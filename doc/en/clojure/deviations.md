@@ -212,7 +212,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).
 - `def` inside a body sets the global when the body runs; `defn` inside a body works only
-  in statement position (a multi-arity one only at the top level).
+  in statement position.
 - Verbs assume the right collection kind; misuse may signal the Common Lisp type error
   instead of the oracle's.
 - Macros expand while lowering, so every backend runs expanded code; the interpreter's
@@ -368,9 +368,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.
-- `format` renders and refuses as `java.util.Formatter` does, except: the format string must be
-  literal, and `%h`, `%a` and `%t` are refused; an integer past the long range renders as a
-  `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a `biginteger`);
+- `format` renders and refuses as `java.util.Formatter` does (a computed format string parses
+  when the call runs), except: `%h`, `%a` and `%t` are refused; an integer past the long range
+  renders as a `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a
+  `biginteger`);
   `int` answers a long, so `(format "%x" (int -1))` is 64 bits of `f` (the oracle's 32), and `%c`
   refuses an integer (the oracle takes an `Integer` code point).
 - `upper-case`, `lower-case`, `capitalize`, `.toUpperCase`, `.toLowerCase`, the uppercase `format`
@@ -408,7 +409,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   given, where the oracle's keeps casting, and `:float` holds doubles.
 - `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position
   of `rest`), so it carries no metadata, and of a map entry `[]` (the oracle `nil`).
-- `partition` takes no pad. `partition-all` with a non-positive size or step signals,
+- `partition-all` with a non-positive size or step signals,
   where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
   calling thread. `take-nth` with a zero step signals, and its seq arity steps by the
   magnitude of a negative one, where the oracle's repeats the first member forever.

@@ -147,6 +147,19 @@ final class ClojureCoreLowering {
 			case "partition-by":
 				arity(name, n, 2, 2);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
+			case "with-bindings*":
+				return ClojureStateLowering.withBindingsStarOf(ctx, items);
+			case "push-thread-bindings", "pop-thread-bindings":
+				return ClojureStateLowering.unpairedThreadBindings(name);
+			case "find-var":
+				return ClojureVarLowering.findVarOf(ctx, items);
+			case "tree-seq":
+				arity(name, n, 3, 3);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
+						ClojureBindingLowering.realFnValue(ctx, items.get(2)), ctx.lower(items.get(3)));
+			case "flatten":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
 			case "min-key", "max-key":
 				arity(name, n, 2, -1);
 				return ClojureLowerUtil.list(runtime("extreme-key"),
@@ -259,12 +272,15 @@ final class ClojureCoreLowering {
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
 					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
-					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method" ->
+					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method", "tree-seq",
+					"flatten" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
+			case "with-bindings*" -> ClojureStateLowering.withBindingsStarValue(ctx);
+			case "find-var" -> ClojureVarLowering.findVarValue();
 			case "test" -> ClojureVarLowering.testValue();
 			case "type" -> ClojureDispatchLowering.typeValue(ctx);
 			case "var-get" -> ClojureVarLowering.getValue();
@@ -366,8 +382,7 @@ final class ClojureCoreLowering {
 		if (parts == null || parts.size() != 2 || !(parts.get(0) instanceof LispSymbol head)) {
 			return false;
 		}
-		return name.equals(ClojureCoreNames.coreSpelling(head.name()))
-				|| (head.name().equals(name) && !ctx.known(name));
+		return name.equals(ctx.coreSpelling(head.name())) || (head.name().equals(name) && !ctx.known(name));
 	}
 
 	/**

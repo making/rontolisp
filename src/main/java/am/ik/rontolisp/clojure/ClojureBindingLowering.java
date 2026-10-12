@@ -438,16 +438,6 @@ final class ClojureBindingLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn));
 	}
 
-	/** Whether a lowered form is a redefinable {@code defn}'s value-cell store. */
-	static boolean isRedefCellStore(LispVal form) {
-		List<LispVal> parts = ClojureLowerUtil.items(form);
-		if (parts == null || parts.size() != 3 || !ClojureLowerUtil.isSymbolNamed(parts.get(0), "SETQ")) {
-			return false;
-		}
-		List<LispVal> value = ClojureLowerUtil.items(parts.get(2));
-		return value != null && value.size() == 2 && ClojureLowerUtil.isSymbolNamed(value.get(0), "FUNCTION");
-	}
-
 	/** The parameter vectors of a {@code defn}'s single arity or of each clause. */
 	static List<LispVal> arglistsOf(List<LispVal> body) {
 		if (!(body.get(0) instanceof LispCons) || isVectorDatum(ClojureLowerUtil.stripMeta(body.get(0)))) {
@@ -598,8 +588,114 @@ final class ClojureBindingLowering {
 		return clause(ctx, paramVector, bodyForms, null);
 	}
 
+	/**
+	 * One fn-shaped clause ({@code fn}, {@code defn}, {@code defmacro},
+	 * {@code defmethod}, a protocol extension's function):
+	 * {@link #clause(ClojureLowering, LispVal, List, ClojureLowering.RecurTarget, boolean)}
+	 * with its condition map applied.
+	 */
 	static ClojureLowering.Clause clause(ClojureLowering ctx, LispVal paramVector, List<LispVal> bodyForms,
 			ClojureLowering.@Nullable RecurTarget target) {
+		return clause(ctx, paramVector, bodyForms, target, true);
+	}
+
+	/**
+	 * The body of a fn-shaped clause with its condition map applied, the oracle's
+	 * {@code fn}: a map first in a body of more forms -- else the parameter vector's
+	 * metadata -- holds {@code :pre} and {@code :post} conditions. Each {@code :pre}
+	 * condition is a {@code clojure.core/assert} ahead of the body; with {@code :post}
+	 * the body's value is bound to {@code %}, each {@code :post} condition asserted, and
+	 * {@code %} answered (tools.cli's {@code compile-option-specs}). A body map without
+	 * either key is dropped all the same, like the oracle's.
+	 */
+	static List<LispVal> conditioned(LispVal paramVector, List<LispVal> bodyForms) {
+		LispVal conds = null;
+		List<LispVal> body = bodyForms;
+		if (bodyForms.size() > 1 && isMapDatum(bodyForms.get(0))) {
+			conds = bodyForms.get(0);
+			body = bodyForms.subList(1, bodyForms.size());
+		}
+		else {
+			conds = conditionMeta(paramVector);
+		}
+		if (conds == null) {
+			return bodyForms;
+		}
+		List<LispVal> pre = conditionsOf(conds, ":pre");
+		List<LispVal> post = conditionsOf(conds, ":post");
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal condition : pre == null ? List.<LispVal>of() : pre) {
+			out.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "assert"), condition));
+		}
+		if (post == null) {
+			out.addAll(body);
+			return out;
+		}
+		LispSymbol result = new LispSymbol("%");
+		LispVal value = body.size() == 1 ? body.get(0)
+				: ClojureLowerUtil.cons(new LispSymbol("do"), body.isEmpty() ? List.of() : body);
+		List<LispVal> let = new ArrayList<>();
+		let.add(new LispSymbol(ClojureCoreNames.PREFIX + "let"));
+		let.add(ClojureLowerUtil.list(ClojureReader.VECTOR, result, value));
+		for (LispVal condition : post) {
+			let.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "assert"), condition));
+		}
+		let.add(result);
+		out.add(ClojureLowerUtil.list(let));
+		return out;
+	}
+
+	/** Whether a datum is a map literal ({@code (%hash-map ...)}). */
+	private static boolean isMapDatum(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map");
+	}
+
+	/**
+	 * The map literal among a parameter vector's metadata ({@code ^{:pre [...]} [x]}), or
+	 * null.
+	 */
+	private static @Nullable LispVal conditionMeta(LispVal paramVector) {
+		LispVal datum = paramVector;
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			if (isMapDatum(parts.get(2))) {
+				return parts.get(2);
+			}
+			datum = parts.get(1);
+			parts = ClojureLowerUtil.items(datum);
+		}
+		return null;
+	}
+
+	/**
+	 * The conditions a condition map holds under {@code :pre} or {@code :post}: the
+	 * members of its vector or list, or null when the key is absent or nil.
+	 */
+	private static @Nullable List<LispVal> conditionsOf(LispVal conds, String key) {
+		List<LispVal> entries = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(conds));
+		for (int i = 1; entries != null && i + 1 < entries.size(); i += 2) {
+			if (!ClojureLowerUtil.isSymbolNamed(entries.get(i), key)) {
+				continue;
+			}
+			LispVal value = ClojureLowerUtil.stripMeta(entries.get(i + 1));
+			if (ClojureLowerUtil.isSymbolNamed(value, "nil")) {
+				return null;
+			}
+			List<LispVal> members = ClojureLowerUtil.items(value);
+			if (members != null && !members.isEmpty() && members.get(0) == ClojureReader.VECTOR) {
+				return members.subList(1, members.size());
+			}
+			throw new LispReadException(
+					"a condition map's " + key + " takes a vector of conditions, not " + entries.get(i + 1).print());
+		}
+		return null;
+	}
+
+	static ClojureLowering.Clause clause(ClojureLowering ctx, LispVal paramVector, List<LispVal> bodyForms,
+			ClojureLowering.@Nullable RecurTarget target, boolean conditions) {
+		List<LispVal> forms = conditions ? conditioned(paramVector, bodyForms) : bodyForms;
 		// metadata on the vector (type hints like ^String) is dropped, like the
 		// rest: it never affects dispatch
 		List<LispVal> names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector),
@@ -640,13 +736,13 @@ final class ClojureBindingLowering {
 		boolean variadic = params.contains(ClojureLowering.AMPERSAND_REST);
 		int fixed = variadic ? params.indexOf(ClojureLowering.AMPERSAND_REST) : params.size();
 		if (target == null) {
-			body = ctx.inScope(scope, () -> ctx.bodyOf(bodyForms));
+			body = ctx.inScope(scope, () -> ctx.bodyOf(forms));
 		}
 		else {
 			target.setArity((variadic ? fixed + 1 : fixed) - target.leading(), variadic);
 			ctx.pushRecurTarget(target);
 			try {
-				body = ctx.inScope(scope, () -> ctx.bodyOfTail(bodyForms));
+				body = ctx.inScope(scope, () -> ctx.bodyOfTail(forms));
 			}
 			finally {
 				ctx.recurTargets.pop();
@@ -1232,7 +1328,9 @@ final class ClojureBindingLowering {
 	 * A vector pattern against an already-lowered init: each element binds positionally
 	 * through the seq view, so maps seq to entry vectors and anything past the end is
 	 * nil; {@code &} binds the rest as a seq, {@code :as} the whole. Elements destructure
-	 * recursively.
+	 * recursively. The shape is the oracle's {@code seq-binding-form}: positional
+	 * patterns, then an optional {@code & rest}, then an optional {@code :as name}, which
+	 * ends the pattern ({@code [tag & content :as all]}).
 	 */
 	static void destructureVector(ClojureLowering ctx, List<LispVal> elements, LispVal init, List<LispVal> pairs,
 			Map<String, ClojureLowering.Kind> scope, String what) {
@@ -1243,6 +1341,7 @@ final class ClojureBindingLowering {
 			LispVal element = elements.get(i);
 			if (ClojureLowerUtil.isSymbolNamed(element, ":as")) {
 				ClojureLowerUtil.isTrue(i + 1 < elements.size(), "a vector pattern :as needs a plain name after it");
+				ClojureLowerUtil.isTrue(i + 2 == elements.size(), "a vector pattern :as and its name end the pattern");
 				String name = ClojureLowerUtil.plainName(elements.get(++i), "a vector pattern :as");
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
 				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
@@ -1251,7 +1350,9 @@ final class ClojureBindingLowering {
 			if (ClojureLowerUtil.isSymbolNamed(element, "&")) {
 				ClojureLowerUtil.isTrue(i + 1 < elements.size(),
 						"a vector pattern & needs a single rest pattern after it");
-				ClojureLowerUtil.isTrue(i + 2 == elements.size(),
+				ClojureLowerUtil.isTrue(
+						i + 2 == elements.size() || i + 2 < elements.size()
+								&& ClojureLowerUtil.isSymbolNamed(elements.get(i + 2), ":as"),
 						"a vector pattern & takes a single rest pattern after it");
 				destructureInto(ctx, elements.get(++i), dropView(ctx, whole, position), pairs, scope, what);
 				continue;

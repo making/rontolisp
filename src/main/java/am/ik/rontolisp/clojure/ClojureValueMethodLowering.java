@@ -424,8 +424,30 @@ final class ClojureValueMethodLowering {
 					ClojureLowerUtil.list(new LispSymbol(ClojureStringLowering.MATCHER_VALUE_P), recv), matcherCall,
 					arm);
 		}
+		LispVal patternCall = patternMethod(method, recv, args);
+		if (patternCall != null) {
+			// a pattern answers java.util.regex.Pattern's matcher and pattern, as the
+			// one Pattern/compile and a literal make on every backend
+			arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-PATTERN-P"), recv), patternCall, arm);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+	}
+
+	/**
+	 * The call of a {@code java.util.regex.Pattern} method on a pattern: {@code matcher}
+	 * of an input is {@code re-matcher}'s matcher, {@code pattern} the source; null for
+	 * any other method.
+	 */
+	private static @Nullable LispVal patternMethod(String method, LispSymbol recv, List<LispVal> args) {
+		return switch (method + "/" + args.size()) {
+			case "matcher/1" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHER"), recv, args.get(0));
+			case "pattern/0" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STR-OF"), recv,
+					LispString.literal(""), ClojureLowering.NIL_CONST);
+			default -> null;
+		};
 	}
 
 	/**

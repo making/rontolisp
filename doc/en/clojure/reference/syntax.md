@@ -29,6 +29,7 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `alter-meta!` | `(do (def x 5) (alter-meta! #'x assoc :k 1) (:k (meta #'x)))` | `1` |
 | `reset-meta!` | `(do (def x 5) (reset-meta! #'x {:k 2}))` | `{:k 2}` |
 | `resolve` | `(resolve 'inc)` | `#'clojure.core/inc` |
+| `find-var` | `(find-var 'clojure.core/inc)` | `#'clojure.core/inc` |
 | `test` | `(do (defn ^{:test (fn [] nil)} t []) (test #'t))` | `:ok` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |
@@ -45,4 +46,6 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `locking` | `(locking :k (+ 1 2))` | `3` |
 | `with-redefs` | `(do (defn f [] 1) (with-redefs [f (fn [] 2)] (f)))` | `2` |
 | `binding` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] *d*))` | `2` |
+| `with-bindings` | `(do (def ^:dynamic *d* 1) (with-bindings {#'*d* 2} *d*))` | `2` |
+| `push-thread-bindings` | `(do (push-thread-bindings {#'*print-length* 1}) (try (pr-str [1 2]) (finally (pop-thread-bindings))))` | `"[1 ...]"` |
 | `time` | `(time (+ 1 2))` | `3` |

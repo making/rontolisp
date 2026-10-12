@@ -459,6 +459,11 @@ final class ClojureNamespaceLowering {
 			ctx.ns().aliases.put(asAlias, ns);
 			return null;
 		}
+		if (ns.equals(ClojureCoreNames.NAMESPACE)) {
+			requireCore(ctx, alias, asAlias, !refer ? List.of() : only != null ? only : all ? null : List.of(), exclude,
+					rename);
+			return null;
+		}
 		boolean library = isKnownNamespace(ns);
 		if (ClojureKernelLowering.isKernelNamespace(ns)) {
 			// the kernels are the built-in namespaces' own, no user surface
@@ -530,6 +535,40 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		return ctx.requireCall(ns, mode);
+	}
+
+	/**
+	 * A libspec of {@code clojure.core}, which the oracle loaded before any program
+	 * (malli's and cuerdas' {@code [clojure.core :as c]}): nothing loads, the alias
+	 * spells core names ({@link ClojureLowering#coreSpelling}), and each referred name
+	 * reaches its core var again through the {@code :refer-clojure :rename} table, past a
+	 * {@code :refer-clojure} filter that left it out.
+	 * @param ctx the hub
+	 * @param alias the {@code :as} alias, or null
+	 * @param asAlias the {@code :as-alias} alias, or null
+	 * @param referred the names {@code :refer} lists, every core name for null
+	 * ({@code :refer :all}, {@code use})
+	 * @param exclude what {@code :exclude} leaves out
+	 * @param rename what {@code :rename} spells a referred name as
+	 */
+	private static void requireCore(ClojureLowering ctx, @Nullable String alias, @Nullable String asAlias,
+			@Nullable List<String> referred, Set<String> exclude, Map<String, String> rename) {
+		if (alias != null) {
+			ctx.ns().aliases.put(alias, ClojureCoreNames.NAMESPACE);
+		}
+		if (asAlias != null) {
+			ctx.ns().aliases.put(asAlias, ClojureCoreNames.NAMESPACE);
+		}
+		Iterable<String> names = referred != null ? referred : new java.util.TreeSet<>(ClojureCoreNames.NAMES);
+		for (String var : names) {
+			if (exclude.contains(var)) {
+				continue;
+			}
+			if (!ClojureCoreNames.contains(var)) {
+				throw new LispReadException(var + " does not exist");
+			}
+			ctx.ns().coreRenames.put(rename.getOrDefault(var, var), var);
+		}
 	}
 
 	/**

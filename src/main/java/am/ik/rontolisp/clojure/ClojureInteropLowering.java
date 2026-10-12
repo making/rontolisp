@@ -1052,6 +1052,18 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
 					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
 		}
+		if (!ctx.hostTarget && cls.equals("java.lang.String") && member.equals("valueOf") && args.size() == 1) {
+			// where no host is, the value's toString (camel-snake-kebab's
+			// (String/valueOf ch)); nil the oracle's reflector failure. The host's own
+			// answers a value's Java face elsewhere
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STRING-VALUE-OF"), args.get(0));
+		}
+		LispVal pattern = cls.equals("java.util.regex.Pattern") ? patternStatic(member, args) : null;
+		if (pattern != null) {
+			// the regex runtime's own pattern, on every backend
+			// (camel-snake-kebab's (-> p Pattern/quote Pattern/compile))
+			return pattern;
+		}
 		if (cls.equals("clojure.lang.MapEntry") && member.equals("create") && args.size() == 2) {
 			// a map entry is the two-member vector here
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
@@ -1065,6 +1077,24 @@ final class ClojureInteropLowering {
 		call.add(LispString.literal(designator));
 		call.addAll(args);
 		return hostCall(ctx, JAVA_STATIC, call, 2, answersBytes(cls, designator, args.size(), true));
+	}
+
+	/**
+	 * A {@code java.util.regex.Pattern} static the regex runtime answers, or null:
+	 * {@code compile} of one string is {@code re-pattern}'s pattern, {@code quote} the
+	 * {@code \Q...\E} source Java's spells, {@code matches} the whole-string match as a
+	 * boolean. The flags overload of {@code compile} stays the host's.
+	 */
+	private static @Nullable LispVal patternStatic(String member, List<LispVal> args) {
+		return switch (member) {
+			case "compile" -> args.size() == 1
+					? ClojureLowerUtil.list(new LispSymbol(ClojureStringLowering.RE_PATTERN), args.get(0)) : null;
+			case "quote" -> args.size() == 1
+					? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PATTERN-QUOTE"), args.get(0)) : null;
+			case "matches" -> args.size() == 2 ? ClojureLowerUtil
+				.list(new LispSymbol("RONTOLISP::%CLOJURE-PATTERN-MATCHES"), args.get(0), args.get(1)) : null;
+			default -> null;
+		};
 	}
 
 	/**
@@ -2385,14 +2415,21 @@ final class ClojureInteropLowering {
 
 	/**
 	 * {@code indexOf} / {@code lastIndexOf} over an already-bound string: the index, or
-	 * {@code -1} when missing, like the oracle.
+	 * {@code -1} when missing, like the oracle. A needle that is no string literal goes
+	 * through {@code %clojure-index-needle}, so an int searches its character, the
+	 * {@code indexOf(int)} overload (honeysql's {@code (.indexOf s (int ch))}).
 	 */
 	static @Nullable LispVal stringIndexForm(ClojureLowering ctx, LispVal recv, List<LispVal> args, boolean last) {
+		if (args.isEmpty() || args.size() > 2) {
+			return null;
+		}
+		LispVal needle = args.get(0) instanceof LispString ? args.get(0)
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INDEX-NEEDLE"), args.get(0));
 		LispVal search = switch (args.size()) {
-			case 1 -> last ? ClojureStringLowering.lastIndexForm(recv, args.get(0), null)
-					: ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), args.get(0), recv);
-			case 2 -> last ? ClojureStringLowering.lastIndexForm(recv, args.get(0), args.get(1))
-					: ClojureStringLowering.searchFrom(args.get(0), recv, args.get(1));
+			case 1 -> last ? ClojureStringLowering.lastIndexForm(recv, needle, null)
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), needle, recv);
+			case 2 -> last ? ClojureStringLowering.lastIndexForm(recv, needle, args.get(1))
+					: ClojureStringLowering.searchFrom(needle, recv, args.get(1));
 			default -> null;
 		};
 		if (search == null) {

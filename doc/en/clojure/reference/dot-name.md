@@ -4,8 +4,8 @@
 
 The sugar for `.`: a dotted name calls the method on the receiver, a `.-`-dotted one reads
 the instance field. The receiver decides the path as everywhere in interop, so a string
-receiver takes the mapped core operation, and another `String` method calls the string as a
-`String`. `.toString` of any value that is no host object
+receiver takes the mapped core operation (`.indexOf` of an int searches its character, the
+`indexOf(int)` overload), and another `String` method calls the string as a `String`. `.toString` of any value that is no host object
 answers its `str` spelling, on every backend. A collection, keyword, symbol, ratio or atom has
 no host object either: its common `clojure.lang`/`java.util` methods (`.count`, `.size`,
 `.isEmpty`, `.get`, `.nth`, `.valAt`, `.contains`, `.containsKey`, `.indexOf`, `.getName`,

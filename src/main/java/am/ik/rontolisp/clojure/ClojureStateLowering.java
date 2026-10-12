@@ -1058,6 +1058,171 @@ final class ClojureStateLowering {
 				barrierBody(ctx, items, 2));
 	}
 
+	/** The run-time binding of a map of vars around a call ({@code clojure.lisp}). */
+	private static final LispSymbol WITH_BINDINGS = new LispSymbol("RONTOLISP::%CLOJURE-WITH-BINDINGS");
+
+	/**
+	 * {@code with-bindings*} as the run-time library holds it: a map, a fn, arguments.
+	 */
+	private static final LispSymbol WITH_BINDINGS_V = new LispSymbol("RONTOLISP::%CLOJURE-WITH-BINDINGS-V");
+
+	/**
+	 * Whether a name spells a verb binding vars through var objects
+	 * ({@code with-bindings}, {@code with-bindings*}, {@code push-thread-bindings}), bare
+	 * or {@code clojure.core/}-qualified: what turns every dynamic var site's binder on
+	 * ({@link ClojureLowering#threadBinders}).
+	 */
+	static boolean isThreadBindingName(String name) {
+		String plain = name.startsWith(ClojureCoreNames.PREFIX) ? name.substring(ClojureCoreNames.PREFIX.length())
+				: name;
+		return plain.equals("with-bindings") || plain.equals("with-bindings*") || plain.equals("push-thread-bindings");
+	}
+
+	/**
+	 * {@code (with-bindings binding-map body...)}: the body as a {@code fn} of no
+	 * arguments, called with each var of the map bound to its value
+	 * ({@code %clojure-with-bindings}, through the binder every dynamic var site carries
+	 * in such a program), like the oracle's {@code with-bindings*} over
+	 * {@code (fn [] body)}.
+	 */
+	static LispVal withBindingsOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/with-bindings");
+		ctx.needThreadBinders();
+		List<LispVal> fn = new ArrayList<>();
+		fn.add(new LispSymbol("fn*"));
+		fn.add(ClojureLowerUtil.list(ClojureReader.VECTOR));
+		fn.addAll(items.subList(2, items.size()));
+		return ClojureLowerUtil.list(WITH_BINDINGS, ctx.lower(items.get(1)), ctx.lower(ClojureLowerUtil.list(fn)));
+	}
+
+	/**
+	 * {@code (with-bindings* binding-map f args...)}: {@code f} applied to the arguments
+	 * with each var of the map bound, every argument evaluated first, like the oracle's
+	 * function.
+	 */
+	static LispVal withBindingsStarOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/with-bindings*");
+		ctx.needThreadBinders();
+		return ClojureLowerUtil.cons(WITH_BINDINGS_V, ctx.lowers(items, 1));
+	}
+
+	/** {@code with-bindings*} as a value. */
+	static LispVal withBindingsStarValue(ClojureLowering ctx) {
+		ctx.needThreadBinders();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), WITH_BINDINGS_V);
+	}
+
+	/**
+	 * A {@code push-thread-bindings} or {@code pop-thread-bindings} the body pairing
+	 * ({@link #pairThreadBindings}) did not take: refused by name, since a thread binding
+	 * here is a dynamic extent, never a frame left pushed.
+	 */
+	static LispVal unpairedThreadBindings(String name) {
+		throw new LispReadException(name + " is supported only as push-thread-bindings followed by a try"
+				+ " whose finally calls pop-thread-bindings (what binding expands to)");
+	}
+
+	/**
+	 * A body's forms with each {@code (push-thread-bindings m)} that the next form, a
+	 * {@code try} whose {@code finally} calls {@code (pop-thread-bindings)}, closes --
+	 * the shape the oracle's {@code binding} expands to, hiccup's {@code binding*} and
+	 * honeysql's {@code with-inline} -- taken together as one
+	 * {@code (clojure.core/with-bindings m (try body catches...))}: the catches still run
+	 * under the bindings, the {@code finally} forms ahead of the pop inside them, the
+	 * ones after it outside, in an outer {@code try}. A body without a push is answered
+	 * itself.
+	 */
+	static List<LispVal> pairThreadBindings(ClojureLowering ctx, List<LispVal> forms) {
+		boolean any = false;
+		for (LispVal form : forms) {
+			any |= isThreadBindingCall(ctx, form, "push-thread-bindings", 1);
+		}
+		if (!any) {
+			return forms;
+		}
+		List<LispVal> out = new ArrayList<>();
+		for (int i = 0; i < forms.size(); i++) {
+			LispVal form = forms.get(i);
+			List<LispVal> push = ClojureLowerUtil.items(form);
+			if (push != null && i + 1 < forms.size() && isThreadBindingCall(ctx, form, "push-thread-bindings", 1)) {
+				LispVal paired = pairedTry(ctx, push.get(1), forms.get(i + 1));
+				if (paired != null) {
+					out.add(paired);
+					i++;
+					continue;
+				}
+			}
+			out.add(form);
+		}
+		return out;
+	}
+
+	/**
+	 * Whether a datum is a call of the core verb {@code name} with {@code args}
+	 * arguments, spelled bare (no local or program var claiming the name) or
+	 * {@code clojure.core/}-qualified.
+	 */
+	private static boolean isThreadBindingCall(ClojureLowering ctx, LispVal form, String name, int args) {
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null || items.size() != args + 1 || !(items.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		String spelled = head.name();
+		if (spelled.equals(name)) {
+			return !ctx.known(name) && ClojureNamespaceLowering.coreAllowed(ctx, name);
+		}
+		try {
+			return name.equals(ctx.coreSpelling(spelled));
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+	}
+
+	/**
+	 * The pair of a push of {@code map} and the {@code try} after it, as one
+	 * {@code with-bindings} form, or null when the {@code try} pops nowhere.
+	 */
+	private static @Nullable LispVal pairedTry(ClojureLowering ctx, LispVal map, LispVal next) {
+		List<LispVal> tryItems = ClojureLowerUtil.items(next);
+		if (tryItems == null || tryItems.size() < 2 || !ClojureLowerUtil.isSymbolNamed(tryItems.get(0), "try")) {
+			return null;
+		}
+		List<LispVal> finallyItems = ClojureLowerUtil.items(tryItems.get(tryItems.size() - 1));
+		if (finallyItems == null || finallyItems.isEmpty()
+				|| !ClojureLowerUtil.isSymbolNamed(finallyItems.get(0), "finally")) {
+			return null;
+		}
+		int pop = -1;
+		for (int i = 1; i < finallyItems.size(); i++) {
+			if (isThreadBindingCall(ctx, finallyItems.get(i), "pop-thread-bindings", 0)) {
+				pop = i;
+				break;
+			}
+		}
+		if (pop < 0) {
+			return null;
+		}
+		List<LispVal> inner = new ArrayList<>(tryItems.subList(0, tryItems.size() - 1));
+		if (pop > 1) {
+			List<LispVal> before = new ArrayList<>();
+			before.add(finallyItems.get(0));
+			before.addAll(finallyItems.subList(1, pop));
+			inner.add(ClojureLowerUtil.list(before));
+		}
+		LispVal bound = ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "with-bindings"), map,
+				ClojureLowerUtil.list(inner));
+		if (pop + 1 == finallyItems.size()) {
+			return bound;
+		}
+		List<LispVal> after = new ArrayList<>();
+		after.add(finallyItems.get(0));
+		after.addAll(finallyItems.subList(pop + 1, finallyItems.size()));
+		return ClojureLowerUtil.list(tryItems.get(0), bound, ClojureLowerUtil.list(after));
+	}
+
 	/**
 	 * {@code (with-open [name init ...] body...)}: the body with each value bound, closed
 	 * in reverse order on every exit through {@code unwind-protect}. Closing calls the

@@ -12708,3 +12708,211 @@ cases:
       "EOF while reading string"
       "Unsupported escape character: \\q"
       "Wrong number of args (2) passed to: clojure.lang.LispReader/StringReader"
+  - name: a-vector-pattern-takes-as-after-its-rest
+    # The oracle's seq-binding-form: positional patterns, an optional & rest, then an
+    # optional :as name, which ends the pattern (hiccup's [tag & content :as tag-content],
+    # honeysql's [x expr & tail :as with]); a type-hinted for/doseq name binds too.
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn (let [[a & r :as all] [1 2 3]] [a r all]) (let [[a & r :as all] '(1 2 3)] [a r all]))
+      (prn (let [[a & [b & c :as bc] :as all] [1 2 3 4]] [a b c bc all]) (let [[a & r :as all] nil] [a r all]))
+      (prn ((fn [[tag & content :as tc]] [tag content tc]) [:p 1 2]) (let [[a & {:keys [x] :as m} :as all] [1 :x 2]] [a x m all]))
+      (prn (for [[k & vs :as row] [[1 2] [3]]] [k vs row]) (loop [[x & xs :as all] [1 2 3] acc []] (if x (recur xs (conj acc (count all))) acc)))
+      (prn (for [^String s ["a" "b"]] (str s s)) (doseq [^String s ["c"]] (print s)))
+    expected: |
+      [1 (2 3) [1 2 3]] [1 (2 3) (1 2 3)]
+      [1 2 (3 4) (2 3 4) [1 2 3 4]] [nil nil nil]
+      [:p (1 2) [:p 1 2]] [1 2 {:x 2} [1 :x 2]]
+      ([1 (2) [1 2]] [3 nil [3]]) [3 2 1]
+      c("aa" "bb") nil
+  - name: partition-takes-a-pad-filling-the-incomplete-tail
+    # (partition n step pad coll): an incomplete tail is kept, filled from the pad
+    # (which may be endless, tools.cli's (repeat nil)) up to n. Oracle lines (clj
+    # 1.12.6, 2026-10-12) but the last's () -- an empty strict seq prints nil here.
+    source: |
+      (prn (partition 3 3 [:a :b] [1 2 3 4]) (partition 2 2 nil [1 2 3]) (partition 2 2 [0] [1 2]) (partition 2 3 [0] [1 2 3 4 5 6 7]) (partition 2 2 (repeat nil) [:a]))
+      (prn (take 2 (partition 2 1 [9] (iterate inc 0))) (map count (partition 3 3 [] (range 7))) (apply partition [2 2 [0] [1 2 3]]) (partition 2 2 [0] []))
+    expected: |
+      ((1 2 3) (4 :a :b)) ((1 2) (3)) ((1 2)) ((1 2) (4 5) (7 0)) ((:a nil))
+      ((0 1) (1 2)) (3 3 1) ((1 2) (3 0)) nil
+  - name: apply-as-a-value-spreads-any-seqable-last-argument
+    # apply as a value (reitit's (partial apply assoc-in)): the last argument may be
+    # any seqable, and the call goes through the IFn dispatcher, like a call of apply.
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn ((partial apply +) [1 2]) (reduce (partial apply assoc-in) {} [[[:a] 1] [[:b :c] 2]]) (map (partial apply str) [[1 2] '(3 4) "ab"]))
+      (def apv-apply apply)
+      (prn (apv-apply + 1 [2 3]) (apv-apply + (range 3)) (apv-apply + nil) (apv-apply max 3 #{5}) (apv-apply str "a" {:k 1}))
+      (prn (try (apv-apply +) (catch clojure.lang.ArityException e (ex-message e))))
+    expected: |
+      3 {:a 1, :b {:c 2}} ("12" "34" "ab")
+      6 3 0 5 "a[:k 1]"
+      "Wrong number of args (1) passed to: clojure.core/apply"
+  - name: some-fn-of-up-to-three-predicates-walks-predicate-major
+    # The oracle's some-fn: one to three predicates try the first three arguments
+    # predicate-major and fail with the last (p x) -- false for (string? 2) -- four or
+    # more fail with nil. Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn ((some-fn nil? keyword? string?) 1 2) ((some-fn :a :b) {:b 1} {:a 2}) ((some-fn :a :b :c) {:c 1} {:a 2}) ((some-fn :a :b :c :d) {:d 1} {:a 2}) ((some-fn odd? neg?) 2 4 6 8) ((some-fn even? pos?) -1 -3 -5 -7))
+    expected: |
+      false 2 2 2 nil nil
+  - name: a-multi-arity-defn-in-a-body-defines-every-arity
+    # A defn of several arities under a letfn or a let (medley's map-padded): each
+    # arity's defun and the dispatch defun are nested ones, closing over the locals.
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (letfn [(mad-first* [s v] (if s (first s) v))]
+        (defn mad-padded
+          ([f val c1] (map f c1))
+          ([f val c1 c2]
+           (lazy-seq
+            (let [s1 (seq c1) s2 (seq c2)]
+              (when (or s1 s2)
+                (cons (f (mad-first* s1 val) (mad-first* s2 val))
+                      (mad-padded f val (rest s1) (rest s2)))))))))
+      (let [k 10] (defn mad-two ([x] (+ x k)) ([x y] (+ x y k))))
+      (prn (mad-padded + 0 [1 2 3] [10]) (mad-padded inc 0 [1 2]) (mad-two 1) (mad-two 1 2))
+    expected: |
+      (11 2 3) (2 3) 11 13
+  - name: a-fn-condition-map-asserts-pre-and-post
+    # A map first in a body of more forms (else the parameter vector's metadata) holds
+    # :pre and :post conditions: each an assert, :post's over % (tools.cli's
+    # compile-option-specs); a lone map is the value, a map without either key drops.
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (defn cond-half [x] {:pre [(even? x) (pos? x)] :post [(< % x)]} (quot x 2))
+      (defn cond-meta ^{:pre [(string? s)]} [s] (count s))
+      (def cond-fn (fn [x] {:post [(string? %)]} (str x)))
+      (defn cond-map [x] {:doc "a map that is no condition"})
+      (defn cond-only [x] {:a 1} x)
+      (prn (cond-half 8) (cond-meta "abc") (cond-fn 1) (cond-map 1) (cond-only 5))
+      (prn (try (cond-half 3) (catch AssertionError e (ex-message e))) (try (cond-half -4) (catch AssertionError e (ex-message e))))
+      (prn (try (cond-meta 1) (catch AssertionError e (ex-message e))) (try ((fn [x] {:post [(neg? %)]} x) 1) (catch AssertionError e (ex-message e))))
+      (prn ((fn ([x] {:pre [(number? x)]} x) ([x y] {:post [(= % 3)]} (+ x y))) 1 2) (letfn [(lf [x] {:pre [(odd? x)]} x)] (lf 3)))
+    expected: |
+      4 3 "1" {:doc "a map that is no condition"} 5
+      "Assert failed: (even? x)" "Assert failed: (pos? x)"
+      "Assert failed: (string? s)" "Assert failed: (neg? %)"
+      3 3
+  - name: format-parses-a-computed-format-string-when-it-runs
+    # format of a computed format string, and format as a value (tools.cli's
+    # (apply format fmt cols)): Formatter's parse when the call runs, with the
+    # refusals a literal's parse makes. Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn (format (str "%-" 4 "s|") "ab") (apply format "%s=%d" ["k" 1]) (map format ["%03d" "%x"] [7 255]))
+      (prn (let [f (str "%" "q")] (try (format f 1) (catch java.util.UnknownFormatConversionException e (ex-message e)))))
+      (prn (try (format "%d" "x") (catch java.util.IllegalFormatConversionException e (ex-message e))) (try (apply format "%s %s" [1]) (catch java.util.MissingFormatArgumentException e (ex-message e))))
+    expected: |
+      "ab  |" "k=1" ("007" "ff")
+      "Conversion = 'q'"
+      "d != java.lang.String" "Format specifier '%s'"
+  - name: a-var-of-a-lowered-library-and-its-resolve
+    # #' and resolve of a clojure.string var (a lowering, no var of its own): a var
+    # whose root is the function value, at run time and while a macro expands
+    # (camel-snake-kebab's defconversion). Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (require '[clojure.string :as lv-str])
+      (prn (#'lv-str/capitalize "abc") ((resolve 'clojure.string/upper-case) "x") (var clojure.string/join) (map #'lv-str/trim [" a "]))
+      (defn lv-conv [g s] (g s))
+      (defmacro lv-mac [sym] (lv-conv (resolve sym) "hello"))
+      (prn (lv-mac clojure.string/upper-case) (lv-mac lv-str/capitalize))
+    expected: |
+      "Abc" "X" #'clojure.string/join ("a")
+      "HELLO" "Hello"
+  - name: tree-seq-and-flatten-walk-depth-first-lazily
+    # tree-seq calls branch? and children as each node is reached, lazily (an endless
+    # tree takes); flatten is the oracle's (rest (tree-seq sequential? seq x)) filtered.
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn (tree-seq sequential? seq [1 [2 [3]] 4]) (flatten [1 [2 [3 (list 4)]] 5]) (flatten nil) (flatten 1) (flatten {:a 1}) (flatten [[] [[]]]))
+      (prn (take 4 (tree-seq (constantly true) (fn [n] [(* 2 n) (inc (* 2 n))]) 1)) (map :n (tree-seq :kids :kids {:n 1 :kids [{:n 2} {:n 3 :kids [{:n 4}]}]})) (take 3 (flatten (repeat [1 [2]]))))
+    expected: |
+      ([1 [2 [3]] 4] 1 [2 [3]] 2 [3] 3 4) (1 2 3 4 5) () () () ()
+      (1 2 4 8) (1 2 3 4) (1 2 1)
+  - name: thread-bindings-bind-vars-through-var-objects
+    # with-bindings, with-bindings* and a push-thread-bindings followed by a try whose
+    # finally pops (hiccup's binding*, honeysql's with-inline) bind each var of the map
+    # through the binder its site carries; find-var of a literal resolves while the
+    # program lowers, of a computed symbol while a macro expands. Oracle-identical
+    # (clj 1.12.6, 2026-10-12).
+    source: |
+      (def ^:dynamic *tvb-x* 1)
+      (def ^:dynamic *tvb-y* :a)
+      (def tvb-plain 5)
+      (defn tvb-show [] [*tvb-x* *tvb-y*])
+      (defn tvb-bind [var val func]
+        (push-thread-bindings {var val})
+        (try (func) (finally (pop-thread-bindings))))
+      (prn (tvb-bind #'*tvb-x* 10 tvb-show) (tvb-show) (with-bindings* {#'*tvb-x* 3} tvb-show) (with-bindings* {#'*tvb-x* 3} (fn [a] (conj (tvb-show) a)) 7))
+      (prn (with-bindings {#'*tvb-x* 4 #'*tvb-y* :c} (tvb-show)) (tvb-bind (find-var 'user/*tvb-x*) 11 tvb-show) (find-var 'user/tvb-nope))
+      (prn (try (find-var 'tvb-nope) (catch IllegalArgumentException e (ex-message e))) (try (find-var 'tvb-nons/x) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (tvb-bind #'tvb-plain 6 (fn [] tvb-plain)) (catch IllegalStateException e (ex-message e))) (tvb-bind #'*tvb-x* 12 (fn [] (set! *tvb-x* 13) *tvb-x*)) (tvb-bind #'*tvb-x* 14 (fn [] (thread-bound? #'*tvb-x*))))
+      (prn (with-bindings {#'*print-length* 2} (pr-str [1 2 3 4])) (try (tvb-bind #'*tvb-x* 15 (fn [] (throw (ex-info "boom" {})))) (catch Exception e (ex-message e))) (tvb-show))
+      (defmacro tvb-mac [] (tvb-bind (find-var 'user/*tvb-x*) 99 (fn [] (first (tvb-show)))))
+      (prn (tvb-mac) (do (push-thread-bindings {#'*tvb-y* :d}) (try (tvb-show) (catch Exception _ :no) (finally (pop-thread-bindings)))))
+    expected: |
+      [10 :a] [1 :a] [3 :a] [3 :a 7]
+      [4 :c] [11 :a] nil
+      "Symbol must be namespace-qualified" "No such namespace: tvb-nons"
+      "Can't dynamically bind non-dynamic var: user/tvb-plain" 13 true
+      "[1 2 ...]" "boom" [1 :a]
+      99 [1 :d]
+  - name: a-hash-inside-a-symbol-or-keyword-is-a-constituent
+    # Only a token's first character dispatches on #, as in the oracle's reader
+    # (hiccup's :div#main.box). Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn :div#main.box 'foo#bar (name :a#b) (keyword "x#y") (= :p#q (keyword "p#q")))
+    expected: |
+      :div#main.box foo#bar "a#b" :x#y true
+  - name: join-takes-any-separator-as-its-str
+    # clojure.string/join's separator is (str separator): a character, a number, a
+    # keyword, nil (tools.cli joins by \newline). Oracle-identical (clj 1.12.6,
+    # 2026-10-12).
+    source: |
+      (prn (clojure.string/join \newline ["a" "b"]) (clojure.string/join 0 [1 2]) (clojure.string/join :k ["x" "y"]) (clojure.string/join nil [1 2]))
+    expected: |
+      "a\nb" "102" "x:ky" "12"
+  - name: index-of-an-int-searches-its-character
+    # .indexOf/.lastIndexOf of an int search its character, the indexOf(int) overload
+    # (honeysql's (.indexOf s (int ch))). Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn (.indexOf "a;b" (int \;)) (.indexOf "a;b" 59) (.lastIndexOf "a;b;" (int \;)) (.indexOf "abc" "c") (let [ch (int \b)] (.indexOf "abc" ch 0)))
+    expected: |
+      1 1 3 2 1
+  - name: pattern-statics-are-the-regex-runtimes-own
+    # Pattern/compile of a string, Pattern/quote and Pattern/matches are the regex
+    # runtime's on every backend, and String/valueOf the value's toString where no
+    # host is (camel-snake-kebab's (-> p Pattern/quote Pattern/compile)).
+    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (prn (java.util.regex.Pattern/quote "a.b") (re-matches (java.util.regex.Pattern/compile (java.util.regex.Pattern/quote "a.b")) "a.b") (java.util.regex.Pattern/matches "a+" "aaa") (java.util.regex.Pattern/matches "a+" "aab"))
+      (prn (str (java.util.regex.Pattern/compile "x|y")) (clojure.string/split "a,b" (java.util.regex.Pattern/compile ",")) (java.util.regex.Pattern/quote "a\\Eb") (String/valueOf \c) (String/valueOf 1))
+    expected: |
+      "\\Qa.b\\E" "a.b" true false
+      "x|y" ["a" "b"] "\\Qa\\E\\\\E\\Qb\\E" "c" "1"
+  - name: a-protocol-on-an-interface-dispatches-while-a-macro-expands
+    # The macro-time evaluator's protocol walk learns each class a program extends a
+    # protocol to, so a macro body dispatching on a seq takes the ISeq row (hiccup's
+    # render-html while html expands). Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (defprotocol MwRender (mw-render [x]))
+      (extend-protocol MwRender clojure.lang.ISeq (mw-render [x] (apply str (map mw-render x))) Object (mw-render [x] (str "<" x ">")))
+      (defmacro mw-at-expansion [form] (mw-render form))
+      (prn (mw-at-expansion (1 2)) (mw-render '(3 4)))
+    expected: |
+      "<1><2>" "<3><4>"
+  - name: a-clojure-core-alias-spells-core-names
+    # (:require [clojure.core :as c :refer [inc]]) (malli's and cuerdas' alias):
+    # nothing loads, c/x spells the core var, and a refer reaches a name the
+    # :refer-clojure filter left out. Oracle-identical (clj 1.12.6, 2026-10-12).
+    source: |
+      (ns core-alias-ns
+        (:refer-clojure :exclude [assert inc])
+        (:require [clojure.core :as c :refer [inc]]))
+      (defmacro assert [x] `(c/str "mine:" ~x))
+      (prn (c/inc 1) (c/map c/inc [1 2]) (map c/str [1 2]) (c/-> 1 c/inc) (assert 1) (inc 41) `c/dec)
+      (in-ns 'user)
+      (prn (inc 1))
+    expected: |
+      2 (2 3) ("1" "2") 2 "mine:1" 42 clojure.core/dec
+      2

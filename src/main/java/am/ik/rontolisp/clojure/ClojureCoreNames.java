@@ -19,8 +19,11 @@ final class ClojureCoreNames {
 	private ClojureCoreNames() {
 	}
 
+	/** The namespace's own name. */
+	static final String NAMESPACE = "clojure.core";
+
 	/** The namespace part of a core-qualified spelling, slash included. */
-	static final String PREFIX = "clojure.core/";
+	static final String PREFIX = NAMESPACE + "/";
 
 	static final Set<String> NAMES = Set.of("""
 			* *' *1 *2 *3 *agent* *allow-unresolved-vars* *assert* *clojure-version* *command-line-args*

@@ -46,7 +46,20 @@ class ClojureProjectNamespacesTest {
 	static Path project;
 
 	private static final Map<String, String> FILES = Map.ofEntries(Map.entry("deps.edn", "{:paths [\"src\"]}\n"),
-			Map.entry("src/app/svc.clj", """
+			Map.entry("src/app/sep.cljc", """
+					(ns app.sep
+					  (:require [clojure.string :as string])
+					  #?(:clj (:import (java.util.regex Pattern))))
+					(defprotocol Separator (split-by [this s]))
+					#?(:clj
+					   (letfn [(by-pattern [p s] (string/split s p))
+					           (by-string [p s] (by-pattern (-> p Pattern/quote Pattern/compile) s))
+					           (by-char [p s] (by-string (String/valueOf p) s))]
+					     (extend Pattern Separator {:split-by by-pattern})
+					     (extend String Separator {:split-by by-string})
+					     (extend Character Separator {:split-by by-char})))
+					(def generic (reify Separator (split-by [_ s] (string/split s #"\\s+"))))
+					"""), Map.entry("src/app/svc.clj", """
 					(ns app.svc)
 					(defn fetch [id] (str "real-" id))
 					(defn report [id] (str "report of " (fetch id)))
@@ -347,6 +360,34 @@ class ClojureProjectNamespacesTest {
 		if (HostWasmtime.isAvailable()) {
 			assertThat(runOnWasm(entry, false)).isEqualTo(MACRO_LIB_OUT);
 			assertThat(runOnWasm(entry, true)).isEqualTo(MACRO_LIB_OUT);
+		}
+	}
+
+	/**
+	 * A required namespace extending its protocol inside a {@code letfn} and defining a
+	 * {@code reify} of it below (camel-snake-kebab's string-separator): the reify's rows
+	 * land among the file's definitions in order, after the defprotocol made the table
+	 * they store into (they went ahead of the file's definitions before, an unbound
+	 * table). {@code Pattern/quote}, {@code Pattern/compile} and {@code String/valueOf}
+	 * are the front end's own, so wasm runs it too. The oracle's output, clj 1.12.6.
+	 */
+	private static final String SEPARATOR = """
+			(ns app.sep-test (:require [app.sep :refer [split-by generic]]))
+			(prn (split-by #"-" "a-b") (split-by "." "a.b") (split-by \\, "a,b") (split-by generic "x  y"))
+			""";
+
+	private static final String SEPARATOR_OUT = """
+			["a" "b"] ["a" "b"] ["a" "b"] ["x" "y"]
+			""";
+
+	@Test
+	void aReifyBelowItsProtocolsExtensionsInsideALetfnStoresIntoItsTable() throws Exception {
+		Path entry = entry("sep_test.clj", SEPARATOR);
+		assertThat(interpret(entry)).isEqualTo(SEPARATOR_OUT);
+		assertThat(runOnJvm(entry, "ProjSeparator")).isEqualTo(SEPARATOR_OUT);
+		if (HostWasmtime.isAvailable()) {
+			assertThat(runOnWasm(entry, false)).isEqualTo(SEPARATOR_OUT);
+			assertThat(runOnWasm(entry, true)).isEqualTo(SEPARATOR_OUT);
 		}
 	}
 

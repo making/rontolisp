@@ -4,7 +4,8 @@
 
 Answers the var a symbol names in the current namespace, the class a class name spells,
 or `nil`. A quoted symbol resolves while the program lowers, to the var `#'name` lowers
-to: a program var, a `clojure.core` var this front end implements, or a core macro. Any
+to: a program var, a `clojure.core` var this front end implements, a core macro, or a var
+of a library it implements as a lowering (`clojure.string/upper-case`). Any
 other name answers `nil`, a core var this front end lacks included, so a library that
 chooses code by the `clojure.core` it runs on (a `compile-if` over `resolve`) chooses the
 code that lowers here. A computed symbol resolves only in a macro body; at run time it

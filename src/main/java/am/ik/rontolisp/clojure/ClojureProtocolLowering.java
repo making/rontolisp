@@ -1338,7 +1338,8 @@ final class ClojureProtocolLowering {
 		String fresh = ctx.freshRecurName();
 		ClojureLowering.RecurTarget target = ClojureLowering.RecurTarget.inlineMethod(fresh,
 				ClojureBindingLowering.paramShape(impl.params()).fixed() >= 1 ? 1 : 0);
-		ClojureLowering.Clause clause = ClojureBindingLowering.clause(ctx, impl.params(), impl.body(), target);
+		// a method body, no fn: a map heading it is a statement, never a condition map
+		ClojureLowering.Clause clause = ClojureBindingLowering.clause(ctx, impl.params(), impl.body(), target, false);
 		LispVal body = ClojureBindingLowering.inlineRecurBody(fresh, clause, target);
 		if (fields.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()), body);
@@ -1694,9 +1695,25 @@ final class ClojureProtocolLowering {
 		if (test instanceof LispNil) {
 			return;
 		}
-		ctx.walkTests.putIfAbsent(walked, test);
+		putWalkTest(ctx, walked, test);
 		if (!walks(ctx, def)) {
 			ctx.walkMisses.add(def.methodsVar().name());
+		}
+	}
+
+	/**
+	 * Adds a walked class's test to the protocol runtime's walk. The macro-time
+	 * evaluator's walk was built over no class
+	 * ({@link ClojureLowering#macroTimeRuntimeForms}), so each new class hands it the
+	 * walk again, over every class so far: a macro body dispatching on one (hiccup's
+	 * {@code render-html} of a seq while {@code html} expands) takes the class's row as
+	 * the program does.
+	 */
+	private static void putWalkTest(ClojureLowering ctx, String walked, LispVal test) {
+		if (ctx.walkTests.putIfAbsent(walked, test) == null && ctx.macroEvaluator != null) {
+			for (LispVal form : walkRuntime(ctx)) {
+				ctx.macroEvaluator.define(form);
+			}
 		}
 	}
 
@@ -1775,7 +1792,7 @@ final class ClojureProtocolLowering {
 	 */
 	static void noteInterfaceWalk(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String typeName) {
 		String name = walkedName(ctx, typeName);
-		ctx.walkTests.putIfAbsent(name, ClojureDispatchLowering.instanceTest(ctx, typeName, WALK_VALUE));
+		putWalkTest(ctx, name, ClojureDispatchLowering.instanceTest(ctx, typeName, WALK_VALUE));
 		String protocol = def.methodsVar().name();
 		if (walks(ctx, def)) {
 			return;

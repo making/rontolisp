@@ -822,6 +822,17 @@ class ClojureLoweringTest {
 		assertThat(lowered("((fn [{:keys [a]}] a) {:a 1})")).contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(let [[a &] [1]] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
+		// the oracle's seq-binding-form: an :as name may follow the rest, and ends the
+		// pattern
+		assertThat(lowered("(let [[a & r :as all] [1 2]] all)")).contains("(RONTOLISP::%CLOJURE-DROP 1 ");
+		assertThatThrownBy(() -> Clojure.read("(let [[a & r b] [1 2]] a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a vector pattern & takes a single rest pattern after it");
+		assertThatThrownBy(() -> Clojure.read("(let [[a :as all b] [1 2]] a)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a vector pattern :as and its name end the pattern");
+		assertThatThrownBy(() -> Clojure.read("(let [[a & r :as] [1 2]] a)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a vector pattern :as needs a plain name after it");
 		assertThatThrownBy(() -> Clojure.read("(let [{:keys a} {:a 1}] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a map pattern :keys takes a vector of plain names");
 		assertThat(lowered("(let [{:a/keys [b]} {:a/b 1}] b)")).contains("GETHASH");
@@ -866,9 +877,10 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defn bad ([x & a] x) ([y & b] y))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("at most one variadic clause");
-		assertThatThrownBy(() -> Clojure.read("(let [x 1] (defn bad ([y] y) ([z w] z)))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("a multi-arity defn is only allowed at the top level");
+		// in a body every arity's defun and the dispatch defun are nested ones
+		assertThat(lowered("(let [x 1] (defn nested-mar ([y] (+ x y)) ([z w] z)))")).contains("(PROGN (DEFUN")
+			.contains("|c%nested-mar%1|")
+			.contains("|c%nested-mar%2|");
 	}
 
 	@Test
@@ -2475,6 +2487,32 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-IS-THREAD-BOUND");
 		assertThat(lowered("(def x 1) (thread-bound? #'x)")).doesNotContain("VAR-DYNAMIC");
 		assertThat(lowered("(def x 1) #'x")).doesNotContain("VAR-DYNAMIC");
+		// and its binder only in a program binding vars through var objects, a site
+		// lowered before the first such binding included (the program lowers again)
+		assertThat(lowered("(def ^:dynamic *d* 1) #'*d*")).doesNotContain("binder");
+		assertThat(lowered("(def ^:dynamic *d* 1) (def v #'*d*) (with-bindings {v 2} *d*)"))
+			.contains("(LAMBDA (|c%binder-value| |c%binder-thunk|) (LET* ((|c%*d*| |c%binder-value|)")
+			.contains("(RONTOLISP::%CLOJURE-WITH-BINDINGS ");
+		assertThat(lowered("(with-bindings* {#'*out* *out*} println 1)"))
+			.contains("(LET* ((*STANDARD-OUTPUT* |c%binder-value|)");
+		// a push-thread-bindings a try popping in its finally follows is with-bindings
+		assertThat(lowered(
+				"(def ^:dynamic *d* 1) (defn b [] (push-thread-bindings {#'*d* 2}) (try *d* (finally (pop-thread-bindings))))"))
+			.contains("(RONTOLISP::%CLOJURE-WITH-BINDINGS ")
+			.doesNotContain("push-thread-bindings");
+		assertThatThrownBy(() -> Clojure.read("(defn b [] (push-thread-bindings {}) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("push-thread-bindings is supported only as push-thread-bindings followed by a try");
+		assertThatThrownBy(() -> Clojure.read("(pop-thread-bindings)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("pop-thread-bindings is supported only as push-thread-bindings followed by a try");
+		// find-var of a literal resolves while the program lowers, of a computed symbol
+		// through the run-time library
+		assertThat(lowered("(def fv 1) (find-var 'user/fv)")).contains("(RONTOLISP::%CLOJURE-VAR \"user/fv\"");
+		assertThat(lowered("(find-var 'fv)")).contains("Symbol must be namespace-qualified");
+		assertThat(lowered("(find-var (symbol \"a\" \"b\"))")).contains("(RONTOLISP::%CLOJURE-FIND-VAR ");
+		// a var of a library the lowering implements: its root the function value
+		assertThat(lowered("#'clojure.string/join")).contains("(RONTOLISP::%CLOJURE-VAR \"clojure.string/join\"");
+		assertThat(lowered("(resolve 'clojure.string/nope)")).isEqualTo(FALSE_BINDING + "NIL");
 		assertThat(lowered("(map thread-bound? [])")).contains("#'RONTOLISP::%CLOJURE-IS-THREAD-BOUND-V");
 		// a local is no var (the oracle resolves past it): under a shadowing local
 		// the root is read through a top-level reader the local cannot shadow
@@ -2654,7 +2692,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(zipmap [1] [2])")).contains("GETHASH");
 		assertThat(lowered("(sort [2 1])")).contains("SORT").contains("COPY-LIST");
 		assertThat(lowered("(group-by odd? [1])")).contains("GETHASH");
-		assertThatThrownBy(() -> Clojure.read("(partition 2 1 [1] [2])", null)).isInstanceOf(LispReadException.class)
+		assertThat(lowered("(partition 2 1 [0] [1 2])"))
+			.contains("(RONTOLISP::%CLOJURE-PARTITION-PAD 2 1 (VECTOR 0) (VECTOR 1 2))");
+		assertThatThrownBy(() -> Clojure.read("(partition 2 1 [0] [1] [2])", null))
+			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("partition takes a size");
 	}
 
@@ -2851,8 +2892,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(format \"%%x%04x\" 10)")).contains("(RONTOLISP::%CLOJURE-FORMAT-INTEGER 10 #\\x \"0\" 4)");
 		assertThat(lowered("(format \"%-d\" (inc 1))")).contains("(+ 1 1)")
 			.contains("(RONTOLISP::%CLOJURE-MISSING-FORMAT-WIDTH-EXCEPTION \"%-d\")");
-		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("format takes a literal format string");
+		// a computed format string, and format as a value, parse when the call runs
+		assertThat(lowered("(format (str \"%\" \"d\") 1)")).contains("(RONTOLISP::%CLOJURE-FORMAT-V ");
+		assertThat(lowered("(map format [\"%d\"] [1])")).contains("#'RONTOLISP::%CLOJURE-FORMAT-V");
 	}
 
 	@Test
@@ -2956,6 +2998,22 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.reflect");
+	}
+
+	@Test
+	void aClojureCoreAliasSpellsCoreNames() {
+		// clojure.core loads nothing: its alias spells a core name wherever
+		// clojure.core/name does, a var the namespace lacks is the oracle's refusal
+		assertThat(lowered("(ns t (:require [clojure.core :as c])) (c/inc 1)")).contains("(+ 1 1)");
+		assertThat(lowered("(ns t (:require [clojure.core :as c])) (defn inc [x] x) (map c/inc [1])"))
+			.contains("%CLOJURE-MAP")
+			.contains("(+ ");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.core :as c])) (c/nope 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such var: c/nope");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.core :refer [nope]]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("nope does not exist");
 	}
 
 	@Test

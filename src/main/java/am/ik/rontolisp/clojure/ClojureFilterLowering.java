@@ -196,13 +196,20 @@ final class ClojureFilterLowering {
 
 	/**
 	 * {@code partition}: size, optional step (defaulting to the size, evaluated once),
-	 * collection, through the spliced {@code rontolisp::%clojure-partition}: full groups,
-	 * an incomplete tail dropped, like the oracle; a non-positive size signals.
+	 * optional pad, collection, through the spliced
+	 * {@code rontolisp::%clojure-partition}: full groups, an incomplete tail dropped,
+	 * like the oracle -- with a pad, the incomplete tail kept and filled from the pad up
+	 * to the size ({@code %clojure-partition-pad}); a non-positive size signals.
 	 * Lazy-or-strict.
 	 */
 	static LispVal partitionOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
-		ClojureLowerUtil.isTrue(n == 2 || n == 3, "partition takes a size, an optional step and a collection");
+		ClojureLowerUtil.isTrue(n >= 2 && n <= 4,
+				"partition takes a size, an optional step, an optional pad and a collection");
+		if (n == 4) {
+			return runtimeCall("PARTITION-PAD", ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+					ctx.lower(items.get(3)), ctx.lower(items.get(4)));
+		}
 		if (n == 3) {
 			return runtimeCall("PARTITION", ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
 		}

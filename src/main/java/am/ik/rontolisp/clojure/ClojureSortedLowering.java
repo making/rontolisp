@@ -111,7 +111,7 @@ final class ClojureSortedLowering {
 	private static LispVal testArg(ClojureLowering ctx, LispVal datum) {
 		if (datum instanceof LispSymbol symbol) {
 			String name = symbol.name();
-			String core = ClojureCoreNames.coreSpelling(name);
+			String core = ctx.coreSpelling(name);
 			if (core == null && !ctx.known(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
 				core = name;
 			}

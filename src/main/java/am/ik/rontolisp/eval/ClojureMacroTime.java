@@ -79,6 +79,12 @@ public final class ClojureMacroTime {
 	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
 
 	/**
+	 * The run-time library's {@code find-var} of a computed qualified symbol, refused
+	 * there; resolved like {@code resolve} here.
+	 */
+	private static final LispSymbol FIND_VAR_RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-FIND-VAR-RESOLVE");
+
+	/**
 	 * The run-time library's {@code ns-resolve} of a computed namespace or symbol,
 	 * refused there.
 	 */
@@ -122,6 +128,7 @@ public final class ClojureMacroTime {
 				}
 				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm));
 				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
+				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
 				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm));
 				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm));
 				this.evaluator = macroEval;

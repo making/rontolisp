@@ -300,9 +300,11 @@ final class ClojureStringLowering {
 	// clojure.java.io: exactly reader, over the file-stream runtime
 
 	/**
-	 * {@code join}: the separator (nil counts as {@code ""}, like the oracle) between the
-	 * {@code str} parts of the seq view, concatenated. Each part converts like a
-	 * {@code str} part -- {@code ""} for nil, the colon spelling for a keyword.
+	 * {@code join}: the separator's {@code str} (nil counts as {@code ""}, a character as
+	 * itself -- tools.cli joins by {@code \newline} -- like the oracle's
+	 * {@code (str separator)}) between the {@code str} parts of the seq view,
+	 * concatenated. Each part converts like a {@code str} part -- {@code ""} for nil, the
+	 * colon spelling for a keyword.
 	 */
 	static LispVal joinForm(ClojureLowering ctx, LispVal sep, LispVal coll) {
 		LispSymbol sepSym = ctx.freshTemp();
@@ -319,11 +321,14 @@ final class ClojureStringLowering {
 		LispVal joined = ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("concatenate")),
 				ClojureLowerUtil.quoted("string"), interposed);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
-				ClojureLowerUtil.list(sepSym,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), sep), LispString.literal(""), sep)),
-				ClojureLowerUtil.list(parts, strings))), joined);
+		LispVal separator = sep instanceof LispString
+				? ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), sep), LispString.literal(""), sep)
+				: strOf(ctx, sep, LispString.literal(""), ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil
+					.list(List.of(ClojureLowerUtil.list(sepSym, separator), ClojureLowerUtil.list(parts, strings))),
+				joined);
 	}
 
 	/**

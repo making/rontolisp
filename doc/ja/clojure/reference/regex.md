@@ -1,6 +1,6 @@
 # 正規表現
 
-`#"..."` リテラルはパターン値に読まれます（印字は `#"..."`、`str` は素の綴りを返します）。`re-pattern` は文字列をコンパイルしてパターンを返します。パターンの比較は同一性です（オラクル通り）。`re-find`・`re-seq`・`re-matches` と `re-matcher`/`re-groups` の循環は、`java.util.regex` のパーサーとマッチャーを移植した 1 つの spliced エンジンの上で走るため、すべてのバックエンドがオラクルと同じ答えを返します。
+`#"..."` リテラルはパターン値に読まれます（印字は `#"..."`、`str` は素の綴りを返します）。`re-pattern` は文字列をコンパイルしてパターンを返し、文字列1つの `java.util.regex.Pattern/compile` も全バックエンドで同じです（`Pattern/quote` と `Pattern/matches` もエンジンのもので、パターンは `.matcher` と `.pattern` に答えます）。パターンの比較は同一性です（オラクル通り）。`re-find`・`re-seq`・`re-matches` と `re-matcher`/`re-groups` の循環は、`java.util.regex` のパーサーとマッチャーを移植した 1 つの spliced エンジンの上で走るため、すべてのバックエンドがオラクルと同じ答えを返します。
 
 | Name | Example | Result |
 |---|---|---|

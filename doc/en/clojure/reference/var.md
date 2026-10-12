@@ -10,7 +10,9 @@ the site recorded: `:arglists`, the docstring as `:doc`, the name's metadata and
 map, `:line`/`:column`/`:file`, `:name` and `:ns`. A local is no var (the name resolves
 past it). A `clojure.core` name is the core var, printing `#'clojure.core/name`: its root
 is the core value and its metadata `:name`, `:ns` and a macro's `:macro`; a core var
-with no value here (`#'*err*`) is refused.
+with no value here (`#'*err*`) is refused. A var of a library this front end implements
+as a lowering (`#'clojure.string/join`, `#'s/trim` through an alias, a referred `#'union`)
+is one too, its root the function value and its metadata `:name` and `:ns`.
 
 ```clojure
 (defn greet "Says hello." [who] (str "Hello, " who))

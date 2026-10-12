@@ -1,8 +1,10 @@
 # Regular expressions
 
 A `#"..."` literal reads to a pattern value (printed `#"..."`, spelled bare by
-`str`); `re-pattern` compiles a string and answers a pattern back. Patterns
-compare by identity, like the oracle. `re-find`, `re-seq`, `re-matches` and the
+`str`); `re-pattern` compiles a string and answers a pattern back, and so does
+`java.util.regex.Pattern/compile` of one string, on every backend (`Pattern/quote` and
+`Pattern/matches` are the engine's too; a pattern answers `.matcher` and `.pattern`).
+Patterns compare by identity, like the oracle. `re-find`, `re-seq`, `re-matches` and the
 `re-matcher`/`re-groups` loop run over one spliced engine, a port of
 `java.util.regex`'s parser and matcher, so every backend answers as the oracle does.
 

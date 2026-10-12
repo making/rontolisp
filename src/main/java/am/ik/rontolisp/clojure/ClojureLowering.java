@@ -292,6 +292,24 @@ public final class ClojureLowering {
 	boolean unsetVarSites;
 
 	/**
+	 * Whether every {@code #'} site of a dynamic var carries its binder, the closure
+	 * {@code with-bindings} and a {@code push-thread-bindings} pair bind the var through:
+	 * the program names one of them, found by the pre-scan or, inside a required file or
+	 * a macro expansion, by the pass before this one ({@link #threadBinderMiss}). A
+	 * session carries them always: a later input may bind what an earlier one made.
+	 */
+	boolean threadBinders;
+
+	/**
+	 * Whether this pass met a thread binding with {@link #threadBinders} off after a
+	 * dynamic var site went without its binder: the program lowers again with it on.
+	 */
+	boolean threadBinderMiss;
+
+	/** Whether this pass lowered a dynamic var site without its binder. */
+	boolean unboundDynamicSites;
+
+	/**
 	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
 	 * the forms lower in.
 	 */
@@ -1548,9 +1566,11 @@ public final class ClojureLowering {
 		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
 		boolean rootSetters = false;
+		boolean threadBinders = false;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.rootSetters = rootSetters;
+			lowering.threadBinders = threadBinders;
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
 			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
@@ -1565,7 +1585,9 @@ public final class ClojureLowering {
 			}
 			boolean setters = lowering.rootSetterMiss && !rootSetters;
 			rootSetters |= lowering.rootSetterMiss;
-			if (!redefs && !walks && !guarded && !setters) {
+			boolean binders = lowering.threadBinderMiss && !threadBinders;
+			threadBinders |= lowering.threadBinderMiss;
+			if (!redefs && !walks && !guarded && !setters && !binders) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1808,6 +1830,7 @@ public final class ClojureLowering {
 
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
 		this.session = true;
+		this.threadBinders = true;
 		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
 		resolveProject(datums);
@@ -2063,6 +2086,11 @@ public final class ClojureLowering {
 			needRootSetters();
 			return;
 		}
+		if (datum instanceof LispSymbol s && ClojureStateLowering.isThreadBindingName(s.name())) {
+			// a var it binds may be any dynamic var's site
+			needThreadBinders();
+			return;
+		}
 		List<LispVal> items = ClojureLowerUtil.items(datum);
 		if (items == null) {
 			return;
@@ -2111,6 +2139,18 @@ public final class ClojureLowering {
 		if (!this.rootSetters) {
 			this.rootSetters = true;
 			this.rootSetterMiss |= this.unsetVarSites;
+		}
+	}
+
+	/**
+	 * Turns {@link #threadBinders} on for a thread binding; a dynamic var site this pass
+	 * already lowered without its binder makes the program lower again
+	 * ({@link #threadBinderMiss}).
+	 */
+	void needThreadBinders() {
+		if (!this.threadBinders) {
+			this.threadBinders = true;
+			this.threadBinderMiss |= this.unboundDynamicSites;
 		}
 	}
 
@@ -2380,7 +2420,8 @@ public final class ClojureLowering {
 	@Nullable String projectNamespaceOf(String head) {
 		String aliased = ns().aliases.get(head);
 		if (aliased != null) {
-			return ClojureNamespaceLowering.isKnownNamespace(aliased) ? null : aliased;
+			return ClojureNamespaceLowering.isKnownNamespace(aliased) || aliased.equals(ClojureCoreNames.NAMESPACE)
+					? null : aliased;
 		}
 		if ((head.equals(this.currentNs) || this.createdNamespaces.contains(head))
 				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
@@ -2812,9 +2853,23 @@ public final class ClojureLowering {
 					// a dynamic one's declaim and counter ride top-level, where the
 					// collectors read them
 					int mark = loaded.size();
-					List<LispVal> init = initDefForms(datum, loaded);
+					// what the value hoists (a reify's rows) lands with the file's
+					// definitions, in order -- after the defprotocol whose table the
+					// rows store into (camel-snake-kebab's generic-separator)
+					List<LispVal> outer = this.hoisted;
+					this.hoisted = new ArrayList<>();
+					List<LispVal> init;
+					List<LispVal> valueHoisted;
+					try {
+						init = initDefForms(datum, loaded);
+					}
+					finally {
+						valueHoisted = this.hoisted;
+						this.hoisted = outer;
+					}
 					List<LispVal> handed = new ArrayList<>(loaded.subList(mark, loaded.size()));
 					handed.addAll(init);
+					loaded.addAll(valueHoisted);
 					ClojureMacroLowering.handOver(this, datum, handed);
 					statements.addAll(init);
 				}
@@ -3535,7 +3590,7 @@ public final class ClojureLowering {
 		}
 		refusePendingTag(items);
 		if (items.get(0) instanceof LispSymbol op) {
-			String core = ClojureCoreNames.coreSpelling(op.name());
+			String core = coreSpelling(op.name());
 			if (core == null) {
 				core = renamedCore(op.name());
 			}
@@ -3567,6 +3622,29 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The core name a qualified spelling names: {@code clojure.core/name}, or
+	 * {@code c/name} through an alias of {@code clojure.core} in the current namespace
+	 * (malli's and cuerdas' {@code (:require [clojure.core :as c])}) -- else null. A name
+	 * {@code clojure.core} does not define is the oracle's {@code No such var} refusal
+	 * either way.
+	 */
+	@Nullable String coreSpelling(String name) {
+		String core = ClojureCoreNames.coreSpelling(name);
+		if (core != null) {
+			return core;
+		}
+		int slash = qualifierSlash(name);
+		if (slash < 0 || !ClojureCoreNames.NAMESPACE.equals(ns().aliases.get(name.substring(0, slash)))) {
+			return null;
+		}
+		String var = name.substring(slash + 1);
+		if (!ClojureCoreNames.contains(var)) {
+			throw new LispReadException("No such var: " + name);
+		}
+		return var;
+	}
+
+	/**
 	 * The core name a {@code (:refer-clojure :rename {old new})} spelling stands for, or
 	 * null: a local or a var of the program under the same name wins, like any refer.
 	 */
@@ -3580,32 +3658,18 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code defn} in a body: a single defun (a dynamic single-arity one its defun plus
-	 * its defparameters, a redefinable one its defun plus its value-cell store) splices
-	 * behind a progn, like ever; several arities cannot splice into expression position.
+	 * A {@code defn} in a body ({@code (letfn [...] (defn f ...))}, medley's
+	 * {@code map-padded}): its forms -- the defun, or for several arities one defun per
+	 * arity and the dispatch defun, plus the defparameters, value-cell store and metadata
+	 * store -- behind a progn. Each defun is a nested one, defined when the body runs and
+	 * closing over the body's locals, on every backend.
 	 */
 	LispVal defnInBody(LispVal form, List<LispVal> items) {
 		List<LispVal> forms = ClojureBindingLowering.defuns(this, form, items);
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}
-		boolean single = forms.stream().filter(ClojureLowering::isLoweredDefun).count() == 1 && forms.stream()
-			.allMatch(f -> ClojureLowering.isLoweredDefun(f) || isLoweredDefparameter(f)
-					|| ClojureVarLowering.isMetaStore(f) || ClojureBindingLowering.isRedefCellStore(f));
-		ClojureLowerUtil.isTrue(single, "a multi-arity defn is only allowed at the top level");
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
-	}
-
-	/** Whether the lowered form is headed by {@code defun}. */
-	static boolean isLoweredDefun(LispVal form) {
-		List<LispVal> parts = ClojureLowerUtil.items(form);
-		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "DEFUN");
-	}
-
-	/** Whether the lowered form is headed by {@code defparameter}. */
-	static boolean isLoweredDefparameter(LispVal form) {
-		List<LispVal> parts = ClojureLowerUtil.items(form);
-		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "DEFPARAMETER");
 	}
 
 	/**
@@ -3819,6 +3883,9 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "binding")) {
 			return ClojureStateLowering.bindingOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-bindings")) {
+			return ClojureStateLowering.withBindingsOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-open")) {
 			return ClojureStateLowering.withOpenOf(this, items);
@@ -4812,6 +4879,8 @@ public final class ClojureLowering {
 			case "map" -> ClojureSeqLowering.mapValue(this);
 			case "filter" -> ClojureSeqLowering.filterValue(this);
 			case "reduce" -> ClojureSeqLowering.reduceValue(this);
+			case "apply" -> ClojureSeqLowering.applyValue();
+			case "format" -> ClojureFormatLowering.formatValue();
 			case "concat" -> ClojureSeqLowering.concatValue(this);
 			case "take" -> ClojureSeqLowering.takeValue(this);
 			case "drop" -> ClojureSeqLowering.dropValue(this);
@@ -4989,7 +5058,8 @@ public final class ClojureLowering {
 		return out;
 	}
 
-	LispVal bodyOf(List<LispVal> forms) {
+	LispVal bodyOf(List<LispVal> body) {
+		List<LispVal> forms = ClojureStateLowering.pairThreadBindings(this, body);
 		if (forms.isEmpty()) {
 			return NIL_CONST;
 		}
@@ -5006,20 +5076,10 @@ public final class ClojureLowering {
 	}
 
 	LispVal body(List<LispVal> items, int from) {
-		int n = items.size() - from;
-		if (n <= 0) {
+		if (from >= items.size()) {
 			return NIL_CONST;
 		}
-		if (n == 1) {
-			return lowerTailSlot(items.get(from));
-		}
-		List<LispVal> out = new ArrayList<>();
-		out.add(ClojureLowerUtil.sym("progn"));
-		for (int i = from; i < items.size() - 1; i++) {
-			out.add(lower(items.get(i)));
-		}
-		out.add(lowerTailSlot(items.get(items.size() - 1)));
-		return ClojureLowerUtil.list(out);
+		return bodyOf(items.subList(from, items.size()));
 	}
 
 	/** A namespace-qualified var: the namespace and the var it names. */
@@ -5117,7 +5177,7 @@ public final class ClojureLowering {
 			// itself instead of mangling behind the prefix
 			return s;
 		}
-		String core = ClojureCoreNames.coreSpelling(name);
+		String core = coreSpelling(name);
 		if (core == null) {
 			core = renamedCore(name);
 		}
@@ -5475,7 +5535,7 @@ public final class ClojureLowering {
 	 */
 	boolean hostMemberName(String name) {
 		int slash = qualifierSlash(name);
-		return slash > 0 && ClojureCoreNames.coreSpelling(name) == null && !known(name)
+		return slash > 0 && coreSpelling(name) == null && !known(name)
 				&& ClojureNamespaceLowering.resolveQualified(this, name) == null
 				&& ClojureNamespaceLowering.libraryRefer(this, name) == null
 				&& projectNamespaceOf(name.substring(0, slash)) == null;

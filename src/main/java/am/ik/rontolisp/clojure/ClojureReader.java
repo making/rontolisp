@@ -1488,7 +1488,10 @@ final class ClojureReader {
 		char first = peek();
 		boolean number = Character.isDigit(first) || ((first == '+' || first == '-')
 				&& this.pos + 1 < this.source.length() && Character.isDigit(this.source.charAt(this.pos + 1)));
-		while (this.pos < this.source.length() && (DELIMS.indexOf(peek()) < 0 || (!number && peek() == '\''))) {
+		// so is a hash inside a symbol or keyword (hiccup's :div#main.box, foo#bar):
+		// only a token's first character dispatches on it
+		while (this.pos < this.source.length()
+				&& (DELIMS.indexOf(peek()) < 0 || (!number && (peek() == '\'' || peek() == '#')))) {
 			next();
 		}
 		// a gensym suffix: `x#` reads as one identifier when the `#` ends the

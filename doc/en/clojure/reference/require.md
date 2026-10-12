@@ -10,6 +10,9 @@ and one no root holds is an error. Only `:refer` refers names: a bare `:only` re
 like the oracle. `:rename {old new}` refers a referred var under `new` instead of `old`;
 `:as-alias` registers an alias without loading the namespace (`::alias/k` and a syntax-quoted `alias/x` spell its name).
 An unquoted vector spec is accepted too, though real Clojure rejects it.
+`clojure.core` itself loads nothing: `[clojure.core :as c]` makes `c/x` spell the core
+var `clojure.core/x` (malli's and cuerdas' alias), and its `:refer` brings back a name
+`(:refer-clojure :exclude [...])` left out.
 A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
 `:reload` runs each named namespace again (`def` resets, `defonce` keeps its root);
 `:reload-all` re-runs their dependencies first. A `require` inside a function body loads

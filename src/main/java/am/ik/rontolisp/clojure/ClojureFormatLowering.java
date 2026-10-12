@@ -49,7 +49,18 @@ final class ClojureFormatLowering {
 
 	private static final LispSymbol FORMAT_FLOAT = new LispSymbol("RONTOLISP::%CLOJURE-FORMAT-FLOAT");
 
+	/**
+	 * The run-time {@code format}: the format string parsed when the call runs, with the
+	 * same refusals and helpers ({@code clojure.lisp}).
+	 */
+	private static final LispSymbol FORMAT_V = new LispSymbol("RONTOLISP::%CLOJURE-FORMAT-V");
+
 	private ClojureFormatLowering() {
+	}
+
+	/** {@code format} as a value: the run-time {@code format}. */
+	static LispVal formatValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), FORMAT_V);
 	}
 
 	/**
@@ -117,7 +128,9 @@ final class ClojureFormatLowering {
 	static LispVal formatOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "format takes a format string and arguments");
 		if (!(items.get(1) instanceof LispString fmt)) {
-			throw new LispReadException("format takes a literal format string, not " + items.get(1).print());
+			// a computed format string parses when the call runs
+			// (tools.cli's column format)
+			return ClojureLowerUtil.cons(FORMAT_V, ctx.lowers(items, 1));
 		}
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {

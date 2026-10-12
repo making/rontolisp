@@ -577,6 +577,16 @@ final class ClojureSeqLowering {
 	}
 
 	/**
+	 * {@code apply} as a value ({@code (partial apply assoc-in)}): the runtime's
+	 * {@code %clojure-apply-v}, which spreads the last argument's whole-collection view
+	 * and calls through the dispatcher like a call of {@code apply} -- Common Lisp's
+	 * {@code apply} takes a list alone, so a vector, map or lazy seq would signal.
+	 */
+	static LispVal applyValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-APPLY-V"));
+	}
+
+	/**
 	 * {@code apply} over any leading arguments: each but the last passes through, the
 	 * last answers its whole-collection view (a lazy seq realizes) -- CL {@code apply}'s
 	 * own shape, so {@code (apply f x args)} spreads like the oracle's.

@@ -462,9 +462,10 @@ class ClojureReaderTest {
 		assertThat(printed("x#")).isEqualTo("[|x#|]");
 		assertThat(printed("`(~x ~@y s#)"))
 			.isEqualTo("[(|syntax-quote| ((|unquote| |x|) (|unquote-splicing| |y|) |s#|))]");
-		// a dispatch form after an identifier still dispatches
-		assertThat(printed("a#'x")).isEqualTo("[|a|, (|var| |x|)]");
-		assertThat(printed("a#_skip b")).isEqualTo("[|a|, |b|]");
+		// past a token's first character a hash is a constituent, as in the oracle's
+		// reader (clj 1.12.6, 2026-10-12): a#'x and a#_skip are symbols
+		assertThat(printed("a#'x")).isEqualTo("[|a#'x|]");
+		assertThat(printed("a#_skip b")).isEqualTo("[|a#_skip|, |b|]");
 	}
 
 	@Test
@@ -475,6 +476,17 @@ class ClojureReaderTest {
 		assertThat(printed("[a' b'' a'b 'c (f'x) :k']"))
 			.isEqualTo("[(|%vector| |a'| |b''| |a'b| (|quote| |c|) (|f'x|) :|k'|)]");
 		assertThat(printed("1'x")).isEqualTo("[1, (|quote| |x|)]");
+	}
+
+	@Test
+	void aHashInsideASymbolOrKeywordIsAConstituent() {
+		// oracle (clj 1.12.6, 2026-10-12): # is a non-terminating macro character, so
+		// only a token's first one dispatches -- hiccup's :div#main.box is one keyword,
+		// a syntax-quote gensym x# one symbol
+		assertThat(printed("[:div#main.box foo#bar a## x# #'y]"))
+			.isEqualTo("[(|%vector| :|div#main.box| |foo#bar| |a##| |x#| (|var| |y|))]");
+		// a number stops at it, like the oracle's number reader
+		assertThat(printed("1 #_x 2")).isEqualTo("[1, 2]");
 	}
 
 	@Test

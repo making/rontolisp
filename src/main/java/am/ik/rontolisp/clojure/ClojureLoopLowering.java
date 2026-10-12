@@ -484,7 +484,10 @@ final class ClojureLoopLowering {
 	 * {@code :keys}/{@code :syms}/{@code :strs}, explicit locals, {@code :as} and nested
 	 * patterns -- mirroring {@code destructureInto}, which still owns every refusal.
 	 */
-	static void collectPatternNames(LispVal pattern, Map<String, ClojureLowering.Kind> scope) {
+	static void collectPatternNames(LispVal datum, Map<String, ClojureLowering.Kind> scope) {
+		// a type hint on a name or a pattern (tools.cli's (for [^String s ...])) is
+		// dropped, as destructureInto drops it
+		LispVal pattern = ClojureLowerUtil.stripMeta(datum);
 		if (pattern instanceof LispSymbol name) {
 			if (!name.name().startsWith(":") && !name.name().equals("&")) {
 				scope.put(name.name(), ClojureLowering.Kind.VARIABLE);
@@ -511,7 +514,9 @@ final class ClojureLoopLowering {
 					if (i + 1 < rest.size()) {
 						collectPatternNames(rest.get(i + 1), scope);
 					}
-					break;
+					// only an :as name may follow the rest pattern
+					i++;
+					continue;
 				}
 				collectPatternNames(element, scope);
 			}

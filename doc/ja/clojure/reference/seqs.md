@@ -69,3 +69,5 @@ seq は任意のコレクション上のリストビューです:strict なコ�
 | `not-empty` | `(not-empty [])` | `nil` |
 | `empty` | `(empty [1 2])` | `[]` |
 | `pmap` | `(pmap inc [1 2])` | `(2 3)` |
+| `tree-seq` | `(tree-seq vector? seq [1 [2]])` | `([1 [2]] 1 [2] 2)` |
+| `flatten` | `(flatten [1 [2 [3]]])` | `(1 2 3)` |

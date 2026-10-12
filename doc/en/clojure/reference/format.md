@@ -13,12 +13,15 @@ spells `null` under any conversion.
 A malformed format string, a flag its conversion does not take, a missing argument or
 one of the wrong class is the oracle's refusal (`MissingFormatWidthException`,
 `IllegalFormatConversionException` ...) with its message, signalled after the
-arguments are evaluated. The format string must be literal; `%h`, `%a` and the date
-conversions `%t` are refused when the program is read.
+arguments are evaluated. A literal format string is parsed when the program is read, a
+computed one when the call runs, with the same renderings and refusals -- so `format`
+works as a value too (`(apply format fmt cols)`). `%h`, `%a` and the date conversions
+`%t` are refused.
 
 ```clojure
 (println (format "%s=%d" :a 5)) ; :a=5
 (println (format "%5s|%.2f" "ab" 3.14159)) ;    ab|3.14
 (println (format "%%x%04x|%,d|%+.1e" 10 1234567 -0.5)) ; %x000a|1,234,567|-5.0e-01
 (println (format "%2$s %1$s %<s" "a" "b")) ; b a a
+(println (apply format (str "%-" 4 "s|") ["ab"])) ; ab  |
 ```

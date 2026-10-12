@@ -4979,12 +4979,42 @@
                  (rontolisp::%clojure-partition-lazy n step
                   (rontolisp::%clojure-drop step s))))))))
 
+(defun rontolisp::%clojure-partition-pad (n step pad coll)
+  "(partition n step pad coll): runs of N every STEP members, like the oracle's;
+   an incomplete tail is kept, filled from PAD up to N members. A non-positive
+   size signals."
+  (if (<= n 0)
+      (error "partition takes a positive size")
+      (rontolisp::%clojure-lazy-or-strict coll
+       (rontolisp::%clojure-partition-pad-lazy n step pad coll))))
+
+(defun rontolisp::%clojure-partition-pad-lazy (n step pad coll)
+  "The lazy arm of %clojure-partition-pad (each run strict)."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (null s)
+           nil
+           (let ((part (rontolisp::%clojure-take n s)))
+             (if (< (length part) n)
+                 (list
+                  (append part
+                          (rontolisp::%clojure-take (- n (length part)) pad)))
+                 (cons part
+                       (rontolisp::%clojure-partition-pad-lazy n step pad
+                        (rontolisp::%clojure-drop step s))))))))))
+
 (defun rontolisp::%clojure-partition-v (&rest args)
-  "partition as a value: [n coll] or [n step coll]."
-  (if (= (rontolisp::%clojure-check-arity args 2 3 "partition") 2)
-      (rontolisp::%clojure-partition (car args) (car args) (car (cdr args)))
-      (rontolisp::%clojure-partition (car args) (car (cdr args))
-                                     (car (cdr (cdr args))))))
+  "partition as a value: [n coll], [n step coll] or [n step pad coll]."
+  (let ((n (rontolisp::%clojure-check-arity args 2 4 "partition")))
+    (cond ((= n 2)
+           (rontolisp::%clojure-partition (car args) (car args)
+                                          (car (cdr args))))
+          ((= n 3)
+           (rontolisp::%clojure-partition (car args) (car (cdr args))
+                                          (car (cdr (cdr args)))))
+          (t (rontolisp::%clojure-partition-pad (car args) (car (cdr args))
+              (car (cdr (cdr args))) (car (cdr (cdr (cdr args)))))))))
 
 (defun rontolisp::%clojure-interleave (colls)
   "(interleave c1 c2 ...) over the COLLS list: each one's first member, then
@@ -5050,6 +5080,61 @@
   "X, (f X), (f (f X)) ... as a lazy seq of the real function F."
   (rontolisp::%clojure-make-lazy
    (lambda () (cons x (rontolisp::%clojure-iterate f (funcall f x))))))
+
+(defun rontolisp::%clojure-index-needle (x)
+  "What String.indexOf and lastIndexOf search for: an int its character (the
+   indexOf(int) overload), anything else itself."
+  (if (integerp x) (string (code-char x)) x))
+
+(defun rontolisp::%clojure-tree-seq (branch children root)
+  "(tree-seq branch? children root): the nodes of the tree under ROOT, depth
+   first, lazily; the real functions BRANCH and CHILDREN are called on a node
+   as its cell realizes, like the oracle's walk."
+  (rontolisp::%clojure-tree-walk branch children (list (list root))))
+
+(defun rontolisp::%clojure-tree-walk (branch children pending)
+  "The lazy rest of a tree walk: PENDING is a stack of the seqs whose nodes are
+   still to come, the innermost first."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((stack pending) (s nil))
+       (do ()
+           ((or (null stack) (setq s (rontolisp::%clojure-seq (car stack)))))
+         (setq stack (cdr stack)))
+       (if (null stack)
+           nil
+           (let ((node (car s)) (rest (cons (cdr s) (cdr stack))))
+             (cons node
+                   (rontolisp::%clojure-tree-walk branch children
+                                                  (if (rontolisp::%clojure-truthy
+                                                       (funcall branch node))
+                                                      (cons
+                                                       (funcall children node)
+                                                       rest)
+                                                      rest)))))))))
+
+(defun rontolisp::%clojure-tree-seq-v (&rest args)
+  "tree-seq as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "tree-seq")
+  (rontolisp::%clojure-tree-seq (rontolisp::%clojure-as-fn (car args))
+                                (rontolisp::%clojure-as-fn (car (cdr args)))
+                                (car (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-flatten (x)
+  "(flatten x): the members of X's nested sequential collections that are no
+   sequential one, depth first, lazily, like the oracle's walk of
+   (rest (tree-seq sequential? seq x)); () when X is no sequential one."
+  (rontolisp::%clojure-filter-lazy
+   (lambda (y) (not (rontolisp::%clojure-is-sequential-type y)))
+   (rontolisp::%clojure-tree-walk
+    (lambda (y) (rontolisp::%clojure-is-sequential-type y))
+    (lambda (y) (rontolisp::%clojure-seq y))
+    (if (and x (rontolisp::%clojure-is-sequential-type x)) (list x) nil))))
+
+(defun rontolisp::%clojure-flatten-v (&rest args)
+  "flatten as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "flatten")
+  (rontolisp::%clojure-flatten (car args)))
 
 (defun rontolisp::%clojure-repeatedly (f)
   "The infinite seq of (f) calls of the real function F."
@@ -8261,6 +8346,37 @@
    (if (stringp x) (rontolisp::%clojure-re-compile x) x)
    "re-pattern takes a pattern or a string"))
 
+(defun rontolisp::%clojure-string-value-of (x)
+  "String/valueOf of one value: its toString; nil the NullPointerException the
+   oracle's reflector meets, choosing valueOf(char[]) for it."
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot read the array length because \"value\" is null")
+      (rontolisp::%clojure-str-of x "" nil)))
+
+(defun rontolisp::%clojure-pattern-quote (s)
+  "Pattern/quote: the source matching the string S literally, as Java spells
+   it -- S inside \\Q...\\E, each \\E of S closed and reopened around an
+   escaped one."
+  (if (not (stringp s))
+      (rontolisp::%clojure-class-cast-exception-of
+       "Pattern/quote takes a string" s)
+      (let ((out "\\Q") (from 0) (at (search "\\E" s)))
+        (do ()
+            ((null at))
+          (setq out (concatenate 'string out (subseq s from at) "\\E\\\\E\\Q"))
+          (setq from (+ at 2))
+          (setq at (search "\\E" s :start2 from)))
+        (concatenate 'string out (subseq s from) "\\E"))))
+
+(defun rontolisp::%clojure-pattern-matches (regex input)
+  "Pattern/matches: whether the regex source REGEX matches the whole of INPUT, a
+   string or a type implementing CharSequence (read through its toString)."
+  (if (rontolisp::%clojure-re-matches (rontolisp::%clojure-re-pattern regex)
+       (if (stringp input) input (rontolisp::%clojure-str-of input "" nil)))
+      t
+      rontolisp::%clojure-false))
+
 (defun rontolisp::%clojure-re-matcher (pat s)
   "A matcher of the pattern PAT over the string S (a pattern only, like the
    oracle), or over a type implementing CharSequence, read only as far as a
@@ -9402,11 +9518,23 @@
               (if (rontolisp::%clojure-truthy v) (setq found v))))))
     found))
 
+(defun rontolisp::%clojure-some-pred-major-last (preds args)
+  "The first truthy (p x) over PREDS, every member of ARGS per predicate, else
+   the last (p x) tried (nil when none)."
+  (let ((last nil) (found nil))
+    (dolist (p preds)
+      (dolist (x args)
+        (if (not found)
+            (progn
+              (setq last (funcall p x))
+              (if (rontolisp::%clojure-truthy last) (setq found t))))))
+    last))
+
 (defun rontolisp::%clojure-some-fn-apply (preds args)
-  "The oracle's some-fn answer: one or two predicates walk the first three
-   arguments argument-major (failing with the last (p x)), three or more walk
-   them predicate-major (failing with nil); the arguments past three follow the
-   same order and fail with nil."
+  "The oracle's some-fn answer: one to three predicates walk the first three
+   arguments predicate-major failing with the last (p x), and the arguments past
+   three argument-major failing with nil; four or more walk both predicate-major
+   and fail with nil."
   (let ((head nil) (tail args) (i 0))
     (do ()
         ((or (null tail) (= i 3)))
@@ -9414,10 +9542,10 @@
       (setq tail (cdr tail))
       (setq i (+ i 1)))
     (setq head (reverse head))
-    (if (cdr (cdr preds))
+    (if (cdr (cdr (cdr preds)))
         (let ((v (rontolisp::%clojure-some-pred-major preds head)))
           (if v v (rontolisp::%clojure-some-pred-major preds tail)))
-        (let ((v (rontolisp::%clojure-some-arg-major preds head)))
+        (let ((v (rontolisp::%clojure-some-pred-major-last preds head)))
           (cond ((rontolisp::%clojure-truthy v) v)
                 ((null tail) v)
                 (t (let ((w (rontolisp::%clojure-some-arg-major preds tail)))
@@ -11515,6 +11643,275 @@
                                                       (cdr magnitude) flags
                                                       width))))))))
 
+;; format of a format string computed at run time, and format as a value
+;; (tools.cli's (apply format fmt cols)): Formatter's parse when the call runs,
+;; every refusal the lowering's parse of a literal makes (ClojureFormatLowering)
+;; in the same class and words, then each specifier's argument converted left
+;; to right through the helpers above. A parsed specifier is the list (index
+;; flags width precision conv): INDEX 0 the next ordinary argument, n the n$
+;; one, -1 the previous one (<), -2 none (%% and %n); FLAGS in Formatter's
+;; order, < included; WIDTH and PRECISION an integer or nil.
+(defun rontolisp::%clojure-format-v (fmt &rest args)
+  "format as a value, and a call whose format string is computed: FMT parsed
+   as Formatter parses it, ARGS converted like a literal's."
+  (cond ((null fmt)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"String.length()\" because \"s\" is null"))
+        ((not (stringp fmt))
+         (rontolisp::%clojure-class-cast-exception
+          (concatenate 'string "class " (rontolisp::%clojure-class-name-of fmt)
+                       " cannot be cast to class java.lang.String")))
+        (t (rontolisp::%clojure-format-print
+            (rontolisp::%clojure-format-parse fmt) args))))
+
+(defun rontolisp::%clojure-format-parse (s)
+  "Formatter's parse of the format string S: its literal runs (strings) and
+   specifiers in order, the first refusal of the parse signalled."
+  (let ((parts nil) (i 0) (n (length s)) (done nil))
+    (do ()
+        (done (reverse parts))
+      (let ((pct (position #\% s :start i)))
+        (cond ((null pct)
+               (if (< i n) (setq parts (cons (subseq s i) parts)))
+               (setq done t))
+              (t
+               (if (> pct i) (setq parts (cons (subseq s i pct) parts)))
+               (if (= (+ pct 1) n)
+                   (rontolisp::%clojure-unknown-format-conversion-exception
+                    "Conversion = '%'"))
+               (let ((spec (rontolisp::%clojure-format-specifier s pct)))
+                 (setq parts (cons (car spec) parts))
+                 (setq i (cdr spec))
+                 (if (>= i n) (setq done t)))))))))
+
+(defun rontolisp::%clojure-format-digits-end (s j)
+  "The index past the run of decimal digits of S starting at J."
+  (let ((k j) (n (length s)))
+    (do ()
+        ((or (>= k n) (not (digit-char-p (char s k)))) k)
+      (setq k (+ k 1)))))
+
+(defun rontolisp::%clojure-format-specifier (s pct)
+  "The specifier of S at the % at PCT, Formatter's
+   %[index$][flags][width][.precision][t]conversion with its checks, consed
+   onto the index past it."
+  (let* ((n (length s))
+         (j (+ pct 1))
+         (index 0)
+         (d (rontolisp::%clojure-format-digits-end s j)))
+    (if (and (> d j) (< d n) (char= (char s d) #\$))
+        (progn
+          (setq index (parse-integer s :start j :end d))
+          (if (= index 0)
+              (rontolisp::%clojure-illegal-format-argument-index-exception
+               "Illegal format argument index = 0"))
+          (setq j (+ d 1))))
+    (let ((from j))
+      (do ()
+          ((or (>= j n) (not (find (char s j) "-#+ 0,(<"))))
+        (setq j (+ j 1)))
+      (let ((written (subseq s from j))
+            (width nil)
+            (precision nil)
+            (wend (rontolisp::%clojure-format-digits-end s j)))
+        (if (> wend j)
+            (progn
+              (setq width (parse-integer s :start j :end wend))
+              (setq j wend)))
+        (if (and (< (+ j 1) n) (char= (char s j) #\.)
+                 (digit-char-p (char s (+ j 1))))
+            (let ((pend (rontolisp::%clojure-format-digits-end s (+ j 1))))
+              (setq precision (parse-integer s :start (+ j 1) :end pend))
+              (setq j pend)))
+        (cond ((and (< (+ j 1) n) (find (char s j) "tT")
+                    (or (alpha-char-p (char s (+ j 1)))
+                        (char= (char s (+ j 1)) #\%)))
+               (error
+                (concatenate 'string "format directive %" (string (char s j))
+                             " is not supported yet")))
+              ((or (>= j n)
+                   (not (or (alpha-char-p (char s j)) (char= (char s j) #\%))))
+               (rontolisp::%clojure-unknown-format-conversion-exception
+                (concatenate 'string "Conversion = '"
+                             (string (char s (+ pct 1))) "'"))))
+        (let ((conv (char s j)) (flags ""))
+          (dotimes (k (length written))
+            (if (< (position (char written k) written) k)
+                (rontolisp::%clojure-duplicate-format-flags-exception
+                 (concatenate 'string "Flags = '" (string (char written k))
+                              "'"))))
+          (dolist (flag '(#\- #\# #\+ #\Space #\0 #\, #\( #\<))
+            (if (find flag written)
+                (setq flags (concatenate 'string flags (string flag)))))
+          (if (find #\< flags) (setq index -1))
+          (if (not (find conv "bBhHsScCdoxXeEfgGaAtT%n"))
+              (rontolisp::%clojure-unknown-format-conversion-exception
+               (concatenate 'string "Conversion = '" (string conv) "'")))
+          (let* ((kind (char-downcase conv))
+                 (spec
+                  (list (if (find kind "%n") -2 index) flags width precision
+                        conv)))
+            (rontolisp::%clojure-format-check spec)
+            (if (find kind "ha")
+                (error
+                 (concatenate 'string "format directive %" (string conv)
+                              " is not supported yet")))
+            (cons spec (+ j 1))))))))
+
+(defun rontolisp::%clojure-format-spec-text (spec)
+  "Formatter's FormatSpecifier.toString of SPEC, the words of its refusals."
+  (concatenate 'string "%" (nth 1 spec)
+   (if (> (nth 0 spec) 0)
+       (concatenate 'string (princ-to-string (nth 0 spec)) "$")
+       "") (if (nth 2 spec) (princ-to-string (nth 2 spec)) "")
+   (if (nth 3 spec) (concatenate 'string "." (princ-to-string (nth 3 spec))) "")
+   (string (nth 4 spec))))
+
+(defun rontolisp::%clojure-format-check (spec)
+  "Formatter's checks of the parsed SPEC by its conversion, refused in its
+   class and words."
+  (let ((flags (nth 1 spec))
+        (width (nth 2 spec))
+        (precision (nth 3 spec))
+        (kind (char-downcase (nth 4 spec))))
+    (cond ((find kind "bhs")
+           (if (and (find kind "bh") (find #\# flags))
+               (rontolisp::%clojure-format-flags-mismatch kind "#"))
+           (rontolisp::%clojure-format-require-width spec "-")
+           (rontolisp::%clojure-format-bad-flags spec "+ 0,("))
+          ((char= kind #\c)
+           (if precision
+               (rontolisp::%clojure-illegal-format-precision-exception
+                (princ-to-string precision)))
+           (rontolisp::%clojure-format-bad-flags spec "#+ 0,(")
+           (rontolisp::%clojure-format-require-width spec "-"))
+          ((find kind "dox")
+           (rontolisp::%clojure-format-check-numeric spec)
+           (if precision
+               (rontolisp::%clojure-illegal-format-precision-exception
+                (princ-to-string precision)))
+           (rontolisp::%clojure-format-bad-flags spec
+                                                 (if (char= kind #\d) "#" ",")))
+          ((find kind "efga")
+           (rontolisp::%clojure-format-check-numeric spec)
+           (cond
+            ((char= kind #\e) (rontolisp::%clojure-format-bad-flags spec ","))
+            ((char= kind #\g) (rontolisp::%clojure-format-bad-flags spec "#"))
+            ((char= kind #\a)
+             (rontolisp::%clojure-format-bad-flags spec ",("))))
+          (t
+           (if precision
+               (rontolisp::%clojure-illegal-format-precision-exception
+                (princ-to-string precision)))
+           (if (char= kind #\%)
+               (progn
+                 (if (and (> (length flags) 0) (string/= flags "-"))
+                     (rontolisp::%clojure-format-illegal-flags spec))
+                 (rontolisp::%clojure-format-require-width spec "-"))
+               (progn
+                 (if width
+                     (rontolisp::%clojure-illegal-format-width-exception
+                      (princ-to-string width)))
+                 (if (> (length flags) 0)
+                     (rontolisp::%clojure-format-illegal-flags spec))))))))
+
+(defun rontolisp::%clojure-format-check-numeric (spec)
+  "The checks every numeric conversion makes of SPEC's flags."
+  (let ((flags (nth 1 spec)))
+    (rontolisp::%clojure-format-require-width spec "-0")
+    (if (or (and (find #\+ flags) (find #\Space flags))
+            (and (find #\- flags) (find #\0 flags)))
+        (rontolisp::%clojure-format-illegal-flags spec))))
+
+(defun rontolisp::%clojure-format-require-width (spec flags)
+  "MissingFormatWidthException when SPEC has one of FLAGS but no width."
+  (if (null (nth 2 spec))
+      (dotimes (k (length flags))
+        (if (find (char flags k) (nth 1 spec))
+            (rontolisp::%clojure-missing-format-width-exception
+             (rontolisp::%clojure-format-spec-text spec))))))
+
+(defun rontolisp::%clojure-format-bad-flags (spec bad)
+  "The conversion's refusal of the flags of SPEC among BAD, all of them named."
+  (let ((given ""))
+    (dotimes (k (length (nth 1 spec)))
+      (if (find (char (nth 1 spec) k) bad)
+          (setq given
+                (concatenate 'string given (string (char (nth 1 spec) k))))))
+    (if (> (length given) 0)
+        (rontolisp::%clojure-format-flags-mismatch (char-downcase (nth 4 spec))
+                                                   given))))
+
+(defun rontolisp::%clojure-format-flags-mismatch (kind flags)
+  "FormatFlagsConversionMismatchException of the conversion KIND and FLAGS."
+  (rontolisp::%clojure-format-flags-conversion-mismatch-exception
+   (concatenate 'string "Conversion = " (string kind) ", Flags = " flags)))
+
+(defun rontolisp::%clojure-format-illegal-flags (spec)
+  "IllegalFormatFlagsException naming SPEC's flags."
+  (rontolisp::%clojure-illegal-format-flags-exception
+   (concatenate 'string "Flags = '" (nth 1 spec) "'")))
+
+(defun rontolisp::%clojure-format-print (parts args)
+  "The text of the parsed PARTS over the ARGS list: each specifier's argument
+   resolved as Formatter resolves it and converted, left to right."
+  (let ((out "") (last -1) (ordinary -1) (count (length args)))
+    (dolist (part parts out)
+      (if (stringp part)
+          (setq out (concatenate 'string out part))
+          (let* ((index (nth 0 part))
+                 (flags (remove #\< (nth 1 part)))
+                 (width (nth 2 part))
+                 (precision (nth 3 part))
+                 (conv (nth 4 part))
+                 (kind (char-downcase conv)))
+            (cond ((char= kind #\%)
+                   (setq out
+                         (concatenate 'string out
+                                      (rontolisp::%clojure-format-justify "%"
+                                       flags width))))
+                  ((char= kind #\n)
+                   (setq out (concatenate 'string out (string #\Newline))))
+                  (t
+                   (let ((at
+                          (cond ((= index -1) last)
+                           ((= index 0)
+                            (setq ordinary (+ ordinary 1))
+                            ordinary)
+                           (t (- index 1)))))
+                     (setq last at)
+                     (if (or (< at 0) (>= at count))
+                         (rontolisp::%clojure-missing-format-argument-exception
+                          (concatenate 'string "Format specifier '"
+                           (rontolisp::%clojure-format-spec-text part) "'")))
+                     (if (and (char= kind #\s) (find #\# flags))
+                         (rontolisp::%clojure-format-flags-mismatch #\s "#"))
+                     (let ((x (nth at args)))
+                       (setq out
+                             (concatenate 'string out
+                                          (cond
+                                           ((char= kind #\s)
+                                            (rontolisp::%clojure-format-text
+                                             (rontolisp::%clojure-str-of x
+                                                                         "null"
+                                                                         nil)
+                                             conv flags width precision))
+                                           ((char= kind #\b)
+                                            (rontolisp::%clojure-format-text
+                                             (if (rontolisp::%clojure-truthy x)
+                                                 "true"
+                                                 "false") conv flags width
+                                             precision))
+                                           ((char= kind #\c)
+                                            (rontolisp::%clojure-format-char x
+                                             conv flags width))
+                                           ((find kind "dox")
+                                            (rontolisp::%clojure-format-integer
+                                             x conv flags width))
+                                           (t (rontolisp::%clojure-format-float
+                                               x conv flags width
+                                               precision))))))))))))))
+
 (defun rontolisp::%clojure-rationalize (x)
   "(rationalize x): nil as nil, a rational itself, a double as the rational of
    its shortest decimal (0.1 is 1/10); anything else signals."
@@ -13053,12 +13450,50 @@
           v))))
 
 (defun rontolisp::%clojure-var-dynamic
-    (name getter meta depth &optional (generation 1))
+    (name getter meta depth &optional (generation 1) binder)
   "The var NAME of a ^:dynamic var: as the plain var, and DEPTH, a closure over
-   its binding-depth counter, recorded as the fourth element for thread-bound?."
+   its binding-depth counter, recorded as the fourth element for thread-bound?;
+   BINDER, the closure binding the var around a call, as the fifth in a program
+   binding vars through var objects (%clojure-with-bindings)."
   (let ((v (rontolisp::%clojure-var name getter meta generation)))
-    (rplacd (cdr (cdr v)) (list depth))
+    (rplacd (cdr (cdr v)) (if binder (list depth binder) (list depth)))
     v))
+
+;; with-bindings, with-bindings* and a push-thread-bindings followed by a try
+;; whose finally pops (the shape binding expands to, hiccup's and honeysql's):
+;; each var of the map bound to its value around THUNK, through the binder its
+;; site carries -- the binding binding lowers to, so thread-scoped like it.
+(defun rontolisp::%clojure-with-bindings (bindings thunk)
+  "The zero-argument function THUNK called with each var of the map BINDINGS
+   bound to its value, like the oracle's push-thread-bindings around a try
+   whose finally pops; a var that is no dynamic one is refused in its words."
+  (rontolisp::%clojure-bind-entries (rontolisp::%clojure-seq bindings) thunk))
+
+(defun rontolisp::%clojure-bind-entries (entries thunk)
+  "THUNK called under the bindings of the map ENTRIES, a seq of [var value]."
+  (if (null entries)
+      (funcall thunk)
+      (let ((var (aref (car entries) 0)) (value (aref (car entries) 1)))
+        (if (not (rontolisp::%clojure-var-p var))
+            (rontolisp::%clojure-class-cast-exception
+             (concatenate 'string "class "
+                          (rontolisp::%clojure-class-name-of var)
+                          " cannot be cast to class clojure.lang.Var")))
+        (let ((binder (car (cdr (cdr (cdr (cdr var)))))))
+          (if (null binder)
+              (rontolisp::%clojure-illegal-state-exception
+               (concatenate 'string "Can't dynamically bind non-dynamic var: "
+                            (car (cdr var)))))
+          (funcall binder value
+                   (lambda ()
+                     (rontolisp::%clojure-bind-entries
+                      (rontolisp::%clojure-seq (cdr entries)) thunk)))))))
+
+(defun rontolisp::%clojure-with-bindings-v (&rest args)
+  "with-bindings* as a value: a map, a function and its arguments."
+  (rontolisp::%clojure-check-arity args 2 nil "with-bindings*")
+  (rontolisp::%clojure-with-bindings (car args)
+   (lambda () (rontolisp::%clojure-call (car (cdr args)) (cdr (cdr args))))))
 
 (defun rontolisp::%clojure-replace-meta (x m)
   "X with the metadata map M replacing its own, none for a nil M; answers X."
@@ -13245,6 +13680,31 @@
   (declare (ignore symbol))
   (rontolisp::%clojure-unsupported-operation-exception
    "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+
+(defun rontolisp::%clojure-find-var (symbol)
+  "find-var of a computed symbol: an unqualified one is the oracle's refusal, a
+   qualified one is resolved -- refused at run time, answered through the
+   lowering while a macro expands (hiccup's compile-multi)."
+  (cond ((not (rontolisp::%clojure-real-symbol-p symbol))
+         (rontolisp::%clojure-class-cast-exception-of
+          (concatenate 'string "class "
+                       (rontolisp::%clojure-class-name-of symbol)
+                       " cannot be cast to class clojure.lang.Symbol") symbol))
+        ((null (rontolisp::%clojure-namespace symbol))
+         (rontolisp::%clojure-illegal-argument-exception
+          "Symbol must be namespace-qualified"))
+        (t (rontolisp::%clojure-find-var-resolve symbol))))
+
+(defun rontolisp::%clojure-find-var-resolve (symbol)
+  "find-var of a computed qualified symbol at run time: refused."
+  (declare (ignore symbol))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "find-var of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+
+(defun rontolisp::%clojure-find-var-v (&rest args)
+  "find-var as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "find-var")
+  (rontolisp::%clojure-find-var (car args)))
 
 (defun rontolisp::%clojure-ns-resolve-in (pair)
   "ns-resolve of the symbol (second PAIR) in the namespace (first PAIR) at run
@@ -13935,6 +14395,16 @@
       (lambda (&rest args)
         (funcall (rontolisp::%clojure-interface-entry f "applyTo") f args))
       f))
+
+(defun rontolisp::%clojure-apply-v (f &rest args)
+  "apply as a value: F over the leading ARGS and the members of the last one,
+   which may be any seqable, through the dispatcher like a call of apply."
+  (if (null args)
+      (rontolisp::%clojure-arity-error 1 "apply")
+      (rontolisp::%clojure-call (rontolisp::%clojure-applied-fn f)
+                                (append (butlast args)
+                                        (rontolisp::%clojure-seq-all
+                                         (car (last args)))))))
 
 (defun rontolisp::%clojure-interface-deref (x)
   "@x of the IDeref X: what its deref answers."

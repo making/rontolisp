@@ -22,8 +22,10 @@ var's value, so `binding` rebinds them with dynamic extent (see
 `binding`, like the oracle's non-dynamic error.
 
 A definition may use a name defined below it: the file is pre-scanned for every top-level
-`def`/`defn` (and `declare`) name. Inside a body, `defn` works only in statement
-position, and a multi-arity one only at the top level.
+`def`/`defn` (and `declare`) name. Inside a body, `defn` works in statement position,
+a multi-arity one too (medley's `(letfn [...] (defn map-padded ...))`): each arity is
+defined when the body runs, closing over its locals. A condition map (`:pre`/`:post`)
+works as in [fn](fn.md).
 
 Redefining a `defn` with `def` captures the function: `(def p (memoize p))`
 evaluates its value against the OLD `FUNCTION` binding, so top-level calls hit

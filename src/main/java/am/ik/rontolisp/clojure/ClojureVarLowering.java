@@ -207,7 +207,7 @@ final class ClojureVarLowering {
 			throw new LispReadException("var takes a symbol: " + items.get(1).print());
 		}
 		String name = target.name();
-		String core = ClojureCoreNames.coreSpelling(name);
+		String core = ctx.coreSpelling(name);
 		String key = core != null ? null : ctx.lookupVar(name);
 		if (key != null) {
 			return varOfKey(ctx, key);
@@ -216,9 +216,49 @@ final class ClojureVarLowering {
 			core = name;
 		}
 		if (core == null) {
+			LispVal library = libraryVarOf(ctx, name);
+			if (library != null) {
+				return library;
+			}
 			throw new LispReadException("Unable to resolve var: " + name + " in this context");
 		}
 		return coreVarOf(ctx, core);
+	}
+
+	/**
+	 * The var of a library the lowering implements ({@code clojure.string},
+	 * {@code clojure.set}, {@code clojure.edn} ...) a name names -- qualified through an
+	 * alias or the full name, or referred -- whose root is the function value the name
+	 * lowers to in value position; or null for any other name, and for a var with no
+	 * function value (a macro). camel-snake-kebab's macro body calls
+	 * {@code (resolve 'clojure.string/capitalize)}.
+	 */
+	private static @Nullable LispVal libraryVarOf(ClojureLowering ctx, String name) {
+		ClojureLowering.VarRef ref;
+		try {
+			ref = ClojureNamespaceLowering.resolveQualified(ctx, name);
+		}
+		catch (LispReadException ex) {
+			return null; // a var the library does not have
+		}
+		if (ref == null && ClojureLowering.qualifierSlash(name) < 0 && !ctx.isLocal(name)) {
+			ref = ClojureNamespaceLowering.libraryRefer(ctx, name);
+		}
+		if (ref == null) {
+			return null;
+		}
+		LispVal root;
+		try {
+			root = ClojureNamespaceLowering.namespaceValue(ctx, ref);
+		}
+		catch (LispReadException ex) {
+			return null;
+		}
+		LispVal metaForm = ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map"), keyword("name"),
+				ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol(ref.var())), keyword("ns"),
+				ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol(ref.ns()))));
+		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
+		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(ref.ns() + "/" + ref.var()), getter, metaForm);
 	}
 
 	/**
@@ -250,6 +290,50 @@ final class ClojureVarLowering {
 	/** {@code resolve} as a value: every argument is computed. */
 	static LispVal resolveValue() {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureMacroLowering.RESOLVE);
+	}
+
+	/** The run-time library's {@code find-var} of a computed symbol. */
+	private static final LispSymbol FIND_VAR = new LispSymbol("RONTOLISP::%CLOJURE-FIND-VAR");
+
+	/**
+	 * {@code (find-var sym)}, the oracle's {@code Var.find}: a quoted qualified symbol
+	 * resolves while the program lowers -- the var of an existing namespace, nil for one
+	 * it lacks, the oracle's {@code No such namespace} for a namespace that does not
+	 * exist (an alias is no namespace), {@code Symbol must be namespace-qualified} for an
+	 * unqualified symbol, both run-time refusals; any other argument calls the run-time
+	 * library's {@code find-var}, which refuses in the program and resolves while a macro
+	 * expands (hiccup's {@code compile-multi}).
+	 * @param ctx the hub
+	 * @param items the form, head included
+	 * @return the lowered call
+	 */
+	static LispVal findVarOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/find-var");
+		List<LispVal> quoted = ClojureLowerUtil.items(items.get(1));
+		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
+				&& ClojureLowerUtil.stripMeta(quoted.get(1)) instanceof LispSymbol target
+				&& !target.name().startsWith(":")) {
+			String name = target.name();
+			int slash = ClojureLowering.qualifierSlash(name);
+			if (slash < 0) {
+				return ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
+						LispString.literal("Symbol must be namespace-qualified"));
+			}
+			String ns = name.substring(0, slash);
+			if (!ctx.knowsNamespace(ns) && !ClojureNamespaceLowering.isKnownNamespace(ns)) {
+				return ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
+						LispString.literal("No such namespace: " + ns));
+			}
+			return resolved(ctx, name);
+		}
+		return ClojureLowerUtil.list(FIND_VAR, ctx.lower(items.get(1)));
+	}
+
+	/** {@code find-var} as a value: every argument is computed. */
+	static LispVal findVarValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+				new LispSymbol("RONTOLISP::%CLOJURE-FIND-VAR-V"));
 	}
 
 	/**
@@ -417,7 +501,7 @@ final class ClojureVarLowering {
 	static LispVal resolved(ClojureLowering ctx, String name) {
 		String core;
 		try {
-			core = ClojureCoreNames.coreSpelling(name);
+			core = ctx.coreSpelling(name);
 		}
 		catch (LispReadException ex) {
 			return ClojureLowering.NIL_CONST; // clojure.core/name of no core var
@@ -432,6 +516,10 @@ final class ClojureVarLowering {
 		if (core != null) {
 			return ClojureCoreNames.isMacro(core) || ctx.coreValueOrNull(core) != null ? coreVarOf(ctx, core)
 					: ClojureLowering.NIL_CONST;
+		}
+		LispVal library = libraryVarOf(ctx, name);
+		if (library != null) {
+			return library;
 		}
 		LispVal classValue = ClojureInteropLowering.classValue(ctx, name);
 		return classValue != null ? classValue : ClojureLowering.NIL_CONST;
@@ -517,7 +605,7 @@ final class ClojureVarLowering {
 		if (ctx.isLocal(name)) {
 			throw new LispReadException("Unable to resolve var: " + name + " in this context");
 		}
-		String core = ClojureCoreNames.coreSpelling(name);
+		String core = ctx.coreSpelling(name);
 		String key = core != null ? null : ctx.lookupVar(name);
 		if (key == null) {
 			if (core != null || ClojureCoreNames.contains(name)) {
@@ -584,10 +672,44 @@ final class ClojureVarLowering {
 			ctx.usedSpecials.add(name);
 			LispSymbol counter = special.counter();
 			LispVal depth = counter == null ? new LispInteger(1) : counter;
-			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), depth));
+			List<LispVal> call = new ArrayList<>(List.of(runtime("VAR-DYNAMIC"), LispString.literal(key), getter,
+					metaForm, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), depth)));
+			if (ctx.threadBinders) {
+				List<LispVal> pairs = new ArrayList<>();
+				pairs.add(ClojureLowerUtil.list(ctx.specialValue(special), BINDER_VALUE));
+				LispVal depthPair = specialDepthPair(ctx, name);
+				if (depthPair != null) {
+					pairs.add(depthPair);
+				}
+				call.add(new LispInteger(1));
+				call.add(binder(pairs));
+			}
+			else {
+				ctx.unboundDynamicSites = true;
+			}
+			return ClojureLowerUtil.list(call);
 		}
 		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
+	}
+
+	/** The value a dynamic var's binder binds. */
+	private static final LispSymbol BINDER_VALUE = new LispSymbol(ClojureLowering.mangle("binder-value"));
+
+	/** The function a dynamic var's binder calls under the binding. */
+	private static final LispSymbol BINDER_THUNK = new LispSymbol(ClojureLowering.mangle("binder-thunk"));
+
+	/**
+	 * A dynamic var's binder:
+	 * {@code (lambda (value thunk) (let* PAIRS (funcall thunk)))}, the {@code binding} of
+	 * the var -- its special and its binding-depth counter, as {@code binding} lowers
+	 * them -- around a call, which {@code with-bindings} and a
+	 * {@code push-thread-bindings} pair reach through the var object
+	 * ({@code %clojure-with-bindings}). Thread-scoped like {@code binding} itself.
+	 */
+	private static LispVal binder(List<LispVal> pairs) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(BINDER_VALUE, BINDER_THUNK),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), BINDER_THUNK)));
 	}
 
 	/**
@@ -658,17 +780,31 @@ final class ClojureVarLowering {
 		}
 		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
 		List<LispVal> call = new ArrayList<>();
+		LispVal binder = null;
 		if (ctx.dynamicVars.contains(key)) {
 			// only a dynamic var's site carries the binding-depth reader thread-bound?
 			// asks, so a program with no dynamic var pays nothing for it
 			call.addAll(List.of(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm, ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), ClojureLowering.boundDepthSym(key))));
+			// and its binder only in a program binding vars through var objects
+			if (ctx.threadBinders) {
+				LispSymbol depth = ClojureLowering.boundDepthSym(key);
+				binder = binder(
+						List.of(ClojureLowerUtil.list(ClojureLowering.varSym(key), BINDER_VALUE), ClojureLowerUtil
+							.list(depth, ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1)))));
+			}
+			else {
+				ctx.unboundDynamicSites = true;
+			}
 		}
 		else {
 			call.addAll(List.of(runtime("VAR"), LispString.literal(key), getter, metaForm));
 		}
-		if (generation != 1) {
+		if (generation != 1 || binder != null) {
 			call.add(new LispInteger(generation));
+		}
+		if (binder != null) {
+			call.add(binder);
 		}
 		return ClojureLowerUtil.list(call);
 	}
@@ -744,7 +880,7 @@ final class ClojureVarLowering {
 		LispVal f = ctx.lower(items.get(2));
 		LispVal args = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3));
 		if (name != null) {
-			String core = ClojureCoreNames.coreSpelling(name);
+			String core = ctx.coreSpelling(name);
 			String key = core != null ? null : ctx.lookupVar(name);
 			if (key != null && hasValueCell(ctx, key)) {
 				return ClojureLowerUtil.list(runtime("ALTER-ROOT"), var, rootSetterOf(ctx, key), f, args);

@@ -8,6 +8,8 @@ specials (`*out*`, `*in*`, `*err*`, `*agent*` and the flags such as `*print-leng
 and `*assert*` -- bare or `clojure.core/`-qualified, since a syntax-quote qualifies
 them) may be bound; anything else is refused, like the oracle's non-dynamic error. A `^:dynamic` `defn` holds its function in the var, so it
 rebinds too (any other `defn` stays refused). Inits run sequentially, like `let`.
+[with-bindings](with-bindings.md) binds a map of var objects the same way, and so does a
+[push-thread-bindings](push-thread-bindings.md) a `try` popping in its `finally` follows.
 
 ```clojure
 (def ^:dynamic *loud* false)

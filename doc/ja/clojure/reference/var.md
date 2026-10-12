@@ -11,6 +11,9 @@ attr マップ、`:line`/`:column`/`:file`、`:name`、`:ns`）を返します�
 ありません（名前はローカルを越えて解決されます）。`clojure.core` の名前は core の var で、
 `#'clojure.core/name` と表示されます。ルートは core の値、メタデータは `:name`、`:ns` と
 マクロの `:macro` です。ここで値を持たない core の var（`#'*err*`）は拒否されます。
+このフロントエンドが低レベル化として実装するライブラリの var（`#'clojure.string/join`、
+エイリアス経由の `#'s/trim`、refer した `#'union`）も var で、ルートは関数値、メタデータは
+`:name` と `:ns` です。
 
 ```clojure
 (defn greet "Says hello." [who] (str "Hello, " who))
