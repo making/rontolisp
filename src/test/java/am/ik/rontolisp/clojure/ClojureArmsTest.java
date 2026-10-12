@@ -1,8 +1,10 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -298,6 +300,65 @@ class ClojureArmsTest {
 			assertThat(ClojureStringLowering.reCompiler(source)).as(source)
 				.isEqualTo(ClojureStringLowering.RE_COMPILE_UNICODE);
 		}
+	}
+
+	@Test
+	void theGraphemeFamilyIsMadeByAPatternThatMayNameAGraphemeCluster() {
+		// the parser's arms refuse \X and \b{g} as before without the family, and the
+		// matcher's clause for them goes
+		List<LispVal> parser = read("(if (rontolisp::%clojure-re-grapheme-p st) (list :graph) (error \"no\"))");
+		assertThat(ClojureArms.strip(parser, ClojureArms.Family.REGEX_GRAPHEME).stream().map(LispVal::print))
+			.containsExactly("(ERROR \"no\")");
+		List<LispVal> matcher = read(
+				"(cond ((eq tag :lb) (lb)) ((rontolisp::%clojure-re-grapheme-op-p op) (gr op))" + " (t (anchor)))");
+		assertThat(ClojureArms.strip(matcher, ClojureArms.Family.REGEX_GRAPHEME).stream().map(LispVal::print))
+			.containsExactly("(COND ((EQ TAG :LB) (LB)) (T (ANCHOR)))");
+		for (String maker : List.of("rontolisp::%clojure-re-grapheme-source", "rontolisp::%clojure-re-pattern",
+				"rontolisp::%clojure-read-string", "rontolisp::%clojure-lispreader-regex")) {
+			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_GRAPHEME).builds())
+				.as(maker)
+				.isTrue();
+		}
+		for (String other : List.of("rontolisp::%clojure-re-compile", "rontolisp::%clojure-re-compile-bound",
+				"rontolisp::%clojure-re-compile-unicode")) {
+			assertThat(ClojureArms.scan(read("(" + other + " x)"), ClojureArms.Family.REGEX_GRAPHEME).builds())
+				.as(other)
+				.isFalse();
+		}
+		assertThat(
+				ClojureArms.scan(read("(rontolisp::%clojure-re-grapheme-source x)"), ClojureArms.Family.REGEX_UNICODE)
+					.builds())
+			.isFalse();
+		// a literal's source is wrapped where it may name one: a backslash before X,
+		// or one before b and an opening brace before g
+		for (String source : List.of("\\X", "a\\X+", "\\b{g}", "(?x)\\b {g}", "\\\\X")) {
+			assertThat(ClojureStringLowering.mayNameAGraphemeCluster(source)).as(source).isTrue();
+		}
+		for (String source : List.of("X", "\\b", "\\b{2}", "{g}", "\\x")) {
+			assertThat(ClojureStringLowering.mayNameAGraphemeCluster(source)).as(source).isFalse();
+		}
+		assertThat(ClojureStringLowering.literalPattern(new LispString("\\X\\b")).print()).isEqualTo(
+				"(RONTOLISP::%CLOJURE-RE-COMPILE-BOUND (RONTOLISP::%CLOJURE-RE-GRAPHEME-SOURCE \"\\\\X\\\\b\"))");
+		assertThat(ClojureStringLowering.literalPattern(new LispString("a+")).print())
+			.isEqualTo("(RONTOLISP::%CLOJURE-RE-COMPILE \"a+\")");
+	}
+
+	@Test
+	void aLiteralsCharacterNamesAreLookedUpWhileLowering() {
+		// every text between a brace and a later closing brace naming a character, in
+		// the source and in the source without its \Q and \E; none for a source naming
+		// no \N
+		assertThat(ClojureStringLowering.characterNames("a{1}")).isNull();
+		assertThat(ClojureStringLowering.characterNames("\\N{LATIN SMALL LETTER A}x{2}"))
+			.containsExactly(Map.entry("LATIN SMALL LETTER A", 97));
+		assertThat(ClojureStringLowering.characterNames("\\N{digit one}\\N{foo}"))
+			.containsExactly(Map.entry("digit one", 49));
+		assertThat(ClojureStringLowering.characterNames("\\N{LATIN \\QSMALL\\E LETTER A}"))
+			.containsExactly(Map.entry("LATIN SMALL LETTER A", 97));
+		assertThat(ClojureStringLowering.literalPattern(new LispString("\\N{SPACE}")).print())
+			.isEqualTo("(RONTOLISP::%CLOJURE-RE-COMPILE \"\\\\N{SPACE}\" '(:NAMES (\"SPACE\" . 32)))");
+		assertThat(ClojureStringLowering.literalPattern(new LispString("\\N{foo}")).print())
+			.isEqualTo("(RONTOLISP::%CLOJURE-RE-COMPILE \"\\\\N{foo}\" '(:NAMES))");
 	}
 
 	@Test

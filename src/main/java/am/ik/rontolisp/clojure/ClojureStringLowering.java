@@ -188,7 +188,7 @@ final class ClojureStringLowering {
 				// families
 				// its text may need are made
 				if (items.get(1) instanceof LispString source) {
-					yield ClojureLowerUtil.list(new LispSymbol(reCompiler(source.value())), source);
+					yield literalPattern(source);
 				}
 				yield ClojureLowerUtil.list(new LispSymbol(RE_PATTERN), ctx.lower(items.get(1)));
 			}
@@ -771,6 +771,87 @@ final class ClojureStringLowering {
 
 	/** {@code re-pattern} of a computed value: a pattern whose source is unknown here. */
 	static final String RE_PATTERN = "RONTOLISP::%CLOJURE-RE-PATTERN";
+
+	/**
+	 * The source of a regex literal that may name a grapheme cluster ({@code \X},
+	 * {@code \b{g}}), which answers it as it is: the producer of
+	 * {@link ClojureArms.Family#REGEX_GRAPHEME}.
+	 */
+	static final String GRAPHEME_SOURCE = "RONTOLISP::%CLOJURE-RE-GRAPHEME-SOURCE";
+
+	/**
+	 * The parse of a pattern source known while lowering (a regex literal, a
+	 * {@code re-pattern} of a literal string): {@code (compiler source)} through
+	 * {@link #reCompiler}, the source wrapped in {@link #GRAPHEME_SOURCE} where it may
+	 * name a grapheme cluster, and the code points of the names its {@code \N{name}}
+	 * escapes may give ({@link #characterNames}) after it.
+	 * @param source the pattern's source
+	 * @return the form
+	 */
+	static LispVal literalPattern(LispString source) {
+		String text = source.value();
+		LispVal sourceForm = mayNameAGraphemeCluster(text)
+				? ClojureLowerUtil.list(new LispSymbol(GRAPHEME_SOURCE), source) : source;
+		LispVal compiler = new LispSymbol(reCompiler(text));
+		Map<String, Integer> names = characterNames(text);
+		if (names == null) {
+			return ClojureLowerUtil.list(compiler, sourceForm);
+		}
+		List<LispVal> table = new ArrayList<>();
+		table.add(ClojureLowerUtil.sym(":names"));
+		names.forEach((name, code) -> table.add(new LispCons(new LispString(name), new LispInteger(code))));
+		return ClojureLowerUtil.list(compiler, sourceForm,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(table)));
+	}
+
+	/**
+	 * Whether a pattern source may name {@code \X} or {@code \b{g}}: a backslash before
+	 * {@code X}, or one before {@code b} and an opening brace right before a {@code g}
+	 * (the parser reads the {@code g} right after the brace, but may reach the brace past
+	 * comments-mode space). Yes where the parse needs neither costs the grapheme table,
+	 * never an answer.
+	 * @param source the pattern's source
+	 * @return whether it may
+	 */
+	static boolean mayNameAGraphemeCluster(String source) {
+		return source.contains("\\X") || source.contains("\\b") && source.contains("{g");
+	}
+
+	/**
+	 * The code points {@code Character.codePointOf} gives the names a pattern source's
+	 * {@code \N{name}} escapes may spell, for the run-time parse to read, as the oracle's
+	 * parse reads them from the JDK's name list, which no backend carries: every text
+	 * between a brace and a later closing brace that names a character, in the source and
+	 * in the source without its {@code \Q} and {@code \E} (the parse reads a name after
+	 * its quoting is rewritten, which leaves a quoted letter or digit as it is). The
+	 * parse looks a name up by its exact text and refuses one missing as the oracle does
+	 * an unknown one.
+	 * @param source the pattern's source
+	 * @return the names that name a character, in the order found, or {@code null} for a
+	 * source naming no {@code \N}
+	 */
+	static @Nullable Map<String, Integer> characterNames(String source) {
+		if (!source.contains("\\N")) {
+			return null;
+		}
+		Map<String, Integer> names = new LinkedHashMap<>();
+		for (String text : List.of(source, source.replace("\\Q", "").replace("\\E", ""))) {
+			for (int open = text.indexOf('{'); open >= 0; open = text.indexOf('{', open + 1)) {
+				for (int close = text.indexOf('}', open + 1); close >= 0; close = text.indexOf('}', close + 1)) {
+					String name = text.substring(open + 1, close);
+					if (!names.containsKey(name)) {
+						try {
+							names.put(name, Character.codePointOf(name));
+						}
+						catch (IllegalArgumentException ex) {
+							// names no character
+						}
+					}
+				}
+			}
+		}
+		return names;
+	}
 
 	/**
 	 * The run-time parse a pattern source known while lowering calls: the one making the

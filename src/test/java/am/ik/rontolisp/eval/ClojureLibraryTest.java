@@ -159,7 +159,7 @@ class ClojureLibraryTest {
 		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-CHAR-SEQUENCE-P",
 				"RONTOLISP::%CLOJURE-NTH", "%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-IS-SEQABLE",
 				"%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-RE-FIND", "%CLOJURE-CHAR-SEQUENCE-P",
-				"RONTOLISP::%CLOJURE-RE-NEXT", "%CLOJURE-RE-LAZY-P");
+				"RONTOLISP::%CLOJURE-RE-NEXT-FROM", "%CLOJURE-RE-LAZY-P");
 		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
@@ -300,6 +300,29 @@ class ClojureLibraryTest {
 			assertThat(defun(unicode, parse)).as(source).contains("FAMILY");
 			assertThat(defun(unicode, test)).as(source).contains("UNI-ITEM");
 			assertThat(defun(unicode, bound)).as(source).contains("CAT-WORD");
+		}
+	}
+
+	@Test
+	void aProgramWhosePatternsNameNoGraphemeClusterSplicesTheRegexEngineWithoutIt() {
+		// the parser takes \X and \b{g} and the matcher matches them only where a
+		// pattern may name one: a literal naming either, or a pattern made from a
+		// string at run time
+		String parse = "RONTOLISP::%CLOJURE-RP-ESCAPE-NODE";
+		String match = "RONTOLISP::%CLOJURE-RE-MATCH";
+		assertThat(defun(ClojureLibrary.forms(), parse)).contains("(RONTOLISP::%CLOJURE-RE-GRAPHEME-P ST)");
+		assertThat(defun(ClojureLibrary.forms(), match)).contains("(RONTOLISP::%CLOJURE-RE-GRAPHEME-OP-P OP)");
+		for (String source : List.of("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))",
+				"(println (re-find #\"\\b\\p{L}\" \"a\"))")) {
+			List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(plain, parse)).as(source).doesNotContain("GRAPHEME");
+			assertThat(defun(plain, match)).as(source).doesNotContain("GRAPHEME");
+		}
+		for (String source : List.of("(println (re-seq #\"\\X\" \"ab\"))", "(println (re-find #\"\\b{g}a\" \"a\"))",
+				"(println (re-pattern \"\\\\X\"))", "(defn f [s] (re-pattern s)) (println (f \"a\"))")) {
+			List<LispVal> graphemes = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(graphemes, parse)).as(source).contains("GRAPHEME-P");
+			assertThat(defun(graphemes, match)).as(source).contains("GRAPHEME-OP-P");
 		}
 	}
 

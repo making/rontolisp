@@ -189,6 +189,17 @@ public final class ClojureArms {
 		return Set.copyOf(out);
 	}
 
+	/**
+	 * What makes a pattern that may name a grapheme cluster: a literal whose source may,
+	 * and every parse of a string the program computes or reads.
+	 */
+	private static Set<String> regexGraphemeProducers() {
+		Set<String> out = new HashSet<>(regexUnicodeProducers());
+		out.remove(ClojureStringLowering.RE_COMPILE_UNICODE);
+		out.add(ClojureStringLowering.GRAPHEME_SOURCE);
+		return Set.copyOf(out);
+	}
+
 	private static Set<String> streamProducers() {
 		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
@@ -642,6 +653,19 @@ public final class ClojureArms {
 		 */
 		REGEX_CATEGORY("regex-category", Set.of("RONTOLISP::%CLOJURE-RE-CAT-WORD-P"), Set.of(), Map.of(),
 				regexCategoryProducers(), Set.of()),
+
+		/**
+		 * A pattern naming a grapheme cluster ({@code \X}) or its boundary
+		 * ({@code \b{g}}), which the regex engine finds over the grapheme table
+		 * ({@code clojure-unicode.lisp}): the parser's arms take either (refused as
+		 * before without them) and the matcher's arm matches one. A regex literal (or a
+		 * {@code re-pattern} of a literal string) whose source may name one
+		 * ({@link ClojureStringLowering#mayNameAGraphemeCluster}) makes one, and every
+		 * pattern made from a string while the program runs.
+		 */
+		REGEX_GRAPHEME("regex-grapheme",
+				Set.of("RONTOLISP::%CLOJURE-RE-GRAPHEME-P", "RONTOLISP::%CLOJURE-RE-GRAPHEME-OP-P"), Set.of(), Map.of(),
+				regexGraphemeProducers(), Set.of()),
 
 		/**
 		 * A record, deftype or reify whose type has its own row of

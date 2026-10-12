@@ -472,9 +472,11 @@ final class ClojureCollectionLowering {
 	 */
 	static LispVal regexForm(List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "a regex literal takes a pattern string");
-		String compiler = items.get(1) instanceof LispString source ? ClojureStringLowering.reCompiler(source.value())
-				: ClojureStringLowering.RE_COMPILE_UNICODE;
-		return ClojureLowerUtil.list(new LispSymbol(compiler), items.get(1));
+		if (items.get(1) instanceof LispString source) {
+			return ClojureStringLowering.literalPattern(source);
+		}
+		return ClojureLowerUtil.list(new LispSymbol(ClojureStringLowering.RE_COMPILE_UNICODE),
+				ClojureLowerUtil.list(new LispSymbol(ClojureStringLowering.GRAPHEME_SOURCE), items.get(1)));
 	}
 
 	/**

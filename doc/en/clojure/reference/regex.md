@@ -36,8 +36,15 @@ are Unicode's too, and `\b` takes a non-spacing mark after a letter or digit as 
 word. A program carries the tables only when one of its patterns may name a property, the `U`
 flag or a word boundary, or is built from a string at run time.
 
-What the engine cannot match signals `unsupported regex`: `\N{...}`, `\X`, `\b{g}`, and a
-character class or property under `(?c)`.
+`\X` matches an extended grapheme cluster and `\b{g}` holds at a cluster boundary, as the
+oracle's do (Unicode 16's rules as the JDK applies them), over a table generated from the JDK
+that a program carries only when one of its patterns may name either or is built from a
+string at run time. `\N{name}` in a regex literal, or in `re-pattern` of a literal string,
+is the character `Character.codePointOf` gives the name, looked up while the program
+compiles.
+
+What the engine cannot match signals `unsupported regex`: `\N{...}` in a pattern built from
+a computed string, and a character class or property under `(?c)`.
 
 Deviations: the reader keeps backslashes verbatim, like the oracle (`#"\\d"` reads a
 literal backslash followed by `d`, so classes spell with single backslashes); an unknown

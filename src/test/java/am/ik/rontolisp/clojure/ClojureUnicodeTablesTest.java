@@ -17,6 +17,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.IntPredicate;
 import java.util.function.IntUnaryOperator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
@@ -36,16 +38,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  * from the running JDK, the oracle's own {@code Character}, and pins the shipped file to
  * them: every code point's general category and the {@code Character} predicates
  * {@code java.util.regex}'s {@code CharPredicates} asks, its {@code UnicodeScript} and
- * {@code UnicodeBlock}, and the names {@code UnicodeScript.forName} and
- * {@code UnicodeBlock.forName} take. A JDK whose Unicode moved fails here; the message
- * names the regenerated file to copy over the shipped one.
+ * {@code UnicodeBlock}, the names {@code UnicodeScript.forName} and
+ * {@code UnicodeBlock.forName} take, and its grapheme cluster break type and Indic
+ * conjunct class as {@code java.util.regex}'s {@code \X} reads them. A JDK whose Unicode
+ * moved fails here; the message names the regenerated file to copy over the shipped one.
  *
  * <p>
  * The names come from public API alone: a script's ISO 15924 alias is found by asking
  * {@code forName} every four-letter name, and a block's names are the variants of its
  * constant's name with each underscore a space, a hyphen or kept (and without the
  * spaces), plus the three canonical names that are no such variant. A later JDK adding
- * another such name would go unseen here.
+ * another such name would go unseen here. The grapheme classes, which the JDK keeps in
+ * internal API ({@code jdk.internal.util.regex.Grapheme} and {@code IndicConjunctBreak}),
+ * are found by asking the JDK's own {@code \X} whether short sequences around each code
+ * point form one cluster ({@link #graphemeClass}).
  */
 class ClojureUnicodeTablesTest {
 
@@ -62,6 +68,9 @@ class ClojureUnicodeTablesTest {
 			Character::isEmojiModifier, Character::isEmojiModifierBase, Character::isEmojiComponent,
 			Character::isExtendedPictographic);
 
+	/** The JDK's extended grapheme cluster, the probe of {@link #graphemeClass}. */
+	private static final Pattern CLUSTER = Pattern.compile("\\X");
+
 	/** The block names that are no variant of the block constant's name. */
 	private static final List<String> CANONICAL_BLOCK_NAMES = List.of("GREEK AND COPTIC",
 			"COMBINING DIACRITICAL MARKS FOR SYMBOLS", "CYRILLIC SUPPLEMENT");
@@ -74,6 +83,85 @@ class ClojureUnicodeTablesTest {
 			}
 		}
 		return combo;
+	}
+
+	/**
+	 * Whether the code points form one extended grapheme cluster of the JDK's {@code \X}.
+	 */
+	private static boolean oneCluster(int... codePoints) {
+		String text = new String(codePoints, 0, codePoints.length);
+		Matcher matcher = CLUSTER.matcher(text);
+		return matcher.find() && matcher.end() == text.length();
+	}
+
+	/**
+	 * A code point's break type times four plus its Indic conjunct class
+	 * ({@code clojure.lisp}, "Grapheme clusters"), each the first a probe tells apart: a
+	 * break before an extend leaves CR, LF and Control (CR joins a LF, a CR joins LF);
+	 * joining a letter after it is Extend or ZWJ (ZWJ between two pictographs joins them,
+	 * GB11); joining a letter before it is Prepend; joining a regional indicator,
+	 * Regional_Indicator; joining a Hangul L, one of L, V, LV and LVT (L joins another L,
+	 * V and LV a V, V joins after V); joining a Hangul T, T; a ZWJ and a pictograph after
+	 * it joining it, Extended_Pictographic; else Other. The conjunct class: between two
+	 * consonants alone, a linker; between a consonant and a virama linking another, an
+	 * extend; before that virama and a consonant, a consonant (GB9c). SpacingMark is no
+	 * type here: no rule of the JDK's tells it from Extend.
+	 * @param codePoint the code point
+	 * @return its class
+	 */
+	static int graphemeClass(int codePoint) {
+		return breakType(codePoint) * 4 + conjunctClass(codePoint);
+	}
+
+	private static int breakType(int c) {
+		if (!oneCluster(c, 0x300)) {
+			return oneCluster(c, '\n') ? 1 : oneCluster('\r', c) ? 2 : 3;
+		}
+		if (oneCluster('a', c)) {
+			return oneCluster(0x1F600, c, 0x1F600) ? 5 : 4;
+		}
+		if (oneCluster(c, 'a')) {
+			return 7;
+		}
+		if (oneCluster(0x1F1E6, c)) {
+			return 6;
+		}
+		if (oneCluster(0x1100, c)) {
+			if (oneCluster(c, 0x1100)) {
+				return 8;
+			}
+			if (oneCluster(c, 0x1161)) {
+				return oneCluster(0x1161, c) ? 9 : 11;
+			}
+			return 12;
+		}
+		if (oneCluster(0x11A8, c)) {
+			return 10;
+		}
+		return oneCluster(c, 0x200D, 0x1F600) ? 13 : 0;
+	}
+
+	private static int conjunctClass(int c) {
+		if (oneCluster(0x915, c, 0x915)) {
+			return 3;
+		}
+		if (oneCluster(0x915, c, 0x94D, 0x915)) {
+			return 2;
+		}
+		return oneCluster(c, 0x94D, 0x915) ? 1 : 0;
+	}
+
+	/** Every code point's {@link #graphemeClass}, probed once. */
+	private static final class Graphemes {
+
+		static final int[] CLASSES = new int[Character.MAX_CODE_POINT + 1];
+
+		static {
+			for (int codePoint = 0; codePoint <= Character.MAX_CODE_POINT; codePoint++) {
+				CLASSES[codePoint] = graphemeClass(codePoint);
+			}
+		}
+
 	}
 
 	/**
@@ -141,6 +229,17 @@ class ClojureUnicodeTablesTest {
 				"The Character.UnicodeBlock of every code point (its place among the block\n"
 						+ "   names plus one, 0 for none), as runs.",
 				"(rontolisp::%clojure-re-uni-decode \"" + blockRuns.text + "\" " + blockRuns.count + " nil)");
+		Map<Integer, Integer> classes = new LinkedHashMap<>();
+		Runs graphemes = runs(
+				codePoint -> classes.computeIfAbsent(Graphemes.CLASSES[codePoint], ignored -> classes.size()));
+		StringBuilder classText = new StringBuilder();
+		classes.keySet().forEach(value -> encode(classText, value));
+		cache(out, "graphemes",
+				"The grapheme cluster break type of every code point times four plus its Indic\n"
+						+ "   conjunct class, as runs.",
+				"(rontolisp::%clojure-re-uni-decode \"" + graphemes.text + "\" " + graphemes.count
+						+ "\n                  (rontolisp::%clojure-re-uni-numbers \"" + classText + "\" "
+						+ classes.size() + "))");
 		names(out, "script-names", "The scripts by ordinal: the constant's name, then its ISO 15924 alias.",
 				scriptNames());
 		names(out, "block-names", "The blocks: the constant's name, then its canonical names (* the constant's\n"
@@ -338,8 +437,7 @@ class ClojureUnicodeTablesTest {
 	@Test
 	void theRuntimeReadsEveryRunAsTheJdkAnswers() {
 		// the decoded tables at both sides of every run boundary: the general category
-		// and predicates, the script and the block of each, and every name the two
-		// forName methods take
+		// and predicates, the script, the block and the grapheme class of each
 		LispEvaluator evaluator = new LispEvaluator(
 				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
 		List<Character.UnicodeBlock> blocks = blocks();
@@ -347,7 +445,8 @@ class ClojureUnicodeTablesTest {
 		for (int codePoint = 1; codePoint <= Character.MAX_CODE_POINT; codePoint++) {
 			if (combo(codePoint) != combo(codePoint - 1)
 					|| Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.of(codePoint - 1)
-					|| Character.UnicodeBlock.of(codePoint) != Character.UnicodeBlock.of(codePoint - 1)) {
+					|| Character.UnicodeBlock.of(codePoint) != Character.UnicodeBlock.of(codePoint - 1)
+					|| Graphemes.CLASSES[codePoint] != Graphemes.CLASSES[codePoint - 1]) {
 				points.add(codePoint - 1);
 				points.add(codePoint);
 			}
@@ -361,7 +460,8 @@ class ClojureUnicodeTablesTest {
 					+ chunk.stream().map(String::valueOf).collect(Collectors.joining(" "))
 					+ ") (reverse out)) (setq out (cons (list (rontolisp::%clojure-re-uni-combo c)"
 					+ " (rontolisp::%clojure-re-uni-run-value (rontolisp::%clojure-re-uni-scripts) c)"
-					+ " (rontolisp::%clojure-re-uni-run-value (rontolisp::%clojure-re-uni-blocks) c)) out))))";
+					+ " (rontolisp::%clojure-re-uni-run-value (rontolisp::%clojure-re-uni-blocks) c)"
+					+ " (rontolisp::%clojure-re-gr-class c)) out))))";
 			LispVal answers = evaluator.eval(LispReader.readAllFromString(program, Features.INTERPRETER).get(0));
 			for (LispVal rest = answers; rest instanceof LispCons cons; rest = cons.cdr()) {
 				List<Long> row = new ArrayList<>();
@@ -372,8 +472,9 @@ class ClojureUnicodeTablesTest {
 			}
 			for (int codePoint : chunk) {
 				Character.UnicodeBlock block = Character.UnicodeBlock.of(codePoint);
-				expected.add(List.of((long) combo(codePoint), (long) Character.UnicodeScript.of(codePoint).ordinal(),
-						(long) (block == null ? 0 : blocks.indexOf(block) + 1))
+				expected.add(List
+					.of((long) combo(codePoint), (long) Character.UnicodeScript.of(codePoint).ordinal(),
+							(long) (block == null ? 0 : blocks.indexOf(block) + 1), (long) Graphemes.CLASSES[codePoint])
 					.toString());
 			}
 		}

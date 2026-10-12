@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -90,7 +91,7 @@ class ClojureRegexTest {
 			(defun regex-lazy-anchored (re in seed whole)
 			  (let* ((m (regex-lazy-matcher re in seed))
 			         (n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
-			         (found (rontolisp::%clojure-re-lazy-search m 0 whole)))
+			         (found (rontolisp::%clojure-re-lazy-search m 0 whole 0)))
 			    (if found
 			        (cons (car found)
 			              (cons (car (cdr found))
@@ -100,6 +101,20 @@ class ClojureRegexTest {
 			(defun regex-lazy-anchored-probe (re in seed)
 			  (handler-case
 			      (list 0 (regex-lazy-anchored re in seed nil) (regex-lazy-anchored re in seed t))
+			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
+			(defun regex-named-probe (re in names)
+			  (handler-case
+			      (let* ((p (rontolisp::%clojure-re-compile re names))
+			             (m (rontolisp::%clojure-re-fresh-matcher p in))
+			             (n (rontolisp::%clojure-re-pat-ngroups p))
+			             (acc nil))
+			        (do ((found (rontolisp::%clojure-re-next m) (rontolisp::%clojure-re-next m))
+			             (k 1 (+ k 1)))
+			            ((or (null found) (> k 20)) (cons 0 (reverse acc)))
+			          (setq acc (cons (cons (car found)
+			                                (cons (car (cdr found))
+			                                      (rontolisp::%clojure-re-group-strings in found n 0)))
+			                          acc))))
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			(defvar rontolisp::%clojure-false '|false|)
 			(defun regex-ops (re in ops)
@@ -237,14 +252,11 @@ class ClojureRegexTest {
 
 	@Test
 	void whatNoBackendMatchesIsRefusedAsAnUnsupportedRegex() {
-		// a name the oracle looks up in Unicode's name list, the grapheme clusters, a
-		// class
-		// or a property matched against the input's NFC normalization
-		List<Case> cases = List.of(c("\\N{LATIN SMALL LETTER A}", "a"), c("\\X", "a"), c("\\b{g}", "a"),
-				c("(?c)[a]", "a"), c("(?c)\\p{L}", "a"));
+		// a name the oracle looks up in Unicode's name list where the lowering looked
+		// none up (a pattern made at run time), a class or a property matched against
+		// the input's NFC normalization
+		List<Case> cases = List.of(c("\\N{LATIN SMALL LETTER A}", "a"), c("(?c)[a]", "a"), c("(?c)\\p{L}", "a"));
 		assertThat(runtime(cases)).isEqualTo(List.of("(2 \"unsupported regex: \\\\N{...} is not supported\")",
-				"(2 \"unsupported regex: \\\\X is not supported\")",
-				"(2 \"unsupported regex: \\\\b{g} is not supported\")",
 				"(2 \"unsupported regex: a character class under (?c) is not supported\")",
 				"(2 \"unsupported regex: a character class under (?c) is not supported\")"));
 		// the oracle takes each, and (?U) or (?c) where neither changes a match; a class
@@ -316,6 +328,149 @@ class ClojureRegexTest {
 		List<Case> cases = new RandomPatterns(new Random(20261012), true).cases(1500);
 		assertThat(cases).hasSizeGreaterThan(1400);
 		assertThat(mismatches(cases, runtime(cases), java(cases))).isEmpty();
+	}
+
+	@Test
+	void graphemeClustersMatchAsJavaUtilRegexDoes() throws Exception {
+		// \X and \b{g} over each rule's sequences: CR LF, controls, extends and spacing
+		// marks, prepends, Hangul syllables, emoji ZWJ sequences, regional indicator
+		// pairs, Indic conjuncts (GB9c, a run of them joined three at a time), and a
+		// seeded random corpus of patterns over them
+		String text = "a\r\n\u0001e\u0301\u0302x\u0903\u0600a\u1100\u1161\u11a8\uac00\u11a8\uac01\u1100"
+				+ "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\ud83d\udc4d\ud83c\udffb"
+				+ "\ud83c\uddef\ud83c\uddf5\ud83c\uddfa\ud83c\uddf8\ud83c\uddeb \u0915\u094d\u0937\u093f"
+				+ " \u0915\u0301\u094d\u200d\u0915\u094d\u0915\u094d\u0915 \u0e01\u0e33\u0378\uff9e\u200d";
+		List<Case> cases = new ArrayList<>();
+		for (String regex : List.of("\\X", "\\X+", "\\X{2}", "(\\X)(\\X)?", "\\X*?\\x{1F44D}", "\\b{g}", "\\b{g}.",
+				".\\b{g}", "\\b{g}\\X", "\\X\\b{g}", "(?<=\\X)a", "(?<!\\X)a", "(?:\\X\\b{g})+", "a\\b{g}|\\X",
+				"(?x) \\b {g} \\X", "\\B{g}")) {
+			cases.add(c(regex, text));
+		}
+		cases.addAll(List.of(c("\\X", ""), c("\\b{g}", ""), c("\\X", "\u0915\u094d"), c("\\X", "\u0915\u094d\u0301"),
+				c("e\\b{g}", "ae\u0301"), c("b|(?<=\\b{g}a)", "ab"), c("[\\X]", ""), c("\\b{x", ""), c("\\b{g", ""),
+				c("\\b{gx}", ""), c("(?<=\\X{2})a", "aa")));
+		// the corpus's inputs hold supplementary characters, which the oracle's find
+		// can step into the middle of after an empty match, where the runtime's
+		// positions count code points: such a case is the documented deviation
+		List<Case> random = new RandomPatterns(new Random(20261012), RandomPatterns.Mode.GRAPHEMES).cases(1500);
+		cases.addAll(random.stream().filter(c -> !splitsASurrogatePair(c)).toList());
+		assertThat(cases).hasSizeGreaterThan(1200);
+		assertThat(mismatches(cases, runtime(cases), java(cases))).isEmpty();
+		// a matcher over a CharSequence type reads on while a cluster reaches the
+		// prefix's end
+		for (int seed : List.of(1, 3)) {
+			assertThat(mismatches(cases, lazyRuntime("regex-lazy-probe", cases, seed), java(cases)))
+				.as("finds, seed " + seed)
+				.isEmpty();
+		}
+	}
+
+	// Whether a find of the oracle over the case (at most twenty) starts or ends, or
+	// one of its groups does, between the halves of a surrogate pair.
+	private static boolean splitsASurrogatePair(Case c) {
+		String input = c.input();
+		try {
+			Matcher m = Pattern.compile(c.regex()).matcher(input);
+			for (int n = 0; n < 20 && m.find(); n++) {
+				for (int g = 0; g <= m.groupCount(); g++) {
+					for (int index : new int[] { m.start(g), m.end(g) }) {
+						if (index > 0 && index < input.length() && Character.isLowSurrogate(input.charAt(index))
+								&& Character.isHighSurrogate(input.charAt(index - 1))) {
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		}
+		catch (RuntimeException ex) {
+			return false;
+		}
+	}
+
+	@Test
+	void aGraphemeBoundaryReadsTheMatchersLastWhichASearchMovesAsTheOraclesDoes() {
+		// the oracle's GraphemeBound asks the cluster from its matcher's last: where
+		// the last match ended, 0 after find(int)'s reset (where \G holds at the start
+		// it gives), and moved while a search runs by the atoms of a Curly or a Ques,
+		// a lookahead, an independent group or GroupCurly's body; a failed search
+		// leaves it there, where the next find starts and \G holds
+		Random random = new Random(20261012);
+		List<String> patterns = List.of("\\b{g}\\w", "\\b{g}", "\\X\\b{g}", "\\b{g}.\\b{g}", "\\G\\b{g}\\X",
+				"\\b{g}{2}", "(?=\\X\\X)\\b{g}x", "a??\\b{g}b", "(?>\\X)\\b{g}", "(?:\\X\\b{g}){2}",
+				"(?=\\w\\w)\\Gz|\\Ga", "\\Ga(?=b)c|\\Gx", "(?:a)??\\Gz|\\G\\w", "\\w{2}?\\Gq|\\G.");
+		List<String> inputs = List.of("ab cd", "e\u0301e\u0301x", "\u0915\u094d\u0915a", "", "\r\na", "abx",
+				"xa\u0301b");
+		StringBuilder program = new StringBuilder("(list");
+		List<String> expected = new ArrayList<>();
+		List<String> scripts = new ArrayList<>();
+		for (int i = 0; i < 600; i++) {
+			String regex = patterns.get(random.nextInt(patterns.size()));
+			String input = inputs.get(random.nextInt(inputs.size()));
+			int length = input.codePointCount(0, input.length());
+			List<Integer> ops = new ArrayList<>();
+			for (int k = 0; k < 7; k++) {
+				ops.add(random.nextInt(4) == 0 ? random.nextInt(4) - 3 : random.nextInt(length + 2));
+			}
+			program.append(" (regex-ops ")
+				.append(new LispString(regex).print())
+				.append(' ')
+				.append(new LispString(input).print())
+				.append(" '(")
+				.append(ops.stream().map(String::valueOf).collect(Collectors.joining(" ")))
+				.append("))");
+			expected.add(javaOps(regex, input, ops));
+			scripts.add(quote(regex) + " over " + quote(input) + " " + ops);
+		}
+		LispVal answers = evaluator
+			.eval(LispReader.readAllFromString(program.append(')').toString(), Features.INTERPRETER).get(0));
+		List<String> actual = new ArrayList<>();
+		for (LispVal rest = answers; rest instanceof LispCons cons; rest = cons.cdr()) {
+			actual.add(render(cons.car()));
+		}
+		List<String> mismatches = new ArrayList<>();
+		for (int i = 0; i < scripts.size(); i++) {
+			if (!actual.get(i).equals(expected.get(i))) {
+				mismatches
+					.add(scripts.get(i) + ": " + actual.get(i) + " where java.util.regex answers " + expected.get(i));
+			}
+		}
+		assertThat(mismatches).isEmpty();
+	}
+
+	@Test
+	void aLiteralsCharacterNamesAreLookedUpWhileLoweringAsTheOraclesParseLooksThemUp() {
+		// the names a literal's \N{name} escapes may spell, looked up while lowering
+		// (ClojureStringLowering.characterNames), are what the run-time parse reads: a
+		// name found, the oracle's refusals of one malformed or unknown, in comments
+		// mode, inside a class, past a \Q..\E rewrite
+		List<Case> cases = List.of(c("\\N{LATIN SMALL LETTER A}+", "baab"), c("(?x)\\N{ latin small letter a }", "a"),
+				c("(?x)\\N {LATIN SMALL LETTER A}", "a"), c("[\\N{DIGIT ONE}-\\N{DIGIT THREE}]+", "0123"),
+				c("\\N{CJK UNIFIED IDEOGRAPHS 4E00}", "\u4e00"), c("\\N{GRINNING FACE}+", "a\ud83d\ude00\ud83d\ude00"),
+				c("(?i)\\N{LATIN CAPITAL LETTER A}", "a"), c("\\N{LATIN \\QSMALL\\E LETTER A}", "a"),
+				c("\\N{LATIN SMALL\\Q LETTER\\E A}", "a"), c("\\Q\\E\\N{foo}", ""), c("\\N{a}b}", "ab}"),
+				c("(?x)\\N{LATIN # c}\n SMALL LETTER A}", "a"), c("\\N{}", ""), c("\\N{foo}", ""), c("\\N{abc", ""),
+				c("\\N{", ""), c("\\Nx", ""), c("\\N", ""), c("\\N{U+0061}", "a"),
+				c("a\\N{LATIN SMALL LETTER B}?", "ab"), c("\\N{LATIN SMALL LETTER A}{2}", "aaa"));
+		List<String> actual = new ArrayList<>();
+		for (Case c : cases) {
+			Map<String, Integer> names = ClojureStringLowering.characterNames(c.regex());
+			assertThat(names).as(c.regex()).isNotNull();
+			String table = java.util.Objects.requireNonNull(names)
+				.entrySet()
+				.stream()
+				.map(e -> "(" + new LispString(e.getKey()).print() + " . " + e.getValue() + ")")
+				.collect(Collectors.joining(" ", "'(:names ", ")"));
+			actual.add(
+					render(evaluator.eval(
+							LispReader
+								.readAllFromString(
+										"(regex-named-probe " + new LispString(c.regex()).print() + " "
+												+ new LispString(c.input()).print() + " " + table + ")",
+										Features.INTERPRETER)
+								.get(0))));
+		}
+		assertThat(mismatches(cases, actual, java(cases))).isEmpty();
 	}
 
 	@Test
@@ -490,6 +645,15 @@ class ClojureRegexTest {
 		catch (PatternSyntaxException ex) {
 			return "(1 " + quote(String.valueOf(ex.getMessage())) + ")";
 		}
+		catch (StringIndexOutOfBoundsException ex) {
+			// \b{g} in a look-behind after a match ending at the end: the oracle's
+			// GraphemeBound reads the cluster at the input's length; the runtime's index
+			// and length count code points
+			int length = c.input().codePointCount(0, c.input().length());
+			assertThat(ex.getMessage())
+				.isEqualTo("Index " + c.input().length() + " out of bounds for length " + c.input().length());
+			return "(1 " + quote("Index " + length + " out of bounds for length " + length) + ")";
+		}
 	}
 
 	private static String quote(String s) {
@@ -525,18 +689,32 @@ class ClojureRegexTest {
 
 		private final boolean unicode;
 
-		RandomPatterns(Random random) {
-			this(random, false);
-		}
+		private final boolean graphemes;
 
 		/**
-		 * Random patterns, with the Unicode constructs among them when UNICODE: the
-		 * properties, the U flag and \\G, over inputs of letters, digits, marks and
-		 * spaces past ASCII.
+		 * What the patterns hold beside the constructs every mode ports: nothing more;
+		 * the Unicode properties, the U flag and \\G over inputs of letters, digits,
+		 * marks and spaces past ASCII; or \\X and \\b{g} over inputs of each grapheme
+		 * break rule's characters.
 		 */
+		enum Mode {
+
+			PLAIN, UNICODE, GRAPHEMES
+
+		}
+
+		RandomPatterns(Random random) {
+			this(random, Mode.PLAIN);
+		}
+
 		RandomPatterns(Random random, boolean unicode) {
+			this(random, unicode ? Mode.UNICODE : Mode.PLAIN);
+		}
+
+		RandomPatterns(Random random, Mode mode) {
 			this.random = random;
-			this.unicode = unicode;
+			this.unicode = mode == Mode.UNICODE;
+			this.graphemes = mode == Mode.GRAPHEMES;
 		}
 
 		private String property() {
@@ -623,6 +801,10 @@ class ClojureRegexTest {
 			if (this.unicode && this.random.nextInt(5) == 0) {
 				return this.random.nextInt(6) == 0 ? "\\G" : property();
 			}
+			if (this.graphemes && this.random.nextInt(3) == 0) {
+				return pick("\\X", "\\X", "\\b{g}", "\\b{g}", "\\G", "\\u0301", "\\x{1F600}", "\\u200d", "\\u0915",
+						"\\u094d", "\\x{1F1EF}", "\\uac00");
+			}
 			return switch (this.random.nextInt(depth > 2 ? 10 : 22)) {
 				case 0, 1, 2, 3 -> literal();
 				case 4 -> ".";
@@ -689,6 +871,17 @@ class ClojureRegexTest {
 		}
 
 		private String input() {
+			if (this.graphemes) {
+				List<String> alphabet = List.of("a", "x", " ", "\r", "\n", "\u0001", "\u0301", "\u0903", "\u200d",
+						"\u0600", "\u1100", "\u1161", "\u11a8", "\uac00", "\uac01", "\ud83d\ude00", "\ud83c\udffb",
+						"\ud83c\uddef", "\ud83c\uddf5", "\u0915", "\u094d", "\u0937", "\u0e33", "\u0378", "\uff9e");
+				StringBuilder input = new StringBuilder();
+				int n = this.random.nextInt(9);
+				for (int i = 0; i < n; i++) {
+					input.append(alphabet.get(this.random.nextInt(alphabet.size())));
+				}
+				return input.toString();
+			}
 			String alphabet = this.unicode ? "abAx1_ -éÉΣσ٤日\u0301\u0302\u00a0Ⅻ\u200cǅ" : "abABx1_ -\n\rkKéÉſS#";
 			StringBuilder input = new StringBuilder();
 			int n = this.random.nextInt(9);

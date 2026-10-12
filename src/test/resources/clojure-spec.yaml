@@ -6083,6 +6083,29 @@ cases:
     expected: |
       ("1" "2") ("") "xxba" ["" "" ",3"]
       "a" "b" nil false nil true "c"
+  - name: a-regex-matches-grapheme-clusters-and-character-names
+    # \X is an extended grapheme cluster (Unicode 16's rules as the JDK 25
+    # applies them: CR LF, marks, Hangul, emoji ZWJ sequences, flag pairs,
+    # Indic conjuncts); \b{g} holds where the oracle's GraphemeBound does,
+    # reading the cluster from the matcher's last (0 after find(int)'s reset,
+    # moved by a Curly's atoms); \N{name} of a literal, or of re-pattern of a
+    # literal string, is the code point the lowering looked the name up to,
+    # with the oracle's refusals. The oracle's lines (clj 1.12.6, 2026-10-12).
+    source: |
+      (defn regex-gr-pse [f] (try (f) (catch java.util.regex.PatternSyntaxException e (ex-message e))))
+      (prn (re-seq #"\X" "éx") (re-seq #"\X" "éx\r\n") (count (re-seq #"\X" "👨‍👩‍👧🇯🇵🇺🇸")) (re-seq #"\X" "각각") (re-seq #"\X" "क्षि"))
+      (prn (re-seq #"\b{g}" "ab") (clojure.string/split "éa" #"\b{g}") (re-find #"\X{2}" "aéb") (re-matches #"(\X)+" "áb") (re-seq #"(?<=\X)a" "aa"))
+      (let [m (re-matcher #"\b{g}\w" "ab cd")] (prn (re-find m) (.find m 3) (.group m) (re-find m)))
+      (prn (re-seq #"\b{g}{2}" "\u0001각ᆨ") (re-seq #"a??\b{g}b" "abab"))
+      (prn (re-find #"\N{LATIN SMALL LETTER A}+" "baab") (re-seq #"[\N{DIGIT ONE}-\N{DIGIT THREE}]" "0123") (re-find (re-pattern "\\N{GREEK SMALL LETTER ALPHA}") "βαγ") (re-find #"(?x) \N{ latin small letter b }" "ab"))
+      (prn (regex-gr-pse #(re-pattern "\\N{foo}")) (regex-gr-pse #(re-pattern "\\N{abc")) (regex-gr-pse #(re-pattern "\\Nx")) (regex-gr-pse #(re-pattern "[\\X]")))
+    expected: |
+      ("é" "x") ("é" "x" "\r\n") 3 ("각" "각") ("क्षि")
+      ("" "" "") ["é" "a"] "aé" ["áb" "b"] nil
+      "a" true "c" nil
+      ("" "") nil
+      "aa" ("1" "2" "3") "α" "b"
+      "Unknown character name [foo] near index 6\n\\N{foo}\n      ^" "Unclosed character name escape sequence near index 5\n\\N{abc\n     ^" "Illegal character name escape sequence near index 2\n\\Nx\n  ^" "Illegal/unsupported escape sequence near index 2\n[\\X]\n  ^"
   - name: def-after-defn-memoize-captures-function
     # (def p (memoize p)) after a (defn p ...) captures the function cell: the
     # value lowers against the OLD FUNCTION binding (#'c%p), not the

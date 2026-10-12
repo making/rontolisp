@@ -527,8 +527,8 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `subs-and-substring-refuse-a-non-number-bound-with-the-oracles-class`,
   `ClojureLoweringTest#aStringMethodOfAReceiverNotKnownToBeAStringIsTheReflectiveAlias`,
   `ClojureArmsTest#theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage`.
-- Names no class: a refusal of a construct the oracle accepts (regex `\N{..}`, `\X`, `\b{g}`, a
-  class under `(?c)`, `(partition 0 ...)`, a deftype literal), a value macro's
+- Names no class: a refusal of a construct the oracle accepts (regex `\N{..}` of a pattern made
+  at run time, a class under `(?c)`, `(partition 0 ...)`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
   misuse a lower verb refuses first carries that verb's
   class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`.
@@ -4702,22 +4702,28 @@ U+2029 and `\r\n`. Patterns print `#"..."`, matchers `#<Matcher source>`; `class
   `\x` quotes, `$n` takes digits while that group exists (`$11` with one group is group 1 and
   `1`), `${name}`, the oracle's messages (`character to be escaped is missing`, `Illegal group
   reference`, `No group with name {n}`...). A matcher's `group`/`start`/`end` take a name.
-- `\G` (`:glast`) holds where the matcher's last match ended: the cell's car is the oracle's
-  `last` (0 before any match, the end of the last one, kept by a failed search or `lookingAt`),
-  handed to each search in the group vector's slot 1 (`(:glast . pos)` beside the loop memos);
-  `find(int)` hands its start and, failing, leaves 0, as the oracle's `reset` does. A failed
-  find keeps the car (it used to put it one past the end), so a later find searches again from
-  there like the oracle's (`^` over `ab`: find, find fails, find answers the empty match at 0
-  again); past an empty match at the end the oracle searches no more and keeps that match's
-  bounds with its groups cleared, here the cdr `(end end nil)` that
-  `%clojure-re-last-match` takes for none (the oracle's `group()` answers null there, here
-  `No match found`, as before).
-- Refused as `unsupported regex` (a plain error, "Catching"): `\N{..}` (the oracle looks the
-  name up in Unicode's name list, ~35,000 names), `\X` and `\b{g}` (grapheme clusters:
-  `jdk.internal.util.regex.Grapheme`'s rules over a break property and the Indic conjunct
-  lists, `.todo/f54`), a class or a property under
-  `(?c)` (matched against the input's NFC normalization: the canonical decomposition and
-  composition tables). Deviation: positions count code points, not UTF-16 units.
+- `\G` (`:glast`) holds where the search started from the oracle's `last` (its `oldLast`): the
+  cell's car is that `last` (0 before any match, the end of the last one), handed to each
+  search in the group vector's slot 1 (`(:glast . pos)` beside the loop memos); `find(int)`
+  resets it to 0 and hands its start, as the oracle's `reset` does. The oracle's `last` is no
+  constant of a search (2026-10-12, read off `Pattern.java` of JDK 25): the accept node ending
+  the chain of a Curly's or a Ques's atom, of a lookahead and of an independent group sets it
+  to where that chain ended (Curly and Ques read the atom's end back from it), and so does the
+  group tail GroupCurly iterates; `LastNode` sets it at a match's end. So a search moves the
+  cell's car itself (`(:last . cell)` in slot 1, `%clojure-re-set-last`: `%clojure-re-first`'s
+  success, and `%clojure-re-match-run` for a Curly's or Ques's character atom -- a
+  CharPropertyGreedy, `:cpg`, sets none), and a search that fails or throws leaves it where it
+  was last set: the next find starts there and `\G` holds there, as in the oracle (`^` over
+  `ab`: find, find fails, find answers the empty match at 0 again). The minimum iterations of a
+  Curly and a GroupCurly run every one, as the oracle's do; an empty one that began where the
+  last already stood stands for the rest (each after it begins and ends in that state). Past an
+  empty match at the end the oracle searches no more and keeps that match's bounds with its
+  groups cleared, here the cdr `(end end nil)` that `%clojure-re-last-match` takes for none (the
+  oracle's `group()` answers null there, here `No match found`, as before).
+- Refused as `unsupported regex` (a plain error, "Catching"): `\N{..}` in a pattern made at run
+  time ("Grapheme clusters and character names" below) and a class or a property under `(?c)`
+  (matched against the input's NFC normalization: the canonical decomposition and composition
+  tables). Deviation: positions count code points, not UTF-16 units.
 - Verified 2026-10-11 against `java.util.regex` by a random differential: 34,000 patterns of
   lookarounds, flags, classes, groups and quantifiers over inputs up to 30 characters, every
   find, group and refusal message identical, and 1,500 random `replace`/`split` calls; the spec
@@ -4784,6 +4790,58 @@ such name would go unseen). Committed rather than generated at start the way
   `backslash-g-holds-where-the-last-match-ended` (four backends, the oracle's lines);
   `ClojureLibraryTest#aProgramWhosePatternsNameNoUnicodePropertySplicesTheRegexEngineWithoutItsTables`,
   `ClojureArmsTest#theRegexFamiliesAreMadeByAPatternThatMayNameAPropertyOrAWordBoundary`.
+
+**`\X` and `\b{g}` are `jdk.internal.util.regex.Grapheme`'s ported over a generated table;
+`\N{name}` reads the names the lowering looked up** (2026-10-12).
+- `%clojure-re-gr-next` is `Grapheme.nextBoundary` (Unicode 16, JDK 25): GB9c's conjunct scan
+  first (from the consonant the cluster started at, as the JDK keeps it), then GB11 and GB12,
+  then the rules table (`%clojure-re-gr-break-p`). `clojure-unicode.lisp`'s grapheme table
+  holds every code point's break type times four plus its Indic conjunct class (2,992 runs,
+  17 values). The JDK's type and conjunct lists are internal API, so
+  `ClojureUnicodeTablesTest.graphemeClass` finds both by asking the JDK's own `\X` whether a
+  few sequences around each code point make one cluster (CR + LF, a letter before or after,
+  a Hangul L / V / T, a regional indicator, ZWJ + pictograph, consonant + virama + consonant);
+  SpacingMark is no separate type, no rule tells it from Extend. All code points probe in
+  ~2.5 s, once per test class.
+- `\X` (`:graph`) is XGrapheme: one more at least, no more at most in the study, so a
+  look-behind holding it never matches. `\b{g}` (`:gbound`) is GraphemeBound: at 0, at the
+  end, or where the cluster starting at the matcher's `last` (above, `\G`) ends at or before
+  it -- no more, which the oracle asks: `e\b{g}` over `ae\u0301` matches. Where `last` is the
+  input's end before it, the oracle's `nextBoundary` reads past the input and throws
+  `StringIndexOutOfBoundsException` (`Index n out of bounds for length n`); here too, but
+  over a lazy matcher's prefix (`:total` in slot 1) the search reads on.
+- Family `REGEX_GRAPHEME` (tests `%clojure-re-grapheme-p` in the parser, `%clojure-re-grapheme-op-p`
+  in `%clojure-re-match`): a literal whose source may name either (a backslash before `X`, or
+  before `b` with `{g` somewhere, `ClojureStringLowering.mayNameAGraphemeCluster`) lowers its
+  source as `(%clojure-re-grapheme-source "...")`, the producer, and every pattern made at run
+  time makes it (the regex-unicode producers but the unicode literal's). A program naming
+  neither refuses them as before and carries no grapheme table. Measured 2026-10-12, wasm P1:
+  `(println (re-seq #"a" "ab"))` 375,064 B, `#"\X"` 394,682 (the table and `nextBoundary`,
+  ~19.6 KB), `#"\p{L}"` 456,628, `#"\X\p{L}"` 469,724 -- what `\X` alone would cost had it made
+  `REGEX_UNICODE`, hence a family of its own. `#"\N{LATIN SMALL LETTER A}"` 375,171.
+- `\N{name}`: the oracle looks the name up in `Character.codePointOf`'s list (~35,000 names),
+  too big to ship. The lowering of a literal (or `re-pattern` of a literal string) whose source
+  holds `\N` resolves every text between a `{` and a later `}` -- in the source and in the source
+  without its `\Q`/`\E`, since the parse reads a name off the `RemoveQEQuoting` rewrite --
+  through `codePointOf` and hands the hits to the parse as `'(:names (text . code) ...)`
+  (`ClojureStringLowering.literalPattern`/`characterNames`). The parse (`%clojure-rp-named-char`,
+  Java's `N`) reads the name off the rewritten pattern and looks it up by its exact text: a miss
+  is the oracle's `Unknown character name [..]`, as is every name `codePointOf` refuses; a
+  pattern made at run time has no table and refuses `\N{..}` as `unsupported regex` after the
+  oracle's syntax checks.
+- Pins: `ClojureRegexTest#graphemeClustersMatchAsJavaUtilRegexDoes` (curated cases of every
+  rule and 1,500 seeded random patterns over each rule's characters, whole input and lazy
+  prefixes; cases where the oracle's find steps between a surrogate pair's halves are the
+  code point deviation and left out),
+  `#aGraphemeBoundaryReadsTheMatchersLastWhichASearchMovesAsTheOraclesDoes` (600 random
+  find / find(int) / lookingAt / matches scripts, patterns moving `last` by a lookahead, an
+  atomic group, a Curly, a Ques), `#aLiteralsCharacterNamesAreLookedUpWhileLoweringAsTheOraclesParseLooksThemUp`;
+  `ClojureUnicodeTablesTest` (the table regenerated and decoded at both sides of every run);
+  `ClojureArmsTest#theGraphemeFamilyIsMadeByAPatternThatMayNameAGraphemeCluster`,
+  `#aLiteralsCharacterNamesAreLookedUpWhileLowering`;
+  `ClojureLibraryTest#aProgramWhosePatternsNameNoGraphemeClusterSplicesTheRegexEngineWithoutIt`;
+  clojure-spec `a-regex-matches-grapheme-clusters-and-character-names` (four backends, the
+  oracle's lines).
 
 **A matcher over a type implementing `CharSequence` reads it only as far as a match needs**
 (2026-10-11): `re-matcher` and `re-find` take the type itself, not the text view, and
