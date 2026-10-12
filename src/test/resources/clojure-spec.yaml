@@ -7130,6 +7130,36 @@ cases:
       {:k0 0, :k1 1, :k2 2, :k3 3, :k4 4}
       {:k0 :zero, :k1 1, :k3 3, :k4 4, :k9 9}
       5 2 19999 20000
+  - name: a-maps-seq-walks-it-in-insertion-order
+    # seq, keys and vals walk a map in the order it prints, the oracle's array
+    # map's (at most eight entries): a key assoc'd again keeps its place, a
+    # dissoc'd one leaves. map->R reads its map through seq, so the extension
+    # keys keep their order; clojure.walk, pprint and print-table read seq and
+    # keys too. Until 2026-10-12 every seq walked a map newest-first. Matches the
+    # oracle (clj 1.12.6, 2026-10-12).
+    source: |
+      (require '[clojure.walk :as f55-walk] '[clojure.pprint :as f55-pp])
+      (defrecord WalkR [x y])
+      (let [m {:a 1 :b 2 :c 3}
+            g (-> {:k1 1} (assoc :k2 2) (assoc :k3 3) (dissoc :k2) (assoc :k4 4) (assoc :k1 :one))]
+        (prn (seq m) (keys m) (vals m) (first m) (rest m) (last m))
+        (prn (seq g) (keys g) (vals g) (map key g) (vec g) (into [] (map val) g))
+        (prn (vec (map->WalkR {:x 1 :y 2 :q 9 :b 8 :a 7})) (keys (map->WalkR {:y 2 :q 9 :x 1 :b 8})))
+        (prn (for [[k v] m] [v k]) (apply list m) (zipmap (keys m) (vals m)) (reduce-kv (fn [acc k _] (conj acc k)) [] m))
+        (prn (f55-walk/postwalk identity {:p 1 :q {:r 2 :s 3}}) (f55-walk/stringify-keys {:z 1 :a 2}))
+        (f55-pp/pprint {:z 1 :a 2 :m 3})
+        (f55-pp/print-table [{:z 1 :a 2 :m 3}]))
+    expected: |
+      ([:a 1] [:b 2] [:c 3]) (:a :b :c) (1 2 3) [:a 1] ([:b 2] [:c 3]) [:c 3]
+      ([:k1 :one] [:k3 3] [:k4 4]) (:k1 :k3 :k4) (:one 3 4) (:k1 :k3 :k4) [[:k1 :one] [:k3 3] [:k4 4]] [:one 3 4]
+      [[:x 1] [:y 2] [:q 9] [:b 8] [:a 7]] (:x :y :q :b)
+      ([1 :a] [2 :b] [3 :c]) ([:a 1] [:b 2] [:c 3]) {:a 1, :b 2, :c 3} [:a :b :c]
+      {:p 1, :q {:r 2, :s 3}} {"z" 1, "a" 2}
+      {:z 1, :a 2, :m 3}
+
+      | :z | :a | :m |
+      |----+----+----|
+      |  1 |  2 |  3 |
   - name: a-value-is-equal-to-itself-before-its-contents-are-read
     # = answers true for one object on both sides without reading it, like the
     # oracle's Util.equiv (k1 == k2): a collection holding NaN is = to itself

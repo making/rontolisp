@@ -169,9 +169,13 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("equal")));
 	}
 
-	/** {@code (RONTOLISP:HASH-TABLE-PLIST table)}. */
+	/**
+	 * {@code (RONTOLISP::%CLOJURE-TABLE-PLIST table)}: the table's entries as a plist in
+	 * its walk order (insertion order, the oracle's array map's), where
+	 * {@code rontolisp:hash-table-plist} walks newest-first.
+	 */
 	static LispVal tablePlist(LispVal table) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("rontolisp:hash-table-plist"), table);
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TABLE-PLIST"), table);
 	}
 
 	/**
@@ -901,7 +905,7 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * {@code keys} (or {@code vals}): the table's keys (or values) accumulated into a
-	 * list. The order is the table's walk order, unspecified like the oracle's; a
+	 * list in the table's walk order (insertion order, the oracle's array map's); a
 	 * record's is its declared fields, then the rest.
 	 */
 	static LispVal tableKeysOf(ClojureLowering ctx, List<LispVal> items, boolean keys) {
@@ -924,7 +928,8 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), take, acc))),
 				map);
 		LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect, acc);
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("nreverse"), acc));
 		// a record answers its declared fields in order, then its extension keys
 		// (%clojure-record-entries), where a table walks in its own order
 		LispVal gathered = ClojureLowerUtil.list(

@@ -4,8 +4,7 @@
   Clojure's namespace of the same name: parse reads a document itself on
   every target; a startparse function, and parse of a host object, hand a
   host SAX parser a ContentHandler like the oracle's."
-  (:require [rontolisp.internal.pprint :as printer]
-            [rontolisp.internal.xml :as k]))
+  (:require [rontolisp.internal.xml :as k]))
 
 (defstruct element :tag :attrs :content)
 
@@ -127,8 +126,7 @@
     (println e)
     (do
       (print (str "<" (name (:tag e))))
-      ;; in the order the map prints, as the oracle's array map walks
-      (doseq [[k v] (let [m (:attrs e)] (or (printer/members m) (seq m)))]
+      (doseq [[k v] (:attrs e)]
         (print (str " " (name k) "='" v "'")))
       (if-let [children (:content e)]
         (do

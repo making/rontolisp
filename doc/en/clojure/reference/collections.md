@@ -1,6 +1,6 @@
 # Maps, sets and vectors
 
-A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. A map or set prints its entries in insertion order; `seq`, `keys` and `vals` walk them newest first. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
+A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. A map or set prints its entries, and `seq`, `keys` and `vals` walk them, in insertion order. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
 `aset`, and measures through `alength`; a byte array (`byte-array`, or `make-array` of
 `Byte/TYPE`) holds signed bytes. A transient (`transient`) edits a copy of a vector, map or set in place until `persistent!` hands it back. A persistent queue (`clojure.lang.PersistentQueue/EMPTY`) adds at the rear and pops from the front.

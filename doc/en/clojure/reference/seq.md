@@ -5,7 +5,7 @@
 Answers the seq view of `coll`: a lazy wrapper realizes one level (never past it, so
 infinite seqs stay infinite); a list passes through untouched, a vector or string
 coerces element by element, a map contributes one two-vector per entry and a set one
-member per element, both newest first (a map or set prints in insertion order). `nil` is empty. A Java `Iterable` contributes its elements, a Java `Map` one two-vector per
+member per element, both in insertion order (the order the map or set prints in). `nil` is empty. A Java `Iterable` contributes its elements, a Java `Map` one two-vector per
 entry and a `CharSequence` its characters, read whole when the seq is taken (interpreter
 and JVM). Anything else (a keyword, `false`, a number) signals
 `IllegalArgumentException`, like the oracle.

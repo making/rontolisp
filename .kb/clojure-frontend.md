@@ -162,7 +162,7 @@ answered `2 5 3` before).
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
 | `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`, a record/deftype/reify with its own `CollReduce` row reducing through it ("clojure.jar namespaces", the reducible arms); its function is a real one ("The IFn dispatcher stays at the call site") |
-| `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil is empty, anything else signals ("Seq verbs over a wrapper"); `cons` onto a lazy collection answers a wrapper |
+| `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order: insertion order), nil is empty, anything else signals ("Seq verbs over a wrapper"); `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped, a matcher answering its group (`%clojure-matcher-nth`, "Regex"; `nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
 | `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `vec` refuses a non-collection as the oracle's `RuntimeException` ("Refusals"); `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
@@ -209,7 +209,18 @@ Each is a real work item unless the reason says otherwise.
   seq prints `()`); a map or set prints in insertion order on all four backends since
   2026-10-11 -- the oracle's array map's order (at most eight entries; clojure-spec
   `a-map-grown-one-assoc-at-a-time-shares-its-table`), never its hash map's or hash set's --
-  while `seq`/`keys`/`vals` walk it newest-first (`.todo/f55`); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
+  and `seq`/`keys`/`vals` walk it in the same order since 2026-10-12 (before, the table and
+  set arms of `%clojure-strict-seq` and `keys`/`vals`' `tableKeysForm` consed each entry onto
+  an accumulator and walked newest-first, and every verb reading a map as a plist --
+  `merge`, `conj`, `map->R`, a record's `merge` -- went through `rontolisp:hash-table-plist`,
+  newest-first too; now `%clojure-table-plist`). Measured that day against clj 1.12.6: `seq`,
+  `keys`, `vals`, `first`/`rest`/`last`, `for`, `reduce`, `zipmap`, `merge`, `conj`,
+  `merge-with`, `map->R`, `clojure.walk`, `pprint` and `print-table` of a map of at most
+  eight entries all walk the oracle's order on the interpreter (the JVM class, P1 and the
+  component by clojure-spec `a-maps-seq-walks-it-in-insertion-order`); a set's `seq`
+  follows its printer, so `(set (keys m))` no longer matches the oracle's hash-set order by
+  the coincidence of the reversal. `clojure.pprint`'s `kernel/members` and clojure.xml's use
+  of it (the printer-order walk the reversal needed) are gone; unreadable values print `#<..>` -- functions `#<procedure>`, atoms
   and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a
   stream the oracle's `#object` without the hash ("Streams as values"), any
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash; a
@@ -572,9 +583,11 @@ keyword, var, reduced value or namespace read as its list (`(first :a)` was `:C%
   order, and so do they here on all four backends since 2026-10-11 (a copy keeps the order and
   every backend walks a table in insertion order; before, wasm walked bucket order). Measured
   that day against clj 1.12.6: `(assoc (->R 1 2) :e3 3 :e1 1 :e2 2 :e5 5)` prints, seqs and
-  `reduce-kv`s as the oracle's; `map->R` of a literal map reverses its extension keys, since it
-  reads the map through `seq`, which walks a table newest-first (`:q :b :a` there, `:a :b :q`
-  here). Pin: clojure-spec `a-records-seq-walks-its-declared-fields-in-order-then-the-rest`.
+  `reduce-kv`s as the oracle's; `map->R` of a literal map keeps its extension keys' order since
+  2026-10-12 (it reads the map through `%clojure-table-plist`; before, through
+  `rontolisp:hash-table-plist`, which reversed them). Pins: clojure-spec
+  `a-records-seq-walks-its-declared-fields-in-order-then-the-rest`,
+  `a-maps-seq-walks-it-in-insertion-order`.
 - `%clojure-strict-seq`: a plain list passes after `consp` + `keywordp`; a set, record or
   sorted collection seqs; anything else (a wrapper, `false`, a number, a symbol, a
   function) is `seq`'s IAE. `false` was empty until then (the oracle refuses).
@@ -2073,9 +2086,9 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
     per-line prefix, `*print-length*`/`*print-level*`/`*print-meta*`, reader macros,
     namespace maps, radix printing with its negative-number quirk, `print-table`)
     identical on all four.
-  - Map and set members come in printer order (`kernel/members`, maphash order): `seq`
-    walks a table the other way round, so `seq` would print `{:a 1, :b 2}` as
-    `{:b 2, :a 1}` under `pprint` only.
+  - Map and set members come through `seq` (`print-table`'s columns through `keys`), which
+    walks the printer's order since 2026-10-12; until then `seq` walked a table newest-first
+    and a `kernel/members` kernel walked it the printer's way.
   - `simple-dispatch` has an exact method per common value class (vector, map, set, list,
     number, string, keyword, symbol, boolean, character) beside `:default`: a dispatch
     value with no method of its own tests `isa?` against every method on each call (the
@@ -2349,7 +2362,7 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `isWhitespace`: a no-break space stays), each element made once by `struct` and its
   attributes by `array-map` in reverse document order, so the interpreter and the JVM
   print the oracle's key order (an `assoc`'d struct reordered its keys); `emit-element`
-  walks attributes through `rontolisp.internal.pprint/members` (printer order). A
+  walks attributes as the map seqs (printer order). A
   malformed document is the new refusal carrier `%clojure-sax-parse-exception`
   (`org.xml.sax.SAXParseException`, `ClojureRefusals.SAX_PARSE`) with Xerces' message for
   33 measured mistakes. A host object source (`k/host?`) and `(parse s startparse)` take

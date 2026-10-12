@@ -28,11 +28,11 @@
 ;; walk needs no eq hash table (the %scheme-print comment applies here too).
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
-;; nil IS the empty list (stays nil, never ()); map/set walk order is unspecified
-;; (same as keys/vals); ~S/~A on Clojure values stay Common Lisp notation
-;; (format is a CL surface); a print-method is a program's own record's or
-;; deftype's only, and *print-dup* is a plain value (the other print flags are
-;; honoured); unreadable values
+;; nil IS the empty list (stays nil, never ()); a map or set prints and seqs in
+;; insertion order (the oracle's array map's, never its hash order); ~S/~A on
+;; Clojure values stay Common Lisp notation (format is a CL surface); a
+;; print-method is a program's own record's or deftype's only, and *print-dup* is
+;; a plain value (the other print flags are honoured); unreadable values
 ;; (functions, host objects) print #<..>, except a
 ;; host class object, which prints its name like the oracle's; a condition prints
 ;; its report (an exception's is its toString).
@@ -3170,9 +3170,9 @@
    ((consp x) (rontolisp::%clojure-host-seq-view x))
    ((hash-table-p x)
     (java:view x
-               (rontolisp::%clojure-host-members (rontolisp:hash-table-plist x))
-               :map #'rontolisp::%clojure-host-text nil
-               (rontolisp::%clojure-class-name-of x)))
+     (rontolisp::%clojure-host-members (rontolisp::%clojure-table-plist x))
+     :map #'rontolisp::%clojure-host-text nil
+     (rontolisp::%clojure-class-name-of x)))
    ((rontolisp::%clojure-real-symbol-p x)
     (rontolisp::%clojure-host-ident x (rontolisp::%clojure-symbol-full-name x)
                                     nil))
@@ -3733,6 +3733,14 @@
    already there stays); answers the stored member."
   (let ((k (rontolisp::%clojure-store-key x table)))
     (setf (gethash k table) k)))
+
+;; rontolisp:hash-table-plist walks newest-first (alexandria's); every map read
+;; entry by entry here walks in insertion order, the oracle's array map's.
+(defun rontolisp::%clojure-table-plist (table)
+  "TABLE's alternating keys and values in its walk order."
+  (let ((acc nil))
+    (maphash (lambda (k v) (setq acc (cons v (cons k acc)))) table)
+    (nreverse acc)))
 
 ;; A sorted map BASE answers a sorted map (%clojure-sorted-assoc): assoc and merge
 ;; onto one keep its order.
@@ -4485,13 +4493,13 @@
    ((hash-table-p coll)
     (let ((acc nil))
       (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
-      acc))
+      (nreverse acc)))
    ((rontolisp::%clojure-set-p coll)
     (let ((acc nil))
       (maphash (lambda (k v)
                  (declare (ignore v))
                  (setq acc (cons k acc))) (car (cdr coll)))
-      acc))
+      (nreverse acc)))
    ((rontolisp::%clojure-record-p coll)
     (mapcar (lambda (e) (vector (car e) (cdr e)))
             (rontolisp::%clojure-record-entries coll)))
@@ -10082,7 +10090,7 @@
                                     (rontolisp::%clojure-plist-table
                                      (rontolisp::%clojure-set-entries a "merge")
                                      (if eb
-                                         (rontolisp:hash-table-plist eb)
+                                         (rontolisp::%clojure-table-plist eb)
                                          nil)))))
 
 (defun rontolisp::%clojure-set-project (xrel ks)
@@ -10588,11 +10596,11 @@
         ((null item) nil)
         ((and (vectorp item) (not (stringp item)) (= (length item) 2))
          (list (aref item 0) (aref item 1)))
-        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((hash-table-p item) (rontolisp::%clojure-table-plist item))
         ((rontolisp::%clojure-sorted-map-p item)
          (rontolisp::%clojure-sorted-plist item))
         ((rontolisp::%clojure-record-p item)
-         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+         (rontolisp::%clojure-table-plist (car (cdr (cdr (cdr item))))))
         ((or (rontolisp::%clojure-set-p item)
              (rontolisp::%clojure-sorted-set-p item))
          (let ((acc nil))
@@ -10628,11 +10636,11 @@
    map's pairs, or the members of a set or seq each a [k v] vector; anything else,
    a list of non-entries included, signals."
   (cond ((null item) nil)
-        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((hash-table-p item) (rontolisp::%clojure-table-plist item))
         ((and (vectorp item) (not (stringp item)) (= (length item) 2))
          (list (aref item 0) (aref item 1)))
         ((rontolisp::%clojure-record-p item)
-         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+         (rontolisp::%clojure-table-plist (car (cdr (cdr (cdr item))))))
         ((consp item) (rontolisp::%clojure-seq-entry-plist item))
         ((rontolisp::%clojure-host-seqable-p item)
          (rontolisp::%clojure-host-entry-plist item))
@@ -10778,7 +10786,7 @@
   (if (rontolisp::%clojure-sorted-map-p orig)
       (if (hash-table-p x)
           (rontolisp::%clojure-sorted-make nil (car (cdr (cdr orig)))
-                                           (rontolisp:hash-table-plist x))
+                                           (rontolisp::%clojure-table-plist x))
           x)
       x))
 
@@ -15587,7 +15595,7 @@
              (let ((m
                     (if old
                         (rontolisp::%clojure-plist-table old
-                         (rontolisp:hash-table-plist meta))
+                         (rontolisp::%clojure-table-plist meta))
                         meta)))
                (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
                  (setf (gethash form rontolisp::%clojure-meta-table) m)))
@@ -20045,25 +20053,6 @@
   (let ((state rontolisp::%clojure-pp-state))
     (if state (setf (aref state 4) 0))
     nil))
-
-(defun rontolisp::%clojure-pp-members (x)
-  "The entries of a hash map or record, or the members of a hash set, in the
-   order the printer writes them (seq walks a table the other way round); NIL
-   for anything else."
-  (let ((acc nil))
-    (cond ((hash-table-p x)
-           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) x)
-           (nreverse acc))
-          ((rontolisp::%clojure-set-p x)
-           (maphash (lambda (k v)
-                      (declare (ignore v))
-                      (setq acc (cons k acc))) (car (cdr x)))
-           (nreverse acc))
-          ((rontolisp::%clojure-record-p x)
-           (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
-                    (car (cdr (cdr (cdr x)))))
-           (nreverse acc))
-          (t nil))))
 
 (defun rontolisp::%clojure-pp-out (w s)
   "S written to the writer W's output, its column following."

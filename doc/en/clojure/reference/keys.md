@@ -2,8 +2,8 @@
 
 `(keys m)`
 
-Answers the list of the map's keys, newest first -- the reverse of the order the map
-prints. `keys` of `nil` is `nil`.
+Answers the list of the map's keys in insertion order -- the order the map prints in
+(the oracle's array map's, up to eight entries). `keys` of `nil` is `nil`.
 
 As a value a one-argument lambda.
 
@@ -12,7 +12,7 @@ oracle's.
 
 ```clojure
 (println (keys {:a 1}))          ; (:a)
-(println (count (keys {:a 1 :b 2}))) ; 2
+(println (keys {:a 1 :b 2}))    ; (:a :b)
 (println (keys nil))             ; nil
 (println (map keys [{:a 1}]))    ; ((:a))
 ```

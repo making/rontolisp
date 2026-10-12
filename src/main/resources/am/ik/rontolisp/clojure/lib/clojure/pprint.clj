@@ -183,7 +183,7 @@
   [m]
   (pprint-meta m)
   (let [ns (lifted-namespace m)
-        entries (or (kernel/members m) (seq m))
+        entries (seq m)
         entries (if ns
                   (map (fn [[k v]] [(if (keyword? k) (keyword (name k)) (symbol (name k))) v]) entries)
                   entries)]
@@ -213,7 +213,7 @@
   (cond
     (map? x) (pprint-map x)
     (vector? x) (do (pprint-meta x) (pprint-items "[" "]" (seq x)))
-    (set? x) (do (pprint-meta x) (pprint-items "#{" "}" (or (kernel/members x) (seq x))))
+    (set? x) (do (pprint-meta x) (pprint-items "#{" "}" (seq x)))
     (seq? x) (when-not (pprint-reader-macro x)
                (pprint-meta x)
                (pprint-items "(" ")" (seq x)))
@@ -640,7 +640,7 @@
   "Prints the maps of rows as a table, one column per key of ks (the first row's
   keys when absent), each value right-aligned under its key as str spells them.
   Prints nothing for no rows."
-  ([rows] (print-table (map first (or (kernel/members (first rows)) (seq (first rows)))) rows))
+  ([rows] (print-table (keys (first rows)) rows))
   ([ks rows]
    (when (seq rows)
      (let [widths (map (fn [k] (apply max (count (str k)) (map (fn [row] (count (str (get row k)))) rows))) ks)
