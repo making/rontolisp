@@ -275,6 +275,11 @@ class SkillGenTest {
 	void buildOutputAndBinariesAreNotReadableExampleFiles() {
 		assertThat(SkillGen.isReadableExampleFile("hello/hello.lisp")).isTrue();
 		assertThat(SkillGen.isReadableExampleFile("hello/README.md")).isTrue();
+		// the other source languages' programs and a Clojure project's files
+		assertThat(SkillGen.isReadableExampleFile("scheme/queens.scm")).isTrue();
+		assertThat(SkillGen.isReadableExampleFile("clojure/demo.clj")).isTrue();
+		assertThat(SkillGen.isReadableExampleFile("clojure/portable.cljc")).isTrue();
+		assertThat(SkillGen.isReadableExampleFile("clojure/deps-project/deps.edn")).isTrue();
 		assertThat(SkillGen.isReadableExampleFile("hello/hello.wasm")).isFalse();
 		assertThat(SkillGen.isReadableExampleFile("ch07/params.bin")).isFalse();
 		assertThat(SkillGen.isReadableExampleFile("web/node_modules/x/index.js")).isFalse();

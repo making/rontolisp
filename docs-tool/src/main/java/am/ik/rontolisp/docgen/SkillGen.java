@@ -103,9 +103,9 @@ public final class SkillGen {
 	 * merely large, it is unreadable -- the allowlist keeps binary out by construction
 	 * rather than by naming every kind of it.
 	 */
-	static final List<String> EXAMPLE_TEXT_EXTENSIONS = List.of("lisp", "asd", "md", "txt", "sh", "js", "mjs", "css",
-			"html", "json", "jsonc", "wit", "wat", "wac", "yaml", "yml", "toml", "rs", "py", "java", "xml", "sql",
-			"csv");
+	static final List<String> EXAMPLE_TEXT_EXTENSIONS = List.of("lisp", "asd", "scm", "sld", "clj", "cljc", "edn", "md",
+			"txt", "sh", "js", "mjs", "css", "html", "json", "jsonc", "wit", "wat", "wac", "yaml", "yml", "toml", "rs",
+			"py", "java", "xml", "sql", "csv");
 
 	/** Build output that happens to sit inside an example directory. */
 	static final List<String> EXAMPLE_SKIP_DIRS = List.of("target", "node_modules", "dist", "build", "out");
