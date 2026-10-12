@@ -93,6 +93,47 @@ class JvmClassFileLookupTest {
 		}
 	}
 
+	/**
+	 * What a Clojure lowering reads of a class it finds in class files -- a native
+	 * image's way -- is what reflection says ({@code clojure/ClojureJavaClasses}): the
+	 * supertypes' names, whether a public field exists, and every public method as
+	 * declared with its flags, the compiler's bridges among them.
+	 */
+	@Test
+	void theLoweringsQuestionsHaveReflectionsAnswers() {
+		for (String className : CORPUS) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(className));
+			JavaType read = Objects.requireNonNull(classFiles.find(className));
+			assertThat(read.superclassName()).as("%s superclass", className).isEqualTo(reflected.superclassName());
+			assertThat(read.interfaceNames()).as("%s interfaces", className).isEqualTo(reflected.interfaceNames());
+			assertThat(read.hasPublicFields()).as("%s public fields", className).isEqualTo(reflected.hasPublicFields());
+			assertThat(declared(read.publicMethods())).as("%s methods", className)
+				.isEqualTo(declared(reflected.publicMethods()));
+			assertThat(declared(read.constructors())).as("%s constructors", className)
+				.isEqualTo(declared(reflected.constructors()));
+		}
+		for (String name : List.of("[I", "[Ljava.lang.String;")) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name));
+			JavaType read = Objects.requireNonNull(classFiles.find(name));
+			assertThat(read.superclassName()).as("%s superclass", name).isEqualTo(reflected.superclassName());
+			assertThat(read.interfaceNames()).as("%s interfaces", name).isEqualTo(reflected.interfaceNames());
+		}
+		// String's compareTo(Object) is the bridge javac writes for Comparable<String>
+		assertThat(declared(Objects.requireNonNull(classFiles.find("java.lang.String")).publicMethods()))
+			.contains("java.lang.String.compareTo[java.lang.Object]int synthetic bridge");
+	}
+
+	// Every executable as declared, with the flags the lowering reads.
+	private static List<String> declared(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e) + (e.isSynthetic() ? " synthetic" : "") + (e.isBridge() ? " bridge" : "")
+					+ (e.isAbstract() ? " abstract" : ""));
+		}
+		list.sort(null);
+		return list;
+	}
+
 	@Test
 	void everyPublicFieldIsTheSame() throws Exception {
 		for (String className : CORPUS) {

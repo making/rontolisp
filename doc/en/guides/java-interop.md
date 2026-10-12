@@ -867,7 +867,8 @@ What each output carries:
   the consumer's to provide.
 
 The GraalVM native binary cannot load a class at run time, so there the class path
-reaches only what a compile resolves calls against and what its output carries.
+reaches only what a compile resolves calls against -- what a Clojure host form means
+included -- and what its output carries.
 
 ## Native image
 

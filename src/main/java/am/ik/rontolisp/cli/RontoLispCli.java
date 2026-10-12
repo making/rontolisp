@@ -579,7 +579,8 @@ public final class RontoLispCli {
 		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
-		SourceLoader files = SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath::add);
+		SourceLoader files = SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath.classFiles(),
+				javaClassPath::add);
 		evaluator.setSourceLoader(files);
 		requireSimdForParallel(simd, parallel);
 		if (simd) {
@@ -766,6 +767,7 @@ public final class RontoLispCli {
 				.dists(dists)
 				.declaredFeatures(declaredFeatures)
 				.javaClassLoader(javaClassPath.classLoader())
+				.javaClassLookup(javaClassPath.classFiles())
 				.javaClassPath(javaClassPath::add)
 				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
 				.build());
@@ -793,7 +795,8 @@ public final class RontoLispCli {
 		evaluator.setWarnOnJavaReflection(warnJavaReflection);
 		// java: and a Clojure host form see the program's Java class path, which the
 		// jars of a Clojure program's dependencies join as it lowers.
-		evaluator.setSourceLoader(SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath::add));
+		evaluator.setSourceLoader(
+				SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath.classFiles(), javaClassPath::add));
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		// The entry file, every file it loads and every ASDF component under it read
@@ -1053,6 +1056,7 @@ public final class RontoLispCli {
 			.dists(dists)
 			.declaredFeatures(declaredFeatures)
 			.javaClassLoader(javaClassPath.classLoader())
+			.javaClassLookup(javaClassPath.classFiles())
 			.javaClassPath(javaClassPath::add)
 			.options(CompileFrontend.Options.builder()
 				.baseDir(baseDir)

@@ -1,18 +1,12 @@
 package am.ik.rontolisp.clojure;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.RandomAccess;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.Callable;
 import java.util.function.Function;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
@@ -123,12 +117,18 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final String HOST_ITERATOR = "RONTOLISP::%CLOJURE-HOST-ITERATOR";
 
+	private static final String OBJECT = "java.lang.Object";
+
+	private static final String LIST = "java.util.List";
+
+	private static final String COMPARABLE = "java.lang.Comparable";
+
 	/**
 	 * A kind of value whose Java object ({@code %clojure-host-member}) implements JDK
 	 * interfaces the oracle's class implements too: the test of the kind over the bound
-	 * receiver, the interfaces, and what makes the object.
+	 * receiver, the interfaces' names, and what makes the object.
 	 */
-	private record HostKind(Function<LispVal, LispVal> test, List<Class<?>> types, String maker) {
+	private record HostKind(Function<LispVal, LispVal> test, List<String> types, String maker) {
 
 	}
 
@@ -144,17 +144,18 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final List<HostKind> HOST_KINDS = List.of(
 			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), r),
-					List.of(List.class, RandomAccess.class, Comparable.class), HOST_MEMBER),
-			new HostKind(r -> ClojurePredicateLowering.rawTest("seq?", r), List.of(List.class), HOST_MEMBER),
-			new HostKind(r -> ClojurePredicateLowering.rawTest("set?", r), List.of(Set.class), HOST_MEMBER),
-			new HostKind(r -> ClojurePredicateLowering.rawTest("map?", r), List.of(Map.class), HOST_MEMBER),
-			new HostKind(r -> ClojurePredicateLowering.rawTest("ident?", r), List.of(Comparable.class), HOST_MEMBER),
-			new HostKind(r -> ClojurePredicateLowering.rawTest("ratio?", r), List.of(Number.class, Comparable.class),
+					List.of(LIST, "java.util.RandomAccess", COMPARABLE), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("seq?", r), List.of(LIST), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("set?", r), List.of("java.util.Set"), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("map?", r), List.of("java.util.Map"), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("ident?", r), List.of(COMPARABLE), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("ratio?", r), List.of("java.lang.Number", COMPARABLE),
 					HOST_MEMBER),
 			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), r),
-					List.of(Iterator.class), HOST_ITERATOR),
+					List.of("java.util.Iterator"), HOST_ITERATOR),
 			new HostKind(r -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), r),
-					List.of(Comparator.class, Runnable.class, Callable.class), HOST_MEMBER));
+					List.of("java.util.Comparator", "java.lang.Runnable", "java.util.concurrent.Callable"),
+					HOST_MEMBER));
 
 	/**
 	 * The kinds no one-argument predicate names exactly, each to its family's test, which
@@ -738,7 +739,7 @@ final class ClojureValueMethodLowering {
 		LispVal refusal = refusal(recv, method, !ClojureValueMethods.unsupported(method, n), args);
 		List<LispVal> tests = new ArrayList<>();
 		String maker = HOST_MEMBER;
-		if (declares(List.of(Object.class), method, n)) {
+		if (declares(List.of(OBJECT), method, n)) {
 			tests.add(recv);
 		}
 		else {
@@ -769,13 +770,21 @@ final class ClojureValueMethodLowering {
 
 	/**
 	 * Whether one of the types has a public instance method of the name taking the count
-	 * of arguments, which an instance call of the oracle's reflection would find.
+	 * of arguments, which an instance call of the oracle's reflection would find. A type
+	 * the lowering's classes do not hold has none.
+	 * @param types the types' binary names
+	 * @param method the method's name
+	 * @param n the argument count
+	 * @return whether one of them declares it
 	 */
-	static boolean declares(List<Class<?>> types, String method, int n) {
-		for (Class<?> type : types) {
-			for (Method candidate : type.getMethods()) {
-				if (candidate.getName().equals(method) && candidate.getParameterCount() == n
-						&& !Modifier.isStatic(candidate.getModifiers())) {
+	static boolean declares(List<String> types, String method, int n) {
+		for (String name : types) {
+			ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(name);
+			if (type == null) {
+				continue;
+			}
+			for (ClojureJavaClasses.Member candidate : type.methods()) {
+				if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()) {
 					return true;
 				}
 			}

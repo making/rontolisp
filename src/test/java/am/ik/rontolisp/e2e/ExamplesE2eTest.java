@@ -133,6 +133,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <li>{@code javaSources} -- {@code .java} files (under {@code examples/}) compiled,
  * before the leg, into a class directory that is passed as {@code --java-classpath} and
  * put on a compiled program's {@code java -cp}: a Java library of the example's own.</li>
+ * <li>{@code javaInterop} -- {@code true} for a program that calls Java members as it
+ * runs ({@code java:}, a Clojure host form). The native binary interprets no
+ * {@code java:}, so when it is the driver the {@code interpreter} leg is skipped, as an
+ * assumption like {@code os} and {@code library}; the exec jar's interpreter runs it, and
+ * the compiled legs run under either driver.</li>
  * </ul>
  * Exact matches ({@code equals}/{@code file}) are compared line-by-line, tolerant of a
  * trailing newline, and are asserted against every RUN backend -- so a per-backend
@@ -213,7 +218,7 @@ class ExamplesE2eTest {
 			@Nullable List<String> systemPath, @Nullable String workDir, @Nullable List<String> workFiles,
 			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
 			@Nullable List<String> library, @Nullable List<String> cli, @Nullable List<String> javaSources,
-			@Nullable String note) {
+			@Nullable Boolean javaInterop, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -260,6 +265,14 @@ class ExamplesE2eTest {
 		 */
 		boolean foreignLibrariesPresent() {
 			return this.library == null || this.library.stream().anyMatch(ExamplesE2eTest::libraryLoadable);
+		}
+
+		/**
+		 * Whether the program calls Java members as it runs ({@code java:}, a Clojure
+		 * host form), which only a JVM interprets.
+		 */
+		boolean callsJava() {
+			return Boolean.TRUE.equals(this.javaInterop);
 		}
 
 		Map<String, String> envOrEmpty() {
@@ -435,6 +448,49 @@ class ExamplesE2eTest {
 	}
 
 	/**
+	 * {@code javaInterop} gates the interpreter leg alone, and only when the native
+	 * binary drives the suite: the exec jar's interpreter calls Java, and a compiled
+	 * program runs on {@code java} whichever compiler built it. Needs neither the
+	 * examples opt-in nor a driver.
+	 * @throws Exception if the inline manifest cannot be parsed
+	 */
+	@Test
+	void javaInteropGatesTheInterpreterLegOfTheNativeBinaryOnly() throws Exception {
+		Manifest manifest = MAPPER.readValue("""
+				examples:
+				  - path: calls-java.clj
+				    backends: [interpreter, jvm]
+				    javaInterop: true
+				  - path: portable.clj
+				    backends: [interpreter, jvm]
+				""", Manifest.class);
+		Example callsJava = manifest.examples().get(0);
+		Example portable = manifest.examples().get(1);
+		List<String> binary = List.of("/opt/rontolisp");
+		List<String> jar = List.of("java", "-jar", "rontolisp-exec.jar");
+
+		assertThat(skippedForJavaInterop(Backend.INTERPRETER, callsJava, binary)).isTrue();
+		assertThat(skippedForJavaInterop(Backend.JVM, callsJava, binary)).isFalse();
+		assertThat(skippedForJavaInterop(Backend.INTERPRETER, callsJava, jar)).isFalse();
+		assertThat(skippedForJavaInterop(Backend.INTERPRETER, portable, binary)).isFalse();
+	}
+
+	/**
+	 * Every example the real manifest says calls Java has the interpreter leg the
+	 * declaration gates: on one without it the field would say nothing.
+	 * @throws Exception if the manifest cannot be read
+	 */
+	@Test
+	void everyJavaInteropExampleHasAnInterpreterLeg() throws Exception {
+		assumeTrue(Files.isRegularFile(MANIFEST), () -> "manifest not found: " + MANIFEST);
+		for (Example example : loadManifest().examples()) {
+			if (example.callsJava()) {
+				assertThat(example.backends()).as("%s declares javaInterop", example.path()).contains("interpreter");
+			}
+		}
+	}
+
+	/**
 	 * Every {@code os} token the real manifest names is a platform. A typo would
 	 * otherwise gate an example out of every machine there is -- silently, since a gated
 	 * leg is a skip.
@@ -519,6 +575,26 @@ class ExamplesE2eTest {
 		return backend.runsProgram() && !example.foreignLibrariesPresent();
 	}
 
+	/**
+	 * Whether this leg is gated out by the example's {@code javaInterop}: the interpreter
+	 * leg of a program that calls Java as it runs, when the driver is the native binary
+	 * -- which interprets no {@code java:}, its image holding the reflection of no class
+	 * a program names. The exec jar's interpreter runs the leg, and no compiled leg is
+	 * gated: the binary compiles such a program, and {@code java} runs it.
+	 * @param backend the leg
+	 * @param example the manifest entry
+	 * @param driver the command the legs start the compiler with
+	 * @return {@code true} when the leg must be skipped here
+	 */
+	static boolean skippedForJavaInterop(Backend backend, Example example, List<String> driver) {
+		return backend == Backend.INTERPRETER && example.callsJava() && !onAJvm(driver);
+	}
+
+	/** Whether the driver is the exec jar, run by {@code java -jar}, not the binary. */
+	private static boolean onAJvm(List<String> driver) {
+		return !driver.isEmpty() && "java".equals(driver.get(0));
+	}
+
 	/** Whether the platform's loader resolves a shared library by that name. */
 	private static boolean libraryLoadable(String name) {
 		try (Arena arena = Arena.ofConfined()) {
@@ -560,6 +636,10 @@ class ExamplesE2eTest {
 				}
 				if (skippedForLibrary(backend, example)) {
 					abort(example.path() + " needs one of " + example.library() + "; this machine has none");
+				}
+				if (skippedForJavaInterop(backend, example, driver)) {
+					abort(example.path() + " calls Java as it runs, which the native binary does not interpret;"
+							+ " the exec jar's interpreter runs this leg");
 				}
 				if ((backend == Backend.WASM || backend == Backend.WASM_COMPONENT_RUN) && !onPath("wasmtime")) {
 					abort("wasmtime not on PATH");
@@ -1023,7 +1103,7 @@ class ExamplesE2eTest {
 	 * @return the parsed manifest
 	 * @throws IOException if the manifest cannot be read
 	 */
-	private static Manifest loadManifest() throws IOException {
+	static Manifest loadManifest() throws IOException {
 		// Read through YamlResources.safeReader: snakeyaml-engine 3.0.1 crashes when a
 		// high surrogate lands exactly on its internal buffer boundary, and which
 		// character does depends on everything before it in the file. See YamlResources.

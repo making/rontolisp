@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import am.ik.rontolisp.compiler.JavaClassLookup;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -108,6 +109,18 @@ public interface SourceLoader {
 	 */
 	default ClassLoader javaClassLoader() {
 		return SourceLoader.class.getClassLoader();
+	}
+
+	/**
+	 * The classes a Clojure host form lowers against where this process cannot describe
+	 * the program's classes by reflection as a JVM does: in a native image, whose own
+	 * reflection holds only what its build registered, the class files of the JDK it
+	 * finds and of the program's Java class path. {@code null} (the default) lowers
+	 * against {@link #javaClassLoader()}'s classes, by reflection.
+	 * @return the classes, or {@code null} to reflect
+	 */
+	default @Nullable JavaClassLookup javaClassLookup() {
+		return null;
 	}
 
 	/**
@@ -233,6 +246,23 @@ public interface SourceLoader {
 	 * @return a filesystem-backed loader
 	 */
 	static SourceLoader fileSystem(ClassLoader javaClasses, JavaClassPathSink javaClassPath) {
+		return fileSystem(javaClasses, null, javaClassPath);
+	}
+
+	/**
+	 * Returns a loader that reads files from the local filesystem, for a program whose
+	 * Java classes come from {@code javaClasses} -- described, where this process cannot
+	 * reflect them as a JVM does, by {@code javaClassLookup} -- and whose Java class path
+	 * grows through {@code javaClassPath}.
+	 * @param javaClasses the program's Java class loader ({@link #javaClassLoader()})
+	 * @param javaClassLookup the classes a Clojure host form lowers against, or
+	 * {@code null} to reflect ({@link #javaClassLookup()})
+	 * @param javaClassPath where a jar the program's dependencies bring is added
+	 * ({@link #addJavaClassPath})
+	 * @return a filesystem-backed loader
+	 */
+	static SourceLoader fileSystem(ClassLoader javaClasses, @Nullable JavaClassLookup javaClassLookup,
+			JavaClassPathSink javaClassPath) {
 		return new SourceLoader() {
 			@Override
 			public String load(String path) throws IOException {
@@ -247,6 +277,11 @@ public interface SourceLoader {
 			@Override
 			public ClassLoader javaClassLoader() {
 				return javaClasses;
+			}
+
+			@Override
+			public @Nullable JavaClassLookup javaClassLookup() {
+				return javaClassLookup;
 			}
 
 			@Override

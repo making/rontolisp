@@ -17,6 +17,10 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   name: `bind` stores that program's `_apply` statically. Call sites `JvmJavaInteropCompiler`. The
   bridge is emitted only when a site needs it; it needs JRE >= build JRE.
 - Native image: template `.class` in `resource-config.json` — COMPILE works, INTERPRET does not.
+  A Clojure host form lowers there against the class files this lookup reads (the found JDK's
+  own release, the program's class path), not the image's partial reflection
+  (`.kb/clojure-frontend.md`, "Host classes"); the examples suite skips the interpreter leg of
+  a `javaInterop: true` example under the binary (`.kb/running-backends.md`).
 - A compiled `-o prog.jar` whose sites all resolve native-images with NO config (`--java-static`,
   "Direct calls" below); one that still needs the bridge native-images with agent config
   (`ShippedBridgeNativeImageE2eTest`, opt-in `-Drontolisp.native-image.e2e=true`). Measured
@@ -1107,8 +1111,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   coordinate joining `dependencies()` for a generated pom. The loader is a
   `URLClassLoader` subclass over rontolisp's loader, made once and ALWAYS (a run with no entry
   gets an empty one, so a lowering can grow it: `addURL`) -- not in a native image (no
-  run-time class definition: there the class path reaches the class-file lookup and the
-  outputs only). A wasm compile's class path names nothing (`--java-classpath`/`--java-dep`
+  run-time class definition: there the class path reaches the class-file lookup -- the JVM
+  backend's and the Clojure lowering's, `JavaClassPath.classFiles` -- and the outputs only). A wasm compile's class path names nothing (`--java-classpath`/`--java-dep`
   are refused there) and grows the same way: its lowering and its macro time run on the JVM.
   The Clojure macro-time evaluator resolves `java:` through the program's loader
   (`ClojureMacroTime.create(loader)`, from `SourceLanguage`/`SourceSession`), so a helper a

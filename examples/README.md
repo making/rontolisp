@@ -156,7 +156,10 @@ backends, so a per-backend divergence is a real failure. An example that loads
 an ASDF system names its directory — or, like the rove ones above, the LIST of
 directories — under `systemPath`. One that can only *run* on a given platform
 names it under `os` (`os: [mac]`): that gates the run legs and leaves the
-compile legs alone, so its lowering is still checked everywhere.
+compile legs alone, so its lowering is still checked everywhere. One that calls
+Java as it runs (`java:`, a Clojure host form) says `javaInterop: true`: the
+native binary interprets no `java:`, so its `interpreter` leg runs on the exec
+jar only, while the native binary still compiles it for the `jvm` leg.
 
 The suite is opt-in, so a plain `./mvnw test` skips it:
 

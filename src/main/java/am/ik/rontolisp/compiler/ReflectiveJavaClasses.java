@@ -229,6 +229,26 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		}
 
 		@Override
+		public @Nullable String superclassName() {
+			Class<?> superclass = this.type.getSuperclass();
+			return superclass == null ? null : superclass.getName();
+		}
+
+		@Override
+		public List<String> interfaceNames() {
+			List<String> names = new ArrayList<>();
+			for (Class<?> iface : this.type.getInterfaces()) {
+				names.add(iface.getName());
+			}
+			return names;
+		}
+
+		@Override
+		public boolean hasPublicFields() {
+			return this.type.getFields().length > 0;
+		}
+
+		@Override
 		public boolean isAssignableFrom(JavaType other) {
 			if (other instanceof JavaImplementationType implementation) {
 				return implementation.isAssignableTo(this);
@@ -440,6 +460,16 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		@Override
 		public boolean isConstructor() {
 			return this.executable instanceof Constructor<?>;
+		}
+
+		@Override
+		public boolean isSynthetic() {
+			return this.executable.isSynthetic();
+		}
+
+		@Override
+		public boolean isBridge() {
+			return this.executable instanceof Method method && method.isBridge();
 		}
 
 		@Override

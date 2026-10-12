@@ -50,6 +50,10 @@ final class ClojureInteropLowering {
 
 	static final LispSymbol JAVA_SUBCLASS = new LispSymbol("JAVA:SUBCLASS");
 
+	private static final String OBJECT = "java.lang.Object";
+
+	private static final String STRING = "java.lang.String";
+
 	/**
 	 * A {@code java:new} / {@code java:call} / {@code java:static} call over its parts
 	 * (the names, then the arguments), ended in the markers of the oracle's conventions
@@ -198,14 +202,14 @@ final class ClojureInteropLowering {
 	 * Whether a value of a member's declared type may carry a {@code byte[]} into the
 	 * program: {@code byte[]} itself, a type every array is ({@code Object},
 	 * {@code Cloneable}, {@code Serializable}), or an array whose elements may.
-	 * @param type the declared type
+	 * @param type the declared type's name, in {@link Class#getName()} spelling
 	 * @return whether the value may be or hold a {@code byte[]}
 	 */
-	static boolean carriesBytes(Class<?> type) {
-		if (type.isArray()) {
-			return type == byte[].class || carriesBytes(type.getComponentType());
+	static boolean carriesBytes(String type) {
+		if (ClojureHostClasses.isArray(type)) {
+			return type.equals("[B") || carriesBytes(ClojureHostClasses.componentType(type));
 		}
-		return type == Object.class || type == Cloneable.class || type == java.io.Serializable.class;
+		return type.equals(OBJECT) || type.equals("java.lang.Cloneable") || type.equals("java.io.Serializable");
 	}
 
 	/**
@@ -225,26 +229,28 @@ final class ClojureInteropLowering {
 		}
 		int tagged = designator.indexOf('(');
 		String member = tagged < 0 ? designator : designator.substring(0, tagged);
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			return true;
+		}
 		try {
-			Class<?> found = ClojureHostClasses.load(className);
 			boolean seen = false;
-			for (java.lang.reflect.Method method : found.getMethods()) {
-				if (!method.getName().equals(member)
-						|| statics && !java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+			for (ClojureJavaClasses.Member method : found.methods()) {
+				if (!method.name().equals(member) || statics && !method.isStatic()) {
 					continue;
 				}
-				int count = method.getParameterCount();
+				int count = method.parameterCount();
 				if (count != arity && !(method.isVarArgs() && count - 1 <= arity)) {
 					continue;
 				}
 				seen = true;
-				if (carriesBytes(method.getReturnType())) {
+				if (carriesBytes(method.returnType())) {
 					return true;
 				}
 			}
 			return !seen;
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		catch (LinkageError | SecurityException _) {
 			return true;
 		}
 	}
@@ -257,10 +263,15 @@ final class ClojureInteropLowering {
 	 * @return whether its value may carry a {@code byte[]}
 	 */
 	static boolean fieldCarriesBytes(String className, String field) {
-		try {
-			return carriesBytes(ClojureHostClasses.load(className).getField(field).getType());
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			return true;
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		try {
+			ClojureJavaClasses.Field declared = found.field(field);
+			return declared == null || carriesBytes(declared.type());
+		}
+		catch (LinkageError | SecurityException _) {
 			return true;
 		}
 	}
@@ -739,7 +750,7 @@ final class ClojureInteropLowering {
 	 * the class is no plain throwable or the arity has no such constructor.
 	 */
 	static @Nullable LispVal throwableConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
-		Class<?> type = plainThrowable(cls);
+		ClojureJavaClasses.JavaClass type = plainThrowable(cls);
 		if (type == null) {
 			// a throwable host object becomes an exception of its class once thrown
 			List<String> hostChain = ClojureThrowables.chainOf(cls);
@@ -754,13 +765,13 @@ final class ClojureInteropLowering {
 			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
 					chain, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
 			case 1 -> messageOrCauseConstruction(type, chain, args.get(0));
-			case 2 -> onlyConstructorsAtArity(type, 2, List.of(String.class, Throwable.class)) ? ClojureLowerUtil
+			case 2 -> onlyConstructorsAtArity(type, 2, List.of(STRING, ClojureThrowables.THROWABLE)) ? ClojureLowerUtil
 				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, args.get(0), args.get(1)) : null;
 			default -> null;
 		};
 		if (call != null) {
 			ctx.usedExInfo = true;
-			ctx.hostExceptionClasses.add(type.getName());
+			ctx.hostExceptionClasses.add(type.name());
 		}
 		return call;
 	}
@@ -773,12 +784,13 @@ final class ClojureInteropLowering {
 	 * oracle resolves a literal at compile time: {@code (AssertionError. "m")} is its
 	 * {@code (Object)} constructor). Anything else is null.
 	 */
-	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal chain, LispVal arg) {
-		if (onlyConstructorsAtArity(type, 1, List.of(String.class, Throwable.class))) {
+	private static @Nullable LispVal messageOrCauseConstruction(ClojureJavaClasses.JavaClass type, LispVal chain,
+			LispVal arg) {
+		if (onlyConstructorsAtArity(type, 1, List.of(STRING, ClojureThrowables.THROWABLE))) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), chain, arg);
 		}
 		boolean literal = arg instanceof LispString;
-		if (onlyConstructorsAtArity(type, 1, List.of(String.class)) || (literal && takesAString(type))) {
+		if (onlyConstructorsAtArity(type, 1, List.of(STRING)) || (literal && takesAString(type))) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, arg,
 					ClojureLowering.NIL_CONST);
 		}
@@ -792,48 +804,46 @@ final class ClojureInteropLowering {
 	 * override counts as {@code Throwable}'s) -- so the condition answers every member a
 	 * program can call on it. Null for any other class, or none.
 	 */
-	static @Nullable Class<?> plainThrowable(String cls) {
-		Class<?> type;
-		try {
-			type = ClojureHostClasses.load(cls);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
+	static ClojureJavaClasses.@Nullable JavaClass plainThrowable(String cls) {
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(cls);
+		if (type == null || !ClojureHostClasses.isAssignable(ClojureThrowables.THROWABLE, cls) || !type.isPublic()
+				|| type.isAbstract() || type.hasPublicFields()) {
 			return null;
 		}
-		if (!Throwable.class.isAssignableFrom(type) || !java.lang.reflect.Modifier.isPublic(type.getModifiers())
-				|| java.lang.reflect.Modifier.isAbstract(type.getModifiers()) || type.getFields().length > 0) {
-			return null;
-		}
-		for (java.lang.reflect.Method method : type.getMethods()) {
-			Class<?> owner = method.getDeclaringClass();
-			if (owner != Throwable.class && owner != Object.class && !overridesThrowable(method)) {
+		for (ClojureJavaClasses.Member method : type.methods()) {
+			String owner = method.declaringClass();
+			if (!owner.equals(ClojureThrowables.THROWABLE) && !owner.equals(OBJECT) && !overridesThrowable(method)) {
 				return null;
 			}
 		}
 		return type;
 	}
 
-	private static boolean overridesThrowable(java.lang.reflect.Method method) {
-		if (java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+	// Whether Throwable has a public method of the name and parameter types: what an
+	// instance method overriding one of its own answers for it.
+	private static boolean overridesThrowable(ClojureJavaClasses.Member method) {
+		if (method.isStatic()) {
 			return false;
 		}
-		try {
-			Throwable.class.getMethod(method.getName(), method.getParameterTypes());
-			return true;
-		}
-		catch (NoSuchMethodException _) {
+		ClojureJavaClasses.JavaClass throwable = ClojureHostClasses.find(ClojureThrowables.THROWABLE);
+		if (throwable == null) {
 			return false;
 		}
+		for (ClojureJavaClasses.Member declared : throwable.methods()) {
+			if (declared.name().equals(method.name()) && declared.parameterTypes().equals(method.parameterTypes())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
-	private static boolean hasConstructor(Class<?> type, Class<?>... parameters) {
-		try {
-			type.getConstructor(parameters);
-			return true;
+	private static boolean hasConstructor(ClojureJavaClasses.JavaClass type, String... parameters) {
+		for (ClojureJavaClasses.Member constructor : type.constructors()) {
+			if (constructor.parameterTypes().equals(List.of(parameters))) {
+				return true;
+			}
 		}
-		catch (NoSuchMethodException _) {
-			return false;
-		}
+		return false;
 	}
 
 	/**
@@ -841,29 +851,29 @@ final class ClojureInteropLowering {
 	 * ones: each single parameter type of {@code shapes} at arity one, or the one
 	 * parameter list {@code shapes} at arity two.
 	 */
-	private static boolean onlyConstructorsAtArity(Class<?> type, int arity, List<Class<?>> shapes) {
-		Set<List<Class<?>>> wanted = new HashSet<>();
+	private static boolean onlyConstructorsAtArity(ClojureJavaClasses.JavaClass type, int arity, List<String> shapes) {
+		Set<List<String>> wanted = new HashSet<>();
 		if (arity == 1) {
-			for (Class<?> shape : shapes) {
+			for (String shape : shapes) {
 				wanted.add(List.of(shape));
 			}
 		}
 		else {
 			wanted.add(shapes);
 		}
-		Set<List<Class<?>>> found = new HashSet<>();
-		for (java.lang.reflect.Constructor<?> constructor : type.getConstructors()) {
-			if (constructor.getParameterCount() == arity) {
-				found.add(List.of(constructor.getParameterTypes()));
+		Set<List<String>> found = new HashSet<>();
+		for (ClojureJavaClasses.Member constructor : type.constructors()) {
+			if (constructor.parameterCount() == arity) {
+				found.add(constructor.parameterTypes());
 			}
 		}
 		return found.equals(wanted);
 	}
 
-	private static boolean takesAString(Class<?> type) {
-		for (java.lang.reflect.Constructor<?> constructor : type.getConstructors()) {
-			if (constructor.getParameterCount() == 1
-					&& constructor.getParameterTypes()[0].isAssignableFrom(String.class)) {
+	private static boolean takesAString(ClojureJavaClasses.JavaClass type) {
+		for (ClojureJavaClasses.Member constructor : type.constructors()) {
+			if (constructor.parameterCount() == 1
+					&& ClojureHostClasses.isAssignable(constructor.parameterTypes().get(0), STRING)) {
 				return true;
 			}
 		}
@@ -983,34 +993,32 @@ final class ClojureInteropLowering {
 	 * sites keep their old shape and the run-time error names the class.
 	 */
 	static ClojureLowering.StaticMember staticMember(String className, String member) {
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			return new ClojureLowering.StaticMember(false, List.of(), false);
+		}
 		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			boolean field = false;
-			try {
-				field = java.lang.reflect.Modifier.isStatic(found.getField(member).getModifiers());
-			}
-			catch (NoSuchFieldException _) {
-				// no field of that name: the methods decide below
-			}
+			// a static field of the name; without one, the methods decide below
+			ClojureJavaClasses.Field declared = found.field(member);
+			boolean field = declared != null && declared.isStatic();
 			Set<Integer> arities = new HashSet<>();
 			boolean variadic = false;
-			for (java.lang.reflect.Method method : found.getMethods()) {
-				if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
-						|| method.isSynthetic()) {
+			for (ClojureJavaClasses.Member method : found.methods()) {
+				if (!method.name().equals(member) || !method.isStatic() || method.isSynthetic()) {
 					continue;
 				}
 				if (method.isVarArgs()) {
 					variadic = true;
 				}
 				else {
-					arities.add(method.getParameterCount());
+					arities.add(method.parameterCount());
 				}
 			}
 			List<Integer> sorted = new ArrayList<>(arities);
 			sorted.sort(Integer::compareTo);
 			return new ClojureLowering.StaticMember(field, sorted, variadic);
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		catch (LinkageError | SecurityException _) {
 			return new ClojureLowering.StaticMember(false, List.of(), false);
 		}
 	}
@@ -1204,22 +1212,24 @@ final class ClojureInteropLowering {
 	static List<Integer> instanceArities(String className, String method, String spelling) {
 		Set<Integer> arities = new HashSet<>();
 		boolean variadic = false;
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			throw new LispReadException(spelling + ": no class " + className);
+		}
 		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			for (java.lang.reflect.Method candidate : found.getMethods()) {
-				if (!candidate.getName().equals(method) || java.lang.reflect.Modifier.isStatic(candidate.getModifiers())
-						|| candidate.isSynthetic()) {
+			for (ClojureJavaClasses.Member candidate : found.methods()) {
+				if (!candidate.name().equals(method) || candidate.isStatic() || candidate.isSynthetic()) {
 					continue;
 				}
 				if (candidate.isVarArgs()) {
 					variadic = true;
 				}
 				else {
-					arities.add(candidate.getParameterCount() + 1);
+					arities.add(candidate.parameterCount() + 1);
 				}
 			}
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		catch (LinkageError | SecurityException _) {
 			throw new LispReadException(spelling + ": no class " + className);
 		}
 		return sortedArities(arities, variadic, spelling,
@@ -1233,18 +1243,21 @@ final class ClojureInteropLowering {
 	static List<Integer> constructorArities(String className, String spelling) {
 		Set<Integer> arities = new HashSet<>();
 		boolean variadic = false;
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			throw new LispReadException(spelling + ": no class " + className);
+		}
 		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			for (java.lang.reflect.Constructor<?> candidate : found.getConstructors()) {
+			for (ClojureJavaClasses.Member candidate : found.constructors()) {
 				if (candidate.isVarArgs()) {
 					variadic = true;
 				}
 				else {
-					arities.add(candidate.getParameterCount());
+					arities.add(candidate.parameterCount());
 				}
 			}
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		catch (LinkageError | SecurityException _) {
 			throw new LispReadException(spelling + ": no class " + className);
 		}
 		return sortedArities(arities, variadic, spelling, "no matches found for constructor in class " + className);
@@ -1306,10 +1319,7 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
-		try {
-			ClojureHostClasses.load(cls);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
+		if (!ClojureHostClasses.exists(cls)) {
 			return null;
 		}
 		return ClojureLowerUtil.cons(JAVA_STATIC,
@@ -1722,25 +1732,15 @@ final class ClojureInteropLowering {
 	// Whether the name loads, here, as a final class: a proxy superclass must be
 	// extensible. A name that does not load is left to the run-time error.
 	private static boolean isFinalClass(String className) {
-		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			return !found.isInterface() && java.lang.reflect.Modifier.isFinal(found.getModifiers());
-		}
-		catch (ClassNotFoundException | LinkageError ex) {
-			return false;
-		}
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		return found != null && !found.isInterface() && found.isFinal();
 	}
 
 	// Whether the name loads, here, as a class that is not an interface: a proxy
 	// superclass. A name that does not load is left to the run-time error.
 	private static boolean isHostClass(String className) {
-		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			return !found.isInterface();
-		}
-		catch (ClassNotFoundException | LinkageError ex) {
-			return false;
-		}
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		return found != null && !found.isInterface();
 	}
 
 	/**
@@ -2053,8 +2053,8 @@ final class ClojureInteropLowering {
 	 * reaches an instance call's host arm is a number, a character, a boolean or an
 	 * exception, and {@code Object}'s methods are every value's.
 	 */
-	private static final List<Class<?>> HOSTLESS_RECEIVERS = List.of(Object.class, Long.class, Double.class,
-			Character.class, Boolean.class, Throwable.class);
+	private static final List<String> HOSTLESS_RECEIVERS = List.of(OBJECT, "java.lang.Long", "java.lang.Double",
+			"java.lang.Character", "java.lang.Boolean", ClojureThrowables.THROWABLE);
 
 	/**
 	 * An instance call's host arm for a receiver of no known class where the host is not
@@ -2072,13 +2072,13 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal hostlessCall(LispSymbol recv, String method, List<LispVal> args, LispVal call, boolean strings,
 			boolean streams) {
-		List<Class<?>> classes = new ArrayList<>(HOSTLESS_RECEIVERS);
+		List<String> classes = new ArrayList<>(HOSTLESS_RECEIVERS);
 		if (!strings) {
-			classes.add(String.class);
+			classes.add(STRING);
 		}
 		if (!streams) {
-			classes.add(java.io.Writer.class);
-			classes.add(java.io.Reader.class);
+			classes.add("java.io.Writer");
+			classes.add("java.io.Reader");
 		}
 		return ClojureValueMethodLowering.declares(classes, method, args.size()) ? call
 				: ClojureValueMethodLowering.refusal(recv, method, true, args);
@@ -2171,25 +2171,15 @@ final class ClojureInteropLowering {
 		if (className == null) {
 			return null;
 		}
-		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			Set<String> returns = new HashSet<>();
-			boolean seen = false;
-			for (java.lang.reflect.Method method : found.getMethods()) {
-				if (!method.getName().equals(member) || method.isSynthetic() || method.isVarArgs()
-						|| method.getParameterCount() != arity) {
-					continue;
-				}
-				seen = true;
-				Class<?> ret = method.getReturnType();
-				if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
-					return null;
-				}
-				returns.add(ret.getName());
-			}
-			return seen && returns.size() == 1 ? returns.iterator().next() : null;
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
+			return null;
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		try {
+			SingleReturn single = singleReturn(found, member, arity, false);
+			return single.seen() ? single.name() : null;
+		}
+		catch (LinkageError | SecurityException _) {
 			return null;
 		}
 	}
@@ -2201,57 +2191,53 @@ final class ClojureInteropLowering {
 	 * single return.
 	 */
 	static @Nullable String declaredStaticReturn(String className, String member, int arity) {
-		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			if (arity == 0) {
-				Set<String> returns = new HashSet<>();
-				boolean seen = false;
-				for (java.lang.reflect.Method method : found.getMethods()) {
-					if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
-							|| method.isSynthetic() || method.isVarArgs() || method.getParameterCount() != 0) {
-						continue;
-					}
-					seen = true;
-					Class<?> ret = method.getReturnType();
-					if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
-						return null;
-					}
-					returns.add(ret.getName());
-				}
-				if (seen) {
-					return returns.size() == 1 ? returns.iterator().next() : null;
-				}
-				try {
-					java.lang.reflect.Field field = found.getField(member);
-					if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-						Class<?> type = field.getType();
-						return type.isPrimitive() || type.isArray() ? null : type.getName();
-					}
-				}
-				catch (NoSuchFieldException _) {
-					// no field either: unknown, like an unknown member
-				}
-				return null;
-			}
-			Set<String> returns = new HashSet<>();
-			boolean seen = false;
-			for (java.lang.reflect.Method method : found.getMethods()) {
-				if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
-						|| method.isSynthetic() || method.isVarArgs() || method.getParameterCount() != arity) {
-					continue;
-				}
-				seen = true;
-				Class<?> ret = method.getReturnType();
-				if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
-					return null;
-				}
-				returns.add(ret.getName());
-			}
-			return seen && returns.size() == 1 ? returns.iterator().next() : null;
-		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		ClojureJavaClasses.JavaClass found = ClojureHostClasses.find(className);
+		if (found == null) {
 			return null;
 		}
+		try {
+			SingleReturn single = singleReturn(found, member, arity, true);
+			if (single.seen() || arity != 0) {
+				return single.name();
+			}
+			// no method: the static field's type, or unknown, like an unknown member
+			ClojureJavaClasses.Field field = found.field(member);
+			if (field == null || !field.isStatic()) {
+				return null;
+			}
+			String type = field.type();
+			return ClojureHostClasses.isPrimitive(type) || ClojureHostClasses.isArray(type) ? null : type;
+		}
+		catch (LinkageError | SecurityException _) {
+			return null;
+		}
+	}
+
+	/**
+	 * What the non-variadic overloads of a name at a count declare they return: whether
+	 * there is one, and the single return type's name they share -- null when they
+	 * disagree or one returns a primitive, void or an array.
+	 */
+	private record SingleReturn(boolean seen, @Nullable String name) {
+	}
+
+	private static SingleReturn singleReturn(ClojureJavaClasses.JavaClass found, String member, int arity,
+			boolean statics) {
+		Set<String> returns = new HashSet<>();
+		boolean seen = false;
+		for (ClojureJavaClasses.Member method : found.methods()) {
+			if (!method.name().equals(member) || statics && !method.isStatic() || method.isSynthetic()
+					|| method.isVarArgs() || method.parameterCount() != arity) {
+				continue;
+			}
+			seen = true;
+			String ret = method.returnType();
+			if (ClojureHostClasses.isPrimitive(ret) || ClojureHostClasses.isArray(ret)) {
+				return new SingleReturn(true, null);
+			}
+			returns.add(ret);
+		}
+		return new SingleReturn(seen, seen && returns.size() == 1 ? returns.iterator().next() : null);
 	}
 
 	/**

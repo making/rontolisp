@@ -16,7 +16,7 @@ public final class ClojureSession {
 
 	private final ClojureLowering lowering = new ClojureLowering();
 
-	private final ClassLoader javaClasses;
+	private final ClojureJavaClasses javaClasses;
 
 	/** A session that reads no files: a project {@code require} is refused by name. */
 	public ClojureSession() {
@@ -31,7 +31,7 @@ public final class ClojureSession {
 	public ClojureSession(ClojureFiles files) {
 		this.lowering.sourcePath = new ClojureSourcePath(files, null);
 		this.lowering.files = files;
-		this.javaClasses = files.javaClassLoader();
+		this.javaClasses = files.javaClasses();
 		this.lowering.referReplRequires();
 	}
 

@@ -320,6 +320,7 @@ public final class JvmSourceCompiler {
 					.dists(dists)
 					.declaredFeatures(this.features)
 					.javaClassLoader(classPath.classLoader())
+					.javaClassLookup(classPath.classFiles())
 					.javaClassPath(classPath::add)
 					.options(CompileFrontend.Options.builder()
 						.baseDir(this.baseDir)

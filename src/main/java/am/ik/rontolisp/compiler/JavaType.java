@@ -68,6 +68,28 @@ public interface JavaType extends JavaKind {
 	boolean isAbstract();
 
 	/**
+	 * The name of the superclass, as {@link Class#getSuperclass()} answers: none for an
+	 * interface, a primitive or {@code java.lang.Object}, {@code java.lang.Object} for an
+	 * array.
+	 * @return the superclass's binary name, or {@code null}
+	 */
+	@Nullable String superclassName();
+
+	/**
+	 * The names of the interfaces this type directly implements or extends, in
+	 * declaration order, as {@link Class#getInterfaces()} answers.
+	 * @return the interfaces' binary names
+	 */
+	List<String> interfaceNames();
+
+	/**
+	 * Whether it has a public field, one a superclass or a superinterface declares
+	 * included: whether {@link Class#getFields()} is not empty.
+	 * @return whether there is a public field
+	 */
+	boolean hasPublicFields();
+
+	/**
 	 * Whether a value of {@code other} can be assigned to this type without conversion,
 	 * as {@link Class#isAssignableFrom(Class)} answers.
 	 * @param other the source type

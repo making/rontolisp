@@ -590,11 +590,8 @@ final class ClojureInterfaces {
 		if (name.indexOf('.') < 0) {
 			throw new LispReadException("Unable to resolve symbol: " + symbol + " in this context");
 		}
-		Class<?> host;
-		try {
-			host = ClojureHostClasses.load(name);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
+		ClojureJavaClasses.JavaClass host = ClojureHostClasses.find(name);
+		if (host == null) {
 			throw new LispReadException("Unable to resolve classname: " + name);
 		}
 		if (!host.isInterface()) {

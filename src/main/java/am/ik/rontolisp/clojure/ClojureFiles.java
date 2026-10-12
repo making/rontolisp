@@ -71,13 +71,22 @@ public interface ClojureFiles {
 
 	/**
 	 * The class loader the program's host classes come from -- the program's Java class
-	 * path over the classes rontolisp runs with -- which the lowering asks what a class
-	 * name is (its members' arities, a throwable's chain). The default is rontolisp's own
-	 * loader.
+	 * path over the classes rontolisp runs with. The default is rontolisp's own loader.
 	 * @return the loader
 	 */
 	default ClassLoader javaClassLoader() {
 		return ClojureFiles.class.getClassLoader();
+	}
+
+	/**
+	 * The program's Java classes as the lowering asks what a class name is (its members'
+	 * arities, a throwable's chain and constructors): by default those of
+	 * {@link #javaClassLoader()}, by reflection; a native image, whose own reflection
+	 * holds only what its build registered, answers class files instead.
+	 * @return the classes
+	 */
+	default ClojureJavaClasses javaClasses() {
+		return new ClojureReflectedClasses(javaClassLoader());
 	}
 
 	/**

@@ -15,7 +15,9 @@ import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.clojure.ClojureJavaClasses;
 import am.ik.rontolisp.clojure.ClojureRepositories;
+import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 
@@ -300,6 +302,12 @@ public enum SourceLanguage {
 			@Override
 			public ClassLoader javaClassLoader() {
 				return loader.javaClassLoader();
+			}
+
+			@Override
+			public ClojureJavaClasses javaClasses() {
+				JavaClassLookup classFiles = loader.javaClassLookup();
+				return classFiles == null ? ClojureFiles.super.javaClasses() : new ClojureClassLookup(classFiles);
 			}
 
 			@Override

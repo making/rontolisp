@@ -387,13 +387,7 @@ final class ClojureValueClasses {
 	 * @return {@code true} when it resolves
 	 */
 	static boolean loads(String className) {
-		try {
-			ClojureHostClasses.load(className);
-			return true;
-		}
-		catch (ClassNotFoundException | LinkageError _) {
-			return false;
-		}
+		return ClojureHostClasses.exists(className);
 	}
 
 	/**
@@ -429,14 +423,13 @@ final class ClojureValueClasses {
 		if (ClojureClassBases.basesOf(className) != null) {
 			return false;
 		}
-		try {
-			return ClojureHostClasses.load(className).isInterface();
+		ClojureJavaClasses.JavaClass host = ClojureHostClasses.find(className);
+		if (host != null) {
+			return host.isInterface();
 		}
-		catch (ClassNotFoundException | LinkageError _) {
-			String simple = className.substring(className.lastIndexOf('.') + 1);
-			return simple.length() > 1 && simple.charAt(0) == 'I' && Character.isUpperCase(simple.charAt(1))
-					|| CLOJURE_LANG_INTERFACES.contains(simple);
-		}
+		String simple = className.substring(className.lastIndexOf('.') + 1);
+		return simple.length() > 1 && simple.charAt(0) == 'I' && Character.isUpperCase(simple.charAt(1))
+				|| CLOJURE_LANG_INTERFACES.contains(simple);
 	}
 
 	/**
@@ -455,27 +448,21 @@ final class ClojureValueClasses {
 		if (ClojureClassBases.basesOf(sub) != null) {
 			return ClojureClassBases.supersOf(sub).contains(sup);
 		}
-		try {
-			Class<?> subClass = ClojureHostClasses.load(sub);
-			try {
-				return ClojureHostClasses.load(sup).isAssignableFrom(subClass);
-			}
-			catch (ClassNotFoundException | LinkageError _) {
-				return false;
-			}
+		ClojureJavaClasses.JavaClass subClass = ClojureHostClasses.find(sub);
+		if (subClass != null) {
+			ClojureJavaClasses.JavaClass supClass = ClojureHostClasses.find(sup);
+			return supClass != null && supClass.isAssignableFrom(subClass);
 		}
-		catch (ClassNotFoundException | LinkageError _) {
-			ClojureInterfaces.HostInterface subInterface = ClojureInterfaces.named(sub);
-			ClojureInterfaces.HostInterface supInterface = ClojureInterfaces.named(sup);
-			if (subInterface != null && supInterface != null) {
-				// two interfaces a body may implement: their super-interfaces, read off
-				// the oracle's jar
-				return ClojureInterfaces.closure(List.of(subInterface)).contains(supInterface);
-			}
-			List<Kind> subKinds = kindsOf(sub);
-			List<Kind> supKinds = kindsOf(sup);
-			return !subKinds.isEmpty() && supKinds.containsAll(subKinds) && !subKinds.containsAll(supKinds);
+		ClojureInterfaces.HostInterface subInterface = ClojureInterfaces.named(sub);
+		ClojureInterfaces.HostInterface supInterface = ClojureInterfaces.named(sup);
+		if (subInterface != null && supInterface != null) {
+			// two interfaces a body may implement: their super-interfaces, read off the
+			// oracle's jar
+			return ClojureInterfaces.closure(List.of(subInterface)).contains(supInterface);
 		}
+		List<Kind> subKinds = kindsOf(sub);
+		List<Kind> supKinds = kindsOf(sup);
+		return !subKinds.isEmpty() && supKinds.containsAll(subKinds) && !subKinds.containsAll(supKinds);
 	}
 
 }

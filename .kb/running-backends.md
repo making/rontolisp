@@ -36,6 +36,10 @@ changing anything that can shift cross-backend output:
 ```
 
 A failure prints `[case '<name>' on <BACKEND>`; re-run step 2 only unless Java sources changed.
+`-Dtest=ClojureNativeLoweringE2eTest` with the same binary checks that it lowers the Clojure
+corpus (`clojure-spec.yaml`, the Clojure examples) to the IR this JVM does: the binary reads a
+host form's class from class files where the JVM reflects (`.kb/clojure-frontend.md`, "Host
+classes"); CI's native-image job runs it.
 The corpus runs on each backend TWICE -- default and `--simd`, so the leg is `<BACKEND> --simd` --
 because `--simd` changes the packed-array REPRESENTATION and a matrix counting only backends misses
 half of every accelerated primitive (`.kb/vec.md`, "The E2E `--simd` axis").
@@ -79,6 +83,11 @@ A `deps.edn` project's entry names a file in the project and a `cli` (`[-M:alias
 every leg runs in a copy of that directory with its options ahead of the command line (after a
 leading `test`); `javaSources` compiles an example's own Java library onto `--java-classpath`
 (`ExamplesE2eTest#theLegsOptionsGoAheadOfACommandLineAndAfterAFile`). Both since 2026-10-12.
+`javaInterop: true` marks a program calling Java as it runs: under the native binary (CI's
+driver) its `interpreter` leg is skipped, since the binary interprets no `java:`; the exec jar
+runs it (`ExamplesE2eTest#javaInteropGatesTheInterpreterLegOfTheNativeBinaryOnly`). Added
+2026-10-12, when `clojure/http-client.clj` (`java.net.ServerSocket`) and
+`clojure/java-library/main.clj` failed that leg in CI.
 
 It is the longest run in the repo. **Split it with `-Drontolisp.examples.only=` from the
 start** -- one slice per surface -- and run each slice to completion in the foreground. A

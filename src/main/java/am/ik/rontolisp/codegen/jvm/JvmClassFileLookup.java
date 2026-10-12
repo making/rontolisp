@@ -352,6 +352,21 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		}
 
 		@Override
+		public @Nullable String superclassName() {
+			return null;
+		}
+
+		@Override
+		public List<String> interfaceNames() {
+			return List.of();
+		}
+
+		@Override
+		public boolean hasPublicFields() {
+			return false;
+		}
+
+		@Override
 		public boolean isAssignableFrom(JavaType other) {
 			return other == this;
 		}
@@ -433,6 +448,21 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 		@Override
 		public boolean isAbstract() {
+			return false;
+		}
+
+		@Override
+		public @Nullable String superclassName() {
+			return null;
+		}
+
+		@Override
+		public List<String> interfaceNames() {
+			return List.of();
+		}
+
+		@Override
+		public boolean hasPublicFields() {
 			return false;
 		}
 
@@ -521,6 +551,23 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 		@Override
 		public boolean isAbstract() {
+			return false;
+		}
+
+		// An array class extends Object and implements Cloneable and Serializable, as
+		// reflection says.
+		@Override
+		public String superclassName() {
+			return "java.lang.Object";
+		}
+
+		@Override
+		public List<String> interfaceNames() {
+			return List.of("java.lang.Cloneable", "java.io.Serializable");
+		}
+
+		@Override
+		public boolean hasPublicFields() {
 			return false;
 		}
 
@@ -664,6 +711,41 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 				}
 			}
 			return list;
+		}
+
+		// Class.getSuperclass(): the class file's super_class, none for an interface
+		// (whose class file names Object) or for Object.
+		@Override
+		public @Nullable String superclassName() {
+			String superName = this.info.superName();
+			return superName == null || isInterface() ? null : superName.replace('/', '.');
+		}
+
+		@Override
+		public List<String> interfaceNames() {
+			List<String> names = new ArrayList<>();
+			for (String iface : this.info.interfaces()) {
+				names.add(iface.replace('/', '.'));
+			}
+			return names;
+		}
+
+		// Class.getFields() is not empty: a public field declared here, on a
+		// superinterface or on a superclass, as far as the class path holds them.
+		@Override
+		public boolean hasPublicFields() {
+			for (ClassFileInfo.Member member : this.info.fields()) {
+				if (member.isPublic()) {
+					return true;
+				}
+			}
+			for (ClassType iface : interfaces()) {
+				if (iface.hasPublicFields()) {
+					return true;
+				}
+			}
+			ClassType superclass = superclass();
+			return superclass != null && superclass.hasPublicFields();
 		}
 
 		@Override
@@ -1087,6 +1169,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		@Override
 		public boolean isConstructor() {
 			return "<init>".equals(this.member.name());
+		}
+
+		@Override
+		public boolean isSynthetic() {
+			return (this.member.access() & am.ik.jvm.AccessFlag.ACC_SYNTHETIC) != 0;
+		}
+
+		@Override
+		public boolean isBridge() {
+			return (this.member.access() & am.ik.jvm.AccessFlag.ACC_BRIDGE) != 0;
 		}
 
 		@Override

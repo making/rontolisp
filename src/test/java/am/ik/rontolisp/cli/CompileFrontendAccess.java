@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
@@ -235,6 +236,37 @@ public final class CompileFrontendAccess {
 			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
 			.build());
 		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * A Clojure entry file through the whole front end the way the CLI compiles it, the
+	 * classes its host forms name those of a Java class path: described by reflection
+	 * through a loader over it, as on a JVM, or by {@code classFiles}, as a native image
+	 * reads them ({@code JavaClassPath.classFiles}).
+	 * @param entryFile the program file
+	 * @param javaClassPath the program's Java class path ({@code --java-classpath})
+	 * @param classFiles the classes to lower against instead of reflecting, or
+	 * {@code null}
+	 * @return the expanded program and the feature set it was read with
+	 * @throws java.io.IOException when the file cannot be read
+	 */
+	public static Program clojureFile(Path entryFile, List<Path> javaClassPath, @Nullable JavaClassLookup classFiles)
+			throws java.io.IOException {
+		Path file = entryFile.toAbsolutePath();
+		String source = java.nio.file.Files.readString(file);
+		try (JavaClassPath classPath = JavaClassPath.of(javaClassPath)) {
+			CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+				.source(source)
+				.entryFile(file.toString())
+				.javaClassLoader(classPath.classLoader())
+				.javaClassLookup(classFiles)
+				.javaClassPath(classPath::add)
+				.options(CompileFrontend.Options.builder()
+					.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
+					.build())
+				.build());
+			return new Program(result.program(), result.features());
+		}
 	}
 
 	/**

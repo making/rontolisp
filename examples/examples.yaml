@@ -91,6 +91,11 @@
 #                rontolisp's options; `args` follow it unseparated.
 #   javaSources  .java files compiled before the leg into a class directory that is
 #                passed as --java-classpath and joins a compiled program's java -cp
+#   javaInterop  true for a program that calls Java members as it runs (java:, a
+#                Clojure host form). The native binary interprets no java:, so when
+#                it drives the suite the interpreter leg is skipped (an assumption,
+#                like os and library); the exec jar's interpreter runs it, and the
+#                compiled legs run under either driver.
 #   note         free-form comment
 #
 # GUI examples (jvm/, macos/, minesweeper, rainbow/, the webgl-*/ and other browser
@@ -357,6 +362,7 @@ examples:
       file: .expected/clojure-deps-project-test.txt
   - path: clojure/http-client.clj
     backends: [interpreter, jvm]
+    javaInterop: true
     note: >-
       rontolisp.http-client against a Ring handler the program serves on a free local
       port (:join? false), then System/exit: GET with query parameters, a form POST, a
@@ -378,6 +384,7 @@ examples:
   - path: clojure/java-library/main.clj
     javaSources: [clojure/java-library/java/example/Slugger.java]
     backends: [interpreter, jvm]
+    javaInterop: true
     note: >-
       a Java library of the example's own on --java-classpath: a static method and
       field, a constructor, a List argument and a fn as a Predicate. The WASM targets

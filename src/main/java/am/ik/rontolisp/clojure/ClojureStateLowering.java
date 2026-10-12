@@ -1,6 +1,5 @@
 package am.ik.rontolisp.clojure;
 
-import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -1731,21 +1730,15 @@ final class ClojureStateLowering {
 	 * {@code Throwable}, or no public constructor taking a message.
 	 */
 	private static @Nullable LispVal hostConstruction(String className, LispSymbol message, LispSymbol cause) {
-		Class<?> type;
-		try {
-			type = ClojureHostClasses.load(className);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(className);
+		if (type == null || !ClojureHostClasses.isAssignable(ClojureThrowables.THROWABLE, className) || !type.isPublic()
+				|| type.isAbstract()) {
 			return null;
 		}
-		if (!Throwable.class.isAssignableFrom(type) || !Modifier.isPublic(type.getModifiers())
-				|| Modifier.isAbstract(type.getModifiers())) {
-			return null;
-		}
-		if (hasPublicConstructor(type, String.class, Throwable.class)) {
+		if (hasPublicConstructor(type, "java.lang.String", ClojureThrowables.THROWABLE)) {
 			return construction(className, message, cause, true);
 		}
-		return hasPublicConstructor(type, String.class) ? construction(className, message, cause, false) : null;
+		return hasPublicConstructor(type, "java.lang.String") ? construction(className, message, cause, false) : null;
 	}
 
 	/**
@@ -1779,12 +1772,16 @@ final class ClojureStateLowering {
 				value);
 	}
 
-	private static boolean hasPublicConstructor(Class<?> type, Class<?>... parameters) {
+	private static boolean hasPublicConstructor(ClojureJavaClasses.JavaClass type, String... parameters) {
 		try {
-			type.getConstructor(parameters);
-			return true;
+			for (ClojureJavaClasses.Member constructor : type.constructors()) {
+				if (constructor.parameterTypes().equals(List.of(parameters))) {
+					return true;
+				}
+			}
+			return false;
 		}
-		catch (NoSuchMethodException | LinkageError _) {
+		catch (LinkageError _) {
 			return false;
 		}
 	}

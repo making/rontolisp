@@ -181,20 +181,16 @@ final class ClojureClassBases {
 
 	/** The bases host reflection answers, or null when the class does not resolve. */
 	private static @Nullable List<String> reflectedBases(String name) {
-		Class<?> type;
-		try {
-			type = ClojureHostClasses.load(name);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(name);
+		if (type == null) {
 			return null;
 		}
 		List<String> bases = new ArrayList<>();
-		if (type.getSuperclass() != null) {
-			bases.add(type.getSuperclass().getName());
+		String superclass = type.superclass();
+		if (superclass != null) {
+			bases.add(superclass);
 		}
-		for (Class<?> each : type.getInterfaces()) {
-			bases.add(each.getName());
-		}
+		bases.addAll(type.interfaces());
 		return bases;
 	}
 

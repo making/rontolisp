@@ -1,12 +1,8 @@
 package am.ik.rontolisp.clojure;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
@@ -219,38 +215,32 @@ final class ClojureTimeValueLowering {
 	}
 
 	/**
-	 * {@link #members} by class, method and count, which every instance call no row maps
-	 * asks of the four JDK classes: the same answer for every program, so it is kept
-	 * (cleared past 4096 entries, like the {@code java:} caches).
+	 * The public instance methods of a name and count of one of the four JDK classes,
+	 * which every instance call no row maps asks: a scan of the class's methods, which
+	 * the lowering's classes describe once per lowering.
 	 */
-	private static final Map<String, Members> MEMBERS = new ConcurrentHashMap<>();
-
 	private static Members members(String host, String method, int count) {
-		if (MEMBERS.size() > 4096) {
-			MEMBERS.clear();
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(host);
+		if (type == null) {
+			return Members.NONE;
 		}
-		return MEMBERS.computeIfAbsent(host + "#" + method + "/" + count, key -> scan(host, method, count));
-	}
-
-	private static Members scan(String host, String method, int count) {
-		Method[] methods;
+		List<ClojureJavaClasses.Member> methods;
 		try {
-			methods = ClojureHostClasses.load(host).getMethods();
+			methods = type.methods();
 		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+		catch (LinkageError | SecurityException _) {
 			return Members.NONE;
 		}
 		Members found = Members.NONE;
-		for (Method candidate : methods) {
-			if (!candidate.getName().equals(method) || Modifier.isStatic(candidate.getModifiers())
-					|| candidate.getParameterCount() != count) {
+		for (ClojureJavaClasses.Member candidate : methods) {
+			if (!candidate.name().equals(method) || candidate.isStatic() || candidate.parameterCount() != count) {
 				continue;
 			}
-			Class<?> answer = candidate.getReturnType();
-			if (answer == Void.TYPE) {
+			String answer = candidate.returnType();
+			if (answer.equals("void")) {
 				found = found == Members.NONE ? Members.MUTATOR : found;
 			}
-			else if (answer.isAssignableFrom(java.util.Date.class)) {
+			else if (ClojureHostClasses.isAssignable(answer, "java.util.Date")) {
 				found = Members.ANSWERS_DATE;
 			}
 			else if (found != Members.ANSWERS_DATE) {

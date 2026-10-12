@@ -345,7 +345,8 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   needs a hierarchy at run time. `PARENTS` is a table for every throwable a program names
   without an import (`JAVA_LANG`'s, with the classes between them and `Throwable`) and for the
   public `clojure.lang` throwables (not on this class path: `ExceptionInfo`, `ArityException`,
-  `Compiler$CompilerException`, the two `ReaderException`s); anything else is host reflection.
+  `Compiler$CompilerException`, the two `ReaderException`s); anything else is the lowering's
+  host classes ("Host classes": reflection on a JVM, class files on the native binary).
   The table exists because a native image reflects only what its image holds (measured: a
   `Class.forName` test image found `IllegalArgumentException` and `FileNotFoundException`,
   not `StackOverflowError` or `java.sql.SQLException`); `ClojureThrowablesTest` pins its `java`
@@ -3996,6 +3997,51 @@ real call too. Where it is decided, every piece keyed on `hostTarget` (`Clojure.
   `UnsupportedOperationException` there instead of compiling a `java:` form.
 - Pins: `ClojureWasmHostArmsTest` (the table's programs and the two examples, both targets, plus
   the `(.byteValue x)` warning), `ClojureWasmInteropRefusalTest#aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends`.
+
+## Host classes
+
+**What a host form lowers to is the same on the native binary as on the jar: the lowering
+asks `ClojureJavaClasses`, never `Class`.** A host form's meaning is the named class's
+(`(Class/m)` method or field, a plain throwable's constructors, a face's interface methods,
+whether a member may answer a `byte[]`, a catch's chain), so the lowering asks it through
+`ClojureHostClasses.find` -- the classes of the lowering in progress (`ClojureFiles.javaClasses`,
+a ThreadLocal like the old loader) -- and only `ClojureReflectedClasses` touches reflection.
+
+- JVM: reflection over the program's class loader (`ClojureFiles.javaClasses`' default).
+- Native image: class files -- `cli/JavaClassPath.classFiles()`, `JvmClassFileLookup.forJdk(null,
+  entries)` (the found JDK's OWN release, the API the JVM running the jar reflects, never
+  `--java-release`) over the program's class path, made again when a `deps.edn` jar joins;
+  `eval/ClojureClassLookup` adapts it (`SourceLoader.javaClassLookup`,
+  `CompileFrontend.Request.javaClassLookup`). No JDK found (no `ct.sym` via java.home,
+  `JAVA_HOME`, `java` on PATH): the image's own reflection (`ReflectiveJavaClasses`), as before.
+- Why, measured 2026-10-12 (GraalVM 25.0.4 binary vs exec jar, `--dump-ir`): the image holds
+  only what its build registered -- `Exception`'s `(String)` constructor alone, no
+  `IllegalStateException` constructor, no `List`/`Comparable`/`Thread` method -- and
+  `Class.forName` finds only classes in the image (not `TimeoutException`,
+  `UncheckedIOException`, `URISyntaxException`, `PatternSyntaxException`,
+  `CancellationException`). So the binary lowered `(Exception. "outer" (ex-info ...))` to
+  `java:new` (the CI examples job: wasm `JAVA:NEW is undefined`, the JVM `RuntimeException:
+  inner`, 2026-10-12), `(Thread/currentThread)` to `java:field` (`NoSuchFieldException` on the
+  JVM), a `Comparable` face without `compareTo`, a class-path class with `:octets` wrappers,
+  and refused `clojure-spec.yaml` (`Unable to resolve classname`). A type the reachability
+  metadata registers answers every member (`{"type": ...}`, probe image, same day).
+- The class files answer as reflection: `getMethods()` = `publicMethods()` (bridges included,
+  `JavaExecutable.isSynthetic`/`isBridge`), `JavaType.superclassName`/`interfaceNames`/
+  `hasPublicFields` (`JvmClassFileLookupTest#theLoweringsQuestionsHaveReflectionsAnswers`). A
+  class's "public" is its class file's (a protected member class is), on both.
+- Per lowering now: `ClojureTimeValueLowering`'s member scan (was a static cross-program
+  cache, which would hand one host's answers to another). `ClojureIoLowering.declaredByAClass`
+  asks the `java.`/`javax.` types the io values are objects of (`sun.nio.cs.UTF_8` and the
+  fetched streams' impl classes are not in `ct.sym`; their callable methods are their API
+  supertypes').
+- Open: `Charset/forName` of a non-standard literal (the image holds the standard charsets,
+  a JVM all of them: `"windows-1252"` lowers to a refusal on the binary) and a host without a
+  JDK's class files (the binary with none found, the browser playground), which answers from
+  its image as the binary did before.
+- Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
+  `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
+  program), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir` vs this JVM's, CI's
+  native-image job).
 
 ## Java interop
 

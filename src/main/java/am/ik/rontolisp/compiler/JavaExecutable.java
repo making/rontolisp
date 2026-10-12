@@ -44,6 +44,18 @@ public interface JavaExecutable {
 	boolean isConstructor();
 
 	/**
+	 * @return whether the compiler made it rather than the source declaring it (a bridge
+	 * is): {@code ACC_SYNTHETIC}
+	 */
+	boolean isSynthetic();
+
+	/**
+	 * @return whether it is a bridge a compiler made to a method of the same name and
+	 * another erasure: {@code ACC_BRIDGE}
+	 */
+	boolean isBridge();
+
+	/**
 	 * @return whether it is declared {@code public}: what an overriding method in a
 	 * generated subclass keeps (a {@code protected} one keeps {@code protected})
 	 */

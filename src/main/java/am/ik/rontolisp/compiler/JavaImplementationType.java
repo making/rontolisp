@@ -141,6 +141,34 @@ public final class JavaImplementationType implements JavaType {
 	}
 
 	@Override
+	public String superclassName() {
+		return this.superclass == null ? "java.lang.Object" : this.superclass.name();
+	}
+
+	@Override
+	public List<String> interfaceNames() {
+		List<String> names = new ArrayList<>();
+		for (JavaType iface : this.interfaces) {
+			names.add(iface.name());
+		}
+		names.add("java.io.Serializable");
+		return names;
+	}
+
+	@Override
+	public boolean hasPublicFields() {
+		if (this.superclass != null && this.superclass.hasPublicFields()) {
+			return true;
+		}
+		for (JavaType iface : this.interfaces) {
+			if (iface.hasPublicFields()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
 	public boolean isAssignableFrom(JavaType other) {
 		return other == this;
 	}

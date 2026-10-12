@@ -6,6 +6,7 @@ import java.util.Objects;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.HostBoundary;
+import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.AppKitLibrary;
 import am.ik.rontolisp.eval.DistClient;
@@ -101,13 +102,17 @@ final class CompileFrontend {
 	 * @param options the target and pass options
 	 * @param javaClassLoader the program's Java class loader, whose classes a Clojure
 	 * host form lowers against ({@link SourceLoader#javaClassLoader()})
+	 * @param javaClassLookup the classes a Clojure host form lowers against where this
+	 * process cannot reflect that loader's classes as a JVM does (a native image), or
+	 * {@code null} to reflect ({@link SourceLoader#javaClassLookup()})
 	 * @param javaClassPath where the jars a Clojure program's dependencies bring join the
 	 * program's Java class path -- the one that loader reads
 	 * ({@link SourceLoader#addJavaClassPath})
 	 */
 	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
 			SourceStandards standards, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
-			Options options, ClassLoader javaClassLoader, SourceLoader.JavaClassPathSink javaClassPath) {
+			Options options, ClassLoader javaClassLoader, @Nullable JavaClassLookup javaClassLookup,
+			SourceLoader.JavaClassPathSink javaClassPath) {
 
 		static Builder builder() {
 			return new Builder();
@@ -133,6 +138,8 @@ final class CompileFrontend {
 
 			private ClassLoader javaClassLoader = SourceLoader.fileSystem().javaClassLoader();
 
+			private @Nullable JavaClassLookup javaClassLookup;
+
 			private SourceLoader.JavaClassPathSink javaClassPath = SourceLoader.JavaClassPathSink.NONE;
 
 			private Builder() {
@@ -140,6 +147,11 @@ final class CompileFrontend {
 
 			Builder javaClassLoader(ClassLoader javaClassLoader) {
 				this.javaClassLoader = javaClassLoader;
+				return this;
+			}
+
+			Builder javaClassLookup(@Nullable JavaClassLookup javaClassLookup) {
+				this.javaClassLookup = javaClassLookup;
 				return this;
 			}
 
@@ -199,7 +211,7 @@ final class CompileFrontend {
 						this.sourceLanguage, this.standards, this.systemPath,
 						this.dists != null ? this.dists : DistClient.createDefault(List.of()), this.declaredFeatures,
 						Objects.requireNonNull(this.options, "options is required"), this.javaClassLoader,
-						this.javaClassPath);
+						this.javaClassLookup, this.javaClassPath);
 			}
 
 		}
@@ -484,7 +496,8 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Clojure program needs the GC backend -- --no-gc has"
 					+ " no cons cell, no symbol and no closure (drop --no-gc)");
 		}
-		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassPath());
+		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
+				request.javaClassPath());
 		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards(), files);
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
 				request.dists(), request.standards());

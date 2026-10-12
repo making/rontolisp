@@ -371,19 +371,48 @@ final class ClojureIoLowering {
 
 	/**
 	 * Whether one of the classes a clojure.java.io value is an object of
-	 * ({@link #CLASSES}) has a public instance method of the name at the count.
+	 * ({@link #CLASSES}) has a public instance method of the name at the count that a
+	 * program can call: one the Java API declares on it ({@link #API_TYPES}). A JDK
+	 * without one of the classes: none of its methods counts.
 	 */
 	private static boolean declaredByAClass(String method, int arity) {
-		List<Class<?>> types = new ArrayList<>();
-		for (String name : CLASSES.keySet()) {
-			try {
-				types.add(Class.forName(name, false, ClassLoader.getPlatformClassLoader()));
+		return ClojureValueMethodLowering.declares(ApiTypes.TYPES, method, arity);
+	}
+
+	/**
+	 * The Java API types the values here are objects of: each class of {@link #CLASSES}
+	 * in a {@code java.} or {@code javax.} package, and for one outside them (a charset's
+	 * {@code sun.nio.cs} class, a fetched reply's stream) the API types among its supers
+	 * -- what a call on one reaches, and what every JDK's class files describe alike. A
+	 * holder, so {@link #CLASSES} is made first.
+	 */
+	private static final class ApiTypes {
+
+		static final List<String> TYPES = apiTypes();
+
+		private ApiTypes() {
+		}
+
+	}
+
+	private static List<String> apiTypes() {
+		java.util.TreeSet<String> types = new java.util.TreeSet<>();
+		for (Map.Entry<String, List<String>> entry : CLASSES.entrySet()) {
+			if (isApi(entry.getKey())) {
+				types.add(entry.getKey());
+				continue;
 			}
-			catch (ClassNotFoundException | LinkageError _) {
-				// a JDK without the class: none of its methods counts
+			for (String supertype : entry.getValue()) {
+				if (isApi(supertype)) {
+					types.add(supertype);
+				}
 			}
 		}
-		return ClojureValueMethodLowering.declares(types, method, arity);
+		return List.copyOf(types);
+	}
+
+	private static boolean isApi(String className) {
+		return className.startsWith("java.") || className.startsWith("javax.");
 	}
 
 	/**

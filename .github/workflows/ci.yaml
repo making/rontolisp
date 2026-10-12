@@ -200,9 +200,11 @@ jobs:
         # NativeOutputE2eTest compiles through the binary's --native (its resources
         # and FFM downcalls) and diffs the output against wasmtime run; FetchSpecE2eTest
         # runs the fetch corpus on every transport, the native leg through the binary's
-        # network runner.
+        # network runner. ClojureNativeLoweringE2eTest requires the binary to lower the
+        # Clojure corpus to the IR the JVM does: it reads a host form's class from the
+        # JDK's class files, where its own image holds only part of the JDK.
         ./mvnw -V --no-transfer-progress \
-          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest' -DfailIfNoTests=false \
+          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest,ClojureNativeLoweringE2eTest' -DfailIfNoTests=false \
           -Drontolisp.binary="$PWD/target/rontolisp" \
           -Drontolisp.native.required=true \
           test

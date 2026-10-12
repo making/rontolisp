@@ -27,6 +27,11 @@ import am.ik.maven.MavenResolver;
 import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
 import am.ik.maven.RepositoryPolicy;
+import am.ik.rontolisp.codegen.jvm.JvmClassFileLookup;
+import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -54,6 +59,8 @@ final class JavaClassPath implements AutoCloseable {
 	private final List<Artifact> dependencies;
 
 	private @Nullable ClassLoader loader;
+
+	private @Nullable ClassFiles classFiles;
 
 	private JavaClassPath(List<Path> entries, List<Artifact> dependencies) {
 		this.entries = new ArrayList<>(entries);
@@ -352,6 +359,27 @@ final class JavaClassPath implements AutoCloseable {
 	}
 
 	/**
+	 * The classes a Clojure host form lowers against where this process cannot reflect
+	 * the program's classes as a JVM does: in a native image, whose own reflection holds
+	 * only what its build registered, the class files of the JDK it finds -- its own
+	 * release, the API a JVM running the jar reflects -- and of the entries, followed as
+	 * a program's dependencies add to them; where no JDK is found, the image's own
+	 * classes. None on a JVM: the lowering reflects through {@link #classLoader()}.
+	 * @return the classes, or {@code null} to reflect
+	 */
+	synchronized @Nullable JavaClassLookup classFiles() {
+		if (System.getProperty("org.graalvm.nativeimage.imagecode") == null) {
+			return null;
+		}
+		ClassFiles made = this.classFiles;
+		if (made == null) {
+			made = new ClassFiles();
+			this.classFiles = made;
+		}
+		return made;
+	}
+
+	/**
 	 * Closes the loader's jars, for a caller done with the program's classes before its
 	 * process ends -- an embedder's compile. The command line never closes it: the
 	 * program it runs uses those classes until it exits.
@@ -366,6 +394,82 @@ final class JavaClassPath implements AutoCloseable {
 				// a jar that cannot be closed now is closed when the process ends
 			}
 		}
+		if (this.classFiles != null) {
+			this.classFiles.close();
+		}
+	}
+
+	/**
+	 * The class files of the JDK and of the entries as they stand: a lookup made again
+	 * when an entry joins, the earlier ones kept open, since a type one answered reads
+	 * its supertypes through it when asked. Nothing is read before the first class
+	 * question, and with no JDK found the questions go to the image's own classes.
+	 */
+	private final class ClassFiles implements JavaClassLookup {
+
+		private final List<JvmClassFileLookup> opened = new ArrayList<>();
+
+		private int entryCount = -1;
+
+		private @Nullable JvmClassFileLookup current;
+
+		private @Nullable Boolean platform;
+
+		private @Nullable JavaClassLookup reflected;
+
+		// The entries and the loader are read first: their lock is the class path's,
+		// which close() holds while it takes this one.
+		private JavaClassLookup current() {
+			List<Path> path = entries();
+			ClassLoader loader = classLoader();
+			synchronized (this) {
+				Boolean found = this.platform;
+				if (found == null) {
+					found = JvmClassFileLookup.findCtSym() != null;
+					this.platform = found;
+				}
+				if (!found) {
+					JavaClassLookup own = this.reflected;
+					if (own == null) {
+						own = ReflectiveJavaClasses.over(loader);
+						this.reflected = own;
+					}
+					return own;
+				}
+				JvmClassFileLookup lookup = this.current;
+				if (lookup == null || path.size() != this.entryCount) {
+					lookup = JvmClassFileLookup.forJdk(null, path);
+					this.opened.add(lookup);
+					this.current = lookup;
+					this.entryCount = path.size();
+				}
+				return lookup;
+			}
+		}
+
+		@Override
+		public @Nullable JavaType find(String name) {
+			return current().find(name);
+		}
+
+		@Override
+		public JavaImplementationType implementationOf(List<JavaType> interfaces) {
+			return current().implementationOf(interfaces);
+		}
+
+		@Override
+		public JavaImplementationType subclassOf(JavaType superclass, List<JavaType> interfaces) {
+			return current().subclassOf(superclass, interfaces);
+		}
+
+		synchronized void close() {
+			for (JvmClassFileLookup lookup : this.opened) {
+				lookup.close();
+			}
+			this.opened.clear();
+			this.current = null;
+		}
+
 	}
 
 	private static URL url(Path entry) {

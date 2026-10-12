@@ -127,14 +127,8 @@ final class ClojureThrowables {
 			}
 			return chain;
 		}
-		Class<?> type;
-		try {
-			type = ClojureHostClasses.load(className);
-		}
-		catch (ClassNotFoundException | LinkageError _) {
-			return null;
-		}
-		return Throwable.class.isAssignableFrom(type) ? chainOf(type) : null;
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(className);
+		return type != null && ClojureHostClasses.isAssignable(THROWABLE, type.name()) ? chainOf(type) : null;
 	}
 
 	/**
@@ -142,12 +136,18 @@ final class ClojureThrowables {
 	 * @param type a {@code Throwable} class
 	 * @return its chain, own name first and {@code java.lang.Throwable} last
 	 */
-	static List<String> chainOf(Class<?> type) {
+	static List<String> chainOf(ClojureJavaClasses.JavaClass type) {
 		List<String> chain = new ArrayList<>();
-		for (Class<?> c = type; c != null && Throwable.class.isAssignableFrom(c); c = c.getSuperclass()) {
-			chain.add(c.getName());
+		for (ClojureJavaClasses.JavaClass c = type; c != null
+				&& ClojureHostClasses.isAssignable(THROWABLE, c.name()); c = superclassOf(c)) {
+			chain.add(c.name());
 		}
 		return chain;
+	}
+
+	private static ClojureJavaClasses.@Nullable JavaClass superclassOf(ClojureJavaClasses.JavaClass type) {
+		String superclass = type.superclass();
+		return superclass == null ? null : ClojureHostClasses.find(superclass);
 	}
 
 	/**
@@ -177,13 +177,7 @@ final class ClojureThrowables {
 	}
 
 	private static boolean isClass(String className) {
-		try {
-			ClojureHostClasses.load(className);
-			return true;
-		}
-		catch (ClassNotFoundException | LinkageError _) {
-			return false;
-		}
+		return ClojureHostClasses.exists(className);
 	}
 
 	/**
