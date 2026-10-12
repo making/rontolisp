@@ -19,8 +19,9 @@ import java.util.Set;
  * the JDK interfaces the value's Java object implements here ({@code List},
  * {@code RandomAccess} and {@code Comparable} of a vector, {@code List} of a seq,
  * {@code Set}, {@code Map}, {@code Comparable} of a keyword or symbol, {@code Number} and
- * {@code Comparable} of a ratio, {@code Iterator} of a seq iterator), which that object
- * answers. One table for every kind: a method one class has is unsupported on all.
+ * {@code Comparable} of a ratio, {@code Iterator} of a seq iterator, {@code Comparator},
+ * {@code Runnable} and {@code Callable} of a fn), which that object answers. One table
+ * for every kind: a method one class has is unsupported on all.
  */
 final class ClojureValueMethods {
 
@@ -48,12 +49,11 @@ final class ClojureValueMethods {
 			more/0 namedGroups/0 next/0 notifyWatches/2 nth/1 nth/2 pattern/0 peek/0 persistent/0 pop/0
 			reduce/1 reduce/2 refer/2 region/2 regionEnd/0 regionStart/0 removeAlias/1 removeWatch/1
 			replaceAll/1 replaceFirst/1 requireEnd/0 reset/0 reset/1 resetMeta/1 resetVals/1 restart/2
-			results/0 reverseIterator/0 reversed/0 rseq/0 run/0 seq/0 seq/1 seqFrom/2 set/1 setDynamic/0
+			results/0 reverseIterator/0 rseq/0 run/0 seq/0 seq/1 seqFrom/2 set/1 setDynamic/0
 			setDynamic/1 setErrorHandler/1 setErrorMode/1 setMacro/0 setMaxHistory/1 setMeta/1
 			setMinHistory/1 setTag/1 setValidator/1 setValue/1 split/1 split/2 splitAsStream/1
 			splitWithDelimiters/2 spliterator/0 start/0 start/1 swap/1 swap/2 swap/3 swap/4 swapVals/1
-			swapVals/2 swapVals/3 swapVals/4 thenComparing/1 thenComparing/2 thenComparingDouble/1
-			thenComparingInt/1 thenComparingLong/1 throwArity/0 throwArity/1 toMatchResult/0 toSymbol/0
+			swapVals/2 swapVals/3 swapVals/4 throwArity/0 throwArity/1 toMatchResult/0 toSymbol/0
 			touch/0 trimHistory/0 unbindRoot/0 unmap/1 useAnchoringBounds/1 usePattern/1
 			useTransparentBounds/1 val/0 valAt/1 valAt/2 valIterator/0 vals/0 vals/1 withMeta/1 without/1
 			""".trim().split("\\s+"));

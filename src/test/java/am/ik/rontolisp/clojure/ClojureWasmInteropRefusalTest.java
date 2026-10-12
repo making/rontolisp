@@ -143,11 +143,14 @@ class ClojureWasmInteropRefusalTest {
 		// (ClojureInteropTest); a method no value class has keeps the oracle's words
 		String program = "(defn msg [f] (try (f) (catch Exception e (ex-message e))))"
 				+ " (println (msg #(.toArray [1 2])) \"|\" (msg #(.toArray :k)) \"|\""
-				+ " (msg #(let [it (.iterator [1])] (.remove it))))";
+				+ " (msg #(let [it (.iterator [1])] (.remove it))) \"|\" (msg #(.reversed (fn [a b] 0))) \"|\""
+				+ " (msg #(.thenComparing {:a 1} compare)))";
 		for (boolean component : new boolean[] { false, true }) {
 			assertThat(run(program, component)).as(component ? "component" : "preview 1")
 				.isEqualTo("Method toArray taking 0 args is not supported for class clojure.lang.PersistentVector"
-						+ " | No matching field found: toArray for class clojure.lang.Keyword | nil\n");
+						+ " | No matching field found: toArray for class clojure.lang.Keyword | nil"
+						+ " | Method reversed taking 0 args is not supported for class clojure.lang.AFunction"
+						+ " | No matching method thenComparing found taking 1 args for class clojure.lang.PersistentArrayMap\n");
 		}
 	}
 

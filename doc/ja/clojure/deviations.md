@@ -523,6 +523,9 @@
 - パラメータタグの `_` はその引数を `java:` サーフェスのコスト規則に任せるため、
   `(^[_] Math/abs -2)` は `2` を答えます。オラクルは複数のオーバーロードが残るタグを
   拒否します。
+- `(.thenComparing c (fn [a b] ...))` は fn 引数を `Comparator` として受け取り、それで比較します。
+  オラクルはその位置の fn リテラルやローカルをコンパイル時に拒否します
+  （`More than one matching method found: thenComparing`。`Function` のオーバーロードも受け取れるため）。
 - 読むのはソースルート以下の `.clj` と `.cljc` のファイルだけです。クラスを含む依存の jar は
   Java クラスパスにも加わりますが、ディレクトリのクラスは加わりません（準備済みライブラリの
   `target/classes` は `--java-classpath` で与えます）。プロジェクトの `deps.edn` は、oracle が

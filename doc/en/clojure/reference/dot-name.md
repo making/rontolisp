@@ -15,7 +15,10 @@ map, sorted map or other record of its entries, and doubles inside a collection 
 `Double.equals` (`(.equals [0.0] [-0.0])` false, `(.equals [##NaN] [##NaN])` true). Another
 method of a JDK interface the oracle's class implements (`.toArray`,
 `.containsAll`, `.entrySet`, `.stream`, `.sort`) is called on the read-only Java object the value
-crosses to Java as, on the interpreter and the JVM, and refused by name on the wasm backends. A
+crosses to Java as, on the interpreter and the JVM, and refused by name on the wasm backends.
+A fn answers `.invoke`, `.applyTo`, `.call`, `.run` and `.compare` (a boolean answer read as
+Clojure's `AFunction.compare`) on every backend; `Comparator`'s other methods (`.reversed`,
+`.thenComparing`) are called on the object the fn is, the same way. A
 method its class lacks is refused in the oracle's words (`No matching field found: toArray for
 class clojure.lang.Keyword`), and one the oracle's class may have that nothing here answers
 (`.reduce`, `.meta`) by name. A record, deftype or reify answers what its class has, on every

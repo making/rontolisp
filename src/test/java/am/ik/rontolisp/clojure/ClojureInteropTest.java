@@ -798,6 +798,29 @@ class ClojureInteropTest {
 				"[1 2] 3\ntrue true true\n[10 20]\n[0 1] true true true\n:cce\n");
 	}
 
+	// Oracle (clj 1.12.6, measured 2026-10-11): a fn is an AFunction, so Comparator's
+	// default methods are the fn's own, its compare read as AFunction.compare. Before,
+	// measured the same day on the interpreter: "Method reversed taking 0 args is not
+	// supported for class clojure.lang.AFunction", and the same for thenComparing; a
+	// map's thenComparing or reversed was unsupported too, where the oracle's class
+	// lacks it.
+	@Test
+	void aFnReceiverAnswersComparatorsDefaultMethods() throws Exception {
+		assertBothEqual("(def c (fn [a b] (- a b))) (defn by-desc [a b] (> a b))"
+				+ " (prn (.compare (.reversed c) 1 2))" + " (prn (.compare (.thenComparing c c) 1 2))"
+				+ " (prn (let [l (java.util.ArrayList. [3 1 2])] (.sort l (.reversed c)) (vec l)))"
+				+ " (prn (let [l (java.util.ArrayList. [3 1 2])] (.sort l (.reversed by-desc)) (vec l)))"
+				+ " (def by-first (fn [x y] (compare (first x) (first y))))"
+				+ " (def by-second (fn [x y] (compare (second x) (second y))))"
+				+ " (prn (let [l (java.util.ArrayList. [[1 2] [0 2] [1 1]])] (.sort l (.thenComparing by-first by-second))"
+				+ " (vec l)))" + " (prn (.compare (.thenComparingInt (fn [a b] 0) (fn [x] (- x))) 1 2))"
+				+ " (defn msg [f] (try (f) (catch Exception e (ex-message e))))"
+				+ " (println (msg #(.thenComparing {:a 1} compare)) \"|\" (msg #(.reversed {:a 1})))",
+				"1\n-1\n[3 2 1]\n[1 2 3]\n[[0 2] [1 1] [1 2]]\n1\n"
+						+ "No matching method thenComparing found taking 1 args for class clojure.lang.PersistentArrayMap"
+						+ " | No matching field found: reversed for class clojure.lang.PersistentArrayMap\n");
+	}
+
 	@Test
 	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the

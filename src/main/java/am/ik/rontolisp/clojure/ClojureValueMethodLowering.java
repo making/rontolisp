@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -11,6 +12,7 @@ import java.util.Map;
 import java.util.RandomAccess;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.Callable;
 import java.util.function.Function;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
@@ -135,7 +137,9 @@ final class ClojureValueMethodLowering {
 	 * oracle's class: a vector a {@code List}, {@code RandomAccess} and
 	 * {@code Comparable}, a list or seq a {@code List}, a set a {@code Set}, a map or
 	 * record a {@code Map}, a keyword or symbol a {@code Comparable}, a ratio a
-	 * {@code Number}, and a seq iterator an {@code Iterator}. {@code Object}'s methods
+	 * {@code Number}, a seq iterator an {@code Iterator}, and a fn the oracle's
+	 * {@code AFunction}'s three JDK interfaces ({@code Comparator}'s {@code reversed} or
+	 * {@code thenComparing}; its {@code IFn} methods are rows). {@code Object}'s methods
 	 * every value but nil answers.
 	 */
 	private static final List<HostKind> HOST_KINDS = List.of(
@@ -148,7 +152,9 @@ final class ClojureValueMethodLowering {
 			new HostKind(r -> ClojurePredicateLowering.rawTest("ratio?", r), List.of(Number.class, Comparable.class),
 					HOST_MEMBER),
 			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), r),
-					List.of(Iterator.class), HOST_ITERATOR));
+					List.of(Iterator.class), HOST_ITERATOR),
+			new HostKind(r -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), r),
+					List.of(Comparator.class, Runnable.class, Callable.class), HOST_MEMBER));
 
 	/**
 	 * The kinds no one-argument predicate names exactly, each to its family's test, which

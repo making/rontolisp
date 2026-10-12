@@ -3991,7 +3991,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   types its `%clojure-host-member` object implements, as the oracle's class does (vector `List`
   + `RandomAccess` + `Comparable`, seq `List`, set `Set`, map or record `Map`, keyword or symbol
   `Comparable`, ratio `Number` + `Comparable`, seq iterator `Iterator` through
-  `%clojure-host-iterator`, its face; `Object`'s `wait`/`notify` any value but nil), read by
+  `%clojure-host-iterator`, its face, fn (`functionp`) `Comparator` + `Runnable` + `Callable`,
+  the object the fn is; `Object`'s `wait`/`notify` any value but nil), read by
   reflection at lowering (`declares`: public, instance, exact parameter count, as Clojure's
   reflector). `(if (or kind-tests...) (java:call (maker r) "m" args... :java-false) REFUSAL)`
   where the host is; on wasm the same test guards the unsupported refusal instead, so the
@@ -4286,6 +4287,18 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   "Markers"; pin
   `ClojureInteropTest#aFnPassedAsAComparatorComparesLikeTheOraclesAFunction`). Pin: clojure-spec
   `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
+  Any other method of the three interfaces (`Comparator`'s defaults `reversed`,
+  `thenComparing*`) is a fn `HOST_KINDS` row (f53): called on `%clojure-host-member`'s
+  function object where the host is, refused by name on wasm; the names left
+  `ClojureValueMethods` (only `AFunction` had them past the modeled JDK types: `reversed` of
+  every list class is `List`'s), so a map's `.thenComparing` is the oracle's `No matching
+  method`. Measured 2026-10-11 against clj 1.12.6, `c` a fn `(- a b)`: `(.compare (.reversed c)
+  1 2)` 1, `(.compare (.thenComparing c c) 1 2)` -1, `.sort` by `(.reversed c)` `[3 2 1]`;
+  before, interpreter, `Method reversed taking 0 args is not supported for class
+  clojure.lang.AFunction`. The oracle refuses `.thenComparing` of two fn LITERALS or locals at
+  compile time (`More than one matching method found`: `Comparator` and `Function`); here it
+  picks one. Pins: `ClojureInteropTest#aFnReceiverAnswersComparatorsDefaultMethods`,
+  `ClojureWasmInteropRefusalTest#aMethodOfAValuesJavaObjectIsUnsupportedOnBothBackends`.
 - A fn passed where an interface is expected implements every abstract method by the
   method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
   `ClojureInteropLowering.hostCall` ends a `java:new`/`java:call`/`java:static` with any

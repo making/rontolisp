@@ -534,6 +534,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
+- `(.thenComparing c (fn [a b] ...))` takes the fn argument as a `Comparator` and compares by
+  it, where the oracle refuses a fn literal or local there at compile time (`More than one
+  matching method found: thenComparing`: the `Function` overload takes it too).
 - Only `.clj` and `.cljc` files below the source roots are read. A dependency's jar holding
   classes also joins the Java class path; a directory's classes do not (give a prepped
   library's `target/classes` with `--java-classpath`). The project's `deps.edn` is the
