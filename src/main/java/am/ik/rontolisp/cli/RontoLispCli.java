@@ -63,6 +63,12 @@ public final class RontoLispCli {
 
 	private int exitCode;
 
+	/**
+	 * Whether the last {@link #runReporting} ended by the program's own quit
+	 * ({@code uiop:quit}, {@code System/exit}, Scheme's {@code exit}).
+	 */
+	private boolean quitRequested;
+
 	private @Nullable Boolean assumedTerminal;
 
 	private @Nullable Function<List<RemoteRepository>, MavenResolver> javaDependencyResolver;
@@ -1816,7 +1822,7 @@ public final class RontoLispCli {
 			Thread worker = new Thread(null, () -> {
 				int code;
 				try {
-					code = launch(rest);
+					code = launch(rest).code();
 				}
 				catch (Throwable ex) {
 					ex.printStackTrace();
@@ -1843,8 +1849,18 @@ public final class RontoLispCli {
 	 * default handler with its own trace and still ends the process with a failure,
 	 * exactly as it did when launch ran on thread 0.
 	 */
-	private static int joinLaunch(String[] args, long stackBytes) {
+	private static Launched joinLaunch(String[] args, long stackBytes) {
 		return SizedThread.call("main", stackBytes, () -> launch(args));
+	}
+
+	/**
+	 * How the command line ended.
+	 *
+	 * @param code the process status
+	 * @param quit whether the program asked for it by quitting, which ends the process
+	 * even at status 0 while threads it started still run
+	 */
+	private record Launched(int code, boolean quit) {
 	}
 
 	/** The largest {@code --stack} accepted, in MiB. */
@@ -1918,8 +1934,8 @@ public final class RontoLispCli {
 		}
 	}
 
-	/** The whole command line, answering the exit code. */
-	private static int launch(String[] args) {
+	/** The whole command line, answering how it ended. */
+	private static Launched launch(String[] args) {
 		// By default stdout stays auto-flushing so each REPL input gets an immediate
 		// response. Opt in to a block-buffered, non-auto-flushing stream with
 		// --buffered-output: flushing on every print/format call interleaves badly when
@@ -1935,7 +1951,8 @@ public final class RontoLispCli {
 		}
 		if (!buffered) {
 			RontoLispCli cli = new RontoLispCli(System.in, System.out);
-			return runReporting(cli, args);
+			int code = runReporting(cli, args);
+			return new Launched(code, cli.quitRequested);
 		}
 		PrintStream bufferedOut = new PrintStream(
 				new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 1 << 16), false,
@@ -1944,7 +1961,8 @@ public final class RontoLispCli {
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
 		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
 		try {
-			return runReporting(cli, args);
+			int code = runReporting(cli, args);
+			return new Launched(code, cli.quitRequested);
 		}
 		finally {
 			bufferedOut.flush();
@@ -1975,6 +1993,7 @@ public final class RontoLispCli {
 			// way a normal return drains it -- quit finishes the Lisp output streams
 			// before it signals, and this covers the CLI's own buffer underneath them.
 			cli.out.flush();
+			cli.quitRequested = true;
 			return exit.code();
 		}
 		catch (RuntimeException ex) {
@@ -2024,13 +2043,14 @@ public final class RontoLispCli {
 	}
 
 	// A non-zero exit code has to go through System.exit -- returning from main is always
-	// 0.
-	// Zero returns normally instead, so an embedded caller (tests, the native binary's
-	// own
-	// smoke checks) is not killed by a successful run.
-	private static void exit(int code) {
-		if (code != 0) {
-			System.exit(code);
+	// 0 -- and so does a quit: returning would leave the process running for as long as
+	// a thread the program started does (a server's), where System.exit on the JVM
+	// backend ends it. A program that ran off its end returns normally instead, waiting
+	// for its threads as the JVM waits for any, and an embedded caller (tests, the native
+	// binary's own smoke checks) is not killed by a successful run.
+	private static void exit(Launched launched) {
+		if (launched.code() != 0 || launched.quit()) {
+			System.exit(launched.code());
 		}
 	}
 

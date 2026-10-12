@@ -176,7 +176,10 @@ all four backends through ONE definition** over `%host-exit` (`LispNames.HOST_EX
 `*standard-output*`/`*error-output*` first and masks the code to eight bits, so `(uiop:quit 300)`
 is 44 everywhere; `die` and `shell-boolean-exit` are written over it. Interpreter raises
 `eval.LispExitSignal`, which escapes `RontoLispCli.run` and becomes the process code in `main`
-(`run` is embedded, and killing the calling JVM is not a call's decision); JVM emits `System.exit`
+(`run` is embedded, and killing the calling JVM is not a call's decision) -- through
+`System.exit` even at status 0 (`RontoLispCli.Launched.quit`; until 2026-10-12 a 0 returned from
+`main`, so a live non-daemon thread, a `:join? false` server's, kept the process up;
+`cli/QuitEndsTheProcessTest`); a program that runs off its end still returns. JVM emits `System.exit`
 (`JvmExitCompiler`, minted in the compiler, not the fixed `systemOps` table); both WASM backends
 splice `exit.lisp` (`eval/ExitLibrary`) — Preview 1 binds `proc_exit` under the primitive's OWN
 name so no tenth slot appears, `--component` binds `wasi:cli/exit@0.3.0` as an APPENDED USER
