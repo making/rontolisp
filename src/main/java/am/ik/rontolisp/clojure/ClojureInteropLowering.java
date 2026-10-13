@@ -826,14 +826,25 @@ final class ClojureInteropLowering {
 	static ClojureJavaClasses.@Nullable JavaClass plainThrowable(String cls) {
 		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(cls);
 		if (type == null || !ClojureHostClasses.isAssignable(ClojureThrowables.THROWABLE, cls) || !type.isPublic()
-				|| type.isAbstract() || type.hasPublicFields()) {
+				|| type.isAbstract()) {
 			return null;
 		}
-		for (ClojureJavaClasses.Member method : type.methods()) {
-			String owner = method.declaringClass();
-			if (!owner.equals(ClojureThrowables.THROWABLE) && !owner.equals(OBJECT) && !overridesThrowable(method)) {
+		try {
+			if (type.hasPublicFields()) {
 				return null;
 			}
+			for (ClojureJavaClasses.Member method : type.methods()) {
+				String owner = method.declaringClass();
+				if (!owner.equals(ClojureThrowables.THROWABLE) && !owner.equals(OBJECT)
+						&& !overridesThrowable(method)) {
+					return null;
+				}
+			}
+		}
+		catch (LinkageError | SecurityException _) {
+			// A class that cannot link is no plain throwable: the construction keeps
+			// java:new, whose run-time error names the missing class (.todo/f65).
+			return null;
 		}
 		return type;
 	}

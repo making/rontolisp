@@ -77,7 +77,9 @@ import org.jspecify.annotations.Nullable;
  * What a site's Java call throws goes through {@code _jfail}: a throwable a function
  * called back from Java raised -- recorded on its way out by {@code _jsig}, which the
  * generated implementations and the bridge's {@code Proxy} call -- is thrown on as it is,
- * anything else as the error calling the member ({@link #finishHelpers}).
+ * anything else as the error calling the member ({@link #finishHelpers}). A
+ * {@code NoClassDefFoundError} is answered before that as {@link #UNLINKABLE}: the
+ * refusal naming the missing class, like the interpreter's and the bridge's refusals.
  */
 final class JvmJavaDirectSites {
 
@@ -273,6 +275,16 @@ final class JvmJavaDirectSites {
 	static final String FAIL = "_jfail";
 
 	/**
+	 * {@code _junlinkable(String, NoClassDefFoundError)RuntimeException}: the refusal a
+	 * site over a class that cannot link throws, naming the missing class -- the
+	 * interpreter's and the bridge's {@code unlinkable} in words
+	 * ({@code eval.JavaInterop}, {@code JavaBridgeTemplate}). A site's
+	 * {@code memberFailed} handler answers it for a {@code NoClassDefFoundError}, and
+	 * {@link #FAIL} for anything else.
+	 */
+	static final String UNLINKABLE = "_junlinkable";
+
+	/**
 	 * {@code _jsig(Throwable)Throwable}: records a throwable leaving a function called
 	 * back from Java -- a generated implementation's callback, the bridge's {@code Proxy}
 	 * -- for {@link #FAIL}, and answers it.
@@ -283,6 +295,8 @@ final class JvmJavaDirectSites {
 	static final String SIGNALS = "_jsigTl";
 
 	private static final String FAIL_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)Ljava/lang/Throwable;";
+
+	private static final String UNLINKABLE_DESC = "(Ljava/lang/String;Ljava/lang/NoClassDefFoundError;)Ljava/lang/RuntimeException;";
 
 	private static final String SIGNAL_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
 
@@ -416,6 +430,9 @@ final class JvmJavaDirectSites {
 	// _jfail and _jsig, named when first asked for and built by finishHelpers(), once
 	// every body is compiled: what they read depends on the whole program.
 	private @Nullable MethodRefEntry failure;
+
+	// _junlinkable, named when first asked for and built by finishHelpers() with them.
+	private @Nullable MethodRefEntry unlinkable;
 
 	private @Nullable MethodRefEntry signal;
 
@@ -698,6 +715,15 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
+	private MethodRefEntry unlinkable() {
+		MethodRefEntry ref = this.unlinkable;
+		if (ref == null) {
+			ref = unfinishedHelper(UNLINKABLE, UNLINKABLE_DESC);
+			this.unlinkable = ref;
+		}
+		return ref;
+	}
+
 	private MethodRefEntry unfinishedHelper(String name, String desc) {
 		if (this.finished) {
 			throw new IllegalStateException(name + " asked for after the java: helpers were finished");
@@ -745,6 +771,9 @@ final class JvmJavaDirectSites {
 		if (this.failure != null) {
 			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl,
 					channel.javaExceptionsField));
+		}
+		if (this.unlinkable != null) {
+			this.methods.add(buildUnlinkable());
 		}
 		this.finished = true;
 		return signals;
@@ -930,6 +959,37 @@ final class JvmJavaDirectSites {
 		}
 		a.areturn();
 		return new Method(this.cp.utf8Entry(FAIL), this.cp.utf8Entry(FAIL_DESC), a);
+	}
+
+	// static RuntimeException _junlinkable(String siteClass, NoClassDefFoundError e):
+	// "Cannot link class <siteClass>: missing class <dotted missing name>".
+	private Method buildUnlinkable() {
+		MethodCode a = new MethodCode();
+		// 0 = the site's class name, 1 = the error
+		a.new_(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.ldc(str("Cannot link class "));
+		a.aload(0);
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.ldc(str(": missing class "));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.aload(1);
+		a.invokevirtual(method("java/lang/Throwable", "getMessage", "()Ljava/lang/String;"));
+		MethodCode.Label haveMessage = a.newLabel();
+		a.dup();
+		a.ifnonnull(haveMessage);
+		a.pop();
+		a.aload(1);
+		a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
+		a.labelBinding(haveMessage);
+		a.ldc(str("/"));
+		a.ldc(str("."));
+		a.invokevirtual(method("java/lang/String", "replace",
+				"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;"));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.areturn();
+		return new Method(this.cp.utf8Entry(UNLINKABLE), this.cp.utf8Entry(UNLINKABLE_DESC), a);
 	}
 
 	/**
@@ -1312,10 +1372,20 @@ final class JvmJavaDirectSites {
 				this.a.pop();
 				throwMessage(this.a, "No such class: " + bound.getKey());
 			}
-			// What the member threw: through _jfail, which passes on what a function
-			// called
-			// back from Java raised and wraps anything else.
+			// What the member threw: a class that cannot link is the refusal naming the
+			// missing class; anything else goes through _jfail, which passes on what a
+			// function called back from Java raised and wraps the rest.
+			MethodCode.Label memberThrew = this.a.newLabel();
 			this.a.labelBinding(memberFailed);
+			this.a.dup();
+			this.a.instanceOf(cls("java/lang/NoClassDefFoundError"));
+			this.a.ifeq(memberThrew);
+			this.a.ldc(str(this.type.name()));
+			this.a.swap();
+			this.a.checkcast(cls("java/lang/NoClassDefFoundError"));
+			this.a.invokestatic(unlinkable());
+			this.a.athrow();
+			this.a.labelBinding(memberThrew);
 			this.a.ldc(str(failure));
 			this.a.invokestatic(failure());
 			this.a.athrow();

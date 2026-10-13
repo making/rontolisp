@@ -566,6 +566,16 @@
 - `(.thenComparing c (fn [a b] ...))` は fn 引数を `Comparator` として受け取り、それで比較します。
   オラクルはその位置の fn リテラルやローカルをコンパイル時に拒否します
   （`More than one matching method found: thenComparing`。`Function` のオーバーロードも受け取れるため）。
+- `clojure.lang` に対してコンパイルされた依存の Java クラス（その上の Clojure
+  ライブラリ自身のクラス、たとえば `reitit.Trie`）はここではリンクできず、そのクラスへの
+  すべての呼び出しは不足クラスを名指しする `Cannot link class C: missing class M`
+  で拒否されます。インタプリタでも JVM でも `(catch Exception e ...)` で捕捉できます
+  （wasm ではあらゆる `java:` 呼び出しが実行時エラーです）。`clojure.lang`
+  のブリッジはなく、予定もありません。ここの値は `IPersistentMap`
+  ではないため、それを受け取る依存のコードはどちらにせよ読めないからです。そのような
+  クラスを必要とするライブラリはポータブルな経路も提供しており（reitit の
+  `clojure-trie-compiler` は oracle と同じ行を出力します）、リーダーは先に名前があれば
+  ライブラリの `:rontolisp` ブランチを取ります。
 - 読むのはソースルート以下の `.clj` と `.cljc` のファイルだけです。クラスを含む依存の jar は
   Java クラスパスにも加わりますが、ディレクトリのクラスは加わりません（準備済みライブラリの
   `target/classes` は `--java-classpath` で与えます）。プロジェクトの `deps.edn` は、oracle が

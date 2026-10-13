@@ -1528,7 +1528,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
-| reitit-core 0.11.0 | crash | | | | `reitit.Trie`, Java over `clojure.lang` (`.todo/f65`); with `clojure-trie-compiler` the interpreter prints the oracle's default-compiler lines |
+| reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
 | malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
 
@@ -1547,6 +1547,80 @@ protocol walk ("Macros"); `tree-seq`/`flatten`; `join`'s separator; a hash insid
 clojure-spec cases named after each (`a-vector-pattern-takes-as-after-its-rest` ...
 `a-clojure-core-alias-spells-core-names`) and
 `ClojureProjectNamespacesTest#aReifyBelowItsProtocolsExtensionsInsideALetfnStoresIntoItsTable`.
+
+## Classes compiled against `clojure.lang`
+
+**A class that cannot link is a catchable refusal naming the missing class, on the
+interpreter and the JVM** (`.todo/f65`, decided 2026-10-13). A dependency's Java class
+compiled against `clojure.lang` -- metosin/reitit-core 0.11.0's `reitit.Trie`, whose
+methods take and answer `clojure.lang.IPersistentMap` and `clojure.lang.Keyword`, no
+`clojure.lang` class existing here -- refused every call: the interpreter died with an
+uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
+`JavaInterop.resolve`'s reflection, a JVM crash no program could catch.
+
+- The refusal is `Cannot link class C: missing class M` (the error's own missing name,
+  slashes to dots), taken by `(catch Exception e ...)` alike on both backends: the
+  interpreter's `eval/JavaInterop.unlinkable` (every `java:` entry point: construction,
+  calls, fields, resolved sites, `proxy`/`subclass`/`reify`), the bridge's
+  (`JavaBridgeTemplate`: member enumeration, member invocation, and its initializing
+  `loadClass`, which throws where the interpreter's non-initializing one loads), and a
+  compiled direct call's `memberFailed` handler (`_junlinkable`, which the resolver
+  still emits from class files alone -- a clean signature resolves without the
+  language). Only `NoClassDefFoundError` converts; any other `LinkageError` propagates
+  as it did (a callee throwing one for its own missing dependency is named as the
+  site's, the missing class exactly). Size, a four-site `java:` program: class
+  492,353 -> 492,775 B (+422: the handler discrimination and the helper, which only a
+  program with a direct site carries).
+- The lowering keeps every host form over such a class (the `LinkageError` guards),
+  so the refusal happens when the call runs, in the run-time error's words; a
+  `reify`/`deftype` face over an unlinkable interface keeps the interface and refuses
+  the same way at run time (`ClojureJavaFaces.methods`, `plainThrowable`).
+- Census, top 120 Clojars artifacts by total downloads, 2026-10-13: the search API
+  harvests (~1800 artifacts over two term sets), the artifact API ranks, and a
+  constant-pool scan of each top jar counts the classes naming `clojure/lang/` types
+  (superclass, interfaces, field and method descriptors), behaviorally checked by
+  loading each hit class without the language. 11 jars ship 99 such classes, 93
+  through a method or constructor signature or a superclass (reflection breaks), 6
+  through a static field only (initialization breaks; `.todo/f74`); no jar references
+  the language only in a method body. The other 109 are clean, most pure Clojure with
+  no class files at all.
+
+  | jars | classes | what they are |
+  |---|---|---|
+  | hawk 0.2.11 | 42 + 1 field | AOT-compiled fns (extend `AFunction`) |
+  | selmer 1.13.5 | 12 + 2 field | AOT-compiled fns and deftypes (`IType`, `IMeta`) |
+  | shadow-cljs 3.5.7 | 10 + 2 field | build tooling over maps, keywords, vectors |
+  | http-kit 2.9.0-beta4 | 9 | `ClojureRing` over `IPersistentMap`/`Keyword`, `AFn` subclasses |
+  | jsonista 1.0.2 | 7 | Jackson serializers over `Symbol`/`Keyword`/`IFn` |
+  | reitit-core 0.11.0 | 5 | `reitit.Trie` over `IPersistentMap`/`Keyword` |
+  | nrepl 1.8.0 | 3 | Java threads over `IFn` |
+  | potemkin 0.4.9 | 3 | `PersistentMapProxy` extends `APersistentMap` |
+  | cider-nrepl 0.63.1 | 1 | `DebugSupport` over `IFn`/`IPersistentMap` |
+  | riddley 0.2.2 | 1 | `Util` over `Compiler$LocalBinding`/`Symbol` |
+  | sci.impl.reflector 0.0.5 | 1 field | `FISupport` static sets |
+
+- Decision: no `clojure.lang` bridge and no new reader branch. A bridge would
+  reimplement the language's runtime types as host classes, and no value here is an
+  `IPersistentMap`, so dependency code taking one could not read it anyway; the
+  reader already takes a library's `:rontolisp` branch where one names it first, and
+  the libraries that need the language ship a portable path (reitit's
+  `clojure-trie-compiler`). What ronto does is refuse, catchably, and document the
+  portable path (user doc: `guides/java-interop.md`, `clojure/deviations.md`).
+- Re-probe, reitit-core 0.11.0 (`{:deps {metosin/reitit-core {:mvn/version
+  "0.11.0"}}}`, probe printing match-by-path, match-by-name, `match->path`, routes;
+  oracle `clj` 1.12.6.1673): default compiler -- the interpreter and the JVM answer
+  `Cannot link class reitit.Trie: missing class clojure.lang.IPersistentMap`,
+  catchable; P1 and the component compile with the `java:` call-time warnings and
+  refuse the same way, catchable. Portable compiler (`clojure-trie-compiler`) --
+  the interpreter and the JVM print the oracle's default-compiler lines line for line;
+  P1 builds but router construction fails on `reitit.impl/fast-map`'s `(HashMap. ...)`
+  (`.todo/f73`; a static-only router builds, every compiler piece works alone).
+  Pins: `ClojureInteropTest#aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass`
+  (static call and construction over a fixture jar holding a class compiled against a
+  type it omits),
+  `#aCompiledProgramFindsADependencyJarOnItsRunClasspath` (the `-o Prog.class`
+  contract: with the jar on the run class path the refusal, without it `No such
+  class`).
 
 ## Ring adapter
 
