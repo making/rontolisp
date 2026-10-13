@@ -3522,6 +3522,20 @@ cases:
       (1 2 3)
       (T NIL)
       1
+  - name: computed-symbol-function-identity
+    source: |
+      ;; A computed (symbol-function x) / (fdefinition x) answers the SAME object
+      ;; #'name denotes (SBCL 2.2.9: (T T) for both lines): the compiled backends
+      ;; box the resolution through the canonical per-defun object instead of fresh
+      ;; per evaluation, like the interpreter's function namespace does.
+      (defun ci-csb-f (x) (+ x 1))
+      (let ((s 'ci-csb-f))
+        (print (list (eq (symbol-function s) #'ci-csb-f) (eq (symbol-function s) (symbol-function s)))))
+      (let ((s 'ci-csb-f))
+        (print (list (eq (fdefinition s) #'ci-csb-f) (eq (fdefinition s) (symbol-function s)))))
+    expected: |
+      (T T)
+      (T T)
   - name: map-into
     source: |
       (print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))

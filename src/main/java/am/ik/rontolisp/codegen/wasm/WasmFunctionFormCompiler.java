@@ -67,9 +67,9 @@ final class WasmFunctionFormCompiler {
 			throw new IllegalArgumentException(
 					LispNames.SYMBOL_FUNCTION + " expects exactly one argument: " + cons.print());
 		}
-		// A run-time name resolution BOXES the resolved funcId as a closure struct
-		// {funcId, null env} -- exactly the value #'name would have produced -- so
-		// functionp answers t and the value prints its registered name.
+		// A run-time name resolution answers the canonical box for the resolved
+		// funcId ({@code _funcref}) -- exactly the value #'name would have produced --
+		// so functionp answers t and the value prints its registered name.
 		// The runtime function namespace (GLOBAL_FENV, where (setf
 		// (symbol-function ...)) installs and fmakunbound leaves its tombstone) is
 		// probed first and decides on its own; otherwise the compiled-function
@@ -164,14 +164,25 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.I32_NE);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
-		// Reload (no i32 temp exists inline) and box {funcId, null env}.
+		// Reload (no i32 temp exists inline) and answer the canonical box for the
+		// resolved funcId: the SAME object every static (function name) site of the
+		// definition shares (WasmLispCompiler._funcref), so (eq (symbol-function s)
+		// #'f) is t like on the interpreter. Without a _funcref in this module (a
+		// macro synthesized this site behind the pre-pass scan's back) the box stays
+		// fresh per resolution, as it always did.
 		emitStringOffset(ctx, symTemp);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x04);
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		WasmEmitHelper.emitNewClosure(ctx);
+		if (ctx.symfuncrefFuncIndex >= 0) {
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.symfuncrefFuncIndex);
+		}
+		else {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			WasmEmitHelper.emitNewClosure(ctx);
+		}
 		ctx.writer.write(Instruction.ELSE);
 		emitUnboundSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.END);

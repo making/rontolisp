@@ -19458,6 +19458,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void computedSymbolFunctionAnswersTheCanonicalBox() throws Exception {
+		// A computed (symbol-function x) / (fdefinition x) answers the SAME object
+		// #'name denotes (SBCL: (T T) for both lines): the resolution answers through
+		// the canonical per-funcId box instead of fresh per evaluation, like the
+		// interpreter's function namespace does. The eval leg pins the runtime's own
+		// registry hit answering through it too.
+		String program = "(defun csf-f (x) (+ x 1)) (let ((s 'csf-f))"
+				+ " (print (list (eq (symbol-function s) #'csf-f) (eq (symbol-function s) (symbol-function s)))))"
+				+ " (let ((s 'csf-f))"
+				+ " (print (list (eq (fdefinition s) #'csf-f) (eq (fdefinition s) (symbol-function s)))))"
+				+ " (print (list (eq (eval '(symbol-function 'csf-f)) #'csf-f)))";
+		assertThat(compileAndRun(program)).isEqualTo("(T T)\n(T T)\n(T)");
+		assertThat(compileComponentAndRun(program)).isEqualTo("(T T)\n(T T)\n(T)");
+	}
+
+	@Test
 	void uiopSymbolCall() throws Exception {
 		// REAL on the compile paths (used to be a call-time error, see
 		// .kb/asdf.md): lowers to (funcall (intern (string name) (find-package pkg))

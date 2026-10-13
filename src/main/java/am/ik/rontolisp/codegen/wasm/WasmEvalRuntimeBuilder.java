@@ -203,7 +203,7 @@ final class WasmEvalRuntimeBuilder {
 	 * when undefined. Every path ends in {@code return}.
 	 */
 	private static void emitFunctionLookupReturn(WasmWriter w, int offSlot, int tmpSlot, int addrSlot,
-			boolean identityHash) {
+			boolean identityHash, int funcrefFuncIndex) {
 		// runtime defun binding in $fenv?
 		getLocal(w, offSlot);
 		emitGetGlobalFenv(w);
@@ -228,8 +228,17 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, addrSlot);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		emitNull(w);
-		WasmEmitHelper.emitNewClosure(w, identityHash);
+		if (funcrefFuncIndex >= 0) {
+			// The canonical box for the resolved funcId: what eval'd code resolves
+			// shares with every compiled site, so an eval'd (eq (symbol-function s)
+			// #'f) is t like on the interpreter.
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(funcrefFuncIndex);
+		}
+		else {
+			emitNull(w);
+			WasmEmitHelper.emitNewClosure(w, identityHash);
+		}
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		emitNull(w);
@@ -469,6 +478,63 @@ final class WasmEvalRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	// === _funcref: funcId -> the canonical function-value box ===
+
+	/**
+	 * Builds {@code _funcref}: {@code (i32 funcId) -> (ref null eq)}. Answers the one
+	 * closure struct {@code {funcId, null env}} every site naming the definition shares
+	 * -- the static {@code (function name)} sites, which read it from the same module
+	 * global this ladders through, and every computed {@code (symbol-function x)} /
+	 * {@code (fdefinition x)} resolution and eval runtime registry hit, which call this.
+	 * A funcId outside the covered set (only a registry the gate mispredicted can produce
+	 * one) boxes fresh per call, as every resolution always did.
+	 * @param coveredIds the funcIds with a shared-box global, ascending
+	 * @param boxGlobal the module global holding each covered funcId's box
+	 * @param identityHash whether the module's closures carry the identity-hash slot
+	 * @return the encoded function body
+	 */
+	static byte[] buildFuncrefBody(List<Integer> coveredIds, Map<Integer, Integer> boxGlobal, boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals besides the funcId param
+		for (int funcId : coveredIds) {
+			// if (funcId == F) return <the shared box of F>;
+			getLocal(w, 0);
+			i32(w, funcId);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			int global = java.util.Objects.requireNonNull(boxGlobal.get(funcId));
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(global);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, 0x40);
+			i32(w, funcId);
+			emitNull(w);
+			if (identityHash) {
+				i32(w, 0);
+			}
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(global);
+			w.write(Instruction.END);
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(global);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+		// Uncovered: a fresh {funcId, null env} box, the old behavior.
+		getLocal(w, 0);
+		emitNull(w);
+		if (identityHash) {
+			i32(w, 0);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 	// === _env_lookup: (offset, env) -> binding cons or null ===
 
 	/**
@@ -561,10 +627,13 @@ final class WasmEvalRuntimeBuilder {
 	 * a call of one with no {@code $fenv} binding is reported undefined instead of
 	 * answering nil
 	 * @param identityHash whether hash tables hash by identity
+	 * @param funcrefFuncIndex the function index of {@code _funcref}, the canonical box a
+	 * registry hit answers through, or -1 when this module carries none: then the hit
+	 * boxes fresh per resolution, as it always did
 	 * @return the encoded function body
 	 */
 	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, int globalAccessIndex,
-			java.util.List<String> fenvForwarders, boolean identityHash) {
+			java.util.List<String> fenvForwarders, boolean identityHash, int funcrefFuncIndex) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -806,7 +875,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
 		w.write(Instruction.END);
 		// non-symbol designator (a lambda form): evaluate it
 		getLocal(w, ACC);
@@ -827,7 +896,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
 		w.write(Instruction.END);
 		emitNull(w);
 		w.write(Instruction.RETURN);

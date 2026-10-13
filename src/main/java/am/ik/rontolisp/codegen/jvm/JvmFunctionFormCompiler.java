@@ -110,9 +110,16 @@ final class JvmFunctionFormCompiler {
 		MethodCode.Label registryMiss = ctx.body.newLabel();
 		ctx.body.ifnull(registryMiss);
 		ctx.body.iconst_0().aaload();
-		int idSlot = ctx.allocTemp();
-		ctx.body.astore(idSlot).iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
-		ctx.body.aload(idSlot).aastore();
+		// The canonical box for the resolved funcId (_funcref): a computed
+		// resolution answers the SAME object every static (function name) site of
+		// the definition shares, so (eq (symbol-function s) #'f) is t like on the
+		// interpreter, where the function namespace holds one object. A row the
+		// registry answers is always covered by the <clinit> fill (JvmLispCompiler
+		// sizes the table over the registry when a runtime box can run), so the
+		// cell is never null here.
+		ctx.body.checkcast(ctx.integerClass).invokevirtual(ctx.integerValue);
+		ctx.body.invokestatic(funcrefRef(ctx, className));
+		ctx.computedFunctionBox[0] = true;
 		MethodCode.Label boxed = ctx.body.newLabel();
 		ctx.body.goto_(boxed);
 		ctx.body.labelBinding(registryMiss);
@@ -268,10 +275,10 @@ final class JvmFunctionFormCompiler {
 	/**
 	 * The canonical function-value box of a funcId: {@code _funcref} answers the one
 	 * {@code Object[]{Integer funcId}} every static {@code (function name)} site of the
-	 * funcId shares. Emitted only when the program takes a static function value, so
-	 * every other class is byte-identical to a build that never knew about it. A name
-	 * resolved at run time (a computed {@code symbol-function} / {@code fdefinition})
-	 * still boxes fresh per resolution, as does a lambda value per evaluation.
+	 * funcId shares, and now every computed {@code symbol-function} / {@code fdefinition}
+	 * resolution of it too. Emitted only when the program takes a static function value
+	 * or can resolve one at run time, so every other class is byte-identical to a build
+	 * that never knew about it. A lambda value still boxes fresh per evaluation.
 	 */
 	static MethodRefEntry funcrefRef(JvmLispCompiler.Ctx ctx, String className) {
 		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_funcref", "(I)Ljava/lang/Object;");
