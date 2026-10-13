@@ -5867,12 +5867,11 @@
         (rontolisp::%clojure-escape-part (if (null nm) "null" nm))))))
 
 (defun rontolisp::%clojure-char (x)
-  "The character for X: itself for a character, the code point (truncated)
-   for a number; anything else signals."
-  (cond ((characterp x) x)
-        ((numberp x) (code-char (truncate x)))
-        (t (rontolisp::%clojure-class-cast-exception-of
-            "char needs a character or a number" x))))
+  "The character for X, as the oracle's charCast takes it: itself for a
+   character, the code point for a number in the char range 0..65535 (a
+   double refused past its edges, any other number truncated first);
+   anything else, and a number outside it, the oracle's refusal."
+  (rontolisp::%clojure-char-cast x))
 
 ;;;; Case mapping: String.toUpperCase and String.toLowerCase, behind upper-case,
 ;;;; lower-case, capitalize, the uppercase format conversions and cl-format's

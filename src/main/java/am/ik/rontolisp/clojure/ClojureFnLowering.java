@@ -150,8 +150,9 @@ final class ClojureFnLowering {
 
 	/**
 	 * {@code char} over an already-lowered value: one call to the spliced
-	 * {@code rontolisp::%clojure-char} (a character itself, a number through its
-	 * truncated code point, anything else a signal).
+	 * {@code rontolisp::%clojure-char}, the oracle's {@code charCast} (a character
+	 * itself, a number in the char range 0..65535, anything else and a number outside it
+	 * the oracle's refusal).
 	 */
 	static LispVal charForm(ClojureLowering ctx, LispVal lowered) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CHAR"), lowered);

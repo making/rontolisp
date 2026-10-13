@@ -6242,6 +6242,23 @@ cases:
       (a b)
       a
       :refused
+  - name: char-refuses-numbers-outside-the-char-range
+    # Oracle-identical (clj 1.12.6, 2026-10-13): char is the oracle's charCast --
+    # a character itself, a number in 0..65535 (a double refused past its edges,
+    # any other number truncated first); a number outside it is the oracle's
+    # IllegalArgumentException, nil its NullPointerException, anything else its
+    # ClassCastException. Runs on every backend.
+    source: |
+      (defn char-oob-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (println (char 97.5) (char 197/2) (char 97N))
+      (prn (mapv int (map char [0 65 65535])) (map char [97 98]) (apply char [99]))
+      (prn (map char-oob-msg [#(char 70000) #(char -1) #(char 65536) #(char 65535.9) #(char -1.5) #(char ##NaN) #(char ##Inf) #(char ##-Inf) #(char 70000N)]))
+      (prn (map char-oob-msg [#(char nil) #(char "a") #(char :a) #(char true) #(mapv char [97 70000])]))
+    expected: |
+      a b a
+      [0 65 65535] (\a \b) \c
+      ("Value out of range for char: 70000" "Value out of range for char: -1" "Value out of range for char: 65536" "Value out of range for char: 65535.9" "Value out of range for char: -1.5" "Value out of range for char: NaN" "Value out of range for char: Infinity" "Value out of range for char: -Infinity" "Value out of range for char: 70000")
+      ("Cannot invoke \"java.lang.Number.longValue()\" because \"x\" is null" "class java.lang.String cannot be cast to class java.lang.Number" "class clojure.lang.Keyword cannot be cast to class java.lang.Number" "class java.lang.Boolean cannot be cast to class java.lang.Number" "Value out of range for char: 70000")
   - name: name-reads-past-the-slash
     # name answers a string itself, and a keyword's or symbol's spelling past the
     # first slash (the whole spelling when none); anything else signals.
