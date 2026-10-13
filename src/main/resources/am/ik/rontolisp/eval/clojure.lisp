@@ -674,12 +674,12 @@
    NullPointerException, anything else its ClassCastException to Number (a
    StringWriter has no String constructor, so the reflector's cast fails)."
   (cond ((numberp x) (make-string-output-stream))
-        ((null x)
-         (rontolisp::%clojure-null-pointer-exception
-          "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
-        (t (rontolisp::%clojure-class-cast-exception
-            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
-                         " cannot be cast to class java.lang.Number")))))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number")))))
 
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
@@ -11412,6 +11412,32 @@
          (rontolisp::%clojure-host-entry-plist item))
         (t (rontolisp::%clojure-map-entry-refusal
             "conj needs a map entry: a map, a [k v] vector or nil" item))))
+
+(defun rontolisp::%clojure-hash-map-put-all (target source)
+  "(.putAll TARGET SOURCE) where the host is not: the entries of the map SOURCE
+   stored into TARGET's table, answering nil, like the oracle's mutation of its
+   java.util.HashMap -- malli's fast-registry fills its (HashMap. 1024 0.25)
+   this way at load, then reads it back with .get. A map or record source reads
+   through the same entries merge takes, each key stored through
+   %clojure-store-key like %clojure-plist-table stores it; nil is the oracle's
+   NullPointerException, anything but a map its ClassCastException to
+   java.util.Map (without the module tail). The target is always a table: the
+   lowering answers a record or a sorted map the oracle's message-less
+   UnsupportedOperationException, and anything else its no-such-method refusal."
+  (if (or (hash-table-p source) (rontolisp::%clojure-record-p source)
+          (rontolisp::%clojure-sorted-map-p source))
+      (let ((entries (rontolisp::%clojure-merge-entry-plist source)))
+        (do ((p entries (cdr (cdr p))))
+            ((null p) nil)
+          (setf (gethash (rontolisp::%clojure-store-key (car p) target) target)
+                (car (cdr p)))))
+      (if (null source)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"java.util.Map.size()\" because \"m\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class "
+                        (rontolisp::%clojure-class-name-of source)
+                        " cannot be cast to class java.util.Map")))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member

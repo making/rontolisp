@@ -362,10 +362,19 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   mutable map exists; `.get` and the other lookups read it, `.put` throws the oracle's
   message-less `UnsupportedOperationException` (as the read-only map Java is handed the
   value as throws it on the interpreter and the JVM), and nil builds to the oracle's
-  `NullPointerException`. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
+  `NullPointerException`. A two-argument construction of two numbers
+  (`(java.util.HashMap. 1024 0.25)`) is the empty map too, and `.putAll` of a map stores
+  its entries into the map and answers nil; on a record or a sorted map it throws the
+  same `UnsupportedOperationException`. `.putAll` into a map literal stores into the
+  literal's own table there, where the oracle throws. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
   hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
   itself, where the oracle builds an empty mutable map. Where the host is (the
   interpreter and the JVM) the construction stays that mutable object.
+- `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
+  its default on the wasm backends, where no properties exist (like a host without the
+  property, which is what a library load reads); nil is the oracle's
+  `NullPointerException`. A computed key stays the host call, which the wasm backends
+  reject.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector

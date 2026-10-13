@@ -1542,7 +1542,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
 | data.json 2.5.2 | = | = | refused | refused | the load reads `DateTimeFormatter/ISO_INSTANT` (`.todo/f81`) |
-| malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
+| malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`); past it the load-time host calls run there since 2026-10-13 (f84: `System/getProperty` of a literal key, `(HashMap. capacity load)` of two number datums, `.putAll`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
 `read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`). The gaps
@@ -5059,9 +5059,47 @@ taking 2 args for class ...`, measured against `(.put "s" :a 1)`).
 Deviations, all on wasm only: `str` and `class` of the construction read the Clojure
 map (`{:a 1}`, an array- or hash-map keyword), where the oracle spells the `HashMap`;
 a capacity argument (`(HashMap. 16)`) answers itself, where the oracle builds an empty
-mutable map; two arguments (`(HashMap. 1024 0.25)`, malli's load-time registry) and
-`.putAll` stay host-only (`.todo/f84`). `URLDecoder/decode` and `URLEncoder/encode`
+mutable map. `URLDecoder/decode` and `URLEncoder/encode`
 in the same namespace stay host-only too, as the todo filed them.
+
+A two-argument construction of two number datums (`(HashMap. 1024 0.25)`, malli's
+load-time registry) is the empty map too, since 2026-10-13 (f84): the datums are
+number literals, so dropping them evaluates nothing away (`hashMapCapacity`). Any other
+pair -- a computed capacity, a non-number -- keeps `java:new`, like a tagged
+construction, which names the host overload. The value-position `HashMap/new` of two
+arguments stays host-only with it: its arguments lower to indexed reads, never datums.
+
+`.putAll` of one map into another stores the source's entries into the target's table
+and answers nil where the host is not, like the oracle's mutation of its `HashMap`
+(`ClojureValueMethodLowering.unmappedArm`, the `putAll/1` answer beside `put/2`'s, over
+`rontolisp::%clojure-hash-map-put-all`): malli's `fast-registry` fills its
+`(HashMap. 1024 0.25)` this way at load, then reads it with `.get`. A record or a sorted
+map target is immutable there as here, so writing one throws the same message-less
+construction `.put` throws; any other receiver keeps the oracle's words (`No matching
+method putAll found taking 1 args for class ...`), nil its `NullPointerException`
+through `%clojure-no-method`. A map or record source reads through the same entries
+`merge` takes (each key stored through `%clojure-store-key`, like
+`%clojure-plist-table` stores it); a sorted-map source reads in order; nil is the
+oracle's `NullPointerException` (`Cannot invoke "java.util.Map.size()" because "m" is
+null`, the JDK's words), anything else its `ClassCastException` to `java.util.Map`
+without the module tail. Where the host is nothing changes: the call goes to the
+read-only `Map` view, whose `AbstractMap.putAll` throws that same
+`UnsupportedOperationException`, or to the real `HashMap`.
+
+Deviation, on wasm only: `.putAll` into a map literal stores into the literal's own
+table and answers nil, where the oracle throws `UnsupportedOperationException` -- no
+portable lowering can tell the stand-in table from a literal's -- and a one-argument
+stand-in shares the mutation with the argument it was built from, where the oracle's
+copy does not. A fresh two-argument construction, the load-time shape, has no such
+alias either way.
+
+`System/getProperty` of a literal key runs where the host is not too, since 2026-10-13
+(f84): no properties exist there, so the one-argument call is nil and the two-argument
+call its default -- like a host without the property, which malli.registry's `mode`
+and `type` read at load (`ClojureInteropLowering.staticCall`, beside `String/valueOf`).
+Nil is the oracle's `NullPointerException` (`key can't be null`); a computed key stays
+the host call, which warns and refuses when it runs there, like every other static a
+literal does not answer.
 
 Measured 2026-10-13 (exec jar, before -> after): `(defn f [m k v] (.put m k v))`
 wasm P1 269,790 -> 422,342 B, component 275,688 -> 428,717 B (the exception runtime
@@ -5070,8 +5108,20 @@ it), JVM class 734,032 -> 734,032; `(defn f [m k] (.get m k))` byte-identical on
 three (wasm P1 288,377, component 294,289, class 759,750); `(println (.get
 (java.util.HashMap. {:a 1}) :a))` wasm P1 18,617 (a `JAVA:NEW` stub, refusing at run
 time) -> 405,941 B, the byte count of the same program over the map literal, class
-739,666 -> 739,666. A program naming no `HashMap` construction and no `.put` lowers
+739,666 -> 739,666. A program naming no `HashMap` construction, no `.put`, no
+`.putAll` and no `System/getProperty` lowers
 exactly as before on every backend (the branches are all `!hostTarget`-gated).
+
+Measured 2026-10-13 (exec jar): `(let [h (doto (java.util.HashMap. 1024 0.25)
+(.putAll {:a 1 "s" 2}))] (println (.get h :a) (.get h "s") (.size h)))` wasm P1
+512,082 B, component 518,494 B, class 771,488 B, against 407,861 / 413,912 /
+764,078 B for the same reads over the map literal (the merge helper with
+`%clojure-store-key`, the record/sorted readers, the refusal carriers and the
+message-less construction's exception runtime); `(println (or (System/getProperty
+"malli.registry/mode") "default"))` 35,732 / 36,991 / 666,394 B, the literal folding
+to its default. The malli.registry probe (mode, type, `fast-registry` lookups, a
+record and a sorted-map source, `composite-registry`, `simple-registry`) 559,166 /
+565,730 B, printing the oracle's lines on both wasm backends warning-free.
 
 Re-probe, reitit-core 0.11.0 (the f65 probe grown to seven lines: match-by-path of a
 static and a wild route, match-by-name of both, `match->path`, `routes`,
@@ -5083,12 +5133,20 @@ since 2026-10-13. P1 and the component still warn `JAVA:STATIC`
 without an encoded path) and `JAVA:CALL` (one instance site in `reitit.core`'s load),
 none of them on the probe's path; the static-only and wild-only routers run too.
 Pins: clojure-spec `hash-map-construction-builds-the-map-itself-where-the-host-is-not`,
-`put-on-a-map-refuses-as-the-oracles-unsupported-operation` (all four backends),
+`put-on-a-map-refuses-as-the-oracles-unsupported-operation`,
+`system-get-property-answers-like-a-host-without-the-property`,
+`hash-map-capacity-and-load-build-the-empty-map-where-the-host-is-not`,
+`put-all-stores-into-the-hash-map-where-the-host-is-not` (all four backends),
 `ClojureWasmHashMapTest` (what only wasm answers: `.put` on the construction, the
-nil construction), `ClojureLoweringTest`
+nil construction, the two-argument fill and `System/getProperty`),
+`ClojureLoweringTest`
 `aHashMapConstructionLowersToTheMapItselfWhereTheHostIsNot` /
-`putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot`,
-`ClojureWasmHostArmsTest` (the construction compiles warning-free).
+`putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot` /
+`aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot` /
+`systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot` /
+`putAllOnAMapStoresIntoItsTableWhereTheHostIsNot`,
+`ClojureWasmHostArmsTest` (the construction, the fill and `System/getProperty`
+compile warning-free).
 
 ## Laziness
 

@@ -1878,6 +1878,82 @@ cases:
       :uoe
       :rte
       nil
+  - name: system-get-property-answers-like-a-host-without-the-property
+    # (System/getProperty k) of a literal key is nil and (System/getProperty k
+    # dflt) its default where the host is not (wasm), where no properties exist
+    # -- like a host without the property, which malli.registry's mode and type
+    # read at load. Nil is the oracle's NullPointerException on every backend.
+    # Oracle-identical (clj 1.12.6, 2026-10-13); a computed key stays the host
+    # call, which warns and refuses on wasm.
+    source: |
+      (println (pr-str (System/getProperty "no.such.property")))
+      (println (pr-str (System/getProperty "no.such.property" "dflt")))
+      (println (or (System/getProperty "malli.registry/mode") "default"))
+      (println (or (System/getProperty "malli.registry/type") "default"))
+      (println (try (System/getProperty nil) (catch NullPointerException e :npe)))
+      (println (ex-message (try (System/getProperty nil) (catch NullPointerException e e))))
+    expected: |
+      nil
+      "dflt"
+      default
+      default
+      :npe
+      key can't be null
+  - name: hash-map-capacity-and-load-build-the-empty-map-where-the-host-is-not
+    # (java.util.HashMap. capacity loadFactor) of two number datums is the empty
+    # map where the host is not (wasm) -- the empty mutable map the oracle builds
+    # -- so the lookups read it; anywhere else it stays the host construction.
+    # Oracle-identical (clj 1.12.6, 2026-10-13) but str and class, which read the
+    # Clojure map on wasm.
+    source: |
+      (let [h (java.util.HashMap. 1024 0.25)]
+        (println (.size h) (.isEmpty h) (.get h :a)))
+      (let [h (new java.util.HashMap 16 0.5)]
+        (println (.size h) (.isEmpty h) (.containsKey h :a)))
+      (println (.get (java.util.HashMap. 8 0.75) :missing))
+    expected: |
+      0 true nil
+      0 true false
+      nil
+  - name: put-all-stores-into-the-hash-map-where-the-host-is-not
+    # (.putAll h m) stores m's entries into h and answers nil where the host is
+    # not (wasm), like the oracle's mutation of its HashMap: malli's fast-registry
+    # fills (HashMap. 1024 0.25) this way at load and reads it with .get. A record
+    # or a sorted map source reads like a map; a record or a sorted map target is
+    # immutable there as here, so writing one is the oracle's message-less
+    # UnsupportedOperationException; any other receiver refuses in the oracle's
+    # words, nil the NullPointerException. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (let [h (doto (java.util.HashMap. 1024 0.25) (.putAll {:a 1 "s" 2}))]
+        (println (.get h :a) (.get h "s") (.size h)))
+      (println (.putAll (java.util.HashMap.) {:a 1}))
+      (defrecord PutAllR [a])
+      (let [h (doto (java.util.HashMap.) (.putAll (->PutAllR 5)))]
+        (println (.get h :a)))
+      (let [h (doto (java.util.HashMap.) (.putAll (sorted-map :a 1 :b 2)))]
+        (println (.get h :a) (.get h :b) (.size h)))
+      (println (try (.putAll (sorted-map :a 1) {:b 2}) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.putAll (->PutAllR 1) {:b 2}) (catch UnsupportedOperationException e :uoe)))
+      (println (ex-message (try (.putAll (sorted-map :a 1) {:b 2}) (catch UnsupportedOperationException e e))))
+      (println (try (.putAll "s" {:a 1}) (catch IllegalArgumentException e :iae)))
+      (println (try (.putAll nil {:a 1}) (catch NullPointerException e :npe)))
+      (println (try (.putAll (java.util.HashMap.) nil) (catch NullPointerException e :npe)))
+      (println (ex-message (try (.putAll (java.util.HashMap.) nil) (catch NullPointerException e e))))
+      (println (try (.putAll (java.util.HashMap.) [:a 1]) (catch ClassCastException e :cce)))
+    expected: |
+      1 2 2
+      nil
+      5
+      1 2 2
+      :uoe
+      :uoe
+      nil
+      :iae
+      :npe
+      :npe
+      Cannot invoke "java.util.Map.size()" because "m" is null
+      :cce
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,
