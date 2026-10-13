@@ -155,6 +155,80 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
+	void isoInstantFormatsInstantsOnBothBackends() throws Exception {
+		// DateTimeFormatter/ISO_INSTANT is the portable value where no host is, and
+		// .format of it answers a Date or a Timestamp in ISO-8601 (data.json's
+		// write-instant); anything else is refused in the oracle's words. Answers
+		// measured against clj 1.12.6; the interpreter and the JVM keep the host's
+		// object and call (ClojureInteropTest has no such case: the host call of an
+		// instant of this front end's own is the oracle's refusal).
+		String program = "(require '[clojure.instant :as iso-inst])"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 1234567890123)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 1)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. -394)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. -62135596800000)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.sql.Timestamp. 1000)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.sql.Timestamp. 1500)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.sql.Timestamp. 1123)))"
+				+ " (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT"
+				+ " (iso-inst/read-instant-timestamp \"1970-01-01T00:00:01.123456789Z\")))"
+				+ " (println (try (.format java.time.format.DateTimeFormatter/ISO_INSTANT \"x\")"
+				+ " (catch ClassCastException e (ex-message e))))";
+		String expected = "1970-01-01T00:00:00Z\n2009-02-13T23:31:30.123Z\n1970-01-01T00:00:00.001Z\n"
+				+ "1969-12-31T23:59:59.606Z\n0001-01-01T00:00:00Z\n1970-01-01T00:00:01Z\n"
+				+ "1970-01-01T00:00:01.500Z\n1970-01-01T00:00:01.123Z\n" + "1970-01-01T00:00:01.123456789Z\n"
+				+ "class java.lang.String cannot be cast to class java.time.temporal.TemporalAccessor\n";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1").isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends() throws Exception {
+		// Long/valueOf, Double/valueOf, Integer/parseInt of radix 16,
+		// Integer/toHexString and Math/min lower to the portable readers where no
+		// host is (data.json's read path): a malformed string is the oracle's
+		// NumberFormatException, anything else its coercion or refusal, each
+		// measured against clj 1.12.6. The interpreter and the JVM keep the host's
+		// call, whose coercions are its own (so only the shared lines are in
+		// clojure-spec).
+		String program = "(println (try (Long/valueOf 1.5) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Long/valueOf :k) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Double/valueOf 5) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Double/valueOf 1/2) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Integer/parseInt 5 16) (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Integer/parseInt 1.5 16) (catch ClassCastException e (ex-message e))))"
+				+ " (println (Integer/toHexString 1.5) (Integer/toHexString 1/2) (Integer/toHexString -1.5)"
+				+ " (Integer/toHexString (/ 0.0 0.0)))"
+				+ " (println (try (Integer/toHexString 4294967295) (catch ArithmeticException e (ex-message e))))"
+				+ " (println (try (Integer/toHexString (/ 1.0 0.0))"
+				+ " (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Integer/toHexString nil) (catch NullPointerException e (ex-message e))))"
+				+ " (println (try (Integer/toHexString \"ff\") (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Math/min 1 1.0) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Math/min 1/2 2) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Math/min \"a\" 1) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Math/min nil 1) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Math/min true 1) (catch IllegalArgumentException e (ex-message e))))";
+		String expected = "No matching method valueOf found taking 1 args\n"
+				+ "No matching method valueOf found taking 1 args\n"
+				+ "No matching method valueOf found taking 1 args\n"
+				+ "No matching method valueOf found taking 1 args\n"
+				+ "class java.lang.Long cannot be cast to class java.lang.String\n"
+				+ "class java.lang.Double cannot be cast to class java.lang.String\n" + "1 0 ffffffff 0\n"
+				+ "integer overflow\n" + "Value out of range for long: Infinity\n"
+				+ "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n"
+				+ "class java.lang.String cannot be cast to class java.lang.Number\n"
+				+ "No matching method min found taking 2 args\n" + "No matching method min found taking 2 args\n"
+				+ "No matching method min found taking 2 args\n" + "No matching method min found taking 2 args\n"
+				+ "No matching method min found taking 2 args\n";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1").isEqualTo(expected);
+		}
+	}
+
+	@Test
 	void aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends() throws Exception {
 		// no value a wasm program makes has getBytes but a string, or a field s: the
 		// oracle's own refusal, where the host arm was a call-time error; a String

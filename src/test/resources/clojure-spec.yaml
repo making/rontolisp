@@ -10307,6 +10307,23 @@ cases:
       true false -1 true 1 -1
       ["java.lang.IllegalArgumentException" "No matching field found: foo for class java.util.Date"] ["java.lang.IllegalArgumentException" "No matching method foo found taking 1 args for class java.util.UUID"] ["java.lang.IllegalArgumentException" "No matching field found: getTime for class java.util.UUID"]
       (#inst "1970-01-01T00:00:00.001-00:00" #inst "1970-01-01T00:00:00.002-00:00" #inst "1970-01-01T00:00:00.003-00:00") #{#uuid "00000000-0000-0001-0000-000000000001" #uuid "00000000-0000-0002-0000-000000000002"} :hit true #{#inst "1970-01-01T00:00:00.001-00:00"}
+  - name: iso-instant-is-a-portable-value-where-no-host-is
+    # DateTimeFormatter/ISO_INSTANT where no host is is the portable value: it
+    # reads where the host's field would refuse the load (data.json's defaults)
+    # and stays put through the options it travels in; .format of it over an
+    # instant answers on wasm alone (ClojureWasmInteropRefusalTest), since the
+    # host call of an instant of this front end's own is the oracle's refusal.
+    # nil formats to the oracle's NullPointerException on all four backends.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (defmacro iso-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (let [f java.time.format.DateTimeFormatter/ISO_INSTANT] (= f f)))
+      (prn (iso-rfc NullPointerException (.format java.time.format.DateTimeFormatter/ISO_INSTANT nil)))
+      (prn (try (.format java.time.format.DateTimeFormatter/ISO_INSTANT nil) (catch NullPointerException e (ex-message e))))
+    expected: |
+      true
+      :ok
+      "temporal"
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per
@@ -13019,6 +13036,106 @@ cases:
       (true false nil nil nil nil nil nil nil nil)
       (true nil)
       "Expected string, got java.lang.Boolean" "Expected string, got nil"
+  - name: long-value-of-reads-like-the-host-static
+    # (Long/valueOf s) where no host is lowers to the portable reader: the long
+    # the string spells (parse-long's grammar, Unicode digits included), an
+    # integer in the long range as is; a malformed string is the oracle's
+    # NumberFormatException naming it, nil its null-string refusal. Anything
+    # else is the oracle's no-matching-method refusal on wasm
+    # (ClojureWasmInteropRefusalTest); the host's own answers or refuses its
+    # own way. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (defmacro lv-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map Long/valueOf ["12" "-12" "+12" "007" "+0" "-0" "１２"]))
+      (prn (map Long/valueOf ["9223372036854775807" "-9223372036854775808"]))
+      (prn (Long/valueOf 5) (map Long/valueOf ["12" "13"]))
+      (prn [(lv-rfc NumberFormatException (Long/valueOf "")) (lv-rfc NumberFormatException (Long/valueOf "abc")) (lv-rfc NumberFormatException (Long/valueOf "9999999999999999999999")) (lv-rfc NumberFormatException (Long/valueOf " 12")) (lv-rfc NumberFormatException (Long/valueOf nil))])
+      (prn (try (Long/valueOf "abc") (catch NumberFormatException e (ex-message e))) (try (Long/valueOf nil) (catch NumberFormatException e (ex-message e))))
+    expected: |
+      (12 -12 12 7 0 0 12)
+      (9223372036854775807 -9223372036854775808)
+      5 (12 13)
+      [:ok :ok :ok :ok :ok]
+      "For input string: \"abc\"" "Cannot parse null string"
+  - name: double-value-of-reads-like-the-host-static
+    # (Double/valueOf s) where no host is lowers to the portable reader: the
+    # double the string spells (parse-double's grammar), a double as is; a
+    # malformed string is the oracle's NumberFormatException (empty String of
+    # nothing but blanks), nil its NullPointerException. Anything else is the
+    # oracle's no-matching-method refusal on wasm (ClojureWasmInteropRefusalTest);
+    # the host's own answers or refuses its own way. Oracle-identical (clj
+    # 1.12.6, 2026-10-13).
+    source: |
+      (defmacro dv-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map Double/valueOf ["1.5" "1e3" "NaN" "Infinity" "-Infinity" "0x1p3" "1.5f" " 1.5 " "1e1000" "1e-323"]))
+      (prn (Double/valueOf 1.5) (map Double/valueOf ["1.5" "2.5"]))
+      (prn [(dv-rfc NumberFormatException (Double/valueOf "abc")) (dv-rfc NumberFormatException (Double/valueOf "")) (dv-rfc NumberFormatException (Double/valueOf " "))])
+      (prn (dv-rfc NullPointerException (Double/valueOf nil)))
+      (prn (try (Double/valueOf "abc") (catch NumberFormatException e (ex-message e))) (try (Double/valueOf "") (catch NumberFormatException e (ex-message e))) (try (Double/valueOf nil) (catch NullPointerException e (ex-message e))))
+    expected: |
+      (1.5 1000.0 ##NaN ##Inf ##-Inf 8.0 1.5 1.5 ##Inf 9.9E-324)
+      1.5 (1.5 2.5)
+      [:ok :ok :ok]
+      :ok
+      "For input string: \"abc\"" "empty String" "Cannot invoke \"String.length()\" because \"in\" is null"
+  - name: parse-int-of-radix-16-reads-like-the-host-static
+    # (Integer/parseInt s 16) where no host is lowers to the portable hex
+    # reader: an optional sign and hex digits (ASCII and fullwidth a-f, every
+    # Unicode decimal-digit block's 0-9, like Character.digit), refused past the
+    # int range; nil is the oracle's null-string refusal. Anything else is the
+    # oracle's cast refusal to String on wasm (ClojureWasmInteropRefusalTest);
+    # the host's own refuses its own way. Any other radix stays the host's call.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (defmacro pi-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map #(Integer/parseInt % 16) ["ff" "FF" "-a" "+1" "0" "7fffffff" "-80000000" "ｆｆ" "٣"]))
+      (prn (map #(Integer/parseInt % 16) ["12" "ff"]))
+      (prn [(pi-rfc NumberFormatException (Integer/parseInt "zz" 16)) (pi-rfc NumberFormatException (Integer/parseInt "" 16)) (pi-rfc NumberFormatException (Integer/parseInt "80000000" 16)) (pi-rfc NumberFormatException (Integer/parseInt "100000000" 16)) (pi-rfc NumberFormatException (Integer/parseInt "Ｚ" 16)) (pi-rfc NumberFormatException (Integer/parseInt nil 16))])
+      (prn (try (Integer/parseInt "zz" 16) (catch NumberFormatException e (ex-message e))) (try (Integer/parseInt nil 16) (catch NumberFormatException e (ex-message e))))
+    expected: |
+      (255 255 -10 1 0 2147483647 -2147483648 255 3)
+      (18 255)
+      [:ok :ok :ok :ok :ok :ok]
+      "For input string: \"zz\" under radix 16" "Cannot parse null string"
+  - name: integer-to-hex-string-writes-like-the-host-static
+    # (Integer/toHexString x) where no host is lowers to the portable writer:
+    # an integer in the int range in lowercase hex, two's complement past the
+    # sign. A double, a ratio, an out-of-range integer, nil and anything else
+    # are the oracle's coercions and refusals on wasm
+    # (ClojureWasmInteropRefusalTest); the host's own coerces or refuses its
+    # own way. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn (map Integer/toHexString [0 15 16 255 4096 65535 2147483647 -1 -16 -2147483648]))
+      (prn (Integer/toHexString 5N))
+    expected: |
+      ("0" "f" "10" "ff" "1000" "ffff" "7fffffff" "ffffffff" "fffffff0" "80000000")
+      "5"
+  - name: math-min-of-two-answers-like-the-host-static
+    # (Math/min a b) where no host is lowers to the portable lesser: two longs
+    # in the long range or two doubles (a double -0.0 the lesser of the zeros,
+    # NaN beside a double the NaN, like the oracle's overloads). Any other pair
+    # is the oracle's no-matching-method refusal on wasm
+    # (ClojureWasmInteropRefusalTest); the host's own answers or refuses its
+    # own way. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn [(Math/min 3 5) (Math/min 5 3) (Math/min -1 1) (Math/min 4 4)])
+      (prn [(Math/min 1.5 2.5) (Math/min 0.0 -0.0) (Math/min -0.0 0.0) (Math/min (/ 1.0 0.0) 1.0) (Math/min 1.0 (/ 0.0 0.0)) (Math/min (/ 0.0 0.0) 1.0)])
+    expected: |
+      [3 3 -1 4]
+      [1.5 -0.0 -0.0 1.0 ##NaN ##NaN]
+  - name: isInfinite-and-isNaN-of-a-double-answer-like-the-host-methods
+    # (.isInfinite x)/(.isNaN x) of a double where no host is answer what
+    # infinite?/NaN? answer, as Clojure booleans; anything else keeps the host
+    # call. The host's own answer them elsewhere. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (prn (.isInfinite 1.5))
+      (prn [(.isInfinite (double 1.5)) (.isInfinite (/ 1.0 0.0)) (.isInfinite (/ -1.0 0.0)) (.isInfinite (float 1.5))])
+      (prn [(.isNaN (double 1.5)) (.isNaN (/ 0.0 0.0)) (.isNaN (float 0.0))])
+    expected: |
+      false
+      [false true true false]
+      [false true false]
   - name: object-array-to-array-and-into-array-answer-vectors
     # object-array of a number is that many nils, else the members as a vector;
     # to-array is always an Object vector; into-array infers the component from

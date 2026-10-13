@@ -448,6 +448,14 @@ final class ClojureValueMethodLowering {
 					implemented, defined);
 		}
 		LispVal matcherCall = matcherMethod(method, recv, args);
+		if (!ctx.hostTarget && method.equals("format") && args.size() == 1) {
+			// where no host is, .format of the ISO_INSTANT portable value formats
+			// an instant of this front end's own (data.json's write-instant); any
+			// other value answers the rows as before. Inside the value branch: the
+			// portable value is one, and the host arm it would otherwise reach
+			// refuses it.
+			arm = ClojureDateFormatterLowering.formatArm(recv, args.get(0), arm);
+		}
 		if (matcherCall != null) {
 			// a matcher answers java.util.regex.Matcher's own method: an arm a program
 			// making no matcher sheds (ClojureArms.Family.MATCHER), leaving the arm it

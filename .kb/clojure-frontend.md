@@ -1537,7 +1537,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
-| data.json 2.5.2 | = | = | refused | refused | the load reads `DateTimeFormatter/ISO_INSTANT` (`.todo/f81`) |
+| data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); write escapes and instant writes are the follow-up |
 | malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -2717,6 +2717,61 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `parse-double-parses-like-double-value-of`,
   `parse-boolean-parses-true-and-false` (four backends, oracle-identical);
   `ClojureLoweringTest#parsersAndTypedArraysLowerToTheirWorkers`.
+
+## Portable number statics
+
+- **The verbs** (2026-10-13, f81; `ClojurePortableStaticsLowering`,
+  `clojure.lisp` "Portable number statics"): the pure number statics data.json's
+  read path calls -- `Long/valueOf` and `Double/valueOf` of one argument,
+  `Integer/parseInt` of a string and a literal radix 16, `Integer/toHexString`
+  of one argument, `Math/min` of two -- lower to their portable workers where
+  the host is not (wasm); where the host is each stays the host's call (like
+  `String/valueOf` where no host is, "Java interop"). `.isInfinite`/`.isNaN`
+  of no argument answer what `infinite?`/`NaN?` answer over a double, as a
+  Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
+  `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
+  host's); anything else keeps the host call. Each measured against clj 1.12.6,
+  2026-10-13.
+- `Long/valueOf` is `parse-long`'s grammar or the refusal: a malformed string
+  the oracle's `NumberFormatException` naming it (`For input string: "s"`), an
+  integer in the long range its `(long)` overload, nil its null-string refusal,
+  anything else its no-matching-method refusal. `Double/valueOf` is
+  `parse-double`'s or the refusal (`empty String` of nothing but blanks), a
+  double its `(double)` overload, nil its `NullPointerException`
+  (`Cannot invoke "String.length()" because "in" is null`), anything else its
+  no-matching-method refusal. `Integer/parseInt` of radix 16 is the int the
+  hex spells -- an optional sign and `Character.digit` at radix 16 (the decimal
+  blocks' 0-9, ASCII and fullwidth a-f, so `"ｆｆ"` is 255 and `"Ｚ"` refuses),
+  refused past the int range -- nil the null-string refusal, anything else the
+  oracle's cast refusal to `String`; any other radix stays the host's call (so
+  the one-argument `Integer/parseInt` pin keeps its `JAVA:STATIC`).
+  `Integer/toHexString` is the `intCast` in lowercase hex, two's complement
+  past the sign (`ArithmeticException` past the int range, the oracle's
+  `charValue` `NullPointerException` of nil, its `ClassCastException` to
+  `Number` of anything else no number). `Math/min` is the lesser of two longs
+  in the long range or two doubles (a double `-0.0` the lesser of the zeros,
+  `NaN` beside a double the `NaN`, like the oracle's overloads, with no call
+  on core `min`); any other pair its no-matching-method refusal.
+- Deviations: an `N` literal in the long range reads as its plain integer (the
+  `N` literal rule), so `(Math/min 5 10N)` answers where the oracle refuses a
+  `BigInt`. The host backends keep the host's own coercions, which are looser
+  and stricter than the oracle's in turn (`(Double/valueOf 5)` is `5.0`, a
+  long past the int range wraps under `toHexString`, `(Math/min 1 1.0)` is
+  `1.0` and `(Math/min \a 1)` is `1`, while a double under `toHexString` and a
+  non-string under `parseInt` are `No matching method`; `.todo` follow-up).
+  Rejected: lowering every backend (the host paths work, and the probe needs
+  nothing there; a host behavior change for no oracle gain).
+- Cost, wasm P1: the data.json probe builds with one `JAVA:STATIC`/`NEW`/`CALL`
+  warning each from code the probe never runs (before: plus the load's
+  `JAVA:FIELD`).
+- **Pins**: clojure-spec `long-value-of-reads-like-the-host-static`,
+  `double-value-of-reads-like-the-host-static`,
+  `parse-int-of-radix-16-reads-like-the-host-static`,
+  `integer-to-hex-string-writes-like-the-host-static`,
+  `math-min-of-two-answers-like-the-host-static`,
+  `isInfinite-and-isNaN-of-a-double-answer-like-the-host-methods` (four
+  backends, the host∩oracle lines; the rest on both wasm backends in
+  `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`).
 
 ## Typed arrays
 
@@ -5871,6 +5926,48 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `#aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere`,
   `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`,
   `ClojureLibraryTest#aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember`.
+
+## The ISO_INSTANT formatter
+
+- **`DateTimeFormatter/ISO_INSTANT` where the host is not (wasm) is a portable
+  value, which `.format` answers over an instant of this front end's own in
+  ISO-8601** (2026-10-13, f81; `ClojureDateFormatterLowering`, `clojure.lisp`
+  "The ISO_INSTANT formatter"; data.json 2.5.2's defaults read the field at
+  load, which refused both wasm backends before). Where the host is the field
+  stays the host's object and `.format` its call. The value is the tag
+  `(:C%DATE-FORMATTER)`, which prints as a list, has class `:list` and is `=`
+  by `equal`; the field lowers in value and zero-argument call position (like
+  the charset and locale fields). The `.format` arm rides inside the value
+  branch (`ClojureValueMethodLowering.valueArm`, ahead of the rows: the
+  portable value is a value, and the host arm past the hostless refusal would
+  otherwise take it), over the bound receiver and the run-once argument, so a
+  program naming no `.format` of one argument compiles as before.
+- The text is what the oracle's `appendInstant` writes: the proleptic Gregorian
+  date (`%clojure-civil-from-days` without the Julian cutover, the ISO
+  chronology), the astronomical year (four digits, zero-padded, signed past
+  four), the time of day, `Z`, and the fraction the value carries -- a Date's
+  milliseconds, a Timestamp's nanoseconds -- in three, six or nine digits when
+  not zero; nil is the oracle's `NullPointerException` (`temporal`), anything
+  else its `ClassCastException` to `TemporalAccessor` (without the module
+  tail, like every refusal here). Measured against clj 1.12.6, 2026-10-13.
+- Deviations (user doc): an instant of this front end's own formats where the
+  oracle casts (its `Date` is no `TemporalAccessor`); the value's printed,
+  `str` and `class` answers are the wrapper's. The host call of such an
+  instant stays the host's refusal (`No matching method ... with 1
+  argument(s)`), as before. Rejected: lowering every backend (a host
+  `Instant` the member answers would then meet the wrapper, where today it
+  meets the host formatter through the host call data.json's write path
+  needs).
+- Re-probe, data.json 2.5.2 (`.todo/f81`): `write-str`, `read-str` with
+  `:key-fn`, big numbers and `pprint` print the interpreter's lines on both
+  wasm backends (a bignum without its `N`, a `bigdec` decimal as its exact
+  ratio: the `N`/`M` literal rule). Past the probe by hand: escapes read
+  (`\u00e9`), doubles read and write, and instants read; write escapes stop at
+  the three-argument `Writer.append` on every backend and instant writes at
+  `.toInstant` on wasm (`.todo` follow-up).
+- **Pins**: clojure-spec `iso-instant-is-a-portable-value-where-no-host-is`
+  (four backends); `ClojureWasmInteropRefusalTest#isoInstantFormatsInstantsOnBothBackends`
+  (both wasm backends, the oracle's lines).
 
 ## Data readers
 

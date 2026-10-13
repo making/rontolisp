@@ -1132,6 +1132,14 @@ final class ClojureInteropLowering {
 			// answers a value's Java face elsewhere
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STRING-VALUE-OF"), args.get(0));
 		}
+		if (!ctx.hostTarget) {
+			// where no host is, the pure number statics data.json's read path calls
+			// answer portably; the host's own answer them elsewhere
+			LispVal portable = ClojurePortableStaticsLowering.staticCall(cls, member, args);
+			if (portable != null) {
+				return portable;
+			}
+		}
 		LispVal pattern = cls.equals("java.util.regex.Pattern") ? patternStatic(member, args) : null;
 		if (pattern != null) {
 			// the regex runtime's own pattern, on every backend
@@ -1207,6 +1215,14 @@ final class ClojureInteropLowering {
 			// Locale/US (and ROOT, ENGLISH): the value the case-mapping verbs take
 			return locale;
 		}
+		if (!ctx.hostTarget) {
+			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
+			// value data.json's defaults read; the host's own object elsewhere
+			LispVal formatter = ClojureDateFormatterLowering.field(cls, member);
+			if (formatter != null) {
+				return formatter;
+			}
+		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
 					answersBytes(cls, member, 0, true));
@@ -1275,6 +1291,14 @@ final class ClojureInteropLowering {
 		LispVal locale = ClojureLocaleLowering.field(cls, member);
 		if (locale != null) {
 			return locale;
+		}
+		if (!ctx.hostTarget) {
+			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
+			// value data.json's defaults read; the host's own object elsewhere
+			LispVal formatter = ClojureDateFormatterLowering.field(cls, member);
+			if (formatter != null) {
+				return formatter;
+			}
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
@@ -2151,6 +2175,13 @@ final class ClojureInteropLowering {
 		boolean hashCode = method.equals("hashCode") && args.isEmpty() && cls == null;
 		if (hashCode) {
 			call = valueHashCode(recv);
+		}
+		if (cls == null && !ctx.hostTarget && args.isEmpty()
+				&& (method.equals("isInfinite") || method.equals("isNaN"))) {
+			// where no host is, .isInfinite/.isNaN of a double answer what
+			// infinite?/NaN? answer (data.json's float writers); anything else
+			// keeps the host call
+			call = ClojurePortableStaticsLowering.doublePredicateArm(ctx, method, recv, call);
 		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
 		boolean typed = cls != null || receiver instanceof LispString;

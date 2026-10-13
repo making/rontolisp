@@ -23,6 +23,12 @@ crosses into a Java member as the host object (`(.format sdf (java.util.Date.))`
 method of its class is the host object's (`(.toInstant d)`), and a host Date or UUID a member
 answers is `=` to it and compares beside it.
 
+On the wasm backends, `java.time.format.DateTimeFormatter/ISO_INSTANT` is a portable
+value (the host has no `java.time` there): `.format` of it answers a Date or a Timestamp
+in ISO-8601, so `(.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0))`
+is `"1970-01-01T00:00:00Z"`. On the interpreter and the JVM the field stays the host's
+object and `.format` its call.
+
 | Name | Example | Result |
 |---|---|---|
 | `inst-ms` | `(inst-ms #inst "1970-01-01T00:00:01Z")` | `1000` |
@@ -65,3 +71,7 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
 - A [clojure.instant](clojure-instant.md) Calendar has no host object: it never crosses into
   a Java member, and its class's methods are refused by name. On wasm, so is a method of a
   Date or UUID only the host answers (`toInstant`, `hashCode`).
+- On the wasm backends, `java.time.format.DateTimeFormatter/ISO_INSTANT` is the portable
+  value above: it prints as `(:C%DATE-FORMATTER)`, `class` answers `:list`, and `.format`
+  of it answers an instant of this front end's own where the oracle refuses (its `Date`
+  is no `TemporalAccessor`).
