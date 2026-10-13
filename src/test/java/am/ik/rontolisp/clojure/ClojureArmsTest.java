@@ -116,6 +116,35 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theRefHistoryFamilyKeepsOnlyProgramsNamingAHistoryVerb() {
+		// f75: the registration and the commit bump are views answering what
+		// they wrap; the readers, the setters and the registration produce the
+		// tracked ref
+		List<LispVal> forms = read("(rontolisp::%clojure-ref-history-noted answer log)"
+				+ " (let ((m 0) (n 10)) (rontolisp::%clojure-ref-history-track cell m n))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.REF_HISTORY);
+		assertThat(scan.builds()).isTrue();
+		assertThat(scan.strips()).isFalse();
+		List<LispVal> bare = read("(rontolisp::%clojure-ref-history-noted answer log)");
+		ClojureArms.Scan bareScan = ClojureArms.scan(bare, ClojureArms.Family.REF_HISTORY);
+		assertThat(bareScan.builds()).isFalse();
+		assertThat(bareScan.strips()).isTrue();
+		assertThat(ClojureArms.strip(bare, ClojureArms.Family.REF_HISTORY).stream().map(LispVal::print))
+			.containsExactly("ANSWER");
+		for (String producer : List.of("(rontolisp::%clojure-ref-history-track cell m n)",
+				"(rontolisp::%clojure-ref-history-count r)", "(rontolisp::%clojure-ref-history-count-v r)",
+				"(rontolisp::%clojure-ref-min-history r)", "(rontolisp::%clojure-ref-min-history-v r)",
+				"(rontolisp::%clojure-ref-min-history-set r 1)", "(rontolisp::%clojure-ref-max-history r)",
+				"(rontolisp::%clojure-ref-max-history-v r 1)", "(rontolisp::%clojure-ref-max-history-set r 1)")) {
+			assertThat(ClojureArms.scan(read("(print " + producer + ")"), ClojureArms.Family.REF_HISTORY).builds())
+				.as(producer)
+				.isTrue();
+		}
+		assertThat(ClojureArms.isFamilyName("RONTOLISP::%CLOJURE-REF-HISTORY-TRACK")).isTrue();
+		assertThat(ClojureArms.isFamilyName("RONTOLISP::%CLOJURE-REF-HISTORY-NOTED")).isTrue();
+	}
+
+	@Test
 	void theStreamFamilyFoldsThePrinterArmOfAProgramMakingNoStream() {
 		// a stream reaches a value only through a read of *out*/*in*/*err*, a
 		// StringWriter, a one-argument StringBuilder/StringBuffer construction, a

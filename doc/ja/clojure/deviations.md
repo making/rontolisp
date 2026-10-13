@@ -191,7 +191,9 @@
 - `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
   名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
   ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
-  答えるキーワードで引き、オラクルは `Class` 自身で引きます。
+  答えるキーワードで引き、オラクルは `Class` 自身で引きます。`prefers` は各ディスパッチ値と
+  優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
+  multimethod を返します。どちらも名前の取り方は同じで、関数値はありません。
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは
@@ -248,7 +250,7 @@
   定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
   上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
   `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
-  持ちます）。ここで値を持たない core の var（`#'inc'`）は拒否されます。
+  持ちます）。ここで値を持たない core の var（`#'and`）は拒否されます。
 - 名前空間は oracle の `#object[clojure.lang.Namespace "user"]` から identity hash を除いた
   形で印字され、その `class` は `:clojure.lang.Namespace` を答えます。`the-ns` と `find-ns` が
   知っているのは、呼び出しより上でプログラムが作った名前空間、require したライブラリ、
@@ -340,6 +342,24 @@
   `"en"`）です。`str` と `.toString` はオラクルと一致しますが、`pr`・`class`（`:string`）・
   `string?` は文字列として読みます。1引数の `.toUpperCase`/`.toLowerCase` は引数が何であっても
   引数なしと同じ写像になりますが、オラクルは引数を `Locale` にキャストします。
+- 引数なしの `(java.util.HashMap.)`（`(new java.util.HashMap)` も）は空のマップであり、
+  マップからの1引数の構築はそのマップ自身です（wasm バックエンド。可変のマップは存在
+  しないため）。`.get` などの読み取りはそれを読みます。`.put` はオラクルのメッセージなしの
+  `UnsupportedOperationException` を投げます（インタープリターと JVM では、値が Java へ
+  渡るときの読み取り専用マップが投げるものと同じです）。2つの数値からの2引数の構築
+  （`(java.util.HashMap. 1024 0.25)`）も空のマップであり、マップからの `.putAll` はその
+  エントリーをマップに格納して nil を返します。レコードやソート済みマップへの `.putAll`
+  は同じ `UnsupportedOperationException` を投げます。マップのリテラルへの `.putAll` は
+  そのリテラル自身のテーブルに格納しますが、オラクルは例外を投げます。nil からの構築はオラクルの
+  `NullPointerException` です。`str` と `class` は Clojure のマップとして読みます（`{:a 1}`、
+  array-・hash-map のキーワード）。オラクルは `HashMap` として綴ります。容量の引数はその
+  引数自身を返しますが、オラクルは空の可変マップを構築します。ホストがある場合
+  （インタープリターと JVM）は、その可変オブジェクトのまま残ります。
+- リテラルなキーからの `(System/getProperty k)` は nil、`(System/getProperty k dflt)`
+  は既定値を返します（wasm バックエンド。プロパティは存在しないため。プロパティがない
+  ホストと同じで、ライブラリのロードが読むものです）。nil はオラクルの
+  `NullPointerException` です。計算されたキーはホストの呼び出しのまま残り、wasm
+  バックエンドはそれを拒否します。
 - `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
@@ -397,8 +417,12 @@
   コンパイラがプリミティブの double と型付けする値（double リテラルを束縛した `let` の
   ローカル、`(* 2.0 x)`）は、オラクルでは `Value out of range for int: 2.0E10`、ここでは
   `integer overflow` で拒否されます。比の `double` は最も近い double で（`(double 2/3)` は
-  `0.6666666666666666`）、オラクルは先に有効数字 16 桁に丸めます（`0.6666666666666667`）。`inc`・
-  `dec` と検査付きの演算は桁あふれしません（整数は bignum です）。
+  `0.6666666666666666`）、オラクルは先に有効数字 16 桁に丸めます（`0.6666666666666667`）。`inc'`・
+  `dec'`・`+'`・`-'`・`*'` は `inc`・`dec`・`+`・`-`・`*` と同じです。整数は bignum なので
+  桁あふれせず、数値以外はオラクルと同じクラスで拒否されます。`cast` はクラスのインスタンスなら
+  値を（名前を書いたクラスは `instance?` と同じテスト、計算で求めたものはプロトコルタグで判定）、
+  `nil` には `nil` を答え、それ以外はオラクルの拒否です。値がここに存在しないホストクラスは
+  常に拒否されます（ホストクラスは wasm バックエンドに存在しません）。
 - `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
   `3/2` と表示され、オラクルは `1.5M`）。`N`・`M` リテラルと同じです。10進展開が無限になる比の
   `bigdec` はオラクル同様シグナルします。

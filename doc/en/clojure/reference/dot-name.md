@@ -46,6 +46,18 @@ overload instead and keeps the host construction, on the interpreter and the JVM
 argument take on every backend, mapping as the bare call (the mapping ignores the locale).
 `.intern` of a string is the string, on every backend.
 
+A zero-argument `(java.util.HashMap.)` (or `(new java.util.HashMap)`) is the empty map,
+a one-argument construction of a map the map itself, and a two-argument construction of
+two numbers (`(java.util.HashMap. 1024 0.25)`) the empty map, where the host is not (the
+wasm backends): `.get`, `.size`, `.containsKey` and the other lookups read it like any
+map, while `.put` on it throws the oracle's `UnsupportedOperationException` with no
+message, as on the interpreter and the JVM, where the value crosses to Java as a
+read-only map. `.putAll` of a map stores its entries into the map and answers nil; on a
+record or a sorted map it throws the same `UnsupportedOperationException`.
+nil builds to the oracle's `NullPointerException`. Where the host is (the interpreter
+and the JVM) the construction stays the mutable `java.util.HashMap`, and any other
+argument shape or a `^[...]`-tagged construction keeps the host construction everywhere.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -59,4 +71,5 @@ argument take on every backend, mapping as the bare call (the mapping ignores th
 (println (str (StringBuilder. "ab") (StringBuffer. 16))) ; ab
 (println (let [w (java.io.StringWriter. 16)] (.append w "ab") (str w))) ; ab
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
+(let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 ```

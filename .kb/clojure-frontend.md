@@ -128,6 +128,7 @@ answered `2 5 3` before).
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `swap-vals!` `reset-vals!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!`/`-vals` through the guarded `%clojure-ref-*` helpers, each the plain `%clojure-atom-*` one where no reference can have a validator or watch (`.kb/concurrent-served-requests.md`; "State", validators and watches); `atom`'s options through `%clojure-atom-options` | answer the new value (`-vals` `[old new]`); `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under `clojure.lisp`'s `%clojure-stm-*` | "State" |
+| `ref-history-count` `ref-min-history` `ref-max-history` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker (`-set` for the two-argument setters) after a lower-time arity check in the oracle's wording; as a value `#'...-v` | the count of committed transactions that wrote the ref (one per log entry, so several writes in one transaction count once), capped by its min history like the oracle's retained chain (`min(commits, min)`, never below zero); the bounds are the oracle's `intCast`. A `ref` names `:min-history`/`:max-history` options beside `:validator`, and registers beside its construction where the program names a history verb (the pre-scan's `usedRefHistory`, always in a session), through the `REF_HISTORY` family's views; anything else is the oracle's cast failure. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `ref-history-count-and-the-min-max-bounds` |
 | `agent` `send` `send-off` `await` `await-for` `shutdown-agents` `agent-error` `restart-agent` `set-error-handler!` `set-error-mode!` `error-handler` `error-mode` `agent-errors` `clear-agent-errors` | the cell under `clojure.lisp`'s `%clojure-agent-*` (`ClojureStateLowering.agentRow`) | "State" |
 | `add-watch` `remove-watch` `set-validator!` `get-validator` | one call to `%clojure-<verb>` (`ClojureStateLowering.watchRow`), the `-v` function as a value | "State", validators and watches |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
@@ -137,6 +138,7 @@ answered `2 5 3` before).
 | `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N.0 msecs` | a double like the oracle's `nanoTime` quotient (whole milliseconds here), so the book's `\d+\.\d+` match holds; only the shape pins |
 | `*out*` `*in*` `*err*` `*agent*`, the flags, `*ns*` `*file*` `*source-path*` `*repl*` `*1`..`*e` | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>` (`%clojure-history-1`..`-e`); a stream READ as a value calls its `Special.reader` (`%clojure-out`/`-in`/`-err`, "Streams as values") | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
 | `defstruct` `struct` `struct-map` | a key vector behind the name plus fresh-table builders | missing keys `nil`, too many values signal |
+| `create-struct` `accessor` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`create-struct` of none refuses at run time, so a catch takes it); as a value `#'...-v` | a definition is the key vector `defstruct` stores (any key goes), an accessor the function reading its key out of a struct map; of a non-vector the oracle's cast failure, of a key the definition lacks its `Not a key of struct`. A created definition prints as its key vector, where the oracle's prints its definition object. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `struct-definitions-create-and-read-through-an-accessor` |
 | `var-set` | `(rontolisp::%clojure-var-set v val)` (`-v` as a value) | refused: a var that is not thread-locally bound takes no root through `set`, like the oracle's `IllegalStateException`; thread bindings are not reified here, so always ("Vars and metadata") |
 | `with-redefs-fn` | `(rontolisp::%clojure-with-redefs-fn bindings f)` over the real function (`-v` as a value) | `func` called with each var of the map bound to its value, restored after -- the validations and notifications of `bindRoot`; a var with a registered root setter stores through its value cell (the lowering calls `needRootSetters`, lowering again with every value-cell site carrying one), any other swaps its getter, like the oracle's static link ("Vars and metadata") |
 | `intern` | `(rontolisp::%clojure-intern ns name [val])` (`-v` as a value) | an existing var kept (given a value, rebound like `bindRoot`), else made with the value (unbound without one) over a cell of its own; the cell answers `var-get`, `deref`, `alter-var-root` and `with-redefs-fn`, while a `def`/`defn` of the name keeps its own cell ("Vars and metadata") |
@@ -197,10 +199,12 @@ answered `2 5 3` before).
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `boolean?`/`true?`/`false?` as values are the same lambdas a function position takes (malli's `{:pred boolean?}`, 2026-10-13, f66). `fn?` is false for keywords, sets and maps |
 | the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"), `bytes?` where nothing makes a byte array ("Byte arrays") and `delay?` where nothing makes a delay ("Laziness", delays): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` | `rontolisp::%clojure-int-cast` / `%clojure-long-cast` (`ClojureCoreLowering.castOf`; `-int-v` / `-long-v` as a value, arity checked at run time), a literal argument folded at lower time through the cast of its own type (`foldedCast`: a double literal's `intCast(double)`, a long's, a bigint's or ratio's object cast), an out-of-range literal folding to its refusal carrier with the oracle's message | the oracle's `RT.intCast` / `RT.longCast` of an object: range checks and messages included; a non-literal double takes the object cast (`(int x)` of a var holding `1e10` "integer overflow", where the oracle's primitive-typed double -- a `let` local, `(* 2.0 x)` -- says "Value out of range for int: 2.0E10"); pinned oracle-identical (clj 1.12.6, 2026-10-08) by clojure-spec `int-and-long-are-the-oracles-range-checked-casts` |
+| `cast` | `ClojureCoreLowering`: of a class the lowering names the `instance?` test inline over one temporary (nil casting to nil, anything else the oracle's `Cannot cast A to B` refusal), of anything else one call to `rontolisp::%clojure-cast`; as a value `#'rontolisp::%clojure-cast-v` | a computed class casts by the protocol tag (what `class` answers), a computed host class by the kind its name has here (`%clojure-cast-kind`: numbers by `numberp`, like the oracle's `Long`), else by asking the host; a nil class is the oracle's `NullPointerException`, anything but a class its `ClassCastException`. A host class no value here has always refuses (host classes exist on no wasm backend). Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `cast-casts-or-refuses-with-the-oracles-classes` |
 | `char` `quot` | `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
 | `bigint` `biginteger` `bigdec` `rationalize` `numerator` `denominator` `unchecked-int` `-long` `-short` `-byte` `-char` `-double` `-float` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | integers and ratios are plain Lisp rationals (the `N`/`M` literal rule), so `bigint`/`biginteger` truncate to an integer (a decimal string through `parse-integer` after a first/last character check, since `parse-integer` skips surrounding whitespace and `BigInteger` refuses it; `bigdec` of a string was already strict, both pinned by clojure-spec `bigint-and-bigdec-strings-refuse-surrounding-whitespace`) and `bigdec` answers a rational: an integer, a ratio only when its denominator is `2^a 5^b` (the oracle's `Non-terminating decimal expansion`), a string through `%clojure-parse-decimal`. `rationalize` and `bigdec` of a double read the SHORTEST decimal it prints as (`princ-to-string` parsed back: `(rationalize 0.1)` is `1/10`, the oracle's `BigDecimal.valueOf`; the Lisp `rationalize` answers the simplest rational within half an ulp, `0.3333333333333333` is `1/3` there, not `3333333333333333/10000000000000000`). `numerator`/`denominator` signal on an integer (the oracle's `ClassCastException` on a `Long`). The `unchecked-` casts follow the oracle's Java casts: an integer or ratio wraps two's-complement to the width (`%clojure-wrap-bits`), a double saturates first (int range for `int`/`short`/`byte`, long range for `long`/`char`; NaN 0) so `(unchecked-byte 1e20)` is `-1`, a character is accepted by `unchecked-int`/`-char` only; `unchecked-float` answers a double, the infinity past the float range; `-double` is `double`. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts` (a bigint printed through `str`, a bigdec through `double`: the representation deviates) |
 | `unchecked-add` `-subtract` `-multiply` `-inc` `-dec` `-negate` and the `-int` verbs (`unchecked-add-int` `-subtract-int` `-multiply-int` `-inc-int` `-dec-int` `-negate-int` `-divide-int` `-remainder-int`) | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | the long verbs wrap an INTEGER result at 64 bits (`%mask-signed-field` over two integer operands, `%clojure-wrap-long` over the plain result otherwise; a double or ratio result passes, like the oracle's `Ops`), so `(unchecked-inc 9223372036854775807)` is `-9223372036854775808`. An integer past 64 bits is a plain integer here, so the oracle's bigint operand (`9223372036854775807N`), which its unchecked verbs add unwrapped, wraps too (`deviations.md`). The `-int` verbs cast each argument like `RT.intCast` (`%clojure-int-arg`: a ratio or double truncates, an integer outside the int range signals `integer overflow`, a double outside it signals, a non-number and a character signal) and wrap at 32 (`%mask-signed-field`); `-divide-int` truncates (only `-2147483648 / -1` wraps), both division verbs signal on a zero divisor. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `unchecked-arithmetic-verbs-wrap-at-long-and-int-width` |
+| `inc'` `dec'` `+'` `-'` `*'` | the plain verb (`+`/`-`/`*`, `(+ x 1)`, `(- x 1)`; `+'`/`-'`/`*'` as values `#'...`, `inc'`/`dec'` a one-argument lambda) after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`) | integers are bignums here, so nothing overflows: the checks never fire, and anything but a number is refused with the oracle's class (the CL type error names a nil datum `NullPointerException`, any other `ClassCastException`; a wrong value count is the oracle's `ArityException` at run time). Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `checked-arithmetic-is-plain-arithmetic-that-never-overflows`, `checked-arithmetic-refuses-non-numbers-with-the-oracles-classes` |
 | `bit-and` `bit-or` `bit-xor` `bit-and-not` `bit-not` `bit-shift-left` `bit-shift-right` `unsigned-bit-shift-right` `bit-set` `bit-clear` `bit-flip` `bit-test` | `ClojureCoreLowering`: one call to the `rontolisp::%clojure-NAME` worker (`&rest` for the variadic four) after a lower-time arity check in the oracle's wording; as a value `#'...-v` | the oracle's on longs (clojure.lisp "Bit operations"): two's complement over 64 bits through CL `logand`/`ash` over the wrapped value, a shift count masked to 6 bits (`(bit-shift-left 1 64)` is 1), `unsigned-bit-shift-right` over the unsigned value, the oracle's `bit operation not supported for:` refusal over the class (nil its `NullPointerException`). An `N`-suffixed literal in range reads as a plain integer here, so `(bit-and 5N 2)` answers where the oracle refuses its `BigInt`. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `bit-operations-are-the-oracles-on-longs`, `bit-operations-as-values-and-refuse-non-longs` |
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/`, except the lone `/` (a name, no namespace, like the oracle) |
 | `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
@@ -1536,9 +1540,9 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
-| reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
+| reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
 | data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); write escapes and instant writes are the follow-up |
-| malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
+| malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`); past it the load-time host calls run there since 2026-10-13 (f84: `System/getProperty` of a literal key, `(HashMap. capacity load)` of two number datums, `.putAll`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
 `read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`). The gaps
@@ -1620,9 +1624,9 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
   `Cannot link class reitit.Trie: missing class clojure.lang.IPersistentMap`,
   catchable; P1 and the component compile with the `java:` call-time warnings and
   refuse the same way, catchable. Portable compiler (`clojure-trie-compiler`) --
-  the interpreter and the JVM print the oracle's default-compiler lines line for line;
-  P1 builds but router construction fails on `reitit.impl/fast-map`'s `(HashMap. ...)`
-  (`.todo/f73`; a static-only router builds, every compiler piece works alone).
+  the interpreter, the JVM, P1 and the component print the oracle's lines line for
+  line since 2026-10-13 ("HashMap construction"; P1 and the component warn
+  `JAVA:STATIC`+`JAVA:CALL` off the probe's path).
   Pins: `ClojureInteropTest#aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass`
   (static call and construction over a fixture jar holding a class compiled against a
   type it omits),
@@ -3550,7 +3554,7 @@ constructor and consumer, and a regex `replace` with a function replacement.
   representatives already) with the `(:C%NIL)` marker row re-keyed by nil, which is how a map
   keys nil. The `:object` and default rows stay. Takes a `defmulti` NAME like `get-method`
   (a local alias of a multimethod is refused: the table is reached through the var key, and
-  nothing ties a function value to it); a name no `defmulti` made is `No such multimethod`.
+  nothing ties a function value to it); a name no `defmulti` made is `No such multimethod`. `prefers` (2026-10-13, `.todo/f75`) reads the `%prefers` table grouped by the stored keys (each to its set through `%clojure-set-of`), answering `{}` where nothing is preferred; `remove-all-methods` clears the `%methods` and `%prefers` tables and zeroes the `%object` slot, answering the multimethod itself (of `print-method`, whose rows live in `%clojure-print-methods`, it clears that table and answers `print-method` itself). Both take the name the same way and name no function value, like `methods`. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `prefers-and-remove-all-methods` and `ClojureLoweringTest#multimethodIntrospectionTakesTheMultimethodName`.
   A host class row keeps the keyword `class` answers (the oracle: the `Class`), so
   `(get (methods f) (class x))` works while `(contains? (methods f) String)` is false.
   Programs that do not call it compile byte-identically (measured 2026-10-04: wasm P1,
@@ -3661,6 +3665,25 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
   last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
   and `ClojureSessionTest.theExtendFormsEchoNil`.
+- **Protocol introspection** (2026-10-13, `.todo/f75`). A protocol var holds its method
+  table, so `extenders` answers the extended tags in walk order (`:object` last where the
+  default table exists, which a literal protocol name passes beside the methods table),
+  `nil` of a value holding no table like the oracle's nil of a non-protocol;
+  `find-protocol-impl` answers the tag row's map, else the `Object` default's, else nil, and
+  `find-protocol-method` the row's function for the method key the same way -- where the
+  oracle answers the same, except that a non-protocol is its `NullPointerException` there.
+  The tags are the keywords `class` answers, so an extender prints `:string` where the
+  oracle prints its `Class`. A computed protocol (or any `-v` value) reads the table
+  itself, which holds no `Object` default. Pinned oracle-checked (clj 1.12.6, 2026-10-13)
+  by clojure-spec `protocol-extenders-and-find-protocol-impl-and-method` and
+  `ClojureLoweringTest#protocolIntrospectionReadsTheMethodTables`. `create-struct`
+  (2026-10-13, `.todo/f75`) answers the key vector `struct` and `struct-map` read (`%clojure-create-struct`,
+  refusing no keys at run time so a catch takes it); `accessor` answers the function
+  reading its key (`%clojure-accessor`: of a non-vector the oracle's cast failure, of a key
+  the definition lacks its `Not a key of struct`). A created definition prints as its key
+  vector, where the oracle's prints its definition object. Pinned oracle-identical (clj
+  1.12.6, 2026-10-13) by clojure-spec `struct-definitions-create-and-read-through-an-accessor`
+  and `ClojureLoweringTest#structLeftoversLowerToWorkersWithOracleArities`.
 - **Walked classes** (oracle-checked clj 1.12.6, 2026-10-08). A target no value's tag names
   exactly -- a throwable (a condition's tag is the fresh miss list), an interface or
   abstract class over core kinds (`clojure.lang.IRef`/`IDeref`/`ARef`/`IExceptionInfo`), a
@@ -5060,6 +5083,125 @@ host alone answers ("Host arms where the host is not").
   Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
   (oracle-identical but the `#<java C>` lines),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
+
+## HashMap construction
+
+**A `(java.util.HashMap. ...)` construction is the map itself where the host is not
+(wasm), a mutable `java.util.HashMap` where it is** (`.todo/f73`, decided 2026-10-13).
+reitit's `fast-map` (`(HashMap. ^Map m)`, the name lookup every router but the
+single-static one builds) is the `:cljs` branch's identity on a host-less target: the
+map needs only `.get`, which already answers through the value-method row. A
+zero-argument construction (`(HashMap.)`, `(new java.util.HashMap)`,
+`(HashMap/new)`) is the empty map, the same table a `{}` literal builds
+(`ClojureInteropLowering.hashMapEmpty`); a one-argument untagged construction is the
+argument itself, evaluated once behind a `let` temporary, nil the oracle's
+`NullPointerException` (`hashMapCopy`). A tagged construction and any other arity keep
+`java:new` on every backend. Where the host is (the interpreter, the JVM) every
+spelling keeps `java:new`: the host tests pin the mutation
+(`ClojureInteropTest`: `doto` + `.put` + `.get`, `str` spelling `{:a=1}`), which no
+immutable stand-in answers.
+
+A map here is immutable, so `.put` of a key and a value on one refuses where the
+host is not: the oracle's `UnsupportedOperationException` with no message (measured
+clj 1.12.6 2026-10-13: the same for a sorted map; `ex-message` nil), a message-less
+`(throw (new java.lang.UnsupportedOperationException))` like the seq iterator's
+`.remove` (`ClojureValueMethodLowering.unmappedArm`, the `put/2` answer only). Where
+the host is nothing changes: the same call goes to the read-only `Map` view Java is
+handed the value as, whose `AbstractMap.put` throws that same exception. Any other
+receiver keeps the oracle's words on every backend (`No matching method put found
+taking 2 args for class ...`, measured against `(.put "s" :a 1)`).
+
+Deviations, all on wasm only: `str` and `class` of the construction read the Clojure
+map (`{:a 1}`, an array- or hash-map keyword), where the oracle spells the `HashMap`;
+a capacity argument (`(HashMap. 16)`) answers itself, where the oracle builds an empty
+mutable map. `URLDecoder/decode` and `URLEncoder/encode`
+in the same namespace stay host-only too, as the todo filed them.
+
+A two-argument construction of two number datums (`(HashMap. 1024 0.25)`, malli's
+load-time registry) is the empty map too, since 2026-10-13 (f84): the datums are
+number literals, so dropping them evaluates nothing away (`hashMapCapacity`). Any other
+pair -- a computed capacity, a non-number -- keeps `java:new`, like a tagged
+construction, which names the host overload. The value-position `HashMap/new` of two
+arguments stays host-only with it: its arguments lower to indexed reads, never datums.
+
+`.putAll` of one map into another stores the source's entries into the target's table
+and answers nil where the host is not, like the oracle's mutation of its `HashMap`
+(`ClojureValueMethodLowering.unmappedArm`, the `putAll/1` answer beside `put/2`'s, over
+`rontolisp::%clojure-hash-map-put-all`): malli's `fast-registry` fills its
+`(HashMap. 1024 0.25)` this way at load, then reads it with `.get`. A record or a sorted
+map target is immutable there as here, so writing one throws the same message-less
+construction `.put` throws; any other receiver keeps the oracle's words (`No matching
+method putAll found taking 1 args for class ...`), nil its `NullPointerException`
+through `%clojure-no-method`. A map or record source reads through the same entries
+`merge` takes (each key stored through `%clojure-store-key`, like
+`%clojure-plist-table` stores it); a sorted-map source reads in order; nil is the
+oracle's `NullPointerException` (`Cannot invoke "java.util.Map.size()" because "m" is
+null`, the JDK's words), anything else its `ClassCastException` to `java.util.Map`
+without the module tail. Where the host is nothing changes: the call goes to the
+read-only `Map` view, whose `AbstractMap.putAll` throws that same
+`UnsupportedOperationException`, or to the real `HashMap`.
+
+Deviation, on wasm only: `.putAll` into a map literal stores into the literal's own
+table and answers nil, where the oracle throws `UnsupportedOperationException` -- no
+portable lowering can tell the stand-in table from a literal's -- and a one-argument
+stand-in shares the mutation with the argument it was built from, where the oracle's
+copy does not. A fresh two-argument construction, the load-time shape, has no such
+alias either way.
+
+`System/getProperty` of a literal key runs where the host is not too, since 2026-10-13
+(f84): no properties exist there, so the one-argument call is nil and the two-argument
+call its default -- like a host without the property, which malli.registry's `mode`
+and `type` read at load (`ClojureInteropLowering.staticCall`, beside `String/valueOf`).
+Nil is the oracle's `NullPointerException` (`key can't be null`); a computed key stays
+the host call, which warns and refuses when it runs there, like every other static a
+literal does not answer.
+
+Measured 2026-10-13 (exec jar, before -> after): `(defn f [m k v] (.put m k v))`
+wasm P1 269,790 -> 422,342 B, component 275,688 -> 428,717 B (the exception runtime
+the message-less construction carries; a `.put` site is the only program that pays
+it), JVM class 734,032 -> 734,032; `(defn f [m k] (.get m k))` byte-identical on all
+three (wasm P1 288,377, component 294,289, class 759,750); `(println (.get
+(java.util.HashMap. {:a 1}) :a))` wasm P1 18,617 (a `JAVA:NEW` stub, refusing at run
+time) -> 405,941 B, the byte count of the same program over the map literal, class
+739,666 -> 739,666. A program naming no `HashMap` construction, no `.put`, no
+`.putAll` and no `System/getProperty` lowers
+exactly as before on every backend (the branches are all `!hostTarget`-gated).
+
+Measured 2026-10-13 (exec jar): `(let [h (doto (java.util.HashMap. 1024 0.25)
+(.putAll {:a 1 "s" 2}))] (println (.get h :a) (.get h "s") (.size h)))` wasm P1
+512,082 B, component 518,494 B, class 771,488 B, against 407,861 / 413,912 /
+764,078 B for the same reads over the map literal (the merge helper with
+`%clojure-store-key`, the record/sorted readers, the refusal carriers and the
+message-less construction's exception runtime); `(println (or (System/getProperty
+"malli.registry/mode") "default"))` 35,732 / 36,991 / 666,394 B, the literal folding
+to its default. The malli.registry probe (mode, type, `fast-registry` lookups, a
+record and a sorted-map source, `composite-registry`, `simple-registry`) 559,166 /
+565,730 B, printing the oracle's lines on both wasm backends warning-free.
+
+Re-probe, reitit-core 0.11.0 (the f65 probe grown to seven lines: match-by-path of a
+static and a wild route, match-by-name of both, `match->path`, `routes`,
+`router-name`; oracle `clj` 1.12.6.1673 over the portable compiler): the interpreter,
+the JVM (compiled class with the dependency jars on the run class path, the `-o
+Prog.class` contract), P1 and the component print the oracle's lines line for line
+since 2026-10-13. P1 and the component still warn `JAVA:STATIC`
+(`URLDecoder/decode`, `URLEncoder/encode` in `reitit.impl`'s load, never called
+without an encoded path) and `JAVA:CALL` (one instance site in `reitit.core`'s load),
+none of them on the probe's path; the static-only and wild-only routers run too.
+Pins: clojure-spec `hash-map-construction-builds-the-map-itself-where-the-host-is-not`,
+`put-on-a-map-refuses-as-the-oracles-unsupported-operation`,
+`system-get-property-answers-like-a-host-without-the-property`,
+`hash-map-capacity-and-load-build-the-empty-map-where-the-host-is-not`,
+`put-all-stores-into-the-hash-map-where-the-host-is-not` (all four backends),
+`ClojureWasmHashMapTest` (what only wasm answers: `.put` on the construction, the
+nil construction, the two-argument fill and `System/getProperty`),
+`ClojureLoweringTest`
+`aHashMapConstructionLowersToTheMapItselfWhereTheHostIsNot` /
+`putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot` /
+`aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot` /
+`systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot` /
+`putAllOnAMapStoresIntoItsTableWhereTheHostIsNot`,
+`ClojureWasmHostArmsTest` (the construction, the fill and `System/getProperty`
+compile warning-free).
 
 ## Laziness
 
@@ -6475,6 +6617,7 @@ resolve var`.
   behind a failure. `await` and `await-for` refuse inside a transaction first (`io!`'s
   `IllegalStateException`, read off `%clojure-stm-log`), then inside an action. Deviation:
   `(await-for 0 a)` answers true (the oracle's races its pool).
+- **Ref histories** (2026-10-13, `.todo/f75`; `clojure.lisp` "Ref histories"). `ref` takes `:min-history`/`:max-history` options beside `:validator` (each lowered once, defaulting to 0 and 10), and every ref registers `#(count min max)` in the eql table `%clojure-ref-histories` where the program names a history verb (the pre-scan's `usedRefHistory`, always in a session) through the `REF_HISTORY` family's registration view; anywhere else the cell stays the atom's. A committed transaction bumps every tracked ref its log wrote once (`%clojure-ref-history-noted`, answering its first argument, ahead of the watches' `%clojure-stm-noted`, so a watch reads the new count), to `min(commits, min-history)` and never below zero -- the oracle's retained chain, measured field by field on clj 1.12.6 (several writes in one transaction count once, a rollback never, `max-history` never). The readers answer the slots and the setters store the oracle's `intCast`, answering the ref; anything but a ref is the oracle's cast failure. A program naming no history verb has both views folded and splices as before. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `ref-history-count-and-the-min-max-bounds`, `ClojureLoweringTest#refHistoryVerbsLowerToWorkersAndTrackRefs` and `ClojureArmsTest#theRefHistoryFamilyKeepsOnlyProgramsNamingAHistoryVerb`.
 - **Validators and watches** (2026-10-12; `clojure.lisp` "Validators and watches"). An atom, ref
   or agent keeps both in its cell, `#(value nil validator state watches)`; a var (interned, so one
   object per name) in the eq tables `%clojure-var-validators`/`%clojure-var-watches`. WATCHES is

@@ -10,7 +10,10 @@
 フィールドを読み、なければ静的呼び出しへアリティ毎に振り分ける関数を答えるため、
 `(every? Character/isWhitespace s)` が動きます。可変長のみのメンバーは拒否されます。
 オーバーロードがどれも真偽値を答える静的呼び出し・メンバー値は `true`/`false` を
-答えます。クラスはドット付き・インポート済み・`java.lang` のいずれでも解決されます。
+答えます。リテラルなキーからの `(System/getProperty k)` は nil、
+`(System/getProperty k dflt)` は既定値を答えます（wasm バックエンド。プロパティは
+存在しません。nil はオラクルの `NullPointerException` です）。計算されたキーは
+ホストの呼び出しのまま残ります。クラスはドット付き・インポート済み・`java.lang` のいずれでも解決されます。
 ロード可能なクラス名単体（`String`）はクラスオブジェクトで、
 `(Class/forName "java.lang.String")` と等しく、文字列への `.getClass` も同じものを答えます。
 クラスオブジェクトはオラクルと同じくクラス名（`java.lang.String`）で表示され、
@@ -35,6 +38,7 @@ deftype の `R/new` は位置引数のコンストラクタです。これらの
 (println KeyEvent/VK_LEFT) ; 37
 (println (every? Character/isWhitespace "   ")) ; true
 (println (> (System/currentTimeMillis) 0)) ; true
+(println (System/getProperty "no.such.property" "dflt")) ; dflt
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
 (println String (str String)) ; java.lang.String class java.lang.String

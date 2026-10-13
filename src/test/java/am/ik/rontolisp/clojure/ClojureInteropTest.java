@@ -2545,6 +2545,17 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void castOfAComputedHostClassTakesValuesOfItsKind() throws Exception {
+		// f75: cast of a computed host class casts by the kind its name has here
+		// (answers measured against clj 1.12.6); a host class object evaluates
+		// through java:static, so wasm has no equivalent there
+		assertBothEqual(
+				"(println ((fn [c] (cast c 5)) Long) ((fn [c x] (cast c x)) String \"s\"))"
+						+ " (println (try ((fn [c x] (cast c x)) Long \"s\") (catch ClassCastException e :cce)))",
+				"5 s\n:cce\n");
+	}
+
+	@Test
 	void clojureLangCollectionStaticsLowerPortably() throws Exception {
 		// LazilyPersistentVector/createOwning takes ownership of the array, which
 		// is already the vector here, and PersistentArrayMap/createWithCheck

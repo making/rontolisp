@@ -1826,6 +1826,134 @@ cases:
       class java.lang.String cannot be cast to class java.lang.Number
       class clojure.lang.Keyword cannot be cast to class java.lang.Number
       Cannot invoke "java.lang.Character.charValue()" because "x" is null
+  - name: hash-map-construction-builds-the-map-itself-where-the-host-is-not
+    # A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
+    # (java.util.HashMap/new) is the empty map, and a one-argument construction of
+    # a map the map itself, where the host is not (wasm) -- never a java:new (which
+    # wasm refuses): .get reads it, .size/.containsKey/.containsValue/.isEmpty answer
+    # through the value rows, nil builds to the oracle's NullPointerException. Where
+    # the host is the construction stays the mutable object (ClojureInteropTest pins
+    # the mutation), whose reads print these same lines. Oracle-identical
+    # (clj 1.12.6, 2026-10-13); str and class of the construction read the Clojure
+    # map on wasm (no HashMap exists there), and a capacity argument answers itself.
+    source: |
+      (let [m (java.util.HashMap.)]
+        (println (.size m) (.isEmpty m) (.get m :a)))
+      (let [m (java.util.HashMap. {:a 1 "s" 2})]
+        (println (.get m :a) (.get m "s") (.get m :missing) (.size m))
+        (println (.containsKey m :a) (.containsValue m 2) (.isEmpty m)))
+      (let [m (new java.util.HashMap {:a 1})]
+        (println (.get m :a)))
+      (let [m (java.util.HashMap/new {:a 1})]
+        (println (.get m :a)))
+      (println (try (java.util.HashMap. nil) (catch NullPointerException e :npe)))
+      (defn fast-map [m] (let [m (or m {})] (java.util.HashMap. m)))
+      (defn fast-get [m k] (.get m k))
+      (let [lookup (fast-map {:a 1 :b 2})]
+        (println (fast-get lookup :a) (fast-get lookup :missing)))
+      (println (fast-get (fast-map nil) :a))
+    expected: |
+      0 true nil
+      1 2 nil 2
+      true true false
+      1
+      1
+      :npe
+      1 nil
+      nil
+  - name: put-on-a-map-refuses-as-the-oracles-unsupported-operation
+    # .put of a key and a value on a map is the oracle's
+    # UnsupportedOperationException with no message on every backend: where the
+    # host is the read-only Map view Java is handed the value as throws it, where
+    # the host is not (wasm) the call throws the message-less construction. A
+    # sorted map refuses the same way; the refusal is caught by a superclass too,
+    # and ex-message answers nil. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (try (.put {:a 1} :b 2) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.put (sorted-map :a 1) :b 2) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.put {:a 1} :b 2) (catch RuntimeException e :rte)))
+      (println (ex-message (try (.put {:a 1} :b 2) (catch UnsupportedOperationException e e))))
+    expected: |
+      :uoe
+      :uoe
+      :rte
+      nil
+  - name: system-get-property-answers-like-a-host-without-the-property
+    # (System/getProperty k) of a literal key is nil and (System/getProperty k
+    # dflt) its default where the host is not (wasm), where no properties exist
+    # -- like a host without the property, which malli.registry's mode and type
+    # read at load. Nil is the oracle's NullPointerException on every backend.
+    # Oracle-identical (clj 1.12.6, 2026-10-13); a computed key stays the host
+    # call, which warns and refuses on wasm.
+    source: |
+      (println (pr-str (System/getProperty "no.such.property")))
+      (println (pr-str (System/getProperty "no.such.property" "dflt")))
+      (println (or (System/getProperty "malli.registry/mode") "default"))
+      (println (or (System/getProperty "malli.registry/type") "default"))
+      (println (try (System/getProperty nil) (catch NullPointerException e :npe)))
+      (println (ex-message (try (System/getProperty nil) (catch NullPointerException e e))))
+    expected: |
+      nil
+      "dflt"
+      default
+      default
+      :npe
+      key can't be null
+  - name: hash-map-capacity-and-load-build-the-empty-map-where-the-host-is-not
+    # (java.util.HashMap. capacity loadFactor) of two number datums is the empty
+    # map where the host is not (wasm) -- the empty mutable map the oracle builds
+    # -- so the lookups read it; anywhere else it stays the host construction.
+    # Oracle-identical (clj 1.12.6, 2026-10-13) but str and class, which read the
+    # Clojure map on wasm.
+    source: |
+      (let [h (java.util.HashMap. 1024 0.25)]
+        (println (.size h) (.isEmpty h) (.get h :a)))
+      (let [h (new java.util.HashMap 16 0.5)]
+        (println (.size h) (.isEmpty h) (.containsKey h :a)))
+      (println (.get (java.util.HashMap. 8 0.75) :missing))
+    expected: |
+      0 true nil
+      0 true false
+      nil
+  - name: put-all-stores-into-the-hash-map-where-the-host-is-not
+    # (.putAll h m) stores m's entries into h and answers nil where the host is
+    # not (wasm), like the oracle's mutation of its HashMap: malli's fast-registry
+    # fills (HashMap. 1024 0.25) this way at load and reads it with .get. A record
+    # or a sorted map source reads like a map; a record or a sorted map target is
+    # immutable there as here, so writing one is the oracle's message-less
+    # UnsupportedOperationException; any other receiver refuses in the oracle's
+    # words, nil the NullPointerException. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (let [h (doto (java.util.HashMap. 1024 0.25) (.putAll {:a 1 "s" 2}))]
+        (println (.get h :a) (.get h "s") (.size h)))
+      (println (.putAll (java.util.HashMap.) {:a 1}))
+      (defrecord PutAllR [a])
+      (let [h (doto (java.util.HashMap.) (.putAll (->PutAllR 5)))]
+        (println (.get h :a)))
+      (let [h (doto (java.util.HashMap.) (.putAll (sorted-map :a 1 :b 2)))]
+        (println (.get h :a) (.get h :b) (.size h)))
+      (println (try (.putAll (sorted-map :a 1) {:b 2}) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.putAll (->PutAllR 1) {:b 2}) (catch UnsupportedOperationException e :uoe)))
+      (println (ex-message (try (.putAll (sorted-map :a 1) {:b 2}) (catch UnsupportedOperationException e e))))
+      (println (try (.putAll "s" {:a 1}) (catch IllegalArgumentException e :iae)))
+      (println (try (.putAll nil {:a 1}) (catch NullPointerException e :npe)))
+      (println (try (.putAll (java.util.HashMap.) nil) (catch NullPointerException e :npe)))
+      (println (ex-message (try (.putAll (java.util.HashMap.) nil) (catch NullPointerException e e))))
+      (println (try (.putAll (java.util.HashMap.) [:a 1]) (catch ClassCastException e :cce)))
+    expected: |
+      1 2 2
+      nil
+      5
+      1 2 2
+      :uoe
+      :uoe
+      nil
+      :iae
+      :npe
+      :npe
+      Cannot invoke "java.util.Map.size()" because "m" is null
+      :cce
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,
@@ -13998,6 +14126,229 @@ cases:
       3
       42
       40
+  - name: checked-arithmetic-is-plain-arithmetic-that-never-overflows
+    # inc', dec', +', -' and *' are the plain verbs: integers are bignums here,
+    # so nothing overflows. Oracle-checked (clj 1.12.6, 2026-10-13) up to the
+    # big-integer mark: the oracle prints one past the long range with an N,
+    # which no value prints here (see decimal? in deviations.md).
+    source: |
+      (println (+' 1 2 3) (-' 10 1 2) (*' 2 3 4) (inc' 5) (dec' 5) (+') (*') (-' 5) (+' 5) (*' 5))
+      (println (+' 9223372036854775807 1) (*' 9223372036854775807 2) (inc' 9223372036854775807) (dec' -9223372036854775808))
+      (println (map +' [1 2] [3 4]) (map inc' [1 2]) (apply +' [1 2 3]) ((fn [f] (f 10 4)) -') (apply *' [2 3 4]) (apply dec' [5]))
+      (println (+' 1.5 2) (-' 1/2 1) (*' 1.5 1/2) (inc' 1.5) (dec' 1/2))
+    expected: |
+      6 7 24 6 4 0 1 -5 5 5
+      9223372036854775808 18446744073709551614 9223372036854775808 -9223372036854775809
+      (4 6) (2 3) 6 6 24 4
+      3.5 -1/2 0.75 2.5 -1/2
+  - name: checked-arithmetic-refuses-non-numbers-with-the-oracles-classes
+    # A non-number operand is the oracle's refusal: its NullPointerException
+    # for nil (the CL type error names a nil datum), its ClassCastException
+    # otherwise. A wrong value count is its ArityException at run time.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (try (+' nil 1) (catch NullPointerException e :npe)))
+      (println (try (+' "a" 1) (catch ClassCastException e :cce)))
+      (println (try (-' 1 "a") (catch ClassCastException e :cce)))
+      (println (try (*' 2 nil) (catch NullPointerException e :npe)))
+      (println (try (inc' \a) (catch ClassCastException e :cce)))
+      (println (try (dec' :a) (catch ClassCastException e :cce)))
+      (println (try (apply -' []) (catch clojure.lang.ArityException e :arity)))
+      (println (try (apply inc' [1 2]) (catch clojure.lang.ArityException e :arity)))
+      (println ((fn [f] (f 1)) +') (apply +' []) (apply *' []))
+    expected: |
+      :npe
+      :cce
+      :cce
+      :npe
+      :cce
+      :cce
+      :arity
+      :arity
+      1 0 1
+  - name: cast-casts-or-refuses-with-the-oracles-classes
+    # cast answers the value when it is an instance of the class, nil of nil,
+    # else the oracle's ClassCastException (a nil class its NullPointerException,
+    # anything but a class its ClassCastException). A computed class casts by
+    # the protocol tag, what class answers; a computed host class by the kind
+    # its name has here. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (cast String "a") (cast Object nil) (cast Long 5) (cast Number 5) (cast String nil))
+      (println (try (cast Integer "a") (catch ClassCastException e (str "CCE:" (.getMessage e)))))
+      (println (try (cast Long "5") (catch ClassCastException e (str "CCE:" (.getMessage e)))))
+      (println (try (cast nil 1) (catch NullPointerException e :npe)))
+      (println (try (cast :foo 1) (catch ClassCastException e :cce)))
+      (println (try (cast 5 nil) (catch ClassCastException e :cce)))
+      (println ((fn [c x] (cast c x)) (class 5) 5))
+      (println (try ((fn [c x] (cast c x)) (class "a") 5) (catch ClassCastException e :cce)))
+      (println (map cast [(class "a") (class "b")] ["a" "b"]))
+      (defrecord f75-R [a])
+      (println (cast f75-R (->f75-R 1)))
+      (println (try (cast f75-R 5) (catch ClassCastException e (str "CCE:" (.getMessage e)))))
+      (println (cast (class (->f75-R 1)) (->f75-R 2)))
+      (println (try (apply cast [String]) (catch clojure.lang.ArityException e :arity)))
+      (println (try (apply cast [String "a" "b"]) (catch clojure.lang.ArityException e :arity)))
+    expected: |
+      a nil 5 5 nil
+      CCE:Cannot cast java.lang.String to java.lang.Integer
+      CCE:Cannot cast java.lang.String to java.lang.Long
+      :npe
+      :cce
+      :cce
+      5
+      :cce
+      (a b)
+      #user.f75-R{:a 1}
+      CCE:Cannot cast java.lang.Long to user.f75-R
+      #user.f75-R{:a 2}
+      :arity
+      :arity
+  - name: ref-history-count-and-the-min-max-bounds
+    # A ref starts with no history and the bounds 0 and 10; each committed
+    # transaction writing it counts one more, capped by its min history (the
+    # oracle's retained chain). The bounds are the oracle's intCast, and the
+    # setters answer the ref. Anything but a ref is the oracle's cast failure.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (def f75-hr (ref 10))
+      (println (ref-history-count f75-hr) (ref-min-history f75-hr) (ref-max-history f75-hr))
+      (dosync (alter f75-hr inc) (alter f75-hr inc))
+      (println (ref-history-count f75-hr) @f75-hr)
+      (def f75-hr2 (ref 0 :min-history 2 :max-history 7))
+      (println (ref-history-count f75-hr2) (ref-min-history f75-hr2) (ref-max-history f75-hr2))
+      (dosync (alter f75-hr2 inc))
+      (dosync (alter f75-hr2 inc))
+      (dosync (alter f75-hr2 inc))
+      (println (ref-history-count f75-hr2) @f75-hr2)
+      (do (ref-min-history f75-hr2 4) (println (ref-min-history f75-hr2)))
+      (do (ref-max-history f75-hr2 1) (println (ref-max-history f75-hr2)))
+      (println ((fn [r] (ref-history-count r)) f75-hr2) (map ref-min-history [f75-hr f75-hr2]))
+      (println (try (ref-history-count (atom 1)) (catch ClassCastException e :cce)))
+      (println (try (ref-min-history nil) (catch NullPointerException e :npe)))
+      (println (try (apply ref-max-history [f75-hr2 1 2]) (catch clojure.lang.ArityException e :arity)))
+      (println (try ((fn [f] (f f75-hr2)) ref-history-count) (catch Exception e :no)))
+      (println (try (dosync (alter f75-hr2 inc) (throw (Exception. "x"))) (catch Exception e :thrown)) (ref-history-count f75-hr2) @f75-hr2)
+    expected: |
+      0 0 10
+      0 12
+      0 2 7
+      2 3
+      4
+      1
+      2 (0 4)
+      :cce
+      :npe
+      :arity
+      2
+      :thrown 2 3
+  - name: struct-definitions-create-and-read-through-an-accessor
+    # create-struct answers the key vector struct and struct-map read; an
+    # accessor answers the function reading its key. Too many struct values,
+    # a key the definition lacks and no create-struct keys are the oracle's
+    # refusals. Oracle-identical (clj 1.12.6, 2026-10-13), except a created
+    # definition prints as its key vector, where the oracle's prints its
+    # definition object.
+    source: |
+      (defstruct f75-person :name :age)
+      (println (struct f75-person "n" 3))
+      (println (struct f75-person "n"))
+      (println (struct-map f75-person :name "a"))
+      (println (struct-map f75-person :name "a" :age 3 :extra 9))
+      (println ((accessor f75-person :name) (struct f75-person "n" 3)))
+      (println ((accessor f75-person :age) (struct-map f75-person :name "a")))
+      (println (create-struct :a :b))
+      (println (struct (create-struct :x) 1))
+      (println (map (accessor f75-person :name) [(struct f75-person "a" 1) (struct f75-person "b" 2)]))
+      (println (try (struct f75-person 1 2 3) (catch IllegalArgumentException e (str "IAE:" (.getMessage e)))))
+      (println (try ((accessor f75-person :zzz) {}) (catch IllegalArgumentException e (str "IAE:" (.getMessage e)))))
+      (println (try (accessor 5 :a) (catch ClassCastException e :cce)))
+      (println (try (create-struct) (catch IllegalArgumentException e (str "IAE:" (.getMessage e)))))
+    expected: |
+      {:name n, :age 3}
+      {:name n, :age nil}
+      {:name a, :age nil}
+      {:name a, :age 3, :extra 9}
+      n
+      nil
+      [:a :b]
+      {:x 1}
+      (a b)
+      IAE:Too many arguments to struct constructor
+      IAE:Not a key of struct
+      :cce
+      IAE:Must supply keys
+  - name: prefers-and-remove-all-methods
+    # prefers answers each dispatch value with the set preferred over it, and
+    # remove-all-methods clears the methods and the preferences, answering the
+    # multimethod. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (defmulti f75-pm :k)
+      (defmethod f75-pm :a [x] [:a!])
+      (defmethod f75-pm :b [x] [:b!])
+      (prefer-method f75-pm :a :b)
+      (prefer-method f75-pm :a :c)
+      (println (= (prefers f75-pm) {:a #{:b :c}}))
+      (println (f75-pm {:k :a}))
+      (println (try ((remove-all-methods f75-pm) {:k :a}) (catch IllegalArgumentException e :no-method)))
+      (println (methods f75-pm) (prefers f75-pm))
+      (println (try (f75-pm {:k :a}) (catch IllegalArgumentException e :no-method)))
+    expected: |
+      true
+      [:a!]
+      :no-method
+      {} {}
+      :no-method
+  - name: protocol-extenders-and-find-protocol-impl-and-method
+    # extenders answers the extended tags as a seq (:object last for the Object
+    # default), find-protocol-impl the tag row's map and find-protocol-method
+    # its function, each falling back to the Object default and then to nil. A
+    # non-protocol extends to nothing. Oracle-checked (clj 1.12.6, 2026-10-13):
+    # classes print as the keywords class answers here, and a found function as
+    # the procedure it is, so the pins call and count instead of printing. A
+    # computed protocol (or any -v value) reads the method table itself, which
+    # holds no Object default: there the default shows only through a literal
+    # protocol name.
+    source: |
+      (defprotocol f75-PP (f75-pfoo [x]) (f75-pbar [x y]))
+      (defrecord f75-PR [a])
+      (extend-protocol f75-PP f75-PR (f75-pfoo [x] 11) (f75-pbar [x y] 22))
+      (extend-protocol f75-PP Object (f75-pfoo [x] 99))
+      (println (= (count (extenders f75-PP)) 2))
+      (println (= (count (find-protocol-impl f75-PP (->f75-PR 5))) 2))
+      (println ((find-protocol-method f75-PP :f75-pfoo (->f75-PR 5)) (->f75-PR 5)))
+      (println ((find-protocol-method f75-PP :f75-pbar (->f75-PR 5)) (->f75-PR 5) 1))
+      (println (find-protocol-method f75-PP :nosuch (->f75-PR 5)))
+      (println (= (count (find-protocol-impl f75-PP {})) 1))
+      (println ((find-protocol-method f75-PP :f75-pfoo {}) {}))
+      (println (((fn [f] (f f75-PP :f75-pfoo (->f75-PR 7))) find-protocol-method) (->f75-PR 7)))
+      (println (= ((fn [p x] (find-protocol-impl p x)) f75-PP (->f75-PR 5)) (find-protocol-impl f75-PP (->f75-PR 5))))
+      (defprotocol f75-PQ (f75-qfoo [x]))
+      (defrecord f75-PS [a])
+      (extend-protocol f75-PQ f75-PS (f75-qfoo [x] 7))
+      (println (= (count (extenders f75-PQ)) 1))
+      (println ((fn [p] (count (extenders p))) f75-PQ))
+      (println (((fn [p x] (find-protocol-method p :f75-qfoo x)) f75-PQ (->f75-PS 2)) (->f75-PS 2)))
+      (println (find-protocol-method f75-PQ :missing (->f75-PS 2)))
+      (println (= (count ((fn [p x] (find-protocol-impl p x)) f75-PQ (->f75-PS 2))) 1))
+      (println (extenders {}) (find-protocol-impl {} {}) (find-protocol-method {} :f75-pfoo {}))
+      (println (extenders nil))
+    expected: |
+      true
+      true
+      11
+      22
+      nil
+      true
+      99
+      11
+      true
+      true
+      1
+      7
+      nil
+      true
+      nil nil nil
+      nil
   - name: a-definterface-defines-methods-a-deftype-implements-and-calls-dispatch
     # definterface (.kb/clojure-frontend.md "Defined interfaces"): no host class, the
     # name bound to the binary name; a deftype body naming it stores its methods in the

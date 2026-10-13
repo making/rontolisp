@@ -14,10 +14,12 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -437,6 +439,15 @@ final class ClojureInteropLowering {
 
 	static final String STRING_BUFFER_CLASS = "java.lang.StringBuffer";
 
+	/**
+	 * {@code java.util.HashMap}: a zero-argument construction is the empty map and a
+	 * one-argument construction the map itself where the host is not (wasm;
+	 * {@link #hashMapEmpty}, {@link #hashMapCopy}), like the portable {@code :cljs}
+	 * branch of reitit's {@code fast-map}. Where the host is the construction keeps its
+	 * {@code java:new}, whose mutable object the host tests pin.
+	 */
+	static final String HASH_MAP_CLASS = "java.util.HashMap";
+
 	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
 	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
 
@@ -713,6 +724,12 @@ final class ClojureInteropLowering {
 		if (stringStream != null) {
 			return stringStream;
 		}
+		if (!ctx.hostTarget && types == null) {
+			LispVal hashMap = hashMapEmpty(cls, argDatums.size());
+			if (hashMap != null) {
+				return hashMap;
+			}
+		}
 		if (argDatums.size() == 1 && types == null) {
 			// untagged only: param tags name the host overload, which keeps java:new
 			LispVal arg = ctx.lower(argDatums.get(0));
@@ -723,6 +740,18 @@ final class ClojureInteropLowering {
 			LispVal writer = stringWriterConstruction(cls, arg);
 			if (writer != null) {
 				return writer;
+			}
+			if (!ctx.hostTarget) {
+				LispVal hashMap = hashMapCopy(ctx, cls, arg);
+				if (hashMap != null) {
+					return hashMap;
+				}
+			}
+		}
+		if (!ctx.hostTarget && types == null && argDatums.size() == 2) {
+			LispVal hashMap = hashMapCapacity(cls, argDatums);
+			if (hashMap != null) {
+				return hashMap;
 			}
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
@@ -1132,6 +1161,23 @@ final class ClojureInteropLowering {
 			// answers a value's Java face elsewhere
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STRING-VALUE-OF"), args.get(0));
 		}
+		if (!ctx.hostTarget && cls.equals("java.lang.System") && member.equals("getProperty")) {
+			// System/getProperty of a literal key where no host is (wasm): no
+			// properties exist there, so the one-argument call is nil and the
+			// two-argument call its default, like a host without the property
+			// (malli.registry's mode and type at load). Nil is the oracle's
+			// NullPointerException; a computed key stays the host call, which warns
+			// and refuses when it runs there.
+			if (args.size() == 1 && args.get(0) instanceof LispString) {
+				return ClojureLowering.NIL_CONST;
+			}
+			if (args.size() == 1 && args.get(0) instanceof LispNil) {
+				return ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER, LispString.literal("key can't be null"));
+			}
+			if (args.size() == 2 && args.get(0) instanceof LispString) {
+				return args.get(1);
+			}
+		}
 		if (!ctx.hostTarget) {
 			// where no host is, the pure number statics data.json's read path calls
 			// answer portably; the host's own answer them elsewhere
@@ -1395,6 +1441,12 @@ final class ClojureInteropLowering {
 		if (stringStream != null) {
 			return stringStream;
 		}
+		if (!ctx.hostTarget && types == null) {
+			LispVal empty = hashMapEmpty(cls, args.size());
+			if (empty != null) {
+				return empty;
+			}
+		}
 		if (args.size() == 1 && types == null) {
 			// untagged only: param tags name the host overload, which keeps java:new
 			LispVal builder = stringBuilderConstruction(cls, args.get(0));
@@ -1404,6 +1456,12 @@ final class ClojureInteropLowering {
 			LispVal writer = stringWriterConstruction(cls, args.get(0));
 			if (writer != null) {
 				return writer;
+			}
+			if (!ctx.hostTarget) {
+				LispVal hashMap = hashMapCopy(ctx, cls, args.get(0));
+				if (hashMap != null) {
+					return hashMap;
+				}
 			}
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
@@ -1545,6 +1603,75 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER_1), arg);
 		}
 		return null;
+	}
+
+	/**
+	 * A zero-argument {@code java.util.HashMap} construction (dotted or imported,
+	 * resolved) where the host is not (wasm): the empty map, the same table a {@code {}}
+	 * literal builds ({@link ClojureCollectionLowering#mapBuild}), so every backend runs
+	 * it -- where the host is the construction keeps its {@code java:new}, whose mutable
+	 * object the host tests pin. The callers try it only off a host target; anything else
+	 * (another count, another class) is null, so the call keeps its {@code java:new}
+	 * shape.
+	 */
+	static @Nullable LispVal hashMapEmpty(String cls, int argCount) {
+		if (argCount == 0 && HASH_MAP_CLASS.equals(cls)) {
+			return ClojureCollectionLowering.mapBuild(List.of());
+		}
+		return null;
+	}
+
+	/**
+	 * A one-argument {@code java.util.HashMap} construction (dotted or imported,
+	 * resolved) over the already-lowered argument where the host is not (wasm): the map
+	 * itself, which the argument evaluates to once -- reitit's {@code (HashMap. ^Map m)}
+	 * names a map, and a map here is immutable, so the oracle's copy shares its entries
+	 * either way. Nil is the oracle's {@code NullPointerException} before anything else
+	 * runs; a non-map argument (a capacity, which the oracle builds an empty mutable map
+	 * for) answers itself, a documented deviation no portable program reaches.
+	 * {@code .put} on the value refuses as the oracle's
+	 * {@code UnsupportedOperationException} ({@code .kb/clojure-frontend.md}, "HashMap
+	 * construction"). The callers try it only untagged and off a host target (a tagged
+	 * construction names the host overload and keeps {@code java:new}). Null for any
+	 * other class, so the call keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal hashMapCopy(ClojureLowering ctx, String cls, LispVal arg) {
+		if (!HASH_MAP_CLASS.equals(cls)) {
+			return null;
+		}
+		LispSymbol temp = ctx.freshTemp();
+		LispVal nullCheck = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), temp),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+						LispString.literal("NullPointerException: java.util.HashMap of nil")));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(temp, arg)), nullCheck, temp);
+	}
+
+	/**
+	 * A two-argument {@code java.util.HashMap} construction (dotted or imported,
+	 * resolved) of two number datums where the host is not (wasm): the empty map, the
+	 * same table a {@code {}} literal builds
+	 * ({@link ClojureCollectionLowering#mapBuild}), like the empty mutable map the oracle
+	 * builds for a capacity and a load factor -- malli's {@code fast-registry} builds
+	 * {@code (HashMap. 1024 0.25)} at load, then fills it with {@code .putAll}. The
+	 * datums are number literals, so dropping them evaluates nothing away; any other pair
+	 * (and a tagged construction, which names the host overload) keeps its
+	 * {@code java:new}. Where the host is the construction keeps its {@code java:new},
+	 * whose mutable object the host tests pin. Null for any other class, so the call
+	 * keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal hashMapCapacity(String cls, List<LispVal> argDatums) {
+		if (!HASH_MAP_CLASS.equals(cls)) {
+			return null;
+		}
+		for (LispVal datum : argDatums) {
+			if (!(datum instanceof LispInteger || datum instanceof LispBigInteger || datum instanceof LispDouble
+					|| datum instanceof LispRatio)) {
+				return null;
+			}
+		}
+		return ClojureCollectionLowering.mapBuild(List.of());
 	}
 
 	/**

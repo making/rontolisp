@@ -108,6 +108,12 @@ final class ClojureValueMethodLowering {
 	/** The class whose construction a seq iterator's {@code remove} throws. */
 	private static final String UNSUPPORTED_OPERATION = "java.lang.UnsupportedOperationException";
 
+	/**
+	 * {@code .putAll} of one map into a {@code java.util.HashMap} stand-in where the host
+	 * is not (wasm), storing the entries into the target's table ({@code clojure.lisp}).
+	 */
+	private static final String HASH_MAP_PUT_ALL = "RONTOLISP::%CLOJURE-HASH-MAP-PUT-ALL";
+
 	/** What makes the Java object a value is ({@code clojure.lisp}). */
 	private static final String HOST_MEMBER = "RONTOLISP::%CLOJURE-HOST-MEMBER";
 
@@ -829,6 +835,33 @@ final class ClojureValueMethodLowering {
 			parts.add(LispString.literal(designator));
 			parts.addAll(args);
 			answer = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2, true);
+		}
+		else if (method.equals("put") && n == 2) {
+			// .put of a key and a value on a map: the map is an unmodifiable
+			// java.util.Map here -- the read-only view Java is handed it as where
+			// the host is -- so writing it is the oracle's
+			// UnsupportedOperationException, a message-less construction like the
+			// seq iterator's .remove (.kb/clojure-frontend.md, "HashMap
+			// construction")
+			answer = ctx.lower(ClojureLowerUtil.list(new LispSymbol("throw"),
+					ClojureLowerUtil.list(new LispSymbol("new"), new LispSymbol(UNSUPPORTED_OPERATION))));
+		}
+		else if (method.equals("putAll") && n == 1) {
+			// .putAll of one map into another where the host is not (wasm): the
+			// entries stored into the target's table, answering nil, like the
+			// oracle's mutation of its HashMap (malli's fast-registry fills its
+			// (HashMap. 1024 0.25) this way at load). A record or a sorted map is
+			// immutable there as here, so writing one is the oracle's
+			// message-less UnsupportedOperationException, like .put's above; any
+			// other receiver keeps the refusal, in the oracle's words
+			// (.kb/clojure-frontend.md, "HashMap construction")
+			LispVal stored = ClojureLowerUtil.list(new LispSymbol(HASH_MAP_PUT_ALL), recv, args.get(0));
+			LispVal unmodifiable = ctx.lower(ClojureLowerUtil.list(new LispSymbol("throw"),
+					ClojureLowerUtil.list(new LispSymbol("new"), new LispSymbol(UNSUPPORTED_OPERATION))));
+			answer = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), recv), stored,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojurePredicateLowering.rawTest("map?", recv),
+							unmodifiable, refusal(recv, method, !ClojureValueMethods.unsupported(method, n), args)));
 		}
 		else {
 			answer = refusal(recv, method, false, args);

@@ -200,6 +200,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   name (a `defmulti` var, through an alias or a referred one), not an expression: a local
   bound to a multimethod is refused at lowering. The map `methods` answers keys a host
   class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
+  `prefers` answers each dispatch value with the set preferred over it, and
+  `remove-all-methods` clears the methods and the preferences, answering the
+  multimethod; both take the name the same way and name no function value.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
@@ -258,7 +261,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Deref of a macro's var signals (the oracle answers its expander function). A
   `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
   oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
-  with no value here (`#'inc'`) is refused.
+  with no value here (`#'and`) is refused.
 - A namespace prints as the oracle's `#object[clojure.lang.Namespace "user"]` without the
   identity hash, and `class` of one answers `:clojure.lang.Namespace`. `the-ns` and
   `find-ns` know the namespaces the program created above the call, the libraries it
@@ -354,6 +357,24 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   match the oracle, while `pr`, `class` (`:string`) and `string?` read the string.
   `.toUpperCase`/`.toLowerCase` of one argument map as the bare call whatever the argument
   is, where the oracle casts it to a `Locale`.
+- A zero-argument `(java.util.HashMap.)` (or `(new java.util.HashMap)`) is the empty map
+  and a one-argument construction of a map the map itself on the wasm backends, where no
+  mutable map exists; `.get` and the other lookups read it, `.put` throws the oracle's
+  message-less `UnsupportedOperationException` (as the read-only map Java is handed the
+  value as throws it on the interpreter and the JVM), and nil builds to the oracle's
+  `NullPointerException`. A two-argument construction of two numbers
+  (`(java.util.HashMap. 1024 0.25)`) is the empty map too, and `.putAll` of a map stores
+  its entries into the map and answers nil; on a record or a sorted map it throws the
+  same `UnsupportedOperationException`. `.putAll` into a map literal stores into the
+  literal's own table there, where the oracle throws. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
+  hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
+  itself, where the oracle builds an empty mutable map. Where the host is (the
+  interpreter and the JVM) the construction stays that mutable object.
+- `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
+  its default on the wasm backends, where no properties exist (like a host without the
+  property, which is what a library load reads); nil is the oracle's
+  `NullPointerException`. A computed key stays the host call, which the wasm backends
+  reject.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector
@@ -414,8 +435,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   other the object cast: a double the oracle's compiler types as a primitive (a `let` local
   bound to a double literal, `(* 2.0 x)`) refuses with `Value out of range for int: 2.0E10`
   there and `integer overflow` here. `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
-  oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc`, `dec` and the
-  checked verbs never overflow (integers are bignums).
+  oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc'`, `dec'`,
+  `+'`, `-'` and `*'` are `inc`, `dec`, `+`, `-` and `*`: integers are bignums, so nothing
+  overflows, and anything but a number is refused with the oracle's class. `cast` answers
+  the value when it is an instance of the class (its `instance?` test for a named class,
+  the protocol tag for a computed one), `nil` of `nil`, else the oracle's refusal; a host
+  class no value here has always refuses (host classes exist on no wasm backend).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.

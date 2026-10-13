@@ -26,6 +26,11 @@ class ClojureLoweringTest {
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
+	private static String wasmLowered(String source) {
+		List<LispVal> forms = Clojure.read(source, null, null, ClojureFiles.NONE, false);
+		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
 	private static final String FALSE_BINDING = "(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)\n";
 
 	/**
@@ -2098,6 +2103,102 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aHashMapConstructionLowersToTheMapItselfWhereTheHostIsNot() {
+		// A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
+		// (java.util.HashMap/new) is the empty map, and a one-argument construction
+		// the map itself (nil the oracle's NullPointerException), where the host is
+		// not (wasm), never a java:new (which wasm refuses). A two-argument
+		// construction of two number datums is the empty map too
+		// (aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot);
+		// a tagged construction naming the host overload keeps the host
+		// construction, like any other class; where the host is every spelling keeps
+		// java:new, whose mutable object the host tests pin.
+		assertThat(wasmLowered("(java.util.HashMap.)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new java.util.HashMap)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.HashMap/new)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(let [m {:a 1}] (java.util.HashMap. m))")).doesNotContain("JAVA:")
+			.contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION");
+		assertThat(wasmLowered("(java.util.HashMap. nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(^[int] java.util.HashMap/new 64)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap.)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap. {:a 1})")).contains("JAVA:NEW").contains("java.util.HashMap");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (.get (java.util.HashMap. {:a 1}) :a))"
+				+ " (println (.get (new java.util.HashMap {:a 1}) :a))"
+				+ " (println (let [m (java.util.HashMap.)] (.size m)))";
+		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot() {
+		// (java.util.HashMap. capacity loadFactor) of two number datums is the empty
+		// map where the host is not (wasm), never a java:new (which wasm refuses):
+		// malli's fast-registry builds (HashMap. 1024 0.25) at load. Any other pair,
+		// and a tagged construction naming the host overload, keep the host
+		// construction, like any other class; where the host is every spelling keeps
+		// java:new, whose mutable object the host tests pin.
+		assertThat(wasmLowered("(java.util.HashMap. 1024 0.25)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new java.util.HashMap 16 0.5)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.HashMap. \"a\" \"b\")")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(wasmLowered("(let [c 16] (java.util.HashMap. c 0.5))")).contains("JAVA:NEW")
+			.contains("java.util.HashMap");
+		assertThat(wasmLowered("(^[int float] java.util.HashMap/new 64 0.5)")).contains("JAVA:NEW")
+			.contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap. 1024 0.25)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		// where the host is not, no java: operator is left for the portable shape
+		assertThat(wasmLowered("(println (.size (java.util.HashMap. 16 0.5)))")).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot() {
+		// (System/getProperty k) of a literal key is nil and (System/getProperty k
+		// dflt) its default where the host is not (wasm) -- no properties exist
+		// there -- never a java:static (which wasm refuses): malli.registry reads
+		// its mode and type this way at load. Nil is the oracle's
+		// NullPointerException; a computed key stays the host call. Where the host
+		// is every spelling keeps java:static.
+		assertThat(wasmLowered("(System/getProperty \"a\")")).doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println (System/getProperty \"a\" \"d\"))")).contains("\"d\"")
+			.doesNotContain("JAVA:STATIC");
+		assertThat(wasmLowered("(System/getProperty nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
+			.contains("key can't be null")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(let [k \"a\"] (System/getProperty k))")).contains("JAVA:STATIC");
+		assertThat(lowered("(System/getProperty \"a\")")).contains("JAVA:STATIC");
+		assertThat(lowered("(System/getProperty \"a\" \"d\")")).contains("JAVA:STATIC");
+	}
+
+	@Test
+	void putAllOnAMapStoresIntoItsTableWhereTheHostIsNot() {
+		// (.putAll m s) on a value of unknown class stores s's entries into m's table
+		// where the host is not (wasm) -- malli's fast-registry fills its HashMap this
+		// way at load -- answering nil; a record or a sorted map takes the oracle's
+		// message-less UnsupportedOperationException, anything else its
+		// no-such-method refusal. Where the host is the call keeps java:call.
+		assertThat(wasmLowered("(defn f [m s] (.putAll m s))")).contains("RONTOLISP::%CLOJURE-HASH-MAP-PUT-ALL")
+			.contains("RONTOLISP::%CLOJURE-THROW")
+			.contains("java.lang.UnsupportedOperationException")
+			.contains("No matching method putAll");
+		assertThat(lowered("(defn f [m s] (.putAll m s))")).contains("JAVA:CALL")
+			.doesNotContain("RONTOLISP::%CLOJURE-HASH-MAP-PUT-ALL");
+	}
+
+	@Test
+	void putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot() {
+		// .put of a key and a value on a value of unknown class throws the
+		// message-less UnsupportedOperationException construction where the host is
+		// not (wasm) -- the map is an unmodifiable java.util.Map there, like the
+		// read-only view Java is handed it as where the host is. Any other receiver
+		// keeps the oracle's no-such-method refusal, on every backend.
+		assertThat(wasmLowered("(defn f [m k v] (.put m k v))")).contains("RONTOLISP::%CLOJURE-THROW")
+			.contains("java.lang.UnsupportedOperationException")
+			.contains("No matching method put");
+		assertThat(lowered("(defn f [m k v] (.put m k v))")).contains("JAVA:CALL")
+			.doesNotContain("RONTOLISP::%CLOJURE-THROW");
+	}
+
+	@Test
 	void setBangWritesADeftypeMutableFieldThroughItsSlot() {
 		String out = lowered("(defprotocol P (bump! [c])) "
 				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");
@@ -2796,6 +2897,112 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/intern");
 		assertThatThrownBy(() -> Clojure.read("(create-ns)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/create-ns");
+	}
+
+	@Test
+	void checkedArithmeticLowersLikeThePlainVerbs() {
+		// f75: inc' dec' +' -' *' are the plain verbs (integers are bignums,
+		// so nothing overflows), with the oracle's arity wording
+		assertThat(lowered("(inc' 1)")).contains("(+ 1 1)");
+		assertThat(lowered("(dec' 1)")).contains("(- 1 1)");
+		assertThat(lowered("(+' 1 2)")).contains("(+ 1 2)");
+		assertThat(lowered("(-' 5 2)")).contains("(- 5 2)");
+		assertThat(lowered("(*' 2 3)")).contains("(* 2 3)");
+		assertThat(lowered("(map +' [1])")).contains("#'+");
+		assertThat(lowered("(map -' [1])")).contains("#'-");
+		assertThat(lowered("(map *' [1])")).contains("#'*");
+		assertThat(lowered("(map inc' [1])")).contains("(LAMBDA");
+		assertThat(lowered("(map dec' [1])")).contains("(LAMBDA");
+		assertThatThrownBy(() -> Clojure.read("(inc')", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/inc'");
+		assertThatThrownBy(() -> Clojure.read("(dec' 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/dec'");
+		assertThatThrownBy(() -> Clojure.read("(-')", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/-'");
+	}
+
+	@Test
+	void castLowersToAnInstanceTestOrTheComputedWorker() {
+		// f75: cast of a named class is the instance test inline, of anything
+		// else the computed worker, with the oracle's refusal
+		assertThat(lowered("(fn [x] (cast String x))")).contains("STRINGP").contains("Cannot cast ");
+		assertThat(lowered("(fn [c x] (cast c x))")).contains("(RONTOLISP::%CLOJURE-CAST ");
+		assertThat(lowered("(map cast [String] [\"a\"])")).contains("#'RONTOLISP::%CLOJURE-CAST-V");
+		assertThatThrownBy(() -> Clojure.read("(cast String)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/cast");
+		assertThatThrownBy(() -> Clojure.read("(cast String \"a\" \"b\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/cast");
+	}
+
+	@Test
+	void refHistoryVerbsLowerToWorkersAndTrackRefs() {
+		// f75: the history readers and the min/max setters are workers with -v
+		// values; a ref registers where the program names a history verb, and
+		// stays the atom's cell anywhere else
+		assertThat(lowered("(fn [r] (ref-history-count r))")).contains("(RONTOLISP::%CLOJURE-REF-HISTORY-COUNT ");
+		assertThat(lowered("(fn [r] (ref-min-history r 1))")).contains("(RONTOLISP::%CLOJURE-REF-MIN-HISTORY-SET ");
+		assertThat(lowered("(fn [r] (ref-max-history r))")).contains("(RONTOLISP::%CLOJURE-REF-MAX-HISTORY ");
+		assertThat(lowered("(fn [r] (map ref-max-history [r]))")).contains("#'RONTOLISP::%CLOJURE-REF-MAX-HISTORY-V");
+		assertThat(lowered("(def f75-r (ref 1))")).doesNotContain("REF-HISTORY");
+		assertThat(lowered("(def f75-r (ref 1)) (ref-history-count f75-r)")).contains("REF-HISTORY-TRACK");
+		assertThat(lowered("(def f75-r (ref 1 :min-history 2))")).contains("REF-HISTORY-TRACK");
+		assertThatThrownBy(() -> Clojure.read("(fn [r] (ref-history-count r 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/ref-history-count");
+		assertThatThrownBy(() -> Clojure.read("(fn [r] (ref-min-history r 1 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/ref-min-history");
+	}
+
+	@Test
+	void structLeftoversLowerToWorkersWithOracleArities() {
+		// f75: create-struct is the key vector struct reads, accessor its
+		// reader, each with a -v value
+		assertThat(lowered("(create-struct :a :b)")).contains("(RONTOLISP::%CLOJURE-CREATE-STRUCT ");
+		assertThat(lowered("(map create-struct [[:a]])")).contains("#'RONTOLISP::%CLOJURE-CREATE-STRUCT-V");
+		assertThat(lowered("(defstruct f75-s :a) (accessor f75-s :a)")).contains("(RONTOLISP::%CLOJURE-ACCESSOR ");
+		assertThat(lowered("(defstruct f75-s :a) (map accessor [f75-s f75-s])"))
+			.contains("#'RONTOLISP::%CLOJURE-ACCESSOR-V");
+		assertThatThrownBy(() -> Clojure.read("(defstruct f75-s :a) (accessor f75-s)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/accessor");
+	}
+
+	@Test
+	void multimethodIntrospectionTakesTheMultimethodName() {
+		// f75: prefers reads the prefers table, remove-all-methods clears both
+		// tables, answering like the oracle's; a name no multimethod has is refused
+		assertThat(lowered("(defmulti f75-m identity) (prefers f75-m)")).contains("(RONTOLISP::%CLOJURE-PREFERS ");
+		assertThat(lowered("(defmulti f75-m identity) (remove-all-methods f75-m)")).contains("CLRHASH");
+		assertThatThrownBy(() -> Clojure.read("(defmulti f75-m identity) (prefers f75-n)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: f75-n");
+		assertThatThrownBy(() -> Clojure.read("(defmulti f75-m identity) (remove-all-methods f75-n)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: f75-n");
+	}
+
+	@Test
+	void protocolIntrospectionReadsTheMethodTables() {
+		// f75: extenders answers the tags, find-protocol-impl their rows and
+		// find-protocol-method the functions, each with a -v value
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (extenders f75-P)"))
+			.contains("(RONTOLISP::%CLOJURE-EXTENDERS ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (map extenders [f75-P])"))
+			.contains("#'RONTOLISP::%CLOJURE-EXTENDERS-V");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (find-protocol-impl f75-P nil)"))
+			.contains("(RONTOLISP::%CLOJURE-FIND-PROTOCOL-IMPL ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (find-protocol-method f75-P :f75-m nil)"))
+			.contains("(RONTOLISP::%CLOJURE-FIND-PROTOCOL-METHOD ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (map find-protocol-method [f75-P])"))
+			.contains("#'RONTOLISP::%CLOJURE-FIND-PROTOCOL-METHOD-V");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol f75-P (f75-m [x])) (find-protocol-impl f75-P)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/find-protocol-impl");
+		assertThatThrownBy(
+				() -> Clojure.read("(defprotocol f75-P (f75-m [x])) (find-protocol-method f75-P :f75-m)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/find-protocol-method");
 	}
 
 	@Test
