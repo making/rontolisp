@@ -27723,6 +27723,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aDolistOverACoercedListWithAResultFormKeepsTheLetsScope() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component, both through the whole front end: the in-scope shape answers
+		// through the result form, the out-of-scope one signals the unbound-variable
+		// naming it.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.DolistResultScopeFixture.SCOPED,
+						am.ik.rontolisp.DolistResultScopeFixture.SCOPED_EXPECTED },
+				{ am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED,
+						am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: every symbol a progv had no value for used to be bound to nil.

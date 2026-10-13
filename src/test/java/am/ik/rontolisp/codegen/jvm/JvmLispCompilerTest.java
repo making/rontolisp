@@ -6057,6 +6057,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aDolistOverACoercedListWithAResultFormKeepsTheLetsScope() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the in-scope shape answers
+		// through the result form, the out-of-scope one signals the unbound-variable
+		// naming it.
+		assertThat(compileAndRun(am.ik.rontolisp.DolistResultScopeFixture.SCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.SCOPED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED_EXPECTED);
+	}
+
+	@Test
 	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): every symbol a progv had no
 		// value for used to be bound to nil (.kb/dynamic-special-variables.md, "A progv

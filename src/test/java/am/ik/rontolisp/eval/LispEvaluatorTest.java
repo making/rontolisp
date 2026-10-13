@@ -21421,6 +21421,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aDolistOverACoercedListWithAResultFormKeepsTheLetsScope() {
+		// The reference answer (SBCL prints the same two lines) the compiled
+		// backends' twins of this name (JvmLispCompilerTest,
+		// WasmLispCompilerIntegrationTest) are measured against: the f86 shape's
+		// trailing reference sits outside the let's scope, so it is genuinely
+		// unbound -- the in-scope shape answers through the result form, the
+		// out-of-scope one signals the unbound-variable naming it.
+		assertThat(printedLines(am.ik.rontolisp.DolistResultScopeFixture.SCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.SCOPED_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED_EXPECTED);
+	}
+
+	@Test
 	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() {
 		// The reference answer (SBCL's) the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against: a
