@@ -34,7 +34,11 @@ multimethod itself). A `lambda` form still evaluates to a fresh closure each
 time it runs. A site-independent core value used as a value is one object too: two
 references to `pos-int?` -- or to `map`, `str`, `count`, `inc`, `comp`, `atom`,
 `keyword`, `not=` or `<` -- answer the same object, so they are `identical?`
-and `=`, and it works as a map key. A value snapshotting lower-time state shares
+and `=`, and it works as a map key. The namespace-mapping values share one
+object the same way: two references to `ns-publics`, `ns-interns`, `ns-map`,
+`ns-refers`, `ns-aliases` or `ns-imports` answer the same object -- each closes
+over nothing but its argument (a call of anything computed refuses at run
+time) -- so they are `identical?` and `=`. A value snapshotting lower-time state shares
 one object per snapshot instead of one program-wide: two references to `the-ns`,
 `find-ns`, `ns-name` or `all-ns` under the namespaces known at both sites, to
 `loaded-libs` under the libraries loaded at both, or to `read` or `read-string`

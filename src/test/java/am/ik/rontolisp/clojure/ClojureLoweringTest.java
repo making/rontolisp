@@ -2229,6 +2229,9 @@ class ClojureLoweringTest {
 		// keep distinct cells, so a call through a value still reads its own
 		// site's snapshot. default-data-readers is no snapshot -- always the
 		// same two shipped reader vars -- so it shares one cell program-wide.
+		// The namespace-mapping values (ns-publics, ns-interns, ns-map,
+		// ns-refers, ns-aliases, ns-imports) close over nothing but their
+		// argument, so they share one cell program-wide with no snapshot key.
 		assertThat(lowered("(map inc [1])")).contains("%CLOJURE-MAP").contains("\"inc\"");
 		assertThat(lowered("(count [1 2])")).doesNotContain("SHARED-VALUE");
 		String shared = lowered("(println (= map map))");
@@ -2244,6 +2247,19 @@ class ClojureLoweringTest {
 		assertThat(lowered("(println (= atom atom))")).contains("\"atom\"");
 		assertThat(lowered("(println (= keyword keyword))")).contains("\"keyword\"");
 		assertThat(lowered("(println (= clojure.core/map clojure.core/map))")).contains("\"map\"");
+		assertThat(lowered("(println (= ns-publics ns-publics))")).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"ns-publics\"")
+			.doesNotContain("\"ns-publics#");
+		assertThat(lowered("(println (= ns-interns ns-interns))")).contains("\"ns-interns\"")
+			.doesNotContain("\"ns-interns#");
+		assertThat(lowered("(println (= ns-map ns-map))")).contains("\"ns-map\"").doesNotContain("\"ns-map#");
+		assertThat(lowered("(println (= ns-refers ns-refers))")).contains("\"ns-refers\"")
+			.doesNotContain("\"ns-refers#");
+		assertThat(lowered("(println (= ns-aliases ns-aliases))")).contains("\"ns-aliases\"")
+			.doesNotContain("\"ns-aliases#");
+		assertThat(lowered("(println (= ns-imports ns-imports))")).contains("\"ns-imports\"")
+			.doesNotContain("\"ns-imports#");
+		assertThat(lowered("(println (= clojure.core/ns-map clojure.core/ns-map))")).contains("\"ns-map\"");
 		assertThat(lowered("(println (= = =))")).doesNotContain("SHARED-VALUE");
 		assertThat(lowered("(println (= + +))")).doesNotContain("SHARED-VALUE");
 		assertThat(lowered("(println (= apply apply))")).doesNotContain("SHARED-VALUE");
@@ -2265,6 +2281,12 @@ class ClojureLoweringTest {
 		assertThat(snapshotCells(lowered("(println the-ns) (ns f97-lt) (println the-ns)"), "the-ns")).hasSize(2);
 		assertThat(wasmLowered("(println (= map map) (= count count))")).contains("\"map\"")
 			.contains("\"count\"")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println (= ns-publics ns-publics) (= ns-map ns-map) (= ns-imports ns-imports))"))
+			.contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"ns-publics\"")
+			.contains("\"ns-map\"")
+			.contains("\"ns-imports\"")
 			.doesNotContain("JAVA:");
 	}
 
