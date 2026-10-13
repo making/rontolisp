@@ -94,6 +94,21 @@ public final class JavaLibraryJar {
 	 * @return the jar
 	 */
 	public static Path build(Path dir, String jarName, Map<String, String> sources) {
+		return build(dir, jarName, sources, entry -> true);
+	}
+
+	/**
+	 * Compiles Java sources into a jar holding only the selected entries -- a class
+	 * compiled against a type the jar omits loads but never links.
+	 * @param dir a directory to work in
+	 * @param jarName the jar's file name
+	 * @param sources the sources, by path below the source root
+	 * @param include which compiled paths (slash-spelled, relative to the classes
+	 * directory) the jar holds
+	 * @return the jar
+	 */
+	public static Path build(Path dir, String jarName, Map<String, String> sources,
+			java.util.function.Predicate<String> include) {
 		try {
 			Path src = Files.createTempDirectory(dir, "src");
 			Path classes = Files.createTempDirectory(dir, "classes");
@@ -113,7 +128,11 @@ public final class JavaLibraryJar {
 					JarOutputStream zip = new JarOutputStream(out);
 					Stream<Path> files = Files.walk(classes)) {
 				for (Path file : files.filter(Files::isRegularFile).sorted().toList()) {
-					zip.putNextEntry(new JarEntry(classes.relativize(file).toString().replace('\\', '/')));
+					String entry = classes.relativize(file).toString().replace('\\', '/');
+					if (!include.test(entry)) {
+						continue;
+					}
+					zip.putNextEntry(new JarEntry(entry));
 					zip.write(Files.readAllBytes(file));
 					zip.closeEntry();
 				}

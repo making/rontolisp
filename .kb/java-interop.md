@@ -1140,6 +1140,15 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   program jar after the source jar is deleted, war, `--java-dep` nearest-wins through a
   `file:` repository + pom, library jar, a Clojure program's `(Class/zeroArgStatic)`,
   refusals). WASM: unchanged (`java:` refused at call time).
+- A class the class path holds but that cannot link -- a dependency's class compiled
+  against a language that is not here (a Clojure library's class over `clojure.lang`:
+  `.kb/clojure-frontend.md`, "Classes compiled against `clojure.lang`") -- refuses
+  every call on it with `Cannot link class C: missing class M`, naming the missing
+  class, catchable like any other failure on the interpreter and the JVM alike: the
+  interpreter's `eval/JavaInterop.unlinkable`, the bridge's (incl. its initializing
+  `loadClass`), and a direct call's `memberFailed` handler (`_junlinkable`), which the
+  resolver still emits from class files alone. Only `NoClassDefFoundError` converts;
+  a class the run-time class path lacks stays `No such class`.
 
 ## What a callback raises passes through the Java call
 - A function called back from Java (a `java:reify` / `java:proxy` object's method, a function

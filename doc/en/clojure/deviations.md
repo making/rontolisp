@@ -556,6 +556,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `(.thenComparing c (fn [a b] ...))` takes the fn argument as a `Comparator` and compares by
   it, where the oracle refuses a fn literal or local there at compile time (`More than one
   matching method found: thenComparing`: the `Function` overload takes it too).
+- A dependency's Java class compiled against `clojure.lang` (a Clojure library's own
+  class over it, such as `reitit.Trie`) cannot link here, and every call on it refuses
+  with `Cannot link class C: missing class M`, naming the missing class -- catchable
+  by `(catch Exception e ...)` on the interpreter and the JVM alike (on wasm every
+  `java:` call is a call-time error). There is no `clojure.lang` bridge, and none is
+  planned: no value here is an `IPersistentMap`, so dependency code taking one could
+  not read it anyway. Libraries that need one also ship a portable path (reitit's
+  `clojure-trie-compiler` answers the oracle's lines), and the reader takes a
+  library's `:rontolisp` branch where one names it first.
 - Only `.clj` and `.cljc` files below the source roots are read. A dependency's jar holding
   classes also joins the Java class path; a directory's classes do not (give a prepped
   library's `target/classes` with `--java-classpath`). The project's `deps.edn` is the

@@ -9,8 +9,11 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 
@@ -208,6 +211,85 @@ class ClojureInteropTest {
 				"java.lang.NumberFormatException\n");
 		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch clojure.lang.ExceptionInfo e :info)"
 				+ " (catch Exception e :exc)))", ":exc\n");
+	}
+
+	@Test
+	void aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass() throws Exception {
+		// the fixture jar holds a class compiled against a type it omits: calling it or
+		// constructing it refuses, naming the missing class, on the interpreter and the
+		// JVM (.todo/f65)
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(staticCall, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		String construction = "(println (try (fixture.unlinkable.Unlinkable. nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(construction, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(construction, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+	}
+
+	@Test
+	void aCompiledProgramFindsADependencyJarOnItsRunClasspath() throws Exception {
+		// a -o Prog.class output carries no dependency jar: with the fixture jar on the
+		// run class path the call refuses as it does in process, without it the class is
+		// missing (.kb/java-interop.md, "The program's Java class path"; .todo/f65)
+		java.nio.file.Path jar = unlinkableJar();
+		String program = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(runOnJvmWithClasses(program, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(program, jar, java.util.List.of()))
+			.isEqualTo("No such class: fixture.unlinkable.Unlinkable\n");
+	}
+
+	/** The fixture sources: a class compiled against a type the jar omits. */
+	private static final java.util.Map<String, String> UNLINKABLE_SOURCES = java.util.Map
+		.of("fixture/unlinkable/Unlinkable.java", """
+				package fixture.unlinkable;
+				public class Unlinkable {
+					public Unlinkable(Missing value) {
+					}
+					public static Missing identify(Missing value) {
+						return value;
+					}
+				}
+				""", "fixture/unlinkable/Missing.java", """
+				package fixture.unlinkable;
+				public class Missing {
+				}
+				""");
+
+	// A jar holding a class that loads but never links: the fixture sources compiled
+	// together, minus the missing type.
+	private static java.nio.file.Path unlinkableJar() throws Exception {
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(workDir, "unlinkable");
+		return JavaLibraryJar.build(dir, "unlinkable-lib.jar", UNLINKABLE_SOURCES,
+				entry -> !entry.startsWith("fixture/unlinkable/Missing"));
+	}
+
+	// As interpret, but the program's Java classes come from the jars: the read and the
+	// run both see the fixture, never its missing type.
+	private static String interpretWithClasses(String program, java.nio.file.Path jar) throws Exception {
+		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { jar.toUri().toURL() },
+				LispEvaluator.class.getClassLoader())) {
+			SourceLoader sources = SourceLoader.fileSystem(loader);
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			CliStack.call("clojure-interop", () -> {
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				evaluator.setSourceLoader(sources);
+				for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "test.clj",
+						SourceStandards.DEFAULT, sources)) {
+					evaluator.eval(form);
+				}
+				return null;
+			});
+			return out.toString(StandardCharsets.UTF_8);
+		}
 	}
 
 	@Test
@@ -2409,6 +2491,41 @@ class ClojureInteropTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { workDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader()); var _ = ThreadStdio.out(out)) {
+			CliStack.call("clojure-interop", () -> {
+				try {
+					Method main = loader.loadClass(name).getMethod("main", String[].class);
+					main.invoke(null, (Object) new String[0]);
+				}
+				catch (ReflectiveOperationException ex) {
+					throw new IllegalStateException(ex);
+				}
+				return null;
+			});
+		}
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	// As runOnJvm, but the program is compiled against the jars and runs under a loader
+	// with no parent: what -cp hands it is all it sees, like `java -cp dep.jar:. Prog`.
+	private static String runOnJvmWithClasses(String program, java.nio.file.Path classes,
+			java.util.List<java.net.URL> runJars) throws Exception {
+		String name = "ClojureInteropIsolated";
+		JvmSourceCompiler.Result result = new JvmSourceCompiler(name).sourceLanguage("clojure")
+			.javaClasspath(java.util.List.of(classes))
+			.compile(program, null);
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(workDir, "isolated");
+		java.nio.file.Files.write(dir.resolve(name + ".class"), result.classBytes());
+		for (var file : result.runtimeClasses().entrySet()) {
+			java.nio.file.Path target = dir.resolve(file.getKey());
+			java.nio.file.Files.createDirectories(target.getParent());
+			java.nio.file.Files.write(target, file.getValue());
+		}
+		java.util.List<java.net.URL> urls = new java.util.ArrayList<>(runJars.size() + 1);
+		urls.add(dir.toUri().toURL());
+		urls.addAll(runJars);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (var loader = new java.net.URLClassLoader(urls.toArray(java.net.URL[]::new), null);
+				var _ = ThreadStdio.out(out)) {
 			CliStack.call("clojure-interop", () -> {
 				try {
 					Method main = loader.loadClass(name).getMethod("main", String[].class);

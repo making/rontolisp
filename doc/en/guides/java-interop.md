@@ -866,6 +866,16 @@ What each output carries:
   dependencies, for the consumer's Maven to resolve, and a `--java-classpath` entry is
   the consumer's to provide.
 
+A class the class path holds but that cannot link refuses every call on it instead
+of crashing: a dependency's Java class compiled against a language that is not here
+(a Clojure library's class over `clojure.lang`, such as `reitit.Trie`) fails each
+`java:` call with `Cannot link class C: missing class M`, naming the missing class.
+The refusal is catchable like any other failure -- `(catch Exception e ...)` takes
+it on the interpreter and the JVM alike -- and a direct call the compile resolved
+from the class files refuses the same way when it runs. No `clojure.lang` bridge is
+shipped: libraries that need one also ship a portable path, and the reader takes a
+library's `:rontolisp` branch where one names it first.
+
 The GraalVM native binary cannot load a class at run time, so there the class path
 reaches only what a compile resolves calls against -- what a Clojure host form means
 included -- and what its output carries.

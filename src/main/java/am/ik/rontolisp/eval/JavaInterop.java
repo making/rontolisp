@@ -272,9 +272,15 @@ final class JavaInterop {
 		ReflectiveJavaClasses.Type type = loadClass(name, caller);
 		// A tagged java:new is remembered under its designator, which no method name can
 		// spell, so it never answers an untagged one's choice.
-		JavaOverloads.Overload overload = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
-				() -> JavaOverloads.filterByTag(type.constructors(), tagged ? member(classDesignator).tag() : null),
-				args, caller);
+		JavaOverloads.Overload overload;
+		try {
+			overload = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
+					() -> JavaOverloads.filterByTag(type.constructors(), tagged ? member(classDesignator).tag() : null),
+					args, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
+		}
 		if (overload == null) {
 			throw new LispEvalException(
 					"No matching constructor for " + classDesignator + " with " + args.size() + " argument(s)");
@@ -285,6 +291,9 @@ final class JavaInterop {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
 		}
 	}
 
@@ -315,19 +324,25 @@ final class JavaInterop {
 		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
 		// choice is found by the designator as written.
-		JavaOverloads.Overload overload = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
-			List<ReflectiveJavaClasses.Member> candidates;
-			List<String> tag = null;
-			if (!isTagged(methodName)) {
-				candidates = type.methods(methodName);
-			}
-			else {
-				JavaOverloads.Member member = member(methodName);
-				candidates = type.methods(member.name());
-				tag = member.tag();
-			}
-			return JavaOverloads.filterByTag(statics ? JavaOverloads.staticMethods(candidates) : candidates, tag);
-		}, args, caller);
+		JavaOverloads.Overload overload;
+		try {
+			overload = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
+				List<ReflectiveJavaClasses.Member> candidates;
+				List<String> tag = null;
+				if (!isTagged(methodName)) {
+					candidates = type.methods(methodName);
+				}
+				else {
+					JavaOverloads.Member member = member(methodName);
+					candidates = type.methods(member.name());
+					tag = member.tag();
+				}
+				return JavaOverloads.filterByTag(statics ? JavaOverloads.staticMethods(candidates) : candidates, tag);
+			}, args, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(type.name(), ex);
+		}
 		if (overload == null) {
 			throw new LispEvalException(
 					"No matching method " + type.name() + "." + methodName + " with " + args.size() + " argument(s)");
@@ -338,6 +353,9 @@ final class JavaInterop {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(type.name(), ex);
 		}
 	}
 
@@ -533,6 +551,12 @@ final class JavaInterop {
 		catch (ReflectiveOperationException ex) {
 			throw fail("reading field " + fieldName, ex);
 		}
+		catch (NoClassDefFoundError ex) {
+			String name = classOrObject instanceof LispString s ? s.value()
+					: classOrObject instanceof LispJavaObject obj ? obj.ref().getClass().getName()
+							: classOrObject.print();
+			throw unlinkable(name, ex);
+		}
 	}
 
 	/**
@@ -579,6 +603,9 @@ final class JavaInterop {
 			catch (ReflectiveOperationException ex) {
 				throw fail("reading field " + resolvedField.name(), ex);
 			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(className, ex);
+			}
 		}
 		List<JavaSite.Argument> promised = site.arguments();
 		for (int i = 0; i < args.size(); i++) {
@@ -616,6 +643,9 @@ final class JavaInterop {
 		catch (ReflectiveOperationException ex) {
 			throw fail(executable.isConstructor() ? "constructing " + className
 					: "calling " + className + "." + executable.name(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(className, ex);
 		}
 	}
 
@@ -707,7 +737,12 @@ final class JavaInterop {
 		List<Object> key = List.of(classes, PROXY_KEY);
 		Dispatch dispatch = IMPLEMENTATIONS.get(key);
 		if (dispatch == null) {
-			dispatch = new Dispatch(JavaImplementations.proxy(types, CLASSES));
+			try {
+				dispatch = new Dispatch(JavaImplementations.proxy(types, CLASSES));
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(String.join(",", interfaceNames), ex);
+			}
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
 		return implement(dispatch, List.of(callable), caller);
@@ -765,18 +800,33 @@ final class JavaInterop {
 			catch (IllegalArgumentException ex) {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
 			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(superName.value(), ex);
+			}
 			dispatch = new SubclassDispatch(implementation, CLASSES.subclassOf(superclass, interfaces));
 			remember(SUBCLASSES, key, dispatch);
 		}
-		JavaOverloads.Overload overload = selectConstructor(superclass, ctorArgs, caller);
+		JavaOverloads.Overload overload;
+		try {
+			overload = selectConstructor(superclass, ctorArgs, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
+		}
 		if (overload == null) {
 			throw new LispEvalException(
 					"No matching constructor for " + superName.value() + " with " + ctorArgs.size() + " argument(s)");
 		}
 		Constructor<?> constructor = (Constructor<?>) ((ReflectiveJavaClasses.Member) overload.executable())
 			.executable();
-		Class<?> proxyClass = ClassProxyMaker.proxyClass(superclass.type(), ifaceClasses, dispatch.implementation,
-				constructor, caller.classes().loader());
+		Class<?> proxyClass;
+		try {
+			proxyClass = ClassProxyMaker.proxyClass(superclass.type(), ifaceClasses, dispatch.implementation,
+					constructor, caller.classes().loader());
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
+		}
 		SUBCLASS_KINDS.putIfAbsent(proxyClass, dispatch.kind);
 		@Nullable Object[] javaArgs = marshalArguments(overload, ctorArgs, caller);
 		try {
@@ -788,6 +838,9 @@ final class JavaInterop {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + superName.value(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
 		}
 	}
 
@@ -986,6 +1039,9 @@ final class JavaInterop {
 			}
 			catch (IllegalArgumentException ex) {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(String.join(",", names), ex);
 			}
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
@@ -2057,6 +2113,18 @@ final class JavaInterop {
 			throw new LispEvalException("No such class: " + name);
 		}
 		return type;
+	}
+
+	// What a java: site over a class that cannot link throws: a catchable refusal
+	// naming the missing class, not the raw NoClassDefFoundError reflection throws --
+	// a dependency's class compiled against a language that is not here
+	// (metosin/reitit-core's reitit.Trie over clojure.lang, .todo/f65). The missing
+	// name is the error's own, slashes to dots. Any other LinkageError is not caught:
+	// it propagates as it did.
+	private static LispEvalException unlinkable(String className, NoClassDefFoundError ex) {
+		String detail = ex.getMessage();
+		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
+		return new LispEvalException("Cannot link class " + className + ": missing class " + missing);
 	}
 
 	// What a failed Java call throws: what a function called back from Java raised -- an

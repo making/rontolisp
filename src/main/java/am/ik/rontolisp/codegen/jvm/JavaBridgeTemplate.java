@@ -497,6 +497,9 @@ final class JavaBridgeTemplate {
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
 		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
+		}
 	}
 
 	/** Implements {@code (java:call obj "method" args...)}. */
@@ -633,6 +636,15 @@ final class JavaBridgeTemplate {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("reading field " + name, ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			// Only a class a getField or field read touched throws: the named one, or
+			// the object's own (null reaches no reflection).
+			String owner = lispString(classOrObject);
+			if (owner == null) {
+				owner = classOrObject == null ? "null" : classOrObject.getClass().getName();
+			}
+			throw unlinkable(owner, ex);
 		}
 	}
 
@@ -1337,13 +1349,18 @@ final class JavaBridgeTemplate {
 	private static TreeMap<String, List<Method>> groups(Class<?>[] interfaces) {
 		TreeMap<String, List<Method>> groups = new TreeMap<>();
 		for (Class<?> iface : interfaces) {
-			for (Method method : iface.getMethods()) {
-				if (!Modifier.isStatic(method.getModifiers())) {
-					List<Method> group = groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>());
-					if (!group.contains(method)) {
-						group.add(method);
+			try {
+				for (Method method : iface.getMethods()) {
+					if (!Modifier.isStatic(method.getModifiers())) {
+						List<Method> group = groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>());
+						if (!group.contains(method)) {
+							group.add(method);
+						}
 					}
 				}
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(iface.getName(), ex);
 			}
 		}
 		return groups;
@@ -1354,10 +1371,15 @@ final class JavaBridgeTemplate {
 	private static String declaringName(Class<?>[] interfaces, String key) {
 		if (interfaces.length > 1) {
 			for (Class<?> iface : interfaces) {
-				for (Method method : iface.getMethods()) {
-					if (!Modifier.isStatic(method.getModifiers()) && keyOf(method).equals(key)) {
-						return iface.getName();
+				try {
+					for (Method method : iface.getMethods()) {
+						if (!Modifier.isStatic(method.getModifiers()) && keyOf(method).equals(key)) {
+							return iface.getName();
+						}
 					}
+				}
+				catch (NoClassDefFoundError ex) {
+					throw unlinkable(iface.getName(), ex);
 				}
 			}
 		}
@@ -1477,6 +1499,9 @@ final class JavaBridgeTemplate {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + ((Method) overload[0]).getName(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(cls.getName(), ex);
 		}
 	}
 
@@ -1750,7 +1775,12 @@ final class JavaBridgeTemplate {
 	private static List<Constructor<?>> constructors(Class<?> cls) {
 		List<Constructor<?>> cached = CONSTRUCTORS.get(cls);
 		if (cached == null) {
-			cached = List.of(cls.getConstructors());
+			try {
+				cached = List.of(cls.getConstructors());
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(cls.getName(), ex);
+			}
 			remember(CONSTRUCTORS, cls, cached);
 		}
 		return cached;
@@ -1761,13 +1791,18 @@ final class JavaBridgeTemplate {
 		List<Method> cached = METHODS.get(key);
 		if (cached == null) {
 			List<Method> candidates = new ArrayList<>();
-			for (Method method : cls.getMethods()) {
-				if (method.getName().equals(methodName)) {
-					Method accessible = accessibleMethod(cls, method);
-					if (accessible != null) {
-						candidates.add(accessible);
+			try {
+				for (Method method : cls.getMethods()) {
+					if (method.getName().equals(methodName)) {
+						Method accessible = accessibleMethod(cls, method);
+						if (accessible != null) {
+							candidates.add(accessible);
+						}
 					}
 				}
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(cls.getName(), ex);
 			}
 			cached = List.copyOf(candidates);
 			remember(METHODS, key, cached);
@@ -1779,7 +1814,12 @@ final class JavaBridgeTemplate {
 		List<Object> key = List.of(cls, fieldName);
 		Field cached = FIELDS.get(key);
 		if (cached == null) {
-			cached = cls.getField(fieldName);
+			try {
+				cached = cls.getField(fieldName);
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(cls.getName(), ex);
+			}
 			remember(FIELDS, key, cached);
 		}
 		return cached;
@@ -2636,12 +2676,18 @@ final class JavaBridgeTemplate {
 			return cached;
 		}
 		try {
+			// Initializing, as a direct call's class constant does: static state is
+			// ready when the member runs. A class that cannot link refuses here, naming
+			// the missing class (.todo/f65).
 			Class<?> cls = Class.forName(name);
 			remember(CLASSES, name, cls);
 			return cls;
 		}
 		catch (ClassNotFoundException ex) {
 			throw new RuntimeException("No such class: " + name);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
 		}
 	}
 
@@ -2667,6 +2713,18 @@ final class JavaBridgeTemplate {
 			return exception;
 		}
 		throw rethrow(answer);
+	}
+
+	// What a java: site over a class that cannot link throws: the interpreter's
+	// refusal in words (eval/JavaInterop.unlinkable), as the RuntimeException a
+	// program's catch takes -- a dependency's class compiled against a language that
+	// is not here (metosin/reitit-core's reitit.Trie over clojure.lang, .todo/f65).
+	// Any other LinkageError is not caught: it propagates as it did.
+	// KEEP THE TWO IN SYNC (JavaBridgeTemplateParityTest).
+	private static RuntimeException unlinkable(String className, NoClassDefFoundError ex) {
+		String detail = ex.getMessage();
+		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
+		return new RuntimeException("Cannot link class " + className + ": missing class " + missing);
 	}
 
 }

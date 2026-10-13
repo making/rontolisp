@@ -461,7 +461,16 @@ final class ClojureJavaFaces {
 	private static Map<String, List<ClojureJavaClasses.Member>> methods(List<ClojureJavaClasses.JavaClass> interfaces) {
 		Map<String, List<ClojureJavaClasses.Member>> out = new java.util.TreeMap<>();
 		for (ClojureJavaClasses.JavaClass iface : interfaces) {
-			for (ClojureJavaClasses.Member method : iface.methods()) {
+			// An interface that cannot link contributes no row: the face still names it,
+			// so the run-time java:reify refuses with the missing class (.todo/f65).
+			List<ClojureJavaClasses.Member> declared;
+			try {
+				declared = iface.methods();
+			}
+			catch (LinkageError | SecurityException _) {
+				continue;
+			}
+			for (ClojureJavaClasses.Member method : declared) {
 				if (!method.isStatic() && !method.isBridge()) {
 					List<ClojureJavaClasses.Member> group = out.computeIfAbsent(key(method),
 							ignored -> new ArrayList<>());
