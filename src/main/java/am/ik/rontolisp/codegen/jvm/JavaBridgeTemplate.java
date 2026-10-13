@@ -500,6 +500,9 @@ final class JavaBridgeTemplate {
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(name, ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
+		}
 	}
 
 	/** Implements {@code (java:call obj "method" args...)}. */
@@ -645,6 +648,13 @@ final class JavaBridgeTemplate {
 				owner = classOrObject == null ? "null" : classOrObject.getClass().getName();
 			}
 			throw unlinkable(owner, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			String owner = lispString(classOrObject);
+			if (owner == null) {
+				owner = classOrObject == null ? "null" : classOrObject.getClass().getName();
+			}
+			throw initializerFailed(owner, ex);
 		}
 	}
 
@@ -1502,6 +1512,9 @@ final class JavaBridgeTemplate {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(cls.getName(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(cls.getName(), ex);
 		}
 	}
 
@@ -2690,6 +2703,9 @@ final class JavaBridgeTemplate {
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(name, ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
+		}
 	}
 
 	// What a failed call throws, as the program's _jfail decides for its direct calls:
@@ -2727,6 +2743,33 @@ final class JavaBridgeTemplate {
 		String detail = ex.getMessage();
 		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
 		return new RuntimeException("Cannot link class " + className + ": missing class " + missing);
+	}
+
+	// The missing class an ExceptionInInitializerError's cause chain holds, or
+	// null: a dependency class whose static initializer needs a missing class
+	// initializes with it, while a genuinely broken initializer holds none
+	// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
+	// KEEP IN SYNC with eval/JavaInterop.unlinkableCause.
+	private static @Nullable NoClassDefFoundError unlinkableCause(Throwable ex) {
+		Throwable current = ex;
+		while (current != null) {
+			if (current instanceof NoClassDefFoundError missing) {
+				return missing;
+			}
+			current = current.getCause();
+		}
+		return null;
+	}
+
+	// What a java: site over a class whose initialization needs a missing class
+	// throws: the same refusal unlinkable answers; a genuinely broken
+	// initializer's own failure is rethrown as it was.
+	private static RuntimeException initializerFailed(String className, ExceptionInInitializerError ex) {
+		NoClassDefFoundError cause = unlinkableCause(ex);
+		if (cause != null) {
+			return unlinkable(className, cause);
+		}
+		throw ex;
 	}
 
 }

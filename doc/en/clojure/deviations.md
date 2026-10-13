@@ -499,8 +499,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Invalid reference state`, but later calls reach the refused definition (the oracle
   keeps the old one). A refused `defmacro` redefinition still serves its new expander
   (the call sites below it expanded with it while lowering and the table holds it),
-  where the oracle keeps the old root and drops the macro; `set-validator!` of a
-  computed macro var reads the var's site, which signals like `deref`.
+  where the oracle keeps the old root and drops the macro.
 - `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
   ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
   atom).
@@ -611,7 +610,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   class over it, such as `reitit.Trie`) cannot link here, and every call on it refuses
   with `Cannot link class C: missing class M`, naming the missing class -- catchable
   by `(catch Exception e ...)` on the interpreter and the JVM alike (on wasm every
-  `java:` call is a call-time error). There is no `clojure.lang` bridge, and none is
+  `java:` call is a call-time error). A class whose static initializer needs the
+  missing class (a static field of its type, as in `sci.impl.FISupport`) refuses the
+  same way: its `ExceptionInInitializerError` carries the missing class, so
+  construction, calls and static-field reads answer the same refusal, while a
+  genuinely broken initializer propagates as it did. There is no `clojure.lang` bridge, and none is
   planned: no value here is an `IPersistentMap`, so dependency code taking one could
   not read it anyway. Libraries that need one also ship a portable path (reitit's
   `clojure-trie-compiler` answers the oracle's lines), and the reader takes a

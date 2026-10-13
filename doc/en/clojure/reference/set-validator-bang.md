@@ -8,7 +8,8 @@ the reference would take must pass `f` (any function value), else the store refu
 must pass `f` first; `nil` removes the validator. An atom checks it on every store, a ref
 when its transaction commits, an agent on each action's answer, a var on `alter-var-root`
 and on every `def`, `defn`, `defmacro`, `deftest` or `with-redefs` replacing its root.
-`get-validator` answers it. Works as a function value.
+Of a macro var it checks the macro function, whether the var is spelled literally or
+computed. `get-validator` answers it. Works as a function value.
 
 ```clojure
 (def a (atom 2))

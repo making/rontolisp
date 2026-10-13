@@ -5147,6 +5147,28 @@ cases:
       :m2 [[true true]]
       Invalid reference state [[true true]]
       :m4 [[true true]]
+  - name: set-validator-of-a-computed-macro-var-answers-nil
+    # Oracle-identical (clj 1.12.6, 2026-10-13): set-validator! of a macro var
+    # computed at run time checks the present expander the defmacro site noted,
+    # like a literal site does, answering nil; a validator it fails throws, nil
+    # removes it.
+    source: |
+      (defmacro svm [] :m1)
+      (println (set-validator! (if true #'svm #'svm) (fn [v] (fn? v))))
+      (println ((fn [v] (set-validator! v (fn [v] (fn? v)))) #'svm))
+      (println (apply set-validator! [#'svm (fn [v] (fn? v))]))
+      (println (fn? (get-validator #'svm)))
+      (println (set-validator! (if true #'svm #'svm) nil))
+      (println (get-validator #'svm))
+      (println (try (set-validator! (if true #'svm #'svm) (fn [v] false)) (catch IllegalStateException e (ex-message e))))
+    expected: |
+      nil
+      nil
+      nil
+      true
+      nil
+      nil
+      Invalid reference state
   - name: a-redefined-deftest-notifies-a-var-s-watches
     # Oracle-identical (clj 1.12.6, 2026-10-13): a deftest redefinition calls the
     # var's watches with the old and the new test function, like the oracle's

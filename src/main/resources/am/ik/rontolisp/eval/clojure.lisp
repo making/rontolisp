@@ -13790,21 +13790,50 @@
         t)
       nil))
 
+(defvar rontolisp::%clojure-macro-expanders
+  (make-hash-table :test 'equal)
+  "The present expander of each program macro: an equal table from
+   \"ns/name\" to it, written by the note a defmacro site carries (a
+   WATCH-family statement a program naming no watch verb sheds), read by
+   %clojure-set-validator.")
+
+(defun rontolisp::%clojure-note-macro-expander (name expander)
+  "Register EXPANDER as the present expander of the macro NAME (\"ns/name\"):
+   what a computed set-validator! of its var checks, since the var's site
+   reads no value. Answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+    (setf (gethash name rontolisp::%clojure-macro-expanders) expander))
+  nil)
+
+(defun rontolisp::%clojure-macro-expander-of (ref)
+  "The present expander of the macro whose var is REF, nil for any other
+   reference: what a computed set-validator! checks without touching the
+   var's signaling site."
+  (if (rontolisp::%clojure-var-p ref)
+      (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+        (values
+         (gethash (car (cdr ref)) rontolisp::%clojure-macro-expanders)))))
+
 (defun rontolisp::%clojure-set-validator (ref f)
   "set-validator!: F (nil to remove) as REF's validator, once REF's value
-   passes it; answers nil."
+   passes it; answers nil. A macro's var reads no value, so one the program
+   defined checks its present expander, like the literal macro path."
   (let ((cell (rontolisp::%clojure-watchable-cell ref "set-validator!"))
         (f (if (rontolisp::%clojure-truthy f) f nil)))
     (if cell
         (progn
           (rontolisp::%clojure-stm-validate (aref cell 0) f)
           (setf (aref cell 2) f))
-        (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
-          (rontolisp::%clojure-stm-validate (rontolisp::%clojure-var-get ref) f)
-          (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-            (if f
-                (setf (gethash ref rontolisp::%clojure-var-validators) f)
-                (remhash ref rontolisp::%clojure-var-validators)))))
+        (let ((macro (rontolisp::%clojure-macro-expander-of ref)))
+          (if macro
+              (rontolisp::%clojure-set-validator-macro ref f macro)
+              (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
+                (rontolisp::%clojure-stm-validate
+                 (rontolisp::%clojure-var-get ref) f)
+                (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+                  (if f
+                      (setf (gethash ref rontolisp::%clojure-var-validators) f)
+                      (remhash ref rontolisp::%clojure-var-validators)))))))
     nil))
 
 (defun rontolisp::%clojure-set-validator-v (&rest args)
