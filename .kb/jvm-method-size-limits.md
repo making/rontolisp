@@ -214,6 +214,27 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   A check repeated at every call site belongs in a shared helper, not inline: the
   trampoline's bounce unwrap inline (~22 B/site) took the corpus's largest form past the
   headroom (2026-10-03); as `invokestatic _unw` it is 3 B ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
+- One top-level form past the cap has had nowhere to go since chunking only splits
+  between forms -- until 2026-10-13, when the hiccup 2.0.0 probe's `(h/html ...)`
+  literal (one variant per `*html-mode*` x `*escape-strings?*`, 8 compiled bodies)
+  stopped `-o Probe.class` with `method _top$1: method code exceeds the JVM's
+  65535-byte limit: 69502`. A chunk measured past `TOP_CHUNK_LIMIT_BYTES` (60,000,
+  the cap less the writer's widening margin) is now re-compiled with its largest
+  form cut by `AstOutliner.outlineTopLevel` (`TopLevelTooLarge`, riding the
+  `GateUnderpredicted` retry loop): the branches of a large `case`/`cond`/`if` and
+  the arguments of a long call each become a method of their own closing over
+  nothing but the form's own `let`s, calibrated to `TOP_OUTLINE_TARGET_BYTES`
+  (24,000, the chunk-budget parity) down to a `TOP_OUTLINE_FLOOR_BYTES` (8,000)
+  floor. The cut runs after the exit lowering, so a form with a lexical exit
+  (`go`, `return-from`, `return`) stays whole and keeps the loud report. Measured
+  2026-10-13: a top-level `(print (case ...))` of 8 x 800 branches, `_top$0`
+  70,914 -> 18,028 B with 8 branch methods, oracle-identical; the hiccup probe's
+  big literal, 1,131,133 -> 79 pieces, JVM content-identical to `clj`
+  (the `#object` hash the oracle prints a `RawString` with, rontolisp does not).
+  The top level runs once, so only the hard cap is enforced there, never the
+  8000-bytecode cliff (`JvmLibraryMethodSizeTest` still allows `_top$N` over it).
+  The shared walker's new plain-call arguments also reach oversized defuns (and the
+  WASM twin's), byte-identical where no budget fires.
 
 ## Generated data must not become pool entries
 - **Read the text back; do not scan it** (`ClUnicodeTables`): a scanned table cost ~208,000 pool

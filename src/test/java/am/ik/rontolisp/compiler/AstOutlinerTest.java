@@ -47,6 +47,19 @@ class AstOutlinerTest {
 		return sb.append(')').toString();
 	}
 
+	private static List<LispVal> topProgram(String form) {
+		return LispReader.readAllFromString(form);
+	}
+
+	/** Eight big case arms under one call: the top-level f64 shape. */
+	private static String topCaseForm() {
+		StringBuilder sb = new StringBuilder("(print (case k");
+		for (int b = 0; b < 8; b++) {
+			sb.append(" (").append(b).append(' ').append(group(b * 10)).append(')');
+		}
+		return sb.append("))").toString();
+	}
+
 	@Test
 	void aFunctionNoBudgetCanCutIsNeverAskedFor() {
 		// No position the walker knows to be evaluated, so the first target cuts nothing
@@ -106,6 +119,73 @@ class AstOutlinerTest {
 		assertThat(third).isEqualTo(new AstOutliner.Budget(12000, 2666));
 		assertThat(AstOutliner.outline(program, Map.of("F", third))
 			.nextBudget("F", 8200, third, FIRST_TARGET, FLOOR_TARGET)).isNull();
+	}
+
+	@Test
+	void aTopLevelCallReachesTheBranchBuriedUnderIt() {
+		// The f64 shape: one top-level (print (case ...)) whose decision tree is one
+		// call's argument. The call's arguments are evaluated positions, so the case
+		// -- and then its arms -- move into methods of their own.
+		List<LispVal> program = topProgram(topCaseForm());
+		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(cut.outlinedTop()).containsExactly(0);
+		String printed = cut.program().get(0).print();
+		assertThat(printed).contains("__outlined_").contains("(CASE K");
+	}
+
+	@Test
+	void aTopLevelCallWithSmallArgumentsIsLeftWhole() {
+		// Each argument below the smallest piece worth a method: wrapping one would
+		// cost more than it buys, so the form is left whole and no budget asks for a
+		// re-compile.
+		List<LispVal> program = topProgram("(print (opaque " + statement(0) + " " + statement(1) + "))");
+		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(cut.outlinedTop()).isEmpty();
+		assertThat(cut.nextTopBudget(0, 70000, null, 24000, 8000)).isNull();
+	}
+
+	@Test
+	void aTopLevelFormWithALexicalExitIsLeftWhole() {
+		// The cut runs after the exit lowering, so a form a go or return-from leaves
+		// cannot pay for a fresh lambda around a piece of it: it stays whole and keeps
+		// the loud over-limit report it has today.
+		StringBuilder sb = new StringBuilder("(block done (progn");
+		for (int k = 0; k < 60; k++) {
+			sb.append(' ').append(group(k * 10));
+		}
+		sb.append(" (return-from done 'hit)))");
+		List<LispVal> program = topProgram(sb.toString());
+		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(cut.outlinedTop()).isEmpty();
+		assertThat(cut.nextTopBudget(0, 70000, null, 24000, 8000)).isNull();
+	}
+
+	@Test
+	void aTopLevelQuotedDatumIsNeverReadAsCode() {
+		// quote's positions are data however large: denying the head keeps a huge
+		// literal from being wrapped into a lambda that would evaluate it.
+		StringBuilder sb = new StringBuilder("'(a");
+		for (int k = 0; k < 500; k++) {
+			sb.append(" (").append(k).append(" . ").append(k + 1).append(')');
+		}
+		sb.append(')');
+		List<LispVal> program = topProgram(sb.toString());
+		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(cut.outlinedTop()).isEmpty();
+		assertThat(cut.nextTopBudget(0, 70000, null, 24000, 8000)).isNull();
+	}
+
+	@Test
+	void aTopLevelSetfValueIsCutButItsPlaceIsNot() {
+		// (setf place value): the value is evaluated, the place is not. The value is
+		// two uncuttable-but-large calls in a progn, so no cut inside it fits and the
+		// whole value moves out; the place stays exactly where it was.
+		String value = "(progn " + opaqueCall(300) + " " + opaqueCall(300) + ")";
+		List<LispVal> program = topProgram("(setf (aref arr 0) " + value + ")");
+		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(cut.outlinedTop()).containsExactly(0);
+		String printed = cut.program().get(0).print();
+		assertThat(printed).startsWith("(SETF (AREF ARR 0) (LET").contains("__outlined_");
 	}
 
 }

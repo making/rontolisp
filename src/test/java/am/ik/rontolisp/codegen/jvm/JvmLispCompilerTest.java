@@ -5178,6 +5178,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aTopLevelFormPastTheMethodSizeLimitOutlinesItsBranches() throws Exception {
+		// f64: the top level is chunked only BETWEEN forms, so one form whose own code
+		// passes the 64 KB per-method cap has nowhere to go. Its branches become
+		// methods of their own instead (compiler/AstOutliner over the form's evaluated
+		// arguments, .kb/jvm-method-size-limits.md). The program pins that the compile
+		// succeeds, that every emitted method fits the cap, and that the answer is
+		// what the interpreter prints.
+		int branchCount = 8;
+		int ops = 800;
+		StringBuilder sb = new StringBuilder("(defvar k 3)\n(print (case k\n");
+		for (int b = 0; b < branchCount; b++) {
+			sb.append("  (").append(b).append(" (progn\n");
+			for (int i = 0; i < ops; i++) {
+				sb.append("    (setq k (+ k ").append(i + b * ops).append("))\n");
+			}
+			sb.append("    (list 'branch-").append(b).append(" k)))\n");
+		}
+		sb.append("  (otherwise (list 'other k))))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.values()).as("every emitted method fits the JVM's 64 KB Code limit")
+			.allSatisfy(size -> assertThat(size).isLessThanOrEqualTo(65535));
+		// The source builds no closure of its own, so a lambda method in the class is
+		// one the outlining introduced for a branch.
+		assertThat(sizes.keySet()).as("a branch became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
+		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)");
+	}
+
+	@Test
 	void aFunctionNameTablePastTheMethodSizeBudgetIsSegmented() throws Exception {
 		// _funName is the funcId -> name table behind #<function NAME>: one 11-byte row
 		// per

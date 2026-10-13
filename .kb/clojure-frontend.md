@@ -1511,7 +1511,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | tools.cli 1.4.256 | = | = | = | = | |
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
-| hiccup 2.0.0 | = | compile | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); a 69,502 B top-level method (`.todo/f64`) |
+| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | crash | | | | `reitit.Trie`, Java over `clojure.lang` (`.todo/f65`); with `clojure-trie-compiler` the interpreter prints the oracle's default-compiler lines |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
 | malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
