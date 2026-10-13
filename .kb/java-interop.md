@@ -1312,7 +1312,13 @@ same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,li
   function-where-`Object`-is-expected refusal (`functionObjectRefusal`) is a PLAIN error
   on the interpreter (thrown past the `fail` wrapping), so a direct site refuses it
   BEFORE its conversion handler (`emitFunctionObjectRefusals`), or `handler-case` sees
-  the wrapped text.
+  the wrapped text. Measured 2026-10-13: the pre-check only sees an argument itself,
+  so a function nested in a sequence a resolved site converts element-wise wrapped on
+  the JVM (`error calling C.m: java.lang.RuntimeException: java: a function ...`) while
+  the interpreter, the bridge and dispatched sites stayed plain; the checked
+  conversion now signals the refusal (`_jsig`) so the handler throws it on unchanged.
+  Pins: `JavaImplementationPrograms.FUNCTION_OBJECT` row 4 (unknown-receiver, nested
+  list/vector, dispatched rows on both backends).
 - Tagged designators (`put(byte)`) resolve explicitly and convert UNCHECKED, as before.
 - Test note: `(byte x)` answers a fixnum here (the oracle's `Byte`), which the reflector
   refuses for `byte` parameters -- so `ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItself`
