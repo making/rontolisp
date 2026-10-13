@@ -196,6 +196,8 @@ answered `2 5 3` before).
 | `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing). `newline` is `(progn (princ "\n") nil)`: until 2026-10-09 it answered the `"\n"` `princ` returns, so `pprint` did too (clojure-spec `clojure-pprint-cl-format-lays-out-through-the-pretty-printer`) |
 | `rand` `rand-int` `rand-nth` `shuffle` | draws from the program-owned generator (`.kb/random.md`) | no domain check; `rand-nth` of nil is nil, of an empty vector signals; `shuffle` pins membership, never order |
 | `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`); of one index the byte-array family's `%clojure-aget`/`-aset`/`-alength` | the element class is ignored but `Byte/TYPE` of one dimension, a byte array ("Byte arrays"); every backend |
+| `parse-long` `parse-double` `parse-boolean` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-parse-NAME` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | the oracle's regex-free scanners in Lisp, so every backend runs them ("Portable parsers") |
+| `object-array` `to-array` `into-array`, `int-array` `long-array` `double-array` `float-array` `short-array` `char-array` `boolean-array` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-NAME` (of two arguments `NAME-2`) after a lower-time arity check in the oracle's wording; as a value `#'...-v`; `into-array`'s class spelling resolves at lowering time to a `(:C%CLASS name)` designator | vectors with the oracle's member coercions ("Typed arrays"); every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
@@ -2640,6 +2642,106 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`),
   `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms` (a
   `java:call` keeps the arms on a host target, not on wasm).
+
+## Portable parsers
+
+- **The verbs** (2026-10-13, f57; `ClojureCoreLowering`, `clojure.lisp` "Parsers"):
+  `parse-long` (the oracle's `Long/valueOf` grammar: an optional sign, decimal
+  digits, refused past the long range), `parse-double` (the oracle's
+  `Double/valueOf` grammar: trimmed, an optional sign and `NaN`, `Infinity`, a
+  decimal or a hex float with an optional `d`/`D`/`f`/`F` suffix, which never
+  rounds through float), `parse-boolean` (exactly `"true"`/`"false"`). A
+  non-string is the oracle's `IllegalArgumentException` (`Expected string, got
+  ...`, `nil` for nil), a malformed string nil. They run on every backend: the
+  wasm targets have no host `Long`/`parseLong` to call, so a portable program
+  had no number parser but `read-string` (`deps-project/units/money.cljc`
+  folded digits under a `:rontolisp` branch for want of one; it calls
+  `parse-long` now).
+- `parse-long` reads every Unicode decimal-digit block, like `Character.digit`
+  (clj 1.12.6 reads Arabic-Indic, Devanagari and fullwidth digits too, measured
+  2026-10-13): the 68 block starts ride a `defvar`, the value is a scan over
+  them. `parse-double` reads ASCII only, like the oracle (fullwidth digits are
+  nil), and computes the magnitude as the exact ratio the grammar spells,
+  coerced with `float` -- correctly rounded on all four backends, so `1e-323`
+  is `9.9E-324` and `1e1000` `##Inf`, like `Double/valueOf` (measured
+  2026-10-13 over ~80 strings, oracle-identical but the documented
+  deviations, of which there are none).
+- Infinity is `(/ 1.0 0.0)` and NaN `(/ 0.0 0.0)`: building them from
+  `most-positive-double-float` (`(* max 2.0d0)`, `(- inf inf)`) costs a
+  `parse-double` program about 200 KB of wasm over this (279,249 to 63,279 B
+  P1, measured 2026-10-13); the divisions answer `##Inf`/`##NaN` unsignalled on
+  all four backends. No shared verb grows an arm: the scanners name only core
+  forms, strings and the refusal carriers (no `find`, no `subseq`, no `=` --
+  each links hundreds of KB; `eql` is no cheaper), so a minimal `(prn
+  (parse-long "12"))` is 38,398 B of wasm P1 against 28,097 for `(prn 1)`
+  (measured 2026-10-13), and a program naming none compiles byte-identically
+  (below).
+- **Pins**: clojure-spec `parse-long-parses-decimal-digits-like-long-value-of`,
+  `parse-double-parses-like-double-value-of`,
+  `parse-boolean-parses-true-and-false` (four backends, oracle-identical);
+  `ClojureLoweringTest#parsersAndTypedArraysLowerToTheirWorkers`.
+
+## Typed arrays
+
+- **The decision** (2026-10-13, f57): the typed constructors join the
+  vector stand-in, not the byte-array family's representation. An array
+  `make-array` makes is a vector here already (`deviations.md`), so a typed
+  array is one too: the constructors coerce their members like the oracle's
+  and answer a plain vector, and `aget`/`aset`/`alength`/`aclone`, the seq
+  verbs, `count`, `nth`, `get` and `=` take one as they take a vector. A new
+  wrapper per type would have needed arms in the printer, `str`, `class`, `=`,
+  the seq view, `count`, `nth`, `get`, `contains?`, the `java:` crossing both
+  ways and `instance?` -- one family per type or one shared, each arm a shape
+  every program not naming it must strip. The stand-in adds no arm anywhere:
+  a program naming none of these compiles byte-identically, by construction.
+  Measured 2026-10-13 against the base commit (wasm P1 / jar, this worktree):
+  `demo.clj`, `ring-hello.clj` and a `byte-array`/`parse-uuid`/`make-array`
+  program byte-identical both; a minimal `(vec (int-array [1 2]))` is 274,879
+  B of wasm P1, beside 280,459 for `(vec (byte-array [1 2]))` -- the seq and
+  refusal machinery costs what the byte precedent costs. The oracle's classes,
+  printing, identity, collection predicates and `aset` checks are the
+  documented deviations (`deviations.md`, the reference pages).
+- **The verbs** (`ClojureCoreLowering`, `clojure.lisp` "Typed arrays"):
+  `object-array` (a number is that many nils, else the members as is),
+  `to-array` (always an `Object` vector; a non-seqable is the oracle's
+  `RuntimeException` `Unable to convert: ...`), `into-array` (the component
+  the first member's class, `Object` for none or a nil first; a primitive
+  class casts, any other checks), `int-array`/`long-array`/`short-array`
+  (unchecked narrowing: an integer's low bits, a double or ratio truncated
+  inside the range, NaN 0), `double-array`/`float-array` (widened; a float
+  holds a double, like `float`), `char-array` (characters only),
+  `boolean-array` (booleans only). One size or seq, or a size and an init
+  value or seq: an `int`/`long`/`double`/`float` init fills for any number, a
+  `short` for any in-range integer (the oracle fills only for a `Short`, which
+  is an integer here), a `boolean`/`char` for its own kind, else the seq is
+  copied and truncated to the size. Sizes narrow like the oracle's `intValue`
+  (one argument) or `intCast` (two); failures carry the oracle's classes,
+  with the front end's own messages where the JDK's vary
+  (`deviations.md`).
+- `into-array`'s class spelling resolves at lowering time to a `(:C%CLASS
+  name)` designator (`ClojureCoreLowering.intoArrayType`: `X/TYPE` of a boxed
+  primitive to its primitive name, any other classlike spelling to its
+  canonical name, each unresolved or shadowed spelling lowered as its value),
+  so every backend reads it without the host; a computed type travels as its
+  value, a host `Class` by `%clojure-host-class-name` (nil on wasm, where no
+  `Class` exists), anything else the oracle's `ClassCastException` to
+  `Class`. The primitive conversions are the oracle's own inconsistent matrix
+  (measured clj 1.12.6, 2026-10-13): `int`/`short`/`byte` truncate (doubles,
+  ratios, characters) and refuse past their range (`integer overflow` past the
+  int range, `Value out of range for ...` otherwise; a bigint past the long
+  range is its refusal); `long` takes only the integers and characters
+  (`argument type mismatch` else, empty for nil); `double` those and the
+  doubles; `float` the numbers; `char` the numbers truncated into its range;
+  `boolean` the booleans. A reference component takes nil, `Object` all,
+  `Number` the numbers, `CharSequence` the strings, any other class its own
+  members (`array element type mismatch` else).
+- **Pins**: clojure-spec
+  `object-array-to-array-and-into-array-answer-vectors`,
+  `typed-array-constructors-coerce-like-the-oracles`,
+  `typed-arrays-are-vectors-to-aget-aset-alength-aclone-and-the-verbs` (four
+  backends; oracle-identical but the documented deviations);
+  `ClojureLoweringTest#parsersAndTypedArraysLowerToTheirWorkers`,
+  `ClojureLibraryTest#aProgramNamingNoParserOrTypedArrayPrunesAwayTheirWorkers`.
 
 ## Charset values
 

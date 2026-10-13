@@ -2159,6 +2159,43 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void parsersAndTypedArraysLowerToTheirWorkers() {
+		// the portable parsers are one worker call each, on every backend
+		assertThat(lowered("(parse-long \"12\")")).contains("(RONTOLISP::%CLOJURE-PARSE-LONG");
+		assertThat(lowered("(parse-double \"1.5\")")).contains("(RONTOLISP::%CLOJURE-PARSE-DOUBLE");
+		assertThat(lowered("(parse-boolean \"true\")")).contains("(RONTOLISP::%CLOJURE-PARSE-BOOLEAN");
+		assertThat(lowered("(map parse-long [\"1\"])")).contains("#'RONTOLISP::%CLOJURE-PARSE-LONG-V");
+		assertThatThrownBy(() -> Clojure.read("(parse-long \"1\" \"2\")", null))
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/parse-long");
+		// the object constructors are one worker call each
+		assertThat(lowered("(object-array [1])")).contains("(RONTOLISP::%CLOJURE-OBJECT-ARRAY");
+		assertThat(lowered("(to-array [1])")).contains("(RONTOLISP::%CLOJURE-TO-ARRAY");
+		assertThat(lowered("(into-array [1])")).contains("(RONTOLISP::%CLOJURE-INTO-ARRAY");
+		// a class spelling resolves at lowering time to a (:C%CLASS name)
+		// designator, so no backend needs the host; a computed type travels
+		assertThat(lowered("(into-array String [\"a\"])"))
+			.contains("(RONTOLISP::%CLOJURE-INTO-ARRAY-2 (LIST :C%CLASS \"java.lang.String\")");
+		assertThat(lowered("(into-array Integer/TYPE [1])"))
+			.contains("(RONTOLISP::%CLOJURE-INTO-ARRAY-2 (LIST :C%CLASS \"int\")");
+		assertThat(lowered("(let [t2-v String] (into-array t2-v [\"a\"]))"))
+			.contains("(RONTOLISP::%CLOJURE-INTO-ARRAY-2 |c%t2-v|");
+		assertThatThrownBy(() -> Clojure.read("(into-array)", null))
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/into-array");
+		// each primitive constructor is its worker, of two arguments the -2 one
+		assertThat(lowered("(int-array [1])")).contains("(RONTOLISP::%CLOJURE-INT-ARRAY");
+		assertThat(lowered("(int-array 2 7)")).contains("(RONTOLISP::%CLOJURE-INT-ARRAY-2");
+		assertThat(lowered("(long-array [1])")).contains("(RONTOLISP::%CLOJURE-LONG-ARRAY");
+		assertThat(lowered("(double-array [1])")).contains("(RONTOLISP::%CLOJURE-DOUBLE-ARRAY");
+		assertThat(lowered("(float-array [1])")).contains("(RONTOLISP::%CLOJURE-FLOAT-ARRAY");
+		assertThat(lowered("(short-array [1])")).contains("(RONTOLISP::%CLOJURE-SHORT-ARRAY");
+		assertThat(lowered("(char-array [1])")).contains("(RONTOLISP::%CLOJURE-CHAR-ARRAY");
+		assertThat(lowered("(boolean-array [1])")).contains("(RONTOLISP::%CLOJURE-BOOLEAN-ARRAY");
+		assertThat(lowered("(map int-array [[1]])")).contains("#'RONTOLISP::%CLOJURE-INT-ARRAY-V");
+		assertThatThrownBy(() -> Clojure.read("(int-array 1 2 3)", null))
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/int-array");
+	}
+
+	@Test
 	void inIsStandardInput() {
 		// read as a value, *in* is the bound stream, or the standard input's stream
 		// value where *standard-input* holds the t designator (Clojure's true); a

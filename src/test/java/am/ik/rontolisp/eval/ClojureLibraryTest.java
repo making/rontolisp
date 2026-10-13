@@ -682,6 +682,37 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramNamingNoParserOrTypedArrayPrunesAwayTheirWorkers() {
+		// the parsers and the typed constructors are plain workers, not family
+		// arms: the compile-path pruner drops the ones no kept form reaches, so a
+		// program naming none of them carries none, and one naming one carries
+		// only its own
+		List<String> names = List.of("RONTOLISP::%CLOJURE-PARSE-LONG", "RONTOLISP::%CLOJURE-PARSE-DOUBLE",
+				"RONTOLISP::%CLOJURE-PARSE-BOOLEAN", "RONTOLISP::%CLOJURE-OBJECT-ARRAY", "RONTOLISP::%CLOJURE-TO-ARRAY",
+				"RONTOLISP::%CLOJURE-INTO-ARRAY", "RONTOLISP::%CLOJURE-INT-ARRAY", "RONTOLISP::%CLOJURE-LONG-ARRAY",
+				"RONTOLISP::%CLOJURE-DOUBLE-ARRAY", "RONTOLISP::%CLOJURE-FLOAT-ARRAY",
+				"RONTOLISP::%CLOJURE-SHORT-ARRAY", "RONTOLISP::%CLOJURE-CHAR-ARRAY",
+				"RONTOLISP::%CLOJURE-BOOLEAN-ARRAY", "RONTOLISP::%CLOJURE-ARRAY-MEMBERS",
+				"RONTOLISP::%CLOJURE-BUILD-ARRAY", "RONTOLISP::%CLOJURE-DECIMAL-DIGIT",
+				"RONTOLISP::%CLOJURE-HEX-DIGIT");
+		List<LispVal> plain = Clojure.read("(prn (byte-array 2) (parse-uuid \"1-1-1-1-1\"))", null);
+		assertThat(LibraryDefunPruner.prune(ClojureLibrary.process(plain, false))
+			.stream()
+			.map(LispVal::print)
+			.flatMap(text -> names.stream().filter(text::contains))
+			.toList()).isEmpty();
+		String kept = LibraryDefunPruner
+			.prune(ClojureLibrary.process(Clojure.read("(prn (parse-long \"12\") (int-array [1]))", null), false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(kept).contains("(DEFUN RONTOLISP::%CLOJURE-PARSE-LONG ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-INT-ARRAY ")
+			.doesNotContain("%CLOJURE-PARSE-DOUBLE")
+			.doesNotContain("%CLOJURE-DOUBLE-ARRAY");
+	}
+
+	@Test
 	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
 		// str of a number passes no io test where the program can hold no io value; the
 		// library loaded on first use keeps every arm for what a session reads next
