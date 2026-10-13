@@ -46,6 +46,15 @@ overload instead and keeps the host construction, on the interpreter and the JVM
 argument take on every backend, mapping as the bare call (the mapping ignores the locale).
 `.intern` of a string is the string, on every backend.
 
+A zero-argument `(java.util.HashMap.)` (or `(new java.util.HashMap)`) is the empty map,
+and a one-argument construction of a map the map itself, where the host is not (the wasm
+backends): `.get`, `.size`, `.containsKey` and the other lookups read it like any map,
+while `.put` on it throws the oracle's `UnsupportedOperationException` with no message,
+as on the interpreter and the JVM, where the value crosses to Java as a read-only map.
+nil builds to the oracle's `NullPointerException`. Where the host is (the interpreter
+and the JVM) the construction stays the mutable `java.util.HashMap`, and any other
+arity or a `^[...]`-tagged construction keeps the host construction everywhere.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2

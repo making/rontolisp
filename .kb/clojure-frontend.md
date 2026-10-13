@@ -1536,7 +1536,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
-| reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
+| reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
 | data.json 2.5.2 | = | = | refused | refused | the load reads `DateTimeFormatter/ISO_INSTANT` (`.todo/f81`) |
 | malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
 
@@ -1620,9 +1620,9 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
   `Cannot link class reitit.Trie: missing class clojure.lang.IPersistentMap`,
   catchable; P1 and the component compile with the `java:` call-time warnings and
   refuse the same way, catchable. Portable compiler (`clojure-trie-compiler`) --
-  the interpreter and the JVM print the oracle's default-compiler lines line for line;
-  P1 builds but router construction fails on `reitit.impl/fast-map`'s `(HashMap. ...)`
-  (`.todo/f73`; a static-only router builds, every compiler piece works alone).
+  the interpreter, the JVM, P1 and the component print the oracle's lines line for
+  line since 2026-10-13 ("HashMap construction"; P1 and the component warn
+  `JAVA:STATIC`+`JAVA:CALL` off the probe's path).
   Pins: `ClojureInteropTest#aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass`
   (static call and construction over a fixture jar holding a class compiled against a
   type it omits),
@@ -4990,6 +4990,67 @@ host alone answers ("Host arms where the host is not").
   Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
   (oracle-identical but the `#<java C>` lines),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
+
+## HashMap construction
+
+**A `(java.util.HashMap. ...)` construction is the map itself where the host is not
+(wasm), a mutable `java.util.HashMap` where it is** (`.todo/f73`, decided 2026-10-13).
+reitit's `fast-map` (`(HashMap. ^Map m)`, the name lookup every router but the
+single-static one builds) is the `:cljs` branch's identity on a host-less target: the
+map needs only `.get`, which already answers through the value-method row. A
+zero-argument construction (`(HashMap.)`, `(new java.util.HashMap)`,
+`(HashMap/new)`) is the empty map, the same table a `{}` literal builds
+(`ClojureInteropLowering.hashMapEmpty`); a one-argument untagged construction is the
+argument itself, evaluated once behind a `let` temporary, nil the oracle's
+`NullPointerException` (`hashMapCopy`). A tagged construction and any other arity keep
+`java:new` on every backend. Where the host is (the interpreter, the JVM) every
+spelling keeps `java:new`: the host tests pin the mutation
+(`ClojureInteropTest`: `doto` + `.put` + `.get`, `str` spelling `{:a=1}`), which no
+immutable stand-in answers.
+
+A map here is immutable, so `.put` of a key and a value on one refuses where the
+host is not: the oracle's `UnsupportedOperationException` with no message (measured
+clj 1.12.6 2026-10-13: the same for a sorted map; `ex-message` nil), a message-less
+`(throw (new java.lang.UnsupportedOperationException))` like the seq iterator's
+`.remove` (`ClojureValueMethodLowering.unmappedArm`, the `put/2` answer only). Where
+the host is nothing changes: the same call goes to the read-only `Map` view Java is
+handed the value as, whose `AbstractMap.put` throws that same exception. Any other
+receiver keeps the oracle's words on every backend (`No matching method put found
+taking 2 args for class ...`, measured against `(.put "s" :a 1)`).
+
+Deviations, all on wasm only: `str` and `class` of the construction read the Clojure
+map (`{:a 1}`, an array- or hash-map keyword), where the oracle spells the `HashMap`;
+a capacity argument (`(HashMap. 16)`) answers itself, where the oracle builds an empty
+mutable map; two arguments (`(HashMap. 1024 0.25)`, malli's load-time registry) and
+`.putAll` stay host-only (`.todo/f84`). `URLDecoder/decode` and `URLEncoder/encode`
+in the same namespace stay host-only too, as the todo filed them.
+
+Measured 2026-10-13 (exec jar, before -> after): `(defn f [m k v] (.put m k v))`
+wasm P1 269,790 -> 422,342 B, component 275,688 -> 428,717 B (the exception runtime
+the message-less construction carries; a `.put` site is the only program that pays
+it), JVM class 734,032 -> 734,032; `(defn f [m k] (.get m k))` byte-identical on all
+three (wasm P1 288,377, component 294,289, class 759,750); `(println (.get
+(java.util.HashMap. {:a 1}) :a))` wasm P1 18,617 (a `JAVA:NEW` stub, refusing at run
+time) -> 405,941 B, the byte count of the same program over the map literal, class
+739,666 -> 739,666. A program naming no `HashMap` construction and no `.put` lowers
+exactly as before on every backend (the branches are all `!hostTarget`-gated).
+
+Re-probe, reitit-core 0.11.0 (the f65 probe grown to seven lines: match-by-path of a
+static and a wild route, match-by-name of both, `match->path`, `routes`,
+`router-name`; oracle `clj` 1.12.6.1673 over the portable compiler): the interpreter,
+the JVM (compiled class with the dependency jars on the run class path, the `-o
+Prog.class` contract), P1 and the component print the oracle's lines line for line
+since 2026-10-13. P1 and the component still warn `JAVA:STATIC`
+(`URLDecoder/decode`, `URLEncoder/encode` in `reitit.impl`'s load, never called
+without an encoded path) and `JAVA:CALL` (one instance site in `reitit.core`'s load),
+none of them on the probe's path; the static-only and wild-only routers run too.
+Pins: clojure-spec `hash-map-construction-builds-the-map-itself-where-the-host-is-not`,
+`put-on-a-map-refuses-as-the-oracles-unsupported-operation` (all four backends),
+`ClojureWasmHashMapTest` (what only wasm answers: `.put` on the construction, the
+nil construction), `ClojureLoweringTest`
+`aHashMapConstructionLowersToTheMapItselfWhereTheHostIsNot` /
+`putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot`,
+`ClojureWasmHostArmsTest` (the construction compiles warning-free).
 
 ## Laziness
 

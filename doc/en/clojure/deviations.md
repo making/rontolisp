@@ -354,6 +354,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   match the oracle, while `pr`, `class` (`:string`) and `string?` read the string.
   `.toUpperCase`/`.toLowerCase` of one argument map as the bare call whatever the argument
   is, where the oracle casts it to a `Locale`.
+- A zero-argument `(java.util.HashMap.)` (or `(new java.util.HashMap)`) is the empty map
+  and a one-argument construction of a map the map itself on the wasm backends, where no
+  mutable map exists; `.get` and the other lookups read it, `.put` throws the oracle's
+  message-less `UnsupportedOperationException` (as the read-only map Java is handed the
+  value as throws it on the interpreter and the JVM), and nil builds to the oracle's
+  `NullPointerException`. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
+  hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
+  itself, where the oracle builds an empty mutable map. Where the host is (the
+  interpreter and the JVM) the construction stays that mutable object.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector

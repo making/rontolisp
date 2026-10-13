@@ -1826,6 +1826,58 @@ cases:
       class java.lang.String cannot be cast to class java.lang.Number
       class clojure.lang.Keyword cannot be cast to class java.lang.Number
       Cannot invoke "java.lang.Character.charValue()" because "x" is null
+  - name: hash-map-construction-builds-the-map-itself-where-the-host-is-not
+    # A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
+    # (java.util.HashMap/new) is the empty map, and a one-argument construction of
+    # a map the map itself, where the host is not (wasm) -- never a java:new (which
+    # wasm refuses): .get reads it, .size/.containsKey/.containsValue/.isEmpty answer
+    # through the value rows, nil builds to the oracle's NullPointerException. Where
+    # the host is the construction stays the mutable object (ClojureInteropTest pins
+    # the mutation), whose reads print these same lines. Oracle-identical
+    # (clj 1.12.6, 2026-10-13); str and class of the construction read the Clojure
+    # map on wasm (no HashMap exists there), and a capacity argument answers itself.
+    source: |
+      (let [m (java.util.HashMap.)]
+        (println (.size m) (.isEmpty m) (.get m :a)))
+      (let [m (java.util.HashMap. {:a 1 "s" 2})]
+        (println (.get m :a) (.get m "s") (.get m :missing) (.size m))
+        (println (.containsKey m :a) (.containsValue m 2) (.isEmpty m)))
+      (let [m (new java.util.HashMap {:a 1})]
+        (println (.get m :a)))
+      (let [m (java.util.HashMap/new {:a 1})]
+        (println (.get m :a)))
+      (println (try (java.util.HashMap. nil) (catch NullPointerException e :npe)))
+      (defn fast-map [m] (let [m (or m {})] (java.util.HashMap. m)))
+      (defn fast-get [m k] (.get m k))
+      (let [lookup (fast-map {:a 1 :b 2})]
+        (println (fast-get lookup :a) (fast-get lookup :missing)))
+      (println (fast-get (fast-map nil) :a))
+    expected: |
+      0 true nil
+      1 2 nil 2
+      true true false
+      1
+      1
+      :npe
+      1 nil
+      nil
+  - name: put-on-a-map-refuses-as-the-oracles-unsupported-operation
+    # .put of a key and a value on a map is the oracle's
+    # UnsupportedOperationException with no message on every backend: where the
+    # host is the read-only Map view Java is handed the value as throws it, where
+    # the host is not (wasm) the call throws the message-less construction. A
+    # sorted map refuses the same way; the refusal is caught by a superclass too,
+    # and ex-message answers nil. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (try (.put {:a 1} :b 2) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.put (sorted-map :a 1) :b 2) (catch UnsupportedOperationException e :uoe)))
+      (println (try (.put {:a 1} :b 2) (catch RuntimeException e :rte)))
+      (println (ex-message (try (.put {:a 1} :b 2) (catch UnsupportedOperationException e e))))
+    expected: |
+      :uoe
+      :uoe
+      :rte
+      nil
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,

@@ -340,6 +340,15 @@
   `"en"`）です。`str` と `.toString` はオラクルと一致しますが、`pr`・`class`（`:string`）・
   `string?` は文字列として読みます。1引数の `.toUpperCase`/`.toLowerCase` は引数が何であっても
   引数なしと同じ写像になりますが、オラクルは引数を `Locale` にキャストします。
+- 引数なしの `(java.util.HashMap.)`（`(new java.util.HashMap)` も）は空のマップであり、
+  マップからの1引数の構築はそのマップ自身です（wasm バックエンド。可変のマップは存在
+  しないため）。`.get` などの読み取りはそれを読みます。`.put` はオラクルのメッセージなしの
+  `UnsupportedOperationException` を投げます（インタープリターと JVM では、値が Java へ
+  渡るときの読み取り専用マップが投げるものと同じです）。nil からの構築はオラクルの
+  `NullPointerException` です。`str` と `class` は Clojure のマップとして読みます（`{:a 1}`、
+  array-・hash-map のキーワード）。オラクルは `HashMap` として綴ります。容量の引数はその
+  引数自身を返しますが、オラクルは空の可変マップを構築します。ホストがある場合
+  （インタープリターと JVM）は、その可変オブジェクトのまま残ります。
 - `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
