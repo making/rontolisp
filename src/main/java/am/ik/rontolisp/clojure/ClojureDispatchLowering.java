@@ -558,17 +558,27 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * {@code type}: the logically true {@code :type} entry of the value's metadata
-	 * ({@code rontolisp::%clojure-type-tag}), else what {@code class} answers -- the
-	 * oracle's {@code (or (get (meta x) :type) (class x))}. Inside a {@code defmulti}
-	 * dispatch function a nil answers nil, as {@code class} does there.
+	 * ({@code rontolisp::%clojure-type-tag}), else the host class designator where the
+	 * oracle answers a host class no schema registry may collide with, else what
+	 * {@code class} answers -- {@code rontolisp::%clojure-type-designator} over
+	 * {@code class}'s kind keyword. A registry lookup falls through to {@code (type x)}
+	 * on a miss, where the oracle's class misses every entry but {@code Pattern}'s: the
+	 * designator misses the same way, so an unregistered function, keyword, string,
+	 * symbol, boolean, nil, map or set refuses with {@code :malli.core/invalid-schema}
+	 * instead of looping through (or mistyping under) the colliding kind entry. Inside a
+	 * {@code defmulti} dispatch function a nil answers nil, as {@code class} does there.
 	 */
 	static LispVal typeForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol tag = ctx.freshTemp();
+		LispSymbol kind = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(one, lowered),
 						ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(TYPE_TAG), one))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag, classForm(ctx, one)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+								ClojureLowerUtil.list(ClojureLowerUtil.list(kind, classForm(ctx, one))),
+								ClojureLowerUtil.list(new LispSymbol(TYPE_DESIGNATOR), kind, one))));
 	}
 
 	/** {@code type} as a value: a one-argument lambda over the same read. */
@@ -579,6 +589,20 @@ final class ClojureDispatchLowering {
 
 	/** The logically true {@code :type} entry of a value's metadata, else nil. */
 	static final String TYPE_TAG = "RONTOLISP::%CLOJURE-TYPE-TAG";
+
+	/**
+	 * {@code type}'s answer for {@code class}'s kind keyword: the host class designator
+	 * where the kind collides with a schema registry entry, else the keyword itself
+	 * ({@code clojure.lisp}).
+	 */
+	static final String TYPE_DESIGNATOR = "RONTOLISP::%CLOJURE-TYPE-DESIGNATOR";
+
+	/**
+	 * The kind keyword {@code class} answers for a type designator's host class, or nil
+	 * when it names none ({@code clojure.lisp}): what the multimethod dispatcher and
+	 * {@code instance?} read a designator through.
+	 */
+	static final String DESIGNATOR_KIND = "RONTOLISP::%CLOJURE-DESIGNATOR-KIND";
 
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
@@ -989,7 +1013,10 @@ final class ClojureDispatchLowering {
 		// A `class` call inside the dispatch function answers nil itself for a nil
 		// argument (see classForm), so the one null test maps every class-produced
 		// nil onto the marker while an explicit `:nil` keyword keeps its keyword row,
-		// like the oracle; a shadowed `class` is the caller's own function.
+		// like the oracle; a shadowed `class` is the caller's own function. A `type`
+		// call answers a host class designator for the colliding kinds (see
+		// typeForm), which reads back as its kind keyword here, so a designator
+		// finds the kind method a defmethod stores, like the keyword did.
 		LispVal nilTest = ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), raw);
 		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(
@@ -998,7 +1025,9 @@ final class ClojureDispatchLowering {
 										ClojureLowering.realFun(dispatchFn), args)),
 						ClojureLowerUtil.list(disp,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
-										ClojureCollectionLowering.nilMarkerForm(), raw)),
+										ClojureCollectionLowering.nilMarkerForm(),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+												ClojureLowerUtil.list(new LispSymbol(DESIGNATOR_KIND), raw), raw))),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 						ClojureLowerUtil.list(found,

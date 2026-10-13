@@ -2587,6 +2587,50 @@ cases:
       true true true true
       (:a :b :c)
       "circle 2" "record 3" "other" "nil!"
+  - name: type-answers-a-host-class-designator-where-the-oracle-answers-a-class
+    # Where the oracle answers a host class for a core value whose kind keyword
+    # would collide with a schema registry entry, type answers the (:C%CLASS
+    # name) designator instead (nil for nil, like the oracle): a registry lookup
+    # falls through to (type x) on a miss, where the oracle's class misses every
+    # entry but Pattern's -- so an unregistered function (which looped until the
+    # stack overflowed), keyword, string, symbol, boolean, map or set refuses
+    # with :malli.core/invalid-schema like the oracle, instead of looping
+    # through or mistyping under the colliding :function/:keyword/... entry
+    # (f96). class keeps the kind keyword. Metadata and records still answer
+    # first. The designator names the host class where the oracle prints its
+    # object; anything else is the oracle's (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (type (fn [x] x)) (type pos-int?) (= (type pos-int?) (type pos-int?)))
+      (println (type "s") (type :k) (type 's) (type true) (type nil))
+      (println (type (with-meta [1] {:type :foo})))
+      (println (type {}) (type {:a 1}) (type (sorted-map :a 1)) (type #{1}) (type [1]) (type 1))
+      (println (class (fn [x] x)) (class "s") (class nil))
+      (println (= (type "a") :string) (= (type 1) (class 1)))
+    expected: |
+      (:C%CLASS clojure.lang.AFunction) (:C%CLASS clojure.lang.AFunction) true
+      (:C%CLASS java.lang.String) (:C%CLASS clojure.lang.Keyword) (:C%CLASS clojure.lang.Symbol) (:C%CLASS java.lang.Boolean) nil
+      :foo
+      (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentTreeMap) (:C%CLASS clojure.lang.PersistentHashSet) :vector :number
+      :function :string :nil
+      false true
+  - name: a-type-designator-dispatches-and-instances-as-its-kind
+    # A (:C%CLASS name) designator type answers reads back as its kind where a
+    # class value is consumed: a defmulti on type finds the kind method a
+    # defmethod stores (nil still takes the nil method), and instance? of a
+    # computed type takes what the keyword did (f96).
+    source: |
+      (defmulti t96d type)
+      (defmethod t96d String [s] (str "str:" s))
+      (defmethod t96d clojure.lang.Keyword [k] :kw!)
+      (defmethod t96d nil [_] :was-nil)
+      (defmethod t96d :default [x] :dflt)
+      (println (t96d "a") (t96d :k) (t96d nil) (t96d 1) (t96d [1]))
+      (println (instance? (type "s") "t") (instance? (type "s") 1))
+      (println (instance? (type :a) :b) (instance? (type {:a 1}) {}) (instance? (type (fn [x] x)) "s"))
+    expected: |
+      str:a :kw! :was-nil :dflt :dflt
+      true false
+      true true false
   - name: print-method-of-a-record-or-deftype-is-how-every-printer-writes-it
     # A print-method a program defines for a record or deftype is how pr, prn, print,
     # println and their string forms write a value of the type, at any depth, the

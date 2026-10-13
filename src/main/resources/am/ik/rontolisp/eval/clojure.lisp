@@ -2452,9 +2452,13 @@
   "instance? of the class value C over X, whose class (what class answers) is
    K: a class keyword takes a value of that class, a condition whose class
    chain holds it (a subclass) and a host object of it; a host class object
-   asks the host. nil is the oracle's NullPointerException, any other value
-   its ClassCastException."
-  (cond ((rontolisp::%clojure-keyword-p c)
+   asks the host. A type designator reads as its kind, so instance? of a type
+   answer takes what the keyword did. nil is the oracle's NullPointerException,
+   any other value its ClassCastException."
+  (cond ((rontolisp::%clojure-designator-kind c)
+         (rontolisp::%clojure-class-instance-p (rontolisp::%clojure-designator-kind c)
+                                               x k))
+        ((rontolisp::%clojure-keyword-p c)
          (cond ((null x) nil)
                ((equal k c) t)
                ((rontolisp::%clojure-exception-p x)
@@ -13391,6 +13395,87 @@
    which type answers X's class, like the oracle's (or (get (meta x) :type)
    (class x))."
   (rontolisp::%clojure-meta-method x (list :C%KEYWORD "type")))
+
+;;;; Type designators: what type answers where the oracle answers a host class.
+;;
+;; A schema registry lookup falls through to (type x) on a miss, and the oracle
+;; answers a host class there: every entry but Pattern's misses, so an
+;; unregistered value refuses with :malli.core/invalid-schema. A kind keyword
+;; here hits the :function/:keyword/:string/:symbol/:boolean/:nil/:map/:set
+;; entry instead: a function or set loops until the stack overflows, anything
+;; else mistypes (child-error, invalid-entry). So type answers the host class
+;; designator (:C%CLASS name) for exactly those kinds -- the names
+;; %clojure-class-name-of answers, so a value reads as its class -- and nil for
+;; nil, like the oracle. class keeps the kind keyword; the multimethod
+;; dispatcher and instance? read a designator back as its kind, so dispatch
+;; answers what the keyword did. A kind no entry collides with (numbers,
+;; vectors, records, ...) keeps its keyword: its miss already refuses right.
+;; Pattern keeps :pattern for now: its class is registered, so its accept needs
+;; the host object where a host is, a case of its own.
+
+(defvar rontolisp::%clojure-type-class-names
+  '(("clojure.lang.AFunction" . "function")
+    ("clojure.lang.Keyword" . "keyword")
+    ("java.lang.String" . "string")
+    ("clojure.lang.Symbol" . "symbol")
+    ("java.lang.Boolean" . "boolean")
+    ("clojure.lang.PersistentArrayMap" . "map")
+    ("clojure.lang.PersistentHashMap" . "map")
+    ("clojure.lang.PersistentTreeMap" . "map")
+    ("clojure.lang.PersistentHashSet" . "set")
+    ("clojure.lang.PersistentTreeSet" . "set"))
+  "Host class names type answers by designator, each to the spelling of the
+   kind keyword class answers for its values.")
+
+(defun rontolisp::%clojure-type-designator (k x)
+  "type's answer for the kind keyword K class answers for X: the (:C%CLASS
+   name) designator of X's host class when K collides with a schema registry
+   entry, nil for nil, else K itself. A map names its size's class, like the
+   oracle (an empty map PersistentArrayMap, nine entries up PersistentHashMap);
+   a sorted map or set its tree class (the (:C%SORTED setp cmp items) wrapper
+   %clojure-sorted-p names). K is never a designator here: type is the only
+   caller, over class's answer."
+  (if (rontolisp::%clojure-keyword-p k)
+      (let ((spelling (car (cdr k))))
+        (cond ((equal spelling "function")
+               (list :c%class "clojure.lang.AFunction"))
+              ((equal spelling "keyword")
+               (list :c%class "clojure.lang.Keyword"))
+              ((equal spelling "string")
+               (list :c%class "java.lang.String"))
+              ((equal spelling "symbol")
+               (list :c%class "clojure.lang.Symbol"))
+              ((equal spelling "boolean")
+               (list :c%class "java.lang.Boolean"))
+              ((equal spelling "nil") nil)
+              ((equal spelling "map")
+               (list :c%class
+                     (if (and (consp x) (eq (car x) :C%SORTED))
+                         "clojure.lang.PersistentTreeMap"
+                         (if (> (hash-table-count x) 8)
+                             "clojure.lang.PersistentHashMap"
+                             "clojure.lang.PersistentArrayMap"))))
+              ((equal spelling "set")
+               (list :c%class
+                     (if (and (consp x) (eq (car x) :C%SORTED))
+                         "clojure.lang.PersistentTreeSet"
+                         "clojure.lang.PersistentHashSet")))
+              (t k)))
+      k))
+
+(defun rontolisp::%clojure-designator-kind (v)
+  "The kind keyword class answers for the values of V's host class, when V is
+   a (:C%CLASS name) designator of one of %clojure-type-class-names, else NIL.
+   The multimethod dispatcher and instance? read a type answer through this,
+   so a designator finds the kind method a defmethod stores, like the keyword
+   did; a designator of any other class stays one, as before."
+  (if (and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
+           (stringp (car (cdr v))))
+      (let ((spelling (cdr (assoc (car (cdr v))
+                                  rontolisp::%clojure-type-class-names
+                                  :test #'equal))))
+        (if spelling (list :c%keyword spelling) nil))
+      nil))
 
 ;;;; Monitors: the lock locking holds on the interpreter and the JVM, and the
 ;;;; one alter-var-root, alter-meta! and reset-meta! hold.

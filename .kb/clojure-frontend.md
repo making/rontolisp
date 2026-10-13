@@ -3706,9 +3706,22 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `print-method-of-a-type-keyword-prints-its-carriers-first` (oracle-identical).
 - `type` (`ClojureDispatchLowering.typeForm`, 2026-10-11; instaparse's `failure-type`) is the
   oracle's `(or (get (meta x) :type) (class x))`: `%clojure-type-tag` (the logically true
-  `:type` entry, through `%clojure-meta-method`), else `classForm` over the same temp, so a
-  dispatch function's nil answers nil like `class`'s. Pin: clojure-spec
-  `type-reads-the-type-metadata-else-the-class` (oracle-identical, four backends).
+  `:type` entry, through `%clojure-meta-method`), else `%clojure-type-designator` over
+  `classForm`'s kind keyword and the value, so a dispatch function's nil answers nil like
+  `class`'s. The designator is the host class (`:C%CLASS` name) for exactly the kinds whose
+  keyword would collide with a schema registry entry (function, keyword, string, symbol,
+  boolean, nil, map, set; 2026-10-13, f96): malli's `-lookup` falls through to `(type x)`
+  on a miss, where the oracle's class misses every entry but `Pattern`'s, so an
+  unregistered value refuses with `:malli.core/invalid-schema` instead of looping through
+  (function, set) or mistyping under (keyword, string, symbol, boolean, nil, map) the
+  colliding entry. A map names its size's class (ArrayMap, past eight entries HashMap),
+  a sorted collection its tree class; `Pattern` keeps `:pattern` (its accept is a case of
+  its own). The dispatcher and `instance?` read a designator back as its kind
+  (`%clojure-designator-kind`), so dispatch and `instance?` of a computed type answer
+  what the keyword did. Pins: clojure-spec
+  `type-reads-the-type-metadata-else-the-class` (oracle-identical, four backends),
+  `type-answers-a-host-class-designator-where-the-oracle-answers-a-class` and
+  `a-type-designator-dispatches-and-instances-as-its-kind` (four backends).
 - Lookup: exact hit, else `C%H-DISPATCH` over the hierarchy (strictly most specific wins,
   `prefer-method` breaks ties, an unbroken tie is `Multiple methods ...`), then the
   `Object` slot (ahead of the default, like the oracle), then the default, else
