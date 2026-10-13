@@ -5018,7 +5018,8 @@ public final class ClojureLowering {
 	 * live per environment (the program's library, the macro-time runtime), so macro-time
 	 * evaluation shares macro-time-wide. Only rows whose body closes over nothing but its
 	 * parameters may come here; a parameterized value (a keyword's lookup) keeps its own
-	 * lambda, which compares as its value anyway.
+	 * lambda, which compares as its value anyway. Every other site-independent core value
+	 * reaches this through {@link #sharedCoreValue}.
 	 * @param name the Clojure name
 	 * @param lambda the one-argument value form, built as before
 	 * @return the shared-value call
@@ -5026,6 +5027,62 @@ public final class ClojureLowering {
 	LispVal sharedValue(String name, LispVal lambda) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SHARED-VALUE"), LispString.literal(name),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), lambda));
+	}
+
+	/**
+	 * Names whose value snapshots lower-time state that still evolves while the program
+	 * lowers, so each reference keeps its own object: {@code the-ns}, {@code find-ns} and
+	 * {@code ns-name} close over the namespaces known where the reference stands,
+	 * {@code all-ns} and {@code loaded-libs} over the libraries loaded so far,
+	 * {@code read} and {@code read-string} over the namespace and its aliases so far, and
+	 * {@code default-data-readers} resolves its reader vars there. Sharing them
+	 * first-wins would answer a later call through an early value with the early
+	 * snapshot, where today each site reads its own; every other core value closes over
+	 * nothing but its parameters and is one object program-wide. As data,
+	 * {@code default-data-readers} still compares by value.
+	 */
+	static final Set<String> UNSHARED_VALUES = Set.of("the-ns", "find-ns", "ns-name", "all-ns", "loaded-libs", "read",
+			"read-string", "default-data-readers");
+
+	/**
+	 * A core name's value form shared program-wide, unless the form is already shared (a
+	 * {@code %clojure-shared-value} call), already one object (a {@code function} of a
+	 * library worker) or the name snapshots lower-time state ({@link #UNSHARED_VALUES}).
+	 * The transducer widening ({@code filter}, {@code take}, ...) is shared with the
+	 * verb: the whole widened form is wrapped, so the one-argument arity answers the same
+	 * transducer from every site too. {@code class} and {@code type} lower
+	 * dispatch-shaped inside a {@code defmulti} dispatch function (nil answers nil itself
+	 * there), so those sites share a cell of their own.
+	 * @param name the Clojure name
+	 * @param value the value form, widened where the name has a transducer arity
+	 * @return the shared-value call, or the form itself
+	 */
+	LispVal sharedCoreValue(String name, LispVal value) {
+		if (UNSHARED_VALUES.contains(name) || isSharedOrFunction(value)) {
+			return value;
+		}
+		if (this.inDispatchFn && (name.equals("class") || name.equals("type"))) {
+			// a dispatch function's own cell: classForm answers nil itself for
+			// nil under the dispatch lowering, so the dispatch-shaped body
+			// differs from the normal one, and sharing the name would store
+			// whichever site ran first for both uses (a defmulti over type
+			// then misses its nil method)
+			return sharedValue(name + " (dispatch fn)", value);
+		}
+		return sharedValue(name, value);
+	}
+
+	/**
+	 * Whether the value form is already one object program-wide: a
+	 * {@code rontolisp::%clojure-shared-value} call, or a {@code function} of a library
+	 * worker.
+	 */
+	static boolean isSharedOrFunction(LispVal value) {
+		List<LispVal> items = ClojureLowerUtil.items(value);
+		if (items == null || items.isEmpty() || !(items.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		return head.name().equals("RONTOLISP::%CLOJURE-SHARED-VALUE") || head.name().equalsIgnoreCase("function");
 	}
 
 	/**
@@ -5327,9 +5384,9 @@ public final class ClojureLowering {
 	@Nullable LispVal coreValueOrNull(String name) {
 		switch (name) {
 			case "nth":
-				return ClojureSeqLowering.nthValue(this);
+				return sharedCoreValue(name, ClojureSeqLowering.nthValue(this));
 			case "quot":
-				return ClojureSeqLowering.quotValue(this);
+				return sharedCoreValue(name, ClojureSeqLowering.quotValue(this));
 			default:
 				break;
 		}
@@ -5339,7 +5396,7 @@ public final class ClojureLowering {
 		}
 		LispVal synth = valueOf(name);
 		if (synth != null) {
-			return ClojureTransducerLowering.xformValue(this, name, synth);
+			return sharedCoreValue(name, ClojureTransducerLowering.xformValue(this, name, synth));
 		}
 		String cl = builtinValue(name);
 		if (cl == null) {
@@ -5400,10 +5457,10 @@ public final class ClojureLowering {
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {
-				return ClojureSeqLowering.nthValue(this);
+				return sharedCoreValue(name, ClojureSeqLowering.nthValue(this));
 			}
 			if (name.equals("quot")) {
-				return ClojureSeqLowering.quotValue(this);
+				return sharedCoreValue(name, ClojureSeqLowering.quotValue(this));
 			}
 			ClojureNamespaceLowering.refuseMissingVar(this, name);
 			VarRef qualified = ClojureNamespaceLowering.resolveQualified(this, name);
@@ -5415,7 +5472,7 @@ public final class ClojureLowering {
 			}
 			LispVal synth = valueOf(name);
 			if (synth != null) {
-				return ClojureTransducerLowering.xformValue(this, name, synth);
+				return sharedCoreValue(name, ClojureTransducerLowering.xformValue(this, name, synth));
 			}
 			String cl = builtinValue(name);
 			if (cl == null) {

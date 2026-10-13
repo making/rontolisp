@@ -14705,6 +14705,59 @@ cases:
       (true false)
       true
       true
+  - name: core-function-values-are-shared-across-references
+    # Two references to one site-independent core function value are = and
+    # identical? on every backend, like the predicates (f92) and like the
+    # oracle's var roots: the whole widened value -- a seq verb's transducer
+    # arity included -- lives in one program-wide cell, so a shared value
+    # still runs ((f95-m inc [1 2])) and still answers its transducer arity
+    # ((apply filter [odd?])). A fresh lambda per site used to make them
+    # distinct objects, so (= map map) was false here and true on the oracle.
+    # rest and next stay distinct objects (separate cells, like the oracle's
+    # separate vars), while clojure.core/map and map share one cell. Every
+    # line matches the oracle (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= map map) (identical? map map))
+      (println (= filter filter) (= str str) (= count count) (= inc inc))
+      (println (= comp comp) (= partial partial) (= complement complement) (= constantly constantly))
+      (println (= identity identity) (= memoize memoize) (= trampoline trampoline))
+      (println (= seq seq) (= first first) (= rest rest) (= cons cons) (= take take) (= drop drop))
+      (println (= concat concat) (= reduce reduce) (= conj conj) (= assoc assoc) (= get get))
+      (println (= keyword keyword) (= symbol symbol) (= char char) (= name name))
+      (println (= not= not=) (= < <) (= atom atom) (= deref deref) (= swap! swap!))
+      (println (= update update) (= range range) (= keep keep) (= remove remove) (= sort sort))
+      (println (= nth nth) (= quot quot) (= reverse reverse) (= empty? empty?) (= distinct distinct))
+      (println (= take-while take-while) (= interpose interpose) (= zipmap zipmap) (= last last))
+      (println (= second second) (= dorun dorun) (= force force) (= subs subs) (= format format))
+      (println (= rand rand) (= shuffle shuffle) (= class class) (= spit spit) (= file-seq file-seq))
+      (println (= rest next))
+      (println (= clojure.core/map clojure.core/map) (= clojure.core/map map))
+      (println (= (get {map :hit} map) :hit))
+      (let [f95-m map] (println (= f95-m map) (f95-m inc [1 2])))
+      (println (filter odd? [1 2 3]) (reduce + 0 [1 2]) (update {:a 1} :a inc))
+      (println (into [] (apply filter [odd?]) [1 2 3]))
+      (println (= (deref (atom 1)) 1))
+    expected: |
+      true true
+      true true true true
+      true true true true
+      true true true
+      true true true true true true
+      true true true true true
+      true true true true
+      true true true true true
+      true true true true true
+      true true true true true
+      true true true true
+      true true true true true
+      true true true true true
+      false
+      true true
+      true
+      true (2 3)
+      (1 3) 3 {:a 2}
+      [1 3]
+      true
   - name: protocol-extenders-and-find-protocol-impl-and-method
     # extenders answers the extended tags as a seq (:object last for the Object
     # default), find-protocol-impl the tag row's map and find-protocol-method

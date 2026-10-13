@@ -2217,6 +2217,38 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void coreFunctionValuesLiveInOneProgramWideCell() {
+		// every other site-independent core value goes through the same
+		// shared-value worker as the predicates, so two references are = and
+		// identical? like the oracle's var roots: a fresh lambda per site used
+		// to make (= map map) false. Calls stay inline, on every backend; a
+		// verb's transducer arity is shared with the verb. Values snapshotting
+		// lower-time state keep their own object per site.
+		assertThat(lowered("(map inc [1])")).contains("%CLOJURE-MAP").contains("\"inc\"");
+		assertThat(lowered("(count [1 2])")).doesNotContain("SHARED-VALUE");
+		String shared = lowered("(println (= map map))");
+		assertThat(shared).contains("RONTOLISP::%CLOJURE-SHARED-VALUE").contains("\"map\"");
+		assertThat(lowered("(println (= filter filter))")).contains("\"filter\"")
+			.contains("RONTOLISP::%CLOJURE-XF-FILTER");
+		assertThat(lowered("(println (= not= not=))")).contains("\"not=\"");
+		assertThat(lowered("(println (= < <))")).contains("\"<\"");
+		assertThat(lowered("(println (= inc inc))")).contains("\"inc\"");
+		assertThat(lowered("(println (= str str))")).contains("\"str\"");
+		assertThat(lowered("(println (= count count))")).contains("\"count\"");
+		assertThat(lowered("(println (= comp comp))")).contains("\"comp\"");
+		assertThat(lowered("(println (= atom atom))")).contains("\"atom\"");
+		assertThat(lowered("(println (= keyword keyword))")).contains("\"keyword\"");
+		assertThat(lowered("(println (= clojure.core/map clojure.core/map))")).contains("\"map\"");
+		assertThat(lowered("(println (= = =))")).doesNotContain("SHARED-VALUE");
+		assertThat(lowered("(println (= + +))")).doesNotContain("SHARED-VALUE");
+		assertThat(lowered("(println (= apply apply))")).doesNotContain("SHARED-VALUE");
+		assertThat(lowered("(println all-ns all-ns)")).doesNotContain("SHARED-VALUE");
+		assertThat(wasmLowered("(println (= map map) (= count count))")).contains("\"map\"")
+			.contains("\"count\"")
+			.doesNotContain("JAVA:");
+	}
+
+	@Test
 	void aZeroArgumentObjectConstructionIsAFreshTokenWhereTheHostIsNot() {
 		// (Object.) is a fresh uninterned symbol where the host is not (wasm), so
 		// dynaload's dynalock defonce loads -- never a java:new (which wasm
@@ -3533,7 +3565,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map rand-nth [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map vals [{:a 1}])")).contains("LAMBDA").contains("MAPHASH");
 		assertThat(lowered("(mapcat reverse)")).contains(
-				"(RONTOLISP::%CLOJURE-XF-MAPCAT (LAMBDA (|c%reverse-coll|) (REVERSE (RONTOLISP::%CLOJURE-SEQ-ALL |c%reverse-coll|))))");
+				"(RONTOLISP::%CLOJURE-XF-MAPCAT (RONTOLISP::%CLOJURE-SHARED-VALUE \"reverse\" (LAMBDA NIL (LAMBDA (|c%reverse-coll|) (REVERSE (RONTOLISP::%CLOJURE-SEQ-ALL |c%reverse-coll|))))))");
 		assertThatThrownBy(() -> Clojure.read("(mapv inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("mapv takes a function and collections");
 	}
@@ -4118,7 +4150,8 @@ class ClojureLoweringTest {
 	void sortedVerbsAreOneWorkerCallEach() {
 		assertThat(lowered("(sorted-map :b 1 :a 2)"))
 			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE NIL NIL (LIST (LIST :C%KEYWORD \"b\") 1");
-		assertThat(lowered("(sorted-set-by > 3 1)")).contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (LAMBDA");
+		assertThat(lowered("(sorted-set-by > 3 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (RONTOLISP::%CLOJURE-SHARED-VALUE \">\"");
 		// a literal core test is its keyword, which picks the oracle's path the way its
 		// identity check does; anything else is a real function
 		assertThat(lowered("(def s (sorted-set 1)) (subseq s > 1)"))
