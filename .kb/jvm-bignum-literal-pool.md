@@ -22,7 +22,10 @@ unobservable (`_equal`/`_hash`/`eql` go through `BigInteger.equals`/`compareTo`)
 `JvmLispCompilerTest#aBignumLiteralIsBuiltOnceAndLoadedFromAField`,
 `#aProgramWithoutABignumLiteralGetsNoPool`, `IroncladE2eTest`.
 
-Measured 2026-10-13: a literal-free program (`(print (+ 1 2))`) still carries a
-`<clinit>`, but from f94's `_funcrefs` fill, not the pool -- the pool interns
-nothing, mints no constant and appends no initializer when empty, so the pin
-covers only the `_bi$` absence, not the initializer.
+Measured 2026-10-13: the pool interns nothing, mints no constant and appends no
+initializer when empty, so the pin covers only the `_bi$` absence, not the
+initializer. The `<clinit>` a literal-free program (`(print (+ 1 2))`) carried
+came from f94's `_funcrefs` fill, not the pool -- and g04's dead-table prune
+drops that fill with the shaken table (its only work there), so the program now
+carries no initializer at all (`.kb/optimize-dead-code-elimination.md`, "A table
+no kept body reads goes with its reader").

@@ -1262,3 +1262,25 @@ lines aside); bench-report time and compile time within noise.
 Pins: `JvmDeadMethodEliminationTest#aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow` (also
 the gensym prefix), `#theRegistryKeepsTheCaseOfEveryNameItAnswers`, its
 `WasmTreeShakerTest` twin, `PackageWalkDesignatorFixture` on the four backends.
+
+### A table no kept body reads goes with its reader
+Every static `(function name)` site calls `_funcref`, so the method shakes away
+with the last such site -- but the `_funcrefs` fill seeding the table is
+straight-line code in the always-kept `<clinit>`, which kept the field (and the
+fill, and the `_funcref$fill$` segments past one chunk) alive for a value nothing
+can make: `(print 1)` carried `_funcrefs` (its two static values sit in dead
+code). `JvmLispCompiler.dropDeadFuncrefTable` asks `JvmClassSplitter.reach` over
+the same roots the writer shakes by, after the dispatcher rebuild: when
+`_funcref` is kept the class comes back unchanged, else the field, the method
+and the segments go and `<clinit>` is reassembled from its head and tail pieces
+around the dropped fill (an initializer the fill was the only work of goes too).
+The fill binds no label, so no branch crosses a piece boundary. Sound because
+nothing but those pieces references the field: a kept eval runtime boxes through
+`_funcref` (its nullable ref is non-null exactly when the table is emitted).
+
+Measured 2026-10-13 (class bytes, `--optimize` default): `(print 1)` and
+`(print (+ 1 2))` -150 B each, a shaken-defun program -147 B; every program
+whose table stays is byte-identical (sha256 over keep/drop probes at all three
+levels, including a 300-box segment fill kept and dropped). Pins:
+`JvmDeadMethodEliminationTest#dropsUnreferencedFields` (the exact field list,
+plus `_funcref` gone and the class still printing `1`).

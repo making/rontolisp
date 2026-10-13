@@ -162,6 +162,18 @@ public final class ClassDefinition {
 	}
 
 	/**
+	 * The same class with other fields: a generator that drops a field no kept method
+	 * references ({@link JvmClassSplitter#write}) swaps them in once it has asked. Fields
+	 * carry no code, so there is nothing to check.
+	 * @param fields the fields, in declaration order
+	 * @return the definition
+	 */
+	public ClassDefinition withFields(List<Field> fields) {
+		return new ClassDefinition(this.cp, this.accessFlags, this.thisClass, this.superClass, this.codeName,
+				this.lineNumberTableName, this.interfaces, fields, this.methods);
+	}
+
+	/**
 	 * A field: attribute-free.
 	 *
 	 * @param access its access flags

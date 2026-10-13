@@ -4672,6 +4672,18 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(0, true)),
 					JvmTailBounce.valueTailBody(1, true, false, cp, thisClass));
 		}
+		// The <clinit> pieces below, kept apart so the dead-table prune beside
+		// rebuildDispatchers can reassemble the initializer without the fill: the
+		// head (every seed before it), the _funcrefs fill itself (null when no
+		// table), and the tail (the top-level runner call and the return). The
+		// fill is straight-line and binds no label, so no branch crosses a
+		// piece boundary.
+		MethodCode clinitHeadCode = new MethodCode();
+		@Nullable MethodCode funcrefFillCode = null;
+		MethodCode clinitTailCode = new MethodCode();
+		MethodCode clinitBodyCode = null;
+		List<MethodCode> funcrefFillSegmentCodes = new ArrayList<>();
+		MethodCode funcrefCode = null;
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
 				|| dynVarRuntime != null || unboundMarker != null || initsClinit || funcrefsFieldRef != null
@@ -4717,7 +4729,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				// ... as does the record of what functions called back from Java raised.
 				tlFields.add(javaSignals.field());
 			}
-			MethodCode clinitCode = new MethodCode();
+			clinitHeadCode = new MethodCode();
 			// The holder-presence probe's single initialization:
 			// _hasComplex is true when the travelling RontoComplex class
 			// loads, false when a lone class runs without it beside it (then
@@ -4725,61 +4737,61 @@ public final class JvmLispCompiler implements LispCompiler {
 			// because no holder can exist). First, so the top level a
 			// <clinit> may run already sees the settled value.
 			if (usesComplex) {
-				MethodCode.Label tryStart = clinitCode.newBoundLabel();
-				clinitCode.ldc(java.util.Objects.requireNonNull(hasComplexTarget));
-				clinitCode.invokestatic(java.util.Objects.requireNonNull(hasComplexProbe));
-				clinitCode.pop();
-				clinitCode.iconst_1();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
-				MethodCode.Label tryEnd = clinitCode.newBoundLabel();
-				MethodCode.Label done = clinitCode.newLabel();
-				clinitCode.goto_(done);
-				MethodCode.Label handler = clinitCode.newBoundLabel();
+				MethodCode.Label tryStart = clinitHeadCode.newBoundLabel();
+				clinitHeadCode.ldc(java.util.Objects.requireNonNull(hasComplexTarget));
+				clinitHeadCode.invokestatic(java.util.Objects.requireNonNull(hasComplexProbe));
+				clinitHeadCode.pop();
+				clinitHeadCode.iconst_1();
+				clinitHeadCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
+				MethodCode.Label tryEnd = clinitHeadCode.newBoundLabel();
+				MethodCode.Label done = clinitHeadCode.newLabel();
+				clinitHeadCode.goto_(done);
+				MethodCode.Label handler = clinitHeadCode.newBoundLabel();
 				// The caught exception is on the stack on handler entry.
-				clinitCode.pop();
-				clinitCode.iconst_0();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
-				clinitCode.labelBinding(done);
-				clinitCode.exceptionCatch(tryStart, tryEnd, handler,
+				clinitHeadCode.pop();
+				clinitHeadCode.iconst_0();
+				clinitHeadCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
+				clinitHeadCode.labelBinding(done);
+				clinitHeadCode.exceptionCatch(tryStart, tryEnd, handler,
 						java.util.Objects.requireNonNull(hasComplexAbsent));
 			}
 			for (FieldRefEntry tlField : tlFields) {
-				clinitCode.new_(java.util.Objects.requireNonNull(channel.threadLocalClass));
-				clinitCode.dup();
-				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor));
-				clinitCode.putstatic(tlField);
+				clinitHeadCode.new_(java.util.Objects.requireNonNull(channel.threadLocalClass));
+				clinitHeadCode.dup();
+				clinitHeadCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor));
+				clinitHeadCode.putstatic(tlField);
 			}
 			if (mvChannel != null && mvChannel.perThread() != null) {
 				// ... and the owner's register beside them (JvmMvChannel).
-				java.util.Objects.requireNonNull(mvChannel.perThread()).emitInit(clinitCode);
+				java.util.Objects.requireNonNull(mvChannel.perThread()).emitInit(clinitHeadCode);
 			}
-			channel.initJavaExceptions(clinitCode);
+			channel.initJavaExceptions(clinitHeadCode);
 			if (dynVarRuntime != null) {
 				// The dynamic-binding ThreadLocals (one per bound special) join
 				// the
 				// same initializer -- never lazily: a racy first binding from two
 				// request threads would mint two ThreadLocals and lose one
 				// binding.
-				clinitCode.append(dynVarRuntime.clinitCode());
+				clinitHeadCode.append(dynVarRuntime.clinitCode());
 			}
 			if (unboundMarker != null) {
 				// The UNBOUND marker and the globals that start with it.
-				clinitCode.append(unboundMarker.clinitCode());
+				clinitHeadCode.append(unboundMarker.clinitCode());
 			}
 			if (streamsFieldRef != null) {
 				// _streams = new Object[16]; _streamCount = 3 -- the reserved
 				// standard-stream handles as empty table slots (see above).
-				clinitCode.loadConstant(16);
-				clinitCode.anewarray(objectClass);
-				clinitCode.putstatic(streamsFieldRef);
-				clinitCode.iconst_3();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef));
+				clinitHeadCode.loadConstant(16);
+				clinitHeadCode.anewarray(objectClass);
+				clinitHeadCode.putstatic(streamsFieldRef);
+				clinitHeadCode.iconst_3();
+				clinitHeadCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef));
 			}
 			// The bignum literals go in before the layouts: they are plain
 			// values with no dependency of their own, and every later fragment
 			// (and the top-level runner, invoked last) may read them.
-			clinitCode.append(bigIntClinitCode);
-			clinitCode.append(layoutClinitCode);
+			clinitHeadCode.append(bigIntClinitCode);
+			clinitHeadCode.append(layoutClinitCode);
 			// The standard stream variables' defaults, one table
 			// (StreamDesignators) feeding BOTH homes: the per-name global field
 			// a direct read uses, and the eval runtime's _genv mirror that
@@ -4787,48 +4799,48 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
 				FieldRefEntry globalField = streamGlobalSeeds.get(streamVar.getKey());
 				if (globalField != null) {
-					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
-							streamLayoutField, streamKindStandardStr);
-					clinitCode.putstatic(globalField);
+					emitStreamDefault(clinitHeadCode, streamVar.getValue(), standardOutputTStr, longValueOf,
+							objectClass, streamLayoutField, streamKindStandardStr);
+					clinitHeadCode.putstatic(globalField);
 				}
 				StringEntry seedName = streamGenvSeeds.get(streamVar.getKey());
 				if (seedName != null) {
 					// _genv = {{name, default}, _genv} -- the binding shape
 					// _store prepends, so a later top-level assignment MUTATES
 					// this cell rather than shadowing it.
-					clinitCode.iconst_2();
-					clinitCode.anewarray(objectClass);
-					clinitCode.dup();
-					clinitCode.iconst_0();
-					clinitCode.iconst_2();
-					clinitCode.anewarray(objectClass);
-					clinitCode.dup();
-					clinitCode.iconst_0();
-					clinitCode.ldc(seedName);
-					clinitCode.aastore();
-					clinitCode.dup();
-					clinitCode.iconst_1();
+					clinitHeadCode.iconst_2();
+					clinitHeadCode.anewarray(objectClass);
+					clinitHeadCode.dup();
+					clinitHeadCode.iconst_0();
+					clinitHeadCode.iconst_2();
+					clinitHeadCode.anewarray(objectClass);
+					clinitHeadCode.dup();
+					clinitHeadCode.iconst_0();
+					clinitHeadCode.ldc(seedName);
+					clinitHeadCode.aastore();
+					clinitHeadCode.dup();
+					clinitHeadCode.iconst_1();
 					if (globalField != null) {
 						// The very value the field was just seeded with: a second
 						// construction would make symbol-value answer an object that
 						// is not eq to what a direct read answers.
-						clinitCode.getstatic(globalField);
+						clinitHeadCode.getstatic(globalField);
 					}
 					else {
-						emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
+						emitStreamDefault(clinitHeadCode, streamVar.getValue(), standardOutputTStr, longValueOf,
 								objectClass, streamLayoutField, streamKindStandardStr);
 					}
-					clinitCode.aastore();
-					clinitCode.aastore();
-					clinitCode.dup();
-					clinitCode.iconst_1();
-					clinitCode.getstatic(genvField);
-					clinitCode.aastore();
-					clinitCode.putstatic(genvField);
+					clinitHeadCode.aastore();
+					clinitHeadCode.aastore();
+					clinitHeadCode.dup();
+					clinitHeadCode.iconst_1();
+					clinitHeadCode.getstatic(genvField);
+					clinitHeadCode.aastore();
+					clinitHeadCode.putstatic(genvField);
 				}
 			}
 			if (structTableClinitFinal != null) {
-				clinitCode.append(structTableClinitFinal);
+				clinitHeadCode.append(structTableClinitFinal);
 			}
 			if (funcrefsFieldRef != null) {
 				// _funcrefs = new Object[maxId + 1], then one canonical box per
@@ -4841,11 +4853,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				// which outgrows the 64 KB method limit inline. An empty cover with
 				// a computed site behind it (no function at all, so the site always
 				// misses) still seeds one null cell, so _funcref resolves.
-				emitIntConstant(clinitCode, cp, funcrefIds.isEmpty() ? 1 : funcrefIds.get(funcrefIds.size() - 1) + 1);
-				clinitCode.anewarray(objectClass);
-				clinitCode.putstatic(funcrefsFieldRef);
+				// Assembled apart (see clinitHeadCode above): when dead-method
+				// elimination drops every user of _funcref, the prune beside
+				// rebuildDispatchers reassembles the initializer without this
+				// piece and drops the field with it.
+				MethodCode fill = new MethodCode();
+				emitIntConstant(fill, cp, funcrefIds.isEmpty() ? 1 : funcrefIds.get(funcrefIds.size() - 1) + 1);
+				fill.anewarray(objectClass);
+				fill.putstatic(funcrefsFieldRef);
 				if (funcrefIds.size() <= FUNCREF_FILL_CHUNK) {
-					emitFuncrefFill(clinitCode, funcrefsFieldRef, funcrefIds, objectClass, integerValueOf, cp);
+					emitFuncrefFill(fill, funcrefsFieldRef, funcrefIds, objectClass, integerValueOf, cp);
 				}
 				else {
 					int segment = 0;
@@ -4859,18 +4876,20 @@ public final class JvmLispCompiler implements LispCompiler {
 						Utf8Entry fillDesc = cp.utf8Entry("()V");
 						definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fillName, fillDesc,
 								fillCode);
-						clinitCode.invokestatic(cp.methodRef(thisClass, fillName, fillDesc));
+						funcrefFillSegmentCodes.add(fillCode);
+						fill.invokestatic(cp.methodRef(thisClass, fillName, fillDesc));
 						segment++;
 					}
 				}
+				funcrefFillCode = fill;
 			}
 			if (topRunnerRef != null) {
 				// Run the top level last, after every piece of runtime infra
 				// above is seeded — this is the export-carrying class's
 				// "top level at instantiation" (see mainCtx above).
-				clinitCode.invokestatic(topRunnerRef);
+				clinitTailCode.invokestatic(topRunnerRef);
 			}
-			clinitCode.return_();
+			clinitTailCode.return_();
 			// A layout-only program never runs ensureThreadLocalInfra, so the
 			// channel's <clinit> name constants are null there; a
 			// bound-special-only
@@ -4889,7 +4908,15 @@ public final class JvmLispCompiler implements LispCompiler {
 									: standardOutputClinitDesc != null ? standardOutputClinitDesc
 											: funcrefClinitDesc != null ? funcrefClinitDesc
 													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
-			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitCode);
+			// The initializer from its pieces (see clinitHeadCode above): the head,
+			// the table fill when there is one, and the tail.
+			MethodCode assembledClinit = new MethodCode().append(clinitHeadCode);
+			if (funcrefFillCode != null) {
+				assembledClinit.append(funcrefFillCode);
+			}
+			assembledClinit.append(clinitTailCode);
+			clinitBodyCode = assembledClinit;
+			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, assembledClinit);
 		}
 		if (dynVarRuntime != null) {
 			// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
@@ -5164,7 +5191,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// defun -- the one Object[]{Integer funcId} every static (function
 			// name) site of it shares, and a computed symbol-function resolution
 			// boxes through it too. Straight-line, so no stack-map frame work.
-			MethodCode funcrefCode = new MethodCode();
+			funcrefCode = new MethodCode();
 			funcrefCode.getstatic(funcrefsFieldRef);
 			funcrefCode.iload(0);
 			funcrefCode.aaload();
@@ -5367,6 +5394,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				classDefinition = retargetValueTails(classDefinition, mainCtx.valueTailArities, valueTailCopies, cp,
 						thisClass);
 			}
+			// The canonical function-value table outlives its users: every static
+			// (function name) site calls _funcref, but a site in dead code shakes
+			// away with its method while the <clinit> fill that seeds the table
+			// keeps the _funcrefs field alive ((print 1) carried it).
+			if (funcrefsFieldRef != null && funcrefCode != null && clinitBodyCode != null) {
+				classDefinition = dropDeadFuncrefTable(classDefinition, roots, funcrefsFieldName, funcrefsFieldDesc,
+						funcrefCode, funcrefFillSegmentCodes, clinitBodyCode, clinitHeadCode, clinitTailCode);
+			}
 		}
 		return this.write(classDefinition, roots, exportDecls, writeStart);
 	}
@@ -5473,6 +5508,81 @@ public final class JvmLispCompiler implements LispCompiler {
 							method.lineNumbers()));
 		}
 		return definition.withMethods(methods);
+	}
+
+	/**
+	 * The class without the canonical function-value table when the shake kept no body
+	 * that reads a box from it. Every static {@code (function name)} site calls
+	 * {@code _funcref}, so the method shakes away with the last such site -- but the
+	 * {@code <clinit>} fill seeding the table is straight-line code in the always-kept
+	 * initializer, which kept the {@code _funcrefs} field (and the fill, and the
+	 * {@code _funcref$fill$} segments past one chunk) alive for a value nothing can make.
+	 * Asked over the same roots the writer shakes by, after the dispatcher rebuild: when
+	 * {@code _funcref} is kept the class comes back unchanged. Otherwise the field,
+	 * {@code _funcref} and the fill segments go, and the initializer is reassembled from
+	 * its head and tail pieces around the dropped fill; an initializer the fill was the
+	 * only work of (a lone return) goes too. Sound because nothing but those pieces
+	 * references the field: a kept eval runtime boxes through {@code _funcref} (its
+	 * nullable ref is non-null exactly when the table is emitted), so a class that can
+	 * still box at run time keeps the method and this answers the class unchanged.
+	 * @param definition the class as assembled
+	 * @param roots the shake's roots
+	 * @param funcrefsName the table field's name
+	 * @param funcrefsDesc the table field's descriptor
+	 * @param funcrefBody the {@code _funcref} body, by identity
+	 * @param fillSegmentBodies the {@code _funcref$fill$} bodies, by identity
+	 * @param clinitBody the assembled initializer body, by identity
+	 * @param clinitHead the initializer's head piece (everything before the fill)
+	 * @param clinitTail the initializer's tail piece (the top-level runner call)
+	 * @return the class, or {@code definition} itself when the table stays
+	 */
+	private static ClassDefinition dropDeadFuncrefTable(ClassDefinition definition, Set<String> roots,
+			Utf8Entry funcrefsName, Utf8Entry funcrefsDesc, MethodCode funcrefBody, List<MethodCode> fillSegmentBodies,
+			MethodCode clinitBody, MethodCode clinitHead, MethodCode clinitTail) {
+		JvmClassSplitter.Reach reach = JvmClassSplitter.reach(definition, roots);
+		List<ClassDefinition.Method> methods = definition.methods();
+		boolean funcrefKept = false;
+		for (int m = 0; m < methods.size(); m++) {
+			if (reach.kept()[m] && methods.get(m).body() == funcrefBody) {
+				funcrefKept = true;
+				break;
+			}
+		}
+		if (funcrefKept) {
+			return definition;
+		}
+		Set<MethodCode> dead = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		dead.add(funcrefBody);
+		dead.addAll(fillSegmentBodies);
+		List<ClassDefinition.Method> survivors = new ArrayList<>();
+		boolean clinitReassembled = false;
+		for (ClassDefinition.Method method : methods) {
+			if (dead.contains(method.body())) {
+				continue;
+			}
+			if (method.body() == clinitBody) {
+				if (clinitHead.size() == 0 && clinitTail.size() == 1) {
+					// The fill was the initializer's only work: no initializer.
+					clinitReassembled = true;
+					continue;
+				}
+				survivors.add(new ClassDefinition.Method(method.access(), method.name(), method.descriptor(),
+						new MethodCode().append(clinitHead).append(clinitTail), method.lineNumbers()));
+				clinitReassembled = true;
+				continue;
+			}
+			survivors.add(method);
+		}
+		if (!clinitReassembled) {
+			return definition;
+		}
+		List<ClassDefinition.Field> fields = new ArrayList<>();
+		for (ClassDefinition.Field field : definition.fields()) {
+			if (field.name() != funcrefsName || field.descriptor() != funcrefsDesc) {
+				fields.add(field);
+			}
+		}
+		return definition.withFields(fields).withMethods(survivors);
 	}
 
 	/**

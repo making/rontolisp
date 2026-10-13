@@ -114,6 +114,12 @@ class JvmDeadMethodEliminationTest {
 				.map(java.lang.reflect.Field::getName)
 				.toList();
 			assertThat(fieldNames).containsExactly("_renderPath", "_renderDepth", "_col", "_main$args", "_main$thrown");
+			// The canonical function-value table goes with its reader: (print 1)
+			// takes two static function values in dead code, so _funcref shakes
+			// away and the _funcrefs field, its <clinit> fill and the reader go
+			// with it instead of surviving on the initializer's store.
+			assertThat(declaredMethodNames(optimized)).doesNotContain("_funcref");
+			assertThat(run(optimized)).isEqualTo("1");
 		}
 	}
 
