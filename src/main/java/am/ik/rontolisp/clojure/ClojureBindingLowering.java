@@ -99,6 +99,9 @@ final class ClojureBindingLowering {
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
 		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		if (!valueless) {
+			ctx.valuedAbove.add(key);
+		}
 		if (dynamic) {
 			ctx.dynamicVars.add(key);
 		}
@@ -125,25 +128,28 @@ final class ClojureBindingLowering {
 			// the var is thread-bound. Two top-level forms, so both keep their
 			// defparameter head for SpecialVarCollector. In a namespace init the
 			// setq runs at load time instead, and the declaim plus the counter
-			// ride top-level, where both collectors read them.
+			// ride top-level, where both collectors read them. The init is
+			// validated against the var's validator and the notify statement
+			// behind the store calls its watches, like the oracle's bindRoot; a
+			// program naming no watch verb folds both back (ClojureArms.Family.WATCH).
 			if (hoisted != null) {
 				hoisted.add(ClojureLowering.declaimSpecial(ClojureLowering.varSym(key),
 						ClojureLowering.boundDepthSym(key)));
 				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
-				return withMetaStore(
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value),
+				return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key),
 						metaStore);
 			}
 			List<LispVal> forms = new ArrayList<>(List.of(
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
+							ClojureStateLowering.validatedInit(value, key)),
+					ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
 							new LispInteger(0))));
 			forms.addAll(0, metaStore);
 			return forms;
 		}
-		return withMetaStore(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value),
-				metaStore);
+		return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore);
 	}
 
 	/**
@@ -420,22 +426,42 @@ final class ClojureBindingLowering {
 			// whether the var is thread-bound. A redefined dynamic defn installs
 			// its fresh function cell, so the value cell always holds the newest
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
+					ClojureStateLowering.validatedInit(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+							key)));
+			forms.add(ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)));
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
 					new LispInteger(0)));
 		}
 		else if (redef) {
-			// the value cell every call reads, set where the definition stands
-			forms.add(redefCellStore(key, fn));
+			// the value cell every call reads, set where the definition stands,
+			// validating and notifying like the oracle's bindRoot
+			forms.add(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn), key));
+		}
+		else if (definition > 1) {
+			// no value cell: each definition is its own function, so the replaced
+			// root is the previous definition, still bound. The definition still
+			// validates and notifies behind the defuns, through a statement arm the
+			// strip drops.
+			forms.add(ClojureStateLowering.varDefnNotify(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn), ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("function"), ClojureLowering.defnSym(key, definition - 1))));
+		}
+		else if (ctx.valuedAbove.contains(key)) {
+			// a first defn over a valued root (a def or defonce above it): the
+			// value cell still holds it, read where bound.
+			forms.add(
+					ClojureStateLowering.varDefnNotify(key, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+							ClojureStateLowering.guardedOldRead(ClojureLowering.varSym(key), key)));
+		}
+		else if (ctx.declaredAbove.contains(key)) {
+			// a first defn over a declared root: the unbound root.
+			forms.add(ClojureStateLowering.varDefnNotify(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key))));
 		}
 		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
 		return forms;
-	}
-
-	/** A redefinable {@code defn}'s value-cell store: {@code (setq var #'fn)}. */
-	static LispVal redefCellStore(String key, LispSymbol fn) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn));
 	}
 
 	/** The parameter vectors of a {@code defn}'s single arity or of each clause. */

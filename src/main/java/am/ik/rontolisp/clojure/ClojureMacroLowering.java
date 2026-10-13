@@ -293,8 +293,21 @@ final class ClojureMacroLowering {
 			}
 			case "DEFPARAMETER" -> {
 				if (items.size() == 3 && items.get(1) instanceof LispSymbol var) {
-					evaluator.defineLazy(var, items.get(2), true, once);
+					evaluator.defineLazy(var, validatedInitOf(items.get(2)), true, once);
 				}
+			}
+			case "RONTOLISP::%CLOJURE-VAR-STORE" -> {
+				// a def's store over its value cell: the init runs when an
+				// expansion first reads it, like the setq it stands for
+				if (items.size() == 5) {
+					LispSymbol cell = storeCellOf(items.get(1), items.get(2));
+					if (cell != null) {
+						evaluator.defineLazy(cell, items.get(3), false, once);
+					}
+				}
+			}
+			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY" -> {
+				// a watch/validator arm behind a definition: nothing to hand over
 			}
 			default -> {
 				if (definitions) {
@@ -302,6 +315,50 @@ final class ClojureMacroLowering {
 				}
 			}
 		}
+	}
+
+	/**
+	 * A dynamic definition's init behind its validated view: the init itself, which an
+	 * expansion reads, or the value for any other shape.
+	 * @param value the defparameter's init
+	 * @return the init an expansion reads
+	 */
+	private static LispVal validatedInitOf(LispVal value) {
+		List<LispVal> call = ClojureLowerUtil.items(value);
+		if (call != null && call.size() == 3 && call.get(0) instanceof LispSymbol head
+				&& head.name().equals("RONTOLISP::%CLOJURE-VAR-VALIDATED")) {
+			return call.get(1);
+		}
+		return value;
+	}
+
+	/**
+	 * The value cell a var-root store reads and writes, or null for any other shape (the
+	 * strip refuses those where it folds).
+	 * @param getter the store's getter closure
+	 * @param setter the store's setter closure
+	 * @return the cell, or null
+	 */
+	private static @Nullable LispSymbol storeCellOf(LispVal getter, LispVal setter) {
+		List<LispVal> get = ClojureLowerUtil.items(getter);
+		List<LispVal> set = ClojureLowerUtil.items(setter);
+		if (get == null || get.size() != 3 || set == null || set.size() != 3 || !(set.get(2) instanceof LispCons store)
+				|| !(store.car() instanceof LispSymbol setq) || !setq.name().equals("SETQ")) {
+			return null;
+		}
+		List<LispVal> guarded = ClojureLowerUtil.items(get.get(2));
+		if (guarded == null || guarded.size() != 4 || !(guarded.get(1) instanceof LispCons boundp)
+				|| !(boundp.car() instanceof LispSymbol boundpHead) || !boundpHead.name().equals("BOUNDP")
+				|| !(boundp.cdr() instanceof LispCons quotedCell) || !(quotedCell.car() instanceof LispCons quoted)
+				|| !(quoted.car() instanceof LispSymbol quoteHead) || !LispNames.isQuote(quoteHead.name())) {
+			return null;
+		}
+		List<LispVal> name = ClojureLowerUtil.items(quotedCell.car());
+		if (name == null || name.size() != 2 || !(name.get(1) instanceof LispSymbol cell)
+				|| !(guarded.get(2) instanceof LispSymbol read) || !read.name().equals(cell.name())) {
+			return null;
+		}
+		return cell;
 	}
 
 	/**

@@ -4673,6 +4673,68 @@ cases:
       [[true 0 1] [true 1 11]]
       Invalid reference state 11 [[:k true 1 11]] true
       12 1 Invalid reference state
+  - name: a-def-with-redefs-and-a-validator-notify-a-var-s-watches
+    # Oracle-identical (clj 1.12.6, 2026-10-13): a def replacing a watched root
+    # calls its watches with the old and the new root, and a with-redefs on
+    # entry and on restore; a def or a with-redefs entry the validator refuses
+    # throws and keeps the root, while the restore of a refused entry still
+    # rebinds (and notifies, here with the same value twice); past a
+    # remove-watch a def stores silently.
+    source: |
+      (def wdlog (atom []))
+      (def wdx 1)
+      (add-watch #'wdx :k (fn [k v o n] (swap! wdlog conj [o n])))
+      (def wdx 10)
+      (println @wdlog)
+      (with-redefs [wdx 20] (println wdx @wdlog))
+      (println wdx @wdlog)
+      (set-validator! #'wdx pos?)
+      (println (try (def wdx -1) (catch IllegalStateException e (ex-message e))) wdx)
+      (println (try (with-redefs [wdx -1] :body) (catch IllegalStateException e (ex-message e))) wdx)
+      (remove-watch #'wdx :k)
+      (def wdx 42)
+      (println wdx @wdlog)
+    expected: |
+      [[1 10]]
+      20 [[1 10] [10 20]]
+      10 [[1 10] [10 20] [20 10]]
+      Invalid reference state 10
+      Invalid reference state 10
+      42 [[1 10] [10 20] [20 10] [10 10]]
+  - name: a-redefined-defn-and-a-dynamic-def-notify-a-var-s-watches
+    # Oracle-identical (clj 1.12.6, 2026-10-13): a redefined defn calls the
+    # var's watches with the old and the new function, and a ^:dynamic def
+    # with its replaced root; a redefined redefinable defn the validator
+    # refuses throws and keeps its function; a with-redefs whose body installs
+    # a validator the temporary root fails throws in the body, and the restore
+    # puts the old root back.
+    source: |
+      (defn wdf [] :orig)
+      (def wdflog (atom []))
+      (add-watch #'wdf :k (fn [k v o n] (swap! wdflog conj [(fn? o) (fn? n)])))
+      (defn wdf [] :new)
+      (println (wdf) @wdflog)
+      (def ^:dynamic *wdd* 1)
+      (add-watch #'*wdd* :k (fn [k v o n] (swap! wdflog conj [:d o n])))
+      (def ^:dynamic *wdd* 2)
+      (println *wdd* @wdflog)
+      (def wrf-ok (atom true))
+      (defn ^:redef wrfn [] :orig)
+      (set-validator! #'wrfn (fn [v] @wrf-ok))
+      (reset! wrf-ok false)
+      (println (try (defn ^:redef wrfn [] :new) (catch IllegalStateException e (ex-message e))) (wrfn))
+      (reset! wrf-ok true)
+      (defn ^:redef wrfn [] :newer)
+      (println (wrfn))
+      (def wrx 10)
+      (set-validator! #'wrx pos?)
+      (println (try (with-redefs [wrx 20] (set-validator! #'wrx neg?)) (catch IllegalStateException e (ex-message e))) wrx)
+    expected: |
+      :new [[true true]]
+      2 [[true true] [:d 1 2]]
+      Invalid reference state :orig
+      :newer
+      Invalid reference state 10
   - name: await-for-answers-whether-the-actions-ran-in-time
     # Oracle-identical (clj 1.12.6, 2026-10-12): await-for runs like await and answers
     # true when every agent's actions sent so far ran; await and await-for refuse

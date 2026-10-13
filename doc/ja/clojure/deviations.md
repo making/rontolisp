@@ -418,9 +418,11 @@
   ます（外側は `nil`。オラクルでは unbound です）。`(await-for 0 a)` は、走らせた
   アクションが終わっていれば `true` を答えます（オラクルはプールと競合し `false` を
   答えることがあります）。
-- var の watch と validator が走るのは `alter-var-root` だけです。後の `def`・`defn` と
-  `with-redefs` は var のルートを置き換えますが、watch を呼ばず validator も検査
-  しません（オラクルはどちらも行います）。
+- `defmacro` の再定義は var のルートを置き換えますが、watch を呼ばず validator も
+  検査しません（オラクルはどちらも行います）。値セルを持たない `defn` は新しい関数を
+  定義の束縛の後に検証します。validator が拒否した場合もオラクルと同じ
+  `Invalid reference state` を報告しますが、以降の呼び出しは拒否された定義に届きます
+  （オラクルは古い定義を保ちます）。
 - `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` は、atom と
   セルを共有する ref と volatile も受け付けます（オラクルは atom 以外を拒否します）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの

@@ -38,7 +38,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void everyIdentifierManglesBehindThePrefix() {
-		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")\n|c%x|");
 		assertThat(ClojureLowering.mangle("a:b")).isEqualTo("c%a%cb");
 		assertThat(ClojureLowering.mangle("a%b")).isEqualTo("c%a%%b");
 	}
@@ -96,8 +97,10 @@ class ClojureLoweringTest {
 
 	@Test
 	void defLoneStringIsTheValueNotADocstring() {
-		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| \"hello\")\n|c%x|");
-		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) \"hello\" \"user/x\")\n|c%x|");
+		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")\n|c%x|");
 	}
 
 	@Test
@@ -114,7 +117,8 @@ class ClojureLoweringTest {
 		// the value lowers against the OLD FUNCTION binding (#'|c%p|), not the
 		// still-unbound value cell, and only then does the name become a VARIABLE.
 		assertThat(lowered("(defn p [x] x) (def p (memoize p))")).contains("#'|c%p|");
-		assertThat(lowered("(defn p [x] x) (def p p)")).contains("(SETQ |c%p| #'|c%p|)");
+		assertThat(lowered("(defn p [x] x) (def p p)")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%p|) |c%p| (RONTOLISP::%CLOJURE-UNBOUND \"user/p\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%p| |__clojure_new_root|)) #'|c%p| \"user/p\")");
 		assertThat(lowered("(defn p [x] x) (defonce p (memoize p))")).contains("#'|c%p|");
 	}
 
@@ -127,7 +131,9 @@ class ClojureLoweringTest {
 		// captures the definition current at that point.
 		assertThat(lowered("(defn f [] 1) (def g f) (defn f [] 2) (g) (f)"))
 			.contains("(DEFUN |c%f| NIL " + arity("user/f") + " 1)")
-			.contains("(SETQ |c%g| #'|c%f|)")
+			.contains(
+					"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%g|) |c%g| (RONTOLISP::%CLOJURE-UNBOUND \"user/g\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%g| |__clojure_new_root|)) #'|c%f| \"user/g\")")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/f\" #'|c%f%def2| #'|c%f|)")
 			.contains("(DEFUN |c%f%def2| NIL " + arity("user/f") + " 2)")
 			.contains("(FUNCALL |c%g|)")
 			.contains("(|c%f%def2|)");
@@ -135,9 +141,11 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [] 1) (f) (defn f [] 2) (f)")).contains("(|c%f|)").contains("(|c%f%def2|)");
 		// a redefined dynamic defn installs its fresh function cell, so the
 		// value cell always holds the newest
-		assertThat(lowered("(defn ^:dynamic d [] 1) (defn ^:dynamic d [] 2)")).contains("(DEFPARAMETER |c%d| #'|c%d|)")
+		assertThat(lowered("(defn ^:dynamic d [] 1) (defn ^:dynamic d [] 2)"))
+			.contains("(DEFPARAMETER |c%d| (RONTOLISP::%CLOJURE-VAR-VALIDATED #'|c%d| \"user/d\"))")
+			.contains("(RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED \"user/d\" |c%d|)")
 			.contains("(DEFUN |c%d%def2| NIL " + arity("user/d") + " 2)")
-			.contains("(DEFPARAMETER |c%d| #'|c%d%def2|)");
+			.contains("(DEFPARAMETER |c%d| (RONTOLISP::%CLOJURE-VAR-VALIDATED #'|c%d%def2| \"user/d\"))");
 		// namespaces version their own names independently
 		assertThat(lowered("(ns nsa) (defn f [] 1) (ns nsb) (defn f [] 2) (nsa/f)"))
 			.contains("(DEFUN |c%nsa/f| NIL " + arity("nsa/f") + " 1)")
@@ -158,7 +166,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
 		assertThat(lowered("(declare u) (u 1)")).contains("(SETQ |c%u| (RONTOLISP::%CLOJURE-UNBOUND \"user/u\"))",
 				"(RONTOLISP::%CLOJURE-CALL |c%u| (LIST 1))");
-		assertThat(lowered("(declare u) (defn u [x] x) (u 1)")).contains("(|c%u| 1)").doesNotContain("UNBOUND");
+		assertThat(lowered("(declare u) (defn u [x] x) (u 1)")).contains("(|c%u| 1)")
+			.contains(
+					"(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/u\" #'|c%u| (RONTOLISP::%CLOJURE-UNBOUND \"user/u\"))");
 	}
 
 	@Test
@@ -602,7 +612,7 @@ class ClojureLoweringTest {
 	@Test
 	void conditionalsTreatFalseAndNilAsFalsey() {
 		assertThat(lowered("(def x false) (if x 1 2)")).isEqualTo(FALSE_BINDING
-				+ "(SETQ |c%x| RONTOLISP::%CLOJURE-FALSE)\n"
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) RONTOLISP::%CLOJURE-FALSE \"user/x\")\n"
 				+ "(LET ((|__clojure_0| |c%x|)) (IF (OR (NULL |__clojure_0|) (EQ |__clojure_0| RONTOLISP::%CLOJURE-FALSE)) 2 1))");
 		assertThat(lowered("(def x 1) (when x x)"))
 			.contains("(LET ((|__clojure_0| |c%x|)) (IF (OR (NULL |__clojure_0|)");
@@ -722,11 +732,12 @@ class ClojureLoweringTest {
 		// whose vars carry its name (user's keep the bare mangled name)
 		String nsSwitch = "(DEFVAR RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"user\"))\n"
 				+ "(SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"foo\"))\n";
-		assertThat(lowered("(ns foo) (def x 1) x"))
-			.isEqualTo(FALSE_BINDING + nsSwitch + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
-		assertThat(lowered("(ns foo (:require [clojure.string :as s])) (def x 1) x"))
-			.isEqualTo(FALSE_BINDING + nsSwitch + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
-		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+		assertThat(lowered("(ns foo) (def x 1) x")).isEqualTo(FALSE_BINDING + nsSwitch
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%foo/x|) |c%foo/x| (RONTOLISP::%CLOJURE-UNBOUND \"foo/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%foo/x| |__clojure_new_root|)) 1 \"foo/x\")\n|c%foo/x|");
+		assertThat(lowered("(ns foo (:require [clojure.string :as s])) (def x 1) x")).isEqualTo(FALSE_BINDING + nsSwitch
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%foo/x|) |c%foo/x| (RONTOLISP::%CLOJURE-UNBOUND \"foo/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%foo/x| |__clojure_new_root|)) 1 \"foo/x\")\n|c%foo/x|");
+		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING
+				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")\n|c%x|");
 	}
 
 	@Test
@@ -3019,14 +3030,19 @@ class ClojureLoweringTest {
 	@Test
 	void metadataNamesDefinitionsWithoutAffectingThem() {
 		assertThat(lowered("(defn- f [x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
-		assertThat(lowered("(def ^:private x 1)")).contains("(SETQ |c%x| 1)");
-		assertThat(lowered("(def ^:dynamic *d* 1)")).contains("(DEFPARAMETER |c%*d*| 1)")
+		assertThat(lowered("(def ^:private x 1)")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")");
+		assertThat(lowered("(def ^:dynamic *d* 1)"))
+			.contains("(DEFPARAMETER |c%*d*| (RONTOLISP::%CLOJURE-VAR-VALIDATED 1 \"user/*d*\"))")
+			.contains("(RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED \"user/*d*\" |c%*d*|)")
 			.contains("(DEFPARAMETER |c%*d*%bound-depth| 0)");
 		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
 		assertThat(lowered("(defn f {:private true} [x] x)"))
 			.contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
-		assertThat(lowered("(def x \"a docstring\" 1)")).contains("(SETQ |c%x| 1)");
-		assertThat(lowered("(def x \"a docstring\")")).contains("(SETQ |c%x| \"a docstring\")");
+		assertThat(lowered("(def x \"a docstring\" 1)")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")");
+		assertThat(lowered("(def x \"a docstring\")")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) \"a docstring\" \"user/x\")");
 		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
 		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
 		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");
@@ -3040,8 +3056,11 @@ class ClojureLoweringTest {
 
 	@Test
 	void defonceDefstructAndStructLower() {
-		assertThat(lowered("(defonce d 1)")).contains("BOUNDP").contains("(SETQ |c%d| 1)");
-		assertThat(lowered("(defonce d)")).contains("(SETQ |c%d| NIL)");
+		assertThat(lowered("(defonce d 1)")).contains("BOUNDP")
+			.contains(
+					"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%d|) |c%d| (RONTOLISP::%CLOJURE-UNBOUND \"user/d\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%d| |__clojure_new_root|)) 1 \"user/d\")");
+		assertThat(lowered("(defonce d)")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%d|) |c%d| (RONTOLISP::%CLOJURE-UNBOUND \"user/d\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%d| |__clojure_new_root|)) NIL \"user/d\")");
 		assertThat(lowered("(defstruct s :a :b)")).contains("(SETQ |c%s| (VECTOR");
 		assertThat(lowered("(def s [:a]) (struct s 1)")).contains("GETHASH").contains("DOTIMES");
 		assertThat(lowered("(def s [:a]) (struct-map s :a 1)")).contains("GETHASH").contains("DOTIMES");
@@ -3116,13 +3135,14 @@ class ClojureLoweringTest {
 		// calls) and installs the function in the value cell behind defparameter,
 		// so calls route through it and binding rebinds it with dynamic extent
 		assertThat(lowered("(defn ^:dynamic slow [n] (* n 2)) (slow 21)")).contains("(DEFUN |c%slow| (|c%n|)")
-			.contains("(DEFPARAMETER |c%slow| #'|c%slow|)")
+			.contains("(DEFPARAMETER |c%slow| (RONTOLISP::%CLOJURE-VAR-VALIDATED #'|c%slow| \"user/slow\"))")
+			.contains("(RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED \"user/slow\" |c%slow|)")
 			.contains("(DEFPARAMETER |c%slow%bound-depth| 0)")
 			.contains("(FUNCALL |c%slow| 21)");
 		assertThat(lowered("(defn ^:dynamic madd ([x] 1) ([x y] 2)) (madd 1 2)")).contains("(DEFUN |c%madd%1|")
 			.contains("(DEFUN |c%madd%2|")
 			.contains("(DEFUN |c%madd|")
-			.contains("(DEFPARAMETER |c%madd| #'|c%madd|)")
+			.contains("(DEFPARAMETER |c%madd| (RONTOLISP::%CLOJURE-VAR-VALIDATED #'|c%madd| \"user/madd\"))")
 			.contains("(FUNCALL |c%madd| 1 2)");
 		assertThat(lowered("(defn slow [n] (* n 2)) (slow 21)")).contains("(|c%slow| 21)")
 			.doesNotContain("DEFPARAMETER");
@@ -3652,7 +3672,8 @@ class ClojureLoweringTest {
 		assertThat(out).contains("(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (+ |c%x| 1))")
 			.contains("(DEFVAR |c%app.lib%loaded| NIL)")
 			.contains("(SETQ |c%app.lib%init-1| (LAMBDA NIL")
-			.contains("(SETQ |c%app.lib/v| 1)")
+			.contains(
+					"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%app.lib/v|) |c%app.lib/v| (RONTOLISP::%CLOJURE-UNBOUND \"app.lib/v\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%app.lib/v| |__clojure_new_root|)) 1 \"app.lib/v\")")
 			.contains("(SETQ |c%app.lib%init| (LAMBDA NIL (FUNCALL |c%app.lib%init-1|)))")
 			.contains("(UNLESS |c%app.lib%loaded| " + loading("app.lib") + " (SETQ |c%app.lib%loaded| T))");
 		// definitions ahead of the requiring form, statements inside the init
@@ -3708,11 +3729,13 @@ class ClojureLoweringTest {
 			.contains("(DEFPARAMETER |c%app.dyn/x%bound-depth| 0)")
 			.contains("(DECLAIM (SPECIAL |c%app.dyn/y| |c%app.dyn/y%bound-depth|))")
 			.contains("(DEFPARAMETER |c%app.dyn/y%bound-depth| 0)")
-			.contains("(SETQ |c%app.dyn/x| 1)")
+			.contains(
+					"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%app.dyn/x|) |c%app.dyn/x| (RONTOLISP::%CLOJURE-UNBOUND \"app.dyn/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%app.dyn/x| |__clojure_new_root|)) 1 \"app.dyn/x\")")
 			// A reload keeps the defonce root through a runtime boundp probe
 			// of the var itself -- every store feeds the eval mirror the probe
 			// reads, so no set flag beside the var is needed any more
-			.contains("(UNLESS (BOUNDP '|c%app.dyn/y|) (SETQ |c%app.dyn/y| 2))")
+			.contains(
+					"(UNLESS (BOUNDP '|c%app.dyn/y|) (RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%app.dyn/y|) |c%app.dyn/y| (RONTOLISP::%CLOJURE-UNBOUND \"app.dyn/y\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%app.dyn/y| |__clojure_new_root|)) 2 \"app.dyn/y\"))")
 			.doesNotContain("%set");
 		assertThat(out).doesNotContain("(DEFPARAMETER |c%app.dyn/x| 1)");
 	}
@@ -3723,7 +3746,9 @@ class ClojureLoweringTest {
 		// assignment poisons the name, so the compile-time boundp fold leaves the
 		// probe to the run time, where the mirror answers it
 		String out = loweredWithFiles("(require 'app.once)", Map.of("src/app/once.clj", "(ns app.once) (defonce v 1)"));
-		assertThat(out).contains("(UNLESS (BOUNDP '|c%app.once/v|) (SETQ |c%app.once/v| 1))").doesNotContain("%set");
+		assertThat(out).contains(
+				"(UNLESS (BOUNDP '|c%app.once/v|) (RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%app.once/v|) |c%app.once/v| (RONTOLISP::%CLOJURE-UNBOUND \"app.once/v\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%app.once/v| |__clojure_new_root|)) 1 \"app.once/v\"))")
+			.doesNotContain("%set");
 	}
 
 }

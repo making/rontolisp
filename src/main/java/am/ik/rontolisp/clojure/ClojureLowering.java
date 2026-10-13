@@ -237,6 +237,20 @@ public final class ClojureLowering {
 	final Set<String> unboundRoots = new LinkedHashSet<>();
 
 	/**
+	 * The var keys a valued {@code def} or {@code defonce} lowered above the current
+	 * form, in lowering order: their value cell holds a root. A {@code defn} over one
+	 * notifies with that root as the replaced one.
+	 */
+	final Set<String> valuedAbove = new HashSet<>();
+
+	/**
+	 * The var keys a {@code declare} lowered above the current form: their value cell
+	 * holds the unbound root until a valued definition replaces it. A {@code defn} over
+	 * one notifies with the unbound root as the replaced one.
+	 */
+	final Set<String> declaredAbove = new HashSet<>();
+
+	/**
 	 * Whether this lowering reads a session's buffers one at a time: no pre-scan sees a
 	 * later buffer, so a name only declared so far may still be defined.
 	 */

@@ -100,7 +100,7 @@ answered `2 5 3` before).
 | a call whose head is a compound form (`((fn ...) x)`, `((set v) x)`, `((first ks) m)`) | `funcall` when the head lowers to a `function`/`lambda`, else `rontolisp::%clojure-call` | a call result may be a set, map, vector or keyword, which the dispatcher looks up like `IFn`; a collection literal head and a `#'f` head keep their own rows |
 | a call to a core name the program defines or binds | the program's call | `call` checks `known(name)` before the core rows |
 | `declare` | `nil` (plus a `^:dynamic` name's hoisted declaim and counter) | a pre-scan forward declaration (`Kind.DECLARED`); a real definition wins. "Vars and metadata", unbound vars |
-| `def` | top-level `setq` of the mangled name | inside a body it sets the global when the body runs. The value lowers against the OLD binding, so `(def p (memoize p))` after `(defn p ...)` captures `#'c%p`. A docstring and an attr map are skipped (recorded as var metadata); an attr map needs a value behind it and a lone string is the value |
+| `def` | top-level store of the mangled name: the validating and notifying `%clojure-var-store` over the value cell, folding to its `setq` (`ClojureArms.Family.WATCH`) | inside a body it sets the global when the body runs. The value lowers against the OLD binding, so `(def p (memoize p))` after `(defn p ...)` captures `#'c%p`. A docstring and an attr map are skipped (recorded as var metadata); an attr map needs a value behind it and a lone string is the value |
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
@@ -120,7 +120,7 @@ answered `2 5 3` before).
 | `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr` |
 | `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
 | `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
-| `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn (setq cell v)... body) (setq cell old)...)` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
+| `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn stores... body) restores...)` where each store is the guarded `%clojure-var-store` over the value cell, folding to its `setq` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
 | `alter-var-root` `alter-meta!` `reset-meta!` | `(%clojure-alter-root var setter f args)` for a literal `#'x` of a value cell, else `(%clojure-alter-var-root v f args)`; `(%clojure-alter-meta r f args)`, `(%clojure-reset-meta r m)` (`ClojureVarLowering.alterRootOf`/`alterMetaOf`/`resetMetaOf`) | "Vars and metadata", alter-var-root |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
@@ -3034,7 +3034,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   oracle's form-by-form load). `ClojureMacroLowering.handOver` gives the macro evaluator
   each top-level datum's lowered forms once the datum lowered (`topLevels`, and
   `loadFile` per datum of a required namespace, the init `def`s included): `defun` and
-  `declaim` as they are, a `setq`/`defparameter` store as a LAZY root
+  `declaim` as they are, a `setq`/`defparameter` store -- a var-root store unwrapped to
+  its cell and init -- as a LAZY root
   (`LispEvaluator.defineLazyGlobal`: its value runs only when an expansion reads the
   var, reading the root it supersedes for `(def x (inc x))`), a `defonce`'s store the
   same unless bound (`ClojureLowering.defonceStores` maps the guarded form to it),
@@ -5764,13 +5765,15 @@ resolve var`.
   at any depth, namespace dropped, so a test file's `(with-redefs [alias/f ...])` reaches
   the namespace it requires next), or its name carries `^:redef`. A redefinable `defn`
   pre-declares and lowers as `Kind.VARIABLE`, keeps its `defun` (recur and arity helpers
-  stay direct) and adds `(setq var #'fn)` (`ClojureBindingLowering.redefCellStore`, also
-  allowed in `defnInBody`); it is never in `globalDirectFuns`, so calls go through
-  `%clojure-call` (a stub may be a map or keyword). A redefinable `def`/`defonce` drops
-  out of `globalDirectFuns` the same way. A program naming no such var lowers
-  byte-identically. `withRedefsOf` evaluates the values in order, saves each distinct
-  var's value cell, sets, runs the body behind the `try` barrier and restores in an
-  `unwind-protect`; a later pair of one var wins, a trailing name is resolved only. A
+  stay direct) and adds the validating and notifying `%clojure-var-store` over the value
+  cell, folding to `(setq var #'fn)` (also allowed in `defnInBody`); it is never in
+  `globalDirectFuns`, so calls go through `%clojure-call` (a stub may be a map or
+  keyword). A redefinable `def`/`defonce` drops out of `globalDirectFuns` the same way.
+  A program naming no such var lowers byte-identically. `withRedefsOf` evaluates the
+  values in order, saves each distinct var's value cell, sets, runs the body behind the
+  `try` barrier and restores in an `unwind-protect`; each set and restore validates and
+  notifies where the var is guarded (`%clojure-var-guarded-p`, folding to the plain
+  `setq` otherwise); a later pair of one var wins, a trailing name is resolved only. A
   target the lowering already lowered as a direct call (a `defn` of a namespace loaded
   before the file naming it was scanned) goes into `redefMisses`; `ClojureLowering.lower`
   then lowers the whole program again with those keys seeded (reusing the resolved
@@ -5834,10 +5837,11 @@ resolve var`.
 
 - `binding` is a `let*` over the bound names, sequential, rebinding only `^:dynamic` vars
   and the core specials (the oracle's non-dynamic error otherwise). A `^:dynamic`
-  `def`/`defonce` is a `defparameter` plus a zeroed `%bound-depth` counter special (two
-  top-level forms, for `SpecialVarCollector`); a `^:dynamic` `defn` keeps its `defun` and
-  adds a `defparameter` of the function, so calls go through the value cell (`recur` and
-  the arity helpers stay direct). Each `binding` rebinds the counter one deeper.
+  `def`/`defonce` is a `defparameter` of the validated init plus the notify statement
+  behind the store and a zeroed `%bound-depth` counter special (for `SpecialVarCollector`);
+  a `^:dynamic` `defn` keeps its `defun` and adds a `defparameter` of the validated
+  function the same way, so calls go through the value cell (`recur` and the arity
+  helpers stay direct). Each `binding` rebinds the counter one deeper.
 - `thread-bound?` reads that counter through the var: the `#'x` site of a `^:dynamic` var
   lowers to `%clojure-var-dynamic`, which adds `(lambda () counter)` as a fourth element of
   `(:C%VAR name getter depth)`; every other var site is the plain three-element `%clojure-var`,
@@ -6019,15 +6023,35 @@ resolve var`.
   (which take the atom, not its cell, since this change), and the views `%clojure-ref-notified`,
   `%clojure-ref-validated`, `%clojure-stm-noted`, `%clojure-stm-notified` to their first argument.
   `get-validator` and `remove-watch` are no producers: on a one-long cell they answer nil and the
-  reference. Deviation: a later `def`, `defn` or `with-redefs` replacing a var's root neither
-  calls its watches nor checks its validator (the oracle's `bindRoot` does both); `swap-vals!`
-  and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's refuse anything but an
-  atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
+  reference. A later `def`, `defn`, `defonce` or `with-redefs` replacing a var's root goes
+  through the same validator and watches, like the oracle's `bindRoot` (2026-10-13): a plain
+  store is `%clojure-var-store` over a getter and a setter closure of the value cell,
+  folding to its `setq` (the getter answers the unbound root where the cell is still
+  unbound, so the first binding never reads an unbound variable); a `with-redefs` set or
+  restore is the store behind `%clojure-var-guarded-p`, folding to its `setq`; a dynamic
+  definition keeps its `defparameter` head for `SpecialVarCollector` and validates its
+  init through the `%clojure-var-validated` view (which stashes the replaced root) with
+  the `%clojure-var-notify-stored` statement behind the store; a `defn` with no value
+  cell (a redefinition, or a first one over a declared or valued root) validates and
+  notifies behind its `defun`s through the `%clojure-var-defn-notify` statement. Both
+  statements drop at top level and in `progn` (a program naming no watch verb lowers
+  byte-identically); the macro evaluator reads a store's init lazily like a `setq`'s
+  (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a later input's
+  watch or validator sees every earlier root. Deviation: a `defmacro` redefinition
+  replaces its root without calling its watches or checking its validator (the oracle
+  does both), and a `defn` with no value cell validates only once its definition is
+  bound, so a refused one still routes to the new function (the oracle keeps the old
+  one); `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
+  refuse anything but an atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
   `swap-vals-and-reset-vals-answer-the-old-and-the-new-value`,
   `add-watch-calls-a-watch-after-every-change-of-an-atom`,
   `refs-agents-and-vars-call-their-watches-and-validators`,
+  `a-def-with-redefs-and-a-validator-notify-a-var-s-watches`,
+  `a-redefined-defn-and-a-dynamic-def-notify-a-var-s-watches`,
   `await-for-answers-whether-the-actions-ran-in-time` (all oracle-identical, four backends),
   `ClojureLibraryTest#aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers`,
+  `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsVarStoresUnchanged`,
+  `ClojureSessionTest#aLaterBufferRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
   `ClojureAtomConcurrentRequestsTest` (its second round watches and validates under a burst).
 
 ## clojure.test

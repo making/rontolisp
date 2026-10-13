@@ -13608,6 +13608,79 @@
   (rontolisp::%clojure-alter-var-root (car args) (car (cdr args))
                                       (cdr (cdr args))))
 
+;;;; A def, defn or with-redefs replacing a var's root.
+;;
+;; The oracle's bindRoot validates the new root and notifies the var's
+;; watches on every replacement -- a def's, a redefined defn's and a
+;; with-redefs' entry and restore as much as an alter-var-root's. The
+;; lowering wraps those stores in the WATCH-family arms below
+;; (clojure/ClojureArms): a store over a getter and a setter closure, a
+;; guarded rebind, a validated init with its notify statement, which a
+;; program naming no watch verb folds back to the plain store. A session
+;; keeps them, so a later input's add-watch or set-validator! sees every
+;; earlier root.
+
+(defun rontolisp::%clojure-var-guarded-p (name)
+  "Whether the interned var NAME (\"ns/name\") has watches or a validator.
+   Nil where no var site ever interned one, which can hold neither."
+  (let ((v (gethash name rontolisp::%clojure-var-table)))
+    (and v
+         (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+           (or (gethash v rontolisp::%clojure-var-watches)
+               (gethash v rontolisp::%clojure-var-validators))))))
+
+(defun rontolisp::%clojure-var-store (getter setter new name)
+  "The store replacing the root of the var NAME (\"ns/name\"): NEW validated
+   against its validator, stored through SETTER and its watches called with
+   the root GETTER read and NEW; answers NEW, like the oracle's bindRoot. A
+   var no site ever interned holds neither, so the store is plain."
+  (let ((old (funcall getter)) (v (gethash name rontolisp::%clojure-var-table)))
+    (setq new
+          (rontolisp::%clojure-stm-validate new
+           (if v (rontolisp::%clojure-ref-validator v) nil)))
+    (funcall setter new)
+    (if v (rontolisp::%clojure-ref-notify v old new))
+    new))
+
+(defvar rontolisp::%clojure-var-def-old
+  (make-hash-table :test 'equal)
+  "The root a dynamic definition is replacing: an equal table from
+   \"ns/name\" to it, stashed while its init runs and taken by the notify
+   statement behind it.")
+
+(defun rontolisp::%clojure-var-validated (new name)
+  "A view: NEW, once the validator of the var NAME (\"ns/name\") accepts it.
+   The root it replaces is stashed for the notify statement behind the
+   definition; a var no site ever interned is fresh, so its unbound root is
+   stashed."
+  (let ((v (gethash name rontolisp::%clojure-var-table)))
+    (setf (gethash name rontolisp::%clojure-var-def-old)
+     (if v (rontolisp::%clojure-var-get v) (rontolisp::%clojure-unbound name)))
+    (rontolisp::%clojure-stm-validate new
+     (if v (rontolisp::%clojure-ref-validator v) nil))))
+
+(defun rontolisp::%clojure-var-notify-stored (name new)
+  "A statement: the watches of the var NAME (\"ns/name\") called with the
+   root its definition replaced, stashed while its init ran, and NEW;
+   answers NEW."
+  (let ((v (gethash name rontolisp::%clojure-var-table)))
+    (let ((old (gethash name rontolisp::%clojure-var-def-old)))
+      (remhash name rontolisp::%clojure-var-def-old)
+      (if v (rontolisp::%clojure-ref-notify v old new)))
+    new))
+
+(defun rontolisp::%clojure-var-defn-notify (name new old)
+  "A statement: NEW validated against the validator of the var NAME
+   (\"ns/name\") and its watches called with OLD and NEW; answers NEW.
+   Behind a defn, whose function cells the definition already bound; a var
+   no site ever interned holds neither."
+  (let ((v (gethash name rontolisp::%clojure-var-table)))
+    (setq new
+          (rontolisp::%clojure-stm-validate new
+           (if v (rontolisp::%clojure-ref-validator v) nil)))
+    (if v (rontolisp::%clojure-ref-notify v old new))
+    new))
+
 (defun rontolisp::%clojure-reference-p (x)
   "Whether X is one of the oracle's IReference kinds: a var, an atom, a ref,
    an agent or a namespace (a volatile is none)."

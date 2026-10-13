@@ -112,12 +112,15 @@ class ClojureControlLoweringTest {
 	void aDefnAWithRedefsNamesIsCalledThroughItsVar() {
 		// the pre-scan finds the name anywhere in the file, below the definition too
 		String out = lowered("(defn f [] 1) (defn g [] (f)) (defn t [] (with-redefs [f (fn [] 2)] (g)))");
-		assertThat(out).contains("(SETQ |c%f| #'|c%f|)")
+		assertThat(out).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%f|) |c%f| (RONTOLISP::%CLOJURE-UNBOUND \"user/f\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%f| |__clojure_new_root|)) #'|c%f| \"user/f\")")
 			.contains("(DEFUN |c%g| NIL " + ClojureLoweringTest.arity("user/g")
 					+ " (RONTOLISP::%CLOJURE-CALL |c%f| (LIST)))")
-			.contains("(UNWIND-PROTECT (PROGN (SETQ |c%f| |__clojure_");
+			.contains("(UNWIND-PROTECT (PROGN (IF (RONTOLISP::%CLOJURE-VAR-GUARDED-P \"user/f\")")
+			.contains("(SETQ |c%f| |__clojure_");
 		// ^:redef, the oracle's own opt-out of direct linking, does the same
-		assertThat(lowered("(defn ^:redef f [] 1) (defn g [] (f))")).contains("(SETQ |c%f| #'|c%f|)")
+		assertThat(lowered("(defn ^:redef f [] 1) (defn g [] (f))")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%f|) |c%f| (RONTOLISP::%CLOJURE-UNBOUND \"user/f\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%f| |__clojure_new_root|)) #'|c%f| \"user/f\")")
 			.contains("(RONTOLISP::%CLOJURE-CALL |c%f| (LIST))");
 	}
 

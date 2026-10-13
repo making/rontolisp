@@ -529,23 +529,25 @@ final class ClojureVarLowering {
 	 * {@code (with-redefs [var value ...] body...)}: every value evaluated in order, then
 	 * each var's root replaced for the body and restored in an {@code unwind-protect},
 	 * like the oracle's {@code with-redefs-fn} (a later binding of one var wins; a
-	 * trailing name without a value is resolved and left alone). A var is a value cell
-	 * here: a {@code def}'s, a {@code declare}'s, and a {@code defn}'s when the var is
-	 * redefinable ({@link ClojureLowering#redefinable(String, LispVal)}), which every
-	 * {@code defn} a {@code with-redefs} names is: the pre-scan finds the name, or the
-	 * program lowers again ({@link ClojureLowering#redefMisses}). A session cannot lower
-	 * an earlier input again, so there a {@code defn} it lowered as a direct call is
-	 * refused by name. A local, an unknown name, a macro, a {@code clojure.core} var (its
-	 * verbs lower inline) and a function no {@code defn} defined (a multimethod, a
-	 * protocol method, a test) are refused too. The body sits behind the {@code try}
-	 * barrier.
+	 * trailing name without a value is resolved and left alone). Each replacement
+	 * validates and notifies like the oracle's {@code bindRoot} where the var is guarded,
+	 * and is the plain {@code setq} otherwise (an {@code if} arm the strip folds back). A
+	 * var is a value cell here: a {@code def}'s, a {@code declare}'s, and a
+	 * {@code defn}'s when the var is redefinable
+	 * ({@link ClojureLowering#redefinable(String, LispVal)}), which every {@code defn} a
+	 * {@code with-redefs} names is: the pre-scan finds the name, or the program lowers
+	 * again ({@link ClojureLowering#redefMisses}). A session cannot lower an earlier
+	 * input again, so there a {@code defn} it lowered as a direct call is refused by
+	 * name. A local, an unknown name, a macro, a {@code clojure.core} var (its verbs
+	 * lower inline) and a function no {@code defn} defined (a multimethod, a protocol
+	 * method, a test) are refused too. The body sits behind the {@code try} barrier.
 	 */
 	static LispVal withRedefsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2,
 				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/with-redefs");
 		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "with-redefs");
 		List<LispVal> pairs = new ArrayList<>();
-		List<LispSymbol> cells = new ArrayList<>();
+		Map<LispSymbol, String> cells = new LinkedHashMap<>();
 		List<LispVal> sets = new ArrayList<>();
 		boolean missed = false;
 		for (int i = 0; i < bindings.size(); i += 2) {
@@ -561,10 +563,8 @@ final class ClojureVarLowering {
 			pairs.add(ClojureLowerUtil.list(value, ctx.lower(bindings.get(i + 1))));
 			if (key != null) {
 				LispSymbol cell = ClojureLowering.varSym(key);
-				if (!cells.contains(cell)) {
-					cells.add(cell);
-				}
-				sets.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value));
+				cells.putIfAbsent(cell, key);
+				sets.add(ClojureStateLowering.guardedVarStore(ctx, cell, value, key));
 			}
 		}
 		LispVal body = ClojureStateLowering.barrierBody(ctx, items, 2);
@@ -579,10 +579,10 @@ final class ClojureVarLowering {
 		}
 		List<LispVal> saved = new ArrayList<>();
 		List<LispVal> restores = new ArrayList<>();
-		for (LispSymbol cell : cells) {
+		for (Map.Entry<LispSymbol, String> cell : cells.entrySet()) {
 			LispSymbol old = ctx.freshTemp();
-			saved.add(ClojureLowerUtil.list(old, cell));
-			restores.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, old));
+			saved.add(ClojureLowerUtil.list(old, cell.getKey()));
+			restores.add(ClojureStateLowering.guardedVarStore(ctx, cell.getKey(), old, cell.getValue()));
 		}
 		List<LispVal> run = new ArrayList<>();
 		run.add(ClojureLowerUtil.sym("progn"));
@@ -986,6 +986,7 @@ final class ClojureVarLowering {
 			String key = ctx.internDeclared(ClojureLowerUtil.plainName(nameDatum, "declare"),
 					ClojureLowerUtil.nameIsPrivate(nameDatum));
 			ctx.globals.putIfAbsent(key, ClojureLowering.Kind.DECLARED);
+			ctx.declaredAbove.add(key);
 			ctx.unboundCapable.add(key);
 			forms.addAll(record(ctx, key, form, nameDatum, null, null, declared, false, false));
 			if (ClojureLowerUtil.nameIsDynamic(nameDatum) && ctx.dynamicVars.add(key)) {

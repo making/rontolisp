@@ -391,7 +391,8 @@ final class ClojureStateLowering {
 	 * of it, and the transaction's snapshot and call of its refs' watches.
 	 */
 	static final Set<String> WATCH_VIEWS = Set.of("RONTOLISP::%CLOJURE-REF-NOTIFIED",
-			"RONTOLISP::%CLOJURE-REF-VALIDATED", "RONTOLISP::%CLOJURE-STM-NOTED", "RONTOLISP::%CLOJURE-STM-NOTIFIED");
+			"RONTOLISP::%CLOJURE-REF-VALIDATED", "RONTOLISP::%CLOJURE-STM-NOTED", "RONTOLISP::%CLOJURE-STM-NOTIFIED",
+			"RONTOLISP::%CLOJURE-VAR-VALIDATED");
 
 	/**
 	 * What may give a reference a validator or a watch: the verbs, called or as values,
@@ -400,6 +401,128 @@ final class ClojureStateLowering {
 	static final Set<String> WATCH_PRODUCERS = Set.of("RONTOLISP::%CLOJURE-ADD-WATCH",
 			"RONTOLISP::%CLOJURE-ADD-WATCH-V", "RONTOLISP::%CLOJURE-SET-VALIDATOR",
 			"RONTOLISP::%CLOJURE-SET-VALIDATOR-V", ATOM_OPTIONS.name());
+
+	/**
+	 * The WATCH-family test of a var named by its {@code "ns/name"}: whether the interned
+	 * var has watches or a validator.
+	 */
+	static final LispSymbol VAR_GUARDED_P = new LispSymbol("RONTOLISP::%CLOJURE-VAR-GUARDED-P");
+
+	/**
+	 * The var-root store: {@code (store getter setter init "ns/name")}, over a
+	 * zero-argument getter closure reading the value cell and a one-argument setter
+	 * closure storing it, folding to the {@code setq} of the cell with the init
+	 * ({@link ClojureArms.Family#stores}).
+	 */
+	static final LispSymbol VAR_STORE = new LispSymbol("RONTOLISP::%CLOJURE-VAR-STORE");
+
+	/**
+	 * A view over a dynamic definition's init: the init validated against the var's
+	 * validator, its replaced root stashed for {@link #VAR_NOTIFY_STORED}.
+	 */
+	static final LispSymbol VAR_VALIDATED = new LispSymbol("RONTOLISP::%CLOJURE-VAR-VALIDATED");
+
+	/**
+	 * The notify statement behind a dynamic definition: the var's watches called with the
+	 * stashed root and the new one.
+	 */
+	static final LispSymbol VAR_NOTIFY_STORED = new LispSymbol("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED");
+
+	/**
+	 * The validate-and-notify statement behind a {@code defn} with no value cell: the new
+	 * function validated and the var's watches called with the old and the new one.
+	 */
+	static final LispSymbol VAR_DEFN_NOTIFY = new LispSymbol("RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY");
+
+	/**
+	 * The root a definition replaces, read off the value cell: the cell where bound, else
+	 * the unbound root of the var -- a conditional definition above may never have run. A
+	 * pure read for a bound cell, so a notify statement may name it.
+	 * @param cell the value cell
+	 * @param key the var key
+	 * @return the guarded read
+	 */
+	static LispVal guardedOldRead(LispSymbol cell, String key) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), cell)),
+				cell, ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key)));
+	}
+
+	/**
+	 * The store replacing a var's root, validating the init and notifying the var's
+	 * watches like the oracle's {@code bindRoot}: {@code (store getter setter init
+	 * "ns/name")} over closures over the value cell, folding to its {@code setq}. The
+	 * getter answers the unbound root where the cell is still unbound -- the first
+	 * binding, which no watch or validator can already guard -- so the store never reads
+	 * an unbound variable.
+	 * @param ctx the hub
+	 * @param cell the value cell
+	 * @param init the already-lowered init
+	 * @param key the var key
+	 * @return the store
+	 */
+	static LispVal varStore(ClojureLowering ctx, LispSymbol cell, LispVal init, String key) {
+		// A fixed parameter name: no program spells it (like the fresh temporaries),
+		// and it keeps the temporaries around the store numbered as before.
+		LispSymbol value = new LispSymbol("__clojure_new_root");
+		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+				guardedOldRead(cell, key));
+		LispVal setter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(value),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value));
+		return ClojureLowerUtil.list(VAR_STORE, getter, setter, init, LispString.literal(key));
+	}
+
+	/**
+	 * A {@code with-redefs} set or restore of a var's root: the plain {@code setq} of the
+	 * cell, or the validating and notifying store over it where the var is guarded -- an
+	 * {@code if} arm the strip folds back to the {@code setq}.
+	 * @param ctx the hub
+	 * @param cell the value cell
+	 * @param value the already-lowered value (a temporary)
+	 * @param key the var key
+	 * @return the guarded store
+	 */
+	static LispVal guardedVarStore(ClojureLowering ctx, LispSymbol cell, LispSymbol value, String key) {
+		LispVal plain = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(VAR_GUARDED_P, LispString.literal(key)), varStore(ctx, cell, value, key), plain);
+	}
+
+	/**
+	 * A dynamic definition's init validated against the var's validator, its replaced
+	 * root stashed for {@link #varNotifyStored}: a view answering the init.
+	 * @param init the already-lowered init
+	 * @param key the var key
+	 * @return the validated init
+	 */
+	static LispVal validatedInit(LispVal init, String key) {
+		return ClojureLowerUtil.list(VAR_VALIDATED, init, LispString.literal(key));
+	}
+
+	/**
+	 * The notify statement behind a dynamic definition: the var's watches called with the
+	 * stashed root and the cell's new value. A statement arm the strip drops.
+	 * @param key the var key
+	 * @param cell the value cell, read once stored
+	 * @return the statement
+	 */
+	static LispVal varNotifyStored(String key, LispSymbol cell) {
+		return ClojureLowerUtil.list(VAR_NOTIFY_STORED, LispString.literal(key), cell);
+	}
+
+	/**
+	 * The validate-and-notify statement behind a {@code defn} with no value cell: the new
+	 * function validated and the var's watches called with the old and the new one. A
+	 * statement arm the strip drops.
+	 * @param key the var key
+	 * @param next the new function
+	 * @param prev the replaced function
+	 * @return the statement
+	 */
+	static LispVal varDefnNotify(String key, LispVal next, LispVal prev) {
+		return ClojureLowerUtil.list(VAR_DEFN_NOTIFY, LispString.literal(key), next, prev);
+	}
 
 	/**
 	 * {@code (swap-vals! atom f args...)} and {@code (reset-vals! atom value)}: the store
@@ -1389,6 +1512,7 @@ final class ClojureStateLowering {
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
 		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		ctx.valuedAbove.add(key);
 		if (dynamic) {
 			ctx.dynamicVars.add(key);
 		}
@@ -1417,7 +1541,7 @@ final class ClojureStateLowering {
 			// probe and no set flag beside the var is needed. The probe survives
 			// the compile-time boundp fold -- the init's assignment poisons the
 			// name -- like the loaded flag's plain-variable test.
-			LispVal store = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+			LispVal store = varStore(ctx, var, value, key);
 			LispVal guarded = ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), boundTest(ctx, key, var), store);
 			ctx.defonceStores.put(guarded, store);
 			return guarded;
@@ -1425,10 +1549,11 @@ final class ClojureStateLowering {
 		else {
 			set = dynamic
 					? ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, value),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, validatedInit(value, key)),
+							varNotifyStored(key, var),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
-					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+					: varStore(ctx, var, value, key);
 		}
 		LispVal store = set;
 		if (echo != null) {

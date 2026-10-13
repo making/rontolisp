@@ -344,6 +344,17 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferRedefinitionNotifiesTheWatchesAnEarlierOneAdded() {
+		// a session keeps the watch arms: a later buffer's def, defn or with-redefs
+		// validates and notifies like the oracle's bindRoot, where a file program
+		// naming no watch verb folds them back
+		assertThat(runSession("(def sx 1)", "(add-watch #'sx :k (fn [k v o n] (println :watch o n)))", "(def sx 10)",
+				"(defn sf [] :a)", "(add-watch #'sf :k (fn [k v o n] (println :fn (fn? o) (fn? n))))",
+				"(defn sf [] :b)", "(println (sf))", "(with-redefs [sx 20] (println :body sx))", "(println :after sx)"))
+			.isEqualTo(":watch 1 10\n:fn true true\n:b\n:watch 10 20\n:body 20\n:watch 20 10\n:after 10\n");
+	}
+
+	@Test
 	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
 		// eval in a macro body lowers through the session's one lowering
 		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",

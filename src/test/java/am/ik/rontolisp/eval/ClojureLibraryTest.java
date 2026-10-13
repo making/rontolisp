@@ -367,6 +367,33 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramNamingNoWatchVerbLowersItsVarStoresUnchanged() {
+		// a def, a redefined defn, a dynamic definition, a with-redefs and a defonce
+		// replace the root through the watch arms, which validate and notify like the
+		// oracle's bindRoot; a program naming no watch verb folds every arm back to
+		// the plain store, so it lowers as before watches on redefinition existed
+		String source = "(def x 1) (defn f [] 1) (defn f [] 2) (def ^:dynamic *d* 1) (with-redefs [x 2] x) (defonce y 3) (declare u) (defn u [x] x) (println x (f) *d* y (u 1))";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(SETQ |c%x| 1)")
+			.contains("(DEFPARAMETER |c%*d*| 1)")
+			.contains("(DEFPARAMETER |c%*d*%bound-depth| 0)")
+			.doesNotContain("%CLOJURE-VAR-STORE")
+			.doesNotContain("%CLOJURE-VAR-GUARDED-P")
+			.doesNotContain("%CLOJURE-VAR-VALIDATED")
+			.doesNotContain("%CLOJURE-VAR-NOTIFY-STORED")
+			.doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		String watched = source + " (add-watch #'x :k (fn [k v o n] nil))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL")
+			.contains("(RONTOLISP::%CLOJURE-VAR-GUARDED-P \"user/x\")")
+			.contains("(RONTOLISP::%CLOJURE-VAR-VALIDATED 1 \"user/*d*\")")
+			.contains("(RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED \"user/*d*\" |c%*d*|)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/f\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/u\"");
+	}
+
+	@Test
 	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
 		// only delay makes a delay: a program naming it keeps deref's and the printer's
 		// delay arms, any other derefs and prints as before delays, and its force and

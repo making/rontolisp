@@ -40,9 +40,14 @@ import org.jspecify.annotations.Nullable;
  * ({@link Family#setters}) is the seventh: its call folds to the {@code setf} of the
  * place it stores into. The library definitions only the family's arms and producers
  * reach ({@link Family#owned}) are the eighth: they go with the arms, so what they name
- * never reaches a pass that runs ahead of the pruner and reads names. A family whose
- * value is made only beside another's ({@link Family#requires}) is made when the program
- * names one of its producers and makes that family's value too.
+ * never reaches a pass that runs ahead of the pruner and reads names. A var-root store
+ * ({@link Family#stores}) is the ninth: its call, over a getter and a setter closure,
+ * folds to the {@code setq} (or {@code defparameter}) of the cell with the init, so an
+ * init with an effect is written once and still stored once. A statement
+ * ({@link Family#statements}) is the tenth: a top-level or {@code progn}-member call of
+ * one goes with the arms. A family whose value is made only beside another's
+ * ({@link Family#requires}) is made when the program names one of its producers and makes
+ * that family's value too.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -494,10 +499,17 @@ public final class ClojureArms {
 		 * cell's constructor, to {@code vector} (a one-long cell, with no room for
 		 * either), and the atom verbs' aware helpers, each to its plain one; the views
 		 * call the watches after an agent's action, a transaction's commit and an
-		 * {@code alter-var-root}, and run a var's validator ahead of the last.
+		 * {@code alter-var-root}, and run a var's validator ahead of the last. A
+		 * {@code def}, {@code defn} or {@code with-redefs} replacing a var's root goes
+		 * through the same validator and watches: the test asks whether the var is
+		 * guarded, the stores validate and notify around the cell's {@code setq}, and the
+		 * statements validate and notify behind a definition keeping its shape.
 		 */
-		WATCH("watched-reference", Set.of(), ClojureStateLowering.WATCH_VIEWS, ClojureStateLowering.WATCH_ALIASES,
-				ClojureStateLowering.WATCH_PRODUCERS, Set.of()),
+		WATCH("watched-reference", Set.of("RONTOLISP::%CLOJURE-VAR-GUARDED-P"), ClojureStateLowering.WATCH_VIEWS,
+				ClojureStateLowering.WATCH_ALIASES, ClojureStateLowering.WATCH_PRODUCERS, Set.of(), false, Set.of(),
+				Set.of(), Set.of(), Map.of(), Map.of("RONTOLISP::%CLOJURE-VAR-STORE", "SETQ"),
+				Set.of("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY"), null, null,
+				Set.of()),
 
 		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
@@ -1118,6 +1130,23 @@ public final class ClojureArms {
 		final Map<String, String> setters;
 
 		/**
+		 * The var-root stores, each to the plain head it stands for: a call
+		 * {@code (store getter setter init extra...)} over a zero-argument getter closure
+		 * reading the value cell and a one-argument setter closure storing it folds to
+		 * {@code (head cell init)}, the store the definition lowered to before. The
+		 * closures and the extras must be pure (a variable, a constant or a
+		 * {@code car}/{@code cdr} read of one); the init is walked as code.
+		 */
+		final Map<String, String> stores;
+
+		/**
+		 * The validate-and-notify statements: a top-level or {@code progn}-member call of
+		 * one goes with the arms. A statement anywhere else signals, since leaving it
+		 * would run the kind's code after all.
+		 */
+		final Set<String> statements;
+
+		/**
 		 * The prefix of the library definitions only the family's arms and producers
 		 * reach, or {@code null}: a top-level {@code defun}, {@code defvar} or
 		 * {@code defparameter} of a name it starts goes with the arms.
@@ -1192,6 +1221,14 @@ public final class ClojureArms {
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
 				Set<String> conditions, Map<String, String> setters, @Nullable String owned, @Nullable Family requires,
 				Set<String> hostProducers) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, refusals, conditions,
+					setters, Map.of(), Set.of(), owned, requires, hostProducers);
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
+				Set<String> conditions, Map<String, String> setters, Map<String, String> stores, Set<String> statements,
+				@Nullable String owned, @Nullable Family requires, Set<String> hostProducers) {
 			this.hostProducers = hostProducers;
 			this.label = label;
 			this.tests = tests;
@@ -1204,6 +1241,8 @@ public final class ClojureArms {
 			this.refusals = refusals;
 			this.conditions = conditions;
 			this.setters = setters;
+			this.stores = stores;
+			this.statements = statements;
 			this.owned = owned;
 			this.requires = requires;
 		}
@@ -1293,6 +1332,11 @@ public final class ClojureArms {
 			found[1] = true;
 			return;
 		}
+		if (isStatementArm(form, family)) {
+			// an arm, whose arguments are still scanned below: a producer they name
+			// makes the value after all
+			found[1] = true;
+		}
 		LispVal rest = form;
 		if ((!family.depths.isEmpty() || !family.switches.isEmpty()) && isLet(form)
 				&& ((LispCons) form).cdr() instanceof LispCons bindings) {
@@ -1324,7 +1368,8 @@ public final class ClojureArms {
 				found[0] = true;
 			}
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)
-					|| family.refusals.contains(name) || family.setters.containsKey(name)) {
+					|| family.refusals.contains(name) || family.setters.containsKey(name)
+					|| family.stores.containsKey(name) || family.statements.contains(name)) {
 				found[1] = true;
 			}
 			else if (quoted && family.qualifiedIdents && name.startsWith("c%") && hasNamespace(name.substring(2))) {
@@ -1367,7 +1412,8 @@ public final class ClojureArms {
 		boolean changed = false;
 		for (LispVal form : forms) {
 			if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
-					|| isConditionDefinition(form, family) || isOwnedDefinition(form, family)) {
+					|| isConditionDefinition(form, family) || isOwnedDefinition(form, family)
+					|| isStatementArm(form, family)) {
 				changed = true;
 				continue;
 			}
@@ -1421,6 +1467,14 @@ public final class ClojureArms {
 				String place = this.family.setters.get(name);
 				if (place != null) {
 					return setterAsSetf(cons, place);
+				}
+				String storeHead = this.family.stores.get(name);
+				if (storeHead != null) {
+					return storeAsPlain(cons, storeHead);
+				}
+				if (isStatementArm(cons, this.family)) {
+					throw new IllegalStateException(
+							"a " + this.family.label + " statement where it cannot go: " + form.print());
 				}
 				if (name.equals("FUNCTION") && cons.cdr() instanceof LispCons fn
 						&& fn.car() instanceof LispSymbol target && this.family.aliases.containsKey(target.name())) {
@@ -1503,17 +1557,42 @@ public final class ClojureArms {
 
 		/**
 		 * {@code (progn statement...)}: a switch among the statements before the last
-		 * goes; a {@code progn} it leaves with one form is that form.
+		 * goes, as does a statement arm in any position; a {@code progn} left with one
+		 * form is that form, one left with none is nil.
 		 */
 		private LispVal walkProgn(LispCons form) {
 			LispVal statements = withoutSwitches(form.cdr(), true);
+			statements = withoutStatementArms(statements);
 			if (statements == form.cdr()) {
 				return LispCons.rebuilt(form, form.car(), walkElements(form.cdr()));
+			}
+			if (statements instanceof LispNil) {
+				return LispNil.INSTANCE;
 			}
 			if (statements instanceof LispCons only && only.cdr() instanceof LispNil) {
 				return walkCode(only.car());
 			}
 			return LispCons.rebuilt(form, form.car(), walkElements(statements));
+		}
+
+		/** The statements without the family's statement arms. */
+		private LispVal withoutStatementArms(LispVal statements) {
+			if (this.family.statements.isEmpty()) {
+				return statements;
+			}
+			List<LispVal> kept = new ArrayList<>();
+			boolean dropped = false;
+			LispVal run = statements;
+			while (run instanceof LispCons cell) {
+				if (isStatementArm(cell.car(), this.family)) {
+					dropped = true;
+				}
+				else {
+					kept.add(cell.car());
+				}
+				run = cell.cdr();
+			}
+			return dropped ? LispCons.rebuiltList((LispCons) statements, kept) : statements;
 		}
 
 		/**
@@ -1655,6 +1734,82 @@ public final class ClojureArms {
 		}
 
 		/**
+		 * {@code (store getter setter init extra...)}: the plain {@code (head cell init)}
+		 * the store stands for -- the {@code setq} (or {@code defparameter}) of the
+		 * getter's cell with the init. The getter must be a nullary closure answering the
+		 * cell where bound and the unbound root of the store's var otherwise, and the
+		 * setter a one-argument closure storing the cell, so the init is written once;
+		 * the var name and any further extras, dropped like a test's arguments, must be
+		 * pure. The init is walked as code.
+		 */
+		private LispVal storeAsPlain(LispCons call, String head) {
+			List<LispVal> args = new ArrayList<>();
+			LispVal tail = call.cdr();
+			while (tail instanceof LispCons cell) {
+				args.add(cell.car());
+				tail = cell.cdr();
+			}
+			if (!(tail instanceof LispNil) || args.size() < 4 || !(args.get(3) instanceof LispString name)) {
+				throw new IllegalStateException("a " + this.family.label
+						+ " store takes a getter, a setter, an init and its var: " + call.print());
+			}
+			LispSymbol cell = storeCell(args.get(0), args.get(1), call, name.value());
+			for (LispVal extra : args.subList(3, args.size())) {
+				if (!isPure(extra)) {
+					throw new IllegalStateException(
+							"a " + this.family.label + " store over an argument with an effect: " + call.print());
+				}
+			}
+			return new LispCons(new LispSymbol(head),
+					new LispCons(cell, new LispCons(walkCode(args.get(2)), LispNil.INSTANCE)));
+		}
+
+		/**
+		 * The value cell a store reads and writes: the symbol its getter closure answers
+		 * -- bound, else the unbound root of the store's var -- and its setter closure
+		 * stores into, or a refusal when either is any other shape.
+		 */
+		private LispSymbol storeCell(LispVal getter, LispVal setter, LispVal form, String name) {
+			LispSymbol cell = null;
+			if (getter instanceof LispCons get && get.car() instanceof LispSymbol getHead
+					&& getHead.name().equals("LAMBDA") && get.cdr() instanceof LispCons getParams
+					&& getParams.car() instanceof LispNil && getParams.cdr() instanceof LispCons getBody
+					&& getBody.car() instanceof LispCons guarded && getBody.cdr() instanceof LispNil
+					&& guarded.car() instanceof LispSymbol ifHead && ifHead.name().equals("IF")
+					&& guarded.cdr() instanceof LispCons testCell && testCell.car() instanceof LispCons boundp
+					&& boundp.car() instanceof LispSymbol boundpHead && boundpHead.name().equals("BOUNDP")
+					&& boundp.cdr() instanceof LispCons quotedCell && quotedCell.car() instanceof LispCons quoted
+					&& quoted.car() instanceof LispSymbol quoteHead && LispNames.isQuote(quoteHead.name())
+					&& quoted.cdr() instanceof LispCons quotedName && quotedName.car() instanceof LispSymbol probed
+					&& quotedName.cdr() instanceof LispNil && quotedCell.cdr() instanceof LispNil
+					&& testCell.cdr() instanceof LispCons thenCell && thenCell.car() instanceof LispSymbol read
+					&& read.name().equals(probed.name()) && thenCell.cdr() instanceof LispCons elseCell
+					&& elseCell.car() instanceof LispCons unboundForm && elseCell.cdr() instanceof LispNil
+					&& unboundForm.car() instanceof LispSymbol unboundHead
+					&& unboundHead.name().equals("RONTOLISP::%CLOJURE-UNBOUND")
+					&& unboundForm.cdr() instanceof LispCons unboundName
+					&& unboundName.car() instanceof LispString named && name.equals(named.value())
+					&& unboundName.cdr() instanceof LispNil) {
+				cell = probed;
+			}
+			if (cell == null || !(setter instanceof LispCons set) || !(set.car() instanceof LispSymbol setHead)
+					|| !setHead.name().equals("LAMBDA") || !(set.cdr() instanceof LispCons setParams)
+					|| !(setParams.car() instanceof LispCons paramCell)
+					|| !(paramCell.car() instanceof LispSymbol param) || !(paramCell.cdr() instanceof LispNil)
+					|| !(setParams.cdr() instanceof LispCons setBody) || !(setBody.car() instanceof LispCons store)
+					|| !(setBody.cdr() instanceof LispNil) || !(store.car() instanceof LispSymbol setq)
+					|| !setq.name().equals("SETQ") || !(store.cdr() instanceof LispCons placeCell)
+					|| !(placeCell.car() instanceof LispSymbol place) || !place.name().equals(cell.name())
+					|| !(placeCell.cdr() instanceof LispCons valueCell)
+					|| !(valueCell.car() instanceof LispSymbol value) || !value.name().equals(param.name())
+					|| !(valueCell.cdr() instanceof LispNil)) {
+				throw new IllegalStateException(
+						"a " + this.family.label + " store takes closures over one value cell: " + form.print());
+			}
+			return cell;
+		}
+
+		/**
 		 * {@code (setter args... value)}: the store into {@code (place args...)} the
 		 * setter stands for, {@code (setf (place args...) value)}, every argument walked
 		 * as code and kept in its order.
@@ -1725,8 +1880,21 @@ public final class ClojureArms {
 	}
 
 	/**
+	 * Whether the form is a call of one of the family's statements: what a program
+	 * reading none of the kind sheds where statements sit.
+	 * @param form a lowered form
+	 * @param family the kind
+	 * @return {@code true} for a statement arm
+	 */
+	private static boolean isStatementArm(LispVal form, Family family) {
+		return !family.statements.isEmpty() && form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& family.statements.contains(head.name());
+	}
+
+	/**
 	 * Whether a name is one the arms of some family spell (a test, a view, an alias, a
-	 * producer or a binding-depth counter): a program naming one goes through the strip.
+	 * producer, a store, a statement or a binding-depth counter): a program naming one
+	 * goes through the strip.
 	 * @param symbolName the symbol name, in its canonical spelling
 	 * @return {@code true} for a family's name
 	 */
@@ -1735,7 +1903,8 @@ public final class ClojureArms {
 			if (family.tests.contains(symbolName) || family.views.contains(symbolName)
 					|| family.aliases.containsKey(symbolName) || family.producers.contains(symbolName)
 					|| family.depths.contains(symbolName) || family.switches.contains(symbolName)
-					|| family.refusals.contains(symbolName) || family.setters.containsKey(symbolName)) {
+					|| family.refusals.contains(symbolName) || family.setters.containsKey(symbolName)
+					|| family.stores.containsKey(symbolName) || family.statements.contains(symbolName)) {
 				return true;
 			}
 		}
