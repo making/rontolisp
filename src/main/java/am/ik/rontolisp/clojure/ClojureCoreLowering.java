@@ -138,6 +138,49 @@ final class ClojureCoreLowering {
 				// to 64 bits; bit-test answers T-or-false
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "ref-history-count":
+				// the committed transactions that wrote the ref, capped by its
+				// min history; anything but a ref is the oracle's cast failure
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "ref-min-history", "ref-max-history":
+				// the bound, or the bound stored (the oracle's intCast),
+				// answering the ref
+				arity(name, n, 1, 2);
+				return n == 1 ? worker(name, ctx.lower(items.get(1)))
+						: worker(name + "-set", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "create-struct":
+				// the key vector struct and struct-map read; of no keys the
+				// oracle's refusal, at run time so a catch takes it
+				return worker(name, ctx.lowers(items, 1).toArray(new LispVal[0]));
+			case "accessor":
+				// the function reading the key out of a struct map
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "prefers":
+				// each dispatch value to the set preferred over it
+				arity(name, n, 1, 1);
+				return prefersOf(ctx, items);
+			case "remove-all-methods":
+				// every method and preference gone, answering the multimethod
+				arity(name, n, 1, 1);
+				return removeAllMethodsOf(ctx, items);
+			case "extenders":
+				// the extended tags as a seq, :object last for the default
+				arity(name, n, 1, 1);
+				return extendersOf(ctx, items);
+			case "find-protocol-impl":
+				// the tag row's map, else the Object default's, else nil
+				arity(name, n, 2, 2);
+				return findImplOf(ctx, items);
+			case "find-protocol-method":
+				// the tag row's function, else the Object default's, else nil
+				arity(name, n, 3, 3);
+				return findMethodOf(ctx, items);
+			case "cast":
+				// X when it is an instance of the class, else the oracle's refusal
+				arity(name, n, 2, 2);
+				return castCallOf(ctx, items.get(1), items.get(2));
 			case "key", "val", "map-entry?":
 				arity(name, n, 1, 1);
 				return worker("map-entry?".equals(name) ? "map-entry-p" : name, ctx.lower(items.get(1)));
@@ -472,7 +515,9 @@ final class ClojureCoreLowering {
 					"munge", "namespace-munge", "create-ns", "remove-ns", "intern", "var-set", "load-string",
 					"load-file", "load-reader", "requiring-resolve", "parse-long", "parse-double", "parse-boolean",
 					"object-array", "to-array", "into-array", "int-array", "long-array", "double-array", "float-array",
-					"short-array", "char-array", "boolean-array" ->
+					"short-array", "char-array", "boolean-array", "ref-history-count", "ref-min-history",
+					"ref-max-history", "create-struct", "accessor", "extenders", "find-protocol-impl",
+					"find-protocol-method", "cast" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "with-redefs-fn" -> {
 				ctx.needRootSetters();
@@ -660,6 +705,132 @@ final class ClojureCoreLowering {
 	private static LispVal outOfRange(String kind, String spelled) {
 		return ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				LispString.literal("Value out of range for " + kind + ": " + spelled));
+	}
+
+	/**
+	 * {@code (prefers multifn)}: each dispatch value to the set preferred over it, like
+	 * the oracle's map. The multimethod's name, like {@code methods}: a local bound to
+	 * one is refused at lowering.
+	 */
+	private static LispVal prefersOf(ClojureLowering ctx, List<LispVal> items) {
+		String name = ClojureLowerUtil.plainName(items.get(1), "prefers");
+		if (ClojureDispatchLowering.isPrintMethod(ctx, name)) {
+			// print-method keeps no prefers table: nothing is preferred
+			return ClojureCollectionLowering.mapBuild(List.of());
+		}
+		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
+		return worker("prefers", ClojureDispatchLowering.tableGlobal(key, "%prefers"));
+	}
+
+	/**
+	 * {@code (remove-all-methods multifn)}: every method and preference gone, answering
+	 * the multimethod, like the oracle's.
+	 */
+	private static LispVal removeAllMethodsOf(ClojureLowering ctx, List<LispVal> items) {
+		String name = ClojureLowerUtil.plainName(items.get(1), "remove-all-methods");
+		if (ClojureDispatchLowering.isPrintMethod(ctx, name)) {
+			// every type's print-method gone, answering print-method itself
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("clrhash"),
+							new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHODS")),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+							new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-V")));
+		}
+		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
+		LispSymbol methods = ClojureDispatchLowering.tableGlobal(key, "%methods");
+		LispSymbol prefers = ClojureDispatchLowering.tableGlobal(key, "%prefers");
+		LispSymbol object = ClojureDispatchLowering.tableGlobal(key, "%object");
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("clrhash"), methods),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("clrhash"), prefers),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
+	}
+
+	/**
+	 * {@code (extenders protocol)}: the extended tags as a seq, like the oracle's
+	 * classes. Of a protocol name the method and default tables; of anything else the
+	 * value itself, which no table answers nil for, like the oracle's nil of a
+	 * non-protocol.
+	 */
+	private static LispVal extendersOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowering.ProtocolDef def = protocolDefOf(ctx, items.get(1));
+		if (def != null) {
+			return worker("extenders", def.methodsVar(), def.defaultVar());
+		}
+		return worker("extenders", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * {@code (find-protocol-impl protocol x)}: the tag row's map, else the Object
+	 * default's, else nil.
+	 */
+	private static LispVal findImplOf(ClojureLowering ctx, List<LispVal> items) {
+		ctx.usedProtocols = true;
+		ClojureLowering.ProtocolDef def = protocolDefOf(ctx, items.get(1));
+		if (def != null) {
+			return worker("find-protocol-impl", def.methodsVar(), def.defaultVar(), ctx.lower(items.get(2)));
+		}
+		return worker("find-protocol-impl", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST,
+				ctx.lower(items.get(2)));
+	}
+
+	/**
+	 * {@code (find-protocol-method protocol method x)}: the tag row's function for the
+	 * method key, else the Object default's, else nil.
+	 */
+	private static LispVal findMethodOf(ClojureLowering ctx, List<LispVal> items) {
+		ctx.usedProtocols = true;
+		ClojureLowering.ProtocolDef def = protocolDefOf(ctx, items.get(1));
+		if (def != null) {
+			return worker("find-protocol-method", def.methodsVar(), def.defaultVar(), ctx.lower(items.get(2)),
+					ctx.lower(items.get(3)));
+		}
+		return worker("find-protocol-method", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST,
+				ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+	}
+
+	/** The protocol a datum names, or null for anything else. */
+	private static ClojureLowering.@Nullable ProtocolDef protocolDefOf(ClojureLowering ctx, LispVal datum) {
+		if (!(datum instanceof LispSymbol s) || ctx.isLocal(s.name())) {
+			return null;
+		}
+		return ClojureProtocolLowering.protocolOf(ctx, s.name());
+	}
+
+	/**
+	 * {@code (cast class x)}: X when it is an instance of the class, nil of nil, else the
+	 * oracle's refusal. Of a class the lowering names the instance test is inline; of
+	 * anything else the value travels to the worker, which refuses what is no class as
+	 * the oracle's cast does.
+	 * @param ctx the hub
+	 * @param classDatum the class datum, as written
+	 * @param valueDatum the value datum, as written
+	 * @return the cast call
+	 */
+	private static LispVal castCallOf(ClojureLowering ctx, LispVal classDatum, LispVal valueDatum) {
+		if (classDatum instanceof LispSymbol s && !s.name().startsWith(":") && !s.name().equals("nil")
+				&& !ctx.isLocal(s.name()) && ctx.lookupVar(s.name()) == null
+				&& (ctx.typeDefOf(s.name()) != null || ClojureNamespaceLowering.isClasslike(ctx, s.name()))) {
+			LispSymbol value = ctx.freshTemp();
+			LispVal test = ClojureDispatchLowering.instanceTest(ctx, s.name(), value);
+			ClojureLowering.TypeDef known = ctx.typeDefOf(s.name());
+			String target = known != null ? known.className() : ClojureNamespaceLowering.resolveClass(ctx, s.name());
+			LispVal message = ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("string")),
+					LispString.literal("Cannot cast "),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CLASS-NAME-OF"), value),
+					LispString.literal(" to " + target));
+			LispVal check = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, value,
+					ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, message));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, ctx.lower(valueDatum)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value), ClojureLowering.NIL_CONST,
+							check));
+		}
+		ctx.usedProtocols = true;
+		return worker("cast", ctx.lower(classDatum), ctx.lower(valueDatum));
 	}
 
 	private static LispVal worker(String name, LispVal... args) {

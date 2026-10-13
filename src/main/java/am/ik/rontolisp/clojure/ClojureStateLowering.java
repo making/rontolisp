@@ -799,12 +799,51 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * The ref-history family's views: the registration beside a ref's construction,
+	 * answering the ref, and the commit's count bump, answering its first argument.
+	 */
+	static final Set<String> REF_HISTORY_VIEWS = Set.of("RONTOLISP::%CLOJURE-REF-HISTORY-TRACK",
+			"RONTOLISP::%CLOJURE-REF-HISTORY-NOTED");
+
+	/**
+	 * What tracks a ref for its history: the registration beside a ref's construction,
+	 * the history readers (called or as values) and the min/max setters.
+	 */
+	static final Set<String> REF_HISTORY_PRODUCERS = Set.of("RONTOLISP::%CLOJURE-REF-HISTORY-TRACK",
+			"RONTOLISP::%CLOJURE-REF-HISTORY-COUNT", "RONTOLISP::%CLOJURE-REF-HISTORY-COUNT-V",
+			"RONTOLISP::%CLOJURE-REF-MIN-HISTORY", "RONTOLISP::%CLOJURE-REF-MIN-HISTORY-V",
+			"RONTOLISP::%CLOJURE-REF-MIN-HISTORY-SET", "RONTOLISP::%CLOJURE-REF-MAX-HISTORY",
+			"RONTOLISP::%CLOJURE-REF-MAX-HISTORY-V", "RONTOLISP::%CLOJURE-REF-MAX-HISTORY-SET");
+
+	/** The ref-history family's registration: {@code (track ref min max)}. */
+	static final LispSymbol REF_HISTORY_TRACK = new LispSymbol("RONTOLISP::%CLOJURE-REF-HISTORY-TRACK");
+
+	/**
+	 * A {@code ref}/{@code agent} option list over already-lowered inits: the
+	 * {@code :validator} as a callable form, the {@code :min-history} and
+	 * {@code :max-history} as lowered forms, each null when absent. {@code :meta} is
+	 * dropped, like every other metadata; anything else is refused by name.
+	 */
+	private record RefOptions(@Nullable LispVal validator, @Nullable LispVal min, @Nullable LispVal max) {
+	}
+
+	/**
 	 * A {@code ref}/{@code agent} option list over an already-lowered init: the
 	 * {@code :validator} as a callable form, or null. {@code :meta} is dropped, like
 	 * every other metadata; anything else is refused by name.
 	 */
 	static @Nullable LispVal validatorOpt(ClojureLowering ctx, List<LispVal> items, int from, String op) {
+		return refOptions(ctx, items, from, op).validator();
+	}
+
+	/**
+	 * A {@code ref}'s option list: the validator, min-history and max-history forms, each
+	 * null when absent.
+	 */
+	private static RefOptions refOptions(ClojureLowering ctx, List<LispVal> items, int from, String op) {
 		LispVal validator = null;
+		LispVal min = null;
+		LispVal max = null;
 		for (int i = from; i < items.size(); i += 2) {
 			if (!(items.get(i) instanceof LispSymbol opt) || i + 1 >= items.size()) {
 				throw new LispReadException(op + " takes option/value pairs");
@@ -814,34 +853,84 @@ final class ClojureStateLowering {
 					ClojureLowerUtil.isTrue(validator == null, op + " takes one :validator");
 					validator = ClojureBindingLowering.fnValue(ctx, items.get(i + 1));
 				}
+				case ":min-history" -> {
+					ClojureLowerUtil.isTrue(min == null, op + " takes one :min-history");
+					min = ctx.lower(items.get(i + 1));
+				}
+				case ":max-history" -> {
+					ClojureLowerUtil.isTrue(max == null, op + " takes one :max-history");
+					max = ctx.lower(items.get(i + 1));
+				}
 				case ":meta" -> {
 				} // dropped, like every other metadata
 				default -> throw new LispReadException(op + " option " + opt.name() + " is not supported yet");
 			}
 		}
-		return validator;
+		return new RefOptions(validator, min, max);
 	}
 
 	/**
 	 * {@code (ref init & opts)}: an atom cell, like {@code atom}; with a
 	 * {@code :validator}, the spliced {@link #REF_MAKE}'s cell carrying it, which the
 	 * initial value must pass and every transaction writing the ref runs on its final
-	 * value.
+	 * value. With {@code :min-history}/{@code :max-history}, or where the program names a
+	 * history verb, the cell registers for its history ({@link #trackRef}); anywhere else
+	 * it stays the atom's cell.
 	 */
 	static LispVal refOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "ref takes an initial value");
 		LispVal init = ctx.lower(items.get(1));
-		LispVal validator = validatorOpt(ctx, items, 2, "ref");
-		if (validator == null) {
-			return wrapAtom(init);
-		}
-		return ClojureLowerUtil.list(REF_MAKE, init, validator);
+		RefOptions opts = refOptions(ctx, items, 2, "ref");
+		LispVal cell = opts.validator() == null ? wrapAtom(init)
+				: ClojureLowerUtil.list(REF_MAKE, init, opts.validator());
+		return trackRef(ctx, cell, opts.min(), opts.max());
 	}
 
 	/** {@code ref} as a value: a one-argument lambda over the constructor. */
 	static LispVal refValue(ClojureLowering ctx) {
 		LispSymbol init = new LispSymbol(ClojureLowering.mangle("ref-init"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init), wrapAtom(init));
+		LispVal cell = wrapAtom(init);
+		if (!tracksHistory(ctx, null, null)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init), cell);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init),
+				trackedCell(ctx, cell, new LispInteger(0), new LispInteger(10)));
+	}
+
+	/**
+	 * Whether a ref made here registers for its history: the program names a history
+	 * verb, this is a session (whose later buffers may), or the call spells a history
+	 * bound itself.
+	 */
+	private static boolean tracksHistory(ClojureLowering ctx, @Nullable LispVal min, @Nullable LispVal max) {
+		return ctx.usedRefHistory || ctx.session || min != null || max != null;
+	}
+
+	/**
+	 * The ref cell with its history registration: {@code (track cell min max)} over the
+	 * bounds (0 and 10 where the call spells none), each bound once behind a temporary. A
+	 * view of the ref-history family, so a program the pre-scan found no history verb in
+	 * keeps the bare cell.
+	 * @param ctx the hub
+	 * @param cell the already-lowered cell
+	 * @param min the already-lowered min bound, or null
+	 * @param max the already-lowered max bound, or null
+	 * @return the bare or the registering cell
+	 */
+	static LispVal trackRef(ClojureLowering ctx, LispVal cell, @Nullable LispVal min, @Nullable LispVal max) {
+		if (!tracksHistory(ctx, min, max)) {
+			return cell;
+		}
+		return trackedCell(ctx, cell, min == null ? new LispInteger(0) : min, max == null ? new LispInteger(10) : max);
+	}
+
+	/** The registering cell over already-lowered bounds: both bound once. */
+	private static LispVal trackedCell(ClojureLowering ctx, LispVal cell, LispVal min, LispVal max) {
+		LispSymbol lo = ctx.freshTemp();
+		LispSymbol hi = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(lo, min), ClojureLowerUtil.list(hi, max))),
+				ClojureLowerUtil.list(REF_HISTORY_TRACK, cell, lo, hi));
 	}
 
 	/**

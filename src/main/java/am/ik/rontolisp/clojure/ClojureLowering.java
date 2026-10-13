@@ -1439,6 +1439,14 @@ public final class ClojureLowering {
 	 */
 	boolean usedStm;
 
+	/**
+	 * Whether the program names a ref-history verb ({@code ref-history-count},
+	 * {@code ref-min-history}, {@code ref-max-history}): every {@code ref} it makes
+	 * registers for its history, so the readers find it. Set by the pre-scan ahead of any
+	 * lowering, like the redefinition scan.
+	 */
+	boolean usedRefHistory;
+
 	/** Whether the STM runtime was already spliced in (files splice it inline). */
 	boolean stmEmitted;
 
@@ -2108,6 +2116,10 @@ public final class ClojureLowering {
 			needRootSetters();
 			return;
 		}
+		if (datum instanceof LispSymbol s && isRefHistoryName(s.name())) {
+			// a history verb, called or as a value: every ref registers
+			this.usedRefHistory = true;
+		}
 		if (datum instanceof LispSymbol s && ClojureStateLowering.isThreadBindingName(s.name())) {
 			// a var it binds may be any dynamic var's site
 			needThreadBinders();
@@ -2150,6 +2162,16 @@ public final class ClojureLowering {
 	/** Whether a name spells {@code clojure.core/alter-var-root}. */
 	static boolean isAlterVarRootName(String name) {
 		return name.equals("alter-var-root") || name.equals("clojure.core/alter-var-root");
+	}
+
+	/**
+	 * Whether a name spells a ref-history verb: what makes every {@code ref} the program
+	 * makes register for its history.
+	 */
+	static boolean isRefHistoryName(String name) {
+		return name.equals("ref-history-count") || name.equals("ref-min-history") || name.equals("ref-max-history")
+				|| name.equals("clojure.core/ref-history-count") || name.equals("clojure.core/ref-min-history")
+				|| name.equals("clojure.core/ref-max-history");
 	}
 
 	/**
@@ -4449,9 +4471,30 @@ public final class ClojureLowering {
 			case "inc":
 				ClojureLowerUtil.isTrue(n == 1, "inc takes one argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
+			case "inc'":
+				// checked inc: integers are bignums here, so this is inc, with
+				// the oracle's arity wording
+				ClojureCoreLowering.arity("inc'", n, 1, 1);
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
 			case "dec":
 				ClojureLowerUtil.isTrue(n == 1, "dec takes one argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), lower(items.get(1)), new LispInteger(1));
+			case "dec'":
+				// checked dec: integers are bignums here, so this is dec, with
+				// the oracle's arity wording
+				ClojureCoreLowering.arity("dec'", n, 1, 1);
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), lower(items.get(1)), new LispInteger(1));
+			case "+'":
+				// checked +: integers are bignums here, so this is +
+				return plain("+", items);
+			case "-'":
+				// checked -: integers are bignums here, so this is -, of one or
+				// more arguments
+				ClojureCoreLowering.arity("-'", n, 1, -1);
+				return plain("-", items);
+			case "*'":
+				// checked *: integers are bignums here, so this is *
+				return plain("*", items);
 			case "not":
 				ClojureLowerUtil.isTrue(n == 1, "not takes one argument");
 				LispSymbol notTemp = freshTemp();
@@ -4917,6 +4960,7 @@ public final class ClojureLowering {
 	@Nullable LispVal valueOf(String name) {
 		return switch (name) {
 			case "inc", "dec" -> ClojureFnLowering.incValue(this, name);
+			case "inc'", "dec'" -> ClojureFnLowering.incValue(this, name.equals("inc'") ? "inc" : "dec");
 			case "default-data-readers" -> ClojureDataReaders.defaults(this);
 			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
@@ -5369,6 +5413,9 @@ public final class ClojureLowering {
 					"car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector", "vectorp",
 					"identity" ->
 				name;
+			case "+'" -> "+";
+			case "-'" -> "-";
+			case "*'" -> "*";
 			case "gensym" -> "gensym";
 			case "count" -> "length";
 			case "first" -> "car";

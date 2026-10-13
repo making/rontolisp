@@ -516,6 +516,20 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A ref tracked for its history: only a {@code ref} made where the program names
+		 * a history verb ({@code ref-history-count}, {@code ref-min-history},
+		 * {@code ref-max-history}, called or as values) or names a history option
+		 * registers ({@link ClojureStateLowering#REF_HISTORY_PRODUCERS}). The views
+		 * register the ref beside its construction and bump the counts once its
+		 * transaction committed; anything else folds them to the value they wrap, so a
+		 * program naming no history verb lowers and splices as before. The owned
+		 * definitions are the table and the history functions.
+		 */
+		REF_HISTORY("ref-history", Set.of(), ClojureStateLowering.REF_HISTORY_VIEWS, Map.of(),
+				ClojureStateLowering.REF_HISTORY_PRODUCERS, Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(),
+				Map.of(), Set.of(), "RONTOLISP::%CLOJURE-REF-HISTORY", null, Set.of()),
+
+		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
 		 * constructors' values. The family stands behind the collection interfaces' (from
 		 * {@link #COLLECTION} on), whose aliases rename a helper to one of its own

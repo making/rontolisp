@@ -2650,6 +2650,112 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void checkedArithmeticLowersLikeThePlainVerbs() {
+		// f75: inc' dec' +' -' *' are the plain verbs (integers are bignums,
+		// so nothing overflows), with the oracle's arity wording
+		assertThat(lowered("(inc' 1)")).contains("(+ 1 1)");
+		assertThat(lowered("(dec' 1)")).contains("(- 1 1)");
+		assertThat(lowered("(+' 1 2)")).contains("(+ 1 2)");
+		assertThat(lowered("(-' 5 2)")).contains("(- 5 2)");
+		assertThat(lowered("(*' 2 3)")).contains("(* 2 3)");
+		assertThat(lowered("(map +' [1])")).contains("#'+");
+		assertThat(lowered("(map -' [1])")).contains("#'-");
+		assertThat(lowered("(map *' [1])")).contains("#'*");
+		assertThat(lowered("(map inc' [1])")).contains("(LAMBDA");
+		assertThat(lowered("(map dec' [1])")).contains("(LAMBDA");
+		assertThatThrownBy(() -> Clojure.read("(inc')", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/inc'");
+		assertThatThrownBy(() -> Clojure.read("(dec' 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/dec'");
+		assertThatThrownBy(() -> Clojure.read("(-')", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/-'");
+	}
+
+	@Test
+	void castLowersToAnInstanceTestOrTheComputedWorker() {
+		// f75: cast of a named class is the instance test inline, of anything
+		// else the computed worker, with the oracle's refusal
+		assertThat(lowered("(fn [x] (cast String x))")).contains("STRINGP").contains("Cannot cast ");
+		assertThat(lowered("(fn [c x] (cast c x))")).contains("(RONTOLISP::%CLOJURE-CAST ");
+		assertThat(lowered("(map cast [String] [\"a\"])")).contains("#'RONTOLISP::%CLOJURE-CAST-V");
+		assertThatThrownBy(() -> Clojure.read("(cast String)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/cast");
+		assertThatThrownBy(() -> Clojure.read("(cast String \"a\" \"b\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/cast");
+	}
+
+	@Test
+	void refHistoryVerbsLowerToWorkersAndTrackRefs() {
+		// f75: the history readers and the min/max setters are workers with -v
+		// values; a ref registers where the program names a history verb, and
+		// stays the atom's cell anywhere else
+		assertThat(lowered("(fn [r] (ref-history-count r))")).contains("(RONTOLISP::%CLOJURE-REF-HISTORY-COUNT ");
+		assertThat(lowered("(fn [r] (ref-min-history r 1))")).contains("(RONTOLISP::%CLOJURE-REF-MIN-HISTORY-SET ");
+		assertThat(lowered("(fn [r] (ref-max-history r))")).contains("(RONTOLISP::%CLOJURE-REF-MAX-HISTORY ");
+		assertThat(lowered("(fn [r] (map ref-max-history [r]))")).contains("#'RONTOLISP::%CLOJURE-REF-MAX-HISTORY-V");
+		assertThat(lowered("(def f75-r (ref 1))")).doesNotContain("REF-HISTORY");
+		assertThat(lowered("(def f75-r (ref 1)) (ref-history-count f75-r)")).contains("REF-HISTORY-TRACK");
+		assertThat(lowered("(def f75-r (ref 1 :min-history 2))")).contains("REF-HISTORY-TRACK");
+		assertThatThrownBy(() -> Clojure.read("(fn [r] (ref-history-count r 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/ref-history-count");
+		assertThatThrownBy(() -> Clojure.read("(fn [r] (ref-min-history r 1 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/ref-min-history");
+	}
+
+	@Test
+	void structLeftoversLowerToWorkersWithOracleArities() {
+		// f75: create-struct is the key vector struct reads, accessor its
+		// reader, each with a -v value
+		assertThat(lowered("(create-struct :a :b)")).contains("(RONTOLISP::%CLOJURE-CREATE-STRUCT ");
+		assertThat(lowered("(map create-struct [[:a]])")).contains("#'RONTOLISP::%CLOJURE-CREATE-STRUCT-V");
+		assertThat(lowered("(defstruct f75-s :a) (accessor f75-s :a)")).contains("(RONTOLISP::%CLOJURE-ACCESSOR ");
+		assertThat(lowered("(defstruct f75-s :a) (map accessor [f75-s f75-s])"))
+			.contains("#'RONTOLISP::%CLOJURE-ACCESSOR-V");
+		assertThatThrownBy(() -> Clojure.read("(defstruct f75-s :a) (accessor f75-s)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/accessor");
+	}
+
+	@Test
+	void multimethodIntrospectionTakesTheMultimethodName() {
+		// f75: prefers reads the prefers table, remove-all-methods clears both
+		// tables, answering like the oracle's; a name no multimethod has is refused
+		assertThat(lowered("(defmulti f75-m identity) (prefers f75-m)")).contains("(RONTOLISP::%CLOJURE-PREFERS ");
+		assertThat(lowered("(defmulti f75-m identity) (remove-all-methods f75-m)")).contains("CLRHASH");
+		assertThatThrownBy(() -> Clojure.read("(defmulti f75-m identity) (prefers f75-n)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: f75-n");
+		assertThatThrownBy(() -> Clojure.read("(defmulti f75-m identity) (remove-all-methods f75-n)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: f75-n");
+	}
+
+	@Test
+	void protocolIntrospectionReadsTheMethodTables() {
+		// f75: extenders answers the tags, find-protocol-impl their rows and
+		// find-protocol-method the functions, each with a -v value
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (extenders f75-P)"))
+			.contains("(RONTOLISP::%CLOJURE-EXTENDERS ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (map extenders [f75-P])"))
+			.contains("#'RONTOLISP::%CLOJURE-EXTENDERS-V");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (find-protocol-impl f75-P nil)"))
+			.contains("(RONTOLISP::%CLOJURE-FIND-PROTOCOL-IMPL ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (find-protocol-method f75-P :f75-m nil)"))
+			.contains("(RONTOLISP::%CLOJURE-FIND-PROTOCOL-METHOD ");
+		assertThat(lowered("(defprotocol f75-P (f75-m [x])) (map find-protocol-method [f75-P])"))
+			.contains("#'RONTOLISP::%CLOJURE-FIND-PROTOCOL-METHOD-V");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol f75-P (f75-m [x])) (find-protocol-impl f75-P)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/find-protocol-impl");
+		assertThatThrownBy(
+				() -> Clojure.read("(defprotocol f75-P (f75-m [x])) (find-protocol-method f75-P :f75-m)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/find-protocol-method");
+	}
+
+	@Test
 	void hostOnlyVarsAreRefusedByName() {
 		// f67: what no backend answers is refused naming the reason, never an
 		// unknown name

@@ -10049,6 +10049,219 @@
   (rontolisp::%clojure-update-vals (car args)
    (rontolisp::%clojure-as-fn (car (cdr args)))))
 
+;;;; Struct definitions: create-struct and accessor.
+;;
+;; A struct definition is the key vector defstruct stores, so struct and
+;; struct-map read a created one as they read a defined one. create-struct of
+;; no keys is the oracle's refusal; any key goes, like the oracle's. An
+;; accessor answers the function reading its key out of a struct map; of a
+;; non-vector, or a key the definition lacks, it signals with the oracle's
+;; class and message.
+
+(defun rontolisp::%clojure-create-struct (&rest keys)
+  "(create-struct keys...): the struct definition over KEYS, the key vector
+   struct and struct-map read."
+  (if (null keys)
+      (rontolisp::%clojure-illegal-argument-exception "Must supply keys"))
+  (apply #'vector keys))
+
+(defun rontolisp::%clojure-create-struct-v (&rest args)
+  "create-struct as a value."
+  (apply #'rontolisp::%clojure-create-struct args))
+
+(defun rontolisp::%clojure-accessor (s k)
+  "(accessor s k): the function reading K out of a struct map of S."
+  (if (or (not (vectorp s)) (stringp s))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "Cannot cast " (rontolisp::%clojure-class-name-of s)
+                    " to clojure.lang.PersistentStructMap$Def") s))
+  (let ((found nil))
+    (dolist (e (coerce s 'list)) (if (equal e k) (setq found t)))
+    (if found
+        (lambda (m) (gethash (rontolisp::%clojure-table-key k m) m nil))
+        (rontolisp::%clojure-illegal-argument-exception
+         "Not a key of struct"))))
+
+(defun rontolisp::%clojure-accessor-v (&rest args)
+  "accessor as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "accessor")
+  (rontolisp::%clojure-accessor (car args) (car (cdr args))))
+
+;;;; Multimethod introspection: prefers.
+;;
+;; prefers reads the multimethod's prefers table: each dispatch value to the
+;; set of values preferred over it, like the oracle's map. The stored keys are
+;; the representatives the tables hold, = to the dispatch values prefer-method
+;; was given.
+
+(defun rontolisp::%clojure-prefers (table)
+  "(prefers f): the map of each dispatch value to the set preferred over it."
+  (let ((buckets (make-hash-table :test 'equal)) (order nil) (miss (list nil)))
+    (maphash (lambda (pair ignored)
+               (declare (ignore ignored))
+               (let ((x (car pair)) (y (cdr pair)))
+                 (if (eq (gethash x buckets miss) miss)
+                     (progn
+                       (setf (gethash x buckets) (list y))
+                       (setq order (cons x order)))
+                     (setf (gethash x buckets) (cons y (gethash x buckets))))))
+             table)
+    (let ((out (make-hash-table :test 'equal)))
+      (dolist (x (reverse order) out)
+        (setf (gethash x out)
+              (rontolisp::%clojure-set-of (reverse (gethash x buckets))))))))
+
+;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
+;;
+;; A protocol var holds its method table (a tag to its row of method keyword
+;; to function), with the Object default in a table of its own nil until the
+;; first Object extension. extenders answers the extended tags in their walk
+;; order with :object for the default, like the oracle's seq of classes; of a
+;; value holding no table (a non-protocol) it answers nil, where the oracle's
+;; answers nil too. find-protocol-impl answers the tag row's map, else the
+;; default's, else nil; find-protocol-method the row's function, else the
+;; default's, else nil -- where the oracle answers the same, except that a
+;; non-protocol is its NullPointerException there.
+
+(defun rontolisp::%clojure-protocol-row (methods default x)
+  "The method-keyword-to-function table X's tag has in METHODS, else the
+   Object default's, else nil."
+  (let ((row (and (hash-table-p methods) (gethash (c%protocol-tag x) methods))))
+    (if (hash-table-p row) row (and (hash-table-p default) default))))
+
+(defun rontolisp::%clojure-extenders (methods default)
+  "(extenders p): the extended tags as a seq, :object last when the Object
+   default exists; nil of none."
+  (if (not (hash-table-p methods))
+      nil
+      (let ((out nil))
+        (maphash (lambda (k ignored)
+                   (declare (ignore ignored))
+                   (setq out (cons k out))) methods)
+        (setq out (nreverse out))
+        (if (hash-table-p default)
+            (setq out (append out (list (list :c%keyword "object")))))
+        out)))
+
+(defun rontolisp::%clojure-extenders-v (&rest args)
+  "extenders as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "extenders")
+  (rontolisp::%clojure-extenders (car args) nil))
+
+(defun rontolisp::%clojure-find-protocol-impl (methods default x)
+  "(find-protocol-impl p x): the map of X's implementation, else the Object
+   default's, else nil."
+  (let ((row (rontolisp::%clojure-protocol-row methods default x)))
+    (and row (rontolisp::%clojure-plist-table row nil))))
+
+(defun rontolisp::%clojure-find-protocol-impl-v (&rest args)
+  "find-protocol-impl as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "find-protocol-impl")
+  (rontolisp::%clojure-find-protocol-impl (car args) nil (car (cdr args))))
+
+(defun rontolisp::%clojure-find-protocol-method (methods default m x)
+  "(find-protocol-method p m x): X's function for the method key M, else the
+   Object default's, else nil."
+  (let ((row (rontolisp::%clojure-protocol-row methods default x)))
+    (and row (gethash m row))))
+
+(defun rontolisp::%clojure-find-protocol-method-v (&rest args)
+  "find-protocol-method as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "find-protocol-method")
+  (rontolisp::%clojure-find-protocol-method (car args) nil (car (cdr args))
+                                            (car (cdr (cdr args)))))
+
+;;;; Checked casts: cast of a computed class.
+;;
+;; cast of a class the lowering names is the instance test inline; of a
+;; computed one this worker, like instance? of a class value: a class keyword
+;; casts by the protocol tag (what class answers for every value but a host
+;; object), a host class object by the kind its name has here (numbers by
+;; numberp, like the oracle's Long) else by asking the host, nil is the
+;; oracle's NullPointerException and anything else its ClassCastException. nil
+;; casts to nil past a class.
+
+(defun rontolisp::%clojure-cast-kind (name)
+  "The class keyword a value of the host class NAME has here, or nil: what
+   c%protocol-tag answers for one, so cast of a computed host class takes the
+   values it takes on every backend."
+  (let ((kind
+         (cond
+          ((or (equal name "java.lang.String")
+               (equal name "java.lang.CharSequence"))
+           "string")
+          ((or (equal name "java.lang.Long") (equal name "java.lang.Integer")
+               (equal name "java.lang.Short") (equal name "java.lang.Byte")
+               (equal name "java.lang.Double") (equal name "java.lang.Float")
+               (equal name "java.lang.Number")
+               (equal name "java.math.BigInteger")
+               (equal name "java.math.BigDecimal")
+               (equal name "clojure.lang.BigInt")
+               (equal name "clojure.lang.Ratio") (equal name "long")
+               (equal name "int") (equal name "short") (equal name "byte")
+               (equal name "double") (equal name "float"))
+           "number")
+          ((or (equal name "java.lang.Character") (equal name "char")) "char")
+          ((or (equal name "java.lang.Boolean") (equal name "boolean"))
+           "boolean")
+          ((equal name "clojure.lang.Keyword") "keyword")
+          ((equal name "clojure.lang.Symbol") "symbol")
+          ((equal name "clojure.lang.IPersistentVector") "vector")
+          ((equal name "clojure.lang.IPersistentMap") "map")
+          ((equal name "clojure.lang.IPersistentSet") "set")
+          ((or (equal name "clojure.lang.ISeq")
+               (equal name "clojure.lang.Sequential")
+               (equal name "clojure.lang.IPersistentList"))
+           "list")
+          ((or (equal name "clojure.lang.IFn")
+               (equal name "clojure.lang.AFunction"))
+           "function")
+          ((or (equal name "clojure.lang.Atom") (equal name "clojure.lang.Ref")
+               (equal name "clojure.lang.Agent"))
+           "atom")
+          ((or (equal name "clojure.lang.PersistentTreeMap")
+               (equal name "clojure.lang.Sorted"))
+           "map")
+          ((equal name "clojure.lang.PersistentTreeSet") "set")
+          (t nil))))
+    (and kind (list :c%keyword kind))))
+
+(defun rontolisp::%clojure-cast (c x)
+  "(cast c x): X when it is an instance of C, else the oracle's refusal."
+  (cond
+   ((rontolisp::%clojure-keyword-p c)
+    (if (null x)
+        nil
+        (if (equal (c%protocol-tag x) c)
+            x
+            (rontolisp::%clojure-class-cast-exception
+             (concatenate 'string "Cannot cast "
+                          (rontolisp::%clojure-class-name-of x) " to "
+                          (car (cdr c)))))))
+   ((null c)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Class.cast(Object)\" because \"c\" is null"))
+   (t (let ((name (rontolisp::%clojure-host-class-name c)))
+        (if (null name)
+            (rontolisp::%clojure-host-cast-failure c "java.lang.Class")
+            (if (null x)
+                nil
+                (let ((kind (rontolisp::%clojure-cast-kind name)))
+                  (if (or (equal name "java.lang.Object")
+                          (and kind (equal (c%protocol-tag x) kind))
+                          (and (null kind)
+                               (rontolisp::%clojure-host-class-instance-p c x)))
+                      x
+                      (rontolisp::%clojure-class-cast-exception
+                       (concatenate 'string "Cannot cast "
+                                    (rontolisp::%clojure-class-name-of x) " to "
+                                    name))))))))))
+
+(defun rontolisp::%clojure-cast-v (&rest args)
+  "cast as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "cast")
+  (rontolisp::%clojure-cast (car args) (car (cdr args))))
+
 ;;;; Type and collection predicates.
 ;;
 ;; Each answers a CL boolean; the lowering (ClojurePredicateLowering) wraps the
@@ -13371,7 +13584,9 @@
                                                                       (setq done
                                                                             t)
                                                                       (rontolisp::%clojure-stm-noted
-                                                                       answer
+                                                                       (rontolisp::%clojure-ref-history-noted
+                                                                        answer
+                                                                        log)
                                                                        log))
                                                       (if done
                                                           nil
@@ -13616,6 +13831,102 @@
 (defun rontolisp::%clojure-agent-error-mode (agent)
   "error-mode: AGENT's mode keyword."
   (aref (rontolisp::%clojure-agent-state agent "error-mode") 4))
+
+;;;; Ref histories: ref-history-count, ref-min-history and ref-max-history.
+;;
+;; A ref's history is the count of committed transactions that wrote it, capped
+;; by its min history (the oracle's retained chain: minHistory bounds what a
+;; commit keeps, maxHistory only the faults), beside the min and max it was
+;; made or set with (both the oracle's intCast, so 1.5 is 1). The counts live in the eq table below, keyed
+;; by the ref wrapper: an atom wrapper is never entered, so the readers refuse
+;; it as the oracle's cast to a ref does. A committed transaction bumps every
+;; tracked ref its log wrote through %clojure-ref-history-noted, which answers
+;; its first argument; a rolled-back one never reaches it.
+;;
+;; Only a program naming a history verb tracks a ref (clojure/ClojureArms, the
+;; REF_HISTORY family): every other program has the noted call folded to its
+;; answer and no ref registered.
+
+(defvar rontolisp::%clojure-ref-histories
+  (make-hash-table :test 'eql)
+  "Each tracked ref's history: an eql table from the ref wrapper to
+   #(count min max).")
+
+(defun rontolisp::%clojure-ref-history-track (ref min max)
+  "REF registered with MIN and MAX history, answering REF. A view of the
+   ref-history family: a program naming no history verb folds it to REF."
+  (setf (gethash ref rontolisp::%clojure-ref-histories)
+        (vector 0 (rontolisp::%clojure-int-cast min)
+                (rontolisp::%clojure-int-cast max)))
+  ref)
+
+(defun rontolisp::%clojure-ref-history-noted (answer log)
+  "ANSWER, after bumping the history count of every tracked ref the committed
+   transaction LOG wrote: one more commit, capped by the ref's min history
+   (the oracle's retained chain), never below zero. A view of the
+   ref-history family: a program naming no history verb folds it to ANSWER."
+  (dolist (entry (car log) answer)
+    (let ((hist (gethash (car entry) rontolisp::%clojure-ref-histories)))
+      (if hist
+          (setf (aref hist 0)
+                (max 0 (min (+ (aref hist 0) 1) (aref hist 1))))))))
+
+(defun rontolisp::%clojure-ref-history-of (ref)
+  "The history vector REF is tracked under; the oracle's cast failure of
+   anything but a ref (its NullPointerException for nil)."
+  (let ((hist (gethash ref rontolisp::%clojure-ref-histories)))
+    (if hist
+        hist
+        (rontolisp::%clojure-class-cast-exception-of
+         (concatenate 'string "Cannot cast "
+                      (rontolisp::%clojure-class-name-of ref)
+                      " to clojure.lang.Ref") ref))))
+
+(defun rontolisp::%clojure-ref-history-count (ref)
+  "(ref-history-count ref): the committed transactions that wrote REF, capped
+   by its max history."
+  (aref (rontolisp::%clojure-ref-history-of ref) 0))
+
+(defun rontolisp::%clojure-ref-history-count-v (&rest args)
+  "ref-history-count as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "ref-history-count")
+  (rontolisp::%clojure-ref-history-count (car args)))
+
+(defun rontolisp::%clojure-ref-min-history (ref)
+  "(ref-min-history ref): REF's min history."
+  (aref (rontolisp::%clojure-ref-history-of ref) 1))
+
+(defun rontolisp::%clojure-ref-min-history-set (ref n)
+  "(ref-min-history ref n): N (the oracle's intCast) stored as REF's min
+   history; answers REF."
+  (let ((hist (rontolisp::%clojure-ref-history-of ref)))
+    (setf (aref hist 1) (rontolisp::%clojure-int-cast n))
+    ref))
+
+(defun rontolisp::%clojure-ref-min-history-v (&rest args)
+  "ref-min-history as a value."
+  (rontolisp::%clojure-check-arity args 1 2 "ref-min-history")
+  (if (cdr args)
+      (rontolisp::%clojure-ref-min-history-set (car args) (car (cdr args)))
+      (rontolisp::%clojure-ref-min-history (car args))))
+
+(defun rontolisp::%clojure-ref-max-history (ref)
+  "(ref-max-history ref): REF's max history."
+  (aref (rontolisp::%clojure-ref-history-of ref) 2))
+
+(defun rontolisp::%clojure-ref-max-history-set (ref n)
+  "(ref-max-history ref n): N (the oracle's intCast) stored as REF's max
+   history; answers REF."
+  (let ((hist (rontolisp::%clojure-ref-history-of ref)))
+    (setf (aref hist 2) (rontolisp::%clojure-int-cast n))
+    ref))
+
+(defun rontolisp::%clojure-ref-max-history-v (&rest args)
+  "ref-max-history as a value."
+  (rontolisp::%clojure-check-arity args 1 2 "ref-max-history")
+  (if (cdr args)
+      (rontolisp::%clojure-ref-max-history-set (car args) (car (cdr args)))
+      (rontolisp::%clojure-ref-max-history (car args))))
 
 ;;;; Validators and watches.
 ;;

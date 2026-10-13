@@ -202,6 +202,8 @@ categories:
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
       - { slug: struct-map, name: "struct-map" }
+      - { slug: create-struct, name: "create-struct" }
+      - { slug: accessor, name: "accessor" }
       - { slug: make-array, name: "make-array" }
       - { slug: aget, name: "aget" }
       - { slug: aset, name: "aset" }
@@ -236,8 +238,11 @@ categories:
     index_page: clojure/reference/numbers.md
     functions:
       - { slug: plus, name: "+" }
+      - { slug: plus-prime, name: "+'" }
       - { slug: minus, name: "-" }
+      - { slug: minus-prime, name: "-'" }
       - { slug: star, name: "*" }
+      - { slug: star-prime, name: "*'" }
       - { slug: slash, name: "/" }
       - { slug: quot, name: "quot" }
       - { slug: rem, name: "rem" }
@@ -247,7 +252,9 @@ categories:
       - { slug: min, name: "min" }
       - { slug: expt, name: "expt" }
       - { slug: inc, name: "inc" }
+      - { slug: inc-prime, name: "inc'" }
       - { slug: dec, name: "dec" }
+      - { slug: dec-prime, name: "dec'" }
       - { slug: eq, name: "=" }
       - { slug: not-eq, name: "not=" }
       - { slug: num-eq, name: "==" }
@@ -272,6 +279,7 @@ categories:
       - { slug: instance-p, name: "instance?" }
       - { slug: class, name: "class" }
       - { slug: type, name: "type" }
+      - { slug: cast, name: "cast" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }
       - { slug: double, name: "double" }
@@ -416,6 +424,9 @@ categories:
       - { slug: commute, name: "commute" }
       - { slug: ref-set, name: "ref-set" }
       - { slug: ensure, name: "ensure" }
+      - { slug: ref-history-count, name: "ref-history-count" }
+      - { slug: ref-min-history, name: "ref-min-history" }
+      - { slug: ref-max-history, name: "ref-max-history" }
       - { slug: agent, name: "agent" }
       - { slug: send, name: "send" }
       - { slug: send-off, name: "send-off" }
@@ -440,6 +451,8 @@ categories:
       - { slug: get-method, name: "get-method" }
       - { slug: methods, name: "methods" }
       - { slug: prefer-method, name: "prefer-method" }
+      - { slug: prefers, name: "prefers" }
+      - { slug: remove-all-methods, name: "remove-all-methods" }
       - { slug: print-method, name: "print-method" }
       - { slug: derive, name: "derive" }
       - { slug: underive, name: "underive" }
@@ -460,6 +473,9 @@ categories:
       - { slug: extend-type, name: "extend-type" }
       - { slug: extend, name: "extend" }
       - { slug: satisfies-p, name: "satisfies?" }
+      - { slug: extenders, name: "extenders" }
+      - { slug: find-protocol-impl, name: "find-protocol-impl" }
+      - { slug: find-protocol-method, name: "find-protocol-method" }
   - title: "エラー"
     index_page: clojure/reference/errors.md
     functions:
