@@ -10576,6 +10576,40 @@
       (rontolisp::%clojure-icomparable-p x)
       (rontolisp::%clojure-host-object-p x "java.lang.Comparable")))
 
+(defun rontolisp::%clojure-comparator-p (x)
+  "Whether X is a comparator sort and the sorted collections order through: a
+   function, a record, deftype or reify implementing java.util.Comparator, or
+   a host Comparator."
+  (or (functionp x)
+      ;; a type implementing Comparator: an arm of the comparable-interface
+      ;; family ("Collection interfaces")
+      (rontolisp::%clojure-icomparator-p x)
+      ;; a host Comparator: an arm of the host-object family
+      (rontolisp::%clojure-host-object-p x "java.util.Comparator")))
+
+(defun rontolisp::%clojure-comparator-compare (cmp a b)
+  "The int order the comparator CMP puts A and B in: a host Comparator's
+   compare, a record, deftype or reify implementing Comparator's compare row,
+   else the AFunction.compare reading of the function CMP (true -1, false asks
+   the reversed call, a number its integer part)."
+  (cond ;; a host Comparator answers its compareTo-like compare, an arm of the
+        ;; host-object family
+        ((rontolisp::%clojure-host-object-p cmp "java.util.Comparator")
+         (java:call (the (java:object "java.util.Comparator") cmp) "compare" a
+                    b))
+        ;; a Comparator type answers its compare row, an arm of the
+        ;; comparable-interface family ("Collection interfaces")
+        ((rontolisp::%clojure-icomparator-p cmp)
+         (let ((c
+                (funcall (rontolisp::%clojure-call-method cmp "compare") cmp a
+                         b)))
+           (if (integerp c)
+               c
+               (rontolisp::%clojure-class-cast-exception-of
+                "the answer of compare cannot be cast to class java.lang.Number"
+                c))))
+        (t (rontolisp::%clojure-cmp-call cmp a b))))
+
 (defun rontolisp::%clojure-cmp-call (cmp a b)
   "The order the comparator function CMP puts A and B in, the oracle's
    AFunction.compare: true is -1; false asks (CMP B A), 1 when that is truthy,
@@ -10599,7 +10633,7 @@
   "The order of A and B under a sorted collection's comparator CMP: its
    function, or compare when CMP is NIL."
   (if cmp
-      (rontolisp::%clojure-cmp-call cmp a b)
+      (rontolisp::%clojure-comparator-compare cmp a b)
       (rontolisp::%clojure-compare a b)))
 
 (defun rontolisp::%clojure-sorted-check (cmp k)
@@ -10666,7 +10700,7 @@
    the last value wins: the oracle's conj after conj, assoc after assoc. A key
    without a value, a CMP that is no function and, under compare, a key it does
    not order signal like the oracle."
-  (if (and cmp (not (functionp cmp)))
+  (if (and cmp (not (rontolisp::%clojure-comparator-p cmp)))
       (rontolisp::%clojure-class-cast-exception
        "a sorted collection needs a comparator function"))
   (let ((entries nil))
@@ -14750,6 +14784,9 @@
 
 (defun rontolisp::%clojure-icomparable-p (x)
   (rontolisp::%clojure-interface-entry x "java.lang.Comparable"))
+
+(defun rontolisp::%clojure-icomparator-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.Comparator"))
 
 (defun rontolisp::%clojure-iterable-p (x)
   (rontolisp::%clojure-interface-entry x "java.lang.Iterable"))

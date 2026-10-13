@@ -511,6 +511,10 @@ final class ClojureInterfaces {
 				List.of(), ClojureArms.Family.JAVA_MAP, "RONTOLISP::%CLOJURE-JMAP-P");
 		add(table, "java.lang.Comparable", methods("compareTo", 2), List.of(), ClojureArms.Family.COMPARABLE,
 				"RONTOLISP::%CLOJURE-ICOMPARABLE-P");
+		add(table, "java.util.Comparator", methods("compare", 3),
+				methods("reversed", 1, "thenComparing", 2, "thenComparing", 3, "thenComparingInt", 2,
+						"thenComparingLong", 2, "thenComparingDouble", 2),
+				List.of(), ClojureArms.Family.COMPARABLE, "RONTOLISP::%CLOJURE-ICOMPARATOR-P");
 		add(table, "java.lang.CharSequence", methods("length", 1, "charAt", 2, "subSequence", 3),
 				methods("chars", 1, "codePoints", 1, "getChars", 5, "isEmpty", 1), List.of(),
 				ClojureArms.Family.CHAR_SEQUENCE, "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-P");

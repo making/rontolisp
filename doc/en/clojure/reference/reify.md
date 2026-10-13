@@ -61,7 +61,7 @@ too, and so does a protocol extended to the interface. A method the body leaves 
 oracle's `AbstractMethodError` when called (a `java.util` default method keeps the
 interface's, refused by name when called), and any other interface (`IChunkedSeq`,
 `java.util.Deque` ...) is refused by name. The Java interfaces a body implements (`Runnable`,
-`Comparable`, `Iterable`, a `java.util` collection) and the `Object` methods it overrides are
+`Comparable`, `java.util.Comparator`, `Iterable`, a `java.util` collection) and the `Object` methods it overrides are
 what Java sees of the value too: it crosses into a Java member as an object implementing them
 ([Java interop](interop.md)). Deviations: a value overriding `toString` prints as
 `#object[user$reify "text"]`, without the oracle's class number and identity hash; a
@@ -102,6 +102,7 @@ oracle asks them, the interface's supers included (`IPersistentMap` is an `Assoc
 | `IPending` | `realized?` |
 | `Sorted` | `subseq`, `rsubseq` (`seqFrom`, `seq`, `comparator`, `entryKey`), `sorted?` |
 | `java.lang.Comparable` | `compare`, `sort`, a sorted collection's default order |
+| `java.util.Comparator` | `sort`, `sort-by`, `sorted-map-by`, `sorted-set-by` (`compare`) |
 | `java.lang.Iterable` | the seq of one that is no `Seqable`, `reduce`, `into`, `vec` (`iterator`), `seqable?` |
 | `java.util.Iterator` | [iterator-seq](iterator-seq.md), the seq and reduction of an `Iterable` |
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count` (`size`), `nth` (a `RandomAccess` list's `get`), `contains?` (a `Set`'s `contains`), `=`, `pr` as a list, a vector or a set |

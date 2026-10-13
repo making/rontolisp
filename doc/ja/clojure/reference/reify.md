@@ -62,7 +62,7 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 オラクルの `AbstractMethodError` になり（`java.util` の default メソッドはインタフェース側の実装の
 ままで、呼ぶと名前を挙げて拒否されます）、それ以外のインタフェース（`IChunkedSeq`、
 `java.util.Deque` など）は名前を挙げて拒否されます。本体が実装した Java のインタフェース
-（`Runnable`、`Comparable`、`Iterable`、`java.util` のコレクション）と上書きした `Object` の
+（`Runnable`、`Comparable`、`java.util.Comparator`、`Iterable`、`java.util` のコレクション）と上書きした `Object` の
 メソッドは、Java から見た値にも及びます。値は Java のメンバへ、それらを実装したオブジェクト
 として渡ります（[Java interop](interop.md)）。仕様との差異:`toString` を上書きした値は
 `#object[user$reify "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。
@@ -103,6 +103,7 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `IPending` | `realized?` |
 | `Sorted` | `subseq`、`rsubseq`（`seqFrom`、`seq`、`comparator`、`entryKey`）、`sorted?` |
 | `java.lang.Comparable` | `compare`、`sort`、ソート済みコレクションの既定の順序 |
+| `java.util.Comparator` | `sort`、`sort-by`、`sorted-map-by`、`sorted-set-by`（`compare`） |
 | `java.lang.Iterable` | `Seqable` でない場合の seq、`reduce`、`into`、`vec`（`iterator`）、`seqable?` |
 | `java.util.Iterator` | [iterator-seq](iterator-seq.md)、`Iterable` の seq と畳み込み |
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count`（`size`）、`nth`（`RandomAccess` なリストの `get`）、`contains?`（`Set` の `contains`）、`=`、`pr` でのリスト・ベクタ・集合としての印字 |

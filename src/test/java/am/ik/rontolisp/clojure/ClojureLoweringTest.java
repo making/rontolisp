@@ -1281,6 +1281,12 @@ class ClojureLoweringTest {
 			.contains("\"subSequence\" (LAMBDA (")
 			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"toString\" (LAMBDA (")
 			.doesNotContain("\"isEmpty\"");
+		// a Comparator stores its compare through the Comparable row's family (the
+		// defaults its body leaves out stay Java's)
+		String comparator = lowered("(reify java.util.Comparator (compare [_ a b] (compare b a)))");
+		assertThat(comparator).contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("'(\"java.util.Comparator\") (LIST \"compare\" (LAMBDA (")
+			.doesNotContain("\"reversed\"");
 		// an Object override needs no group of its own, and a reify's names its class
 		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
 		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"reify ")
@@ -1376,6 +1382,12 @@ class ClojureLoweringTest {
 		assertThat(lowered(
 				"(deftype Bag [items] Iterable (iterator [_] (.iterator items))) (String/join \",\" (Bag. []))"))
 			.contains("\"iterator()\" (LAMBDA NIL (RONTOLISP::%CLOJURE-HOST-ITERATOR (FUNCALL ");
+		// a Comparator's face implements it beside Comparable, its compare calling
+		// the type's row method
+		assertThat(lowered(
+				"(deftype D [] java.util.Comparator (compare [_ a b] (compare b a)))" + " (java.util.TreeMap. (D.))"))
+			.contains("(JAVA:REIFY '(\"java.util.Comparator\" \"java.lang.Comparable\") :VALUE ")
+			.contains(" \"compare(java.lang.Object,java.lang.Object)\" (LAMBDA (");
 	}
 
 	@Test
