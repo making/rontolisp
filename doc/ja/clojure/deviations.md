@@ -346,11 +346,20 @@
   マップからの1引数の構築はそのマップ自身です（wasm バックエンド。可変のマップは存在
   しないため）。`.get` などの読み取りはそれを読みます。`.put` はオラクルのメッセージなしの
   `UnsupportedOperationException` を投げます（インタープリターと JVM では、値が Java へ
-  渡るときの読み取り専用マップが投げるものと同じです）。nil からの構築はオラクルの
+  渡るときの読み取り専用マップが投げるものと同じです）。2つの数値からの2引数の構築
+  （`(java.util.HashMap. 1024 0.25)`）も空のマップであり、マップからの `.putAll` はその
+  エントリーをマップに格納して nil を返します。レコードやソート済みマップへの `.putAll`
+  は同じ `UnsupportedOperationException` を投げます。マップのリテラルへの `.putAll` は
+  そのリテラル自身のテーブルに格納しますが、オラクルは例外を投げます。nil からの構築はオラクルの
   `NullPointerException` です。`str` と `class` は Clojure のマップとして読みます（`{:a 1}`、
   array-・hash-map のキーワード）。オラクルは `HashMap` として綴ります。容量の引数はその
   引数自身を返しますが、オラクルは空の可変マップを構築します。ホストがある場合
   （インタープリターと JVM）は、その可変オブジェクトのまま残ります。
+- リテラルなキーからの `(System/getProperty k)` は nil、`(System/getProperty k dflt)`
+  は既定値を返します（wasm バックエンド。プロパティは存在しないため。プロパティがない
+  ホストと同じで、ライブラリのロードが読むものです）。nil はオラクルの
+  `NullPointerException` です。計算されたキーはホストの呼び出しのまま残り、wasm
+  バックエンドはそれを拒否します。
 - `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて

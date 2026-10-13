@@ -30856,6 +30856,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileLambdaPastTheCallableLimitBundlesLikeAWideDefun() throws Exception {
+		// A lambda value with more than MAX_CALLABLE_ARITY parameters used to refuse
+		// the compile outright; it now rides the same rest-args bundling a wide defun
+		// does (WasmArityBundler) -- one rest list every caller packs like any
+		// variadic callee's -- so funcall, apply, a local call and a nested defun all
+		// reach it, and a wrong count signals the interpreter's program-error. The
+		// eleven-argument calls size the module's own extra dispatcher tier,
+		// including the ones Pass 2 lowers a labels local or a nested defun into.
+		assertThat(compileAndRun("""
+				(defparameter *w* (lambda (a b c d e f g h i j k) k))
+				(print (funcall *w* 1 2 3 4 5 6 7 8 9 10 11))
+				(print (apply *w* (list 1 2 3 4 5 6 7 8 9 10 11)))
+				(print (handler-case (funcall *w* 1 2) (program-error (c) (princ-to-string c))))
+				(print (labels ((lw (a b c d e f g h i j k) (+ a k))) (lw 1 2 3 4 5 6 7 8 9 10 11)))
+				(print (flet ((fw (a b c d e f g h i j k) (list k a))) (fw 1 2 3 4 5 6 7 8 9 10 11)))
+				""")).isEqualTo("11\n11\n\"Function expects 11 arguments, got 2\"\n12\n(11 1)");
+		assertThat(compileAndRun("""
+				(defun outer () (defun inner (a b c d e f g h i j k) k) (inner 1 2 3 4 5 6 7 8 9 10 11))
+				(print (outer))
+				""")).isEqualTo("11");
+	}
+
+	@Test
 	void compileMakeArrayElementTypeResolvesADeftypeAlias() throws Exception {
 		// Same contract as the interpreter's makeArrayElementTypeResolvesADeftypeAlias:
 		// an alias picks the representation its expansion designates. salza2 allocates

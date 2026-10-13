@@ -14,10 +14,12 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -746,6 +748,12 @@ final class ClojureInteropLowering {
 				}
 			}
 		}
+		if (!ctx.hostTarget && types == null && argDatums.size() == 2) {
+			LispVal hashMap = hashMapCapacity(cls, argDatums);
+			if (hashMap != null) {
+				return hashMap;
+			}
+		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
 		if (timeValue != null) {
@@ -1153,6 +1161,31 @@ final class ClojureInteropLowering {
 			// answers a value's Java face elsewhere
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STRING-VALUE-OF"), args.get(0));
 		}
+		if (!ctx.hostTarget && cls.equals("java.lang.System") && member.equals("getProperty")) {
+			// System/getProperty of a literal key where no host is (wasm): no
+			// properties exist there, so the one-argument call is nil and the
+			// two-argument call its default, like a host without the property
+			// (malli.registry's mode and type at load). Nil is the oracle's
+			// NullPointerException; a computed key stays the host call, which warns
+			// and refuses when it runs there.
+			if (args.size() == 1 && args.get(0) instanceof LispString) {
+				return ClojureLowering.NIL_CONST;
+			}
+			if (args.size() == 1 && args.get(0) instanceof LispNil) {
+				return ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER, LispString.literal("key can't be null"));
+			}
+			if (args.size() == 2 && args.get(0) instanceof LispString) {
+				return args.get(1);
+			}
+		}
+		if (!ctx.hostTarget) {
+			// where no host is, the pure number statics data.json's read path calls
+			// answer portably; the host's own answer them elsewhere
+			LispVal portable = ClojurePortableStaticsLowering.staticCall(cls, member, args);
+			if (portable != null) {
+				return portable;
+			}
+		}
 		LispVal pattern = cls.equals("java.util.regex.Pattern") ? patternStatic(member, args) : null;
 		if (pattern != null) {
 			// the regex runtime's own pattern, on every backend
@@ -1228,6 +1261,14 @@ final class ClojureInteropLowering {
 			// Locale/US (and ROOT, ENGLISH): the value the case-mapping verbs take
 			return locale;
 		}
+		if (!ctx.hostTarget) {
+			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
+			// value data.json's defaults read; the host's own object elsewhere
+			LispVal formatter = ClojureDateFormatterLowering.field(cls, member);
+			if (formatter != null) {
+				return formatter;
+			}
+		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
 					answersBytes(cls, member, 0, true));
@@ -1296,6 +1337,14 @@ final class ClojureInteropLowering {
 		LispVal locale = ClojureLocaleLowering.field(cls, member);
 		if (locale != null) {
 			return locale;
+		}
+		if (!ctx.hostTarget) {
+			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
+			// value data.json's defaults read; the host's own object elsewhere
+			LispVal formatter = ClojureDateFormatterLowering.field(cls, member);
+			if (formatter != null) {
+				return formatter;
+			}
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
@@ -1597,6 +1646,32 @@ final class ClojureInteropLowering {
 						LispString.literal("NullPointerException: java.util.HashMap of nil")));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(temp, arg)), nullCheck, temp);
+	}
+
+	/**
+	 * A two-argument {@code java.util.HashMap} construction (dotted or imported,
+	 * resolved) of two number datums where the host is not (wasm): the empty map, the
+	 * same table a {@code {}} literal builds
+	 * ({@link ClojureCollectionLowering#mapBuild}), like the empty mutable map the oracle
+	 * builds for a capacity and a load factor -- malli's {@code fast-registry} builds
+	 * {@code (HashMap. 1024 0.25)} at load, then fills it with {@code .putAll}. The
+	 * datums are number literals, so dropping them evaluates nothing away; any other pair
+	 * (and a tagged construction, which names the host overload) keeps its
+	 * {@code java:new}. Where the host is the construction keeps its {@code java:new},
+	 * whose mutable object the host tests pin. Null for any other class, so the call
+	 * keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal hashMapCapacity(String cls, List<LispVal> argDatums) {
+		if (!HASH_MAP_CLASS.equals(cls)) {
+			return null;
+		}
+		for (LispVal datum : argDatums) {
+			if (!(datum instanceof LispInteger || datum instanceof LispBigInteger || datum instanceof LispDouble
+					|| datum instanceof LispRatio)) {
+				return null;
+			}
+		}
+		return ClojureCollectionLowering.mapBuild(List.of());
 	}
 
 	/**
@@ -2227,6 +2302,13 @@ final class ClojureInteropLowering {
 		boolean hashCode = method.equals("hashCode") && args.isEmpty() && cls == null;
 		if (hashCode) {
 			call = valueHashCode(recv);
+		}
+		if (cls == null && !ctx.hostTarget && args.isEmpty()
+				&& (method.equals("isInfinite") || method.equals("isNaN"))) {
+			// where no host is, .isInfinite/.isNaN of a double answer what
+			// infinite?/NaN? answer (data.json's float writers); anything else
+			// keeps the host call
+			call = ClojurePortableStaticsLowering.doublePredicateArm(ctx, method, recv, call);
 		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
 		boolean typed = cls != null || receiver instanceof LispString;

@@ -6,7 +6,7 @@
 
 引数なしの `(StringBuilder.)`（`(new StringBuilder)`・`(StringBuffer.)` も）は、`(new java.io.StringWriter)` と同じく全バックエンドで文字列出力ストリームです。1引数の `.append` はその値の `str` を書き込み（nil は `"null"` を書き込みます）、ビルダー自身を返します。`.toString` と `str` はここまでのテキストを返し、`.length`・`.charAt`・`.setLength` はその読み取りと伸縮です（`.setLength` は nil を返します）。1引数の構築はそのテキストでストリームを満たして開始します（`(StringBuilder. "ab")`・`(new StringBuilder "ab")`・`(StringBuffer. "ab")`）。整数の引数は容量です（無視し、ストリームは空で開始します）。それ以外の引数は `No matching ctor found for class ...` として拒否します。1引数の `java.io.StringWriter`（`(java.io.StringWriter. 16)`・`(new java.io.StringWriter 16)`）は代わりに空の文字列出力ストリームです。数値は容量であり（無視し、ストリームは空で開始します）、それ以外はオラクルの `Number` への `ClassCastException` になります（`StringWriter` に `String` のコンストラクタはないため）。nil はオラクルの `NullPointerException` です。`^[...]` タグ付きの構築はホストのオーバーロードを指定したことになり、ホストの構築のまま残るためインタープリターと JVM でのみ動作します。`java.util.Locale/US`（`ROOT`・`ENGLISH` も）はそのロケールの `toString` のテキスト（`"en_US"`・`""`・`"en"`）で、1引数の `.toUpperCase`・`.toLowerCase` が全バックエンドで受け付け、引数なしと同じ写像になります（写像はロケールを無視します）。文字列の `.intern` はその文字列自身で、全バックエンドで動作します。
 
-引数なしの `(java.util.HashMap.)`（`(new java.util.HashMap)` も）は空のマップであり、マップからの1引数の構築はそのマップ自身です（ホストがない場合、すなわち wasm バックエンド）。`.get`・`.size`・`.containsKey` などの読み取りは通常のマップと同じようにそれを読みますが、`.put` はオラクルのメッセージなしの `UnsupportedOperationException` を投げます（インタープリターと JVM と同じです。そこでは値が Java へ渡るときに読み取り専用マップになるため）。nil からの構築はオラクルの `NullPointerException` です。ホストがある場合（インタープリターと JVM）は可変の `java.util.HashMap` のまま残り、それ以外の引数個数や `^[...]` タグ付きの構築は全域でホストの構築のまま残ります。
+引数なしの `(java.util.HashMap.)`（`(new java.util.HashMap)` も）は空のマップであり、マップからの1引数の構築はそのマップ自身、2つの数値からの2引数の構築（`(java.util.HashMap. 1024 0.25)`）は空のマップです（ホストがない場合、すなわち wasm バックエンド）。`.get`・`.size`・`.containsKey` などの読み取りは通常のマップと同じようにそれを読みますが、`.put` はオラクルのメッセージなしの `UnsupportedOperationException` を投げます（インタープリターと JVM と同じです。そこでは値が Java へ渡るときに読み取り専用マップになるため）。マップからの `.putAll` はそのエントリーをマップに格納して nil を返します。レコードやソート済みマップへの `.putAll` は同じ `UnsupportedOperationException` を投げます。nil からの構築はオラクルの `NullPointerException` です。ホストがある場合（インタープリターと JVM）は可変の `java.util.HashMap` のまま残り、それ以外の引数の形や `^[...]` タグ付きの構築は全域でホストの構築のまま残ります。
 
 ```clojure
 (println (.toUpperCase "hi")) ; HI
@@ -21,4 +21,5 @@
 (println (str (StringBuilder. "ab") (StringBuffer. 16))) ; ab
 (println (let [w (java.io.StringWriter. 16)] (.append w "ab") (str w))) ; ab
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
+(let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 ```

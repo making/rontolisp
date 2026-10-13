@@ -11413,6 +11413,32 @@
         (t (rontolisp::%clojure-map-entry-refusal
             "conj needs a map entry: a map, a [k v] vector or nil" item))))
 
+(defun rontolisp::%clojure-hash-map-put-all (target source)
+  "(.putAll TARGET SOURCE) where the host is not: the entries of the map SOURCE
+   stored into TARGET's table, answering nil, like the oracle's mutation of its
+   java.util.HashMap -- malli's fast-registry fills its (HashMap. 1024 0.25)
+   this way at load, then reads it back with .get. A map or record source reads
+   through the same entries merge takes, each key stored through
+   %clojure-store-key like %clojure-plist-table stores it; nil is the oracle's
+   NullPointerException, anything but a map its ClassCastException to
+   java.util.Map (without the module tail). The target is always a table: the
+   lowering answers a record or a sorted map the oracle's message-less
+   UnsupportedOperationException, and anything else its no-such-method refusal."
+  (if (or (hash-table-p source) (rontolisp::%clojure-record-p source)
+          (rontolisp::%clojure-sorted-map-p source))
+      (let ((entries (rontolisp::%clojure-merge-entry-plist source)))
+        (do ((p entries (cdr (cdr p))))
+            ((null p) nil)
+          (setf (gethash (rontolisp::%clojure-store-key (car p) target) target)
+                (car (cdr p)))))
+      (if (null source)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"java.util.Map.size()\" because \"m\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class "
+                        (rontolisp::%clojure-class-name-of source)
+                        " cannot be cast to class java.util.Map")))))
+
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member
    compares equal to it (that member stays); a map gains ITEM's entries
@@ -19445,6 +19471,83 @@
   "class of the instant X, as a keyword."
   (list :C%KEYWORD (rontolisp::%clojure-instant-class-name x)))
 
+;;;; The ISO_INSTANT formatter: DateTimeFormatter/ISO_INSTANT lowers to a
+;;;; portable value where the host is not (wasm), and .format of it answers an
+;;;; instant of this front end's own in ISO-8601
+;;;; (clojure/ClojureDateFormatterLowering). Where the host is the field stays
+;;;; the host's object and .format its call. Measured against clj 1.12.6,
+;;;; 2026-10-13.
+
+(defun rontolisp::%clojure-iso-instant-formatter ()
+  "The ISO_INSTANT field's portable value: a tag no other value reads."
+  (list :C%DATE-FORMATTER))
+
+(defun rontolisp::%clojure-iso-instant-formatter-p (x)
+  "Whether X is the ISO_INSTANT portable value."
+  (and (consp x) (eq (car x) :C%DATE-FORMATTER)))
+
+(defun rontolisp::%clojure-iso-instant-year (year stream)
+  "Write the astronomical YEAR to STREAM as the oracle's ISO chronology
+   spells it: four digits, zero-padded, a sign past four."
+  (cond ((> year 9999)
+         (write-char #\+ stream)
+         (write-string (princ-to-string year) stream))
+        ((>= year 0) (rontolisp::%clojure-write-padded year 4 stream))
+        (t
+         (write-char #\- stream)
+         (rontolisp::%clojure-write-padded (- year) 4 stream))))
+
+(defun rontolisp::%clojure-iso-instant-text (x stream)
+  "Write the instant X to STREAM as ISO_INSTANT formats it: the proleptic
+   Gregorian date (the ISO chronology, no Julian cutover), the time of day,
+   and the fraction the value carries -- a Date's milliseconds, a Timestamp's
+   nanoseconds -- in three, six or nine digits when it is not zero, like the
+   oracle's appendInstant."
+  (let* ((ms (car (cdr x)))
+         (day (floor ms 86400000))
+         (time (- ms (* day 86400000)))
+         (date (rontolisp::%clojure-civil-from-days day nil)))
+    (rontolisp::%clojure-iso-instant-year (car date) stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (car (cdr date)) 2 stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (car (cdr (cdr date))) 2 stream)
+    (write-char #\T stream)
+    (rontolisp::%clojure-write-padded (floor time 3600000) 2 stream)
+    (write-char #\: stream)
+    (rontolisp::%clojure-write-padded (mod (floor time 60000) 60) 2 stream)
+    (write-char #\: stream)
+    (rontolisp::%clojure-write-padded (mod (floor time 1000) 60) 2 stream)
+    (let ((nanos
+           (if (eq (car x) :C%TIMESTAMP)
+               (car (cdr (cdr x)))
+               (* (mod time 1000) 1000000))))
+      (if (= nanos 0)
+          nil
+          (progn
+            (write-char #\. stream)
+            (cond ((= (mod nanos 1000000) 0)
+                   (rontolisp::%clojure-write-padded (truncate nanos 1000000) 3
+                                                     stream))
+                  ((= (mod nanos 1000) 0)
+                   (rontolisp::%clojure-write-padded (truncate nanos 1000) 6
+                                                     stream))
+                  (t (rontolisp::%clojure-write-padded nanos 9 stream)))))))
+  (write-char #\Z stream))
+
+(defun rontolisp::%clojure-iso-instant-format (f x)
+  "(.format f x) of the ISO_INSTANT portable value F: an instant of this front
+   end's own in ISO-8601; nil is the oracle's NullPointerException, anything
+   else its ClassCastException to TemporalAccessor."
+  (cond ((null x) (rontolisp::%clojure-null-pointer-exception "temporal"))
+        ((and (consp x) (or (eq (car x) :C%INST) (eq (car x) :C%TIMESTAMP)))
+         (let ((out (make-string-output-stream)))
+           (rontolisp::%clojure-iso-instant-text x out)
+           (get-output-stream-string out)))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+             " cannot be cast to class java.time.temporal.TemporalAccessor")))))
+
 (defun rontolisp::%clojure-inst-equal (a b)
   "= of the instant A and B: equal wrappers, or a Date and a Timestamp of the
    same milliseconds (the oracle's Date.equals; Timestamp.equals takes no
@@ -24553,6 +24656,142 @@
   "parse-boolean as a value."
   (rontolisp::%clojure-check-arity args 1 1 "parse-boolean")
   (rontolisp::%clojure-parse-boolean (car args)))
+
+;;;; Portable number statics: Long/valueOf, Double/valueOf, Integer/parseInt
+;;;; of radix 16, Integer/toHexString and Math/min of two, which data.json's
+;;;; read path calls. Where the host is not (wasm) the static call lowers to
+;;;; one of these (clojure/ClojurePortableStaticsLowering); where the host is
+;;;; it stays the host's call. Each measured against clj 1.12.6, 2026-10-13.
+
+(defun rontolisp::%clojure-long-value-of (s)
+  "(Long/valueOf s): the long S spells, its NumberFormatException naming the
+   string past it; an integer in the long range its (long) overload, nil its
+   null-string refusal, anything else its no-matching-method refusal."
+  (cond ((stringp s)
+         (or (rontolisp::%clojure-parse-long s)
+             (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "For input string: \"" s "\""))))
+        ((typep s '(signed-byte 64)) s)
+        ((null s)
+         (rontolisp::%clojure-number-format-exception
+          "Cannot parse null string"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching method valueOf found taking 1 args"))))
+
+(defun rontolisp::%clojure-double-blank-p (s)
+  "Whether S is empty or holds only codes at most 32, which Double/valueOf
+   trims to the empty string."
+  (let ((blank t))
+    (dotimes (i (length s) blank)
+      (if (> (char-code (char s i)) 32) (setq blank nil)))))
+
+(defun rontolisp::%clojure-double-value-of (s)
+  "(Double/valueOf s): the double S spells, its NumberFormatException (empty
+   String of nothing but blanks) past it; a double its (double) overload, nil
+   its NullPointerException, anything else its no-matching-method refusal."
+  (cond ((stringp s)
+         (or (rontolisp::%clojure-parse-double s)
+             (rontolisp::%clojure-number-format-exception
+              (if (rontolisp::%clojure-double-blank-p s)
+                  "empty String"
+                  (concatenate 'string "For input string: \"" s "\"")))))
+        ((floatp s) s)
+        ((null s)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"String.length()\" because \"in\" is null"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching method valueOf found taking 1 args"))))
+
+(defun rontolisp::%clojure-base16-digit-value (code)
+  "CODE's hex digit value, or nil: every decimal digit Character.digit reads
+   at radix 16 (the decimal blocks' 0-9) and a-f/A-F in ASCII and fullwidth."
+  (or (rontolisp::%clojure-decimal-digit-value code)
+      (cond ((and (>= code 65) (<= code 70)) (- code 55))
+            ((and (>= code 97) (<= code 102)) (- code 87))
+            ((and (>= code 65313) (<= code 65318)) (- code 65303))
+            ((and (>= code 65345) (<= code 65350)) (- code 65335)))))
+
+(defun rontolisp::%clojure-parse-int-16 (s)
+  "(Integer/parseInt s 16): the int S spells in hex, an optional sign and hex
+   digits, refused past the int range; nil is the oracle's null-string
+   refusal, anything else its cast refusal to String."
+  (cond ((stringp s)
+         (let ((n (length s))
+               (i 0)
+               (neg nil)
+               (value 0)
+               (digits 0)
+               (limit 2147483647)
+               (ok t))
+           (when (and (< i n)
+                      (or (char= (char s i) #\+) (char= (char s i) #\-)))
+             (setq neg (char= (char s i) #\-))
+             (setq i (+ i 1))
+             (if neg (setq limit 2147483648)))
+           (do ()
+               ((or (>= i n) (not ok)))
+             (let ((d
+                    (rontolisp::%clojure-base16-digit-value
+                     (char-code (char s i)))))
+               (if (or (null d) (> value (truncate (/ (- limit d) 16))))
+                   (setq ok nil)
+                   (progn
+                     (setq value (+ (* value 16) d))
+                     (setq digits (+ digits 1))
+                     (setq i (+ i 1))))))
+           (if (and ok (> digits 0))
+               (if neg (- value) value)
+               (rontolisp::%clojure-number-format-exception
+                (concatenate 'string "For input string: \"" s
+                             "\" under radix 16")))))
+        ((null s)
+         (rontolisp::%clojure-number-format-exception
+          "Cannot parse null string"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
+                         " cannot be cast to class java.lang.String")))))
+
+(defun rontolisp::%clojure-int-hex (n)
+  "The non-negative int N in lowercase hex, no leading zeros."
+  (let ((out (make-string-output-stream)))
+    (if (= n 0)
+        (write-char #\0 out)
+        (let ((digits nil))
+          (do ()
+              ((= n 0))
+            (setq digits (cons (char "0123456789abcdef" (mod n 16)) digits))
+            (setq n (truncate n 16)))
+          (dolist (c digits) (write-char c out))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-integer-to-hex-string (x)
+  "(Integer/toHexString x): the intCast of X in lowercase hex, two's
+   complement past the sign; nil is the oracle's charValue
+   NullPointerException, anything else no number its ClassCastException to
+   Number."
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null")
+      (if (numberp x)
+          (let ((n (rontolisp::%clojure-int-cast x)))
+            (rontolisp::%clojure-int-hex (if (< n 0) (+ n 4294967296) n)))
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                        " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-math-min (a b)
+  "(Math/min a b): the lesser of two longs in the long range or two doubles
+   (a double -0.0 the lesser of the zeros, NaN beside a double the NaN, like
+   the oracle's overloads); any other pair its no-matching-method refusal."
+  (if (or (and (typep a '(signed-byte 64)) (typep b '(signed-byte 64)))
+          (and (floatp a) (floatp b)))
+      (if (< a b)
+          a
+          (if (< b a)
+              b
+              (if (and (floatp a) (or (/= a a) (< (/ 1.0 a) 0))) a b)))
+      (rontolisp::%clojure-illegal-argument-exception
+       "No matching method min found taking 2 args")))
 
 ;;;; Typed arrays: object-array, to-array, into-array and the primitive
 ;;;; constructors (clojure.core/int-array and friends). An array is a vector

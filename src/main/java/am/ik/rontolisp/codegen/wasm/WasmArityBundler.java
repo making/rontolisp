@@ -1,7 +1,9 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispCons;
@@ -43,6 +45,20 @@ import org.jspecify.annotations.Nullable;
  * parameters would have made a short call report {@code at least 9}. The price is one
  * cons per argument per call, on a signature only a generated or unusually wide helper
  * has. Variadic ({@code &rest}) definitions past the limit keep the existing hard error.
+ *
+ * <p>
+ * First-class functions ride the same bundling ({@link #bundleLambdas}): a {@code lambda}
+ * value with more than ten plain parameters, a {@code flet} or {@code labels} clause of
+ * that width, and a non-top-level {@code defun} (which Pass 2 lowers to a closure) are
+ * rewritten to the same {@code (&rest %bundle)} shape. Their callers already pack a
+ * variadic callee's rest list -- the per-arity dispatchers a {@code funcall} or a local
+ * call travels through, and the SPREAD dispatcher an {@code apply} reaches -- so no call
+ * site is rewritten. A {@code lambda} in call position
+ * ({@code ((lambda (p...) ...) args...)}) is left alone: it is inlined into its caller
+ * and never becomes a function. A body-declared wrong-count report
+ * ({@link DeclaredArityReport}, what a Clojure {@code fn} lowers to) stays at the
+ * rewritten body's head, and the check names the enclosing lambda through the compilation
+ * context, so the refusal keeps the declaring words.
  */
 final class WasmArityBundler {
 
@@ -88,6 +104,216 @@ final class WasmArityBundler {
 	}
 
 	/**
+	 * Applies the bundling to every too-wide fixed-arity first-class function: a
+	 * {@code lambda} value with more than ten plain parameters, a {@code flet} or
+	 * {@code labels} clause of that width, and a non-top-level {@code defun} (which the
+	 * expression compiler lowers to a closure). Runs after {@link #bundle}, whose
+	 * top-level defuns it recurses into, and before compilation. A {@code lambda} in call
+	 * position is inlined into its caller and never becomes a function, so only its body
+	 * is rewritten, never its parameter list. Quoted data is left alone.
+	 * @param program the top-level forms
+	 * @return the transformed program (the same list when no lambda is too wide)
+	 */
+	static List<LispVal> bundleLambdas(List<LispVal> program) {
+		List<LispVal> out = null;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal rewritten = bundleForm(program.get(i));
+			if (rewritten != program.get(i)) {
+				if (out == null) {
+					out = new ArrayList<>(program);
+				}
+				out.set(i, rewritten);
+			}
+		}
+		return out == null ? program : out;
+	}
+
+	private static LispVal bundleForm(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol q && LispNames.isQuote(q.name())) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.get(0) instanceof LispCons head && isLambdaForm(head)) {
+			// An inline call: the lambda runs in its caller's frame, so its
+			// parameters are locals, never wasm parameters -- rewrite only what the
+			// body holds, never the parameter list.
+			LispVal inlined = bundleLambdaContents(head);
+			List<LispVal> out = new ArrayList<>(parts.size());
+			out.add(inlined == head ? head : inlined);
+			boolean changed = inlined != head;
+			for (int i = 1; i < parts.size(); i++) {
+				LispVal arg = bundleForm(parts.get(i));
+				changed |= arg != parts.get(i);
+				out.add(arg);
+			}
+			return changed ? LispCons.rebuiltList(cons, out) : form;
+		}
+		if (parts.get(0) instanceof LispSymbol op) {
+			String name = op.name();
+			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2) {
+				LispVal bundled = bundleLambdaValue(parts);
+				return bundled == null ? bundleChildren(cons, parts) : bundleForm(bundled);
+			}
+			if ((LispNames.FLET.equals(name) || LispNames.LABELS.equals(name)) && parts.size() >= 2) {
+				return bundleFletLabels(cons, parts);
+			}
+			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && parts.get(1) instanceof LispSymbol
+					&& parts.get(2) instanceof LispCons paramsCons && isWidePlainParams(paramsCons)) {
+				// A non-top-level defun (a top-level one already rode bundle());
+				// the expression compiler lowers it to a closure either way.
+				return bundleForm(bundleDefun(parts));
+			}
+		}
+		return bundleChildren(cons, parts);
+	}
+
+	private static boolean isLambdaForm(LispCons head) {
+		return head.isProperList() && head.car() instanceof LispSymbol op && LispNames.LAMBDA.equals(op.name())
+				&& head.cdr() instanceof LispCons;
+	}
+
+	private static boolean isWidePlainParams(LispCons paramsCons) {
+		if (!paramsCons.isProperList()) {
+			return false;
+		}
+		List<LispVal> params = paramsCons.toList();
+		return params.size() > WasmLispCompiler.MAX_CALLABLE_ARITY
+				&& params.stream().allMatch(WasmArityBundler::isPlainParam);
+	}
+
+	/** The body of a {@code lambda} form with its nested functions bundled. */
+	private static LispVal bundleLambdaContents(LispCons head) {
+		List<LispVal> parts = head.toList();
+		if (parts.size() < 2) {
+			return head;
+		}
+		List<LispVal> out = new ArrayList<>(parts.size());
+		out.add(parts.get(0));
+		out.add(parts.get(1));
+		boolean changed = false;
+		for (int i = 2; i < parts.size(); i++) {
+			LispVal rewritten = bundleForm(parts.get(i));
+			changed |= rewritten != parts.get(i);
+			out.add(rewritten);
+		}
+		return changed ? LispCons.rebuiltList(head, out) : head;
+	}
+
+	/**
+	 * A {@code lambda} value's bundled form, or {@code null} when its parameters fit.
+	 */
+	private static @Nullable LispVal bundleLambdaValue(List<LispVal> parts) {
+		if (!(parts.get(1) instanceof LispCons paramsCons) || !isWidePlainParams(paramsCons)) {
+			return null;
+		}
+		List<LispVal> params = paramsCons.toList();
+		List<LispVal> body = parts.subList(2, parts.size());
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(parts.get(0));
+		lambda.add(listToCons(List.of(new LispSymbol(LispNames.LAMBDA_REST), new LispSymbol(BUNDLE_VAR))));
+		DeclaredArityReport declared = DeclaredArityReport.of(body);
+		if (declared != null) {
+			lambda.add(declared.declaration());
+		}
+		// Unnamed: the check names the enclosing lambda through the compilation
+		// context, so a declared report keeps its words.
+		lambda.add(bundleLetStar(params, body, listToCons(
+				List.of(new LispSymbol(CHECK), new LispSymbol(BUNDLE_VAR), new LispInteger(params.size())))));
+		return listToCons(lambda);
+	}
+
+	private static LispVal bundleChildren(LispCons cons, List<LispVal> parts) {
+		List<LispVal> out = new ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal part : parts) {
+			LispVal rewritten = bundleForm(part);
+			changed |= rewritten != part;
+			out.add(rewritten);
+		}
+		return changed ? LispCons.rebuiltList(cons, out) : cons;
+	}
+
+	/**
+	 * A {@code flet} or {@code labels} form with every too-wide clause bundled; each
+	 * clause keeps its name and declares its report where the expansion still reads it.
+	 */
+	private static LispVal bundleFletLabels(LispCons cons, List<LispVal> parts) {
+		List<LispVal> out = new ArrayList<>(parts.size());
+		out.add(parts.get(0));
+		boolean changed = false;
+		for (int i = 1; i < parts.size(); i++) {
+			LispVal part = parts.get(i);
+			if (i == 1 && part instanceof LispCons defsCons && defsCons.isProperList()) {
+				List<LispVal> defs = defsCons.toList();
+				List<LispVal> rewrittenDefs = new ArrayList<>(defs.size());
+				boolean defsChanged = false;
+				for (LispVal def : defs) {
+					LispVal rewritten = bundleFletClause(def);
+					defsChanged |= rewritten != def;
+					rewrittenDefs.add(rewritten);
+				}
+				LispVal rewritten = defsChanged ? LispCons.rebuiltList(defsCons, rewrittenDefs) : part;
+				changed |= defsChanged;
+				out.add(rewritten);
+			}
+			else {
+				LispVal rewritten = bundleForm(part);
+				changed |= rewritten != part;
+				out.add(rewritten);
+			}
+		}
+		return changed ? LispCons.rebuiltList(cons, out) : cons;
+	}
+
+	private static LispVal bundleFletClause(LispVal def) {
+		if (!(def instanceof LispCons defCons) || !defCons.isProperList()) {
+			return def;
+		}
+		List<LispVal> dp = defCons.toList();
+		if (dp.size() < 2 || !(dp.get(0) instanceof LispSymbol) || !(dp.get(1) instanceof LispCons paramsCons)
+				|| !isWidePlainParams(paramsCons)) {
+			return bundleForm(def);
+		}
+		List<LispVal> params = paramsCons.toList();
+		List<LispVal> body = dp.subList(2, dp.size());
+		List<LispVal> clause = new ArrayList<>();
+		clause.add(dp.get(0));
+		clause.add(listToCons(List.of(new LispSymbol(LispNames.LAMBDA_REST), new LispSymbol(BUNDLE_VAR))));
+		DeclaredArityReport declared = DeclaredArityReport.of(body);
+		if (declared != null) {
+			clause.add(declared.declaration());
+		}
+		clause.add(bundleLetStar(params, body, listToCons(
+				List.of(new LispSymbol(CHECK), new LispSymbol(BUNDLE_VAR), new LispInteger(params.size())))));
+		return listToCons(clause);
+	}
+
+	/**
+	 * The {@code (let* ((p1 (progn check (nth 0 bundle))) ...) body...)} a bundled
+	 * function's parameter bindings become.
+	 * @param check the count check the first binding runs ({@link #bundleCheck})
+	 */
+	private static LispVal bundleLetStar(List<LispVal> params, List<LispVal> body, LispVal check) {
+		LispSymbol bundle = new LispSymbol(BUNDLE_VAR);
+		List<LispVal> letBindings = new ArrayList<>();
+		for (int i = 0; i < params.size(); i++) {
+			LispVal nth = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), bundle));
+			if (i == 0) {
+				nth = listToCons(List.of(new LispSymbol(LispNames.PROGN), check, nth));
+			}
+			letBindings.add(listToCons(List.of(params.get(i), nth)));
+		}
+		List<LispVal> letParts = new ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(listToCons(letBindings));
+		letParts.addAll(body);
+		return listToCons(letParts);
+	}
+
+	/**
 	 * The widest PER-ARITY dispatch the program asks for: the argument count of its
 	 * widest {@code funcall}, or the list count of its widest
 	 * {@code mapcar}/{@code mapc}/{@code mapcan} (each iteration funcalls the mapped
@@ -98,34 +324,110 @@ final class WasmArityBundler {
 	 * spread dispatcher that serves every callable at every width.
 	 *
 	 * <p>
-	 * A pre-scan of the source program cannot see a {@code funcall} a macro synthesizes
-	 * later in Pass 2, which is exactly what the codegen ceiling checks are still for:
-	 * anything past the ceiling stays a call-time signal ({@code funcall}) or a compile
-	 * error (the map family, which has no per-site fallback).
+	 * A direct call a nested {@code defun} or a {@code flet}/{@code labels} local takes
+	 * becomes a {@code funcall} only when Pass 2 lowers it, past this scan -- so the scan
+	 * counts those too, by name: a call whose head spells a nested definition or a local
+	 * function contributes its argument count, unless a top-level {@code defun} of the
+	 * name stays a direct call. A pre-scan of the source program cannot see a
+	 * {@code funcall} a macro synthesizes out of nothing later in Pass 2, which is
+	 * exactly what the codegen ceiling checks are still for: anything past the ceiling
+	 * stays a call-time signal ({@code funcall}) or a compile error (the map family,
+	 * which has no per-site fallback).
 	 * @param program the top-level forms
 	 * @return the widest dispatch arity
 	 */
 	static int widestDispatchArity(List<LispVal> program) {
+		Set<String> directNames = new HashSet<>();
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol name) {
+					directNames.add(name.name());
+				}
+			}
+		}
+		Set<String> valueNames = new HashSet<>();
+		for (LispVal form : program) {
+			collectValueNames(form, true, valueNames);
+		}
+		valueNames.removeAll(directNames);
 		int widest = 0;
 		for (LispVal form : program) {
-			widest = Math.max(widest, widestDispatchArityIn(form));
+			widest = Math.max(widest, widestDispatchArityIn(form, valueNames));
 		}
 		return widest;
 	}
 
-	private static int widestDispatchArityIn(LispVal form) {
+	/**
+	 * The names a direct call reaches as a function value: a non-top-level
+	 * {@code defun}'s (Pass 2 lowers the definition to a closure and the call to a
+	 * {@code funcall}) and every {@code flet}/{@code labels} clause's (the local-call
+	 * rewrite turns call position into a {@code funcall} of the bound variable).
+	 */
+	private static void collectValueNames(LispVal form, boolean topLevel, Set<String> out) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol q && LispNames.isQuote(q.name())) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.get(0) instanceof LispSymbol op) {
+			String name = op.name();
+			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && parts.get(1) instanceof LispSymbol defName) {
+				if (!topLevel) {
+					out.add(defName.name());
+				}
+				for (int i = 3; i < parts.size(); i++) {
+					collectValueNames(parts.get(i), false, out);
+				}
+				return;
+			}
+			if ((LispNames.FLET.equals(name) || LispNames.LABELS.equals(name)) && parts.size() >= 2
+					&& parts.get(1) instanceof LispCons defsCons && defsCons.isProperList()) {
+				for (LispVal def : defsCons.toList()) {
+					if (def instanceof LispCons defCons && defCons.isProperList()) {
+						List<LispVal> dp = defCons.toList();
+						if (!dp.isEmpty() && dp.get(0) instanceof LispSymbol clause) {
+							out.add(clause.name());
+						}
+						for (int i = 1; i < dp.size(); i++) {
+							collectValueNames(dp.get(i), false, out);
+						}
+					}
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					collectValueNames(parts.get(i), false, out);
+				}
+				return;
+			}
+		}
+		for (LispVal part : parts) {
+			collectValueNames(part, false, out);
+		}
+	}
+
+	private static int widestDispatchArityIn(LispVal form, Set<String> valueNames) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()
 				|| cons.car() instanceof LispSymbol q && LispNames.isQuote(q.name())) {
 			return 0;
 		}
 		List<LispVal> parts = cons.toList();
 		// (funcall f a1 .. aN) and (mapcar f l1 .. lN) both dispatch at N.
-		int widest = cons.car() instanceof LispSymbol op
-				&& (LispNames.FUNCALL.equals(op.name()) || LispNames.MAPCAR.equals(op.name())
-						|| LispNames.MAPC.equals(op.name()) || LispNames.MAPCAN.equals(op.name())) ? parts.size() - 2
-								: 0;
+		int widest = 0;
+		if (cons.car() instanceof LispSymbol op) {
+			if (LispNames.FUNCALL.equals(op.name()) || LispNames.MAPCAR.equals(op.name())
+					|| LispNames.MAPC.equals(op.name()) || LispNames.MAPCAN.equals(op.name())) {
+				widest = parts.size() - 2;
+			}
+			else if (!valueNames.isEmpty() && valueNames.contains(op.name())) {
+				// A direct call Pass 2 turns into a funcall of a function value.
+				widest = parts.size() - 1;
+			}
+		}
 		for (LispVal part : parts) {
-			widest = Math.max(widest, widestDispatchArityIn(part));
+			widest = Math.max(widest, widestDispatchArityIn(part, valueNames));
 		}
 		return widest;
 	}
@@ -203,24 +505,12 @@ final class WasmArityBundler {
 		// a report the body declares stays the defun's own (DeclaredArityReport), and the
 		// check names the defun, so its report is spelled in the declared words
 		DeclaredArityReport declared = DeclaredArityReport.of(parts.subList(3, parts.size()));
-		List<LispVal> letBindings = new ArrayList<>();
-		for (int i = 0; i < params.size(); i++) {
-			LispVal nth = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), bundle));
-			if (i == 0) {
-				nth = listToCons(List.of(new LispSymbol(LispNames.PROGN),
-						bundleCheck(bundle, params.size(), declared != null ? (LispSymbol) parts.get(1) : null), nth));
-			}
-			letBindings.add(listToCons(List.of(params.get(i), nth)));
-		}
-		List<LispVal> letParts = new ArrayList<>();
-		letParts.add(new LispSymbol(LispNames.LET_STAR));
-		letParts.add(listToCons(letBindings));
-		letParts.addAll(parts.subList(3, parts.size()));
 		List<LispVal> defun = new ArrayList<>(List.of(parts.get(0), parts.get(1), listToCons(newParams)));
 		if (declared != null) {
 			defun.add(declared.declaration());
 		}
-		defun.add(listToCons(letParts));
+		defun.add(bundleLetStar(params, parts.subList(3, parts.size()),
+				bundleCheck(bundle, params.size(), declared != null ? (LispSymbol) parts.get(1) : null)));
 		return listToCons(defun);
 	}
 
@@ -241,10 +531,13 @@ final class WasmArityBundler {
 	 * the interpreter's {@code program-error},
 	 * {@code Function expects n arguments, got m} -- or the report the named defun
 	 * declares ({@link DeclaredArityReport}) -- in EH mode behind a handler landing pad
-	 * and traps elsewhere, as a dispatcher's no-match arm does there. A module without
-	 * the helper traps in place. A Lisp-level {@code (error 'program-error ...)} would
-	 * have pulled the instance machinery into every module with a wide defun, and could
-	 * not be compiled at all where the instance gate had already closed.
+	 * and traps elsewhere, as a dispatcher's no-match arm does there. A bundled lambda's
+	 * check carries no name; it names the enclosing lambda instead (Pass 2c records its
+	 * funcId on the context), so a declared report keeps its words there too, and a
+	 * lambda declaring none reports the same generic text a named shape would. A module
+	 * without the helper traps in place. A Lisp-level {@code (error 'program-error ...)}
+	 * would have pulled the instance machinery into every module with a wide defun, and
+	 * could not be compiled at all where the instance gate had already closed.
 	 * @param cons the check form
 	 * @param ctx the compilation context
 	 */
@@ -260,6 +553,14 @@ final class WasmArityBundler {
 			if (declaring != null && declaring.declaredArity() != null && ctx.namesArityOperators
 					&& declaring.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
 				named = declaring.funcId();
+				ctx.arityNamedCallees.add(named);
+			}
+			else if (declaring == null && parts.size() == 3 && ctx.enclosingLambdaFuncId >= 0 && ctx.namesArityOperators
+					&& ctx.enclosingLambdaFuncId < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
+				// a bundled lambda's check: the enclosing lambda's report (if it
+				// declares one) spells the refusal, like the miss arm of a dispatcher
+				// would for an unbundled one
+				named = ctx.enclosingLambdaFuncId;
 				ctx.arityNamedCallees.add(named);
 			}
 			ctx.writer.write(Instruction.I32_CONST);

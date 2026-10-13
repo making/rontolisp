@@ -24,6 +24,12 @@ Java のメンバーにホストオブジェクトとして渡り（`(.format sd
 そのクラスのほかのメソッドはホストオブジェクトが答えます（`(.toInstant d)`）。メンバーが
 返したホストの Date や UUID は、こうした値と `=` になり、並べて比較できます。
 
+wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
+（ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
+`(.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0))` は
+`"1970-01-01T00:00:00Z"` になります。インタプリタと JVM では、このフィールドはホストの
+オブジェクトのままで、`.format` もホストの呼び出しです。
+
 | 名前 | 例 | 結果 |
 |---|---|---|
 | `inst-ms` | `(inst-ms #inst "1970-01-01T00:00:01Z")` | `1000` |
@@ -66,3 +72,11 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
 - [clojure.instant](clojure-instant.md) の Calendar にはホストオブジェクトがありません。Java の
   メンバーには渡らず、そのクラスのメソッドは名前を挙げて拒否します。wasm では、Date や UUID の
   メソッドのうちホストだけが答えるもの（`toInstant`、`hashCode`）も同じく拒否します。
+- wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
+  （ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
+  `(.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0))` は
+  `"1970-01-01T00:00:00Z"` です。`nil` はオラクルの `NullPointerException`、それ以外は
+  `TemporalAccessor` への `ClassCastException` です。この値は `(:C%DATE-FORMATTER)` と印字され、
+  `class` は `:list` を返します。オラクルは Date の `.format` を拒否します（Date は
+  `TemporalAccessor` ではないため）。インタプリタと JVM では、このフィールドはホストの
+  オブジェクトのままで、`.format` もホストの呼び出しです。

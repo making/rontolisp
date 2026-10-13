@@ -3694,6 +3694,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LispVal> bundled = WasmArityBundler.bundle(program);
 		boolean bundlesWideDefuns = bundled != program;
 		program = bundled;
+		// The same bundling for too-wide first-class functions (lambda values,
+		// flet/labels clauses, nested defuns): their callers pack a variadic
+		// callee's rest list already, so no call site is rewritten.
+		List<LispVal> lambdaBundled = WasmArityBundler.bundleLambdas(program);
+		boolean bundlesWideLambdas = lambdaBundled != program;
+		program = lambdaBundled;
 		// A CALL SITE wider than the fixed block is a different question from a too-wide
 		// DEFUN: the arguments of a keyword lambda list go through verbatim for the
 		// callee's own dispatcher to parse, so a seven-parameter function is funcalled
@@ -3899,7 +3905,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// or no catcher (outside EH mode behind a handler landing pad) the guard traps
 		// instead, as a dispatcher's no-match arm does there -- a wrong count is never
 		// a silent bind (WasmRuntimeBuilder.buildArityChkBody).
-		this.emitsArityChk = usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns;
+		this.emitsArityChk = usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns
+				|| bundlesWideLambdas;
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
@@ -5344,6 +5351,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				.writer(lambdaWriter)
 				.bodyStream(lambdaBody)
 				.build();
+			// A bundled lambda's count check names this body for the report.
+			lambdaCtx.enclosingLambdaFuncId = lambda.funcId();
 
 			// Slot 0 = env (closure environment)
 			lambdaCtx.closureEnvSlot = 0;
@@ -11121,6 +11130,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> boundSpecials = Set.of();
 
 		int closureEnvSlot = -1;
+
+		/**
+		 * The funcId of the lambda body Pass 2c is emitting, or -1 anywhere else. A
+		 * bundled lambda's count check ({@code WasmArityBundler.CHECK}) names it for the
+		 * shared wrong-count report, so a body-declared report
+		 * ({@code DeclaredArityReport}) keeps its words; a defun's check names the defun
+		 * instead. Set per lambda body, never inherited: each Pass 2c body gets its own
+		 * context, and no check form compiles outside those two.
+		 */
+		int enclosingLambdaFuncId = -1;
 
 		List<LambdaInfo> lambdaDecls;
 

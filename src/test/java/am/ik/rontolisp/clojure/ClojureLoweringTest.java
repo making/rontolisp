@@ -2107,10 +2107,12 @@ class ClojureLoweringTest {
 		// A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
 		// (java.util.HashMap/new) is the empty map, and a one-argument construction
 		// the map itself (nil the oracle's NullPointerException), where the host is
-		// not (wasm), never a java:new (which wasm refuses). Two arguments, and a
-		// tagged construction naming the host overload, keep the host construction,
-		// like any other class; where the host is every spelling keeps java:new,
-		// whose mutable object the host tests pin.
+		// not (wasm), never a java:new (which wasm refuses). A two-argument
+		// construction of two number datums is the empty map too
+		// (aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot);
+		// a tagged construction naming the host overload keeps the host
+		// construction, like any other class; where the host is every spelling keeps
+		// java:new, whose mutable object the host tests pin.
 		assertThat(wasmLowered("(java.util.HashMap.)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
 		assertThat(wasmLowered("(new java.util.HashMap)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
 		assertThat(wasmLowered("(java.util.HashMap/new)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
@@ -2118,7 +2120,6 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION");
 		assertThat(wasmLowered("(java.util.HashMap. nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
 			.doesNotContain("JAVA:");
-		assertThat(wasmLowered("(java.util.HashMap. 16 0.5)")).contains("JAVA:NEW").contains("java.util.HashMap");
 		assertThat(wasmLowered("(^[int] java.util.HashMap/new 64)")).contains("JAVA:NEW").contains("java.util.HashMap");
 		assertThat(lowered("(java.util.HashMap.)")).contains("JAVA:NEW").contains("java.util.HashMap");
 		assertThat(lowered("(java.util.HashMap. {:a 1})")).contains("JAVA:NEW").contains("java.util.HashMap");
@@ -2127,6 +2128,60 @@ class ClojureLoweringTest {
 				+ " (println (.get (new java.util.HashMap {:a 1}) :a))"
 				+ " (println (let [m (java.util.HashMap.)] (.size m)))";
 		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aTwoArgumentHashMapConstructionOfTwoNumbersIsTheEmptyMapWhereTheHostIsNot() {
+		// (java.util.HashMap. capacity loadFactor) of two number datums is the empty
+		// map where the host is not (wasm), never a java:new (which wasm refuses):
+		// malli's fast-registry builds (HashMap. 1024 0.25) at load. Any other pair,
+		// and a tagged construction naming the host overload, keep the host
+		// construction, like any other class; where the host is every spelling keeps
+		// java:new, whose mutable object the host tests pin.
+		assertThat(wasmLowered("(java.util.HashMap. 1024 0.25)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new java.util.HashMap 16 0.5)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.HashMap. \"a\" \"b\")")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(wasmLowered("(let [c 16] (java.util.HashMap. c 0.5))")).contains("JAVA:NEW")
+			.contains("java.util.HashMap");
+		assertThat(wasmLowered("(^[int float] java.util.HashMap/new 64 0.5)")).contains("JAVA:NEW")
+			.contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap. 1024 0.25)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		// where the host is not, no java: operator is left for the portable shape
+		assertThat(wasmLowered("(println (.size (java.util.HashMap. 16 0.5)))")).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot() {
+		// (System/getProperty k) of a literal key is nil and (System/getProperty k
+		// dflt) its default where the host is not (wasm) -- no properties exist
+		// there -- never a java:static (which wasm refuses): malli.registry reads
+		// its mode and type this way at load. Nil is the oracle's
+		// NullPointerException; a computed key stays the host call. Where the host
+		// is every spelling keeps java:static.
+		assertThat(wasmLowered("(System/getProperty \"a\")")).doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println (System/getProperty \"a\" \"d\"))")).contains("\"d\"")
+			.doesNotContain("JAVA:STATIC");
+		assertThat(wasmLowered("(System/getProperty nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
+			.contains("key can't be null")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(let [k \"a\"] (System/getProperty k))")).contains("JAVA:STATIC");
+		assertThat(lowered("(System/getProperty \"a\")")).contains("JAVA:STATIC");
+		assertThat(lowered("(System/getProperty \"a\" \"d\")")).contains("JAVA:STATIC");
+	}
+
+	@Test
+	void putAllOnAMapStoresIntoItsTableWhereTheHostIsNot() {
+		// (.putAll m s) on a value of unknown class stores s's entries into m's table
+		// where the host is not (wasm) -- malli's fast-registry fills its HashMap this
+		// way at load -- answering nil; a record or a sorted map takes the oracle's
+		// message-less UnsupportedOperationException, anything else its
+		// no-such-method refusal. Where the host is the call keeps java:call.
+		assertThat(wasmLowered("(defn f [m s] (.putAll m s))")).contains("RONTOLISP::%CLOJURE-HASH-MAP-PUT-ALL")
+			.contains("RONTOLISP::%CLOJURE-THROW")
+			.contains("java.lang.UnsupportedOperationException")
+			.contains("No matching method putAll");
+		assertThat(lowered("(defn f [m s] (.putAll m s))")).contains("JAVA:CALL")
+			.doesNotContain("RONTOLISP::%CLOJURE-HASH-MAP-PUT-ALL");
 	}
 
 	@Test

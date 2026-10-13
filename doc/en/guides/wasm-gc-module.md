@@ -50,7 +50,9 @@ Two behavioral notes on the wasm-GC value model:
   arguments as one `&rest` list and check their count itself — so wide
   library signatures compile unchanged, and the function is an ordinary
   value: `#'name`, `funcall`, `apply` and `eval` all reach it, and a wrong
-  argument count signals the interpreter's `program-error`. A `lambda` or
+  argument count signals the interpreter's `program-error`. A `lambda`,
+  `flet`/`labels` local, or nested `defun` past the limit is rewritten the
+  same way, so its `funcall`, `apply` and local callers reach it too. A
   variadic function past the limit still errors — bundle those arguments
   into a list yourself. The rest list of a variadic function counts as one
   parameter, so a `&rest` function may declare at most nine required

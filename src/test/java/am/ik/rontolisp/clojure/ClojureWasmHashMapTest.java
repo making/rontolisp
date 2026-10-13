@@ -17,9 +17,12 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * The {@code java.util.HashMap} construction on both WASM backends: where the host is not
  * the construction is the map itself ({@code .kb/clojure-frontend.md}, "HashMap
  * construction"), so {@code .get} reads it and {@code .put} on it throws the oracle's
- * {@code UnsupportedOperationException} with no message -- where the host is the same
- * construction stays the mutable object (the shared spec yaml pins only the lines both
- * agree on, and {@link ClojureInteropTest} the mutation).
+ * {@code UnsupportedOperationException} with no message; a two-argument construction of
+ * two numbers is the empty map too, and {@code .putAll} stores into the table, so malli's
+ * load-time registry builds there, while {@code System/getProperty} of a literal key
+ * answers like a host without the property -- where the host is the same constructions
+ * stay the mutable objects (the shared spec yaml pins only the lines both agree on, and
+ * {@link ClojureInteropTest} the mutation).
  */
 class ClojureWasmHashMapTest {
 
@@ -28,12 +31,12 @@ class ClojureWasmHashMapTest {
 
 	@Test
 	void aHashMapConstructionReadsAndRefusesWritesOnPreview1() throws Exception {
-		assertThat(run(false)).isEqualTo("1\n2\n:uoe\n:rte\nnil\n0 true\n:npe\n");
+		assertThat(run(false)).isEqualTo("1\n2\n:uoe\n:rte\nnil\n0 true\n:npe\n1 2 2\nnil\nnil d\n");
 	}
 
 	@Test
 	void aHashMapConstructionReadsAndRefusesWritesOnTheComponent() throws Exception {
-		assertThat(run(true)).isEqualTo("1\n2\n:uoe\n:rte\nnil\n0 true\n:npe\n");
+		assertThat(run(true)).isEqualTo("1\n2\n:uoe\n:rte\nnil\n0 true\n:npe\n1 2 2\nnil\nnil d\n");
 	}
 
 	private static String run(boolean component) throws Exception {
@@ -44,7 +47,11 @@ class ClojureWasmHashMapTest {
 				+ " (println (try (.put m :b 2) (catch RuntimeException e :rte)))"
 				+ " (println (ex-message (try (.put m :b 2) (catch UnsupportedOperationException e e)))))"
 				+ "(let [m (java.util.HashMap.)]" + " (println (.size m) (.isEmpty m)))"
-				+ "(println (try (java.util.HashMap. nil) (catch NullPointerException e :npe)))";
+				+ "(println (try (java.util.HashMap. nil) (catch NullPointerException e :npe)))"
+				+ "(let [h (doto (java.util.HashMap. 1024 0.25) (.putAll {:a 1 \"s\" 2}))]"
+				+ " (println (.get h :a) (.get h \"s\") (.size h)))" + "(println (.putAll (java.util.HashMap.) {:a 1}))"
+				+ "(println (System/getProperty \"no.such.property\")"
+				+ " (System/getProperty \"no.such.property\" \"d\"))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)

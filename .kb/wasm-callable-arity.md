@@ -35,6 +35,16 @@ dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
   undercut: `WasmLispCompiler`'s static check); optionals past it ride the rest list, so a
   lambda list never needs the bundler ([lambda-lists.md](lambda-lists.md), "Optional
   arguments travel as parameters").
+- LAMBDA >10 plain params (a value, a `flet`/`labels` clause, a non-top-level `defun`,
+  which Pass 2 lowers to a closure): rewritten like a defun (`WasmArityBundler.bundleLambdas`,
+  2026-10-13, f83 -- dynaload's 11-20-arity `IFn` invokes are reify method lambdas of this
+  shape). Callers already pack a variadic callee's rest list, so no call site is rewritten;
+  a `lambda` in call position stays inlined (it never becomes a function). A body-declared
+  report (`DeclaredArityReport`, what a Clojure `fn` lowers to) stays at the rewritten head
+  and the check names the enclosing lambda through the context, so the refusal keeps its
+  words. A direct call a nested defun or a local takes becomes a `funcall` only in Pass 2,
+  past the ceiling pre-scan, so the scan counts those by name (a head spelling a nested
+  definition or a local, unless a top-level defun of the name stays direct).
 
 ## Traps
 - `MAX_CALLABLE_ARITY` is an index ORIGIN, never raised: the extra tier is APPENDED, at
@@ -51,14 +61,21 @@ dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
   ([eval-runtime.md](eval-runtime.md)), which builds the spread dispatcher's BODY only when it
   sees `apply`. The injected designator is a VARIABLE, caught by its computed-designator arm.
 - The ceiling must be known before Pass 2 (`userFuncBase()`-relative indices) -- hence the AST
-  pre-scan; a `funcall` synthesized DURING Pass 2 is invisible to it.
+  pre-scan; a `funcall` synthesized DURING Pass 2 out of nothing is invisible to it. One a
+  lowering turns a VISIBLE direct call into (a nested defun's, a `flet`/`labels` local's) is
+  counted by name instead (`collectValueNames`).
 - `WasmAsyncEmit.freshCtx` also builds the SYNCHRONOUS top level, so it must carry the ceiling;
   it inherits every `Ctx.Builder` field since 2026-10-04 (before, a field-by-field copy).
 
 ## Tests
 - `WasmLispCompilerIntegrationTest`: `compileFuncallWiderThanTheCallableLimitGoesThroughApply`,
   `compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame` (the `freshCtx` pin),
-  `compileMapcarOverMoreListsThanTheFixedDispatcherBlockWorks`
-- `WasmLispCompilerTest.aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher`
-- ci-spec `fill-and-over-arity-funcall`, `eval-inline-operators-check-their-argument-count`
+  `compileMapcarOverMoreListsThanTheFixedDispatcherBlockWorks`,
+  `compileLambdaPastTheCallableLimitBundlesLikeAWideDefun`
+- `WasmLispCompilerTest.aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher`,
+  `aLambdaPastTheCallableLimitCompilesWhileAVariadicOnePastItStillRefuses`
+- ci-spec `fill-and-over-arity-funcall`, `lambdas-past-ten-parameters-bundle-like-wide-defuns`,
+  `eval-inline-operators-check-their-argument-count`
   (the rest-bundled defun through `eval` and `#'`); `ChipzE2eTest`.
+- clojure-spec `a-fn-past-ten-parameters-answers-through-every-call-shape`,
+  `a-reify-invoke-past-ten-parameters-answers` (dynaload's shape).

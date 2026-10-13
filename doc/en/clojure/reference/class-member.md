@@ -10,7 +10,10 @@ host class has one, else the static field read (so `(Integer/MAX_VALUE)` and
 when the host class has one, else answers a member-as-value function dispatching
 per arity over the static call, so `(every? Character/isWhitespace s)` runs; a
 variadic-only member is refused. A static call or member value whose overloads
-all answer a boolean answers `true`/`false`. The class resolves dotted,
+all answer a boolean answers `true`/`false`. `(System/getProperty k)` of a literal
+key is nil and `(System/getProperty k dflt)` its default on the wasm backends, where
+no properties exist (nil is the oracle's `NullPointerException`); a computed key stays
+the host call. The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
 string answers it. A class object prints its name (`java.lang.String`), and `str`
@@ -34,6 +37,7 @@ argument count is refused when the program is read.
 (println KeyEvent/VK_LEFT) ; 37
 (println (every? Character/isWhitespace "   ")) ; true
 (println (> (System/currentTimeMillis) 0)) ; true
+(println (System/getProperty "no.such.property" "dflt")) ; dflt
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
 (println String (str String)) ; java.lang.String class java.lang.String
