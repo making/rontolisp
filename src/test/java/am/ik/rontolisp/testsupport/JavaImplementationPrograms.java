@@ -566,7 +566,10 @@ public final class JavaImplementationPrograms {
 	 * it before an interface it implements none of ({@code StringBuilder.append(Object)},
 	 * not {@code append(CharSequence)}), a varargs {@code Object} array and a sequence's
 	 * elements too. At any other call the conversion is refused, naming
-	 * {@code java:handle}, which makes an object Java hands back as any value.
+	 * {@code java:handle}, which makes an object Java hands back as any value. The
+	 * refusal is a plain error -- not the error calling the member -- at a resolved, a
+	 * dispatched and a run-time site alike, for an argument itself and for one nested in
+	 * a sequence it converts element-wise.
 	 */
 	public static final String FUNCTION_OBJECT = """
 			(defun row (thunk)
@@ -580,6 +583,15 @@ public final class JavaImplementationPrograms {
 			(defun compare-method ()
 			  (java:call (class-named "java.util.Comparator") "getMethod" "compare" (class-named "java.lang.Object")
 			             (class-named "java.lang.Object")))
+			(defun add-to (l x) (java:call l "add" x))
+			(defun append-to (sb x)
+			  (declare (type (java:object "java.lang.StringBuilder") sb))
+			  (java:call sb "append" x))
+			(defun refusedp (thunk)
+			  (handler-case (funcall thunk)
+			    (error (e)
+			      (prefixp "java: a function where java.lang.Object is expected needs a java:handle, got "
+			               (princ-to-string e)))))
 			(row (lambda ()
 			       (let ((l (java:new "java.util.ArrayList")) (s (java:new "java.util.HashSet")) (f (lambda () 1)))
 			         (java:call l "add" f :functional :java-false)
@@ -622,13 +634,24 @@ public final class JavaImplementationPrograms {
 			                            (princ-to-string e))))
 			               (java:call l "add" (java:handle f nil nil))
 			               (eq f (java:call l "get" 0))))))
+			(row (lambda ()
+			       (let ((l (java:new "java.util.ArrayList"))
+			             (v (make-array 1)))
+			         (setf (aref v 0) (lambda () 1))
+			         (list (refusedp (lambda () (add-to l (lambda () 1))))
+			               (refusedp (lambda () (add-to l (list (lambda () 1)))))
+			               (refusedp (lambda () (java:call l "add" (list (lambda () 1)))))
+			               (refusedp (lambda () (java:call l "add" v)))
+			               (refusedp (lambda () (append-to (java:new "java.lang.StringBuilder")
+			                                             (list (lambda () 1)))))))))
 			""";
 
 	/** What {@link #FUNCTION_OBJECT} prints. */
 	public static final String FUNCTION_OBJECT_OUTPUT = """
 			(T T 0 T T T T T T)
 			(NIL 7 -1 1 (NIL NIL (1 2) (2 1) (1 2)))
-			(T T T T)""";
+			(T T T T)
+			(T T T T T)""";
 
 	/**
 	 * A {@code java:handle} of a function given, in place of the text, the markers of a

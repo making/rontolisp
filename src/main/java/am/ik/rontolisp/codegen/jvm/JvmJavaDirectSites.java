@@ -1353,6 +1353,28 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
+	 * {@code throw new RuntimeException(prefix + _lispToString(local))}, the throwable
+	 * recorded with {@code _jsig} first, so the call's handler ({@code _jfail}) throws it
+	 * on unchanged instead of the error calling the member -- as the interpreter's
+	 * checked conversion throws the function-object refusal past its own wrapping, and as
+	 * a resolved site's own refusal does before its handler
+	 * ({@code emitFunctionObjectRefusals}, which only sees an argument itself, never one
+	 * nested in a sequence).
+	 */
+	private void throwSignalled(MethodCode a, String prefix, int slot) {
+		a.new_(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.ldc(str(prefix));
+		a.aload(slot);
+		a.invokestatic(this.lispToString);
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.dup();
+		a.invokestatic(signalHelper());
+		a.athrow();
+	}
+
+	/**
 	 * One site's method: the receiver checks, each argument's kind dispatch and
 	 * conversion -- at a dispatched site, each argument's check, the choice of the
 	 * overload and one arm per overload -- the call, the value's conversion back, and the
@@ -2996,6 +3018,9 @@ final class JvmJavaDirectSites {
 					// unchecked conversion makes it: proxies are exact, never narrowing.
 					// Any
 					// other target refuses, as the interpreter's checked conversion does.
+					// The function-object refusal is signalled, so the call's handler
+					// throws it on unchanged instead of the error calling the member
+					// (a coercion failure still wraps, as the interpreter wraps it).
 					if (!target.isInterface() && !JavaOverloads.OBJECT.equals(name)) {
 						throwCheckedCCE(JavaImplementation.FUNCTION_CLASS, checkedCastName(name));
 						return false;
@@ -3005,7 +3030,7 @@ final class JvmJavaDirectSites {
 							: this.markers.functional() ? implementations().functionalFactory(target, this.markers)
 									: implementations().proxyFactory(target, this.markers);
 					if (factory == null) {
-						throwDescribing(a, JavaImplementation.FUNCTION_OBJECT_REFUSAL, slot);
+						throwSignalled(a, JavaImplementation.FUNCTION_OBJECT_REFUSAL, slot);
 						return false;
 					}
 					a.loadConstant(1);
