@@ -851,6 +851,17 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theDefinedInterfaceFamilyIsMadeByTheStoreOfItsRow() {
+		// a program-defined interface's row makes its family, which has no arm
+		// tests of its own: instance? and a .method call read the row's entries
+		// directly, so only the store marks the program
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-defined-interface-row tag '(\"user.PBR\") (list))"),
+					ClojureArms.Family.DEFINED_INTERFACE)
+			.builds()).isTrue();
+	}
+
+	@Test
 	void theTypedKeyFamilyIsMadeByTheStoreOfAnIHashEqOrAnObjectRow() {
 		// a structural key's typed arms fold to the forms before typed keys unless a
 		// type may have a hash of its own: either store makes one

@@ -12,7 +12,11 @@
 `remove-method` は既定の書き方に戻し、`get-method` はメソッドを返します（なければ
 `print-method` 自身）。
 
-逸脱: メソッドを持てるのはプログラム自身の record と deftype だけです。`:type` キーワード、
+`:type` キーワードのメソッドは、そのキーワードをメタデータに持つ（`(:type (meta x))`）
+すべての値を書きます。record や deftype のタグのメソッドより先に使われます。oracle は
+`print-method` を `(:type (meta x))` で先にディスパッチするからです。
+
+逸脱: メソッドを持てるのはプログラム自身の record・deftype・`:type` キーワードだけです。
 ホストや `clojure.lang` のクラス、`Object`、nil のメソッドは名前で拒否し、`print-method` の
 `methods` と `prefer-method` も同様です。値そのものの `str` は、oracle がその `toString` を
 返すところで、メソッドが書く内容を返します。

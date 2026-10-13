@@ -585,10 +585,18 @@ final class ClojureStateLowering {
 	 * {@code set-validator!} of a macro's var, as the lowering's own worker: the var's
 	 * site reads no value (a macro has none -- deref of it signals), so the macro's
 	 * present expander travels as the value the validator checks. Only a literal
-	 * {@code #'name} below its definition takes this path; a computed one still reads the
-	 * signaling site, like deref.
+	 * {@code #'name} below its definition takes this path; a computed one reads the
+	 * expander the note behind its {@code defmacro} registered, through the plain worker.
 	 */
 	static final LispSymbol SET_VALIDATOR_MACRO = new LispSymbol("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
+
+	/**
+	 * The note a {@code defmacro} site carries behind its table entry: the macro's
+	 * present expander registered under its var key, so a computed {@code set-validator!}
+	 * of its var checks the expander without touching the var's signaling site. A
+	 * statement the strip drops where the program names no watch verb.
+	 */
+	static final LispSymbol NOTE_MACRO_EXPANDER = new LispSymbol("RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER");
 
 	/**
 	 * {@code set-validator!} of a literal macro var below its definition, or null for any

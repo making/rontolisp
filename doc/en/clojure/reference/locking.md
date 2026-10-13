@@ -9,6 +9,10 @@ spelling. Both wasm backends are single-threaded, so there the body runs as is. 
 lock throws `NullPointerException` before the body. A `recur` in the body is refused,
 like one inside a `try`.
 
+`(monitor-enter x)` / `(monitor-exit x)` are the two halves of `locking`, holding and
+releasing the same per-value mutex and answering nil. On the wasm backends the object
+evaluates and nil answers. A `nil` object is the same `NullPointerException`.
+
 Deviation: the lock table keeps every value it was handed for the program's lifetime,
 and the `NullPointerException` message names the local `locklocal` where Clojure names
 a generated one.

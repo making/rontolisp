@@ -34,8 +34,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
   a CL surface; `clojure.pprint/cl-format` writes them as Clojure).
-  [print-method](reference/print-method.md) takes a program's own records and deftypes
-  only: a method for a `:type` keyword or a class is refused by name, `methods` and
+  [print-method](reference/print-method.md) takes a program's own records, deftypes and
+  `:type` keywords only: a method for a class is refused by name, `methods` and
   `prefer-method` of it are too, and `get-method` of a type without one answers
   `print-method` itself where the oracle's answers its default method.
 - A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a
@@ -397,6 +397,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without hashing; a map, set or sequential type is bucketed by its contents rather than its
   `hasheq` ([map keys](reference/reify.md#map-keys-and-set-members)). `sort` and `distinct`
   take a type implementing `Seqable` alone through its seq, where the oracle refuses both.
+- A program-defined interface (`definterface`) joins the same rows under its own
+  binary name, which `instance?` tests and a `.method` call dispatches on
+  ([reify](reference/reify.md#host-interfaces)). Deviations: the name's value is the
+  binary-name string (the oracle's class object), so `resolve` answers its var and
+  `str` spells the name bare; redefining the interface replaces it, and instances
+  made before the redefinition still satisfy it, where the oracle's are instances of
+  the old class only; a wrong-count call on a `reify` names `java.lang.Object` (a
+  reify's class is no host class here), and the abstract refusal of a method the body
+  leaves out names the method and the interface but no receiver class.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
@@ -488,8 +497,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Invalid reference state`, but later calls reach the refused definition (the oracle
   keeps the old one). A refused `defmacro` redefinition still serves its new expander
   (the call sites below it expanded with it while lowering and the table holds it),
-  where the oracle keeps the old root and drops the macro; `set-validator!` of a
-  computed macro var reads the var's site, which signals like `deref`.
+  where the oracle keeps the old root and drops the macro.
 - `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
   ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
   atom).
@@ -600,7 +608,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   class over it, such as `reitit.Trie`) cannot link here, and every call on it refuses
   with `Cannot link class C: missing class M`, naming the missing class -- catchable
   by `(catch Exception e ...)` on the interpreter and the JVM alike (on wasm every
-  `java:` call is a call-time error). There is no `clojure.lang` bridge, and none is
+  `java:` call is a call-time error). A class whose static initializer needs the
+  missing class (a static field of its type, as in `sci.impl.FISupport`) refuses the
+  same way: its `ExceptionInInitializerError` carries the missing class, so
+  construction, calls and static-field reads answer the same refusal, while a
+  genuinely broken initializer propagates as it did. There is no `clojure.lang` bridge, and none is
   planned: no value here is an `IPersistentMap`, so dependency code taking one could
   not read it anyway. Libraries that need one also ship a portable path (reitit's
   `clojure-trie-compiler` answers the oracle's lines), and the reader takes a

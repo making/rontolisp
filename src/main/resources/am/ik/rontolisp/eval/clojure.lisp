@@ -298,8 +298,9 @@
                   (write-char #\Space stream))))))
     nil))
 
-;; print-method: the methods a program defines for its records and deftypes,
-;; (defmethod print-method R [x writer] ...), kept under the type's tag. The
+;; print-method: the methods a program defines for its records and deftypes, and
+;; for :type keywords ((defmethod print-method :my/type [x writer] ...)), kept
+;; under the type's tag (the keyword itself for one). The
 ;; printer's %clojure-print-method-p, an arm of the print-method family whose
 ;; producer is the store (clojure/ClojureArms), hands a value of such a type to
 ;; its method, the stream as the writer, at any depth and from every printing
@@ -326,14 +327,22 @@
       #'rontolisp::%clojure-print-method-v))
 
 (defun rontolisp::%clojure-print-method-p (x readable stream)
-  "Write X through its type's print-method when it is a record or deftype with
-   one, READABLE the side the printer is on, and answer T; NIL otherwise.
-   print-dup never applies one (the oracle's is its own multimethod), so under
+  "Write X through its print-method when it has one, READABLE the side the
+   printer is on, and answer T; NIL otherwise. The oracle dispatches on
+   (:type (meta x)) first, so a method for a :type keyword prints every value
+   carrying it ahead of the record-or-deftype tag's own; print-dup never
+   applies one (the oracle's is its own multimethod), so under
    %clojure-print-dup-quiet there is none."
   (let ((method
-         (if (and (null rontolisp::%clojure-print-dup-quiet) (consp x)
-                  (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
-             (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
+         (if (null rontolisp::%clojure-print-dup-quiet)
+             (or (let ((tag (rontolisp::%clojure-type-tag x)))
+                   (if (rontolisp::%clojure-keyword-p tag)
+                       (gethash tag rontolisp::%clojure-print-methods)
+                       nil))
+                 (if (and (consp x)
+                          (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
+                     (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
+                     nil))
              nil)))
     (if method
         (progn
@@ -4708,8 +4717,7 @@
 ;; that stops early steps with %clojure-seq-rest.
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
-;; no chunking (every element realizes singly), no parallel realization, infinite
-;; range stays refused.
+;; no chunking (every element realizes singly), no parallel realization.
 
 (defun rontolisp::%clojure-lazy-p (x)
   "Whether X is the (:C%LAZY cell) wrapper lazy-seq and friends build."
@@ -5322,6 +5330,16 @@
   "X, (f X), (f (f X)) ... as a lazy seq of the real function F."
   (rontolisp::%clojure-make-lazy
    (lambda () (cons x (rontolisp::%clojure-iterate f (funcall f x))))))
+
+(defun rontolisp::%clojure-range ()
+  "The infinite seq of the integers from 0, the oracle's (range) without an
+   end: one wrapper per element, like iterate's."
+  (rontolisp::%clojure-range-from 0))
+
+(defun rontolisp::%clojure-range-from (n)
+  "N, (1+ N) ... as a lazy seq."
+  (rontolisp::%clojure-make-lazy
+   (lambda () (cons n (rontolisp::%clojure-range-from (+ n 1))))))
 
 (defun rontolisp::%clojure-index-needle (x)
   "What String.indexOf and lastIndexOf search for: an int its character (the
@@ -14083,21 +14101,50 @@
         t)
       nil))
 
+(defvar rontolisp::%clojure-macro-expanders
+  (make-hash-table :test 'equal)
+  "The present expander of each program macro: an equal table from
+   \"ns/name\" to it, written by the note a defmacro site carries (a
+   WATCH-family statement a program naming no watch verb sheds), read by
+   %clojure-set-validator.")
+
+(defun rontolisp::%clojure-note-macro-expander (name expander)
+  "Register EXPANDER as the present expander of the macro NAME (\"ns/name\"):
+   what a computed set-validator! of its var checks, since the var's site
+   reads no value. Answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+    (setf (gethash name rontolisp::%clojure-macro-expanders) expander))
+  nil)
+
+(defun rontolisp::%clojure-macro-expander-of (ref)
+  "The present expander of the macro whose var is REF, nil for any other
+   reference: what a computed set-validator! checks without touching the
+   var's signaling site."
+  (if (rontolisp::%clojure-var-p ref)
+      (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+        (values
+         (gethash (car (cdr ref)) rontolisp::%clojure-macro-expanders)))))
+
 (defun rontolisp::%clojure-set-validator (ref f)
   "set-validator!: F (nil to remove) as REF's validator, once REF's value
-   passes it; answers nil."
+   passes it; answers nil. A macro's var reads no value, so one the program
+   defined checks its present expander, like the literal macro path."
   (let ((cell (rontolisp::%clojure-watchable-cell ref "set-validator!"))
         (f (if (rontolisp::%clojure-truthy f) f nil)))
     (if cell
         (progn
           (rontolisp::%clojure-stm-validate (aref cell 0) f)
           (setf (aref cell 2) f))
-        (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
-          (rontolisp::%clojure-stm-validate (rontolisp::%clojure-var-get ref) f)
-          (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-            (if f
-                (setf (gethash ref rontolisp::%clojure-var-validators) f)
-                (remhash ref rontolisp::%clojure-var-validators)))))
+        (let ((macro (rontolisp::%clojure-macro-expander-of ref)))
+          (if macro
+              (rontolisp::%clojure-set-validator-macro ref f macro)
+              (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
+                (rontolisp::%clojure-stm-validate
+                 (rontolisp::%clojure-var-get ref) f)
+                (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+                  (if f
+                      (setf (gethash ref rontolisp::%clojure-var-validators) f)
+                      (remhash ref rontolisp::%clojure-var-validators)))))))
     nil))
 
 (defun rontolisp::%clojure-set-validator-v (&rest args)
@@ -15883,6 +15930,12 @@
 (defun rontolisp::%clojure-marker-row (tag names methods)
   "Stores a row of an interface no core verb reads (Serializable,
    IEditableCollection, the transients)."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-defined-interface-row (tag names methods)
+  "Stores the row of an interface a definterface defines, under its binary
+   name: instance? tests the name and an instance call dispatches on the
+   row's method."
   (rontolisp::%clojure-interface-store tag names methods))
 
 ;; The tests: whether X's type implements the interface.
@@ -17779,6 +17832,36 @@
                           (rontolisp::%clojure-str-of held "null" nil)))))
       (setf (gethash (rontolisp::%clojure-store-key (car p) table) table)
             (car (cdr p))))))
+
+(defun rontolisp::%clojure-create-with-check (arr)
+  "PersistentArrayMap/createWithCheck of the flat object array ARR: the map of
+   its alternating keys and values, a key = to an earlier one the oracle's
+   Duplicate key -- every key at an even index is checked, even a dangling
+   last one, which itself is dropped like the oracle drops it; nil the
+   oracle's NullPointerException, anything but an array its ClassCastException."
+  (cond ((null arr)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot read the array length because the array is null"))
+        ((or (not (arrayp arr)) (stringp arr) (rontolisp::%clojure-bytes-p arr))
+         (rontolisp::%clojure-class-cast-exception
+          "PersistentArrayMap/createWithCheck takes an Object array"))
+        (t
+         (let ((table (make-hash-table :test 'equal))
+               (miss (list nil))
+               (n (array-dimension arr 0))
+               (i 0))
+           (do ()
+               ((>= i n) table)
+             (let* ((k (aref arr i))
+                    (held (rontolisp::%clojure-table-key k table)))
+               (if (not (eq (gethash held table miss) miss))
+                   (rontolisp::%clojure-illegal-argument-exception
+                    (concatenate 'string "Duplicate key: "
+                                 (rontolisp::%clojure-str-of held "null" nil))))
+               (if (< (+ i 1) n)
+                   (setf (gethash (rontolisp::%clojure-store-key k table) table)
+                         (aref arr (+ i 1)))))
+             (setq i (+ i 2)))))))
 
 (defun rontolisp::%clojure-rd-set (rd)
   "A set literal's members up to }, as the set wrapper (%clojure-rd-set-of)."
@@ -25138,6 +25221,18 @@
     (if (rontolisp::%clojure-bytes-p x)
         (rontolisp::%clojure-string-of-bytes x more)
         (rontolisp::%clojure-host-string-new x more))))
+
+(defun rontolisp::%clojure-char-vector-p (x)
+  "Whether X is a char array: a vector of characters, which a String
+   construction reads on every backend (a string, also a vector, takes the
+   host's copy constructor instead)."
+  (and (vectorp x) (not (stringp x)) (every #'characterp x)))
+
+(defun rontolisp::%clojure-string-of-chars (x &rest more)
+  "(String. x more...) of a char array X: the string of its characters, or of
+   the range MORE names (an offset and a count), like the oracle's String."
+  (let ((s (coerce x 'string)))
+    (if (null more) s (subseq s (car more) (+ (car more) (car (cdr more)))))))
 
 ;; (String. x more...) of an X that is no byte array: the host's constructor. A
 ;; host arm: where the host is not (wasm) it refuses by name

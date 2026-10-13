@@ -19,8 +19,8 @@ import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Control forms of the Clojure lowering: {@code case}, {@code condp}, {@code while} and
- * {@code locking}.
+ * Control forms of the Clojure lowering: {@code case}, {@code condp}, {@code while},
+ * {@code locking} and the {@code monitor-enter}/{@code monitor-exit} halves.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -258,6 +258,15 @@ final class ClojureControlLowering {
 	static LispVal condpOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3,
 				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/condp");
+		if (isInstancePred(ctx, items.get(1))) {
+			// (condp instance? expr ...) has no function value to bind: each clause
+			// tests (instance? test expr), the class evaluated like the oracle's
+			LispVal value = ctx.lower(items.get(2));
+			LispSymbol expr = ctx.freshTemp();
+			LispVal body = condpInstanceClauses(ctx, expr, items.subList(3, items.size()));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET*"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(expr, value)), body);
+		}
 		LispVal predForm = ctx.lower(items.get(1));
 		LispSymbol pred = ctx.freshTemp();
 		LispVal value = ctx.lower(items.get(2));
@@ -266,6 +275,54 @@ final class ClojureControlLowering {
 		LispVal body = condpClauses(ctx, realPred, pred, expr, items.subList(3, items.size()));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(pred, predForm), ClojureLowerUtil.list(expr, value)), body);
+	}
+
+	/**
+	 * Whether the {@code condp} predicate datum is the core {@code instance?}, which has
+	 * no function value: spelled bare or qualified, and shadowed by no local or program
+	 * var, like the oracle's evaluated class position.
+	 */
+	private static boolean isInstancePred(ClojureLowering ctx, LispVal datum) {
+		if (!(datum instanceof LispSymbol name)
+				|| (!name.name().equals("instance?") && !name.name().equals("clojure.core/instance?"))) {
+			return false;
+		}
+		if (ctx.isLocal(name.name()) || ctx.resolveVar(name.name()) != null) {
+			// a local or a program var shadows the core name: an ordinary call
+			return false;
+		}
+		// a name (:refer-clojure ...) excludes is no core call either
+		return ClojureNamespaceLowering.coreAllowed(ctx, name.name());
+	}
+
+	/**
+	 * The clauses of a {@code (condp instance? expr ...)}: each clause's test applied as
+	 * {@code (instance? test expr)}, split like the oracle's.
+	 */
+	private static LispVal condpInstanceClauses(ClojureLowering ctx, LispSymbol expr, List<LispVal> args) {
+		int width = args.size() >= 2 && ClojureLowerUtil.isSymbolNamed(args.get(1), ":>>") ? 3 : 2;
+		int n = Math.min(width, args.size());
+		if (n == 0) {
+			return noMatchingClause(ctx, expr);
+		}
+		if (n == 1) {
+			return ctx.lowerTailSlot(args.get(0));
+		}
+		LispVal applied = ClojureDispatchLowering.instanceApplied(ctx, args.get(0), expr);
+		if (n == 2) {
+			LispVal then = ctx.lowerTailSlot(args.get(1));
+			LispVal rest = condpInstanceClauses(ctx, expr, args.subList(n, args.size()));
+			return ctx.ifFalsey(applied, then, rest);
+		}
+		LispSymbol answer = ctx.freshTemp();
+		LispVal fnForm = ctx.lower(args.get(2));
+		LispSymbol fn = ctx.freshTemp();
+		LispVal call = ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(fn, fnForm)), ctx.callFun(fnForm, fn, List.of(answer)));
+		LispVal rest = condpInstanceClauses(ctx, expr, args.subList(n, args.size()));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(answer, applied)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), ctx.isFalsey(answer), rest, call));
 	}
 
 	private static LispVal condpClauses(ClojureLowering ctx, boolean realPred, LispSymbol pred, LispSymbol expr,
@@ -332,6 +389,38 @@ final class ClojureControlLowering {
 		LispVal body = ClojureStateLowering.barrierBody(ctx, items, 2);
 		LispVal held = ctx.hostTarget ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP:WITH-MUTEX"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(MONITOR, temp)), body) : body;
+		LispVal nullCheck = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), temp),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+						LispString.literal("Cannot enter synchronized block because \"locklocal\" is null")));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(temp, lockee)), nullCheck, held);
+	}
+
+	/**
+	 * {@code (monitor-enter x)} / {@code (monitor-exit x)}: the two halves of
+	 * {@code locking}, which dynaload's {@code locking2} spells out (its {@code :default}
+	 * branch). Where threads exist the same reentrant mutex {@code locking} holds is
+	 * acquired or released, answering nil like the oracle's void; on wasm,
+	 * single-threaded by construction, the object evaluates and nil answers. {@code nil}
+	 * is the oracle's {@code NullPointerException}, like there.
+	 */
+	static LispVal monitorEnterOf(ClojureLowering ctx, List<LispVal> items) {
+		return monitorOf(ctx, items, "monitor-enter", "RONTOLISP:MUTEX-ACQUIRE");
+	}
+
+	static LispVal monitorExitOf(ClojureLowering ctx, List<LispVal> items) {
+		return monitorOf(ctx, items, "monitor-exit", "RONTOLISP:MUTEX-RELEASE");
+	}
+
+	private static LispVal monitorOf(ClojureLowering ctx, List<LispVal> items, String name, String primitive) {
+		ClojureLowerUtil.isTrue(items.size() == 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/" + name);
+		LispVal lockee = ctx.lower(items.get(1));
+		LispSymbol temp = ctx.freshTemp();
+		LispVal held = ctx.hostTarget ? ClojureLowerUtil.list(ClojureLowerUtil.sym("PROGN"),
+				ClojureLowerUtil.list(new LispSymbol(primitive), ClojureLowerUtil.list(MONITOR, temp)),
+				ClojureLowering.NIL_CONST) : ClojureLowering.NIL_CONST;
 		LispVal nullCheck = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), temp),
 				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,

@@ -117,7 +117,12 @@ final class ClojureMacroLowering {
 	 * its body and template name, the template's qualified symbols included (the dispatch
 	 * gate reads a spelled defun name as a call it may resolve). A call above the
 	 * definition names the missing expander instead of an unknown name, unless the name
-	 * is a {@code clojure.core} one, whose core meaning holds there.
+	 * is a {@code clojure.core} one, whose core meaning holds there. Behind the table
+	 * entry the site notes its present expander under its var key
+	 * ({@link ClojureStateLowering#NOTE_MACRO_EXPANDER}), so a computed
+	 * {@code set-validator!} of its var checks the expander without touching the var's
+	 * signaling site -- a statement the strip drops where the program names no watch
+	 * verb.
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
@@ -206,6 +211,10 @@ final class ClojureMacroLowering {
 					new LispInteger(ctx.macroExpanders.size())));
 			ctx.macroExpanders.add(expander);
 		}
+		// the present expander noted under the var key, ahead of the notify
+		// statement: a refused redefinition still serves its new expander, so the
+		// note carries it too
+		forms.add(ClojureLowerUtil.list(ClojureStateLowering.NOTE_MACRO_EXPANDER, LispString.literal(key), expander));
 		forms.addAll(metaStore);
 		LispVal redefined = macroNotify(ctx, key, expander, superseded);
 		if (redefined != null) {
@@ -348,7 +357,8 @@ final class ClojureMacroLowering {
 					}
 				}
 			}
-			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY" -> {
+			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY",
+					"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER" -> {
 				// a watch/validator arm behind a definition: nothing to hand over
 			}
 			default -> {
@@ -538,7 +548,9 @@ final class ClojureMacroLowering {
 	 * One macro call expanded: the argument datums travel quoted (the same values a
 	 * quoted form answers at run time, so the two expanders agree) into one application
 	 * of the expander, the answer decodes back to a datum and lowers like any other form
-	 * -- which expands the macros the expansion calls, one depth deeper.
+	 * -- which expands the macros the expansion calls, one depth deeper. Reader metadata
+	 * travels with the arguments ({@link ClojureLowering#quoteForMacro}), like the
+	 * oracle's forms carry it: a mutable deftype flag below a selecting macro survives.
 	 */
 	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items,
 			boolean bindsEnv) {
@@ -551,7 +563,7 @@ final class ClojureMacroLowering {
 		}
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			quoted.add(ctx.quote(items.get(i)));
+			quoted.add(ctx.quoteForMacro(items.get(i)));
 		}
 		// the body reads the load's specials where the call expands, like the oracle's
 		// macroexpansion inside the load, and a body reading &env or &form the call's
@@ -562,7 +574,8 @@ final class ClojureMacroLowering {
 				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))));
 		if (bindsEnv) {
 			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), envValue(ctx)));
-			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quote(ClojureLowerUtil.list(items))));
+			bindings.add(
+					ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteForMacro(ClojureLowerUtil.list(items))));
 		}
 		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
@@ -584,7 +597,10 @@ final class ClojureMacroLowering {
 		}
 		ctx.macroDepth++;
 		try {
-			return ctx.lower(expansion);
+			// the expansion stands where the call stood, so it inherits the call's
+			// tail position: a recur it holds recurs (data.json's codepoint-case
+			// around a loop's recur), one in an argument slot still refuses
+			return ctx.lowerTailSlot(expansion);
 		}
 		finally {
 			ctx.macroDepth--;

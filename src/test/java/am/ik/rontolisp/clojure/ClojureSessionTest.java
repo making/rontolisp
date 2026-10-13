@@ -370,6 +370,20 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferSetValidatorOfAComputedMacroVarAnswersNil() {
+		// a computed set-validator! of a macro var checks the present expander the
+		// earlier buffer's defmacro noted, since the var's site reads no value; a
+		// validator it fails throws, nil removes it
+		assertThat(runSession("(defmacro smc [] :a)",
+				"(println (set-validator! (if true #'smc #'smc) (fn [v] (fn? v))))",
+				"(println ((fn [v] (set-validator! v (fn [v] (fn? v)))) #'smc))",
+				"(println (apply set-validator! [#'smc (fn [v] (fn? v))]))", "(println (fn? (get-validator #'smc)))",
+				"(println (set-validator! (if true #'smc #'smc) nil))", "(println (get-validator #'smc))",
+				"(println (try (set-validator! (if true #'smc #'smc) (fn [v] false)) (catch IllegalStateException e (ex-message e))))"))
+			.isEqualTo("nil\nnil\nnil\ntrue\nnil\nnil\nInvalid reference state\n");
+	}
+
+	@Test
 	void aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded() {
 		// and a later buffer's deftest: the calls below it run the newest
 		// definition while the watches see the replaced test function

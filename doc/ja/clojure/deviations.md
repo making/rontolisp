@@ -35,10 +35,10 @@
  `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
  サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
- [print-method](reference/print-method.md) はプログラム自身の record と deftype だけが対象です。
- `:type` キーワードやクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
- 同様です。メソッドのない型の `get-method` は `print-method` 自身を返します（オラクルは
- 既定のメソッドを返します）。
+ [print-method](reference/print-method.md) はプログラム自身の record・deftype・`:type`
+ キーワードだけが対象です。クラスのメソッドは名前で拒否し、その `methods` と
+ `prefer-method` も同様です。メソッドのない型の `get-method` は `print-method` 自身を
+ 返します（オラクルは既定のメソッドを返します）。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
  （`defn` なら `my.app/f`、外にない場合は名前空間）に、`fn` 自身の名前か `fn` を続けます
@@ -379,6 +379,15 @@
   使わずに比べます。マップ・集合・シーケンシャルの型の値は `hasheq` ではなく中身で振り分けられます
   （[マップのキー](reference/reify.md#map-keys-and-set-members)）。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
+- プログラムが定義したインタフェース（`definterface`）は、同じ行に自前のバイナリ名で
+  加わります。`instance?` はその名前を調べ、`.method` 呼び出しはその行のメソッドに
+  ディスパッチします（[reify](reference/reify.md#host-interfaces)）。相違点: 名前の値は
+  バイナリ名の文字列です（オラクルはクラスオブジェクト）。そのため `resolve` は var を
+  答え、`str` は名前を bare に綴ります。インタフェースを再定義すると置き換わり、
+  再定義より前のインスタンスもそれを満たします（オラクルでは古いクラスのインスタンス
+  だけです）。`reify` への個数の違う呼び出しは `java.lang.Object` を名指します
+  （reify のクラスはここのホストクラスではありません）。本体が書かなかったメソッドの
+  abstract 拒否はメソッドとインタフェースを名指しますが、レシーバーのクラスは名指しません。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
   `Cat` の木を返し、その fold は半分ずつの fold を結合します。
@@ -466,8 +475,7 @@
   `Invalid reference state` を報告しますが、以降の呼び出しは拒否された定義に届きます
   （オラクルは古い定義を保ちます）。拒否された `defmacro` の再定義は新しいエクスパンダがそのまま使われます
   （下にある呼び出しは lowering 時にそれで展開され、テーブルもそれを保持します）。
-  オラクルは古いルートを保ちマクロを外します。計算で求めたマクロ var への `set-validator!` は var のサイトを読み、
-  これは `deref` 同様にシグナルします。
+  オラクルは古いルートを保ちマクロを外します。
 - `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` は、atom と
   セルを共有する ref と volatile も受け付けます（オラクルは atom 以外を拒否します）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの
@@ -585,7 +593,11 @@
   ライブラリ自身のクラス、たとえば `reitit.Trie`）はここではリンクできず、そのクラスへの
   すべての呼び出しは不足クラスを名指しする `Cannot link class C: missing class M`
   で拒否されます。インタプリタでも JVM でも `(catch Exception e ...)` で捕捉できます
-  （wasm ではあらゆる `java:` 呼び出しが実行時エラーです）。`clojure.lang`
+  （wasm ではあらゆる `java:` 呼び出しが実行時エラーです）。不足クラスを静的
+  イニシャライザが必要とするクラス（その型の静的フィールドを持つもの、たとえば
+  `sci.impl.FISupport`）も同じ拒否になります。その `ExceptionInInitializerError`
+  が不足クラスを運ぶため、構築・呼び出し・静的フィールド読みのいずれも同じ拒否を
+  答え、本当に壊れたイニシャライザは従来どおり伝播します。`clojure.lang`
   のブリッジはなく、予定もありません。ここの値は `IPersistentMap`
   ではないため、それを受け取る依存のコードはどちらにせよ読めないからです。そのような
   クラスを必要とするライブラリはポータブルな経路も提供しており（reitit の

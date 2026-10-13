@@ -214,6 +214,15 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(loop [i 0] ((fn [j] j) (recur (inc i))))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can only recur from tail position");
+		// a macro expansion in tail position keeps it: a recur the expansion holds
+		// recurs (data.json's codepoint-case around a loop's recur), while one in an
+		// argument slot of the expansion still refuses, like the oracle's
+		assertThat(loweredWithMacros("(defmacro mwhen [c x] `(if ~c :d (recur ~x))) (loop [i 0] (mwhen (zero? i) i))"))
+			.contains("LABELS");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mno [x] `(+ ~x 1)) (loop [i 0] (mno (recur i)))", null,
+				ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
 		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
@@ -399,6 +408,91 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void localsAndProgramDefinitionsShadowLoweringRowsButNotSpecials() {
+		// a parameter named fn is called, never defined through (malli's
+		// -proxy-schema destructures fn); the same for when and ->
+		assertThat(lowered("((fn [fn] (fn 1 2)) (fn [a] a))")).contains("%CLOJURE-CALL");
+		assertThat(lowered("(let [wh 1] (wh 2))")).contains("%CLOJURE-CALL");
+		// the special forms never shadow: if stays the special under a local if
+		assertThat(lowered("(let [if 1] (if 1 2 3))")).contains("(IF ").contains("|c%if|");
+		assertThat(lowered("(let [do 5] (do do))")).contains("|c%do|");
+		// a defn of a core name replaces the core verb from there on, like the
+		// oracle's form-by-form compile (malli's defn deref)
+		assertThat(lowered("(defn shd-deref ([x] [x])) (shd-deref 1)")).contains("(|c%shd-deref| 1)");
+		assertThat(lowered("(defn deref ([x] [x])) (deref 1)")).contains("(|c%deref| 1)")
+			.doesNotContain("%CLOJURE-DEREF");
+		// above the definition the core meaning stays: the pre-scan leaves a
+		// shadowing definition invisible until lowered
+		assertThat(lowered("(deref 1) (defn deref [x] [x])")).contains("%CLOJURE-DEREF");
+		// a non-core definition keeps the pre-scan's forward visibility
+		assertThat(lowered("(defn shd-f [] (shd-g)) (defn shd-g [] 1)")).contains("(|c%shd-g|)");
+	}
+
+	@Test
+	void recurThroughThreadingFormsKeepsTailPosition() {
+		// the threading rewrites lower in the incoming tail position, so a recur
+		// in a step's tail is its target's, like the oracle's macroexpansions
+		assertThat(lowered("((fn [n] (cond-> n true (do (recur (inc n))))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (-> n (do (recur (inc n))))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (as-> n v (if (zero? v) :z (recur (dec v))))) 1)")).contains("LABELS");
+		// outside tail position the refusal stays, like the oracle's
+		assertThatThrownBy(() -> Clojure.read("(defn f [x] (list (-> x (recur x))))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		assertThatThrownBy(() -> Clojure.read("(defn f [x] [(cond-> x true (do (recur x)))])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+	}
+
+	@Test
+	void macroArgumentsKeepTheirReaderMetadata() {
+		// argument datums travel to the expander with their reader metadata, so
+		// a ^:volatile-mutable deftype field below a selecting macro keeps its
+		// flag and set! compiles (dynaload's if-bb, which malli loads through)
+		assertThat(loweredWithMacros(
+				"(defmacro mm-pick [then else] (if (System/getProperty \"no.such.property\") then else))"
+						+ " (mm-pick :bb (deftype MmT [f ^:volatile-mutable c]"
+						+ " clojure.lang.IDeref (deref [_] (set! c 1))))"))
+			.contains("SETF");
+		// a quoted shape decodes back with it, so meta reads through the call
+		assertThat(loweredWithMacros("(defmacro mm-id [x] x) (println (meta (mm-id ^:foo [1 2])))"))
+			.contains("%CLOJURE-PUT-META");
+	}
+
+	@Test
+	void readerMetadataAttachesToFnReifyAndLiterals() {
+		// a fn or reify form takes the metadata on the value it builds (malli's
+		// ^{:type ::schema} (reify ...)), like a vector, map or set literal
+		assertThat(lowered("^:foo (fn [x] x)")).contains("%CLOJURE-PUT-META");
+		assertThat(lowered("^{:type :rm-t} (reify Object (toString [_] \"r\"))")).contains("%CLOJURE-PUT-META");
+		// anywhere else it parses and drops: a symbol, a call, a quoted shape
+		assertThat(lowered("(let [x 1] ^:foo x)")).doesNotContain("PUT-META");
+		assertThat(lowered("^:foo (inc 1)")).doesNotContain("PUT-META");
+	}
+
+	@Test
+	void booleanPredicatesAnswerTheSameLambdasAsValues() {
+		// boolean?, true? and false? lower inline in calls and answer the same
+		// lambdas as values (what a function position takes), so a map holding
+		// one calls it (malli's {:pred boolean?})
+		assertThat(lowered("(:pred {:pred boolean?})")).contains("LAMBDA").contains("(EQ ");
+		assertThat(lowered("(:pred {:pred true?})")).contains("LAMBDA").contains("(EQ ");
+		assertThat(lowered("(:pred {:pred false?})")).contains("LAMBDA").contains("(EQ ");
+	}
+
+	@Test
+	void printMethodOfATypeKeywordStoresUnderTheKeyword() {
+		// a :type keyword dispatch stores under the keyword itself, where the
+		// printer's :type-first lookup finds it (malli's ::into-schema); any
+		// other non-type dispatch value stays refused by name
+		assertThat(lowered("(defmethod print-method :kw [x w] x)"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW (LIST :C%KEYWORD \"kw\")");
+		assertThatThrownBy(() -> Clojure.read("(defmethod print-method Object [x w] x)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("print-method of |Object| is not supported yet");
+	}
+
+	@Test
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
 			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) " + arity("user/fn") + " (+ |c%a| |c%b|)) 1 2)");
@@ -476,8 +570,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(drop 2 [1 2])")).contains("%CLOJURE-DROP");
 		assertThat(lowered("(range 3)")).contains("LABELS").contains("REVERSE");
 		assertThat(lowered("(range 1 5 2)")).contains("LABELS");
-		assertThatThrownBy(() -> Clojure.read("(range)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("infinite range is not supported: range needs an end");
+		// an end-less range is the infinite lazy integers from zero, on every
+		// backend, as a value too
+		assertThat(lowered("(range)")).contains("(RONTOLISP::%CLOJURE-RANGE)");
+		assertThat(lowered("((fn [r] (r)) range)")).contains("RONTOLISP::%CLOJURE-RANGE");
+		assertThatThrownBy(() -> Clojure.read("(range 1 2 3 4)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("range takes an end, or a start, an end and an optional step");
 		assertThatThrownBy(() -> Clojure.read("(take)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("take takes a count and a collection");
 		assertThatThrownBy(() -> Clojure.read("(drop)", null)).isInstanceOf(LispReadException.class)
@@ -1115,8 +1213,6 @@ class ClojureLoweringTest {
 			.hasMessageContaining("protocols are not supported yet: gen-class");
 		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: gen-interface");
-		assertThatThrownBy(() -> Clojure.read("(definterface I (m [x]))", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("protocols are not supported yet: definterface");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a defprotocol method signature is its name over one parameter vector per arity");
@@ -1318,6 +1414,51 @@ class ClojureLoweringTest {
 				{ "(defrecord R [a] clojure.lang.Counted (count [_] 1))",
 						"Duplicate method name \"count\" in defrecord" },
 				{ "(defrecord R [a] Object (equals [_ o] true))", "Duplicate method name \"equals\" in defrecord" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
+	}
+
+	@Test
+	void aDefinterfaceDefinesAnInterfaceADefTypeImplementsThroughItsOwnRow() {
+		// definterface binds the binary name and stores no row of its own; a deftype
+		// or reify body naming it stores its methods in the defined-interface row
+		// under that name, which instance? tests and an instance call dispatches on
+		String defined = lowered("(definterface PBR (^int readChar []) (^long readChars [b s l]))");
+		assertThat(defined).contains("\"user.PBR\"").doesNotContain("-ROW (");
+		String type = lowered("(definterface PBR (^int readChar [])) (deftype R [n] PBR (readChar [_] n))");
+		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"R\")"
+				+ " '(\"user.PBR\") (LIST \"readChar\" (LAMBDA (");
+		String reified = lowered("(definterface PBR (^int readChar [])) (def r (reify PBR (readChar [_] 1)))");
+		assertThat(reified).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("'(\"user.PBR\") (LIST \"readChar\"");
+		// instance? of the interface reads the row under its binary name, and a call
+		// of its method the row's entry
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (instance? PBR x))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (.m x 1))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		// a program defining none lowers a .m call and an instance? without the rows
+		assertThat(lowered("(defn f [x] (.m x 1))")).doesNotContain("DEFINED-INTERFACE-ROW");
+		for (String[] refused : new String[][] { { "(definterface)", "definterface takes a name and methods" },
+				{ "(definterface PBR (1 2))", "definterface takes method signatures, not (1 2)" },
+				{ "(definterface PBR foo)", "definterface takes method signatures, not |foo|" },
+				{ "(definterface PBR (m [x] [y]))",
+						"definterface takes method signatures, not (|m| (|%vector| |x|) (|%vector| |y|))" },
+				{ "(definterface PBR (m [1 y]))", "definterface method m takes parameter names, not 1" },
+				{ "(definterface PBR (^int q []) (^int q []))",
+						"Duplicate method name \"q\" with signature \"()I\" in class file user.PBR" },
+				{ "(definterface PBR (q [x]) (q [x]))",
+						"Duplicate method name \"q\" with signature \"(Ljava.lang.Object;)Ljava.lang.Object;\""
+								+ " in class file user.PBR" },
+				{ "(gen-class)", "protocols are not supported yet: gen-class" },
+				{ "(gen-interface)", "protocols are not supported yet: gen-interface" },
+				{ "(definterface PBR (m [x])) (extend-protocol PBR nil (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(definterface PBR (m [x])) (extend-type String PBR (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(deftype R [] PBR (m [_] 1))", "Unable to resolve symbol: PBR in this context" } }) {
 			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
 				.isInstanceOf(LispReadException.class)
 				.hasMessageContaining(refused[1]);
@@ -2365,6 +2506,14 @@ class ClojureLoweringTest {
 		assertThat(loweredWithMacros("(defmacro mu-sv [] 1) (set-validator! #'mu-sv pos?)"))
 			.contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
 		assertThat(loweredWithMacros("(set-validator! #'mu-sv pos?) (defmacro mu-sv [] 1)"))
+			.doesNotContain("SET-VALIDATOR-MACRO");
+		// every defmacro site notes its present expander under its var key, so a
+		// computed set-validator! of its var checks the expander without touching
+		// the signaling site; a computed target reads the plain worker
+		assertThat(loweredWithMacros("(defmacro mu-nt [] 1)"))
+			.contains("(RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER \"user/mu-nt\"");
+		assertThat(loweredWithMacros("(defmacro mu-cv [] 1) ((fn [v] (set-validator! v pos?)) #'mu-cv)"))
+			.contains("(RONTOLISP::%CLOJURE-SET-VALIDATOR ")
 			.doesNotContain("SET-VALIDATOR-MACRO");
 	}
 

@@ -402,10 +402,12 @@ class ClojureLibraryTest {
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		String own = program(plain, source);
 		assertThat(own).contains("(DEFUN |c%wmt/wt%def2| NIL").doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(own).doesNotContain("%CLOJURE-NOTE-MACRO-EXPANDER");
 		String watched = source + " (add-watch #'wm :k (fn [k v o n] nil))";
 		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
 		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wm\"")
-			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"");
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"")
+			.contains("(RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER \"wmt/wm\"");
 	}
 
 	@Test
@@ -725,6 +727,38 @@ class ClojureLibraryTest {
 			.contains("(DEFUN RONTOLISP::%CLOJURE-INT-ARRAY ")
 			.doesNotContain("%CLOJURE-PARSE-DOUBLE")
 			.doesNotContain("%CLOJURE-DOUBLE-ARRAY");
+	}
+
+	@Test
+	void aProgramNamingNoRangeOrCreateWithCheckPrunesThemAway() {
+		// the infinite range and the duplicate-checking map build are plain
+		// workers, not family arms: the compile-path pruner drops them when no
+		// kept form reaches them, so a program naming neither carries neither,
+		// and one naming one carries only its own
+		List<String> names = List.of("RONTOLISP::%CLOJURE-RANGE", "RONTOLISP::%CLOJURE-RANGE-FROM",
+				"RONTOLISP::%CLOJURE-CREATE-WITH-CHECK");
+		List<LispVal> plain = Clojure.read("(prn (range 3) (into-array [1]))", null);
+		assertThat(LibraryDefunPruner.prune(ClojureLibrary.process(plain, false))
+			.stream()
+			.map(LispVal::print)
+			.flatMap(text -> names.stream().filter(text::contains))
+			.toList()).isEmpty();
+		String kept = LibraryDefunPruner
+			.prune(ClojureLibrary.process(Clojure.read("(prn (take 1 (range)) (map range [[1]]))", null), false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(kept).contains("(DEFUN RONTOLISP::%CLOJURE-RANGE ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-RANGE-FROM ")
+			.doesNotContain("%CLOJURE-CREATE-WITH-CHECK");
+		String checked = LibraryDefunPruner.prune(ClojureLibrary.process(
+				Clojure.read("(prn (clojure.lang.PersistentArrayMap/createWithCheck (object-array [1])))", null),
+				false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(checked).contains("(DEFUN RONTOLISP::%CLOJURE-CREATE-WITH-CHECK ")
+			.doesNotContain("%CLOJURE-RANGE-FROM");
 	}
 
 	@Test

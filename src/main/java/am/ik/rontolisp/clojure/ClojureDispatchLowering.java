@@ -63,6 +63,25 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
+	 * {@code instance?} of a class datum over an already-bound value, as a
+	 * {@code T}-or-false answer: what {@code condp} with an {@code instance?} predicate
+	 * asks per clause. A class spelling tests like one written in place (a bare class
+	 * name stays a spelling: lowering it first would make it a host class object);
+	 * anything else (a local, a computed value) is lowered and tests what {@code class}
+	 * answers, like the oracle's evaluated class.
+	 * @param ctx the lowering
+	 * @param classDatum the class datum
+	 * @param value the bound value
+	 * @return the answer
+	 */
+	static LispVal instanceApplied(ClojureLowering ctx, LispVal classDatum, LispSymbol value) {
+		if (classDatum instanceof LispSymbol name && namesClass(ctx, name.name())) {
+			return instanceAnswer(ctx, name.name(), value, false);
+		}
+		return classValueInstance(ctx, ctx.lower(classDatum), value);
+	}
+
+	/**
 	 * Whether {@code instance?}'s class argument spells a class (or a keyword, which
 	 * {@link #instanceAnswer} refuses) rather than a value: no local or var holds it, and
 	 * it is a type's name or reads like a class.
@@ -71,7 +90,14 @@ final class ClojureDispatchLowering {
 		if (name.startsWith(":")) {
 			return true;
 		}
-		if (ctx.isLocal(name) || ctx.lookupVar(name) != null) {
+		if (ctx.isLocal(name)) {
+			return false;
+		}
+		if (ClojureProtocolLowering.definedInterfaceOf(ctx, name) != null) {
+			// a program-defined interface reads its row, not the var holding its name
+			return true;
+		}
+		if (ctx.lookupVar(name) != null) {
 			return false;
 		}
 		return ctx.typeDefOf(name) != null || ClojureNamespaceLowering.isClasslike(ctx, name);
@@ -123,6 +149,12 @@ final class ClojureDispatchLowering {
 			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
 					ClojureProtocolLowering.typeTagForm(known.tagSpelling())));
+		}
+		ClojureLowering.DefinedInterface defined = ClojureProtocolLowering.definedInterfaceOf(ctx, name);
+		if (defined != null) {
+			// a program-defined interface tests the type's row for its binary name
+			return answer.apply(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), lowered,
+					LispString.literal(defined.binaryName())));
 		}
 		if (name.startsWith(":") || !ClojureNamespaceLowering.isClasslike(ctx, name)) {
 			throw new LispReadException("instance? takes a class name, not " + name);
@@ -1038,8 +1070,8 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * The store of a {@code print-method} a program defines for a record or deftype
-	 * ({@code clojure.lisp}): the print-method family's producer
+	 * The store of a {@code print-method} a program defines for a record, deftype or
+	 * {@code :type} keyword ({@code clojure.lisp}): the print-method family's producer
 	 * ({@link ClojureArms.Family#PRINT_METHOD}).
 	 */
 	static final String PRINT_METHOD_ROW = "RONTOLISP::%CLOJURE-PRINT-METHOD-ROW";
@@ -1061,25 +1093,31 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * The type tag a {@code print-method} dispatch value names: a record or deftype the
-	 * program defines. Any other dispatch value -- a {@code :type} keyword, a host or
-	 * {@code clojure.lang} class, {@code Object}, nil -- is refused by name: the printer
-	 * consults a program's print-methods for its own types only.
+	 * program defines, or a {@code :type} keyword -- the oracle's dispatch reads
+	 * {@code (:type (meta x))} first, so a method for one prints every value carrying it
+	 * (malli's schemas). Any other dispatch value -- a host or {@code clojure.lang}
+	 * class, {@code Object}, nil -- is refused by name: the printer consults a program's
+	 * print-methods for its own types and type keywords only.
 	 */
 	private static LispVal printMethodTag(ClojureLowering ctx, LispVal keyDatum) {
 		ClojureLowering.TypeDef type = keyDatum instanceof LispSymbol s ? ctx.typeDefOf(s.name()) : null;
-		if (type == null) {
-			throw new LispReadException("print-method of " + keyDatum.print()
-					+ " is not supported yet: the printer consults a print-method of a record or deftype only");
+		if (type != null) {
+			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
 		}
-		return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
+		if (keyDatum instanceof LispSymbol s && s.name().startsWith(":")) {
+			return ClojureCollectionLowering
+				.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(ctx, s.name()));
+		}
+		throw new LispReadException("print-method of " + keyDatum.print()
+				+ " is not supported yet: the printer consults a print-method of a record, deftype or :type keyword only");
 	}
 
 	/**
 	 * {@code (defmethod print-method R [x writer] body...)} of a record or deftype
-	 * {@code R}: the method stored under the type's tag, where the printer writes every
-	 * value of the type through it -- {@code pr}, {@code prn}, {@code print},
-	 * {@code println} and their string forms, at any depth ({@code clojure.lisp}
-	 * "print-method").
+	 * {@code R}, or of a {@code :type} keyword: the method stored under the type's tag
+	 * (the keyword itself for one), where the printer writes every value of the type
+	 * through it -- {@code pr}, {@code prn}, {@code print}, {@code println} and their
+	 * string forms, at any depth ({@code clojure.lisp} "print-method").
 	 */
 	private static LispVal printMethodForm(ClojureLowering ctx, List<LispVal> items) {
 		LispVal tag = printMethodTag(ctx, items.get(2));

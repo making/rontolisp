@@ -299,6 +299,168 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The pre-scan half of {@code definterface}: registers the interface (parsed pure, so
+	 * parsing twice is harmless) plus its name, so a use may stand above the definition,
+	 * like {@code defn}. The interface has no host class here; its binary name is only
+	 * the key a {@code deftype} or {@code reify} body stores its methods under.
+	 */
+	static ClojureLowering.DefinedInterface declareInterface(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "definterface takes a name and methods");
+		String name = ClojureLowerUtil.plainName(items.get(1), "definterface");
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ClojureLowering.DefinedInterface def = parseInterface(ctx, name, items);
+		ctx.definedInterfaces.put(key, def);
+		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		return def;
+	}
+
+	/**
+	 * The interface a name resolves to: the current namespace's own, a referred one, or
+	 * one reached through an alias or its namespace's full name; null when it names none.
+	 */
+	static ClojureLowering.@Nullable DefinedInterface definedInterfaceOf(ClojureLowering ctx, String name) {
+		String key = ctx.isLocal(name) ? null : ctx.resolveVar(name);
+		return key == null ? null : ctx.definedInterfaces.get(key);
+	}
+
+	/**
+	 * Parses a {@code definterface} datum without emitting: the binary name and every
+	 * method with its parameter counts, the target included. A signature is the method
+	 * name over one parameter vector, {@code (m [x y])}, each parameter a plain symbol (a
+	 * type hint rides along, read only for the duplicate method's signature); a signature
+	 * without one, {@code (m)}, is a zero-argument method, like the oracle's. A repeated
+	 * signature is the oracle's {@code ClassFormatError}, naming the duplicate with its
+	 * signature.
+	 */
+	static ClojureLowering.DefinedInterface parseInterface(ClojureLowering ctx, String name, List<LispVal> items) {
+		String binary = ctx.currentNs.replace('-', '_') + "." + name;
+		Map<String, Set<Integer>> methods = new LinkedHashMap<>();
+		Set<String> signatures = new HashSet<>();
+		for (int i = 2; i < items.size(); i++) {
+			List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(items.get(i)));
+			if (parts == null || parts.isEmpty() || !(ClojureLowerUtil.stripMeta(parts.get(0)) instanceof LispSymbol)) {
+				throw new LispReadException("definterface takes method signatures, not " + items.get(i).print());
+			}
+			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(parts.get(0))).name();
+			List<LispVal> params;
+			if (parts.size() == 1) {
+				params = List.of();
+			}
+			else if (parts.size() == 2
+					&& ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(parts.get(1)))) {
+				params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(parts.get(1)),
+						"the method " + method + " of");
+			}
+			else {
+				throw new LispReadException("definterface takes method signatures, not " + items.get(i).print());
+			}
+			LispVal given = parts.get(0);
+			List<String> tags = new ArrayList<>();
+			for (LispVal param : params) {
+				if (!(ClojureLowerUtil.stripMeta(param) instanceof LispSymbol)) {
+					throw new LispReadException(
+							"definterface method " + method + " takes parameter names, not " + param.print());
+				}
+				tags.add(hintOf(param));
+			}
+			String signature = "(" + String.join("", tags.stream().map(tag -> descriptorOf(ctx, tag)).toList()) + ")"
+					+ descriptorOf(ctx, hintOf(given));
+			ClojureLowerUtil.isTrue(signatures.add(method + signature), "Duplicate method name \"" + method
+					+ "\" with signature \"" + signature + "\" in class file " + binary);
+			methods.computeIfAbsent(method, ignored -> new LinkedHashSet<>()).add(params.size() + 1);
+		}
+		Map<String, Set<Integer>> frozen = new LinkedHashMap<>();
+		methods.forEach((method, counts) -> frozen.put(method, Set.copyOf(counts)));
+		return new ClojureLowering.DefinedInterface(binary, Map.copyOf(frozen));
+	}
+
+	/**
+	 * The {@code ^...} type hint of a method or parameter datum: the bare symbol, or a
+	 * {@code {:tag ...}} map's tag; null when it carries none. Hints never affect
+	 * dispatch here; only the duplicate method's signature reads them.
+	 */
+	private static @Nullable String hintOf(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			LispVal meta = parts.get(2);
+			if (meta instanceof LispSymbol tag && !tag.name().startsWith(":")) {
+				return tag.name();
+			}
+			List<LispVal> entries = ClojureLowerUtil.items(meta);
+			if (entries != null && !entries.isEmpty() && ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")) {
+				for (int i = 1; i + 1 < entries.size(); i += 2) {
+					if (entries.get(i) instanceof LispSymbol key && key.name().equals(":tag")
+							&& entries.get(i + 1) instanceof LispSymbol tag) {
+						return tag.name();
+					}
+				}
+			}
+			datum = parts.get(1);
+			parts = ClojureLowerUtil.items(datum);
+		}
+		return null;
+	}
+
+	/**
+	 * A hint's JVM descriptor, the oracle's {@code gen-interface} spelling: primitives
+	 * and the array words by letter, a class by its binary name, anything unhinted or
+	 * unresolvable {@code Object}.
+	 */
+	private static String descriptorOf(ClojureLowering ctx, @Nullable String tag) {
+		if (tag == null) {
+			return "Ljava.lang.Object;";
+		}
+		String descriptor = switch (tag) {
+			case "boolean" -> "Z";
+			case "byte" -> "B";
+			case "char" -> "C";
+			case "short" -> "S";
+			case "int" -> "I";
+			case "long" -> "J";
+			case "float" -> "F";
+			case "double" -> "D";
+			case "void" -> "V";
+			case "booleans" -> "[Z";
+			case "bytes" -> "[B";
+			case "chars" -> "[C";
+			case "shorts" -> "[S";
+			case "ints" -> "[I";
+			case "longs" -> "[J";
+			case "floats" -> "[F";
+			case "doubles" -> "[D";
+			case "objects" -> "[Ljava.lang.Object;";
+			default -> null;
+		};
+		if (descriptor != null) {
+			return descriptor;
+		}
+		String binary;
+		try {
+			binary = ClojureNamespaceLowering.resolveClass(ctx, tag);
+		}
+		catch (LispReadException ex) {
+			binary = tag;
+		}
+		return "L" + binary + ";";
+	}
+
+	/**
+	 * {@code (definterface name sig...)}: registers the interface and binds its name to
+	 * the binary name, the value the form answers, like the oracle's class object is a
+	 * value. The name is an ordinary var, so {@code resolve}, redefinition and a later
+	 * session buffer see it; {@code instance?} and the {@code deftype}/{@code reify}
+	 * bodies read the interface itself, not the var.
+	 */
+	static LispVal definterfaceForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "definterface takes a name and methods");
+		ClojureLowering.DefinedInterface def = declareInterface(ctx, items);
+		return ClojureBindingLowering.def(ctx, form,
+				List.of(ClojureLowerUtil.sym("def"), items.get(1), LispString.literal(def.binaryName())));
+	}
+
+	/**
 	 * The protocol a name resolves to: the current namespace's own, a referred one, or
 	 * one reached through an alias or its namespace's full name; null when it names none.
 	 */
@@ -887,6 +1049,18 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The refusal of an extension to a name that is no protocol: a program-defined
+	 * interface is not one, like the oracle's, anything else is unknown.
+	 */
+	private static LispReadException noSuchProtocol(ClojureLowering ctx, String protocol) {
+		ClojureLowering.DefinedInterface declared = definedInterfaceOf(ctx, protocol);
+		if (declared != null) {
+			return new LispReadException("interface " + declared.binaryName() + " is not a protocol");
+		}
+		return new LispReadException("No such protocol: " + protocol);
+	}
+
+	/**
 	 * The implementation groups behind {@code extend-type} (each headed by a known
 	 * protocol name): every method must belong to its protocol, like the oracle's "Can't
 	 * define method not in interfaces". An extension spells several arities as {@code fn}
@@ -910,7 +1084,7 @@ final class ClojureProtocolLowering {
 				protocol = s.name();
 				def = protocolOf(ctx, protocol);
 				if (def == null) {
-					throw new LispReadException("No such protocol: " + protocol);
+					throw noSuchProtocol(ctx, protocol);
 				}
 				methods = new ArrayList<>();
 				continue;
@@ -969,6 +1143,13 @@ final class ClojureProtocolLowering {
 				if (def != null) {
 					protocols.putIfAbsent(s.name(), def);
 					byProtocol.computeIfAbsent(s.name(), ignored -> new ArrayList<>());
+					continue;
+				}
+				ClojureInterfaces.HostInterface defined = ClojureInterfaces.defined(ctx, s.name());
+				if (defined != null) {
+					if (!named.contains(defined)) {
+						named.add(defined);
+					}
 					continue;
 				}
 				ClojureInterfaces.HostInterface one = ClojureInterfaces.resolve(ctx, s.name(), what);
@@ -1597,6 +1778,11 @@ final class ClojureProtocolLowering {
 		if (kind == null) {
 			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
 		}
+		if (kind == null && fqn.equals("clojure.lang.BigInt")) {
+			// 1N reads as the integer 1 here, so an extension to BigInt reads and
+			// writes every integer through the number's row, like Long's
+			kind = "number";
+		}
 		if (kind != null && reachesOtherKinds(ctx, typeName)) {
 			return ClojureCollectionLowering.keywordForm(walkedName(ctx, typeName));
 		}
@@ -1668,7 +1854,8 @@ final class ClojureProtocolLowering {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
-		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))) {
+		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))
+				|| fqn.equals("clojure.lang.BigInt")) {
 			return reachesOtherKinds(ctx, typeName) ? walkedName(ctx, typeName) : null;
 		}
 		if (ClojureIoLowering.EXTENDABLE.contains(fqn)) {
@@ -2033,7 +2220,7 @@ final class ClojureProtocolLowering {
 		String protocol = ((LispSymbol) items.get(1)).name();
 		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
-			throw new LispReadException("No such protocol: " + protocol);
+			throw noSuchProtocol(ctx, protocol);
 		}
 		List<LispVal> rows = new ArrayList<>();
 		int at = 2;
@@ -2113,7 +2300,7 @@ final class ClojureProtocolLowering {
 			String protocol = ((LispSymbol) items.get(p)).name();
 			ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 			if (def == null) {
-				throw new LispReadException("No such protocol: " + protocol);
+				throw noSuchProtocol(ctx, protocol);
 			}
 			defs.add(def);
 		}

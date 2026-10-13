@@ -1244,6 +1244,19 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * An interface a {@code definterface} defines: its binary name
+	 * ({@code my_app.core.Name}: the defining namespace with {@code -} munged to
+	 * {@code _}, then the name verbatim, like the oracle's, which {@code str} of no value
+	 * here spells) and its methods, each to the parameter counts of its signatures, the
+	 * target included. A {@code deftype} or {@code reify} body naming it stores its
+	 * methods in the type's interface row under the binary name, which {@code instance?}
+	 * tests and an instance call dispatches on, like the oracle's class, which no backend
+	 * here generates.
+	 */
+	record DefinedInterface(String binaryName, Map<String, Set<Integer>> methods) {
+	}
+
+	/**
 	 * One entry of {@link TypeDef#inlineMethods}: the protocol's var key and the method
 	 * name.
 	 */
@@ -1269,6 +1282,12 @@ public final class ClojureLowering {
 	 * resolves a class spelling to one.
 	 */
 	final Map<String, TypeDef> types = new HashMap<>();
+
+	/**
+	 * The interfaces defined so far, by the var key their name takes in the defining
+	 * namespace (the whole-file pre-scan fills it first, like the protocols).
+	 */
+	final Map<String, DefinedInterface> definedInterfaces = new HashMap<>();
 
 	/**
 	 * Whether the program uses protocols, records, deftypes or reify: the protocol
@@ -2243,8 +2262,8 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			String key = preDeclare(items.get(1), "def", Kind.VARIABLE, false);
-			if (items.size() == 2) {
+			String key = preDeclareUnlessCoreShadow(items.get(1), "def", Kind.VARIABLE, false);
+			if (key != null && items.size() == 2) {
 				this.unboundCapable.add(key);
 			}
 		}
@@ -2253,20 +2272,20 @@ public final class ClojureLowering {
 			// a ^:dynamic or redefinable defn holds its function in the value cell
 			// (like a def), so even a forward call routes through it and sees a
 			// binding or a with-redefs
-			String key = preDeclare(items.get(1), "defn", Kind.FUNCTION,
+			String key = preDeclareUnlessCoreShadow(items.get(1), "defn", Kind.FUNCTION,
 					ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"));
-			if (ClojureLowerUtil.nameIsDynamic(items.get(1)) || redefinable(key, items.get(1))) {
+			if (key != null && (ClojureLowerUtil.nameIsDynamic(items.get(1)) || redefinable(key, items.get(1)))) {
 				this.globals.put(key, Kind.VARIABLE);
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
-			preDeclare(items.get(1), "defonce", Kind.VARIABLE, false);
+			preDeclareUnlessCoreShadow(items.get(1), "defonce", Kind.VARIABLE, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defstruct")) {
-			preDeclare(items.get(1), "defstruct", Kind.VARIABLE, false);
+			preDeclareUnlessCoreShadow(items.get(1), "defstruct", Kind.VARIABLE, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")) {
-			preDeclare(items.get(1), "defmulti", Kind.FUNCTION, false);
+			preDeclareUnlessCoreShadow(items.get(1), "defmulti", Kind.FUNCTION, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defprotocol")) {
 			ClojureProtocolLowering.declareProtocol(this, items);
@@ -2274,6 +2293,9 @@ public final class ClojureLowering {
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "deftype")) {
 			ClojureProtocolLowering.declareRecordType(this, items);
+		}
+		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "definterface")) {
+			ClojureProtocolLowering.declareInterface(this, items);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
 			// a macro name, so a call above its definition names the missing
@@ -2289,7 +2311,7 @@ public final class ClojureLowering {
 		else if (ClojureTestLowering.isDeftestSpelling(items.get(0))) {
 			// a clojure.test definition is a zero-argument function: (name) runs
 			// the test, like the oracle
-			preDeclare(items.get(1), "deftest", Kind.FUNCTION, false);
+			preDeclareUnlessCoreShadow(items.get(1), "deftest", Kind.FUNCTION, false);
 		}
 		else if (ClojureWasmLowering.isDefimportSpelling(items.get(0))) {
 			// a host function is a function var like a defn's, so a call above its
@@ -2332,6 +2354,23 @@ public final class ClojureLowering {
 		String key = internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum));
 		this.globals.put(key, kind);
 		return key;
+	}
+
+	/**
+	 * {@link #preDeclare} unless the name shadows a core var: a use above the definition
+	 * keeps the core meaning, like the oracle's form-by-form compile (malli's
+	 * {@code (@c k)} in {@code -cached}, above its {@code defn deref}), while a use below
+	 * resolves to the definition once lowered. Null when skipped (an explicit
+	 * {@code declare} still pre-registers, and a {@code defmacro} stays visible through
+	 * {@code pendingCoreMacro}).
+	 * @return the var key, or null when the name shadows a core var
+	 */
+	private @Nullable String preDeclareUnlessCoreShadow(LispVal nameDatum, String what, Kind kind,
+			boolean privateHead) {
+		if (ClojureCoreNames.contains(ClojureLowerUtil.plainName(nameDatum, what))) {
+			return null;
+		}
+		return preDeclare(nameDatum, what, kind, privateHead);
 	}
 
 	/**
@@ -3759,6 +3798,16 @@ public final class ClojureLowering {
 	 */
 	LispVal lowerRow(LispVal form, List<LispVal> items, boolean coreOnly) {
 		LispVal head = items.get(0);
+		if (!coreOnly && head instanceof LispSymbol s && qualifierSlash(s.name()) < 0
+				&& !ClojureMacroLowering.SPECIAL_FORMS.contains(s.name())
+				&& (isLocal(s.name()) || resolveVar(s.name()) != null)) {
+			// a local binding or program definition shadows every lowering row
+			// but the special forms', like the oracle (whose specials never
+			// shadow): a parameter named fn is called, never defined through,
+			// and a defn of deref replaces the core verb from there on (malli's
+			// -proxy-schema and deref)
+			return call(form, items, coreOnly);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "quote")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "quote takes one form");
 			return quote(items.get(1));
@@ -3890,7 +3939,10 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "satisfies?")) {
 			return ClojureProtocolLowering.satisfiesOf(this, items);
 		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "definterface") || ClojureLowerUtil.isSymbolNamed(head, "gen-class")
+		if (ClojureLowerUtil.isSymbolNamed(head, "definterface")) {
+			return ClojureProtocolLowering.definterfaceForms(this, form, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "gen-class")
 				|| ClojureLowerUtil.isSymbolNamed(head, "gen-interface")) {
 			throw new LispReadException("protocols are not supported yet: " + ((LispSymbol) head).name());
 		}
@@ -4150,6 +4202,12 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "locking")) {
 			return ClojureControlLowering.lockingOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "monitor-enter")) {
+			return ClojureControlLowering.monitorEnterOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "monitor-exit")) {
+			return ClojureControlLowering.monitorExitOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-redefs")) {
 			return ClojureVarLowering.withRedefsOf(this, items);
@@ -5425,9 +5483,37 @@ public final class ClojureLowering {
 	}
 
 	LispVal quote(LispVal datum) {
+		return quote(datum, false);
+	}
+
+	/**
+	 * A macro argument datum quoted for the expander: like {@link #quote(LispVal)} but
+	 * reader metadata ({@code (%with-meta form meta)}) travels as a three-element list
+	 * over the quoted form and metadata, so the expansion decodes back with it -- the
+	 * oracle hands a macro its argument forms with metadata, and a mutable deftype field
+	 * below a selecting macro (dynaload's {@code if-bb}) lowers only with its
+	 * {@code ^:volatile-mutable} flag intact.
+	 * @param datum the argument datum
+	 * @return the core form evaluating to the argument value
+	 */
+	LispVal quoteForMacro(LispVal datum) {
+		return quote(datum, true);
+	}
+
+	LispVal quote(LispVal datum, boolean keepMeta) {
+		if (keepMeta) {
+			List<LispVal> parts = ClojureLowerUtil.items(datum);
+			if (parts != null && parts.size() == 3
+					&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+				return ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"),
+						List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+								ClojureLowerUtil.dataSym(ClojureLowerUtil.READER_META)), quote(parts.get(1), true),
+								quote(parts.get(2), true)));
+			}
+		}
 		LispVal bare = ClojureLowerUtil.stripMeta(datum);
 		if (bare != datum) {
-			return quote(bare); // reader metadata on quoted data is dropped
+			return quote(bare, keepMeta); // reader metadata on quoted data is dropped
 		}
 		if (datum instanceof LispSymbol s) {
 			String name = s.name();
@@ -5457,13 +5543,13 @@ public final class ClojureLowering {
 				List<LispVal> out = new ArrayList<>();
 				out.add(ClojureLowerUtil.sym("vector"));
 				for (int i = 1; i < items.size(); i++) {
-					out.add(quote(items.get(i)));
+					out.add(quote(items.get(i), keepMeta));
 				}
 				return ClojureLowerUtil.list(out);
 			}
 			if (!items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-map")
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-set"))) {
-				return quotedCollection(items);
+				return quotedCollection(items, keepMeta);
 			}
 			if (!items.isEmpty() && items.get(0) == ClojureReader.REGEX
 					|| !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%regex")) {
@@ -5482,7 +5568,7 @@ public final class ClojureLowering {
 			List<LispVal> elements = new ArrayList<>();
 			boolean constant = true;
 			for (LispVal item : items) {
-				LispVal element = quote(item);
+				LispVal element = quote(item, keepMeta);
 				elements.add(element);
 				constant &= isQuoteForm(element);
 			}
@@ -5509,10 +5595,10 @@ public final class ClojureLowering {
 	 * {@code '{:a x}} builds a table holding the symbol. Markers never reach the
 	 * per-element path -- they are skipped here, not quoted.
 	 */
-	LispVal quotedCollection(List<LispVal> items) {
+	LispVal quotedCollection(List<LispVal> items, boolean keepMeta) {
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			quoted.add(quotedElement(items.get(i)));
+			quoted.add(quotedElement(items.get(i), keepMeta));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-map")) {
 			return ClojureCollectionLowering.mapBuild(quoted);
@@ -5525,12 +5611,12 @@ public final class ClojureLowering {
 	 * elements are forms, not data -- each element's own quote form (a symbol or a list
 	 * stays data instead of being evaluated); a keyword travels as its construction.
 	 */
-	LispVal quotedElement(LispVal datum) {
+	LispVal quotedElement(LispVal datum, boolean keepMeta) {
 		if (datum instanceof LispSymbol s && s.name().startsWith(":")) {
 			return ClojureCollectionLowering
 				.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(this, s.name()));
 		}
-		return quote(datum);
+		return quote(datum, keepMeta);
 	}
 
 	// errors: try over handler-case and unwind-protect, throw over error

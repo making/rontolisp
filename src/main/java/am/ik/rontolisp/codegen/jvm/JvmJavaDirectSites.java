@@ -79,7 +79,10 @@ import org.jspecify.annotations.Nullable;
  * generated implementations and the bridge's {@code Proxy} call -- is thrown on as it is,
  * anything else as the error calling the member ({@link #finishHelpers}). A
  * {@code NoClassDefFoundError} is answered before that as {@link #UNLINKABLE}: the
- * refusal naming the missing class, like the interpreter's and the bridge's refusals.
+ * refusal naming the missing class, like the interpreter's and the bridge's refusals --
+ * and so is an {@code ExceptionInInitializerError} whose cause chain holds one
+ * ({@link #UNLINKABLE_CAUSE}), a dependency class whose static initializer needs a
+ * missing class.
  */
 final class JvmJavaDirectSites {
 
@@ -279,10 +282,18 @@ final class JvmJavaDirectSites {
 	 * site over a class that cannot link throws, naming the missing class -- the
 	 * interpreter's and the bridge's {@code unlinkable} in words
 	 * ({@code eval.JavaInterop}, {@code JavaBridgeTemplate}). A site's
-	 * {@code memberFailed} handler answers it for a {@code NoClassDefFoundError}, and
-	 * {@link #FAIL} for anything else.
+	 * {@code memberFailed} handler answers it for a {@code NoClassDefFoundError}, and for
+	 * an {@code ExceptionInInitializerError} holding one (see {@link #UNLINKABLE_CAUSE}),
+	 * and {@link #FAIL} for anything else.
 	 */
 	static final String UNLINKABLE = "_junlinkable";
+
+	/**
+	 * {@code _junlinkableCause(Throwable)NoClassDefFoundError}: the missing class an
+	 * {@code ExceptionInInitializerError}'s cause chain holds, or null -- the
+	 * interpreter's and the bridge's {@code unlinkableCause} over the same chain.
+	 */
+	static final String UNLINKABLE_CAUSE = "_junlinkableCause";
 
 	/**
 	 * {@code _jsig(Throwable)Throwable}: records a throwable leaving a function called
@@ -297,6 +308,8 @@ final class JvmJavaDirectSites {
 	private static final String FAIL_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)Ljava/lang/Throwable;";
 
 	private static final String UNLINKABLE_DESC = "(Ljava/lang/String;Ljava/lang/NoClassDefFoundError;)Ljava/lang/RuntimeException;";
+
+	private static final String UNLINKABLE_CAUSE_DESC = "(Ljava/lang/Throwable;)Ljava/lang/NoClassDefFoundError;";
 
 	private static final String SIGNAL_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
 
@@ -433,6 +446,10 @@ final class JvmJavaDirectSites {
 
 	// _junlinkable, named when first asked for and built by finishHelpers() with them.
 	private @Nullable MethodRefEntry unlinkable;
+
+	// _junlinkableCause, named beside _junlinkable and built by finishHelpers() with
+	// it.
+	private @Nullable MethodRefEntry unlinkableCause;
 
 	private @Nullable MethodRefEntry signal;
 
@@ -724,6 +741,15 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
+	private MethodRefEntry unlinkableCause() {
+		MethodRefEntry ref = this.unlinkableCause;
+		if (ref == null) {
+			ref = unfinishedHelper(UNLINKABLE_CAUSE, UNLINKABLE_CAUSE_DESC);
+			this.unlinkableCause = ref;
+		}
+		return ref;
+	}
+
 	private MethodRefEntry unfinishedHelper(String name, String desc) {
 		if (this.finished) {
 			throw new IllegalStateException(name + " asked for after the java: helpers were finished");
@@ -774,6 +800,9 @@ final class JvmJavaDirectSites {
 		}
 		if (this.unlinkable != null) {
 			this.methods.add(buildUnlinkable());
+		}
+		if (this.unlinkableCause != null) {
+			this.methods.add(buildUnlinkableCause());
 		}
 		this.finished = true;
 		return signals;
@@ -990,6 +1019,31 @@ final class JvmJavaDirectSites {
 		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
 		a.areturn();
 		return new Method(this.cp.utf8Entry(UNLINKABLE), this.cp.utf8Entry(UNLINKABLE_DESC), a);
+	}
+
+	// static NoClassDefFoundError _junlinkableCause(Throwable t): the missing class
+	// t's cause chain holds, or null -- the interpreter's and the bridge's
+	// unlinkableCause over the same chain.
+	private Method buildUnlinkableCause() {
+		MethodCode a = new MethodCode();
+		// 0 = the throwable; the chain is walked in place.
+		MethodCode.Label loop = a.newBoundLabel();
+		a.aload(0);
+		a.dup();
+		a.instanceOf(cls("java/lang/NoClassDefFoundError"));
+		MethodCode.Label next = a.newLabel();
+		a.ifeq(next);
+		a.aload(0);
+		a.checkcast(cls("java/lang/NoClassDefFoundError"));
+		a.areturn();
+		a.labelBinding(next);
+		a.invokevirtual(method("java/lang/Throwable", "getCause", "()Ljava/lang/Throwable;"));
+		a.dup();
+		a.astore(0);
+		a.ifnonnull(loop);
+		a.aconst_null();
+		a.areturn();
+		return new Method(this.cp.utf8Entry(UNLINKABLE_CAUSE), this.cp.utf8Entry(UNLINKABLE_CAUSE_DESC), a);
 	}
 
 	/**
@@ -1373,13 +1427,34 @@ final class JvmJavaDirectSites {
 				throwMessage(this.a, "No such class: " + bound.getKey());
 			}
 			// What the member threw: a class that cannot link is the refusal naming the
-			// missing class; anything else goes through _jfail, which passes on what a
-			// function called back from Java raised and wraps the rest.
+			// missing class -- so is a class whose initialization needs one, whose
+			// ExceptionInInitializerError carries the missing class in its cause chain
+			// (_junlinkableCause); anything else goes through _jfail, which passes on
+			// what a function called back from Java raised and wraps the rest.
 			MethodCode.Label memberThrew = this.a.newLabel();
+			MethodCode.Label checkInit = this.a.newLabel();
+			MethodCode.Label hasCause = this.a.newLabel();
 			this.a.labelBinding(memberFailed);
 			this.a.dup();
 			this.a.instanceOf(cls("java/lang/NoClassDefFoundError"));
+			this.a.ifeq(checkInit);
+			this.a.ldc(str(this.type.name()));
+			this.a.swap();
+			this.a.checkcast(cls("java/lang/NoClassDefFoundError"));
+			this.a.invokestatic(unlinkable());
+			this.a.athrow();
+			this.a.labelBinding(checkInit);
+			this.a.dup();
+			this.a.instanceOf(cls("java/lang/ExceptionInInitializerError"));
 			this.a.ifeq(memberThrew);
+			this.a.dup();
+			this.a.invokestatic(unlinkableCause());
+			this.a.dup();
+			this.a.ifnonnull(hasCause);
+			this.a.pop();
+			this.a.goto_(memberThrew);
+			this.a.labelBinding(hasCause);
+			this.a.pop();
 			this.a.ldc(str(this.type.name()));
 			this.a.swap();
 			this.a.checkcast(cls("java/lang/NoClassDefFoundError"));
@@ -1555,10 +1630,13 @@ final class JvmJavaDirectSites {
 			desc.append(')').append(executable.isConstructor() ? "V" : descriptor(executable.returnType()));
 			String internal = internalName(this.type);
 			if (executable.isConstructor()) {
+				// The handler covers the new as well as the init call: making the
+				// object loads and verifies the class, which a missing dependency
+				// fails as NoClassDefFoundError before <init> ever runs.
+				MethodCode.Label start = a.newBoundLabel();
 				a.new_(this.owner);
 				a.dup();
 				loadArguments(params, converted);
-				MethodCode.Label start = a.newBoundLabel();
 				a.invokespecial(method(internal, "<init>", desc.toString()));
 				handle(start, a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 				return slots + 2;

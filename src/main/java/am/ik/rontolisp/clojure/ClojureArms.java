@@ -468,6 +468,15 @@ public final class ClojureArms {
 				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
 
 		/**
+		 * An interface a {@code definterface} defines, which a {@code deftype} or
+		 * {@code reify} body implements: {@code instance?} tests the type's row for the
+		 * interface's binary name and an instance call dispatches on the row's method, so
+		 * no core verb grows an arm for one. Only the store of such a row makes one.
+		 */
+		DEFINED_INTERFACE("defined-interface", Set.of(), Set.of(), Map.of(), Set.of(ClojureInterfaces.DEFINED_ROW),
+				Set.of()),
+
+		/**
 		 * A transient, which {@code persistent!} and the bang verbs edit and
 		 * {@code count}, {@code empty?}, {@code get}, {@code nth}, {@code contains?},
 		 * {@code find}, a call, a keyword's call, {@code counted?}, {@code ifn?},
@@ -507,13 +516,17 @@ public final class ClojureArms {
 		 * {@code def}, {@code defn} or {@code with-redefs} replacing a var's root goes
 		 * through the same validator and watches: the test asks whether the var is
 		 * guarded, the stores validate and notify around the cell's {@code setq}, and the
-		 * statements validate and notify behind a definition keeping its shape.
+		 * statements validate and notify behind a definition keeping its shape. A
+		 * {@code defmacro} site notes its present expander under its var key, so a
+		 * computed {@code set-validator!} of its var checks the expander without touching
+		 * the var's signaling site.
 		 */
 		WATCH("watched-reference", Set.of("RONTOLISP::%CLOJURE-VAR-GUARDED-P"), ClojureStateLowering.WATCH_VIEWS,
 				ClojureStateLowering.WATCH_ALIASES, ClojureStateLowering.WATCH_PRODUCERS, Set.of(), false, Set.of(),
 				Set.of(), Set.of(), Map.of(), Map.of("RONTOLISP::%CLOJURE-VAR-STORE", "SETQ"),
-				Set.of("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY"), null, null,
-				Set.of()),
+				Set.of("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY",
+						"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER"),
+				null, null, Set.of()),
 
 		/**
 		 * A ref tracked for its history: only a {@code ref} made where the program names
@@ -617,14 +630,16 @@ public final class ClojureArms {
 		 * keyword or symbol of one namespace. Only a qualified keyword or symbol makes
 		 * one -- a literal of either ({@link Family#qualifiedIdents}), or one of the
 		 * library functions that build a keyword or symbol from a computed spelling, or
-		 * call one that does (the constructors, {@code find-keyword} and the reader).
+		 * call one that does (the constructors, {@code find-keyword}, {@code intern} and
+		 * {@code loaded-libs} over the symbol constructor, and the reader).
 		 */
 		NAMESPACE_MAP("namespace-map", Set.of("RONTOLISP::%CLOJURE-PRINT-NS-MAP-P"), Set.of(), Map.of(), Set.of(
 				"RONTOLISP::%CLOJURE-KEYWORD-1", "RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-SYMBOL-1",
 				"RONTOLISP::%CLOJURE-SYMBOL-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD",
-				"RONTOLISP::%CLOJURE-FIND-KEYWORD-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD-V", "RONTOLISP::%CLOJURE-READ",
-				"RONTOLISP::%CLOJURE-READ-V", "RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM",
-				"RONTOLISP::%CLOJURE-READ-STRING", "RONTOLISP::%CLOJURE-READ-STRING-V",
+				"RONTOLISP::%CLOJURE-FIND-KEYWORD-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD-V",
+				"RONTOLISP::%CLOJURE-INTERN", "RONTOLISP::%CLOJURE-INTERN-V", "RONTOLISP::%CLOJURE-LOADED-LIBS",
+				"RONTOLISP::%CLOJURE-READ", "RONTOLISP::%CLOJURE-READ-V", "RONTOLISP::%CLOJURE-READ-OPTS",
+				"RONTOLISP::%CLOJURE-READ-FROM", "RONTOLISP::%CLOJURE-READ-STRING", "RONTOLISP::%CLOJURE-READ-STRING-V",
 				"RONTOLISP::%CLOJURE-READ-STRING-OPTS", "RONTOLISP::%CLOJURE-RD-ANON-FN", "RONTOLISP::%CLOJURE-RD-ARG",
 				"RONTOLISP::%CLOJURE-RD-ARG-PARAM", "RONTOLISP::%CLOJURE-RD-ATOM",
 				"RONTOLISP::%CLOJURE-RD-BUILD-RECORD", "RONTOLISP::%CLOJURE-RD-CONDITIONAL",

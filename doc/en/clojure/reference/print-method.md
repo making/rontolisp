@@ -12,8 +12,12 @@ or `binding [*out* writer]` and print. A `pr` inside the method under `print` wr
 `remove-method` brings the default back, `get-method` answers the method (without one,
 `print-method` itself).
 
-Deviations: only a program's own records and deftypes take a method -- one for a `:type`
-keyword, a host or `clojure.lang` class, `Object` or nil is refused by name, and so are
+A method for a `:type` keyword prints every value carrying it in its metadata
+(`(:type (meta x))`), ahead of the record-or-deftype tag's own -- the oracle dispatches
+`print-method` on the `:type` entry first.
+
+Deviations: only a program's own records, deftypes and `:type` keywords take a method --
+one for a host or `clojure.lang` class, `Object` or nil is refused by name, and so are
 `methods` and `prefer-method` of `print-method`; `str` of the value itself answers what the
 method writes where the oracle answers its `toString`.
 
