@@ -16,7 +16,8 @@ See the [Java interop guide](../../guides/java-interop.md).
 ```
 
 `Math.max` is overloaded for `int`/`long`/`float`/`double`; the integer
-arguments select the `int` overload, so the result is the integer `7`.
+arguments select the `long` overload (an integer is a `long`), so the result is
+the integer `7`.
 
 The method name may carry the parameter types, which picks the overload directly:
 `"max(long,long)"`, or `"max(long,_)"` with `_` left to the cost rule. A call is resolved

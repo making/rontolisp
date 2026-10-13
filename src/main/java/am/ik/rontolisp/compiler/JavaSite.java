@@ -37,6 +37,9 @@ import org.jspecify.annotations.Nullable;
  * resolved one
  * @param overloads for a dispatched site, the overloads of the static class the call
  * chooses among when it runs, in {@link JavaOverloads#ranked} order; empty otherwise
+ * @param unchecked whether the arguments convert without the checked casts: a site
+ * resolved from a designator carrying a parameter tag names its member explicitly, so a
+ * value converts however the member takes it (as {@code java:} always did)
  * @param markers the keywords the site ends in ({@link JavaMarkers}): {@code :functional}
  * -- a function argument converted to an interface implements it by its arguments
  * ({@link JavaImplementations#functional}), not as a {@code java:proxy} called with the
@@ -46,8 +49,8 @@ import org.jspecify.annotations.Nullable;
  */
 public record JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
 		@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
-		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads,
-		JavaMarkers markers) {
+		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads, JavaMarkers markers,
+		boolean unchecked) {
 
 	/**
 	 * Copies the arguments and the overloads.
@@ -74,7 +77,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 			@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
 			List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads) {
 		this(operator, staticClass, designator, executable, field, packed, result, arguments, reason, overloads,
-				JavaMarkers.NONE);
+				JavaMarkers.NONE, false);
 	}
 
 	/**
@@ -83,7 +86,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 	 */
 	public JavaSite withMarkers(JavaMarkers ending) {
 		return new JavaSite(this.operator, this.staticClass, this.designator, this.executable, this.field, this.packed,
-				this.result, this.arguments, this.reason, this.overloads, ending);
+				this.result, this.arguments, this.reason, this.overloads, ending, this.unchecked);
 	}
 
 	/**

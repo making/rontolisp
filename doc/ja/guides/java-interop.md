@@ -47,12 +47,12 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 
 | rontolisp | Java (入力) | Java (出力) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (およびそのボックス型)、`BigInteger` | `int`/`long`/.../`BigInteger` → integer |
+| integer | `long`、収まれば `int`、`Long`、または `Long`/`Integer` の上位型 — それ以外には一切渡りません (`double` にも `BigInteger` にもならない) | `int`/`long`/.../`BigInteger` → integer |
 | bignum | `BigInteger` (またはその上位型: `Number`、`Object` など) | `BigInteger` → integer |
-| float | `double`/`float` (およびボックス型) | `double`/`float` → float |
-| string | `String`、長さ 1 なら `char` | `String` → string |
-| character | `char`/`Character` | `Character` → character |
-| `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` (`:java-false` の後では `t`/`\|false\|`) |
+| float | `double` (`Double` の上位型も可)、`double` のオーバーロードがなければ `float` | `double`/`float` → float |
+| string | `String` (またはその上位型) — 長さ 1 でも決して `char` にはならない | `String` → string |
+| character | `char`/`Character` (`Character` の上位型も可) — `int` にはならない (補助文字は整数として変換される) | `Character` → character |
+| `t` / `nil` | `t` は `boolean`/`Boolean`、`nil` は参照が期待される位置のみ (`null`)、プリミティブには決してならない | `boolean` → `t`/`nil` (`:java-false` の後では `t`/`\|false\|`) |
 | 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装。`Object` が期待される箇所では `:functional :java-false` の後で関数そのものであるオブジェクト (引数に限る) | — |
@@ -73,10 +73,10 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-bignum は、`java.math.BigInteger` (または `Number`、`Object` などその上位型) が期待される箇所に `BigInteger` として渡り、それより狭い型には渡りません。`long` にも `double` にもならないので、`double` が必要なら先に `float` で変換してください。fixnum も、それを受け取るプリミティブのオーバーロードがなければ `BigInteger` パラメータに渡ります。逆方向では、`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
+bignum は、`java.math.BigInteger` (または `Number`、`Object` などその上位型) が期待される箇所に `BigInteger` として渡り、それより狭い型には渡りません。`long` にも `double` にもならないので、`double` が必要なら先に `float` で変換してください。fixnum は決して `BigInteger` パラメータには渡りません (`int` や `long` のオーバーロードが受けます)。逆方向では、`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
 
 ```lisp
-;; in: a bignum -> BigInteger; a fixnum -> BigInteger where no primitive fits
+;; in: a bignum -> BigInteger
 (java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
 ```
 
@@ -225,18 +225,33 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 
 ## オーバーロード解決
 
-クラスに同名・同アリティのコンストラクタやメソッドが複数ある場合、`java` は引数の変換 **総コストが最小** となるオーバーロードを選びます。完全一致は拡大変換より優先され、拡大変換はロッシー/ボックス化された変換より優先されます。同点は安定したシグネチャ順序で決まります。したがって整数引数は `long`/`double` より `int` パラメータを好み、リフレクションがメソッドを返す順序に結果が左右されることはありません。
+規則は Clojure のリフレクタのものです。値は自分の型が一致するものにしか一致しません。整数は `long` です。`long` に完全一致し、収まれば `int` に縮小変換し (収まらなければエラーで、折り畳みではありません)、`Long` や `Long`/`Integer` の上位型に一致します — 浮動小数点型、`char`、`BigInteger` には一切一致しません。浮動小数点数は `double` です。1 文字の文字列もあくまで文字列で、`char` にはなりません。文字は決して `int` にはなりません。`nil` は、`boolean` を含めどのプリミティブにもなりません。クラスに同名・同アリティのコンストラクタやメソッドが複数ある場合、`java` は引数の変換 **総コストが最小** となるオーバーロードを選びます。完全一致は拡大変換より優先され、拡大変換はロッシー/ボックス化された変換より優先されます。同点は安定したシグネチャ順序で決まります。したがって整数引数は `long` パラメータを好み、リフレクションがメソッドを返す順序に結果が左右されることはありません。
 
 ```lisp
-;; Math.max is overloaded for int/long/float/double; an integer picks int,
-;; so the result is an integer, not a float.
+;; Math.max is overloaded for int/long/float/double; an integer picks long.
 (java:static "java.lang.Math" "max" 3 7)   ; => 7
 ```
 
-整数のオーバーロードが存在しない場合、整数は利用可能な型へ変換されます。
+型の異なる引数の組は、Clojure と同じくどのオーバーロードにも一致しません。
+
+```lisp
+(handler-case (java:static "java.lang.Math" "max" 3 7.5)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+```
+
+そのアリティの候補が 1 つのみの呼び出しはコスト規則を飛ばし、Clojure のコンパイラが 1 つのメソッドを直接呼ぶのと同じく、チェック付きキャストで引数を変換します。メンバーの選択時に想定していない値は変換時に拒否されます。そのため整数は、唯一の `double` である `sqrt` には届き、型の異なる値は変換に失敗します。
+
+```lisp
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+```lisp
+(handler-case (java:static "java.lang.Character" "charCount" #\a)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Character.charCount: java.lang.ClassCastException: class java.lang.Character cannot be cast to class java.lang.Number"
 ```
 
 関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。
@@ -294,12 +309,18 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 
 ```lisp
 (defun bigger (a b) (java:static "java.lang.Math" "max" a b))
-(list (bigger 3 7) (bigger 2.5 1) (bigger #\a 1))   ; => (7 2.5 97)
+;; `max(long,long)` による。整数は `long` である。
+(bigger 3 7)   ; => 7
+```
+`a` と `b` は何でもありうるので、`bigger` の呼び出しはそのたびに `max(long,long)`、`max(int,int)`、浮動小数点の各オーバーロードの中からコスト規則で選びます — そして、どのオーバーロードも受けない組は Clojure と同じく拒否します。
+
+```lisp
+(handler-case (bigger 2.5 1)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
 ```
 
-`a` と `b` は何でもありうるので、`bigger` の呼び出しはそのたびに `max(int,int)`、`max(long,long)`、`max(float,float)`、`max(double,double)` の中からコスト規則で選びます。
-
-引数が実行前にメソッドを決めるのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は `append(boolean)` を選ぶため、`(java:call sb "append" (java:call sb "toString"))` は実行時に `append(String)` と `append(boolean)` のどちらかを選びます。
+引数が実行前にメソッドを決めるのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は参照パラメータにしか一致しないため、`(java:call sb "append" (java:call sb "toString"))` は実行時に `append(String)` などの参照オーバーロードの中から選びます。
 
 ### 宣言されたレシーバのクラスが候補を決める
 

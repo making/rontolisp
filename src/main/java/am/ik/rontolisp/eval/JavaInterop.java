@@ -37,6 +37,7 @@ import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -243,8 +244,10 @@ final class JavaInterop {
 
 	}
 
-	// The overload select() chose for these argument kinds.
-	private record Memo(JavaKind[] kinds, JavaOverloads.Overload overload) {
+	// The overload select() chose for these argument kinds, and whether its
+	// arguments convert forced (its only candidate of the arity takes them however
+	// they convert).
+	private record Memo(JavaKind[] kinds, JavaOverloads.Overload overload, boolean forced) {
 
 		boolean matches(JavaKind[] argumentKinds) {
 			if (this.kinds.length != argumentKinds.length) {
@@ -260,6 +263,11 @@ final class JavaInterop {
 
 	}
 
+	// A resolved overload and whether its arguments convert forced (its only
+	// candidate of the arity takes them however they convert).
+	private record Resolution(JavaOverloads.Overload overload, boolean forced) {
+	}
+
 	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
 		int markers = markerCount(rawArgs);
 		if (markers > 0) {
@@ -272,9 +280,9 @@ final class JavaInterop {
 		ReflectiveJavaClasses.Type type = loadClass(name, caller);
 		// A tagged java:new is remembered under its designator, which no method name can
 		// spell, so it never answers an untagged one's choice.
-		JavaOverloads.Overload overload;
+		Resolution resolution;
 		try {
-			overload = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
+			resolution = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
 					() -> JavaOverloads.filterByTag(type.constructors(), tagged ? member(classDesignator).tag() : null),
 					args, caller);
 		}
@@ -284,13 +292,15 @@ final class JavaInterop {
 		catch (ExceptionInInitializerError ex) {
 			throw initializerFailed(name, ex);
 		}
-		if (overload == null) {
-			throw new LispEvalException(
-					"No matching constructor for " + classDesignator + " with " + args.size() + " argument(s)");
+		if (resolution == null) {
+			throw noMatch("constructing " + name, JavaOverloads.noMatchingCtor(name));
 		}
+		JavaOverloads.Overload overload = resolution.overload();
+		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller)
+				: marshalArguments(overload, args, caller);
 		try {
 			Constructor<?> constructor = (Constructor<?>) executable(overload);
-			return unmarshal(constructor.newInstance(marshalArguments(overload, args, caller)), caller);
+			return unmarshal(constructor.newInstance(handed), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -330,9 +340,9 @@ final class JavaInterop {
 		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
 		// choice is found by the designator as written.
-		JavaOverloads.Overload overload;
+		Resolution resolution;
 		try {
-			overload = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
+			resolution = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
 				List<ReflectiveJavaClasses.Member> candidates;
 				List<String> tag = null;
 				if (!isTagged(methodName)) {
@@ -352,13 +362,16 @@ final class JavaInterop {
 		catch (ExceptionInInitializerError ex) {
 			throw initializerFailed(type.name(), ex);
 		}
-		if (overload == null) {
-			throw new LispEvalException(
-					"No matching method " + type.name() + "." + methodName + " with " + args.size() + " argument(s)");
+		if (resolution == null) {
+			throw noMatch("calling " + type.name() + "." + methodName, JavaOverloads.noMatchingMethod(
+					bareName(methodName), args.size(), receiver == null ? null : receiver.getClass().getName()));
 		}
+		JavaOverloads.Overload overload = resolution.overload();
+		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller)
+				: marshalArguments(overload, args, caller);
 		try {
 			Method method = (Method) executable(overload);
-			return unmarshal(method.invoke(receiver, marshalArguments(overload, args, caller)), caller);
+			return unmarshal(method.invoke(receiver, handed), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
@@ -375,6 +388,11 @@ final class JavaInterop {
 	// reports): the untagged common case is never looked up in MEMBERS.
 	private static boolean isTagged(String designator) {
 		return designator.indexOf('(') >= 0 || designator.indexOf(')') >= 0;
+	}
+
+	// The member name without its parameter tag, for the oracle's words.
+	private static String bareName(String designator) {
+		return isTagged(designator) ? member(designator).name() : designator;
 	}
 
 	private static JavaOverloads.Member member(String designator) {
@@ -399,24 +417,34 @@ final class JavaInterop {
 	// their kinds, otherwise select() over the candidates by argument kind (and
 	// remembered). A list or vector has no kind: such a call is costed by marshalling its
 	// arguments and never remembered.
-	private static JavaOverloads.@Nullable Overload resolve(ReflectiveJavaClasses.Type type, String member,
+	private static @Nullable Resolution resolve(ReflectiveJavaClasses.Type type, String member,
 			Supplier<? extends List<? extends JavaExecutable>> candidates, List<LispVal> args, Caller caller) {
 		JavaKind[] kinds = kindsOf(args);
 		if (kinds == null) {
 			@Nullable Object[] slot = new @Nullable Object[1];
-			return JavaOverloads.select(candidates.get(), args.size(),
+			JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), args.size(),
 					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
+			return chosen == null ? null : new Resolution(chosen, false);
 		}
-		JavaOverloads.Overload remembered = remembered(type.type(), member, kinds);
+		Memo remembered = remembered(type.type(), member, kinds);
 		if (remembered != null) {
-			return remembered;
+			return new Resolution(remembered.overload(), remembered.forced());
 		}
 		JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), kinds.length,
 				(i, target) -> JavaOverloads.kindCost(kinds[i], target, CLASSES));
 		if (chosen != null) {
-			rememberChoice(type.type(), member, new Memo(kinds, chosen));
+			rememberChoice(type.type(), member, new Memo(kinds, chosen, false));
+			return new Resolution(chosen, false);
 		}
-		return chosen;
+		// One candidate of the arity takes its arguments however they convert (the
+		// oracle's reflector calls one directly): remember the choice, converting
+		// forced when it runs.
+		JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates.get(), kinds.length);
+		if (only != null) {
+			rememberChoice(type.type(), member, new Memo(kinds, only, true));
+			return new Resolution(only, true);
+		}
+		return null;
 	}
 
 	// The kind of every argument, or null when one has none.
@@ -432,13 +460,13 @@ final class JavaInterop {
 		return kinds;
 	}
 
-	private static JavaOverloads.@Nullable Overload remembered(Class<?> cls, String member, JavaKind[] kinds) {
+	private static @Nullable Memo remembered(Class<?> cls, String member, JavaKind[] kinds) {
 		ConcurrentHashMap<String, Memo[]> members = CHOICES.get(cls);
 		Memo[] memos = members == null ? null : members.get(member);
 		if (memos != null) {
 			for (Memo memo : memos) {
 				if (memo.matches(kinds)) {
-					return memo.overload();
+					return memo;
 				}
 			}
 		}
@@ -535,8 +563,100 @@ final class JavaInterop {
 		}
 	}
 
+	// The Java arguments for a site resolved from an explicit parameter tag, packing
+	// a varargs tail: each value converts however the member takes it (as java: always
+	// did), never refusing like the oracle. A conversion's failure propagates as it
+	// did: the refusal of a function where none is expected, anything else the member
+	// sees (or its own failure to take it).
+	private static @Nullable Object[] marshalUncheckedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed; i++) {
+			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller);
+		}
+		if (overload.packed()) {
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+			for (int i = fixed; i < args.size(); i++) {
+				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller));
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	// A value converted however the target takes it: a value with a kind by the
+	// unchecked arms, anything else as marshal converts it.
+	private static @Nullable Object convertForced(LispVal value, Class<?> target, Caller caller) {
+		if (kindOf(value) != null) {
+			return convert(value, target, caller);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+			throw new IllegalStateException("java interop: the selected overload rejects " + value.print());
+		}
+		return slot[0];
+	}
+
+	// The Java arguments for the overload a run-time resolution's only candidate
+	// takes however they convert (as the oracle's reflector calls one directly):
+	// each value with a kind by the unchecked arms, anything else as marshal
+	// converts it. A conversion's failure propagates as the reflector's does.
+	private static @Nullable Object[] marshalForcedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed; i++) {
+			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller);
+		}
+		if (overload.packed()) {
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+			for (int i = fixed; i < args.size(); i++) {
+				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller));
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
 	private static Class<?> classOf(JavaType type) {
 		return ((ReflectiveJavaClasses.Type) type).type();
+	}
+
+	// The Java arguments for the member a site resolved before it ran, packing a
+	// varargs tail: each value converted with the oracle's checked casts (a value the
+	// member was not chosen for refuses), never with the cost table's silent
+	// narrowings. A conversion's failure is the error calling the member, carrying
+	// the real exception.
+	private static @Nullable Object[] marshalCheckedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller, String what) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		try {
+			for (int i = 0; i < fixed; i++) {
+				out[i] = convertChecked(args.get(i), classOf(params.get(i)), caller);
+			}
+			if (overload.packed()) {
+				JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+				Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+				for (int i = fixed; i < args.size(); i++) {
+					Array.set(packed, i - fixed, convertChecked(args.get(i), classOf(component), caller));
+				}
+				out[fixed] = packed;
+			}
+		}
+		catch (LispEvalException ex) {
+			throw ex;
+		}
+		catch (RuntimeException ex) {
+			throw fail(what, ex);
+		}
+		return out;
 	}
 
 	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
@@ -643,17 +763,22 @@ final class JavaInterop {
 			overload = dispatch(site, taken, caller);
 			if (overload == null) {
 				String designator = java.util.Objects.requireNonNull(site.designator());
-				throw new LispEvalException(site.operator() == JavaSite.Operator.NEW
-						? "No matching constructor for " + designator + " with " + taken.size() + " argument(s)"
-						: "No matching method " + className + "." + designator + " with " + taken.size()
-								+ " argument(s)");
+				if (site.operator() == JavaSite.Operator.NEW) {
+					throw noMatch("constructing " + className, JavaOverloads.noMatchingCtor(className));
+				}
+				throw noMatch("calling " + className + "." + designator, JavaOverloads.noMatchingMethod(
+						bareName(designator), taken.size(), target == null ? null : target.getClass().getName()));
 			}
 		}
 		else {
 			overload = new JavaOverloads.Overload(java.util.Objects.requireNonNull(site.executable()), site.packed());
 		}
 		JavaExecutable executable = overload.executable();
-		@Nullable Object[] javaArgs = marshalArguments(overload, taken, caller);
+		String what = executable.isConstructor() ? "constructing " + className
+				: "calling " + className + "." + executable.name();
+		@Nullable Object[] javaArgs = site.dispatched() ? marshalArguments(overload, taken, caller)
+				: site.unchecked() ? marshalUncheckedArguments(overload, taken, caller)
+						: marshalCheckedArguments(overload, taken, caller, what);
 		try {
 			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
 			if (reflected instanceof Constructor<?> constructor) {
@@ -700,11 +825,11 @@ final class JavaInterop {
 		if (chosen != null) {
 			Memo[] grown;
 			if (memos == null || memos.length >= CHOICES_PER_MEMBER) {
-				grown = new Memo[] { new Memo(kinds, chosen) };
+				grown = new Memo[] { new Memo(kinds, chosen, false) };
 			}
 			else {
 				grown = Arrays.copyOf(memos, memos.length + 1);
-				grown[memos.length] = new Memo(kinds, chosen);
+				grown[memos.length] = new Memo(kinds, chosen, false);
 			}
 			remember(DISPATCHES, key, grown);
 		}
@@ -1505,7 +1630,8 @@ final class JavaInterop {
 			if (!proxies && kind == JavaKind.Lisp.FUNCTION) {
 				return NO_MATCH;
 			}
-			int cost = JavaOverloads.kindCost(kind, target, CLASSES);
+			int cost = proxies ? JavaOverloads.kindCost(kind, target, CLASSES)
+					: JavaOverloads.returnedCost(kind, target, CLASSES);
 			if (cost != NO_MATCH) {
 				out[index] = convert(value, classOf(target), caller);
 			}
@@ -1582,7 +1708,7 @@ final class JavaInterop {
 	// The Java value of a value with a kind, for a target kindCost accepted.
 	private static @Nullable Object convert(LispVal value, Class<?> target, Caller caller) {
 		return switch (value) {
-			case LispNil ignored -> target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
+			case LispNil ignored -> target == boolean.class ? Boolean.FALSE : null;
 			case LispTrue ignored -> Boolean.TRUE;
 			// |false|, the one symbol with a kind
 			case LispSymbol ignored -> Boolean.FALSE;
@@ -1630,6 +1756,375 @@ final class JavaInterop {
 
 	private static Object convertDouble(double v, Class<?> target) {
 		return target == float.class || target == Float.class ? (Object) (float) v : (Object) v;
+	}
+
+	// What a failed resolution throws: the oracle's refusal -- a real
+	// IllegalArgumentException in its words -- carried by a java:java-exception,
+	// as what a member threw is. A Clojure catch binds the exception by its class.
+	private static LispEvalException noMatch(String what, String oracleWords) {
+		return fail(what, new IllegalArgumentException(oracleWords));
+	}
+
+	// What a failed Java call throws when the failure is already a throwable (a
+	// coercion's, a resolution's): what a function called back from Java raised on
+	// to the Lisp code that made the call, as it is; anything else the error
+	// calling the member, a java:java-exception carrying it.
+	private static LispEvalException fail(String what, Throwable cause) {
+		if (passedOn(cause)) {
+			if (cause instanceof RuntimeException signal) {
+				throw signal;
+			}
+			if (cause instanceof Error error) {
+				throw error;
+			}
+		}
+		LispEvalException failure = LispEvalException.ofClass(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME,
+				"error " + what + ": " + cause);
+		failure.initCause(cause);
+		return failure;
+	}
+
+	// The ClassCastException of a checked conversion, in the oracle's words but
+	// without its module tail (as the portable lowering spells them).
+	private static ClassCastException castFailure(String from, String to) {
+		return new ClassCastException("class " + from + " cannot be cast to class " + to);
+	}
+
+	// The class a checked conversion casts to for the target: the box for a
+	// primitive (as the oracle's emitUnboxArg casts a primitive target through its
+	// box), the target's own name otherwise.
+	private static String castTargetName(Class<?> target) {
+		if (target == boolean.class) {
+			return "java.lang.Boolean";
+		}
+		if (target == char.class) {
+			return "java.lang.Character";
+		}
+		if (target.isPrimitive()) {
+			return "java.lang.Number";
+		}
+		return target.getName();
+	}
+
+	// The NullPointerException of a checked conversion unboxing nil, in the oracle's
+	// words (its compiler's local is named x).
+	private static NullPointerException nullUnboxing(String method) {
+		return new NullPointerException("Cannot invoke \"" + method + "\" because \"x\" is null");
+	}
+
+	// The IllegalArgumentException of a checked conversion past a range, in the
+	// oracle's words (RT's casts, spelling the value as Java does).
+	private static IllegalArgumentException outOfRange(String name, Object value) {
+		return new IllegalArgumentException("Value out of range for " + name + ": " + value);
+	}
+
+	// The Java value of a value for the target of a site resolved before it ran: the
+	// oracle's checked casts (clj 1.12.6, its compiler's emitUnboxArg over RT's casts,
+	// measured 2026-10-13). A primitive target unboxes the value's box with RT's
+	// range checks -- a fixnum narrows with Math.toIntExact (past the int range an
+	// ArithmeticException), a float through the long range first (past it an
+	// IllegalArgumentException naming the long range); nil unboxes to a
+	// NullPointerException; a box of another class to the target's ClassCastException.
+	// A dispatched site, whose member the run-time choice makes, converts with
+	// marshal() instead (the oracle's reflector's unchecked boxArgs). A sequence
+	// converts element-wise as marshal() converts it; a ratio answers its double for
+	// a floating target and truncates for an integral one, like the oracle's casts.
+	private static @Nullable Object convertChecked(LispVal value, Class<?> target, Caller caller) {
+		return switch (value) {
+			case LispNil ignored -> {
+				if (target == boolean.class) {
+					throw nullUnboxing("java.lang.Boolean.booleanValue()");
+				}
+				if (target == char.class) {
+					throw nullUnboxing("java.lang.Character.charValue()");
+				}
+				if (target == int.class) {
+					throw nullUnboxing("java.lang.Character.charValue()");
+				}
+				if (target.isPrimitive() && target != void.class) {
+					throw nullUnboxing("java.lang.Number.doubleValue()");
+				}
+				yield null;
+			}
+			case LispTrue ignored -> convertCheckedBoolean(Boolean.TRUE, target);
+			// |false|, the one symbol with a kind; any other symbol falls to the
+			// default arm (no Java object of its own, like a ratio)
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) ->
+				convertCheckedBoolean(Boolean.FALSE, target);
+			case LispInteger i -> convertCheckedLong(i.value(), target);
+			case LispBigInteger b -> convertCheckedBigInteger(b.value(), target);
+			case LispDouble d -> convertCheckedDouble(d.value(), target);
+			case LispString string -> {
+				String text = string.value();
+				if (target.isInstance(text)) {
+					yield text;
+				}
+				if (target == char.class || target == Character.class) {
+					throw castFailure("java.lang.String", "java.lang.Character");
+				}
+				if (target == boolean.class || target == Boolean.class) {
+					throw castFailure("java.lang.String", "java.lang.Boolean");
+				}
+				if (target.isPrimitive()) {
+					throw castFailure("java.lang.String", "java.lang.Number");
+				}
+				throw castFailure("java.lang.String", target.getName());
+			}
+			case LispChar c -> {
+				int codePoint = c.codePoint();
+				if (Character.isBmpCodePoint(codePoint)) {
+					Character boxed = (char) codePoint;
+					if (target == char.class) {
+						yield (char) codePoint;
+					}
+					if (target.isInstance(boxed)) {
+						yield boxed;
+					}
+					if (target == boolean.class || target == Boolean.class) {
+						throw castFailure("java.lang.Character", "java.lang.Boolean");
+					}
+					if (target.isPrimitive()) {
+						throw castFailure("java.lang.Character", "java.lang.Number");
+					}
+					throw castFailure("java.lang.Character", target.getName());
+				}
+				yield convertCheckedLong(codePoint, target);
+			}
+			case LispRatio ratio -> convertCheckedRatio(ratio, target);
+			case LispJavaObject object -> {
+				Object ref = object.ref();
+				if (ref instanceof RontoJavaListView view) {
+					JavaType viewTarget = ReflectiveJavaClasses.of(target);
+					@Nullable Object[] slot = new @Nullable Object[1];
+					if (marshalListView(view, viewTarget, caller, slot, 0, true) == NO_MATCH) {
+						throw castFailure(ref.getClass().getName(), castTargetName(target));
+					}
+					yield slot[0];
+				}
+				if (ref instanceof RontoJavaBytesView view) {
+					if (JavaOverloads.bytesViewCost(ReflectiveJavaClasses.of(target)) == NO_MATCH) {
+						throw castFailure(ref.getClass().getName(), castTargetName(target));
+					}
+					yield view.bytes();
+				}
+				if (target.isInstance(ref)) {
+					yield ref;
+				}
+				if (ref instanceof BigInteger big) {
+					yield convertCheckedBigInteger(big, numericTarget(target, ref));
+				}
+				if (ref instanceof Long || ref instanceof Integer || ref instanceof Short || ref instanceof Byte) {
+					yield convertCheckedLong(((Number) ref).longValue(), numericTarget(target, ref));
+				}
+				if (ref instanceof Number number) {
+					yield convertCheckedDouble(number.doubleValue(), numericTarget(target, ref));
+				}
+				if (ref instanceof Boolean boxed) {
+					if (target == boolean.class) {
+						yield boxed.booleanValue();
+					}
+					throw castFailure(ref.getClass().getName(), castTargetName(target));
+				}
+				if (ref instanceof Character boxed) {
+					if (target == char.class) {
+						yield boxed.charValue();
+					}
+					throw castFailure(ref.getClass().getName(), castTargetName(target));
+				}
+				throw castFailure(ref.getClass().getName(), castTargetName(target));
+			}
+			case LispLambda ignored -> convertCheckedFunction(value, target, caller);
+			case LispFunction ignored -> convertCheckedFunction(value, target, caller);
+			default -> {
+				@Nullable Object[] slot = new @Nullable Object[1];
+				if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+					throw castFailure(value.getClass().getName(), castTargetName(target));
+				}
+				yield slot[0];
+			}
+		};
+	}
+
+	// The primitive a host number converts to through its own value: its own for a
+	// numeric primitive, itself refused for anything else.
+	private static Class<?> numericTarget(Class<?> target, Object ref) {
+		if (target.isPrimitive() && target != boolean.class && target != char.class && target != void.class) {
+			return target;
+		}
+		throw castFailure(ref.getClass().getName(), castTargetName(target));
+	}
+
+	private static Object convertCheckedBoolean(Boolean boxed, Class<?> target) {
+		if (target == boolean.class) {
+			return boxed.booleanValue();
+		}
+		if (target.isInstance(boxed)) {
+			return boxed;
+		}
+		if (target == char.class || target == Character.class) {
+			throw castFailure("java.lang.Boolean", "java.lang.Character");
+		}
+		if (target.isPrimitive()) {
+			throw castFailure("java.lang.Boolean", "java.lang.Number");
+		}
+		throw castFailure("java.lang.Boolean", target.getName());
+	}
+
+	private static Object convertCheckedLong(long v, Class<?> target) {
+		if (target == long.class) {
+			return v;
+		}
+		if (target == int.class) {
+			return Math.toIntExact(v);
+		}
+		if (target == short.class) {
+			if (v < Short.MIN_VALUE || v > Short.MAX_VALUE) {
+				throw outOfRange("short", v);
+			}
+			return (short) v;
+		}
+		if (target == byte.class) {
+			if (v < Byte.MIN_VALUE || v > Byte.MAX_VALUE) {
+				throw outOfRange("byte", v);
+			}
+			return (byte) v;
+		}
+		if (target == float.class) {
+			return (float) v;
+		}
+		if (target == double.class) {
+			return (double) v;
+		}
+		if (target == Long.class) {
+			return v;
+		}
+		if (target == char.class || target == Character.class) {
+			throw castFailure("java.lang.Long", "java.lang.Character");
+		}
+		if (target == boolean.class || target == Boolean.class) {
+			throw castFailure("java.lang.Long", "java.lang.Boolean");
+		}
+		Long boxed = v;
+		if (target.isInstance(boxed)) {
+			// Boxed to the narrowest type that holds it, like a fixnum (and like the
+			// unchecked conversion): what Java stores, a view's items among them.
+			return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
+		}
+		throw castFailure("java.lang.Long", target.getName());
+	}
+
+	private static Object convertCheckedBigInteger(BigInteger v, Class<?> target) {
+		if (target.isInstance(v)) {
+			return v;
+		}
+		if (target == double.class) {
+			return v.doubleValue();
+		}
+		if (target == float.class) {
+			double d = v.doubleValue();
+			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
+				throw outOfRange("float", v);
+			}
+			return (float) d;
+		}
+		if (target == long.class) {
+			if (v.bitLength() < 64) {
+				return v.longValue();
+			}
+			throw outOfRange("long", v);
+		}
+		if (target == int.class) {
+			return Math.toIntExact(convertCheckedBigIntegerLong(v));
+		}
+		if (target == short.class || target == byte.class) {
+			return convertCheckedLong(convertCheckedBigIntegerLong(v), target);
+		}
+		if (target == char.class || target == Character.class) {
+			throw castFailure("java.math.BigInteger", "java.lang.Character");
+		}
+		if (target == boolean.class || target == Boolean.class) {
+			throw castFailure("java.math.BigInteger", "java.lang.Boolean");
+		}
+		throw castFailure("java.math.BigInteger", target.getName());
+	}
+
+	private static long convertCheckedBigIntegerLong(BigInteger v) {
+		if (v.bitLength() < 64) {
+			return v.longValue();
+		}
+		throw outOfRange("long", v);
+	}
+
+	private static Object convertCheckedDouble(double v, Class<?> target) {
+		if (target == double.class) {
+			return v;
+		}
+		if (target == float.class) {
+			if (v < -Float.MAX_VALUE || v > Float.MAX_VALUE) {
+				throw outOfRange("float", v);
+			}
+			return (float) v;
+		}
+		if (target == long.class) {
+			if (v < Long.MIN_VALUE || v > Long.MAX_VALUE) {
+				throw outOfRange("long", v);
+			}
+			return (long) v;
+		}
+		if (target == int.class) {
+			return Math.toIntExact(convertCheckedDoubleLong(v));
+		}
+		if (target == short.class || target == byte.class) {
+			return convertCheckedLong(convertCheckedDoubleLong(v), target);
+		}
+		Double boxed = v;
+		if (target.isInstance(boxed)) {
+			return boxed;
+		}
+		if (target == char.class || target == Character.class) {
+			throw castFailure("java.lang.Double", "java.lang.Character");
+		}
+		if (target == boolean.class || target == Boolean.class) {
+			throw castFailure("java.lang.Double", "java.lang.Boolean");
+		}
+		throw castFailure("java.lang.Double", target.getName());
+	}
+
+	private static long convertCheckedDoubleLong(double v) {
+		if (v < Long.MIN_VALUE || v > Long.MAX_VALUE) {
+			throw outOfRange("long", v);
+		}
+		return (long) v;
+	}
+
+	// A ratio answers its double for a floating target and truncates toward zero
+	// for an integral one, like the oracle's casts of one.
+	private static Object convertCheckedRatio(LispRatio ratio, Class<?> target) {
+		if (target == double.class || target == Double.class) {
+			return ratio.doubleValue();
+		}
+		if (target == float.class || target == Float.class) {
+			double d = ratio.doubleValue();
+			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
+				throw outOfRange("float", ratio.print());
+			}
+			return (float) d;
+		}
+		if (target == long.class || target == int.class || target == short.class || target == byte.class) {
+			return convertCheckedBigInteger(ratio.numerator().divide(ratio.denominator()), target);
+		}
+		throw castFailure(valueClassName(ratio), castTargetName(target));
+	}
+
+	private static String valueClassName(LispVal value) {
+		return value.getClass().getName();
+	}
+
+	private static Object convertCheckedFunction(LispVal function, Class<?> target, Caller caller) {
+		if (target.isInterface() || target == Object.class) {
+			return ((LispJavaObject) implementation(target, function, caller)).ref();
+		}
+		throw castFailure(JavaImplementation.FUNCTION_CLASS, castTargetName(target));
 	}
 
 	// A proper list (or rank-1 vector) converts to a Java array (element-wise to the
@@ -2202,18 +2697,7 @@ final class JavaInterop {
 	// what the member threw (the landing that catches it builds the condition from it).
 	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
 		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
-		if (passedOn(cause)) {
-			if (cause instanceof RuntimeException signal) {
-				return signal;
-			}
-			if (cause instanceof Error error) {
-				throw error;
-			}
-		}
-		LispEvalException failure = LispEvalException.ofClass(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME,
-				"error " + what + ": " + cause);
-		failure.initCause(cause);
-		return failure;
+		return fail(what, cause);
 	}
 
 	// The arguments a member takes: each condition standing for a host exception -- a

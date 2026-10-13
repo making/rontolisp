@@ -965,8 +965,12 @@ class JavaBridgeTemplateParityTest {
 		ReflectiveJavaClasses.Type reflected = ReflectiveJavaClasses.of(type);
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(reflected.methods(member.name()),
 				member.tag());
-		return JavaOverloads.select(candidates, args.size(),
+		JavaOverloads.Overload chosen = JavaOverloads.select(candidates, args.size(),
 				(i, target) -> JavaOverloads.kindCost(args.get(i).kind(), target, ReflectiveJavaClasses.instance()));
+		if (chosen != null) {
+			return chosen;
+		}
+		return JavaOverloads.singleFixed(candidates, args.size());
 	}
 
 	// The template's private resolve(Class, String, Supplier, Object[]) over the compiled
@@ -990,9 +994,10 @@ class JavaBridgeTemplateParityTest {
 		for (Arg arg : args) {
 			values.add(arg.compiled());
 		}
-		return (Object[]) invoke("resolve",
+		Object[] resolution = (Object[]) invoke("resolve",
 				new Class<?>[] { Class.class, String.class, Supplier.class, Object[].class }, type,
 				designator + "#parity", candidates, values.toArray());
+		return resolution == null ? null : (Object[]) resolution[0];
 	}
 
 	private static @Nullable Object invoke(String name, Class<?>[] parameterTypes, @Nullable Object... args)

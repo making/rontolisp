@@ -8,7 +8,9 @@ package am.ik.rontolisp.testsupport;
 public final class JavaInteropPrograms {
 
 	/**
-	 * Dispatched sites meeting every kind of argument; prints {@link #DISPATCH_OUTPUT}.
+	 * Dispatched sites meeting every kind of argument; prints {@link #DISPATCH_OUTPUT}. A
+	 * mixed pair matches no overload (as the oracle's reflector refuses one); nil matches
+	 * only reference parameters (appending "null").
 	 */
 	public static final String DISPATCH_PROGRAM = """
 			(defun mx (x y) (java:static "java.lang.Math" "max" x y))
@@ -19,13 +21,17 @@ public final class JavaInteropPrograms {
 			  (declare (type (java:object "java.lang.StringBuilder") sb)
 			           (type (java:object "java.lang.String") s))
 			  (java:call sb "append" s))
-			(print (list (mx 1 2) (mx 1 2.5) (mx #\\a 3)))
-			(print (mapcar #'val (list 5 2.5 t nil #\\a "s" "str" (list #\\a #\\b) (vector #\\c #\\d))))
+			(print (list (mx 1 2)))
+			(print (handler-case (mx 1 2.5) (error (e) (format nil "~a" e))))
+			(print (handler-case (mx #\\a 3) (error (e) (format nil "~a" e))))
+			(print (mapcar #'val (list 5 2.5 t #\\a "s" "str" (list #\\a #\\b) (vector #\\c #\\d))))
+			(print (handler-case (val nil) (error (e) (format nil "~a" e))))
 			(print (list (two 1 "x") (two (list 1 2) 2.5)))
 			(print (list (mk "ab") (mk 16) (val (make-string 2 :initial-element #\\x))))
 			(let ((sb (java:new "java.lang.StringBuilder")))
-			  (app sb "ab") (app sb "c") (app sb nil)
-			  (print (java:call sb "toString")))
+			  (app sb "ab") (app sb "c")
+			  (print (java:call sb "toString"))
+			  (print (handler-case (app sb nil) (error (e) (format nil "~a" e)))))
 			""";
 
 	/**
@@ -49,17 +55,21 @@ public final class JavaInteropPrograms {
 	public static final String SEQUENCE_DISPATCH_OUTPUT = """
 			"[[1, 2], [3, a], null, y]"
 			"[1, 2, 3]"
-			"[1.5, 2.0]"
+			"[1.5, 2]"
 			("accept" 1)
 			("accept" 2)""";
 
 	/** What {@link #DISPATCH_PROGRAM} prints. */
 	public static final String DISPATCH_OUTPUT = """
-			(2 2.5 97)
-			("5" "2.5" "true" "false" "a" "s" "str" "ab" "cd")
+			(2)
+			"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+			"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+			("5" "2.5" "true" "a" "s" "str" "ab" "cd")
+			"error calling java.lang.String.valueOf: java.lang.NullPointerException: Cannot read the array length because \\"value\\" is null"
 			("1/x" "[1, 2]/2.5")
 			("ab" "" "xx")
-			"abcfalse\"""";
+			"abc"
+			"error calling java.lang.StringBuilder.append: java.lang.NullPointerException: Cannot read the array length because \\"str\\" is null\"""";
 
 	/**
 	 * A dispatched call on a receiver declared a {@code Collection}: prints
@@ -272,14 +282,14 @@ public final class JavaInteropPrograms {
 	public static final String HOST_OBJECT_OUTPUT = """
 			java:call expects a java object as the first argument, got (1 2)
 			"[1, 2]"
-			No matching method java.lang.Double.size with 0 argument(s)
+			error calling java.lang.Double.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.lang.Double
 			"1.0E10"
-			No matching method java.math.BigInteger.size with 0 argument(s)
+			error calling java.math.BigInteger.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.math.BigInteger
 			"1267650600228229401496703205376"
 			java:call expects a java object as the first argument, got 1/3
-			No matching method java.util.Objects.toString with 1 argument(s)
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispRatio cannot be cast to class java.lang.Object
 			java:call expects a java object as the first argument, got #C(1 2)
-			No matching method java.util.Objects.toString with 1 argument(s)
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispComplex cannot be cast to class java.lang.Object
 			java:call expects a java object as the first argument, got #(0 0)
 			"[0, 0]"
 			java:call expects a java object as the first argument, got #()
@@ -293,7 +303,7 @@ public final class JavaInteropPrograms {
 			(1 1 1 1 "[1]" "{k=1}")
 			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
 			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
-			No matching method java.lang.Integer.size with 0 argument(s)""";
+			error calling java.lang.Integer.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.lang.Integer""";
 
 	/**
 	 * A Lisp value as a {@code java:call} receiver: called as the object it converts to
@@ -342,7 +352,7 @@ public final class JavaInteropPrograms {
 			java:call: the receiver is not a java.lang.String, got 5
 			java:call expects a java object as the first argument, got NIL
 			java:call: the receiver is not a java.util.Collection, got "abc"
-			No matching method java.lang.String.noSuch with 0 argument(s)
+			error calling java.lang.String.noSuch: java.lang.IllegalArgumentException: No matching method noSuch found taking 0 args for java.lang.String
 			java:call expects a java object as the first argument, got NIL
 			java:call expects a java object as the first argument, got FOO
 			java:call expects a java object as the first argument, got (1)
@@ -375,8 +385,9 @@ public final class JavaInteropPrograms {
 			  (let ((h (make-hash-table :test 'equal)))
 			    (loop for (k v) on kvs by #'cddr do (setf (gethash k h) v))
 			    h))
-			(row (lambda () (list (java:static "java.lang.Boolean" "toString" '|false|) (bool '|false|) (bool t)
-			                      (bool nil))))
+			(row (lambda () (list (java:static "java.lang.Boolean" "toString" '|false|) (bool '|false|) (bool t))))
+			;; nil unboxes to the oracle's NullPointerException where a boolean is expected.
+			(row (lambda () (bool nil)))
 			(row (lambda () (list (ts '|false|) (ts* '|false|) (ts nil) (ts* t))))
 			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
 			                  (java:call l "add" '|false|)
@@ -407,7 +418,8 @@ public final class JavaInteropPrograms {
 
 	/** What {@link #FALSE_AND_TABLE_PROGRAM} prints. */
 	public static final String FALSE_AND_TABLE_OUTPUT = """
-			("false" "false" "true" "false")
+			("false" "false" "true")
+			error calling java.lang.Boolean.toString: java.lang.NullPointerException: Cannot invoke "java.lang.Boolean.booleanValue()" because "x" is null
 			("false" "false" "null" "true")
 			"[false, null, [true, false]]"
 			(NIL T "Boolean")
@@ -415,10 +427,10 @@ public final class JavaInteropPrograms {
 			("{a=[1, x], b=2, c=false}" "{a=[1, x], b=2, c=false}" "{b=2, a=[1, x], c=false}" "{b=2, a=[1, x], c=false}")
 			("{Key=2}" "{Key=2}")
 			"{}"
-			No matching constructor for java.util.TreeMap with 1 argument(s)
-			No matching constructor for java.util.HashMap with 1 argument(s)
-			No matching method java.lang.Math.abs with 1 argument(s)
-			No matching method java.util.Objects.toString with 1 argument(s)""";
+			error constructing java.util.TreeMap: java.lang.IllegalArgumentException: No matching ctor found for class java.util.TreeMap
+			error constructing java.util.HashMap: java.lang.IllegalArgumentException: No matching ctor found for class java.util.HashMap
+			error calling java.lang.Math.abs: java.lang.IllegalArgumentException: No matching method abs found taking 1 args
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispSymbol cannot be cast to class java.lang.Object""";
 
 	/**
 	 * Calls ending in {@code :java-false}: Java's {@code false} comes back as
@@ -644,7 +656,7 @@ public final class JavaInteropPrograms {
 			("[1, two, 3.5]" "[1, two, 3.5]" 1 "[a, b]")
 			(2 T "[a, b]" 2 NIL "map" 1)
 			error calling am.ik.rontolisp.runtime.RontoJavaMapView.put: java.lang.UnsupportedOperationException
-			No matching method java.util.Arrays.toString with 1 argument(s)
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
 			(1 2 3)
 			1
 			error calling am.ik.rontolisp.runtime.RontoJavaVectorView.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaVectorView cannot be cast to class java.lang.Comparable
@@ -703,7 +715,7 @@ public final class JavaInteropPrograms {
 			  (row (lambda () (either nil (java:view 'b (octets 9) :bytes)))))
 			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
 			                       (a (java:call bb "array" :octets)))
-			                  (java:call bb "put" 7)
+			                  (java:call bb "put(byte)" 7)
 			                  a)))
 			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
 			                       (v (octets 1 2))
@@ -776,7 +788,7 @@ public final class JavaInteropPrograms {
 			#(7 7 8)
 			#(7 8 8)
 			(T T NIL)
-			No matching constructor for java.util.ArrayList with 1 argument(s)
+			error constructing java.util.ArrayList: java.lang.IllegalArgumentException: No matching ctor found for class java.util.ArrayList
 			(5 #(104 101 108 108 111 0))
 			#(0 0 0 42)
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2)
@@ -833,24 +845,24 @@ public final class JavaInteropPrograms {
 			("[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]")
 			("[7, 65535]" "[7, 65535]" "[7, 65535]" "[7, 65535]")
 			("[9, 65536]" "[9, 65536]" "[9, 65536]" "[9, 65536]")
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.lang.String.valueOf with 1 argument(s)
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.util.Arrays.toString with 1 argument(s)
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.lang.String.valueOf: java.lang.IllegalArgumentException: No matching method valueOf found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
 			("1267650600228229401496703205376" "1267650600228229401496703205376")
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.util.Arrays.toString with 1 argument(s)
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
 			("-18446744073709551616" "-18446744073709551616")
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.util.Arrays.toString with 1 argument(s)
-			No matching method java.lang.String.valueOf with 1 argument(s)
-			"0.05"
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.lang.String.valueOf: java.lang.IllegalArgumentException: No matching method valueOf found taking 1 args
+			error constructing java.math.BigDecimal: java.lang.IllegalArgumentException: No matching ctor found for class java.math.BigDecimal
 			"100000000000000000.000"
 			"1267650600228229401496703205376"
 			T
 			1267650600228229401496703205377
-			No matching method java.lang.Math.sqrt with 1 argument(s)
+			1.125899906842624e15
 			"[1267650600228229401496703205376, 1]"
 			("[1, 1267650600228229401496703205376]" "[1267650600228229401496703205376]")""";
 
@@ -1005,7 +1017,7 @@ public final class JavaInteropPrograms {
 			("For input string: \\"x\\"" T)
 			"For input string: \\"y\\""
 			"For input string: \\"z\\""
-			"No matching constructor for java.lang.RuntimeException with 2 argument(s)"
+			"error constructing java.lang.RuntimeException: java.lang.ClassCastException: class am.ik.rontolisp.LispInstance cannot be cast to class java.lang.Throwable"
 			:TYPE-ERROR""";
 
 	private JavaInteropPrograms() {

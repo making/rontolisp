@@ -142,13 +142,15 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"sqrt\" 16))")).isEqualTo("4.0");
 	}
 
-	// A character argument marshals to an int parameter (the code point) when there is
-	// no char/Character overload -- mirrors
-	// JavaInteropTest#characterMarshalsToIntParameter
-	// to pin the interpreter and the compiled bridge to the same rule.
+	// A character argument refuses an int parameter where no char/Character overload
+	// takes it -- mirrors JavaInteropTest#characterRefusesAnIntParameter: the oracle's
+	// cast refusal (Character.charCount takes an int alone).
 	@Test
-	void characterMarshalsToIntParameter() throws Exception {
-		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"charCount\" #\\a))")).isEqualTo("1");
+	void characterRefusesAnIntParameter() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(print (java:static \"java.lang.Character\" \"charCount\" #\\a))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.lang.Character.charCount: java.lang.ClassCastException:"
+					+ " class java.lang.Character cannot be cast to class java.lang.Number");
 	}
 
 	// A supplementary code point cannot fit a single Java char, so it falls back to the
@@ -285,7 +287,7 @@ class JvmJavaInteropCompilerTest {
 	void dottedListDoesNotMarshal() {
 		assertThatThrownBy(() -> compileAndRun("(java:static \"java.util.Collections\" \"max\" (cons 1 2))"))
 			.isInstanceOf(RuntimeException.class)
-			.hasMessageContaining("No matching method");
+			.hasMessageContaining("cannot be cast to class java.util.Collection");
 	}
 
 	@Test
@@ -305,14 +307,14 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo("0");
 	}
 
-	// The overload chosen for a call is remembered per argument kind. A float first
-	// selects max(double,double); the integers after it must still select max(int,int)
-	// (a shared choice would print 3.0), and the floats after those the double one.
+	// The overload chosen for a call is remembered per argument kind. An integer
+	// selects valueOf(long), a string valueOf(String): alternating them keeps each
+	// choice (a shared choice would refuse one).
 	@Test
 	void rememberedOverloadFollowsTheArgumentKind() throws Exception {
 		assertThat(compileAndRun("""
-				(print (mapcar (lambda (x) (java:static "java.lang.Math" "max" x 0)) (list 2.5 3 4.5 5)))
-				""")).isEqualTo("(2.5 3 4.5 5)");
+				(print (mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 "a" 7)))
+				""")).isEqualTo("(\"5\" \"a\" \"7\")");
 	}
 
 	// The same method name on alternating receiver classes resolves on each class.
@@ -507,7 +509,8 @@ class JvmJavaInteropCompilerTest {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		compiler.compile(LispReader.readAllFromString(program));
 		assertThat(compiler.runtimeClassFiles()).isEmpty();
-		assertThat(javap(program)).contains("Method java/lang/Math.max:(II)I")
+		// A fixnum is a long, so the two literals resolve to max(long,long).
+		assertThat(javap(program)).contains("Method java/lang/Math.max:(JJ)J")
 			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V")
 			.contains("Method java/lang/StringBuilder.length:()I")
 			.contains("Field java/lang/Integer.MAX_VALUE:I")
@@ -650,7 +653,8 @@ class JvmJavaInteropCompilerTest {
 		assertThatThrownBy(
 				() -> compileAndRun("(defun mx (x y) (java:static \"java.lang.Math\" \"max\" x y)) (mx \"a\" 1)"))
 			.isInstanceOf(RuntimeException.class)
-			.hasMessage("No matching method java.lang.Math.max with 2 argument(s)");
+			.hasMessage(
+					"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args");
 	}
 
 	// java:static calls a static method: an instance method of the name, which could only
@@ -659,7 +663,8 @@ class JvmJavaInteropCompilerTest {
 	void aStaticCallNeverChoosesAnInstanceMethod() {
 		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.String\" \"length\")"))
 			.isInstanceOf(RuntimeException.class)
-			.hasMessage("No matching method java.lang.String.length with 0 argument(s)");
+			.hasMessage(
+					"error calling java.lang.String.length: java.lang.IllegalArgumentException: No matching method length found taking 0 args");
 	}
 
 	@Test

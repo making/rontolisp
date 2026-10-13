@@ -421,7 +421,7 @@ public final class JavaImplementationPrograms {
 			              (seen nil))
 			         (java:call (holding a) "forEach"
 			                    (java:reify "java.util.function.Consumer" "accept"
-			                      (lambda (x) (java:call bb "put" 7) (setf (aref x 1) 5) (setq seen (list (aref x 0) (aref x 1))))
+			                      (lambda (x) (java:call bb "put(byte)" 7) (setf (aref x 1) 5) (setq seen (list (aref x 0) (aref x 1))))
 			                      :octets))
 			         (list seen a))))
 			""";

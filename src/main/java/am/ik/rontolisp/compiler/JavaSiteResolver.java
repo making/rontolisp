@@ -609,6 +609,18 @@ public final class JavaSiteResolver {
 				return resolved;
 			}
 		}
+		// One candidate of the arity takes its arguments however they convert: the
+		// oracle's compiler calls one directly, refusing or coercing with its
+		// checked casts where the cost table matches nothing. A varargs executable
+		// whose packed shape also applies keeps the dispatch (packing is this
+		// language's own, and the oracle never packs).
+		JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates, args.size());
+		if (only != null) {
+			JavaSite resolved = resolveToOpen(op, type, member, only, args, types, constructed, javaFalse);
+			if (resolved != null) {
+				return resolved;
+			}
+		}
 		// A dispatch: the overloads a value each argument can have may select, the
 		// arguments' promises kept.
 		List<JavaSite.Argument> arguments = new ArrayList<>();
@@ -738,6 +750,38 @@ public final class JavaSiteResolver {
 	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
 			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
 			@Nullable JavaStaticType constructed, boolean javaFalse) {
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			arguments
+				.add(new JavaSite.Argument(sorted((JavaStaticType.Kinds) types.get(i)), declaredClass(args.get(i))));
+		}
+		return resolveTo(op, type, member, chosen, args.size(), constructed, javaFalse, arguments,
+				member.tag() != null);
+	}
+
+	/**
+	 * A site resolved to its only candidate of the arity, whatever its arguments' kinds:
+	 * the oracle's compiler calls one directly, converting with its checked casts. No
+	 * argument is checked against kinds the resolution never counted on; what the member
+	 * takes, a value it was not chosen for, refuses in conversion.
+	 */
+	private @Nullable JavaSite resolveToOpen(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
+			@Nullable JavaStaticType constructed, boolean javaFalse) {
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			// Known kinds are checked when the site runs (a false declaration is an
+			// error here, never converted for a member it was not chosen for); what
+			// the member takes, a value of another kind, refuses in conversion.
+			arguments.add(argument(types.get(i), args.get(i)));
+		}
+		return resolveTo(op, type, member, chosen, args.size(), constructed, javaFalse, arguments,
+				member.tag() != null);
+	}
+
+	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, int argc, @Nullable JavaStaticType constructed, boolean javaFalse,
+			List<JavaSite.Argument> arguments, boolean unchecked) {
 		JavaExecutable executable = chosen.executable();
 		for (JavaType parameter : executable.parameterTypes()) {
 			if (unlinkable("the parameter type ", parameter) != null) {
@@ -747,13 +791,8 @@ public final class JavaSiteResolver {
 		String name = op == JavaSite.Operator.NEW ? type.name() : member.name();
 		JavaStaticType result = constructed != null ? constructed
 				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup, javaFalse);
-		List<JavaSite.Argument> arguments = new ArrayList<>();
-		for (int i = 0; i < args.size(); i++) {
-			arguments
-				.add(new JavaSite.Argument(sorted((JavaStaticType.Kinds) types.get(i)), declaredClass(args.get(i))));
-		}
 		return new JavaSite(op, type.name(), JavaOverloads.fullDesignator(executable, name), executable, null,
-				chosen.packed(), result, arguments, null, List.of());
+				chosen.packed(), result, arguments, null, List.of(), JavaMarkers.NONE, unchecked);
 	}
 
 	/** What a dispatched site counts on for an argument of this static type. */

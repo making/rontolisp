@@ -1051,15 +1051,18 @@ class ClojureInteropTest {
 		// writes later; a function Java hands its array to reads what Java writes while
 		// it runs, and stores into that array. A byte array is the byte[] itself on both
 		// backends (before, the JVM held copies behind a width: [0 0 0 0] and [0 0] for
-		// the first two)
+		// the first two). The single-element writes spell putChar: a (byte x) cast
+		// answers a fixnum here, which the oracle's reflector refuses where a byte is
+		// expected (as it refuses a long), while a character unboxes to a char there
+		// and here.
 		assertBothEqual("(let [b (byte-array 4) bb (java.nio.ByteBuffer/wrap b)] (.putInt bb 42) (prn (vec b)))"
-				+ " (let [bb (java.nio.ByteBuffer/allocate 2) a (.array bb)] (.put bb (byte 7)) (prn (vec a)))"
+				+ " (let [bb (java.nio.ByteBuffer/allocate 2) a (.array bb)] (.putChar bb \\a) (prn (vec a)))"
 				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
-				+ " (.forEach l (proxy [java.util.function.Consumer] [] (accept [x] (.put bb (byte 7)) (prn (vec x)))))"
+				+ " (.forEach l (proxy [java.util.function.Consumer] [] (accept [x] (.putChar bb \\a) (prn (vec x)))))"
 				+ " (prn (vec (.array bb))))"
 				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
-				+ " (.forEach l (fn [x] (aset-byte x 1 5) (.put bb (byte 7)))) (prn (vec (.array bb))))",
-				"[0 0 0 42]\n[7 0]\n[7 0]\n[7 0]\n[7 5]\n");
+				+ " (.forEach l (fn [x] (.putChar bb \\a) (aset-byte x 1 5))) (prn (vec (.array bb))))",
+				"[0 0 0 42]\n[0 97]\n[0 97]\n[0 97]\n[0 5]\n");
 	}
 
 	@Test

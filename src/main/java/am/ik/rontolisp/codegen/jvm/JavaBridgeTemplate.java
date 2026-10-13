@@ -483,14 +483,16 @@ final class JavaBridgeTemplate {
 		@Nullable Object[] values = renderedAll(args);
 		// A tagged java:new is remembered under its designator, which no method name can
 		// spell, so it never answers an untagged one's choice.
-		Object[] overload = resolve(cls, tagged ? designator : CONSTRUCTOR,
+		Object[] resolution = resolve(cls, tagged ? designator : CONSTRUCTOR,
 				() -> filterByTag(constructors(cls), tagged ? (String[]) member(designator)[1] : null), values);
-		if (overload == null) {
-			throw new RuntimeException(
-					"No matching constructor for " + designator + " with " + args.length + " argument(s)");
+		if (resolution == null) {
+			throw noMatch("constructing " + name, noMatchingCtor(name));
 		}
+		Object[] overload = (Object[]) resolution[0];
+		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = marshalArguments(overload, values, functions, through);
+			@Nullable Object[] handed = forced ? marshalForcedArguments(overload, values, functions, through)
+					: marshalArguments(overload, values, functions, through);
 			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
 			return unmarshal(made, javaFalse, octets);
 		}
@@ -1490,7 +1492,7 @@ final class JavaBridgeTemplate {
 		// designator is parsed only when the candidates are needed: a remembered choice
 		// is found by the designator as written.
 		boolean statics = receiver == null;
-		Object[] overload = resolve(cls, statics ? STATIC_PREFIX + methodName : methodName, () -> {
+		Object[] resolution = resolve(cls, statics ? STATIC_PREFIX + methodName : methodName, () -> {
 			if (!isTagged(methodName)) {
 				return statics ? staticMethods(methods(cls, methodName)) : methods(cls, methodName);
 			}
@@ -1498,12 +1500,16 @@ final class JavaBridgeTemplate {
 			List<Method> candidates = methods(cls, (String) member[0]);
 			return filterByTag(statics ? staticMethods(candidates) : candidates, (String[]) member[1]);
 		}, values);
-		if (overload == null) {
-			throw new RuntimeException(
-					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
+		if (resolution == null) {
+			String bare = isTagged(methodName) ? (String) member(methodName)[0] : methodName;
+			throw noMatch("calling " + cls.getName() + "." + methodName,
+					noMatchingMethod(bare, values.length, receiver == null ? null : receiver.getClass().getName()));
 		}
+		Object[] overload = (Object[]) resolution[0];
+		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = marshalArguments(overload, values, functions, through);
+			@Nullable Object[] handed = forced ? marshalForcedArguments(overload, values, functions, through)
+					: marshalArguments(overload, values, functions, through);
 			Object answer = ((Method) overload[0]).invoke(receiver, handed);
 			return unmarshal(answer, javaFalse, octets);
 		}
@@ -1645,6 +1651,26 @@ final class JavaBridgeTemplate {
 		return matching;
 	}
 
+	// The one fixed-arity member of the argument count, or null (mirrors
+	// compiler/JavaOverloads.singleFixed; this class must stand alone).
+	private static Object @Nullable [] singleFixed(List<? extends Executable> candidates, int argc) {
+		Object[] found = null;
+		for (Executable e : candidates) {
+			Class<?>[] params = e.getParameterTypes();
+			if (params.length == argc && !e.isVarArgs()) {
+				if (found != null) {
+					return null;
+				}
+				found = new Object[] { e, params, Boolean.FALSE };
+			}
+			else if (e.isVarArgs() && argc >= params.length - 1
+					&& params[params.length - 1].getComponentType() != null) {
+				return null;
+			}
+		}
+		return found;
+	}
+
 	// The overload of `member` on `cls` for these (rendered) arguments: the one
 	// remembered
 	// for their kinds, otherwise select() over the candidates by argument kind (and
@@ -1652,20 +1678,31 @@ final class JavaBridgeTemplate {
 	// its arguments and never remembered.
 	private static Object @Nullable [] resolve(Class<?> cls, String member,
 			Supplier<? extends List<? extends Executable>> candidates, @Nullable Object[] values) {
+		// Returns {overload, forced}: forced when the only candidate of the arity takes
+		// the arguments however they convert (as the oracle's reflector calls one
+		// directly).
 		Object[] kinds = kindsOf(values);
 		if (kinds == null) {
 			@Nullable Object[] slot = new @Nullable Object[1];
-			return select(candidates.get(), values.length, (i, target) -> marshal(values[i], target, slot, 0));
+			Object[] chosen = select(candidates.get(), values.length,
+					(i, target) -> marshal(values[i], target, slot, 0));
+			return chosen == null ? null : new Object[] { chosen, Boolean.FALSE };
 		}
 		Object[] remembered = remembered(cls, member, kinds);
 		if (remembered != null) {
-			return remembered;
+			return new Object[] { remembered[1], remembered[2] };
 		}
 		Object[] chosen = select(candidates.get(), kinds.length, (i, target) -> kindCost(kinds[i], target));
 		if (chosen != null) {
-			rememberChoice(cls, member, new Object[] { kinds, chosen });
+			rememberChoice(cls, member, new Object[] { kinds, chosen, Boolean.FALSE });
+			return new Object[] { chosen, Boolean.FALSE };
 		}
-		return chosen;
+		Object[] only = singleFixed(candidates.get(), kinds.length);
+		if (only != null) {
+			rememberChoice(cls, member, new Object[] { kinds, only, Boolean.TRUE });
+			return new Object[] { only, Boolean.TRUE };
+		}
+		return null;
 	}
 
 	private static Object @Nullable [] remembered(Class<?> cls, String member, Object[] kinds) {
@@ -1674,7 +1711,7 @@ final class JavaBridgeTemplate {
 		if (memos != null) {
 			for (Object[] memo : memos) {
 				if (sameKinds((Object[]) memo[0], kinds)) {
-					return (Object[]) memo[1];
+					return memo;
 				}
 			}
 		}
@@ -2031,6 +2068,44 @@ final class JavaBridgeTemplate {
 		return out;
 	}
 
+	// The Java arguments for the overload a run-time resolution's only candidate
+	// takes however they convert (as the oracle's reflector calls one directly).
+	private static @Nullable Object[] marshalForcedArguments(Object[] overload, @Nullable Object[] values,
+			int functions, @Nullable Object through) {
+		Class<?>[] params = (Class<?>[]) overload[1];
+		boolean packs = (Boolean) overload[2];
+		@Nullable Object[] out = new @Nullable Object[params.length];
+		int fixed = packs ? params.length - 1 : params.length;
+		for (int i = 0; i < fixed; i++) {
+			out[i] = convertForced(values[i], params[i], functions, through);
+		}
+		if (packs) {
+			Class<?> component = params[fixed].getComponentType();
+			Object packed = Array.newInstance(component, values.length - fixed);
+			@Nullable Object[] slot = new @Nullable Object[1];
+			for (int i = fixed; i < values.length; i++) {
+				slot[0] = convertForced(values[i], component, functions, through);
+				Array.set(packed, i - fixed, slot[0]);
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	// A value converted however the target takes it: a value with a kind by the
+	// unchecked arms, anything else as marshal converts it.
+	private static @Nullable Object convertForced(@Nullable Object value, Class<?> target, int functions,
+			@Nullable Object through) {
+		if (kindOf(value) != null) {
+			return convert(value, target, functions, through);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(value, target, slot, 0, functions, through) == NO_MATCH) {
+			throw new IllegalStateException("java interop: the selected overload rejects " + describe(value));
+		}
+		return slot[0];
+	}
+
 	// select() costed this argument against this type, so it converts.
 	private static void marshalSelected(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index,
 			int functions, @Nullable Object through) {
@@ -2062,7 +2137,8 @@ final class JavaBridgeTemplate {
 			if ((functions & FUNCTIONS_MODE) == FUNCTIONS_NONE && KIND_FUNCTION.equals(kind)) {
 				return NO_MATCH;
 			}
-			int cost = kindCost(kind, target);
+			int cost = (functions & FUNCTIONS_MODE) == FUNCTIONS_NONE ? returnedCost(kind, target)
+					: kindCost(kind, target);
 			if (cost != NO_MATCH) {
 				out[index] = convert(value, target, functions, through);
 			}
@@ -2270,10 +2346,9 @@ final class JavaBridgeTemplate {
 		}
 		return switch ((String) kind) {
 			case KIND_NIL -> {
-				if (target == boolean.class) {
-					yield COST_EXACT;
-				}
-				// nil carries no type, so any reference target ties
+				// nil carries no type, so any reference target ties; no primitive
+				// takes it, not even boolean (the oracle's compiler unboxes it to a
+				// NullPointerException).
 				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
 			}
 			// Java's false is t's twin.
@@ -2295,24 +2370,25 @@ final class JavaBridgeTemplate {
 				if (target.isAssignableFrom(String.class)) {
 					yield target == String.class ? COST_EXACT : COST_BOXED;
 				}
-				// Only a one-character string narrows to a char.
-				yield KIND_STRING_1.equals(kind) && (target == char.class || target == Character.class) ? COST_NARROW
-						: NO_MATCH;
+				// Not even a one-character string narrows to a char: the oracle
+				// refuses it.
+				yield NO_MATCH;
 			}
 			case KIND_CHAR, KIND_SUPPLEMENTARY_CHAR -> {
-				// A Lisp CHARACTER narrows to a Java char only when its code point is in
-				// the BMP; a supplementary one cannot fit a single char, so that
-				// parameter shape is refused (the caller can accept a String / int).
+				// A BMP character is a char, a Character, or a supertype of one; a
+				// supplementary code point is a fixnum, like an integer. A character
+				// converts to no int.
 				if (KIND_CHAR.equals(kind) && (target == char.class || target == Character.class
 						|| target.isAssignableFrom(Character.class))) {
 					yield target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
 				}
-				// int / Integer accept the raw code point (including supplementary
-				// values).
-				if (target == int.class || target == Integer.class) {
-					yield COST_WIDEN;
+				if (KIND_SUPPLEMENTARY_CHAR.equals(kind) && (target == int.class || target == long.class
+						|| target == Integer.class || target == Long.class || target.isAssignableFrom(Long.class)
+						|| target.isAssignableFrom(Integer.class))) {
+					yield target == long.class ? COST_EXACT
+							: (target == int.class || target == Long.class ? COST_WIDEN : COST_BOXED);
 				}
-				yield target.isAssignableFrom(Integer.class) ? COST_BOXED : NO_MATCH;
+				yield NO_MATCH;
 			}
 			case KIND_FUNCTION -> target == Object.class ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
 					: isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
@@ -2321,20 +2397,11 @@ final class JavaBridgeTemplate {
 	}
 
 	private static int integerCost(Class<?> target) {
-		if (target == int.class) {
+		if (target == long.class) {
 			return COST_EXACT;
 		}
-		if (target == Integer.class || target == long.class || target == Long.class) {
+		if (target == int.class || target == Long.class) {
 			return COST_WIDEN;
-		}
-		if (target == double.class || target == Double.class || target == float.class || target == Float.class) {
-			return COST_CONVERT;
-		}
-		if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
-			return COST_NARROW;
-		}
-		if (target == BigInteger.class) {
-			return COST_CONVERT;
 		}
 		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
 				|| target.isAssignableFrom(Integer.class)) {
@@ -2359,6 +2426,37 @@ final class JavaBridgeTemplate {
 		return NO_MATCH;
 	}
 
+	// What a java:reify / java:proxy function answers costs: what the value converts
+	// to however Java takes it, as java: always converted answers (mirrors
+	// compiler/JavaOverloads.returnedCost; this class must stand alone).
+	private static int returnedCost(Object kind, Class<?> target) {
+		if (KIND_NIL.equals(kind) && target == boolean.class) {
+			return COST_EXACT;
+		}
+		if (KIND_INTEGER.equals(kind)) {
+			if (target == double.class || target == Double.class || target == float.class || target == Float.class) {
+				return COST_CONVERT;
+			}
+			if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
+				return COST_NARROW;
+			}
+			if (target == BigInteger.class) {
+				return COST_CONVERT;
+			}
+		}
+		if (KIND_FLOAT.equals(kind) && (target == float.class || target == Float.class)) {
+			return COST_NARROW;
+		}
+		if (KIND_STRING_1.equals(kind) && (target == char.class || target == Character.class)) {
+			return COST_NARROW;
+		}
+		if ((KIND_CHAR.equals(kind) || KIND_SUPPLEMENTARY_CHAR.equals(kind))
+				&& (target == int.class || target == Integer.class)) {
+			return COST_WIDEN;
+		}
+		return kindCost(kind, target);
+	}
+
 	// The Java value of a (rendered) value with a kind, for a target kindCost accepted.
 	private static @Nullable Object convert(@Nullable Object value, Class<?> target) {
 		return convert(value, target, FUNCTIONS_PROXY, null);
@@ -2367,7 +2465,7 @@ final class JavaBridgeTemplate {
 	private static @Nullable Object convert(@Nullable Object value, Class<?> target, int functions,
 			@Nullable Object through) {
 		if (value == null) { // nil
-			return target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
+			return target == boolean.class ? Boolean.FALSE : null;
 		}
 		if (value instanceof Long l) {
 			return convertLong(l, target);
@@ -2706,6 +2804,47 @@ final class JavaBridgeTemplate {
 		catch (ExceptionInInitializerError ex) {
 			throw initializerFailed(name, ex);
 		}
+	}
+
+	// What the oracle's reflector refuses a call or a construction with (mirrors
+	// compiler/JavaOverloads.noMatchingMethod/noMatchingCtor; this class must stand
+	// alone).
+	private static String noMatchingMethod(String name, int argc, @Nullable String contextClass) {
+		return "No matching method " + name + " found taking " + argc + " args"
+				+ (contextClass != null ? " for " + contextClass : "");
+	}
+
+	private static String noMatchingCtor(String className) {
+		return "No matching ctor found for class " + className;
+	}
+
+	// What a failed resolution throws: the oracle's refusal carried by a
+	// java:java-exception, as the program's _jfail decides for a failed call.
+	private static RuntimeException noMatch(String what, String oracleWords) {
+		return fail(what, new IllegalArgumentException(oracleWords));
+	}
+
+	// What a failed Java call throws when the failure is already a throwable (a
+	// resolution's): the error calling the member, a java:java-exception carrying
+	// it, as the program's _jfail decides for its direct calls.
+	private static RuntimeException fail(String what, Throwable cause) {
+		String text = "error " + what + ": ";
+		Method fail = failMethod;
+		if (fail != null) {
+			try {
+				Throwable answer = (Throwable) fail.invoke(null, cause, text);
+				if (answer instanceof RuntimeException exception) {
+					return exception;
+				}
+				throw rethrow(answer);
+			}
+			catch (ReflectiveOperationException unexpected) {
+				// The error calling the member, below.
+			}
+		}
+		RuntimeException failure = new RuntimeException(text + cause);
+		failure.initCause(cause);
+		return failure;
 	}
 
 	// What a failed call throws, as the program's _jfail decides for its direct calls:

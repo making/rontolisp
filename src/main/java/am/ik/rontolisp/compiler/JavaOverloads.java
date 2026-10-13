@@ -101,6 +101,66 @@ public final class JavaOverloads {
 	private static final String BIG_INTEGER = "java.math.BigInteger";
 
 	/**
+	 * The conversion cost of a value a {@code java:reify} / {@code java:proxy} function
+	 * answers for the method's return type: what the value converts to however Java takes
+	 * it, as {@code java:} always converted answers (the oracle's proxy class unboxes a
+	 * number unchecked, never refusing one). A fixnum narrows to a short, a byte, a
+	 * float, a double or a BigInteger; a float to a float; a one-character string to a
+	 * char; a character to an int; nil to a boolean -- beyond what {@link #kindCost}
+	 * matches for arguments. Anything else costs as for arguments.
+	 * @param kind the answer kind
+	 * @param target the return type
+	 * @param lookup where the boxed types and {@code String} are found
+	 * @return the cost, or {@link #NO_MATCH}
+	 */
+	public static int returnedCost(JavaKind kind, JavaType target, JavaClassLookup lookup) {
+		if (!(kind instanceof JavaKind.Lisp lisp)) {
+			return kindCost(kind, target, lookup);
+		}
+		String name = target.name();
+		switch (lisp) {
+			case NIL -> {
+				if ("boolean".equals(name)) {
+					return COST_EXACT;
+				}
+			}
+			case INTEGER -> {
+				switch (name) {
+					case "double", "java.lang.Double", "float", "java.lang.Float" -> {
+						return COST_CONVERT;
+					}
+					case "short", "java.lang.Short", "byte", "java.lang.Byte" -> {
+						return COST_NARROW;
+					}
+					case "java.math.BigInteger" -> {
+						return COST_CONVERT;
+					}
+					default -> {
+					}
+				}
+			}
+			case FLOAT -> {
+				if ("float".equals(name) || "java.lang.Float".equals(name)) {
+					return COST_NARROW;
+				}
+			}
+			case STRING_1 -> {
+				if ("char".equals(name) || "java.lang.Character".equals(name)) {
+					return COST_NARROW;
+				}
+			}
+			case CHAR -> {
+				if ("int".equals(name) || "java.lang.Integer".equals(name)) {
+					return COST_WIDEN;
+				}
+			}
+			default -> {
+			}
+		}
+		return kindCost(kind, target, lookup);
+	}
+
+	/**
 	 * The class every value is: a function converts to it
 	 * ({@link #COST_FUNCTION_OBJECT}).
 	 */
@@ -108,6 +168,30 @@ public final class JavaOverloads {
 
 	/** A tag type that matches any parameter type. */
 	public static final String WILDCARD = "_";
+
+	/**
+	 * What the oracle's reflector refuses a call with (clj 1.12.6, measured 2026-10-13):
+	 * a static call names no class, an instance call the receiver's.
+	 * @param name the method name
+	 * @param argc the argument count
+	 * @param contextClass the receiver's class for an instance call, {@code null} for a
+	 * static one
+	 * @return e.g. {@code No matching method min found taking 2 args}
+	 */
+	public static String noMatchingMethod(String name, int argc, @Nullable String contextClass) {
+		return "No matching method " + name + " found taking " + argc + " args"
+				+ (contextClass != null ? " for " + contextClass : "");
+	}
+
+	/**
+	 * What the oracle's reflector refuses a construction with (clj 1.12.6, measured
+	 * 2026-10-13).
+	 * @param className the class
+	 * @return e.g. {@code No matching ctor found for class java.math.BigDecimal}
+	 */
+	public static String noMatchingCtor(String className) {
+		return "No matching ctor found for class " + className;
+	}
 
 	private JavaOverloads() {
 	}
@@ -201,6 +285,33 @@ public final class JavaOverloads {
 			}
 		}
 		return best;
+	}
+
+	/**
+	 * The one fixed-arity member of the argument count, or {@code null} when the
+	 * candidates hold none or several applicable shapes for it: a varargs executable of
+	 * the count applies packed as well as fixed, so it never stands alone. What a lone
+	 * candidate is called with converts with the oracle's checked casts, whatever the
+	 * cost table says.
+	 */
+	public static @Nullable Overload singleFixed(List<? extends JavaExecutable> candidates, int argc) {
+		@Nullable Overload found = null;
+		for (JavaExecutable candidate : candidates) {
+			List<? extends JavaType> params = candidate.parameterTypes();
+			if (params.size() == argc && !candidate.isVarArgs()) {
+				if (found != null) {
+					return null;
+				}
+				found = new Overload(candidate, false);
+			}
+			else if (candidate.isVarArgs() && argc >= params.size() - 1
+					&& params.get(params.size() - 1).componentType() != null) {
+				// A packed tail applies too: the call is some shape's, not one
+				// member's.
+				return null;
+			}
+		}
+		return found;
 	}
 
 	/**
@@ -438,6 +549,15 @@ public final class JavaOverloads {
 	/**
 	 * The conversion cost of a value of {@code kind} where {@code target} is expected --
 	 * THE cost table. Pure: it reads no value, so selection over kinds needs none.
+	 * <p>
+	 * The table is the oracle's reflector's (clj 1.12.6,
+	 * {@code clojure.lang.Reflector#paramArgTypeMatch}, measured 2026-10-13): a fixnum
+	 * matches {@code long} exactly and {@code int} by narrowing, but no floating type, no
+	 * {@code char} and no {@code BigInteger}; a float matches {@code double} alone; a
+	 * one-character string no {@code char}; a character no {@code int}; {@code nil} no
+	 * primitive. A call with a single candidate of its arity skips this table
+	 * ({@code JavaSiteResolver} resolves it, converting with the oracle's checked casts),
+	 * as the oracle's compiler calls one directly.
 	 * @param kind the argument kind
 	 * @param target the parameter type
 	 * @param lookup where the boxed types and {@code String} are found
@@ -453,10 +573,9 @@ public final class JavaOverloads {
 		String name = target.name();
 		return switch ((JavaKind.Lisp) kind) {
 			case NIL -> {
-				if ("boolean".equals(name)) {
-					yield COST_EXACT;
-				}
-				// nil carries no type, so any reference target ties
+				// nil carries no type, so any reference target ties; no primitive
+				// takes it, not even boolean (the oracle's compiler unboxes it to a
+				// NullPointerException).
 				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
 			}
 			// Java's false is t's twin: a boolean, a Boolean, or a supertype of Boolean.
@@ -469,7 +588,7 @@ public final class JavaOverloads {
 				}
 				yield assignableFrom(target, "java.lang.Boolean", lookup) ? COST_BOXED : NO_MATCH;
 			}
-			case INTEGER -> integerCost(target, name, lookup);
+			case INTEGER, SUPPLEMENTARY_CHAR -> integerCost(target, name, lookup);
 			// A bignum is a BigInteger: that class, or a supertype of it. It converts to
 			// no primitive or box -- none holds it -- and never silently to a double.
 			case BIGNUM -> {
@@ -483,23 +602,19 @@ public final class JavaOverloads {
 				if (assignableFrom(target, "java.lang.String", lookup)) {
 					yield "java.lang.String".equals(name) ? COST_EXACT : COST_BOXED;
 				}
-				// Only a one-character string narrows to a char.
-				yield kind == JavaKind.Lisp.STRING_1 && ("char".equals(name) || "java.lang.Character".equals(name))
-						? COST_NARROW : NO_MATCH;
+				// Not even a one-character string narrows to a char: the oracle
+				// refuses it (its reflector matches no char parameter for a String).
+				yield NO_MATCH;
 			}
-			case CHAR, SUPPLEMENTARY_CHAR -> {
-				// A supplementary code point cannot fit a single Java char, so the
-				// char/Character overload is refused for it rather than truncated.
-				if (kind == JavaKind.Lisp.CHAR && ("char".equals(name) || "java.lang.Character".equals(name)
-						|| assignableFrom(target, "java.lang.Character", lookup))) {
+			case CHAR -> {
+				if ("char".equals(name) || "java.lang.Character".equals(name)
+						|| assignableFrom(target, "java.lang.Character", lookup)) {
 					yield "char".equals(name) ? COST_EXACT
 							: ("java.lang.Character".equals(name) ? COST_WIDEN : COST_BOXED);
 				}
-				// int / Integer accept the raw code point (supplementary values too).
-				if ("int".equals(name) || "java.lang.Integer".equals(name)) {
-					yield COST_WIDEN;
-				}
-				yield assignableFrom(target, "java.lang.Integer", lookup) ? COST_BOXED : NO_MATCH;
+				// A character converts to no int: the oracle refuses it (its
+				// reflector matches no int parameter for a Character).
+				yield NO_MATCH;
 			}
 			// A Lisp callable passed where an interface is expected is auto-wrapped in a
 			// proxy -- a functional interface first, as a Java lambda; where an Object is
@@ -510,21 +625,23 @@ public final class JavaOverloads {
 		};
 	}
 
+	// A fixnum (and a supplementary code point, which is one): long exactly, int by
+	// narrowing, a box or supertype of either -- but no floating type (the oracle
+	// refuses a fixnum where a double is expected), no char and no BigInteger.
 	private static int integerCost(JavaType target, String name, JavaClassLookup lookup) {
 		return switch (name) {
-			case "int" -> COST_EXACT;
-			case "java.lang.Integer", "long", "java.lang.Long" -> COST_WIDEN;
-			case "double", "java.lang.Double", "float", "java.lang.Float" -> COST_CONVERT;
-			case "short", "java.lang.Short", "byte", "java.lang.Byte" -> COST_NARROW;
-			// Lossless, but no primitive: ties with double, which the signature order
-			// prefers.
-			case BIG_INTEGER -> COST_CONVERT;
+			case "long" -> COST_EXACT;
+			case "int", "java.lang.Long" -> COST_WIDEN;
 			default ->
 				assignableFrom(target, "java.lang.Long", lookup) || assignableFrom(target, "java.lang.Integer", lookup)
 						? COST_BOXED : NO_MATCH;
 		};
 	}
 
+	// A float is a double: that class, or a supertype of it -- and, where no double
+	// takes it, a float, as the oracle's compiler passes a double literal to a float
+	// parameter (its reflector refuses one at run time, an unpinned corner this table
+	// does not model). It converts to no integer, char or boolean.
 	private static int floatCost(JavaType target, String name, JavaClassLookup lookup) {
 		return switch (name) {
 			case "double" -> COST_EXACT;

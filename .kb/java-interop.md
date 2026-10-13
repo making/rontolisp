@@ -159,15 +159,16 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   was a Lisp string no further call could take. Supersedes, for receivers, the 2026-09-26
   BigInteger note above: a bignum is callable as a `BigInteger`; a host BigInteger fitting a
   fixnum is a fixnum, called as an `Integer`/`Long`. Pins: `JavaInteropPrograms.
-  LISP_RECEIVER_PROGRAM` (both backends), `HOST_OBJECT_OUTPUT` (`No matching method
-  java.lang.Double.size`), `JavaSiteResolverTest#aLispValueReceiverResolvesAsTheClassItConvertsTo`.
+  LISP_RECEIVER_PROGRAM` (both backends), `HOST_OBJECT_OUTPUT` (f90: `error calling
+  java.lang.Double.size: java.lang.IllegalArgumentException: No matching method size found
+  taking 0 args for java.lang.Double`), `JavaSiteResolverTest#aLispValueReceiverResolvesAsTheClassItConvertsTo`.
 
 ## Bignums and specialized vectors
 - BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype
   of it (`Number`, `Object`, `Comparable`, `Serializable`) BOXED, anything else NO_MATCH -- no
   `long`, and no lossy `double` (a user converts with `float`). INTEGER -> `BigInteger` is
-  CONVERT (`BigInteger.valueOf`): lossless but after every primitive that holds it; a tie with
-  `double` goes to `double` by the signature order. Kind tests: interpreter `LispBigInteger`,
+  NO_MATCH (f90: the oracle's reflector matches no `BigInteger` parameter for a `long`;
+  `(java:static "java.lang.Math" "max" 3 7)` is `max(long,long)`). Kind tests: interpreter `LispBigInteger`,
   bridge / `_jkind` / `emitKindTest` `instanceof BigInteger`; conversion = the value itself.
   A literal bignum is a BIGNUM static type (a site resolves on it); spelled
   `(java:object "java.math.BigInteger")` = {integer, bignum, nil} (`KIND_SPELLINGS`).
@@ -578,8 +579,9 @@ four classes); no `_apply`, no `$JavaCalls`.
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
 `Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
 - A KIND is the smallest token every conversion cost is a pure function of: nil, t, `|false|`,
-  integer, bignum, float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP
-  char, supplementary char, function value, host object = its exact `Class`. Canonical
+  integer, bignum, float, string of UTF-16 length 1 (never `char`, f90: the oracle refuses one),
+  other string, BMP char (never `int`, f90), supplementary char (a fixnum, f90), function value,
+  host object = its exact `Class`. Canonical
   (constants / `Class`), compared by identity. Conses, Lisp arrays and hash tables have NO kind
   (the cost sums the elements, a table's keys and values); values `marshal` never bridges
   (other symbols, ratios, ...) have none either.
@@ -620,7 +622,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   {C, nil}, Object/Number/CharSequence/arrays... -> UNKNOWN, else `Bounded(C)`); `(the
   (java:object "C") x)`. An argument resolves the site only when EVERY kind it can have selects
   the same (executable, packed) (`COMBINATION_LIMIT` 256) -- so a resolved argument never changes
-  the member (a String answer may be nil -> `append(boolean)` -> unresolved).
+  the member (f90: a String answer may be nil, which matches only reference parameters, so the
+  site dispatches among the reference `append` overloads).
 - THE semantic difference (documented in the guide): a receiver typed by an upper bound resolves
   among the bound's methods; an overload only the run-time class adds is not a candidate
   (`Collection.remove(Object)` vs `ArrayList.remove(int)`) -- whether the site resolves to one
@@ -716,7 +719,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   static through an instance), STATIC ONLY for `java:static` (`JavaOverloads.staticMethods`, on all
   three: resolver, interpreter, bridge -- its memo key is prefixed so a call's and a static's
   choices of one name never mix). An instance method under `java:static` only ever failed (an NPE
-  out of `Method.invoke`); now it is no candidate: `No matching method C.m with N argument(s)`.
+  out of `Method.invoke`); now it is no candidate (f90: `error calling C.m: java.lang.IllegalArgumentException: No matching method m found taking N args`).
 - An INTERFACE receiver's `java:call` candidates add `Object`'s public instance methods it does
   not redeclare (`JavaSiteResolver.callableMethods`; JLS 9.2 members, final ones included --
   javac emits `invokeinterface List.getClass`, which links by JVMS 5.4.3.4). The lookups keep
@@ -752,9 +755,10 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   whenever `beats` at equal cost is a strict total order (signature string, then covariant
   return, then `tieKey`); a non-transitive trio of covariant variants of one parameter list
   could differ -- none found: `JavaSiteResolverTest#theRankedOrderChoosesWhatSelectChooses`
-  checks >1000 (candidates, kinds) pairs over ten JDK classes. No-match text = the run-time one
-  with the STATIC class: `No matching method C.<designator> with N argument(s)` /
-  `No matching constructor for <designator> ...`.
+  checks >1000 (candidates, kinds) pairs over ten JDK classes. No-match text = the oracle's
+  refusal (f90) with the STATIC class: `No matching method <name> found taking N args [for C]` /
+  `No matching ctor found for class C`, carried by a `java:java-exception` (`error calling ...` /
+  `error constructing ...`).
 - Interpreter: `JavaInterop.invokeResolved` -> `dispatch`: receiver check, `keepsPromise` per
   argument, `selectRanked` over `kindCost` (a kindless argument: `marshal` cost, never
   remembered), memo per site IDENTITY (`DISPATCHES`, `SiteKey`; same limits as `CHOICES`) --
@@ -1268,3 +1272,54 @@ dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
 same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,life-gui}.lisp`;
 `doc/{en,ja}/guides/java-interop.md` + the `reference/functions/java-*.md` pages (a GUI form hangs
 `DocExamplesTest`).
+
+## Host coercions match the oracle's reflector (f90, 2026-10-13)
+- Measured against clj 1.12.6 (`clojure.lang.Reflector#paramArgTypeMatch`, bytecode-read
+  and probed): a fixnum matches `long` exactly and `int` by narrowing (checked --
+  `Math.toIntExact`, so `(Integer/toHexString 4294967295)` is the oracle's
+  `ArithmeticException: integer overflow`), a `Long`, or a supertype of `Long`/`Integer`;
+  but no floating type (`(Double/valueOf 5)` and `(Math/min 1 1.0)` refuse), no `char` and
+  no `BigInteger`. A float matches `double` alone (`(Integer/toHexString 1.5)` is NOT
+  refused -- see the single-candidate rule below). A one-character string matches no
+  `char`; a character no `int` (`(Math/min \a 1)` refuses); `nil` no primitive, not even
+  `boolean` (unboxing nil is the oracle's `NullPointerException`, naming `x`).
+- THE cost table is the oracle's (`JavaOverloads.kindCost`, bridge hand copy, `_jcost$N`
+  arms): INTEGER/SUPPLEMENTARY_CHAR = `long` EXACT, `int`/`Long` WIDEN, supertypes of
+  either BOXED; NIL = any reference BOXED; T/FALSE = `boolean` EXACT, `Boolean` WIDEN,
+  supertypes BOXED; BIGNUM = `BigInteger` EXACT, supertypes BOXED; FLOAT = `double` EXACT,
+  `Double` WIDEN, `float`/`Float` NARROW (only where no `double` takes it), supertypes of
+  `Double` BOXED; STRING/STRING_1 = `String` EXACT, supertypes BOXED; CHAR = `char` EXACT,
+  `Character` WIDEN, supertypes BOXED. Host boxes keep pure assignability (a host `Byte`
+  never occurs as a value: every `unmarshal` answers it as a fixnum).
+- A call with a SINGLE fixed-arity candidate of its arity (`JavaOverloads.singleFixed`;
+  a varargs executable whose packed shape also applies keeps the dispatch) skips the
+  table on all three paths (resolver `resolveToOpen`, interpreter, bridge): the oracle's
+  compiler calls one method directly. Arguments convert with the oracle's checked casts
+  (`convertChecked*`, direct sites `_jchk$N`): primitives narrow checked (`int` exact,
+  `short`/`byte` range-checked `IllegalArgumentException: Value out of range for ...`,
+  `float`/`double` widened), boxes unbox through their box (`NullPointerException:
+  Cannot invoke "....booleanValue()" because "x" is null` for nil), anything else a
+  `ClassCastException: class FROM cannot be cast to class TO` without the module tail
+  (FROM = the Lisp class: `LispRatio`, `LispComplex`, `LispSymbol`, `LispInstance`,
+  `LispCons` -- direct sites name it through the shared `_jcls` helper, since the
+  compiled values are `BigInteger[]`, `RontoComplex`, bare `String`, layout-headed
+  `Object[]`; a Lisp string stays `java.lang.String`, a host value its own class).
+  So `(Math/sqrt 16)` answers `4.0`, `(Integer/toHexString 1.5)` answers `"1"`, and
+  `(Integer/parseInt 5 16)` is the oracle's `ClassCastException` to `String`.
+- Refusals spell the oracle's words, carried by a `java:java-exception` (`error calling
+  C.m: ...` / `error constructing C: ...`): `No matching method <name> found taking N
+  args [for C]`, `No matching ctor found for class C`. One exception: the
+  function-where-`Object`-is-expected refusal (`functionObjectRefusal`) is a PLAIN error
+  on the interpreter (thrown past the `fail` wrapping), so a direct site refuses it
+  BEFORE its conversion handler (`emitFunctionObjectRefusals`), or `handler-case` sees
+  the wrapped text.
+- Tagged designators (`put(byte)`) resolve explicitly and convert UNCHECKED, as before.
+- Test note: `(byte x)` answers a fixnum here (the oracle's `Byte`), which the reflector
+  refuses for `byte` parameters -- so `ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItself`
+  writes through `putChar` (a character unboxes on both), oracle-measured `[0 97]` etc.
+- Pins: `JavaSiteResolverTest` (`max(long,long)`, the `append` reference set, the
+  single-candidate rows), `JavaInteropTest`/`JvmJavaInteropCompilerTest` (refusals,
+  `characterRefusesAnIntParameter`, `FUNCTION_OBJECT` row 3, `HOST_EXCEPTION_PROGRAM`'s
+  `LispInstance`), `JavaBridgeTemplateParityTest` (`singleFixed` fallback),
+  `ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItself`; guide
+  `doc/{en,ja}/guides/java-interop.md` ("Overload resolution") + `java-static.md`.

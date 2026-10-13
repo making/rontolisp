@@ -75,12 +75,12 @@ Arguments and results are converted between rontolisp and Java automatically:
 
 | rontolisp | Java (in) | Java (out) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes), `BigInteger` | `int`/`long`/.../`BigInteger` → integer |
+| integer | `long`, `int` (when it fits), `Long`, or a supertype of `Long`/`Integer` -- and nowhere else: not `double`, not `BigInteger` | `int`/`long`/.../`BigInteger` → integer |
 | bignum | `BigInteger` (or a supertype: `Number`, `Object`, ...) | `BigInteger` → integer |
-| float | `double`/`float` (and boxes) | `double`/`float` → float |
-| string | `String`, or `char` if length 1 | `String` → string |
-| character | `char`/`Character` | `Character` → character |
-| `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` (after `:java-false`, `t`/`\|false\|`) |
+| float | `double` (or a supertype of `Double`); a `float` where no `double` overload takes it | `double`/`float` → float |
+| string | `String` (or a supertype) -- never `char`, not even of length 1 | `String` → string |
+| character | `char`/`Character` (or a supertype of `Character`) -- never `int` (a supplementary character converts as an integer does) | `Character` → character |
+| `t` / `nil` | `boolean`/`Boolean` for `t`; `nil` only where a reference is expected (`null`), never for a primitive | `boolean` → `t`/`nil` (after `:java-false`, `t`/`\|false\|`) |
 | the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | after `:java-false`, Java's false |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods; where `Object` is expected, after `:functional :java-false`, the object it is (an argument only) | — |
@@ -110,13 +110,14 @@ stays an opaque `java` object whose methods you call:
 
 A bignum is passed as a `java.math.BigInteger` where one (or a supertype such as
 `Number` or `Object`) is expected, and nowhere narrower: not as a `long`, and not
-as a `double` -- convert it with `float` first. A fixnum reaches a `BigInteger`
-parameter too, when no primitive overload takes it. In the other direction a
+as a `double` -- convert it with `float` first. A fixnum reaches no `BigInteger`
+parameter: where an `int` or a `long` overload takes it, that one is chosen. In
+the other direction a
 `java.math.BigInteger` result is a Lisp integer, not a `java` object: compute with
 it in Lisp rather than through `java:call`.
 
 ```lisp
-;; in: a bignum -> BigInteger; a fixnum -> BigInteger where no primitive fits
+;; in: a bignum -> BigInteger
 (java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
 ```
 
@@ -363,23 +364,45 @@ Clojure, whose `=` asks its left operand.
 
 ## Overload resolution
 
-When a class has several constructors or methods of the same name and arity,
-`java` picks the overload whose arguments convert at the **lowest total cost** —
-an exact match beats a widening conversion, which beats a lossy/boxed one — with
-ties broken by a stable signature ordering. So an integer argument prefers an
-`int` parameter over `long`/`double`, and the choice never depends on the order
-reflection happens to return methods:
+The rule is Clojure's reflector's: a value matches what its own type matches, and
+nothing else. An integer is a `long`: it matches `long` exactly and `int` by
+narrowing (an out-of-range value is an error, not a wrap), a `Long`, or a
+supertype of `Long`/`Integer` — but no floating type, no `char` and no
+`BigInteger`. A float is a `double`. A one-character string is still a string,
+never a `char`; a character never an `int`; `nil` never a primitive, not even
+`boolean`. When a class has several constructors or methods of the same name and
+arity, `java` picks the overload whose arguments convert at the **lowest total
+cost** — an exact match beats a widening conversion, which beats a lossy/boxed
+one — with ties broken by a stable signature ordering. So an integer argument
+prefers a `long` parameter, and the choice never depends on the order reflection
+happens to return methods:
 
 ```lisp
-;; Math.max is overloaded for int/long/float/double; an integer picks int,
-;; so the result is an integer, not a float.
+;; Math.max is overloaded for int/long/float/double; an integer picks long.
 (java:static "java.lang.Math" "max" 3 7)   ; => 7
 ```
 
-When no integer overload exists the integer is converted to the available type:
+A mixed pair matches no overload, as in Clojure:
+
+```lisp
+(handler-case (java:static "java.lang.Math" "max" 3 7.5)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+```
+
+A call with a single candidate of its arity skips the cost rule, as Clojure's
+compiler calls one method directly: the arguments convert with checked casts,
+which refuse what the member was not chosen for. So an integer still reaches the
+one `double` of `sqrt`, and a value of the wrong type fails in conversion:
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+```lisp
+(handler-case (java:static "java.lang.Character" "charCount" #\a)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Character.charCount: java.lang.ClassCastException: class java.lang.Character cannot be cast to class java.lang.Number"
 ```
 
 A function costs less for a functional interface (one abstract method) than for
@@ -471,16 +494,24 @@ method chosen, the arguments checked and converted.
 
 ```lisp
 (defun bigger (a b) (java:static "java.lang.Math" "max" a b))
-(list (bigger 3 7) (bigger 2.5 1) (bigger #\a 1))   ; => (7 2.5 97)
+;; by max(long,long): an integer is a long.
+(bigger 3 7)   ; => 7
 ```
 
-`a` and `b` may be anything, so each call of `bigger` chooses among `max(int,int)`,
-`max(long,long)`, `max(float,float)` and `max(double,double)` by the cost rule.
+`a` and `b` may be anything, so each call of `bigger` chooses among `max(long,long)`,
+`max(int,int)` and the floating overloads by the cost rule -- and refuses a pair no
+overload takes, as Clojure does:
+
+```lisp
+(handler-case (bigger 2.5 1)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+```
 
 An argument decides the method before the call runs only when every kind it can have
-selects the same one. A `String` answer may be `nil`, which selects `append(boolean)`, so
-`(java:call sb "append" (java:call sb "toString"))` chooses between `append(String)` and
-`append(boolean)` when it runs.
+selects the same one. A `String` answer may be `nil`, which matches only reference
+parameters, so `(java:call sb "append" (java:call sb "toString"))` chooses among
+`append(String)` and the other reference overloads when it runs.
 
 ### The declared receiver class decides the candidates
 

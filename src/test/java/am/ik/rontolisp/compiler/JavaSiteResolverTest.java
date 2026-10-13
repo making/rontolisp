@@ -33,29 +33,33 @@ class JavaSiteResolverTest {
 
 	@Test
 	void literalArgumentsSelectByTheirKinds() {
-		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7)")).isEqualTo("java.lang.Math max(int,int)");
-		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7.5)"))
-			.isEqualTo("java.lang.Math max(double,double)");
+		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7)")).isEqualTo("java.lang.Math max(long,long)");
+		// A mixed pair matches nothing, as the oracle's reflector refuses it: left to run
+		// time, where it is the oracle's no-matching-method refusal.
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7.5)").reason())
+			.isEqualTo("no method of java.lang.Math accepts arguments of kinds integer, float");
 		assertThat(member("(java:static \"java.lang.Math\" \"sqrt\" 16)")).isEqualTo("java.lang.Math sqrt(double)");
 		assertThat(member("(java:static \"java.lang.Character\" \"toString\" #\\a)"))
 			.isEqualTo("java.lang.Character toString(char)");
 	}
 
-	// A bignum is a BigInteger or a supertype of one; a fixnum reaches a BigInteger
-	// parameter, after every primitive that holds it. A BigInteger answer is an integer
-	// of either kind, spelled (java:object "java.math.BigInteger").
+	// A bignum is a BigInteger or a supertype of one; a fixnum reaches no BigInteger
+	// parameter (as the oracle's reflector refuses one). A BigInteger answer is an
+	// integer of either kind, spelled (java:object "java.math.BigInteger"). A call
+	// with a single candidate of its arity still resolves, converting with the
+	// oracle's checked casts.
 	@Test
 	void bignumsAndBigIntegerParametersResolve() {
 		assertThat(member("(java:static \"java.lang.String\" \"valueOf\" 1267650600228229401496703205376)"))
 			.isEqualTo("java.lang.String valueOf(java.lang.Object)");
 		assertThat(member("(java:new \"java.math.BigDecimal\" 1267650600228229401496703205376)"))
 			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(java.math.BigInteger)");
-		assertThat(member("(java:new \"java.math.BigDecimal\" 5 2)"))
-			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(java.math.BigInteger,int)");
+		assertThat(resolve("(java:new \"java.math.BigDecimal\" 5 2)").reason())
+			.isEqualTo("no constructor of java.math.BigDecimal accepts arguments of kinds integer, integer");
 		assertThat(member("(java:new \"java.math.BigDecimal\" 5)"))
-			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(int)");
-		assertThat(resolve("(java:static \"java.lang.Math\" \"sqrt\" 1267650600228229401496703205376)").reason())
-			.isNotNull();
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(long)");
+		assertThat(member("(java:static \"java.lang.Math\" \"sqrt\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.lang.Math sqrt(double)");
 		JavaStaticType whole = this.resolver.typeOf(
 				LispReader.readAllFromString("(java:call (java:new \"java.math.BigDecimal\" \"2.5\") \"toBigInteger\")")
 					.get(0));
@@ -70,7 +74,7 @@ class JavaSiteResolverTest {
 	@Test
 	void aTrailingFunctionalMarkerIsSetAside() {
 		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7 :functional)"))
-			.isEqualTo("java.lang.Math max(int,int)");
+			.isEqualTo("java.lang.Math max(long,long)");
 		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7 :functional)").functional()).isTrue();
 		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7)").functional()).isFalse();
 		assertThat(member("(java:new \"java.lang.Thread\" (lambda () nil) :functional)"))
@@ -231,7 +235,7 @@ class JavaSiteResolverTest {
 		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\" \"x\")"))
 			.isEqualTo("java.lang.StringBuilder append(java.lang.String)");
 		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\" 42)"))
-			.isEqualTo("java.lang.StringBuilder append(int)");
+			.isEqualTo("java.lang.StringBuilder append(long)");
 		// The declared return type of a resolved member types the next receiver: the
 		// covariant StringBuilder append, never the bridge returning its superclass.
 		assertThat(
@@ -272,20 +276,25 @@ class JavaSiteResolverTest {
 
 	@Test
 	void anArgumentResolvesOnlyWhenEveryKindItCanHaveAgrees() {
-		// A String result may be nil, and nil selects append(boolean): no single member,
-		// a dispatch among the overloads one of its kinds selects.
+		// A String result may be nil, and nil matches only reference parameters now (as
+		// the oracle's reflector matches null): no single member, a dispatch among the
+		// overloads one of its kinds selects.
 		JavaSite site = resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (java:call (java:new \"java.lang.StringBuilder\") \"toString\"))");
 		assertThat(site.dispatched()).isTrue();
 		assertThat(site.executable()).isNull();
-		assertThat(overloads(site)).contains("append(java.lang.String)", "append(boolean)", "append(char)")
-			.doesNotContain("append(int)", "append(long)", "append(double)");
+		assertThat(overloads(site))
+			.contains("append(java.lang.String)", "append(java.lang.Object)", "append(java.lang.CharSequence)",
+					"append([C)", "append(java.lang.StringBuffer)")
+			.doesNotContain("append(int)", "append(long)", "append(double)", "append(boolean)", "append(char)",
+					"append(float)");
 		assertThat(site.arguments()).containsExactly(
 				new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1), null));
-		// An int result is always an integer.
+		// An int result is always an integer, which takes the long overload (as the
+		// oracle's compiler takes it for a long).
 		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (java:call (java:new \"java.lang.StringBuilder\") \"length\"))"))
-			.isEqualTo("java.lang.StringBuilder append(int)");
+			.isEqualTo("java.lang.StringBuilder append(long)");
 		// A CharSequence may be a Lisp string: nothing is known of the argument.
 		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (the (java:object \"java.lang.CharSequence\") x))")
@@ -316,15 +325,21 @@ class JavaSiteResolverTest {
 				JavaSite.Argument.open(null, null));
 		// The overloads answer different types: nothing is known of the value.
 		assertThat(site.result()).isEqualTo(JavaStaticType.UNKNOWN);
-		// The receiver's declared class decides the candidates.
+		// The receiver's declared class decides the candidates; one candidate of the
+		// arity resolves however the argument converts, as the oracle's compiler calls
+		// one directly.
 		JavaSite remove = resolve("(java:call (the (java:object \"java.util.Collection\") c) \"remove\" x)");
-		assertThat(overloads(remove)).containsExactly("remove(java.lang.Object)");
+		assertThat(remove.resolved()).isTrue();
+		assertThat(remove.dispatched()).isFalse();
+		assertThat(JavaOverloads.fullDesignator(java.util.Objects.requireNonNull(remove.executable()), "remove"))
+			.isEqualTo("remove(java.lang.Object)");
 		assertThat(remove.result())
 			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
 		// A bounded argument is nil or an object of its class.
 		JavaSite bounded = resolve("(java:call (java:new \"java.util.ArrayList\") \"addAll\""
 				+ " (the (java:object \"java.util.Collection\") c))");
-		assertThat(overloads(bounded)).containsExactly("addAll(java.util.Collection)");
+		assertThat(bounded.resolved()).isTrue();
+		assertThat(bounded.dispatched()).isFalse();
 		assertThat(bounded.arguments())
 			.containsExactly(JavaSite.Argument.open("java.util.Collection", "java.util.Collection"));
 		assertThat(bounded.arguments().get(0).expected()).isEqualTo("a java.util.Collection");

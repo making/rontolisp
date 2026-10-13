@@ -18,7 +18,7 @@ public interface JavaKind {
 	/** The kinds of the Lisp values the bridge marshals. */
 	enum Lisp implements JavaKind {
 
-		/** {@code nil}: {@code boolean} false, or {@code null} for any reference. */
+		/** {@code nil}: {@code null} for any reference; no primitive takes it. */
 		NIL,
 
 		/** {@code t}: {@code boolean} true. */
@@ -43,16 +43,19 @@ public interface JavaKind {
 		/** A float. */
 		FLOAT,
 
-		/** A string of UTF-16 length 1: it may also narrow to a {@code char}. */
+		/** A string of UTF-16 length 1 (no {@code char}: the oracle refuses one). */
 		STRING_1,
 
 		/** Any other string. */
 		STRING,
 
-		/** A character in the Basic Multilingual Plane: it fits a Java {@code char}. */
+		/**
+		 * A character in the Basic Multilingual Plane: a {@code char}, never an
+		 * {@code int}.
+		 */
 		CHAR,
 
-		/** A supplementary character: it fits an {@code int}, never a {@code char}. */
+		/** A supplementary character: a fixnum, like an integer. */
 		SUPPLEMENTARY_CHAR,
 
 		/** A function value: it becomes a proxy where an interface is expected. */

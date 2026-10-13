@@ -88,12 +88,14 @@ class JavaInteropTest {
 		assertThat(eval("(java:static \"java.lang.Math\" \"sqrt\" 16)")).isEqualTo(new LispDouble(4.0));
 	}
 
-	// A character argument marshals to an int parameter (the code point) when there is
-	// no char/Character overload -- matching the JVM-compiled bridge's rule
-	// (JavaBridgeTemplate.marshal).
+	// A character argument refuses an int parameter where no char/Character overload
+	// takes it: the oracle's cast refusal (Character.charCount takes an int alone).
 	@Test
-	void characterMarshalsToIntParameter() {
-		assertThat(eval("(java:static \"java.lang.Character\" \"charCount\" #\\a)")).isEqualTo(new LispInteger(1));
+	void characterRefusesAnIntParameter() {
+		assertThatThrownBy(() -> eval("(java:static \"java.lang.Character\" \"charCount\" #\\a)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("error calling java.lang.Character.charCount: java.lang.ClassCastException:"
+					+ " class java.lang.Character cannot be cast to class java.lang.Number");
 	}
 
 	// A supplementary code point cannot fit a single Java char, so it must be refused
@@ -208,7 +210,7 @@ class JavaInteropTest {
 	void dottedListDoesNotMarshal() {
 		assertThatThrownBy(() -> eval("(java:static \"java.util.Collections\" \"max\" (cons 1 2))"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("No matching method");
+			.hasMessageContaining("cannot be cast to class java.util.Collection");
 	}
 
 	// Extra trailing arguments are packed into the varargs array.
@@ -227,14 +229,14 @@ class JavaInteropTest {
 		assertThat(eval("(java:call (java:static \"java.util.List\" \"of\") \"size\")")).isEqualTo(new LispInteger(0));
 	}
 
-	// The overload chosen for a call is remembered per argument kind. A float first
-	// selects max(double,double); the integers after it must still select max(int,int)
-	// (a shared choice would return 3.0), and the floats after those the double one.
+	// The overload chosen for a call is remembered per argument kind. An integer
+	// selects valueOf(long), a string valueOf(String): alternating them keeps each
+	// choice (a shared choice would refuse one).
 	@Test
 	void rememberedOverloadFollowsTheArgumentKind() {
 		assertThat(eval("""
-				(mapcar (lambda (x) (java:static "java.lang.Math" "max" x 0)) (list 2.5 3 4.5 5))
-				""").print()).isEqualTo("(2.5 3 4.5 5)");
+				(mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 "a" 7))
+				""").print()).isEqualTo("(\"5\" \"a\" \"7\")");
 	}
 
 	// The same method name on alternating receiver classes resolves on each class.
@@ -514,7 +516,8 @@ class JavaInteropTest {
 			.hasMessage("java:call: argument 1 is not a java.util.Collection, got 5");
 		assertThatThrownBy(() -> eval("(defun mx (x y) (java:static \"java.lang.Math\" \"max\" x y)) (mx \"a\" 1)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessage("No matching method java.lang.Math.max with 2 argument(s)");
+			.hasMessage(
+					"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args");
 	}
 
 	// java:static calls a static method: an instance method of the name, which could only
@@ -523,7 +526,8 @@ class JavaInteropTest {
 	void aStaticCallNeverChoosesAnInstanceMethod() {
 		assertThatThrownBy(() -> eval("(java:static \"java.lang.String\" \"length\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessage("No matching method java.lang.String.length with 0 argument(s)");
+			.hasMessage(
+					"error calling java.lang.String.length: java.lang.IllegalArgumentException: No matching method length found taking 0 args");
 	}
 
 	@Test
