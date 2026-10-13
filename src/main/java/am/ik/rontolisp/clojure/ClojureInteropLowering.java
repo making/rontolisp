@@ -426,7 +426,9 @@ final class ClojureInteropLowering {
 	 * own {@code with-out-str} construction), and so are a zero-argument
 	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}: to these
 	 * programs a builder is the same object ({@code .append} of any value's {@code str},
-	 * {@code .toString}, {@code .length}, {@code .setLength}, {@code .charAt}).
+	 * {@code .toString}, {@code .length}, {@code .setLength}, {@code .charAt}). A
+	 * one-argument builder or buffer construction is one the argument fills at run time
+	 * ({@link #STRING_BUILDER_1}).
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
 
@@ -436,6 +438,12 @@ final class ClojureInteropLowering {
 
 	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
 	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
+
+	/**
+	 * A one-argument {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}
+	 * construction: a string output stream.
+	 */
+	static final String STRING_BUILDER_1 = "RONTOLISP::%CLOJURE-STRING-BUILDER-1";
 
 	/**
 	 * Whether X is a string output stream: a {@code java.io.StringWriter},
@@ -673,10 +681,13 @@ final class ClojureInteropLowering {
 	/**
 	 * A host construction over argument datums, shared by {@code (Class. ...)},
 	 * {@code (new Class ...)} and {@code (Class/new ...)}: the reader wrappers and the
-	 * zero-argument {@code java.io.StringWriter} as streams, a Date, Timestamp or UUID as
-	 * the value it is here ({@link ClojureTimeValueLowering#construction}), an untagged
-	 * plain throwable as an exception ({@link #throwableConstruction}), anything else
-	 * {@code java:new}, under the param-tag designator when tagged.
+	 * zero-argument {@code java.io.StringWriter} as streams, a one-argument
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer} as a stream the
+	 * argument fills (untagged only; a tagged one keeps {@code java:new} under the
+	 * param-tag designator), a Date, Timestamp or UUID as the value it is here
+	 * ({@link ClojureTimeValueLowering#construction}), an untagged plain throwable as an
+	 * exception ({@link #throwableConstruction}), anything else {@code java:new}, under
+	 * the param-tag designator when tagged.
 	 */
 	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
 			@Nullable List<String> types) {
@@ -689,6 +700,13 @@ final class ClojureInteropLowering {
 		LispVal stringStream = stringStreamConstruction(cls, argDatums.size());
 		if (stringStream != null) {
 			return stringStream;
+		}
+		if (argDatums.size() == 1 && types == null) {
+			// untagged only: param tags name the host overload, which keeps java:new
+			LispVal builder = stringBuilderConstruction(cls, ctx.lower(argDatums.get(0)));
+			if (builder != null) {
+				return builder;
+			}
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
@@ -1313,15 +1331,23 @@ final class ClojureInteropLowering {
 
 	/**
 	 * {@link #hostConstruction} over already-lowered arguments: the zero-argument
-	 * {@code java.io.StringWriter} a string output stream, a Date, Timestamp or UUID the
-	 * value it is here, an untagged plain throwable an exception, anything else
-	 * {@code java:new}.
+	 * {@code java.io.StringWriter} a string output stream, an untagged one-argument
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer} a stream the
+	 * argument fills, a Date, Timestamp or UUID the value it is here, an untagged plain
+	 * throwable an exception, anything else {@code java:new}.
 	 */
 	static LispVal hostConstructionLowered(ClojureLowering ctx, String cls, List<LispVal> args,
 			@Nullable List<String> types) {
 		LispVal stringStream = stringStreamConstruction(cls, args.size());
 		if (stringStream != null) {
 			return stringStream;
+		}
+		if (args.size() == 1 && types == null) {
+			// untagged only: param tags name the host overload, which keeps java:new
+			LispVal builder = stringBuilderConstruction(cls, args.get(0));
+			if (builder != null) {
+				return builder;
+			}
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
 		if (timeValue != null) {
@@ -1425,6 +1451,23 @@ final class ClojureInteropLowering {
 		if (argCount == 0 && (cls.equals(STRING_WRITER_CLASS) || cls.equals(STRING_BUILDER_CLASS)
 				|| cls.equals(STRING_BUFFER_CLASS))) {
 			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER));
+		}
+		return null;
+	}
+
+	/**
+	 * A one-argument {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}
+	 * construction (dotted or imported, resolved) over the already-lowered argument: a
+	 * fresh string output stream the argument fills at run time
+	 * ({@code %clojure-string-builder-1}, a stream producer), so every backend runs it --
+	 * wasm included, which never sees the refused {@code java:new}. Only untagged
+	 * constructions reach it (the callers keep a tagged one, whose param tags name the
+	 * host overload, on {@code java:new}). Null for any other class, so the call keeps
+	 * its {@code java:new} shape.
+	 */
+	static @Nullable LispVal stringBuilderConstruction(String cls, LispVal arg) {
+		if (cls.equals(STRING_BUILDER_CLASS) || cls.equals(STRING_BUFFER_CLASS)) {
+			return ClojureLowerUtil.list(new LispSymbol(STRING_BUILDER_1), LispString.literal(cls), arg);
 		}
 		return null;
 	}

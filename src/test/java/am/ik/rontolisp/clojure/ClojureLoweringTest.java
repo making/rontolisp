@@ -1860,9 +1860,6 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(StringBuffer.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		// an initial text or capacity keeps the host construction, like any other class
-		assertThat(lowered("(new StringBuilder \"ab\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
-		assertThat(lowered("(new StringBuilder 16)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
 		assertThat(lowered("(let [s (StringBuilder.)] (.length s))"))
 			.contains("(RONTOLISP::%CLOJURE-STRING-OUTPUT-P |__clojure_0|)")
 			.contains("RONTOLISP::%CLOJURE-STREAM-STRING");
@@ -1878,6 +1875,45 @@ class ClojureLoweringTest {
 		// where the host is not, no java: operator is left for any of them
 		String portable = "(let [sb (StringBuilder.)] (.append sb \"a\") (println (str sb) (.length sb)))"
 				+ " (println (.toUpperCase \"hi\" java.util.Locale/US) (.intern \"x\"))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aOneArgumentStringBuilderLowersToAStreamTheArgumentFills() {
+		// A one-argument (StringBuilder.), (new StringBuilder), (StringBuilder/new) or
+		// (StringBuffer.) is a fresh string output stream the argument fills at run
+		// time, on every backend, never a java:new (which wasm refuses): the class
+		// travels for the refusal, a string is written into the stream, an integer is
+		// a capacity (ignored), anything else the oracle's no-such-constructor
+		// refusal. Two arguments, and a tagged construction naming the host overload,
+		// keep the host construction, like any other class.
+		assertThat(lowered("(StringBuilder. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuilder 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder/new \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuffer. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuffer 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder. \"a\" \"b\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// a tagged construction names the host overload and keeps java:new, on the
+		// interpreter and the JVM only
+		assertThat(lowered("(^[String] StringBuilder/new \"z\")")).contains("JAVA:NEW")
+			.contains("java.lang.StringBuilder");
+		assertThat(lowered("(^[int] StringBuilder/new 64)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (str (StringBuilder. \"ab\")))" + " (println (str (new StringBuffer 16)))"
+				+ " (println (let [sb (StringBuilder/new \"x\")] (.append sb \"y\") (str sb)))";
 		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
 			.stream()
 			.map(LispVal::print)

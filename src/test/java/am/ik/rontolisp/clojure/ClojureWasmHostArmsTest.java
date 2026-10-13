@@ -27,6 +27,7 @@ class ClojureWasmHostArmsTest {
 			"(println (String. (.getBytes \"abc\" \"UTF-8\") \"UTF-8\"))",
 			"(println (count (.getBytes \"é\" java.nio.charset.StandardCharsets/UTF_8)))",
 			"(println (let [sb (StringBuilder.)] (.append sb \"a\") (.append sb :k) (str sb) (.length sb)))",
+			"(println (str (StringBuilder. \"ab\") (StringBuffer. 16) (new StringBuilder \"c\")))",
 			"(println (.toUpperCase \"straße\" java.util.Locale/US) (.intern (str \"a\")))",
 			"(deftype K [s] Object (equals [this o] (and (instance? K o) (= s (.-s ^K o))))"
 					+ " (hashCode [this] (hash s)))" + " (println (= (K. 1) (K. 1)) (= (K. 1) (K. 2)))");

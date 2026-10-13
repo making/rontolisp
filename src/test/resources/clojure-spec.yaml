@@ -1673,6 +1673,48 @@ cases:
       [104 101 0 0]
       d
       e
+  - name: string-builder-construction-with-an-initial-text-or-capacity
+    # A one-argument (StringBuilder.), (new StringBuilder), (StringBuilder/new) or
+    # (StringBuffer.) is a string output stream pre-filled with the text on every
+    # backend: a string is written into the fresh stream, an integer is a capacity
+    # (ignored, the stream starts empty), anything else the oracle's
+    # no-such-constructor refusal. Oracle-identical (clj 1.12.6, 2026-10-13); nil
+    # is refused here (no such constructor), where the oracle throws a
+    # NullPointerException.
+    source: |
+      (println (str (StringBuilder. "ab")))
+      (println (str (StringBuilder. 16)))
+      (println (str (StringBuffer. "ab")))
+      (println (str (StringBuffer. 16)))
+      (println (str (new StringBuilder "xy")))
+      (println (str (StringBuilder/new "wz")))
+      (println (str (new StringBuffer 8)))
+      (println (let [sb (StringBuilder. "ab")] (.append sb "c") (str sb)))
+      (println (.length (StringBuilder. "abcd")))
+      (println (str (doto (StringBuilder. "ab") (.append "cd"))))
+      (println (str (StringBuilder. "")))
+      (println (str (StringBuilder. (str "a" "b"))))
+      (println (str (StringBuilder. (long 16))))
+      (println (try (str (StringBuilder. 1.5)) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (str (StringBuffer. :k)) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (str (StringBuilder. nil)) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      ab
+
+      ab
+
+      xy
+      wz
+
+      abc
+      4
+      abcd
+
+      ab
+
+      No matching ctor found for class java.lang.StringBuilder
+      No matching ctor found for class java.lang.StringBuffer
+      No matching ctor found for class java.lang.StringBuilder
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,

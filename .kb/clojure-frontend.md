@@ -1526,8 +1526,8 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | medley 1.10.0 | = | = | = | = | |
 | tools.cli 1.4.256 | = | = | = | = | |
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
-| honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
-| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
+| honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
+| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
 | malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
@@ -4333,11 +4333,18 @@ host alone answers ("Host arms where the host is not").
   `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is the same string
   output stream (f63, 2026-10-13): `.append` of one value writes its `str` (nil `"null"`),
   answering the builder, `.length`/`.charAt`/`.setLength` read a string output stream's
-  text so far (`.setLength` answering nil, any other stream the oracle's refusal),
-  `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
+  text so far (`.setLength` answering nil, any other stream the oracle's refusal). A
+  one-argument construction (f71, 2026-10-13) is a fresh stream the argument fills at
+  run time (`%clojure-string-builder-1`, a stream producer): a string is written into
+  it, an integer is a capacity (ignored, the stream starts empty), anything else the
+  oracle's `No matching ctor found for class ...` (nil among them, where the oracle
+  throws a `NullPointerException`). A tagged construction names the host overload and
+  keeps `java:new`, on the interpreter and the JVM only. `class` and `instance?` see the
+  builder as the `StringWriter` it is. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
   `.toUpperCase`/`.toLowerCase` of one argument take, mapping as the bare call, and
   `.intern` of a string is the string. Pins: clojure-spec
   `string-builder-builds-through-append-and-answers-its-text`,
+  `string-builder-construction-with-an-initial-text-or-capacity`,
   `to-upper-and-lower-case-with-a-locale-map-like-without-one`,
   `intern-of-a-string-is-the-string` (all four backends), honeysql 2.7.1479 and hiccup
   2.0.0 `=` on wasm ("Library probes").
@@ -5959,7 +5966,8 @@ resolve var`.
   `java.io.BufferedReader` (`clojure.java.io/reader`). **Arms**: the printer's and
   `str`'s `%clojure-stream-p` tests are `ClojureArms.Family.STREAM`, whose producers are the
   Clojure-only wrappers a stream reaches a program through -- `%clojure-out`/`-in`/`-err`,
-  `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-reader` (a reader over a
+  `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-builder-1` (a one-argument
+  `StringBuilder`/`StringBuffer` construction, f71), `%clojure-string-reader` (a reader over a
   StringReader), `%clojure-reader`, and the io kernels opening a file
   (`ClojureIoLowering.STREAM_PRODUCERS`, "clojure.java.io") -- never `open` or
   `make-string-output-stream`, which `ClojureLibrary.references` would read as a library

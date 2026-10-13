@@ -326,7 +326,12 @@
   `:java.io.StringWriter` を返し、`StringWriter` の `#object` として印字します。`(.length w)`
   は `StringWriter` についても答えます（オラクルにそのメソッドはありません）。1引数の `.append`
   はその値の `str` を追加します（nil は `"null"` を追加します）。オラクルはオーバーロードを
-  解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。文字列の `.intern`
+  解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。1引数の構築は
+  そのテキストでストリームを満たして開始し、整数の引数は容量です（無視します）。それ以外の
+  引数は `No matching ctor found for class ...` として拒否します。nil もその中に含まれますが、
+  オラクルは `NullPointerException` を投げます。`class` と `instance?` はビルダーをその実体で
+  ある `StringWriter` として見るので（`(instance? CharSequence (StringBuilder. "a"))` は
+  `false` です）。文字列の `.intern`
   はその文字列自身なので、インターニングの有無がわかるのは `identical?` だけです。
   `java.util.Locale/US`（`ROOT`・`ENGLISH` も）はその `toString` のテキスト（`"en_US"`・`""`・
   `"en"`）です。`str` と `.toString` はオラクルと一致しますが、`pr`・`class`（`:string`）・

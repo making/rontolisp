@@ -645,6 +645,20 @@
   "A reader over (java.io.StringReader. TEXT): a string input stream."
   (make-string-input-stream text))
 
+(defun rontolisp::%clojure-string-builder-1 (class-name x)
+  "A one-argument java.lang.StringBuilder or java.lang.StringBuffer construction
+   of X (CLASS-NAME its name for the refusal): a string is written into a fresh
+   string output stream, an integer is a capacity (ignored, the stream starts
+   empty), anything else the oracle's no-such-constructor refusal."
+  (cond ((stringp x)
+         (let ((s (make-string-output-stream)))
+           (write-string x s)
+           s))
+        ((integerp x) (make-string-output-stream))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "No matching ctor found for class "
+                         class-name)))))
+
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
    SOURCE itself when it is already an input stream (a reader over a reader,
