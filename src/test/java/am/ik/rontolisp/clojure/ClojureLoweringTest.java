@@ -2285,6 +2285,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void typeAnswersTheDesignatorWhereARegistryCouldCollide() {
+		// type reads the designator of the host class where the oracle answers
+		// one no schema registry may collide with, else class's kind keyword: a
+		// registry lookup falls through to (type x) on a miss, so a kind keyword
+		// hit the :function/:keyword/... entry -- an unregistered function looped
+		// until the stack overflowed instead of refusing with
+		// :malli.core/invalid-schema (f96). class itself is untouched, and a
+		// dispatch value reads back as its kind.
+		String designator = "RONTOLISP::%CLOJURE-TYPE-DESIGNATOR";
+		assertThat(lowered("(println (type (fn [x] x)))")).contains(designator);
+		assertThat(lowered("(println (type nil))")).contains(designator);
+		assertThat(wasmLowered("(println (type \"s\"))")).contains(designator).doesNotContain("JAVA:");
+		assertThat(lowered("(println (class (fn [x] x)))")).contains(":C%KEYWORD").doesNotContain(designator);
+		assertThat(lowered("(println (type 1))")).contains(designator);
+		String multi = lowered("(defmulti m type) (defmethod m String [s] s)");
+		assertThat(multi).contains("RONTOLISP::%CLOJURE-DESIGNATOR-KIND");
+	}
+
+	@Test
 	void aZeroArgumentObjectConstructionIsAFreshTokenWhereTheHostIsNot() {
 		// (Object.) is a fresh uninterned symbol where the host is not (wasm), so
 		// dynaload's dynalock defonce loads -- never a java:new (which wasm
