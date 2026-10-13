@@ -50,7 +50,8 @@ count:
 - a warning in a library rontolisp splices in
 - a warning in a system `ql:quickload` downloaded from a dist, which you cannot fix
 - a line that is not about the source: the `:async t` and `--host-fetch` host
-  obligations, and `warning: no JDK found`
+  obligations, and `warning: no JDK found` (no JDK's `lib/ct.sym` found: `java:`
+  sites resolve at run time, Clojure host forms lower from the image's reflection)
 - a `style-warning` a macro signals while it expands
 
 The Maven plugin takes it as `<warningsAsErrors>true</warningsAsErrors>`

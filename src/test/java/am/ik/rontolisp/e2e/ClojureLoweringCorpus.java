@@ -23,8 +23,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@code .kb/clojure-frontend.md}, "Host classes"): {@code clojure-spec.yaml}'s program,
  * every Clojure example {@code examples.yaml} lists without a {@code cli} (its
  * {@code javaSources} compiled onto its Java class path), the Clojure examples it does
- * not list, and a program of the host forms a native image's own classes answered
- * wrongly.
+ * not list, a program of the host forms a native image's own classes answered wrongly,
+ * and a program whose host forms name only the JDK classes the image registers, which the
+ * binary must lower alike with no JDK found.
  */
 final class ClojureLoweringCorpus {
 
@@ -55,6 +56,31 @@ final class ClojureLoweringCorpus {
 			""";
 
 	/**
+	 * The name of the program below, whose host forms name only the JDK classes the
+	 * native image registers ({@code .kb/clojure-frontend.md}, "Host classes"), so the
+	 * binary lowers it from its own reflection with no JDK found as the jar does from the
+	 * JDK's classes.
+	 */
+	static final String NO_JDK_PROGRAM = "no-jdk-host-forms";
+
+	/**
+	 * Host forms naming only registered classes: plain throwables built as exception
+	 * conditions, a catch of them, a {@code Comparable} face, an unmapped value method
+	 * reaching a host kind's interface, and time-value members the kind scan answers.
+	 */
+	private static final String NO_JDK_HOST_FORMS = """
+			(ns no-jdk-host-forms)
+			(def failures [(Exception. "outer" (ex-info "inner" {:code 42}))
+			               (IllegalStateException. "state")
+			               (RuntimeException.)])
+			(defn caught [f] (try (f) (catch IllegalStateException e :illegal) (catch java.io.IOException e :io)))
+			(deftype Version [n] Comparable (compareTo [_ other] (compare n (.-n other))))
+			(println (map ex-message failures) (caught (fn [] (throw (IllegalStateException. "deep"))))
+			         (map #(.-n %) (sort [(Version. 2) (Version. 1)])) (vec (.toArray [1 2]))
+			         (.getTime (java.util.Date. 0)) (.toInstant (java.util.Date. 0)))
+			""";
+
+	/**
 	 * One program to lower.
 	 *
 	 * @param name what the test calls it
@@ -82,6 +108,9 @@ final class ClojureLoweringCorpus {
 		Path hostForms = workDir.resolve("host_forms.clj");
 		Files.writeString(hostForms, HOST_FORMS);
 		programs.add(new Program("host-forms", hostForms, List.of()));
+		Path noJdkHostForms = workDir.resolve("no_jdk_host_forms.clj");
+		Files.writeString(noJdkHostForms, NO_JDK_HOST_FORMS);
+		programs.add(new Program(NO_JDK_PROGRAM, noJdkHostForms, List.of()));
 		for (ExamplesE2eTest.Example example : ExamplesE2eTest.loadManifest().examples()) {
 			String path = example.path();
 			if (!(path.endsWith(".clj") || path.endsWith(".cljc"))

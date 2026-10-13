@@ -199,6 +199,21 @@ final class ClojureTimeValueLowering {
 			new Kind("java.util.GregorianCalendar", ClojurePredicateLowering.CALENDAR_P, false),
 			new Kind("java.util.UUID", ClojurePredicateLowering.UUID_P, true));
 
+	/**
+	 * The host classes the {@link #KINDS} kinds are the oracle's values of: what the
+	 * member scan reads, on every target. A native image without a JDK's class files
+	 * answers these from its own reflection, so its build registers every one
+	 * ({@code .kb/clojure-frontend.md}, "Host classes").
+	 * @return the hosts, in kind order
+	 */
+	static List<String> kindHosts() {
+		List<String> hosts = new ArrayList<>();
+		for (Kind kind : KINDS) {
+			hosts.add(kind.host());
+		}
+		return List.copyOf(hosts);
+	}
+
 	/** Every kind's test: what an arm taking every value answers. */
 	static final Set<String> ALL = Set.of(ClojurePredicateLowering.DATE_P, ClojurePredicateLowering.TIMESTAMP_P,
 			ClojurePredicateLowering.CALENDAR_P, ClojurePredicateLowering.UUID_P);

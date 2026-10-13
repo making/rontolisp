@@ -395,6 +395,17 @@ final class ClojureIoLowering {
 
 	}
 
+	/**
+	 * The Java API types the clojure.java.io values are objects of
+	 * ({@link ApiTypes#TYPES}): what {@code declaredByAClass} reads, on every target. A
+	 * native image without a JDK's class files answers these from its own reflection, so
+	 * its build registers every one ({@code .kb/clojure-frontend.md}, "Host classes").
+	 * @return the types, in name order
+	 */
+	static List<String> hostApiTypes() {
+		return ApiTypes.TYPES;
+	}
+
 	private static List<String> apiTypes() {
 		java.util.TreeSet<String> types = new java.util.TreeSet<>();
 		for (Map.Entry<String, List<String>> entry : CLASSES.entrySet()) {

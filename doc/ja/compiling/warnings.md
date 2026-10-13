@@ -48,7 +48,8 @@ error: 2 warnings about the program's source, treated as errors (--warnings-as-e
 - rontolisp が差し込むライブラリの中の警告
 - `ql:quickload` が dist からダウンロードしたシステムの中の警告。利用者には直せません
 - ソースについてではない行。`:async t` と `--host-fetch` のホスト側の義務、そして
-  `warning: no JDK found`
+  `warning: no JDK found`（JDK の `lib/ct.sym` が見つからない場合。`java:` サイトは
+  実行時に解決し、Clojure のホスト形式はイメージのリフレクションから低下します）
 - マクロが展開中に通知する `style-warning`
 
 Maven プラグインでは `<warningsAsErrors>true</warningsAsErrors>`

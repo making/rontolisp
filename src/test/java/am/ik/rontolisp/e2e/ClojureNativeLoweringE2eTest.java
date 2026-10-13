@@ -2,6 +2,7 @@ package am.ik.rontolisp.e2e;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -9,10 +10,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.StringJoiner;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.cli.RontoLispCli;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,7 +37,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <p>
  * Each program of {@link ClojureLoweringCorpus} is dumped with {@code --dump-ir} by the
  * binary and by this JVM's {@link RontoLispCli}; the binary finds the JDK this JVM runs
- * on ({@code JAVA_HOME} or the {@code java} on {@code PATH}).
+ * on ({@code JAVA_HOME} or the {@code java} on {@code PATH}). The corpus program whose
+ * host forms name only the JDK classes the image registers is dumped a second time with
+ * the binary seeing no JDK, when it lowers from its own reflection and warns it found
+ * none.
  * <p>
  * Runs only when {@code -Drontolisp.binary=<path>} points at a built native binary.
  */
@@ -74,6 +80,84 @@ class ClojureNativeLoweringE2eTest {
 		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out, true));
 		cli.run(arguments(program).toArray(String[]::new));
 		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * The corpus program whose host forms name only the registered JDK classes, dumped by
+	 * the binary seeing no JDK: with neither {@code JAVA_HOME} nor a {@code java} on
+	 * {@code PATH} holding a {@code lib/ct.sym} (a native image's own {@code java.home}
+	 * holds none), the binary lowers from its image's reflection, as the jar does from
+	 * the JDK's classes, and warns it found no JDK.
+	 */
+	@TestFactory
+	Stream<DynamicTest> theBinaryWithoutAJdkLowersRegisteredHostFormsAsTheJvmDoes() throws Exception {
+		String binary = System.getProperty("rontolisp.binary");
+		assumeTrue(binary != null, "rontolisp.binary not set; skipping native-binary E2E");
+		Path bin = Path.of(binary).toAbsolutePath();
+		assumeTrue(Files.isExecutable(bin), () -> "not an executable binary: " + bin);
+		List<DynamicTest> tests = new ArrayList<>();
+		for (ClojureLoweringCorpus.Program program : ClojureLoweringCorpus.programs(workDir)) {
+			if (!program.name().equals(ClojureLoweringCorpus.NO_JDK_PROGRAM)) {
+				continue;
+			}
+			tests.add(dynamicTest(program.name() + " (no JDK)", () -> {
+				List<String> jvm = dumpOnThisJvm(program).lines().toList();
+				NoJdkDump image = dumpWithBinaryWithoutJdk(bin, program);
+				assertThat(image.errors()).as("%s: the binary warned it found no JDK", program.name())
+					.contains("no JDK found");
+				List<String> lines = image.output().lines().toList();
+				assertThat(jvm).as("%s: the JVM's dump", program.name()).isNotEmpty();
+				int differs = firstDifference(jvm, lines);
+				assertThat(differs)
+					.as("%s: the binary's IR differs from the JVM's at form %d%n  jvm:    %s%n  binary: %s",
+							program.name(), differs, excerpt(jvm, differs), excerpt(lines, differs))
+					.isEqualTo(-1);
+			}));
+		}
+		assertThat(tests).as("the " + ClojureLoweringCorpus.NO_JDK_PROGRAM + " program").isNotEmpty();
+		return tests.stream();
+	}
+
+	/** A dump by the binary seeing no JDK: its standard output and error. */
+	private record NoJdkDump(String output, String errors) {
+	}
+
+	private static NoJdkDump dumpWithBinaryWithoutJdk(Path bin, ClojureLoweringCorpus.Program program)
+			throws IOException, InterruptedException {
+		List<String> command = new ArrayList<>();
+		command.add(bin.toString());
+		command.addAll(arguments(program));
+		Path errors = Files.createTempFile(workDir, "dump-", ".err");
+		ProcessBuilder builder = new ProcessBuilder(command).directory(PROJECT_DIR.toFile())
+			.redirectError(errors.toFile());
+		// The binary finds its JDK through java.home (none in an image), JAVA_HOME and
+		// the java on PATH: unset the first a process controls and keep the second free
+		// of any java, so no lib/ct.sym is found.
+		builder.environment().remove("JAVA_HOME");
+		builder.environment().put("PATH", jdkFreePath(builder.environment().get("PATH")));
+		Process process = builder.start();
+		process.getOutputStream().close();
+		byte[] out = process.getInputStream().readAllBytes();
+		assertThat(process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+			.as("%s: the binary's dump finished", program.name())
+			.isTrue();
+		String reported = Files.readString(errors);
+		assertThat(process.exitValue()).as("%s: the binary's dump exited%n%s", program.name(), reported).isZero();
+		return new NoJdkDump(new String(out, StandardCharsets.UTF_8), reported);
+	}
+
+	/** A {@code PATH} value with no directory holding a {@code java} executable. */
+	private static String jdkFreePath(@Nullable String path) {
+		if (path == null || path.isEmpty()) {
+			return "";
+		}
+		StringJoiner kept = new StringJoiner(File.pathSeparator);
+		for (String dir : path.split(File.pathSeparator)) {
+			if (!dir.isEmpty() && !Files.isRegularFile(Path.of(dir, "java"))) {
+				kept.add(dir);
+			}
+		}
+		return kept.toString();
 	}
 
 	private static String dumpWithBinary(Path bin, ClojureLoweringCorpus.Program program)

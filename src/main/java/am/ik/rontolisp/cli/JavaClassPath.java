@@ -28,6 +28,7 @@ import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
 import am.ik.maven.RepositoryPolicy;
 import am.ik.rontolisp.codegen.jvm.JvmClassFileLookup;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaType;
@@ -417,6 +418,8 @@ final class JavaClassPath implements AutoCloseable {
 
 		private @Nullable JavaClassLookup reflected;
 
+		private boolean warned;
+
 		// The entries and the loader are read first: their lock is the class path's,
 		// which close() holds while it takes this one.
 		private JavaClassLookup current() {
@@ -429,6 +432,12 @@ final class JavaClassPath implements AutoCloseable {
 					this.platform = found;
 				}
 				if (!found) {
+					if (!this.warned) {
+						this.warned = true;
+						CompileWarnings.note("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no"
+								+ " lib/ct.sym): Clojure host forms that name JDK classes are lowered from the"
+								+ " image's reflection");
+					}
 					JavaClassLookup own = this.reflected;
 					if (own == null) {
 						own = ReflectiveJavaClasses.over(loader);

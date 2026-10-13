@@ -133,6 +133,21 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * The JDK types every {@link #HOST_KINDS} kind's Java object implements: what
+	 * {@link #declares} reads, on every target. A native image without a JDK's class
+	 * files answers these from its own reflection, so its build registers every one
+	 * ({@code .kb/clojure-frontend.md}, "Host classes").
+	 * @return the types, in kind order
+	 */
+	static List<String> hostKindTypes() {
+		List<String> types = new ArrayList<>();
+		for (HostKind kind : HOST_KINDS) {
+			types.addAll(kind.types());
+		}
+		return List.copyOf(types);
+	}
+
+	/**
 	 * The kinds whose Java object answers the methods of the JDK interfaces of the
 	 * oracle's class: a vector a {@code List}, {@code RandomAccess} and
 	 * {@code Comparable}, a list or seq a {@code List}, a set a {@code Set}, a map or

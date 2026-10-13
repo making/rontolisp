@@ -4036,13 +4036,27 @@ a ThreadLocal like the old loader) -- and only `ClojureReflectedClasses` touches
   fetched streams' impl classes are not in `ct.sym`; their callable methods are their API
   supertypes').
 - Open: `Charset/forName` of a non-standard literal (the image holds the standard charsets,
-  a JVM all of them: `"windows-1252"` lowers to a refusal on the binary) and a host without a
-  JDK's class files (the binary with none found, the browser playground), which answers from
-  its image as the binary did before.
+  a JVM all of them: `"windows-1252"` lowers to a refusal on the binary).
+- A host without a JDK's class files (the binary with none found, the browser
+  playground) answers from its image's reflection, as every build did before 2026-10-12:
+  f69 (2026-10-13) registers the 99 JDK classes the front end names in its own code --
+  the `ClojureThrowables.PARENTS` throwables, `ClojureInteropLowering.HOSTLESS_RECEIVERS`,
+  `ClojureValueMethodLowering`'s host kinds, `ClojureTimeValueLowering`'s kinds,
+  `ClojureIoLowering`'s API types, `Object` and `Throwable` -- as `reflection` types in
+  `reachability-metadata.json`, so each answers every member query as a JVM does (probe
+  image, GraalVM 25.0.4, 2026-10-12). The `clojure.lang` throwables of `PARENTS` stay
+  out: no host here holds them. A class a program names outside the list stays partial
+  without a JDK, and the binary warns when it finds none (`JavaClassPath.ClassFiles`,
+  a `CompileWarnings.note` on `JvmLispCompiler`'s no-JDK warning's model). Size,
+  weighed for the web image the playground downloads: the `reflection` section adds
+  ~5.6 KB to the checked-in file (99 bare `{"type"}` entries plus the comment paragraph
+  describing them); the list stays at what the front end names.
 - Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
   `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
-  program), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir` vs this JVM's, CI's
-  native-image job).
+  program, a no-JDK host-form program), `ClojureHostImageTypesTest` (the registered list
+  against the constants above), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir`
+  vs this JVM's, CI's native-image job; the no-JDK program a second time with the binary
+  seeing no JDK).
 
 ## Java interop
 

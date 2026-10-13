@@ -2081,9 +2081,11 @@ final class ClojureInteropLowering {
 	 * The classes a receiver of no known class may be an object of where the host is not
 	 * (wasm), past the string and the stream: nothing makes a host object there, so what
 	 * reaches an instance call's host arm is a number, a character, a boolean or an
-	 * exception, and {@code Object}'s methods are every value's.
+	 * exception, and {@code Object}'s methods are every value's. A native image without a
+	 * JDK's class files answers these from its own reflection, so its build registers
+	 * every one ({@code .kb/clojure-frontend.md}, "Host classes").
 	 */
-	private static final List<String> HOSTLESS_RECEIVERS = List.of(OBJECT, "java.lang.Long", "java.lang.Double",
+	static final List<String> HOSTLESS_RECEIVERS = List.of(OBJECT, "java.lang.Long", "java.lang.Double",
 			"java.lang.Character", "java.lang.Boolean", ClojureThrowables.THROWABLE);
 
 	/**
