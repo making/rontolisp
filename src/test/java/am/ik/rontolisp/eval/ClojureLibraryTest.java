@@ -911,14 +911,16 @@ class ClojureLibraryTest {
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
 		// the HTTP client its options' and response map's fixed key names; Throwable->map
 		// a class name as a symbol; clojure.java.io a value's class name; cast a host
-		// class's kind keyword
+		// class's kind keyword; a type designator its kind keyword (f96's kinds and,
+		// since f98, nothing else: the Pattern designator reads back as no kind)
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
 				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-INSTANT-CLASS",
 				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
 				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
 				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION",
 				"RONTOLISP::%CLOJURE-THROWABLE-VIA", "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP",
-				"RONTOLISP::%CLOJURE-IO-CLASS-KEY", "RONTOLISP::%CLOJURE-CAST-KIND");
+				"RONTOLISP::%CLOJURE-IO-CLASS-KEY", "RONTOLISP::%CLOJURE-CAST-KIND",
+				"RONTOLISP::%CLOJURE-DESIGNATOR-KIND");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {
