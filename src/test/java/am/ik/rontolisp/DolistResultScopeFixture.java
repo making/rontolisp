@@ -2,9 +2,9 @@ package am.ik.rontolisp;
 
 /**
  * A {@code dolist} over {@code (coerce s 'list)} whose result form names the enclosing
- * {@code let} binding (`.todo/f86`): the reported shape's trailing reference sits OUTSIDE
- * the {@code let}'s scope -- one closing paren too many -- so it is genuinely unbound,
- * and every backend signals {@code unbound-variable} there exactly as SBCL (an
+ * {@code let} binding: the reported shape's trailing reference sits OUTSIDE the
+ * {@code let}'s scope -- one closing paren too many -- so it is genuinely unbound, and
+ * every backend signals {@code unbound-variable} there exactly as SBCL (an
  * {@code undefined variable} warning, then {@code UNBOUND-VARIABLE}) and ECL
  * ({@code The variable FOUND is unbound}) do. There is no interpreter quirk to fix; a
  * change that stopped signalling would diverge from Common Lisp. {@link #SCOPED} pins the
