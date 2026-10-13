@@ -3233,6 +3233,20 @@ public final class ClojureLowering {
 	 * @return the lowered list
 	 */
 	LispVal knownLoadedLibs() {
+		List<LispVal> names = new ArrayList<>();
+		for (String name : knownLoadedLibNames()) {
+			names.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+	}
+
+	/**
+	 * The sorted names {@link #knownLoadedLibs} quotes: the namespaces whose files ran
+	 * before the call, the libraries the program required and the startup namespaces that
+	 * loaded. Sorted, so a snapshot digest over them is stable.
+	 * @return the names
+	 */
+	Set<String> knownLoadedLibNames() {
 		Set<String> loaded = new java.util.TreeSet<>(this.requiredLibraries);
 		loaded.addAll(this.loadedFiles);
 		for (String ns : STARTUP_NAMESPACES) {
@@ -3240,11 +3254,7 @@ public final class ClojureLowering {
 				loaded.add(ns);
 			}
 		}
-		List<LispVal> names = new ArrayList<>();
-		for (String name : loaded) {
-			names.add(LispString.literal(name));
-		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+		return loaded;
 	}
 
 	/**
@@ -3267,7 +3277,7 @@ public final class ClojureLowering {
 		return knownNamespaceNames().contains(ns);
 	}
 
-	private Set<String> knownNamespaceNames() {
+	Set<String> knownNamespaceNames() {
 		Set<String> known = new java.util.TreeSet<>(this.createdNamespaces);
 		known.addAll(this.requiredLibraries);
 		known.addAll(STARTUP_NAMESPACES);
@@ -5019,8 +5029,11 @@ public final class ClojureLowering {
 	 * evaluation shares macro-time-wide. Only rows whose body closes over nothing but its
 	 * parameters may come here; a parameterized value (a keyword's lookup) keeps its own
 	 * lambda, which compares as its value anyway. Every other site-independent core value
-	 * reaches this through {@link #sharedCoreValue}.
-	 * @param name the Clojure name
+	 * reaches this through {@link #sharedCoreValue}. A snapshotting name
+	 * ({@link #UNSHARED_VALUES}) reaches this through {@link #sharedCoreValue} too, with
+	 * a cell of its own per snapshot ({@link #snapshotDigest}).
+	 * @param name the Clojure name, or the name plus its snapshot digest for a
+	 * snapshotting one
 	 * @param lambda the one-argument value form, built as before
 	 * @return the shared-value call
 	 */
@@ -5030,35 +5043,44 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * Names whose value snapshots lower-time state that still evolves while the program
-	 * lowers, so each reference keeps its own object: {@code the-ns}, {@code find-ns} and
+	 * Names whose value closes over lower-time state that still evolves while the program
+	 * lowers, so each snapshot keeps a cell of its own in the
+	 * {@code rontolisp::%clojure-shared-value} table: {@code the-ns}, {@code find-ns} and
 	 * {@code ns-name} close over the namespaces known where the reference stands,
-	 * {@code all-ns} and {@code loaded-libs} over the libraries loaded so far,
-	 * {@code read} and {@code read-string} over the namespace and its aliases so far, and
-	 * {@code default-data-readers} resolves its reader vars there. Sharing them
-	 * first-wins would answer a later call through an early value with the early
-	 * snapshot, where today each site reads its own; every other core value closes over
-	 * nothing but its parameters and is one object program-wide. As data,
-	 * {@code default-data-readers} still compares by value.
+	 * {@code all-ns} over the same set, {@code loaded-libs} over the libraries loaded so
+	 * far, and {@code read} and {@code read-string} over the namespace and its aliases so
+	 * far. Two references under one snapshot are one object -- {@code =} and
+	 * {@code identical?}, like the oracle's var roots -- while references under different
+	 * snapshots keep distinct objects, so a call through a value still reads the snapshot
+	 * where the value was taken. Sharing them first-wins would answer a later call
+	 * through an early value with the early snapshot, where today each site reads its
+	 * own; reading the state at run time instead would move the calls' snapshots too, so
+	 * each name keeps its per-site snapshot and only same-snapshot references share.
+	 * {@code default-data-readers} is no snapshot at all -- its map always resolves the
+	 * same two shipped reader vars -- so it shares one cell program-wide; as data it
+	 * still compares by value.
 	 */
 	static final Set<String> UNSHARED_VALUES = Set.of("the-ns", "find-ns", "ns-name", "all-ns", "loaded-libs", "read",
-			"read-string", "default-data-readers");
+			"read-string");
 
 	/**
 	 * A core name's value form shared program-wide, unless the form is already shared (a
 	 * {@code %clojure-shared-value} call), already one object (a {@code function} of a
 	 * library worker) or the name snapshots lower-time state ({@link #UNSHARED_VALUES}).
-	 * The transducer widening ({@code filter}, {@code take}, ...) is shared with the
-	 * verb: the whole widened form is wrapped, so the one-argument arity answers the same
-	 * transducer from every site too. {@code class} and {@code type} lower
-	 * dispatch-shaped inside a {@code defmulti} dispatch function (nil answers nil itself
-	 * there), so those sites share a cell of their own.
+	 * A snapshotting name shares one cell per snapshot ({@link #snapshotDigest}): two
+	 * references under one snapshot are one object, while references under different
+	 * snapshots keep distinct objects, so no call through a value moves. The transducer
+	 * widening ({@code filter}, {@code take}, ...) is shared with the verb: the whole
+	 * widened form is wrapped, so the one-argument arity answers the same transducer from
+	 * every site too. {@code class} and {@code type} lower dispatch-shaped inside a
+	 * {@code defmulti} dispatch function (nil answers nil itself there), so those sites
+	 * share a cell of their own.
 	 * @param name the Clojure name
 	 * @param value the value form, widened where the name has a transducer arity
 	 * @return the shared-value call, or the form itself
 	 */
 	LispVal sharedCoreValue(String name, LispVal value) {
-		if (UNSHARED_VALUES.contains(name) || isSharedOrFunction(value)) {
+		if (isSharedOrFunction(value)) {
 			return value;
 		}
 		if (this.inDispatchFn && (name.equals("class") || name.equals("type"))) {
@@ -5069,7 +5091,43 @@ public final class ClojureLowering {
 			// then misses its nil method)
 			return sharedValue(name + " (dispatch fn)", value);
 		}
+		if (UNSHARED_VALUES.contains(name)) {
+			return sharedValue(name + "#" + snapshotDigest(name), value);
+		}
 		return sharedValue(name, value);
+	}
+
+	/**
+	 * The digest of the lower-time state a snapshotting core value
+	 * ({@link #UNSHARED_VALUES}) closes over where the reference stands: the known
+	 * namespaces for the namespace verbs and {@code all-ns}, the loaded libraries for
+	 * {@code loaded-libs}, the namespace and its aliases for the reading verbs. Two
+	 * references digest alike exactly when their embedded snapshots answer alike, so
+	 * sharing the digest's cell is unobservable except for the identity itself. The
+	 * digest is FNV-1a over the canonical (sorted) state, so the lowered program is
+	 * stable across runs.
+	 * @param name the Clojure name
+	 * @return the sixteen hex digits of the digest
+	 */
+	String snapshotDigest(String name) {
+		String canonical = switch (name) {
+			case "the-ns", "find-ns", "ns-name", "all-ns" -> String.join("\0", knownNamespaceNames());
+			case "loaded-libs" -> String.join("\0", knownLoadedLibNames());
+			case "read", "read-string" -> {
+				StringBuilder state = new StringBuilder(this.currentNs);
+				for (Map.Entry<String, String> alias : new java.util.TreeMap<>(ns().aliases).entrySet()) {
+					state.append('\0').append(alias.getKey()).append('\0').append(alias.getValue());
+				}
+				yield state.toString();
+			}
+			default -> throw new IllegalArgumentException("no snapshot state for " + name);
+		};
+		long hash = 0xcbf29ce484222325L;
+		for (int i = 0; i < canonical.length(); i++) {
+			hash ^= canonical.charAt(i);
+			hash *= 0x100000001b3L;
+		}
+		return String.format("%016x", hash);
 	}
 
 	/**

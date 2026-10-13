@@ -13525,7 +13525,12 @@
 ;; object, made on first use; later references answer the stored one. The table
 ;; lives per environment, so macro-time evaluation shares macro-time-wide and
 ;; the program shares run-wide. Only rows whose body closes over nothing but
-;; its parameters come here.
+;; its parameters come here. A core value closing over lower-time state that
+;; still evolves while the program lowers (the namespaces known, the libraries
+;; loaded, the namespace and its aliases) shares one cell per snapshot instead
+;; of one program-wide: the lowering keys the cell by the snapshot's digest, so
+;; two references under one snapshot are one object while references under
+;; different snapshots keep distinct objects, and no call through a value moves.
 
 (defvar rontolisp::%clojure-shared-values (make-hash-table :test 'equal))
 

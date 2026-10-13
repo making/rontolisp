@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
@@ -2223,7 +2224,11 @@ class ClojureLoweringTest {
 		// identical? like the oracle's var roots: a fresh lambda per site used
 		// to make (= map map) false. Calls stay inline, on every backend; a
 		// verb's transducer arity is shared with the verb. Values snapshotting
-		// lower-time state keep their own object per site.
+		// lower-time state share one cell per snapshot: two references under one
+		// snapshot are one object, while references under different snapshots
+		// keep distinct cells, so a call through a value still reads its own
+		// site's snapshot. default-data-readers is no snapshot -- always the
+		// same two shipped reader vars -- so it shares one cell program-wide.
 		assertThat(lowered("(map inc [1])")).contains("%CLOJURE-MAP").contains("\"inc\"");
 		assertThat(lowered("(count [1 2])")).doesNotContain("SHARED-VALUE");
 		String shared = lowered("(println (= map map))");
@@ -2242,10 +2247,41 @@ class ClojureLoweringTest {
 		assertThat(lowered("(println (= = =))")).doesNotContain("SHARED-VALUE");
 		assertThat(lowered("(println (= + +))")).doesNotContain("SHARED-VALUE");
 		assertThat(lowered("(println (= apply apply))")).doesNotContain("SHARED-VALUE");
-		assertThat(lowered("(println all-ns all-ns)")).doesNotContain("SHARED-VALUE");
+		String snapshotting = lowered("(println all-ns all-ns read read find-ns find-ns loaded-libs loaded-libs)");
+		assertThat(snapshotting).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"all-ns#")
+			.contains("\"read#")
+			.contains("\"find-ns#")
+			.contains("\"loaded-libs#");
+		assertThat(snapshotting).doesNotContain("\"all-ns\"")
+			.doesNotContain("\"read\"")
+			.doesNotContain("\"find-ns\"")
+			.doesNotContain("\"loaded-libs\"");
+		assertThat(lowered("(println (= default-data-readers default-data-readers))"))
+			.contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"default-data-readers\"")
+			.doesNotContain("\"default-data-readers#");
+		assertThat(snapshotCells(lowered("(println find-ns find-ns)"), "find-ns")).hasSize(1);
+		assertThat(snapshotCells(lowered("(println the-ns) (ns f97-lt) (println the-ns)"), "the-ns")).hasSize(2);
 		assertThat(wasmLowered("(println (= map map) (= count count))")).contains("\"map\"")
 			.contains("\"count\"")
 			.doesNotContain("JAVA:");
+	}
+
+	/**
+	 * The distinct snapshot digests a snapshotting core value's cells carry in the
+	 * lowered program: one per snapshot the references stood under.
+	 * @param lowered the lowered program
+	 * @param name the Clojure name
+	 * @return the distinct digests
+	 */
+	private static List<String> snapshotCells(String lowered, String name) {
+		return Pattern.compile("\"" + name + "#([0-9a-f]+)\"")
+			.matcher(lowered)
+			.results()
+			.map(match -> match.group(1))
+			.distinct()
+			.toList();
 	}
 
 	@Test

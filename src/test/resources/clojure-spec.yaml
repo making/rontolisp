@@ -14830,6 +14830,98 @@ cases:
       (1 3) 3 {:a 2}
       [1 3]
       true
+  - name: snapshotting-core-values-share-one-object-per-snapshot
+    # Two references to one snapshotting core value under one snapshot are =
+    # and identical? on every backend, like the oracle's var roots: the-ns,
+    # find-ns and ns-name close over the namespaces known where the reference
+    # stands, all-ns over the same set, loaded-libs over the libraries loaded so
+    # far, read and read-string over the namespace and its aliases so far, and
+    # default-data-readers (no snapshot at all: always the same two shipped
+    # reader vars) shares one cell program-wide. A qualified spelling shares the
+    # bare name's cell, a let-bound value stays identical, and a shared value
+    # still runs and still works as a map key. Every line matches the oracle
+    # (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= the-ns the-ns) (identical? the-ns the-ns))
+      (println (= find-ns find-ns) (identical? find-ns find-ns))
+      (println (= ns-name ns-name) (identical? ns-name ns-name))
+      (println (= all-ns all-ns) (identical? all-ns all-ns))
+      (println (= loaded-libs loaded-libs) (identical? loaded-libs loaded-libs))
+      (println (= read read) (identical? read read))
+      (println (= read-string read-string) (identical? read-string read-string))
+      (println (= default-data-readers default-data-readers) (identical? default-data-readers default-data-readers))
+      (println (= clojure.core/all-ns all-ns) (= clojure.core/read-string read-string))
+      (let [f97-m all-ns] (println (= f97-m all-ns) (identical? f97-m all-ns) (= (count (f97-m)) (count (all-ns)))))
+      (println (= (get {all-ns :hit} all-ns) :hit))
+      (println (some? (get default-data-readers 'inst)) (some? (get default-data-readers 'uuid)))
+    expected: |
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true true
+      true
+      true true
+  - name: snapshotting-namespace-values-keep-their-sites-snapshot
+    # A call through a snapshotting namespace value reads the snapshot where the
+    # value was taken, on every backend: f97-f1 (taken before the require) never
+    # saw rontolisp.wasm, while f97-f2 (taken after) finds it, like the call.
+    # References under different snapshots keep distinct objects, so the four
+    # identity lines are false here and true on the oracle (clj 1.12.6,
+    # 2026-10-13, checked with clojure.set for the oracle-only twin: the oracle
+    # reads the current namespaces through every value, so its f1 finds the
+    # library too). Calls keep their own per-site snapshots either way: the
+    # all-ns call at the end counts what f97-a2 counts.
+    source: |
+      (ns f97-snap)
+      (def f97-f1 find-ns)
+      (def f97-t1 the-ns)
+      (def f97-a1 all-ns)
+      (def f97-l1 loaded-libs)
+      (require 'rontolisp.wasm)
+      (def f97-f2 find-ns)
+      (def f97-t2 the-ns)
+      (def f97-a2 all-ns)
+      (def f97-l2 loaded-libs)
+      (println (= f97-f1 f97-f2) (= f97-t1 f97-t2) (= f97-a1 f97-a2) (= f97-l1 f97-l2))
+      (println (nil? (f97-f1 'rontolisp.wasm)) (some? (f97-f2 'rontolisp.wasm)) (some? (find-ns 'rontolisp.wasm)))
+      (println (= (f97-f2 'rontolisp.wasm) (find-ns 'rontolisp.wasm)))
+      (println (= (ns-name (f97-t2 'rontolisp.wasm)) 'rontolisp.wasm))
+      (println (= (count (f97-a2)) (inc (count (f97-a1)))) (= (count (all-ns)) (count (f97-a2))))
+      (println (= (count (f97-l2)) (inc (count (f97-l1)))) (= (count (loaded-libs)) (count (f97-l2))))
+      (in-ns 'user)
+    expected: |
+      false false false false
+      true true true
+      true
+      true
+      true true
+      true true
+  - name: read-string-values-keep-their-sites-reader-context
+    # A call through a reading value resolves against the namespace and aliases
+    # where the value was taken, on every backend: f97-r1 reads ::x as
+    # :f97-ra/x under its own context, f97-r2 as :f97-rb/x. References under
+    # different contexts keep distinct objects, so the middle identity is false
+    # here and true on the oracle (clj 1.12.6, 2026-10-13: the oracle reads the
+    # calling namespace through every value, so both lines answer :f97-rb/x).
+    source: |
+      (ns f97-ra (:require [clojure.set :as q]))
+      (def f97-r1 read-string)
+      (ns f97-rb)
+      (def f97-r2 read-string)
+      (println (= f97-ra/f97-r1 f97-ra/f97-r1) (= f97-ra/f97-r1 f97-r2) (identical? f97-ra/f97-r1 f97-ra/f97-r1))
+      (println (f97-ra/f97-r1 "::x") (f97-r2 "::x"))
+      (println (f97-ra/f97-r1 "\"hi\"") ((fn [r] (r "42")) read-string))
+      (in-ns 'user)
+    expected: |
+      true false true
+      :f97-ra/x :f97-rb/x
+      hi 42
   - name: protocol-extenders-and-find-protocol-impl-and-method
     # extenders answers the extended tags as a seq (:object last for the Object
     # default), find-protocol-impl the tag row's map and find-protocol-method
