@@ -58,6 +58,21 @@ import org.jspecify.annotations.Nullable;
  * not knowing an operator is only a cut not taken.
  *
  * <p>
+ * <b>A plain call's arguments are cut.</b> An operator the whitelist does not case and no
+ * denial below names is a function call, whose every argument evaluates exactly once,
+ * left to right -- so a branch buried under calls (a top-level {@code (print
+ * (case ...))}) is reachable, as is a call with a long argument list. Operators with
+ * unevaluated positions (binding shapes, clause type heads, places, quoted data, exits)
+ * are denied by name ({@code DENIED_CALL_HEADS}) and left whole.
+ *
+ * <p>
+ * <b>Top-level forms are cut on request</b> ({@link #outlineTopLevel}): one form whose
+ * own code passes the JVM's 64 KB per-method cap has no split point between forms, so its
+ * branches and call arguments become methods of their own closing over nothing but the
+ * form's own {@code let}s. Forms with a lexical exit are skipped -- this entry runs after
+ * the exit lowering.
+ *
+ * <p>
  * <b>The budget is measured, not guessed.</b> Bytecodes per AST node ranges from 3.4 to
  * 39 across one program's methods (surface macros expand during the backend's own pass,
  * so the node count at this point does not predict the emitted size), which makes an
@@ -85,8 +100,9 @@ public final class AstOutliner {
 	}
 
 	/**
-	 * The rewritten program, the functions actually changed, and -- for the compile that
-	 * measures the outcome -- what budget, if any, is worth one more compile.
+	 * The rewritten program, the functions actually changed, the top-level form indexes
+	 * actually cut, and -- for the compile that measures the outcome -- what budget, if
+	 * any, is worth one more compile.
 	 */
 	public static final class Result {
 
@@ -96,10 +112,17 @@ public final class AstOutliner {
 
 		private final Set<String> outlined;
 
+		private final Set<Integer> outlinedTop;
+
 		private Result(List<LispVal> input, List<LispVal> program, Set<String> outlined) {
+			this(input, program, outlined, Set.of());
+		}
+
+		private Result(List<LispVal> input, List<LispVal> program, Set<String> outlined, Set<Integer> outlinedTop) {
 			this.input = input;
 			this.program = program;
 			this.outlined = outlined;
+			this.outlinedTop = outlinedTop;
 		}
 
 		/**
@@ -115,6 +138,14 @@ public final class AstOutliner {
 		 */
 		public Set<String> outlined() {
 			return this.outlined;
+		}
+
+		/**
+		 * {@return the top-level form indexes this pass really did cut} An index absent
+		 * here cannot be helped by asking again.
+		 */
+		public Set<Integer> outlinedTop() {
+			return this.outlinedTop;
 		}
 
 		/**
@@ -159,6 +190,53 @@ public final class AstOutliner {
 				}
 			}
 			return null;
+		}
+
+		/**
+		 * The budget the next compile should cut top-level form {@code index} under, or
+		 * null when no budget left to try would change what this compile emitted for it.
+		 * The same differ-or-stop rule as {@link #nextBudget}: a form whose remaining
+		 * targets all produce the same cut stops costing a compile per target.
+		 * @param index the top-level form this compile measured over the limit
+		 * @param measuredBytes the size it came out at
+		 * @param current the budget this compile cut it under, or null when none was
+		 * asked for
+		 * @param firstTargetBytes the target a first cut aims at
+		 * @param floorTargetBytes the target past which no further tightening is tried
+		 * @return the next budget, or null when asking again cannot change the outcome
+		 */
+		public @Nullable Budget nextTopBudget(int index, int measuredBytes, @Nullable Budget current,
+				int firstTargetBytes, int floorTargetBytes) {
+			if (current == null) {
+				Budget first = new Budget(measuredBytes, firstTargetBytes);
+				return changesTopCut(index, null, first) ? first : null;
+			}
+			if (!this.outlinedTop.contains(index)) {
+				// Asked for and not cut: no tighter target finds a candidate either.
+				return null;
+			}
+			Budget next = current;
+			while (next.targetBytes() > floorTargetBytes) {
+				next = new Budget(next.measuredBytes(), next.targetBytes() * 2 / 3);
+				if (changesTopCut(index, current, next)) {
+					return next;
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * {@return whether cutting top-level form {@code index} under {@code to} produces
+		 * another form than under {@code from}} A null {@code from} is the uncut form.
+		 */
+		private boolean changesTopCut(int index, @Nullable Budget from, Budget to) {
+			if (index < 0 || index >= this.input.size()) {
+				return false;
+			}
+			LispVal form = this.input.get(index);
+			LispVal before = from == null ? form : new Cutter(false).cutTopLevel(form, from);
+			LispVal after = new Cutter(false).cutTopLevel(form, to);
+			return !sameForm(before, after);
 		}
 
 		/**
@@ -229,6 +307,50 @@ public final class AstOutliner {
 			out.add(rewritten);
 		}
 		return new Result(program, out, outlined);
+	}
+
+	/**
+	 * Cuts over-limit top-level forms into pieces that fit their budget. A top-level form
+	 * has no enclosing method to split between, so a form whose own emitted code passes
+	 * the JVM's 64 KB per-method cap is cut the way an oversized defun body is: an
+	 * oversized evaluated sub-form becomes a local function of its own ({@code wrap}),
+	 * which the backend then emits as a method beside the top-level chunk. A top-level
+	 * form closes over nothing but its own {@code let}s, so the pieces are calls that
+	 * carry no continuation state.
+	 *
+	 * <p>
+	 * Unlike {@link #outline}, this runs after every lowering (on the JVM backend, just
+	 * before the top-level chunks are emitted), so the exit lowering has already run: a
+	 * form containing a lexical exit ({@code go}, {@code return-from}, {@code return}) is
+	 * left whole -- wrapping a piece of it in a fresh lambda would strand the exit from
+	 * its establishing construct. Such a form keeps the loud over-limit failure it has
+	 * today.
+	 * @param topLevel the top-level forms about to be emitted, in emission order
+	 * @param budgets the form indexes to cut, each with the calibration measured from the
+	 * compile that asked
+	 * @return the rewritten forms and the indexes actually cut
+	 */
+	public static Result outlineTopLevel(List<LispVal> topLevel, Map<Integer, Budget> budgets) {
+		if (budgets.isEmpty()) {
+			return new Result(topLevel, topLevel, Set.of(), Set.of());
+		}
+		Cutter cutter = new Cutter(System.getProperty("rontolisp.debug.outline") != null);
+		List<LispVal> out = new ArrayList<>(topLevel.size());
+		Set<Integer> outlinedTop = new LinkedHashSet<>();
+		for (int i = 0; i < topLevel.size(); i++) {
+			LispVal form = topLevel.get(i);
+			LispVal rewritten = form;
+			Budget budget = budgets.get(i);
+			if (budget != null) {
+				LispVal cut = cutter.cutTopLevel(form, budget);
+				if (cut != form) {
+					rewritten = cut;
+					outlinedTop.add(i);
+				}
+			}
+			out.add(rewritten);
+		}
+		return new Result(topLevel, out, Set.of(), outlinedTop);
 	}
 
 	/**
@@ -314,6 +436,60 @@ public final class AstOutliner {
 			List<LispVal> out = new ArrayList<>(parts.subList(0, 3));
 			out.addAll(cutParts.subList(1, cutParts.size()));
 			return list(out);
+		}
+
+		/**
+		 * Cuts one top-level form so what is left in place, and each piece taken out of
+		 * it, fits the budget. The form is cut AS the sequence it is: a top-level
+		 * {@code progn} of one is the common oversized shape (one Clojure datum lowers to
+		 * one form), and a single call such as {@code (print (case ...))} is cut through
+		 * its evaluated arguments.
+		 *
+		 * <p>
+		 * A form containing a lexical exit ({@code go}, {@code return-from},
+		 * {@code return}) is returned whole: this entry runs after the exit lowering, so
+		 * a fresh lambda around a piece of it would strand the exit from the construct
+		 * that establishes it.
+		 */
+		private LispVal cutTopLevel(LispVal form, Budget budget) {
+			if (containsLexicalExit(form)) {
+				return form;
+			}
+			int nodes = nodes(form);
+			if (budget.measuredBytes() <= 0) {
+				return form;
+			}
+			int nodeBudget = Math.max(MIN_BUDGET_NODES,
+					(int) ((long) nodes * budget.targetBytes() / budget.measuredBytes()));
+			LispVal cut = cut(form, nodeBudget);
+			if (this.report) {
+				System.err.println("[outline-top] nodes=" + nodes + " measured=" + budget.measuredBytes() + " target="
+						+ budget.targetBytes() + " nodeBudget=" + nodeBudget + " pieces=" + this.counter);
+			}
+			return cut;
+		}
+
+		/**
+		 * {@return whether {@code form} contains a lexical exit anywhere, quoted data
+		 * included} Over-approximate on purpose: a false positive only leaves the form
+		 * whole, while wrapping a real exit in a fresh lambda would strand it.
+		 */
+		private static boolean containsLexicalExit(LispVal form) {
+			while (form instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol head) {
+					String name = head.name();
+					int colon = name.lastIndexOf(':');
+					String plain = colon < 0 ? name : name.substring(colon + 1);
+					if ("GO".equals(plain) || "RETURN-FROM".equals(plain) || "RETURN".equals(plain)) {
+						return true;
+					}
+				}
+				if (containsLexicalExit(cons.car())) {
+					return true;
+				}
+				form = cons.cdr();
+			}
+			return false;
 		}
 
 		/**
@@ -534,6 +710,18 @@ public final class AstOutliner {
 					addForm(out, parts, i);
 				}
 			}
+			case LispNames.SETF, LispNames.PSETQ -> {
+				// A place-Value pair per two positions: the values are ordinary
+				// evaluated forms, while a place is not a value and never moves.
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					addForm(out, parts, i + 1);
+				}
+			}
+			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
+				// (defvar name init doc): the initform is evaluated once, the name and
+				// the docstring are not code.
+				addForm(out, parts, 2);
+			}
 			case LispNames.COND -> {
 				// (cond (test body...) ...): every form of every clause is code.
 				for (int i = 1; i < parts.size(); i++) {
@@ -549,10 +737,69 @@ public final class AstOutliner {
 				}
 			}
 			default -> {
+				// A plain call: every argument is evaluated exactly once, left to
+				// right, so each is an independent subexpression a method of its own
+				// can compute. This is what reaches a branch buried under calls -- a
+				// top-level (print (case ...)) is one call around the whole decision
+				// tree -- and what cuts a call with a long argument list.
+				//
+				// An operator this pass does not understand is NOT a plain call: its
+				// positions may be binding shapes, type heads, places, or quoted data,
+				// and reading one as code would silently turn data into code (the
+				// mistake LispMacroExpander.evaluatedClauseForms exists to prevent).
+				// Such a head is denied below and left whole, which costs a cut and
+				// never miscompiles. Package-qualified spellings (cl:go, cl:quote)
+				// deny like their bare names.
+				String name = head;
+				int colon = name.lastIndexOf(':');
+				String plain = colon < 0 ? name : name.substring(colon + 1);
+				if (!DENIED_CALL_HEADS.contains(plain)) {
+					addForms(out, parts, 1);
+				}
 			}
 		}
 		return out;
 	}
+
+	/**
+	 * Operator heads whose argument positions are not all evaluated, so a call to one is
+	 * never read as a plain call. Groups: quoted data and designators; binding shapes
+	 * (lambda lists, declarations, definitions, loopIteration heads); places; clause type
+	 * heads and situations; multiple-value shapes whose multiplicity must stay
+	 * transparent; condition registration. A denied head is left whole -- the cut it
+	 * would have bought is lost, nothing else.
+	 */
+	private static final Set<String> DENIED_CALL_HEADS = Set.of(
+			// Quoted data and designators: never code.
+			"QUOTE", "%UNSPELLED-QUOTE", "FUNCTION",
+			// Binding shapes: the names and lists around the code are data.
+			"LAMBDA", "DECLARE", "DECLAIM", "PROCLAIM", "DEFUN", "DEFMACRO", "DEFTYPE", "DEFSTRUCT", "DEFCLASS",
+			"DEFMETHOD", "DEFGENERIC", "DEFPACKAGE", "IN-PACKAGE", "MACROLET", "SYMBOL-MACROLET", "DESTRUCTURING-BIND",
+			"WITH-SLOTS", "WITH-ACCESSORS", "WITH-HASH-TABLE-ITERATOR", "WITH-OPEN-FILE", "WITH-OUTPUT-TO-STRING",
+			"WITH-INPUT-FROM-STRING", "PPRINT-LOGICAL-BLOCK", "DOTIMES", "DOLIST", "DO", "DO*", "LOOP", "PROG", "PROG*",
+			"PROGV",
+			// Places: not values.
+			"PUSH", "POP", "PUSHNEW", "REMF", "ROTATEF", "INCF", "DECF", "SHIFTF", "DEFINE-MODIFY-MACRO",
+			"MULTIPLE-VALUE-SETQ",
+			// Multiple values: the values-form's multiplicity must stay transparent.
+			"MULTIPLE-VALUE-CALL", "MULTIPLE-VALUE-LIST", "MULTIPLE-VALUE-PROG1", "NTH-VALUE",
+			// Clause type heads, situations and conditions: data around the code.
+			"HANDLER-CASE", "HANDLER-BIND", "RESTART-CASE", "RESTART-BIND", "WITH-SIMPLE-RESTART", "CHECK-TYPE",
+			"ASSERT", "ERROR", "CERROR", "SIGNAL", "MAKE-CONDITION", "DEFINE-CONDITION", "DEFINE-SETF-EXPANDER",
+			"DEFINE-COMPILER-MACRO",
+			// Dynamic extent and load-time shapes, left whole.
+			"CATCH", "UNWIND-PROTECT", "LOAD-TIME-VALUE", "EVAL-WHEN", "WITH-COMPILATION-UNIT",
+			// Exits: moving a piece of one strands it (top-level cuts skip such forms
+			// outright; this keeps the shared walker from descending into one).
+			"GO", "RETURN", "RETURN-FROM", "BLOCK", "TAGBODY",
+			// The rest of the clause family, which the whitelist above does not case.
+			"CCASE", "CTYPECASE",
+			// Backstop: every operator the whitelist above cases, so a
+			// package-qualified spelling that missed the switch (cl:cond) is left
+			// whole rather than read as a plain call. Unreachable for bare heads.
+			"IF", "PROGN", "LOCALLY", "WHEN", "UNLESS", "AND", "OR", "PROG1", "PROG2", "LET", "LET*", "FLET", "LABELS",
+			"MULTIPLE-VALUE-BIND", "THE", "SETQ", "SETF", "PSETQ", "DEFVAR", "DEFPARAMETER", "DEFCONSTANT", "COND",
+			"CASE", "ECASE", "TYPECASE", "ETYPECASE");
 
 	private static void addForms(List<Child> out, List<LispVal> parts, int from) {
 		for (int i = from; i < parts.size(); i++) {
