@@ -1529,6 +1529,52 @@ cases:
       Wrong number of args (0) passed to: corpus-ns/wna-mk/fn
       Wrong number of args (0) passed to: corpus-ns/fn
       1 2 3 4 6
+  - name: a-fn-past-ten-parameters-answers-through-every-call-shape
+    # A fn past the wasm backends' ten parameters rides the same rest-args
+    # bundling a wide defn does (.kb/wasm-callable-arity.md): the lambda checks
+    # its own count, so a wrong one still refuses in the oracle's words, through
+    # a direct call, apply, map, a local holding it and a call through another
+    # function. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (def wf11 (fn [a b c d e f g h i j k] k))
+      (println (wf11 1 2 3 4 5 6 7 8 9 10 11))
+      (println (apply wf11 [1 2 3 4 5 6 7 8 9 10 11]))
+      (println ((fn [a b c d e f g h i j k l] (+ a l)) 1 2 3 4 5 6 7 8 9 10 11 12))
+      (println (map wf11 [1] [2] [3] [4] [5] [6] [7] [8] [9] [10] [11]))
+      (println (try (wf11 1 2) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try (apply wf11 [1 2]) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (let [f wf11] (f 1 2 3 4 5 6 7 8 9 10 11)))
+      (defn wf-call [f] (f 1 2 3 4 5 6 7 8 9 10 11))
+      (println (wf-call (fn [a b c d e f g h i j k] (+ a k))))
+    expected: |
+      11
+      11
+      13
+      (11)
+      Wrong number of args (2) passed to: corpus-ns/wf11
+      Wrong number of args (2) passed to: corpus-ns/wf11
+      11
+      12
+  - name: a-reify-invoke-past-ten-parameters-answers
+    # dynaload's LazyVar reify spells IFn invokes of 11-20 parameters; the method
+    # lambdas bundle like any wide lambda, and the arity-routed trampoline calls
+    # reach them. A count no method takes is the interface refusal, on every
+    # backend -- the oracle's AbstractMethodError names the missing method, so
+    # only the refusal itself is pinned. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (def wr11 (reify clojure.lang.IFn (invoke [this a b c d e f g h i j] (+ a j))))
+      (println (wr11 1 2 3 4 5 6 7 8 9 10))
+      (println (try (wr11 1 2) (catch Throwable e :refused)))
+      (def wr20 (reify clojure.lang.IFn
+                  (invoke [this a b c d e f g h i j] (+ a j))
+                  (invoke [this a b c d e f g h i j k l m n o p q r s t] (+ a t))))
+      (println (wr20 1 2 3 4 5 6 7 8 9 10))
+      (println (wr20 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
+    expected: |
+      11
+      :refused
+      11
+      21
   - name: declare-forward-declares
     source: |
       (declare dcl-f)

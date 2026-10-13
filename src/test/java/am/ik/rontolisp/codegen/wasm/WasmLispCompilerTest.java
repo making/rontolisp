@@ -1562,6 +1562,23 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aLambdaPastTheCallableLimitCompilesWhileAVariadicOnePastItStillRefuses() {
+		// The lambda half of the bundling (WasmArityBundler.bundleLambdas): a fixed
+		// eleven-parameter lambda is rewritten to one rest list, so the compile that
+		// used to throw "supports at most 10 parameters" succeeds. A variadic
+		// definition past the limit keeps the existing hard error, like a wide
+		// variadic defun.
+		WasmLispCompiler.builder()
+			.build()
+			.compile(LispReader.readAllFromString("(print (funcall (lambda (a b c d e f g h i j k) k) 1))"));
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.build()
+			.compile(LispReader.readAllFromString("(print (funcall (lambda (a b c d e f g h i j k &rest r) k) 1))")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("at most 10 parameters");
+	}
+
+	@Test
 	void aLongQuotedListKeepsNoMoreThanOneRunOfCellsOnTheOperandStack() {
 		// Every car before the first cons left a list's whole length live across the
 		// call each symbol makes, and Cranelift's time grew with the square of it:

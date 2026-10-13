@@ -22046,6 +22046,41 @@ cases:
       120
       ("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")
 
+  # A first-class function past the wasm backends' ten parameters rides the same
+  # rest-args bundling a wide defun does (.kb/wasm-callable-arity.md): a lambda
+  # value, a flet/labels clause and a nested defun are rewritten to take one rest
+  # list, which every caller packs like any variadic callee's -- so funcall, apply,
+  # eval and a local call all reach it, and a wrong count signals the
+  # interpreter's program-error. A lambda in call position stays inlined, and a
+  # variadic definition past the limit is still refused at compile time.
+  - name: lambdas-past-ten-parameters-bundle-like-wide-defuns
+    source: |
+      (defparameter *ci-wl-f* (lambda (a b c d e f g h i j k) k))
+      (print (funcall *ci-wl-f* 1 2 3 4 5 6 7 8 9 10 11))
+      (print (apply *ci-wl-f* (list 1 2 3 4 5 6 7 8 9 10 11)))
+      (print (apply *ci-wl-f* 1 2 (list 3 4 5 6 7 8 9 10 11)))
+      (print (handler-case (funcall *ci-wl-f* 1 2) (program-error (c) (princ-to-string c))))
+      (print (handler-case (apply *ci-wl-f* (list 1 2 3 4 5 6 7 8 9 10 11 12)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(funcall *ci-wl-f* 1 2 3 4 5 6 7 8 9 10 11)) (program-error (c) (princ-to-string c))))
+      (print (let ((h *ci-wl-f*)) (funcall h 1 2 3 4 5 6 7 8 9 10 11)))
+      (print (labels ((lw (a b c d e f g h i j k) (+ a k)) (lw2 (x) (lw x 2 3 4 5 6 7 8 9 10 11))) (lw2 1)))
+      (print (flet ((fw (a b c d e f g h i j k) (list k a))) (fw 1 2 3 4 5 6 7 8 9 10 11)))
+      (print (funcall (lambda (a b c d e f g h i j k l) (+ a l)) 1 2 3 4 5 6 7 8 9 10 11 12))
+      (defun ci-wl-outer () (defun ci-wl-inner (a b c d e f g h i j k) k) (ci-wl-inner 1 2 3 4 5 6 7 8 9 10 11))
+      (print (ci-wl-outer))
+    expected: |
+      11
+      11
+      11
+      "Function expects 11 arguments, got 2"
+      "Function expects 11 arguments, got 12"
+      11
+      11
+      12
+      (11 1)
+      13
+      11
+
   # A DIRECT call of a wrapped built-in with a count its call shape rules out is the
   # interpreter's program-error at run time, its arguments evaluated first, with a
   # compile-time warning (compiler/BuiltinCallArity): the compiled lowerings dropped a
