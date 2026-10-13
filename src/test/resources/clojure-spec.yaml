@@ -13397,6 +13397,31 @@ cases:
       5 (12 13)
       [:ok :ok :ok :ok :ok]
       "For input string: \"abc\"" "Cannot parse null string"
+  - name: long-parse-long-reads-like-the-host-static
+    # (Long/parseLong s) of one argument is the portable long reader where no
+    # host is (wasm): the long the string spells (parse-long's grammar, Unicode
+    # digits included); a malformed string is the oracle's NumberFormatException
+    # naming it, nil its null-string refusal, anything else its cast refusal to
+    # String (the reflector casts the argument). Malli's -string->long reads
+    # strings through it, so the string-transformer decode runs on every
+    # backend; any other arity stays the host's call. Oracle-identical (clj
+    # 1.12.6, 2026-10-13) but for the cast message's module tail, which names no
+    # part of the refusal here (pinned at the class).
+    source: |
+      (defmacro pl-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map Long/parseLong ["12" "-12" "+12" "007" "+0" "-0" "１２"]))
+      (prn (map Long/parseLong ["9223372036854775807" "-9223372036854775808"]))
+      (prn (map Long/parseLong ["12" "13"]))
+      (prn [(pl-rfc NumberFormatException (Long/parseLong "")) (pl-rfc NumberFormatException (Long/parseLong "abc")) (pl-rfc NumberFormatException (Long/parseLong "9999999999999999999999")) (pl-rfc NumberFormatException (Long/parseLong " 12")) (pl-rfc NumberFormatException (Long/parseLong nil))])
+      (prn (try (Long/parseLong "abc") (catch NumberFormatException e (ex-message e))) (try (Long/parseLong nil) (catch NumberFormatException e (ex-message e))))
+      (prn [(pl-rfc ClassCastException (Long/parseLong 5)) (pl-rfc ClassCastException (Long/parseLong 1.5)) (pl-rfc ClassCastException (Long/parseLong :k))])
+    expected: |
+      (12 -12 12 7 0 0 12)
+      (9223372036854775807 -9223372036854775808)
+      (12 13)
+      [:ok :ok :ok :ok :ok]
+      "For input string: \"abc\"" "Cannot parse null string"
+      [:ok :ok :ok]
   - name: double-value-of-reads-like-the-host-static
     # (Double/valueOf s) where no host is lowers to the portable reader: the
     # double the string spells (parse-double's grammar), a double as is; a

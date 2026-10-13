@@ -24785,6 +24785,24 @@
         (t (rontolisp::%clojure-illegal-argument-exception
             "No matching method valueOf found taking 1 args"))))
 
+(defun rontolisp::%clojure-parse-long-static (s)
+  "(Long/parseLong s) of one argument: the long S spells (parse-long's
+   grammar, Unicode digits included); a malformed string is the oracle's
+   NumberFormatException naming it, nil its null-string refusal, anything
+   else its cast refusal to String (the reflector casts the argument). Malli's
+   -string->long reads strings through this on every backend, so the
+   string-transformer decode runs where no host is (wasm)."
+  (cond ((stringp s)
+         (or (rontolisp::%clojure-parse-long s)
+             (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "For input string: \"" s "\""))))
+        ((null s)
+         (rontolisp::%clojure-number-format-exception
+          "Cannot parse null string"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
+                         " cannot be cast to class java.lang.String")))))
+
 (defun rontolisp::%clojure-double-blank-p (s)
   "Whether S is empty or holds only codes at most 32, which Double/valueOf
    trims to the empty string."

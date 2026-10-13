@@ -1546,7 +1546,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
 | data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); f89: the write path's three-argument `Writer.append` and `.toInstant` of a Date or Timestamp run portably since 2026-10-13 (`write-str` with escapes, `write-str` of instants) |
-| malli 0.20.3 | = | = | = | = | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`); past it the load-time host calls run there since 2026-10-13 (f84: `System/getProperty` of a literal key, `(HashMap. capacity load)` of two number datums, `.putAll`). Wasm compiles dynaload's invokes since 2026-10-13 (f83: wide lambdas bundle to one rest list; a dynaload-only require compiles on both wasm backends). Past f84 the load-time host calls run there since 2026-10-13 (f92: a zero-argument `(Object.)` is a fresh uninterned symbol, so dynaload's `dynalock` builds; the boxed-integer limits are themselves, so `+max-size+` reads; a bare class name is its `(:C%CLASS name)` designator, so the class-keyed `class-schemas` builds; a `DateTimeFormatterBuilder` chain threads its marker, so the formatter defs load). The 12-line probe is the oracle's line for line on both wasm backends since 2026-10-13, with `JAVA:NEW`+`JAVA:CALL`+`JAVA:STATIC` warnings off the probe's path (defn-only shapes: `UUID/fromString`, `URI.`, `BigDecimal.`, `Instant/from`, `Date/from`, `.parse`/`.format`, `TimeUnit`). f85 regressed the probe on the hosts meanwhile (identity `=` over fresh per-site lambdas made two `pos-int?` references distinct, so the fn-keyed registry missed and `-lookup` looped through the `:function` schema); f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four |
+| malli 0.20.3 | = | = | = | = | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`); past it the load-time host calls run there since 2026-10-13 (f84: `System/getProperty` of a literal key, `(HashMap. capacity load)` of two number datums, `.putAll`). Wasm compiles dynaload's invokes since 2026-10-13 (f83: wide lambdas bundle to one rest list; a dynaload-only require compiles on both wasm backends). Past f84 the load-time host calls run there since 2026-10-13 (f92: a zero-argument `(Object.)` is a fresh uninterned symbol, so dynaload's `dynalock` builds; the boxed-integer limits are themselves, so `+max-size+` reads; a bare class name is its `(:C%CLASS name)` designator, so the class-keyed `class-schemas` builds; a `DateTimeFormatterBuilder` chain threads its marker, so the formatter defs load). The 12-line probe is the oracle's line for line on both wasm backends since 2026-10-13, with `JAVA:NEW`+`JAVA:CALL`+`JAVA:STATIC` warnings off the probe's path (defn-only shapes: `UUID/fromString`, `URI.`, `BigDecimal.`, `Instant/from`, `Date/from`, `.parse`/`.format`, `TimeUnit`). f85 regressed the probe on the hosts meanwhile (identity `=` over fresh per-site lambdas made two `pos-int?` references distinct, so the fn-keyed registry missed and `-lookup` looped through the `:function` schema); f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. That wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
 `read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`). The gaps
@@ -2734,7 +2734,9 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `Integer/parseInt` of a string and a literal radix 16, `Integer/toHexString`
   of one argument, `Math/min` of two -- lower to their portable workers where
   the host is not (wasm); where the host is each stays the host's call (like
-  `String/valueOf` where no host is, "Java interop"). `.isInfinite`/`.isNaN`
+  `String/valueOf` where no host is, "Java interop"). `Long/parseLong` of one
+  argument joins them (2026-10-13, f99): malli's `-string->long` reads strings
+  through it, so the string-transformer decode runs where the host is not. `.isInfinite`/`.isNaN`
   of no argument answer what `infinite?`/`NaN?` answer over a double, as a
   Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
   `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
@@ -2743,7 +2745,12 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
 - `Long/valueOf` is `parse-long`'s grammar or the refusal: a malformed string
   the oracle's `NumberFormatException` naming it (`For input string: "s"`), an
   integer in the long range its `(long)` overload, nil its null-string refusal,
-  anything else its no-matching-method refusal. `Double/valueOf` is
+  anything else its no-matching-method refusal. `Long/parseLong` of one argument
+  (2026-10-13, f99) is `parse-long`'s grammar or the refusal: a malformed string
+  the oracle's `NumberFormatException` naming it (`For input string: "s"`), nil
+  its null-string refusal, anything else the oracle's cast refusal to `String`
+  (the reflector casts the argument); any other arity stays the host's call, as
+  does the one-argument `Integer/parseInt` pin's `JAVA:STATIC`. `Double/valueOf` is
   `parse-double`'s or the refusal (`empty String` of nothing but blanks), a
   double its `(double)` overload, nil its `NullPointerException`
   (`Cannot invoke "String.length()" because "in" is null`), anything else its
@@ -2773,13 +2780,15 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   warning each from code the probe never runs (before: plus the load's
   `JAVA:FIELD`).
 - **Pins**: clojure-spec `long-value-of-reads-like-the-host-static`,
+  `long-parse-long-reads-like-the-host-static`,
   `double-value-of-reads-like-the-host-static`,
   `parse-int-of-radix-16-reads-like-the-host-static`,
   `integer-to-hex-string-writes-like-the-host-static`,
   `math-min-of-two-answers-like-the-host-static`,
   `isInfinite-and-isNaN-of-a-double-answer-like-the-host-methods` (four
   backends, the host∩oracle lines; the rest on both wasm backends in
-  `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`).
+  `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`),
+  `ClojureLoweringTest#longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot`.
 
 ## Boxed-integer limits, class designators and date builder chains
 

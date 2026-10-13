@@ -2186,6 +2186,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot() {
+		// (Long/parseLong s) of one argument is the portable long reader where the
+		// host is not (wasm) -- malli's -string->long reads strings through it, so
+		// the string-transformer decode runs there -- never a java:static (which
+		// wasm refuses); as a value the arity lambda wraps the same worker for its
+		// one-argument arm (the four-argument arm stays the host call). Any other
+		// arity stays the host call, like every other member; where the host
+		// is every spelling keeps java:static, whose object the host tests pin.
+		assertThat(wasmLowered("(Long/parseLong \"12\")")).contains("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(map Long/parseLong [\"12\"])")).contains("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC")
+			.contains("JAVA:STATIC");
+		assertThat(wasmLowered("(Long/parseLong \"1\" 0 1 10)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC");
+		assertThat(lowered("(Long/parseLong \"12\")")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC");
+	}
+
+	@Test
 	void putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot() {
 		// .put of a key and a value on a value of unknown class throws the
 		// message-less UnsupportedOperationException construction where the host is

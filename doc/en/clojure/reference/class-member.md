@@ -15,7 +15,11 @@ key is nil and `(System/getProperty k dflt)` its default on the wasm backends, w
 no properties exist (nil is the oracle's `NullPointerException`); a computed key stays
 the host call. `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs)
 is itself on the wasm backends, where no host field exists; any other member stays the
-host field. The class resolves dotted,
+host field. One-argument `Long/valueOf`, `Double/valueOf` and `Long/parseLong`,
+`Integer/parseInt` of a string and a literal radix 16, one-argument
+`Integer/toHexString` and two-argument `Math/min` evaluate portably on the wasm backends
+too, in the oracle's grammar and refusals; any other arity stays the host call.
+The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
 string answers it; on the wasm backends it is its `(:C%CLASS name)` designator instead,
@@ -45,6 +49,7 @@ argument count is refused when the program is read.
 (println (> (System/currentTimeMillis) 0)) ; true
 (println (System/getProperty "no.such.property" "dflt")) ; dflt
 (println Long/MAX_VALUE Long/MIN_VALUE) ; 9223372036854775807 -9223372036854775808
+(println (Long/parseLong "12")) ; 12
 (println (= String String)) ; true
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
