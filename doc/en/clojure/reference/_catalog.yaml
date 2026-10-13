@@ -212,8 +212,16 @@ categories:
       - { slug: bytes, name: "bytes" }
       - { slug: aclone, name: "aclone" }
       - { slug: aset-byte, name: "aset-byte" }
+      - { slug: aset-int, name: "aset-int" }
+      - { slug: aset-long, name: "aset-long" }
+      - { slug: aset-double, name: "aset-double" }
+      - { slug: aset-float, name: "aset-float" }
+      - { slug: aset-short, name: "aset-short" }
+      - { slug: aset-boolean, name: "aset-boolean" }
+      - { slug: aset-char, name: "aset-char" }
       - { slug: object-array, name: "object-array" }
       - { slug: to-array, name: "to-array" }
+      - { slug: to-array-2d, name: "to-array-2d" }
       - { slug: into-array, name: "into-array" }
       - { slug: int-array, name: "int-array" }
       - { slug: long-array, name: "long-array" }
@@ -222,6 +230,13 @@ categories:
       - { slug: short-array, name: "short-array" }
       - { slug: char-array, name: "char-array" }
       - { slug: boolean-array, name: "boolean-array" }
+      - { slug: ints, name: "ints" }
+      - { slug: longs, name: "longs" }
+      - { slug: doubles, name: "doubles" }
+      - { slug: floats, name: "floats" }
+      - { slug: shorts, name: "shorts" }
+      - { slug: chars, name: "chars" }
+      - { slug: booleans, name: "booleans" }
       - { slug: hash, name: "hash" }
       - { slug: hash-ordered-coll, name: "hash-ordered-coll" }
       - { slug: hash-unordered-coll, name: "hash-unordered-coll" }

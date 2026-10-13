@@ -674,12 +674,12 @@
    NullPointerException, anything else its ClassCastException to Number (a
    StringWriter has no String constructor, so the reflector's cast fails)."
   (cond ((numberp x) (make-string-output-stream))
-        ((null x)
-         (rontolisp::%clojure-null-pointer-exception
-          "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
-        (t (rontolisp::%clojure-class-cast-exception
-            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
-                         " cannot be cast to class java.lang.Number")))))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number")))))
 
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
@@ -11874,7 +11874,7 @@
              (or (> d 3.4028234663852886e38) (< d -3.4028234663852886e38)))
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Value out of range for float: "
-                      (princ-to-string d)))
+                      (rontolisp::%clojure-host-number-text d)))
         d)))
 
 (defun rontolisp::%clojure-num (x)
@@ -25113,6 +25113,364 @@
   (if (= (rontolisp::%clojure-check-arity args 1 2 "boolean-array") 1)
       (rontolisp::%clojure-boolean-array (car args))
       (rontolisp::%clojure-boolean-array-2 (car args) (car (cdr args)))))
+
+;;;; The remaining array surface: to-array-2d, the checked aset-* stores and
+;;;; the plural casts (clojure.core/to-array-2d, aset-int and friends, ints and
+;;;; friends). An array is a vector here (Typed arrays above), so to-array-2d
+;;;; answers a vector of vectors, each aset-* stores its coerced value into a
+;;;; vector, and each plural cast narrows a vector's members. No shared verb
+;;;; grows an arm, so a program naming none of these compiles as before
+;;;; (clojure/ClojureCoreLowering).
+
+(defun rontolisp::%clojure-array-index (i)
+  "I as an array index takes it, like int-cast takes an object -- an integer in
+   the int range, a double or a ratio truncated (NaN 0), a bignum past the int
+   range the oracle's integer overflow -- but a character is the oracle's
+   ClassCastException to Number, which int-cast reads as its code."
+  (if (characterp i)
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of i)
+                    " cannot be cast to class java.lang.Number"))
+      (rontolisp::%clojure-int-cast i)))
+
+(defun rontolisp::%clojure-char-cast (x)
+  "X as the oracle's charCast takes it: a character, or a number in the char
+   range -- a double refused past its edges, any other number truncated first;
+   anything else, and a number outside it, the oracle's refusal."
+  (cond ((characterp x) x)
+   ((floatp x)
+    (if (or (/= x x) (< x 0.0) (> x 65535.0))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for char: "
+                      (rontolisp::%clojure-host-number-text x)))
+        (code-char (truncate x))))
+   ((numberp x)
+    (let ((v (truncate x)))
+      (if (or (< v 0) (> v 65535))
+          (rontolisp::%clojure-illegal-argument-exception
+           (concatenate 'string "Value out of range for char: "
+                        (rontolisp::%clojure-host-number-text x)))
+          (code-char v))))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Number.longValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-to-array-2d (coll)
+  "(to-array-2d coll), the oracle's toArray2D: the vector of (to-array row) for
+   each row of COLL, which is any Collection of Collections. Nil is the
+   oracle's NullPointerException; a string, a map or a byte array -- seqable
+   but no Collection -- and anything else no seqable is its ClassCastException
+   to Collection."
+  (cond
+   ((null coll)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.util.Collection.size()\" because \"coll\" is null"))
+   ((or (stringp coll) (rontolisp::%clojure-is-map coll)
+        (rontolisp::%clojure-bytes-p coll))
+    (rontolisp::%clojure-class-cast-exception
+     (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
+                  " cannot be cast to class java.util.Collection")))
+   ((rontolisp::%clojure-host-seqable-p coll)
+    (if (rontolisp::%clojure-host-instance-p coll "java.util.Collection")
+        (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
+                                         #'rontolisp::%clojure-to-array)
+        (rontolisp::%clojure-class-cast-exception
+         (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
+                      " cannot be cast to class java.util.Collection"))))
+   ((rontolisp::%clojure-is-seqable coll)
+    (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
+                                     #'rontolisp::%clojure-to-array))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
+                    " cannot be cast to class java.util.Collection")))))
+
+(defun rontolisp::%clojure-to-array-2d-v (&rest args)
+  "to-array-2d as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "to-array-2d")
+  (rontolisp::%clojure-to-array-2d (car args)))
+
+(defun rontolisp::%clojure-array-oob ()
+  "The oracle's ArrayIndexOutOfBoundsException with no message, past either
+   end of a checked store's array: an exception of the program's runtime (like
+   a message-less construction), so ex-message answers nil."
+  (error
+   (c%e-new '("java.lang.ArrayIndexOutOfBoundsException"
+              "java.lang.IndexOutOfBoundsException" "java.lang.RuntimeException"
+              "java.lang.Exception" "java.lang.Throwable") nil nil nil)))
+
+(defun rontolisp::%clojure-array-nil ()
+  "The oracle's NullPointerException with no message, of a checked store into
+   nil: an exception of the program's runtime, so ex-message answers nil."
+  (error
+   (c%e-new '("java.lang.NullPointerException" "java.lang.RuntimeException"
+              "java.lang.Exception" "java.lang.Throwable") nil nil nil)))
+
+(defun rontolisp::%clojure-array-bounds (a at)
+  "The index AT checked against the array A -- a byte array's octets, any
+   other vector itself: outside it the oracle's ArrayIndexOutOfBoundsException
+   with no message."
+  (let ((n
+         (if (rontolisp::%clojure-bytes-p a)
+             (length (car (cdr a)))
+             (length a))))
+    (if (or (< at 0) (>= at n)) (rontolisp::%clojure-array-oob))))
+
+(defun rontolisp::%clojure-aset-checked (a i v coerce)
+  "One checked store for the seven aset-* verbs to share: the index I, then
+   VALUE V through COERCE, then the array -- nil the oracle's
+   NullPointerException with no message, a non-vector that is no byte array
+   its not-an-array, past either end its messageless ArrayIndexOutOfBounds, a
+   byte array its argument type mismatch -- holding the coerced value, VALUE
+   answered. A vector of another component stores too, where the oracle
+   checks."
+  (let ((at (rontolisp::%clojure-array-index i)) (n (funcall coerce v)))
+    (if (null a) (rontolisp::%clojure-array-nil))
+    (if (not
+         (or (rontolisp::%clojure-is-vector a) (rontolisp::%clojure-bytes-p a)))
+        (rontolisp::%clojure-illegal-argument-exception
+         "Argument is not an array"))
+    (rontolisp::%clojure-array-bounds a at)
+    (if (rontolisp::%clojure-bytes-p a)
+        (rontolisp::%clojure-illegal-argument-exception
+         "argument type mismatch"))
+    (setf (aref a at) n)
+    v))
+
+(defun rontolisp::%clojure-aset-int (a i v)
+  "(aset-int array i value): VALUE cast as int casts it, stored at the index I
+   of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-int-cast))
+
+(defun rontolisp::%clojure-aset-int-v (&rest args)
+  "aset-int as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-int")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-int (car args) (car (cdr args))
+                                    (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-int-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-long (a i v)
+  "(aset-long array i value): VALUE cast as long casts it, stored at the index
+   I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-long-cast))
+
+(defun rontolisp::%clojure-aset-long-v (&rest args)
+  "aset-long as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-long")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-long (car args) (car (cdr args))
+                                     (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-long-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-double (a i v)
+  "(aset-double array i value): VALUE cast as double casts it, stored at the
+   index I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-double))
+
+(defun rontolisp::%clojure-aset-double-v (&rest args)
+  "aset-double as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-double")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-double (car args) (car (cdr args))
+                                       (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-double-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-float (a i v)
+  "(aset-float array i value): VALUE cast as float casts it, stored at the
+   index I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-float))
+
+(defun rontolisp::%clojure-aset-float-v (&rest args)
+  "aset-float as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-float")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-float (car args) (car (cdr args))
+                                      (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-float-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-short (a i v)
+  "(aset-short array i value): VALUE cast as short casts it, stored at the
+   index I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-short))
+
+(defun rontolisp::%clojure-aset-short-v (&rest args)
+  "aset-short as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-short")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-short (car args) (car (cdr args))
+                                      (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-short-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-boolean (a i v)
+  "(aset-boolean array i value): VALUE cast as boolean casts it, stored at the
+   index I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-boolean))
+
+(defun rontolisp::%clojure-aset-boolean-v (&rest args)
+  "aset-boolean as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-boolean")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-boolean (car args) (car (cdr args))
+                                        (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-boolean-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aset-char (a i v)
+  "(aset-char array i value): VALUE cast as char casts it, stored at the index
+   I of the vector ARRAY; VALUE answered."
+  (rontolisp::%clojure-aset-checked a i v #'rontolisp::%clojure-char-cast))
+
+(defun rontolisp::%clojure-aset-char-v (&rest args)
+  "aset-char as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "aset-char")
+  (if (= (length args) 3)
+      (rontolisp::%clojure-aset-char (car args) (car (cdr args))
+                                     (car (cdr (cdr args))))
+      (apply #'rontolisp::%clojure-aset-char-v
+             (rontolisp::%clojure-aget (car args) (car (cdr args)))
+             (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-boolean (x)
+  "(boolean x): T for anything truthy, the false object for nil and false --
+   the worker behind boolean's inline test, which the checked aset-boolean
+   stores through."
+  (if (rontolisp::%clojure-truthy x) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-cast-refusal (x cname)
+  "The oracle's refusal of X where it takes an array of the primitive component
+   CNAME (int, long, double, float, short, char, boolean): its
+   ClassCastException."
+  (rontolisp::%clojure-class-cast-exception
+   (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                " cannot be cast to class [" cname)))
+
+(defun rontolisp::%clojure-ints (x)
+  "(ints xs): the int array XS itself -- nil itself, a vector narrowed like
+   int-array narrows it, anything else the oracle's ClassCastException to
+   int[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
+                                           #'rontolisp::%clojure-int-member)
+          (rontolisp::%clojure-cast-refusal x "I"))))
+
+(defun rontolisp::%clojure-ints-v (&rest args)
+  "ints as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "ints")
+  (rontolisp::%clojure-ints (car args)))
+
+(defun rontolisp::%clojure-longs (x)
+  "(longs xs): the long array XS itself -- nil itself, a vector narrowed like
+   long-array narrows it, anything else the oracle's ClassCastException to
+   long[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
+                                           #'rontolisp::%clojure-long-member)
+          (rontolisp::%clojure-cast-refusal x "J"))))
+
+(defun rontolisp::%clojure-longs-v (&rest args)
+  "longs as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "longs")
+  (rontolisp::%clojure-longs (car args)))
+
+(defun rontolisp::%clojure-doubles (x)
+  "(doubles xs): the double array XS itself -- nil itself, a vector widened
+   like double-array widens it, anything else the oracle's ClassCastException
+   to double[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0.0
+                                           #'rontolisp::%clojure-double-member)
+          (rontolisp::%clojure-cast-refusal x "D"))))
+
+(defun rontolisp::%clojure-doubles-v (&rest args)
+  "doubles as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "doubles")
+  (rontolisp::%clojure-doubles (car args)))
+
+(defun rontolisp::%clojure-floats (x)
+  "(floats xs): the float array XS itself -- nil itself, a vector widened like
+   float-array widens it, anything else the oracle's ClassCastException to
+   float[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0.0
+                                           #'rontolisp::%clojure-float-member)
+          (rontolisp::%clojure-cast-refusal x "F"))))
+
+(defun rontolisp::%clojure-floats-v (&rest args)
+  "floats as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "floats")
+  (rontolisp::%clojure-floats (car args)))
+
+(defun rontolisp::%clojure-shorts (x)
+  "(shorts xs): the short array XS itself -- nil itself, a vector narrowed
+   like short-array narrows it, anything else the oracle's ClassCastException
+   to short[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
+                                           #'rontolisp::%clojure-short-member)
+          (rontolisp::%clojure-cast-refusal x "S"))))
+
+(defun rontolisp::%clojure-shorts-v (&rest args)
+  "shorts as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "shorts")
+  (rontolisp::%clojure-shorts (car args)))
+
+(defun rontolisp::%clojure-chars (x)
+  "(chars xs): the char array XS itself -- nil itself, a vector narrowed like
+   char-array narrows it, anything else the oracle's ClassCastException to
+   char[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x)
+                                           (code-char 0)
+                                           #'rontolisp::%clojure-char-member)
+          (rontolisp::%clojure-cast-refusal x "C"))))
+
+(defun rontolisp::%clojure-chars-v (&rest args)
+  "chars as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "chars")
+  (rontolisp::%clojure-chars (car args)))
+
+(defun rontolisp::%clojure-booleans (x)
+  "(booleans xs): the boolean array XS itself -- nil itself, a vector narrowed
+   like boolean-array narrows it, anything else the oracle's ClassCastException
+   to boolean[]."
+  (if (null x)
+      nil
+      (if (rontolisp::%clojure-is-vector x)
+          (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x)
+                                           rontolisp::%clojure-false
+                                           #'rontolisp::%clojure-boolean-member)
+          (rontolisp::%clojure-cast-refusal x "Z"))))
+
+(defun rontolisp::%clojure-booleans-v (&rest args)
+  "booleans as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "booleans")
+  (rontolisp::%clojure-booleans (car args)))
 
 (defun rontolisp::%clojure-bytes-seq (x)
   "The elements of the byte array X as a fresh list of Java bytes, nil when it

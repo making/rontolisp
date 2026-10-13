@@ -136,6 +136,34 @@ final class ClojureCoreLowering {
 			case "aset-byte":
 				arity(name, n, 3, 3);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+			case "to-array-2d":
+				// a 2-dimensional Object array as a vector of vectors: each row
+				// through to-array
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "aset-int", "aset-long", "aset-double", "aset-float", "aset-short", "aset-boolean", "aset-char":
+				// a checked store into a vector: the value cast as the named
+				// primitive casts it. Of more than one index the intermediate
+				// levels read like aget, as the oracle reads them through (aget
+				// array idx). A nil array and a past-the-end index refuse
+				// without a message, through the program's exception runtime
+				ctx.usedExInfo = true;
+				arity(name, n, 3, -1);
+				if (n == 3) {
+					return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+				}
+				LispVal inner = ctx.lower(items.get(1));
+				for (int k = 2; k < items.size() - 2; k++) {
+					inner = ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.AGET), inner,
+							ctx.lower(items.get(k)));
+				}
+				return worker(name, inner, ctx.lower(items.get(items.size() - 2)),
+						ctx.lower(items.get(items.size() - 1)));
+			case "ints", "longs", "doubles", "floats", "shorts", "chars", "booleans":
+				// a cast to the primitive array: nil itself, a vector narrowed
+				// like its constructor narrows it, anything else refused
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
 			default:
 				return null;
 		}
@@ -634,11 +662,17 @@ final class ClojureCoreLowering {
 					"printf", "char-escape-string", "char-name-string", "print-simple", "print-dup", "print-ctor",
 					"munge", "namespace-munge", "create-ns", "remove-ns", "intern", "var-set", "load-string",
 					"load-file", "load-reader", "requiring-resolve", "parse-long", "parse-double", "parse-boolean",
-					"object-array", "to-array", "into-array", "int-array", "long-array", "double-array", "float-array",
-					"short-array", "char-array", "boolean-array", "ref-history-count", "ref-min-history",
-					"ref-max-history", "create-struct", "accessor", "extenders", "find-protocol-impl",
-					"find-protocol-method", "cast" ->
+					"object-array", "to-array", "to-array-2d", "into-array", "int-array", "long-array", "double-array",
+					"float-array", "short-array", "char-array", "boolean-array", "ints", "longs", "doubles", "floats",
+					"shorts", "chars", "booleans", "ref-history-count", "ref-min-history", "ref-max-history",
+					"create-struct", "accessor", "extenders", "find-protocol-impl", "find-protocol-method", "cast" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "aset-int", "aset-long", "aset-double", "aset-float", "aset-short", "aset-boolean", "aset-char" -> {
+				// a checked store as a value: the exception runtime travels, as
+				// for the call
+				ctx.usedExInfo = true;
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			}
 			case "with-redefs-fn" -> {
 				ctx.needRootSetters();
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("with-redefs-fn-v"));

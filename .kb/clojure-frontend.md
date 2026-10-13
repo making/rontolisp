@@ -215,6 +215,9 @@ answered `2 5 3` before).
 | `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`); of one index the byte-array family's `%clojure-aget`/`-aset`/`-alength` | the element class is ignored but `Byte/TYPE` of one dimension, a byte array ("Byte arrays"); every backend |
 | `parse-long` `parse-double` `parse-boolean` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-parse-NAME` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | the oracle's regex-free scanners in Lisp, so every backend runs them ("Portable parsers") |
 | `object-array` `to-array` `into-array`, `int-array` `long-array` `double-array` `float-array` `short-array` `char-array` `boolean-array` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-NAME` (of two arguments `NAME-2`) after a lower-time arity check in the oracle's wording; as a value `#'...-v`; `into-array`'s class spelling resolves at lowering time to a `(:C%CLASS name)` designator | vectors with the oracle's member coercions ("Typed arrays"); every backend |
+| `to-array-2d` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-to-array-2d` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | a vector of `(to-array row)` per row ("Typed arrays"); every backend |
+| `aset-int` `aset-long` `aset-double` `aset-float` `aset-short` `aset-boolean` `aset-char` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-NAME` after a lower-time arity check (three or more arguments) in the oracle's wording; of more than one index the intermediate levels nest through the byte-array family's `%clojure-aget`; as a value `#'...-v` over the same | the checked stores over `%clojure-aset`'s vector arm ("Typed arrays"); every backend |
+| `ints` `longs` `doubles` `floats` `shorts` `chars` `booleans` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-NAME` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | nil itself, a vector narrowed like its constructor narrows it, anything else refused ("Typed arrays"); every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
@@ -2783,6 +2786,54 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   backends; oracle-identical but the documented deviations);
   `ClojureLoweringTest#parsersAndTypedArraysLowerToTheirWorkers`,
   `ClojureLibraryTest#aProgramNamingNoParserOrTypedArrayPrunesAwayTheirWorkers`.
+
+## Remaining array surface
+
+- **The verbs** (2026-10-13, f76): `to-array-2d` (a vector of `(to-array row)`
+  per row of a Collection -- nil the oracle's `NullPointerException`, a string,
+  a map or a byte array and anything else no Collection its `ClassCastException`
+  to `java.util.Collection`), the checked stores `aset-int`/`aset-long`/
+  `aset-double`/`aset-float`/`aset-short`/`aset-boolean`/`aset-char` (the value
+  cast as `int`/`long`/`double`/`float`/`short`/`boolean`/`char` casts it,
+  stored into a vector, the value itself answered; of more than one index the
+  intermediate levels read like `aget`), and the plural casts `ints`/`longs`/
+  `doubles`/`floats`/`shorts`/`chars`/`booleans` (nil itself, a vector narrowed
+  like its constructor narrows it, anything else the oracle's `ClassCastException`
+  to the primitive array). `ClojureCoreLowering.callSeqHead` (the array
+  constructors' slice) lowers each to one `rontolisp::%clojure-NAME` worker call
+  after a lower-time arity check in the oracle's wording, `#'...-v` as a value.
+- **The order** (measured clj 1.12.6, 2026-10-13): the index converts first,
+  then the value, then the array checks -- a bad index beats a bad value, a bad
+  value beats a nil array or a bad bound. A nil array is the oracle's
+  `NullPointerException` with no message, past either end its
+  `ArrayIndexOutOfBoundsException` with no message: both signal through the
+  program's exception runtime (`ClojureStateLowering.exInfoRuntime`, which the
+  lowering splices for a program naming a checked store), so `ex-message`
+  answers nil. A byte array is `argument type mismatch` (past its end first,
+  like the oracle checks bounds before the component); any other non-vector is
+  `Argument is not an array`. The index converts like `int-cast` but refuses a
+  character (`%clojure-array-index`, the oracle's reflective conversion takes no
+  `Character` for an `int`); the value coerces exactly as its named cast does,
+  except `char`, which range-checks (`%clojure-char-cast`, what `(char x)`
+  refuses outside `0..65535` -- `char` itself stays as it was). A literal
+  out-of-range double value coerces as the object cast does (the oracle's inline
+  double cast refuses it instead), like every other worker-side coercion here.
+- **Deviations** (user docs `deviations.md`, the reference pages): no component
+  check -- a checked store stores into any vector, where the oracle checks, and
+  a plural cast narrows any vector, where the oracle refuses what is no
+  primitive array. Multi-index levels that are no vectors read like `aget`;
+  several indexes over a ragged result are the core rank error, as over any
+  nested vector.
+- **Pins**: clojure-spec `to-array-2d-answers-a-vector-of-vectors`,
+  `aset-star-stores-cast-the-value-and-answer-it`,
+  `plural-array-casts-answer-the-array-itself` (four backends, oracle-identical),
+  `new-array-verbs-keep-the-vector-stand-in-deviations` (the deviations);
+  `ClojureLoweringTest#parsersAndTypedArraysLowerToTheirWorkers` (the worker
+  shapes, the nested `aget`, the arities),
+  `ClojureLibraryTest#aProgramNamingNoParserOrTypedArrayPrunesAwayTheirWorkers`
+  (the new workers prune with the old),
+  `ClojureInteropTest#typedArraysStoreCheckedValuesThroughAsetStar`
+  (interpreter and JVM).
 
 ## Charset values
 

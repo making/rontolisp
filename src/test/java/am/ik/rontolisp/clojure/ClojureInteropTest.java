@@ -1420,6 +1420,19 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void typedArraysStoreCheckedValuesThroughAsetStar() throws Exception {
+		// a typed array is a vector here: each aset-* verb stores the value
+		// cast as its primitive casts it, and answers the value itself
+		assertBothEqual("(let [a (int-array [1 2])] (println (aset-int a 0 9)) (println (vec a)))", "9\n[9 2]\n");
+		assertBothEqual("(let [a (int-array [1 2])] (aset-int a 1 1.9) (println (vec a)))", "[1 1]\n");
+		assertBothEqual("(let [a (char-array [\\a \\b])] (aset-char a 0 66) (println (mapv int a)))", "[66 98]\n");
+		assertBothEqual("(let [a (boolean-array [true false])] (aset-boolean a 1 1) (println (vec a)))",
+				"[true true]\n");
+		assertBothEqual("(println (mapv vec (to-array-2d [[1 2] [3]])))", "[[1 2] [3]]\n");
+		assertBothEqual("(println (vec (ints (int-array [1 2]))))", "[1 2]\n");
+	}
+
+	@Test
 	void inIsBoundAndReadsThroughBinding() throws Exception {
 		// the book's hangman take-guess input shape, mocked: *in* is bound (never
 		// real stdin here) and rebinding it feeds (.readLine *in*)

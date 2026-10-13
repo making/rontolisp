@@ -2452,6 +2452,31 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map int-array [[1]])")).contains("#'RONTOLISP::%CLOJURE-INT-ARRAY-V");
 		assertThatThrownBy(() -> Clojure.read("(int-array 1 2 3)", null))
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/int-array");
+		// to-array-2d is one worker call
+		assertThat(lowered("(to-array-2d [[1]])")).contains("(RONTOLISP::%CLOJURE-TO-ARRAY-2D");
+		assertThat(lowered("(map to-array-2d [[[1]]])")).contains("#'RONTOLISP::%CLOJURE-TO-ARRAY-2D-V");
+		assertThatThrownBy(() -> Clojure.read("(to-array-2d)", null))
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/to-array-2d");
+		// each checked store is its worker; of more than one index the
+		// intermediate levels read through the byte-array family's aget
+		assertThat(lowered("(let [a76-v 1] (aset-int a76-v 0 1))"))
+			.contains("(RONTOLISP::%CLOJURE-ASET-INT |c%a76-v| 0 1)");
+		assertThat(lowered("(let [a76-v 1] (aset-int a76-v 0 1 2))")).contains("(RONTOLISP::%CLOJURE-ASET-INT")
+			.contains("(RONTOLISP::%CLOJURE-AGET |c%a76-v| 0)");
+		assertThat(lowered("(map aset-char [[\\a]] [0] [\\z])")).contains("#'RONTOLISP::%CLOJURE-ASET-CHAR-V");
+		assertThatThrownBy(() -> Clojure.read("(aset-int a76-v 0)", null))
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/aset-int");
+		// each plural cast is its worker
+		assertThat(lowered("(ints [1])")).contains("(RONTOLISP::%CLOJURE-INTS");
+		assertThat(lowered("(longs [1])")).contains("(RONTOLISP::%CLOJURE-LONGS");
+		assertThat(lowered("(doubles [1])")).contains("(RONTOLISP::%CLOJURE-DOUBLES");
+		assertThat(lowered("(floats [1])")).contains("(RONTOLISP::%CLOJURE-FLOATS");
+		assertThat(lowered("(shorts [1])")).contains("(RONTOLISP::%CLOJURE-SHORTS");
+		assertThat(lowered("(chars [1])")).contains("(RONTOLISP::%CLOJURE-CHARS");
+		assertThat(lowered("(booleans [1])")).contains("(RONTOLISP::%CLOJURE-BOOLEANS");
+		assertThat(lowered("(map booleans [[true]])")).contains("#'RONTOLISP::%CLOJURE-BOOLEANS-V");
+		assertThatThrownBy(() -> Clojure.read("(ints)", null))
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/ints");
 	}
 
 	@Test

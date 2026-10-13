@@ -13203,6 +13203,190 @@ cases:
       :vector :vector "[1 2]" true
       :oob [1 2]
       [1.9 2]
+  - name: to-array-2d-answers-a-vector-of-vectors
+    # to-array-2d of a collection of collections is the vector of (to-array
+    # row) for each row; alength, aget, aset and aclone take one as they take a
+    # vector. Nil is the oracle's NullPointerException, a string, a map or
+    # anything else no collection its ClassCastException, and a row no seqable
+    # its Unable to convert. Runs on every backend. Oracle-identical (clj
+    # 1.12.6, 2026-10-13).
+    source: |
+      (prn (mapv vec (to-array-2d [[1 2] [3]])))
+      (prn (mapv vec (to-array-2d [])))
+      (prn (mapv vec (to-array-2d [[1 "a"] [nil]])))
+      (prn (mapv vec (to-array-2d '((1 2) (3)))))
+      (prn (mapv vec (to-array-2d [#{1}])))
+      (prn (alength (to-array-2d [[1 2] [3]])))
+      (prn (aget (aget (to-array-2d [[1 2] [3]]) 0) 1))
+      (prn (let [a (to-array-2d [[1 2]])] (aset a 0 (to-array [9])) (mapv vec a)))
+      (prn (mapv vec (aclone (to-array-2d [[1 2]]))))
+      (prn (try (to-array-2d nil) (catch NullPointerException e (ex-message e))))
+      (prn (try (to-array-2d 5) (catch ClassCastException e :refused)))
+      (prn (try (to-array-2d {:a 1}) (catch ClassCastException e :refused)))
+      (prn (try (to-array-2d "ab") (catch ClassCastException e :refused)))
+      (prn (try (mapv vec (to-array-2d [[1] 5])) (catch RuntimeException e (ex-message e))))
+      (prn (mapv vec (apply to-array-2d [[[1 2]]])))
+      (prn (try (apply to-array-2d [[[1 2]] [[3]]]) (catch Exception e :refused)))
+    expected: |
+      [[1 2] [3]]
+      []
+      [[1 "a"] [nil]]
+      [[1 2] [3]]
+      [[1]]
+      2
+      2
+      [[9]]
+      [[1 2]]
+      "Cannot invoke \"java.util.Collection.size()\" because \"coll\" is null"
+      :refused
+      :refused
+      :refused
+      "Unable to convert: class java.lang.Long to Object[]"
+      [[1 2]]
+      :refused
+  - name: aset-star-stores-cast-the-value-and-answer-it
+    # aset-int, aset-long, aset-double, aset-float, aset-short, aset-boolean and
+    # aset-char store the value cast as int, long, double, float, short,
+    # boolean and char cast it -- a double truncates, a character counts as its
+    # code for int and long, anything truthy counts for boolean -- and answer
+    # the value itself. The index converts first, then the value, then the
+    # array: nil is the oracle's NullPointerException, a byte array its
+    # argument type mismatch, and past either end its messageless
+    # ArrayIndexOutOfBounds. Runs on every backend. Oracle-identical (clj
+    # 1.12.6, 2026-10-13).
+    source: |
+      (prn (let [a (int-array [1 2 3])] [(aset-int a 0 9) (vec a) (aget a 0)]))
+      (prn (let [a (int-array [1 2])] [(aset-int a 1 1.9) (vec a)]))
+      (prn (let [a (int-array [1 2])] [(aset-int a 0 \a) (vec a)]))
+      (prn (let [a (long-array [1 2])] [(aset-long a 0 9) (vec a)]))
+      (prn (let [a (double-array [1.0 2.0])] [(aset-double a 0 9) (vec a)]))
+      (prn (let [a (float-array [1.0 2.0])] [(aset-float a 0 9) (vec a)]))
+      (prn (let [a (short-array [1 2])] [(aset-short a 0 9) (vec a)]))
+      (prn (let [a (boolean-array [true false])] [(aset-boolean a 1 1) (vec a)]))
+      (prn (let [a (boolean-array [true false])] [(aset-boolean a 0 nil) (vec a)]))
+      (prn (let [a (char-array [\a \b])] [(aset-char a 0 \z) (mapv int a)]))
+      (prn (let [a (char-array [\a \b])] [(aset-char a 0 66) (mapv int a)]))
+      (prn (mapv #(do (aset-int % 0 5) (vec %)) [(int-array [1 2])]))
+      (prn (map aset-int [(int-array [1 2])] [0] [7]))
+      (prn (apply aset-int [(int-array [1 2]) 0 8]))
+      (prn (try (let [a (int-array [1 2])] (aset-int a 0 "x")) (catch ClassCastException e :refused)))
+      (prn (try (let [a (int-array [1 2])] (aset-int a "x" 5)) (catch ClassCastException e :refused)))
+      (prn (try (let [a (int-array [1 2])] (aset-int a 0 nil)) (catch NullPointerException e :npe)))
+      (prn (try (let [a (int-array [1 2])] (aset-int a 5 1)) (catch ArrayIndexOutOfBoundsException e (pr-str (ex-message e)))))
+      (prn (try (apply aset-int [(int-array [1 2]) 0 0 7]) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (aset-int nil 0 1) (catch NullPointerException e :npe)))
+      (prn (try (let [a (byte-array [1])] (aset-int a 0 1)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (let [a (byte-array [1])] (aset-int a 5 1)) (catch ArrayIndexOutOfBoundsException e :oob)))
+      (prn (try (let [a (char-array [\a])] (aset-char a 0 70000)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (let [a (char-array [\a])] (aset-char a 0 -1)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (let [a (double-array [1.0])] (aset-double a 0 "x")) (catch ClassCastException e :refused)))
+      (prn (try (let [a (int-array [1])] (aset-long a 0 nil)) (catch NullPointerException e :npe)))
+      (prn (try (let [a (float-array [1.0])] (aset-float a 0 1e300)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (let [a (short-array [1])] (aset-short a 0 100000)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (apply aset-int [(int-array [1 2]) 0]) (catch Exception e :refused)))
+    expected: |
+      [9 [9 2 3] 9]
+      [1.9 [1 1]]
+      [\a [97 2]]
+      [9 [9 2]]
+      [9 [9.0 2.0]]
+      [9 [9.0 2.0]]
+      [9 [9 2]]
+      [1 [true true]]
+      [nil [false false]]
+      [\z [122 98]]
+      [66 [66 98]]
+      [[5 2]]
+      (7)
+      8
+      :refused
+      :refused
+      :npe
+      "nil"
+      "Argument is not an array"
+      :npe
+      "argument type mismatch"
+      :oob
+      "Value out of range for char: 70000"
+      "Value out of range for char: -1"
+      :refused
+      :npe
+      "Value out of range for float: 1.0E300"
+      "Value out of range for short: 100000"
+      :refused
+  - name: plural-array-casts-answer-the-array-itself
+    # ints, longs, doubles, floats, shorts, chars and booleans answer the array
+    # itself -- nil itself, anything else no matching array the oracle's
+    # ClassCastException. alength, aget, aset, aclone, count, nth and get take
+    # one as they take a vector. Runs on every backend. Oracle-identical (clj
+    # 1.12.6, 2026-10-13).
+    source: |
+      (prn (vec (ints (int-array [1 2]))))
+      (prn (vec (longs (long-array [1 2]))))
+      (prn (vec (doubles (double-array [1.0 2.0]))))
+      (prn (vec (floats (float-array [1.0]))))
+      (prn (vec (shorts (short-array [1]))))
+      (prn (mapv int (chars (char-array [\a]))))
+      (prn (vec (booleans (boolean-array [true]))))
+      (prn (try (vec (booleans [1 nil])) (catch ClassCastException e :refused)))
+      (prn (try (vec (chars [65])) (catch ClassCastException e :refused)))
+      (prn (vec (bytes (byte-array [1]))))
+      (prn (pr-str (ints nil)) (pr-str (booleans nil)))
+      (prn (try (ints "ab") (catch ClassCastException e :refused)))
+      (prn (try (longs 5) (catch ClassCastException e :refused)))
+      (prn (alength (ints (int-array [1 2]))) (alength (longs (long-array [1]))) (count (doubles (double-array [1.0]))))
+      (prn (aget (ints (int-array [1 2])) 1))
+      (prn (get (booleans (boolean-array [true])) 0))
+      (prn (let [a (ints (int-array [1 2]))] (aset-int a 0 9) (vec a)))
+      (prn (vec (aclone (longs (long-array [1 2])))))
+      (prn (mapv int (chars (char-array [\a \b]))) (vec (booleans (boolean-array [true false]))))
+    expected: |
+      [1 2]
+      [1 2]
+      [1.0 2.0]
+      [1.0]
+      [1]
+      [97]
+      [true]
+      :refused
+      :refused
+      [1]
+      "nil" "nil"
+      :refused
+      :refused
+      2 1 1
+      2
+      true
+      [9 2]
+      [1 2]
+      [97 98] [true false]
+  - name: new-array-verbs-keep-the-vector-stand-in-deviations
+    # Deviations, all of the vector stand-in: an aset-* verb stores into any
+    # vector, where the oracle takes only a real primitive array; several
+    # indexes store through nested vectors, where the oracle's rows are
+    # Object arrays its reflection refuses; a store into a vector of another
+    # component stands, where the oracle checks the component; a plural cast
+    # narrows any vector, where the oracle refuses what is no primitive array;
+    # and = compares elements, where the oracle compares by identity. Runs on
+    # every backend.
+    source: |
+      (prn (let [a [1 2]] (aset-int a 0 5) a))
+      (prn (let [a (long-array [1])] [(aset-boolean a 0 true) (vec a)]))
+      (prn (let [a (to-array-2d [[1 2] [3 4]])] [(aset-int a 0 1 9) (mapv vec a)]))
+      (prn (vec (ints [1.9])))
+      (prn (vec (longs [1])))
+      (prn (vec (doubles [1])))
+      (prn (mapv int (chars [\a])))
+      (prn (= (ints (int-array [1 2])) (int-array [1 2])))
+    expected: |
+      [5 2]
+      [true [true]]
+      [9 [[1 9] [3 4]]]
+      [1]
+      [1]
+      [1.0]
+      [97]
+      true
   - name: standard-charsets-and-charset-for-name-of-a-literal-are-charsets
     # The six StandardCharsets fields and Charset/forName of a string literal are
     # a value standing for the charset on every backend: named (.name, .displayName,

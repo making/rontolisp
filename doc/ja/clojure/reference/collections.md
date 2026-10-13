@@ -71,6 +71,21 @@
 | `short-array` | `(vec (short-array [100000]))` | `[-31072]` |
 | `char-array` | `(vec (char-array [\a \b]))` | `[\a \b]` |
 | `boolean-array` | `(vec (boolean-array [true]))` | `[true]` |
+| `to-array-2d` | `(mapv vec (to-array-2d [[1 2] [3]]))` | `[[1 2] [3]]` |
+| `aset-int` | `(let [a (int-array [1 2])] [(aset-int a 0 9) (vec a)])` | `[9 [9 2]]` |
+| `aset-long` | `(let [a (long-array [1 2])] [(aset-long a 0 9) (vec a)])` | `[9 [9 2]]` |
+| `aset-double` | `(let [a (double-array [1.0 2.0])] [(aset-double a 0 9) (vec a)])` | `[9 [9.0 2.0]]` |
+| `aset-float` | `(let [a (float-array [1.0 2.0])] [(aset-float a 0 9) (vec a)])` | `[9 [9.0 2.0]]` |
+| `aset-short` | `(let [a (short-array [1 2])] [(aset-short a 0 9) (vec a)])` | `[9 [9 2]]` |
+| `aset-boolean` | `(let [a (boolean-array [true false])] [(aset-boolean a 1 1) (vec a)])` | `[1 [true true]]` |
+| `aset-char` | `(let [a (char-array [\a \b])] [(aset-char a 0 66) (mapv int a)])` | `[66 [66 98]]` |
+| `ints` | `(vec (ints (int-array [1 2])))` | `[1 2]` |
+| `longs` | `(vec (longs (long-array [1 2])))` | `[1 2]` |
+| `doubles` | `(vec (doubles (double-array [1.0 2.0])))` | `[1.0 2.0]` |
+| `floats` | `(vec (floats (float-array [1.0])))` | `[1.0]` |
+| `shorts` | `(vec (shorts (short-array [1])))` | `[1]` |
+| `chars` | `(mapv int (chars (char-array [\a])))` | `[97]` |
+| `booleans` | `(vec (booleans (boolean-array [true])))` | `[true]` |
 | `hash` | `(hash [1 2])` | `156247261` |
 | `hash-ordered-coll` | `(hash-ordered-coll '(1 2))` | `156247261` |
 | `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |
