@@ -1,8 +1,10 @@
 package am.ik.wit;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -28,6 +30,48 @@ public final class WitParser {
 	private final String source;
 
 	private final List<WitToken> tokens;
+
+	// One duplicate-name scope: an interface's members, a world's type names, and
+	// (inline) the top-level items of a package, the methods of a resource body and
+	// the parameters of one function each check through here with their own words.
+	private interface NameScope {
+
+		void check(String name, int offset);
+
+	}
+
+	// The duplicate-name state of one world. Imports and exports live in separate
+	// namespaces (a world may `import a;` and `export a;`), while `use`d names and
+	// type definitions share one type namespace that every named import is checked
+	// against. Bare `import a;` / `export a;` references only collide with
+	// themselves.
+	private static final class WorldScope {
+
+		final Set<String> typeNames = new HashSet<>();
+
+		final Map<String, String> importKinds = new HashMap<>();
+
+		final Map<String, Integer> importOffsets = new HashMap<>();
+
+		final Map<String, String> exportKinds = new HashMap<>();
+
+		final Map<String, Integer> exportOffsets = new HashMap<>();
+
+		final Set<WitRef> importRefs = new HashSet<>();
+
+		final Set<WitRef> exportRefs = new HashSet<>();
+
+	}
+
+	// The duplicate-name state of one resource body: at most one constructor, and
+	// each method name once.
+	private static final class ResourceScope {
+
+		final Set<String> methods = new HashSet<>();
+
+		boolean hasConstructor;
+
+	}
 
 	// The start offset of every item parsed, by identity -- handed out as WitLocations so
 	// a consumer can report an error against the WIT line that caused it. Kept beside the
@@ -74,6 +118,10 @@ public final class WitParser {
 
 	private WitDocument parseDocument() {
 		List<WitItem> items = new ArrayList<>();
+		// The top-level items that follow a package header share the header's package;
+		// each package block gets its own scope, and a name in one package never
+		// collides with the same name in another.
+		Map<String, Integer> topScope = new HashMap<>();
 		while (peek().kind() != WitToken.Kind.EOF) {
 			int start = peek().offset();
 			WitMeta meta = parseMeta();
@@ -82,10 +130,10 @@ public final class WitParser {
 				items.add(locate(start, parsePackage(meta)));
 			}
 			else if (keyword.isWord("world")) {
-				items.add(locate(start, parseWorld(meta)));
+				items.add(locate(start, parseWorld(meta, topScope)));
 			}
 			else if (keyword.isWord("interface")) {
-				items.add(locate(start, parseInterface(meta)));
+				items.add(locate(start, parseInterface(meta, topScope)));
 			}
 			else {
 				throw error("Expected 'package', 'world' or 'interface'", keyword);
@@ -103,15 +151,16 @@ public final class WitParser {
 		}
 		expectPunct("{");
 		List<WitItem> items = new ArrayList<>();
+		Map<String, Integer> blockScope = new HashMap<>();
 		while (!peek().isPunct("}")) {
 			int start = peek().offset();
 			WitMeta itemMeta = parseMeta();
 			WitToken keyword = peek();
 			if (keyword.isWord("world")) {
-				items.add(locate(start, parseWorld(itemMeta)));
+				items.add(locate(start, parseWorld(itemMeta, blockScope)));
 			}
 			else if (keyword.isWord("interface")) {
-				items.add(locate(start, parseInterface(itemMeta)));
+				items.add(locate(start, parseInterface(itemMeta, blockScope)));
 			}
 			else {
 				throw error("Expected 'world' or 'interface' in package block", keyword);
@@ -133,29 +182,33 @@ public final class WitParser {
 		return new WitPackageName(namespace, name, version);
 	}
 
-	private WitItem.World parseWorld(WitMeta meta) {
+	private WitItem.World parseWorld(WitMeta meta, Map<String, Integer> topScope) {
 		expectWord("world");
+		int nameOffset = peek().offset();
 		String name = expectWordText();
+		checkTopLevelName(topScope, name, nameOffset);
 		expectPunct("{");
 		List<WitItem> items = new ArrayList<>();
+		WorldScope scope = new WorldScope();
 		while (!peek().isPunct("}")) {
-			items.add(parseWorldItem());
+			items.add(parseWorldItem(scope));
 		}
 		expectPunct("}");
 		return new WitItem.World(meta, name, List.copyOf(items));
 	}
 
-	private WitItem parseWorldItem() {
+	private WitItem parseWorldItem(WorldScope scope) {
 		int start = peek().offset();
-		return locate(start, parseWorldItemBody());
+		return locate(start, parseWorldItemBody(scope));
 	}
 
-	private WitItem parseWorldItemBody() {
+	private WitItem parseWorldItemBody(WorldScope scope) {
 		WitMeta meta = parseMeta();
 		WitToken keyword = peek();
 		if (keyword.isWord("import") || keyword.isWord("export")) {
 			boolean isImport = keyword.isWord("import");
 			next();
+			int nameOffset = peek().offset();
 			String first = expectWordText();
 			// `name: func(...)` / `name: interface {...}` versus a path -- a path's
 			// ':' is followed by the package name and then '/', an extern's ':' by
@@ -163,12 +216,22 @@ public final class WitParser {
 			if (peek().isPunct(":") && isExternKeyword(peekAt(1))) {
 				next();
 				WitItem.Extern extern = parseExtern();
-				return isImport ? new WitItem.ImportNamed(meta, first, extern)
-						: new WitItem.ExportNamed(meta, first, extern);
+				String kind = (extern instanceof WitItem.Extern.ExternFunc) ? "func" : "interface";
+				if (isImport) {
+					checkWorldImport(scope, first, kind, nameOffset);
+					return new WitItem.ImportNamed(meta, first, extern);
+				}
+				checkWorldExport(scope, first, kind, nameOffset);
+				return new WitItem.ExportNamed(meta, first, extern);
 			}
 			WitRef target = parseRef(first);
 			expectPunct(";");
-			return isImport ? new WitItem.ImportRef(meta, target) : new WitItem.ExportRef(meta, target);
+			if (isImport) {
+				checkWorldImportRef(scope, target, nameOffset);
+				return new WitItem.ImportRef(meta, target);
+			}
+			checkWorldExportRef(scope, target, nameOffset);
+			return new WitItem.ExportRef(meta, target);
 		}
 		if (keyword.isWord("include")) {
 			next();
@@ -180,10 +243,10 @@ public final class WitParser {
 			return new WitItem.Include(meta, target);
 		}
 		if (keyword.isWord("use")) {
-			return parseUse(meta, null);
+			return parseUse(meta, (name, offset) -> checkWorldTypeName(scope, name, offset));
 		}
 		if (isTypeDefKeyword(keyword)) {
-			return parseTypeDef(meta, null);
+			return parseTypeDef(meta, (name, offset) -> checkWorldTypeName(scope, name, offset));
 		}
 		throw error("Unexpected world item", keyword);
 	}
@@ -197,7 +260,8 @@ public final class WitParser {
 			next();
 			expectPunct("{");
 			List<WitItem> items = new ArrayList<>();
-			Set<String> scope = new HashSet<>();
+			Set<String> seen = new HashSet<>();
+			NameScope scope = (name, offset) -> checkInterfaceName(seen, name, offset);
 			while (!peek().isPunct("}")) {
 				items.add(parseInterfaceItem(scope));
 			}
@@ -209,18 +273,85 @@ public final class WitParser {
 		return new WitItem.Extern.ExternFunc(func);
 	}
 
-	// An interface -- named or inline in a world -- defines each member name once: a
-	// type and a function may not share a name, nor may two types, two functions, or
-	// a `use`d name and a local one. `wasm-tools component wit` refuses every such
-	// shape with "name `x` is defined more than once" (measured 2026-10-13,
-	// wasm-tools 1.254.0); every `wit-import`/`wit-export` path parses here, so
-	// refusing here covers them all. A `use`d name counts under its alias when
-	// renamed (`use types.{quote as q}` frees `quote`); names in different
-	// interfaces never collide. World members, top-level items, resource bodies and
-	// function parameters keep their own scopes and stay unchecked here.
+	// Every duplicate-name scope in one place, each in `wasm-tools component wit`
+	// 1.254.0's words (all measured 2026-10-13). An interface -- named or inline
+	// in a world -- defines each member name once: a type and a function may not
+	// share a name, nor may two types, two functions, or a `use`d name and a local
+	// one ("name `x` is defined more than once"). A world's `use`d names and type
+	// definitions share one type namespace with the same words, while a named
+	// import that collides says which namespace loses ("import `x` conflicts with
+	// prior func/interface/type of same name", the export side mirroring it); a
+	// bare `import a;` / `export a;` repeated says the interface cannot be
+	// imported/exported more than once. Two top-level items in one package may not
+	// share a name whatever their kind ("duplicate item named `x`"). A resource
+	// body holds one constructor and each method name once ("duplicate
+	// constructors" / "duplicate function name `m`"), and one function's
+	// parameters each name once ("param `x` is defined more than once").
+	// Deliberately unchecked, because wasm-tools accepts them: duplicate `record`
+	// fields, duplicate `enum`/`flags`/`variant` cases, one name in two interfaces
+	// of a package, a world importing and exporting one name, an export beside a
+	// type of the same name, and a bare reference beside a named item of the same
+	// name. Every `wit-import`/`wit-export` path parses here, so refusing here
+	// covers them all. A `use`d name counts under its alias when renamed
+	// (`use types.{quote as q}` frees `quote`); names in different interfaces
+	// never collide.
 	private void checkInterfaceName(Set<String> scope, String name, int offset) {
 		if (!scope.add(name)) {
-			throw new WitParseException("name `" + name + "` is defined more than once", this.source, offset);
+			throw duplicate("name `" + name + "` is defined more than once", offset);
+		}
+	}
+
+	private WitParseException duplicate(String message, int offset) {
+		return new WitParseException(message, this.source, offset);
+	}
+
+	private void checkTopLevelName(Map<String, Integer> scope, String name, int offset) {
+		if (scope.putIfAbsent(name, offset) != null) {
+			throw duplicate("duplicate item named `" + name + "`", offset);
+		}
+	}
+
+	private void checkWorldTypeName(WorldScope scope, String name, int offset) {
+		checkInterfaceName(scope.typeNames, name, offset);
+		// wasm-tools resolves a world's types however they are ordered against its
+		// imports, so a named import always loses to a type: the error blames the
+		// import even when the import comes first in the source.
+		Integer importOffset = scope.importOffsets.get(name);
+		if (importOffset != null) {
+			throw duplicate("import `" + name + "` conflicts with prior type of same name", importOffset);
+		}
+	}
+
+	private void checkWorldImport(WorldScope scope, String name, String kind, int offset) {
+		String prior = scope.importKinds.get(name);
+		if (prior != null) {
+			throw duplicate("import `" + name + "` conflicts with prior " + prior + " of same name", offset);
+		}
+		if (scope.typeNames.contains(name)) {
+			throw duplicate("import `" + name + "` conflicts with prior type of same name", offset);
+		}
+		scope.importKinds.put(name, kind);
+		scope.importOffsets.put(name, offset);
+	}
+
+	private void checkWorldExport(WorldScope scope, String name, String kind, int offset) {
+		String prior = scope.exportKinds.get(name);
+		if (prior != null) {
+			throw duplicate("export `" + name + "` conflicts with prior " + prior + " of same name", offset);
+		}
+		scope.exportKinds.put(name, kind);
+		scope.exportOffsets.put(name, offset);
+	}
+
+	private void checkWorldImportRef(WorldScope scope, WitRef target, int offset) {
+		if (!scope.importRefs.add(target)) {
+			throw duplicate("interface cannot be imported more than once", offset);
+		}
+	}
+
+	private void checkWorldExportRef(WorldScope scope, WitRef target, int offset) {
+		if (!scope.exportRefs.add(target)) {
+			throw duplicate("interface cannot be exported more than once", offset);
 		}
 	}
 
@@ -242,12 +373,15 @@ public final class WitParser {
 		return new WitRef(new WitPackageName(first, pkgName, version), iface);
 	}
 
-	private WitItem.InterfaceDef parseInterface(WitMeta meta) {
+	private WitItem.InterfaceDef parseInterface(WitMeta meta, Map<String, Integer> topScope) {
 		expectWord("interface");
+		int nameOffset = peek().offset();
 		String name = expectWordText();
+		checkTopLevelName(topScope, name, nameOffset);
 		expectPunct("{");
 		List<WitItem> items = new ArrayList<>();
-		Set<String> scope = new HashSet<>();
+		Set<String> seen = new HashSet<>();
+		NameScope scope = (member, offset) -> checkInterfaceName(seen, member, offset);
 		while (!peek().isPunct("}")) {
 			items.add(parseInterfaceItem(scope));
 		}
@@ -255,12 +389,12 @@ public final class WitParser {
 		return new WitItem.InterfaceDef(meta, name, List.copyOf(items));
 	}
 
-	private WitItem parseInterfaceItem(Set<String> scope) {
+	private WitItem parseInterfaceItem(NameScope scope) {
 		int start = peek().offset();
 		return locate(start, parseInterfaceItemBody(scope));
 	}
 
-	private WitItem parseInterfaceItemBody(Set<String> scope) {
+	private WitItem parseInterfaceItemBody(NameScope scope) {
 		WitMeta meta = parseMeta();
 		WitToken keyword = peek();
 		if (keyword.isWord("use")) {
@@ -280,7 +414,7 @@ public final class WitParser {
 		}
 		WitFunc func = parseFuncType();
 		expectPunct(";");
-		checkInterfaceName(scope, name, nameOffset);
+		scope.check(name, nameOffset);
 		return new WitItem.FuncDef(meta, name, kind, func);
 	}
 
@@ -289,12 +423,12 @@ public final class WitParser {
 				|| token.isWord("flags") || token.isWord("resource");
 	}
 
-	private WitItem parseTypeDef(WitMeta meta, @Nullable Set<String> scope) {
+	private WitItem parseTypeDef(WitMeta meta, @Nullable NameScope scope) {
 		WitToken keyword = next();
 		int nameOffset = peek().offset();
 		String name = expectWordText();
 		if (scope != null) {
-			checkInterfaceName(scope, name, nameOffset);
+			scope.check(name, nameOffset);
 		}
 		switch (keyword.text()) {
 			case "type": {
@@ -337,8 +471,9 @@ public final class WitParser {
 				}
 				expectPunct("{");
 				List<WitItem> body = new ArrayList<>();
+				ResourceScope resourceScope = new ResourceScope();
 				while (!peek().isPunct("}")) {
-					body.add(parseResourceItem());
+					body.add(parseResourceItem(resourceScope));
 				}
 				expectPunct("}");
 				return new WitItem.ResourceDef(meta, name, List.copyOf(body));
@@ -369,22 +504,28 @@ public final class WitParser {
 		return List.copyOf(cases);
 	}
 
-	private WitItem parseResourceItem() {
+	private WitItem parseResourceItem(ResourceScope scope) {
 		int start = peek().offset();
-		return locate(start, parseResourceItemBody());
+		return locate(start, parseResourceItemBody(scope));
 	}
 
-	private WitItem parseResourceItemBody() {
+	private WitItem parseResourceItemBody(ResourceScope scope) {
 		WitMeta meta = parseMeta();
 		if (peek().isWord("constructor")) {
+			int ctorOffset = peek().offset();
 			next();
 			expectPunct("(");
 			List<WitFunc.Param> params = parseParams();
 			expectPunct(")");
 			expectPunct(";");
+			if (scope.hasConstructor) {
+				throw duplicate("duplicate constructors", ctorOffset);
+			}
+			scope.hasConstructor = true;
 			return new WitItem.FuncDef(meta, "constructor", WitItem.FuncKind.CONSTRUCTOR,
 					new WitFunc(false, params, null));
 		}
+		int nameOffset = peek().offset();
 		String name = expectWordText();
 		expectPunct(":");
 		WitItem.FuncKind kind = WitItem.FuncKind.PLAIN;
@@ -394,10 +535,13 @@ public final class WitParser {
 		}
 		WitFunc func = parseFuncType();
 		expectPunct(";");
+		if (!scope.methods.add(name)) {
+			throw duplicate("duplicate function name `" + name + "`", nameOffset);
+		}
 		return new WitItem.FuncDef(meta, name, kind, func);
 	}
 
-	private WitItem.Use parseUse(WitMeta meta, @Nullable Set<String> scope) {
+	private WitItem.Use parseUse(WitMeta meta, @Nullable NameScope scope) {
 		expectWord("use");
 		WitRef path = parseRef(expectWordText());
 		expectPunct(".");
@@ -416,7 +560,7 @@ public final class WitParser {
 			// A renamed import introduces only the alias (`use types.{quote as q}`
 			// frees `quote`); an unrenamed one introduces the name itself.
 			if (scope != null) {
-				checkInterfaceName(scope, alias != null ? alias : name, aliasOffset);
+				scope.check(alias != null ? alias : name, aliasOffset);
 			}
 			names.add(new WitItem.UseName(name, alias));
 			if (!consumeIfPunct(",")) {
@@ -448,8 +592,13 @@ public final class WitParser {
 
 	private List<WitFunc.Param> parseParams() {
 		List<WitFunc.Param> params = new ArrayList<>();
+		Set<String> names = new HashSet<>();
 		while (!peek().isPunct(")")) {
+			int nameOffset = peek().offset();
 			String name = expectWordText();
+			if (!names.add(name)) {
+				throw duplicate("param `" + name + "` is defined more than once", nameOffset);
+			}
 			expectPunct(":");
 			WitType type = parseType();
 			params.add(new WitFunc.Param(name, type));

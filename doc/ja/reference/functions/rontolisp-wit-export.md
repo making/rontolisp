@@ -115,7 +115,8 @@ world 中の `async func` はエクスポートを `:async t` としてリフト
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
   機構がありません)
 - コンポーネントモデルのラベル (lower-kebab-case の語) でないエクスポート名、
-  エクスポートの重複、予約名 `run` (コンポーネントの `wasi:cli/run`
+  エクスポートの重複 (WIT リーダーが先に `wasm-tools component wit` の文面で拒否します:
+  `` export `a` conflicts with prior func of same name ``)、予約名 `run` (コンポーネントの `wasi:cli/run`
   エントリポイント)
 - エクスポートを 1 つも宣言しない world、ファイルに存在しない `:world`、および
   ファイルが複数の world を宣言しているときの `:world` の省略
