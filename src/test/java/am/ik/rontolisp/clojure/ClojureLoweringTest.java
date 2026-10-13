@@ -2323,6 +2323,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void typeOfAPatternIsThePatternClass() {
+		// type of a pattern is what the oracle answers: the host Pattern class
+		// where a host is, its (:C%CLASS name) designator where none is -- the
+		// same split a bare class literal lowers to. Only the oracle's answer
+		// hits the registry's class-schemas entry, so (m/schema #"a") builds
+		// the regex schema (f98); class keeps the :pattern keyword.
+		assertThat(lowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
+			.contains("JAVA:STATIC")
+			.contains("forName")
+			.contains("java.util.regex.Pattern");
+		assertThat(wasmLowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
+			.contains(":C%CLASS")
+			.contains("java.util.regex.Pattern")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println (class #\"a\"))")).contains(":C%KEYWORD")
+			.doesNotContain("RONTOLISP::%CLOJURE-TYPE-DESIGNATOR");
+	}
+
+	@Test
 	void aZeroArgumentObjectConstructionIsAFreshTokenWhereTheHostIsNot() {
 		// (Object.) is a fresh uninterned symbol where the host is not (wasm), so
 		// dynaload's dynalock defonce loads -- never a java:new (which wasm

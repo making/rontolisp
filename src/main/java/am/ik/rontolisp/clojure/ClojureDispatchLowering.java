@@ -558,28 +558,52 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * {@code type}: the logically true {@code :type} entry of the value's metadata
-	 * ({@code rontolisp::%clojure-type-tag}), else the host class designator where the
-	 * oracle answers a host class no schema registry may collide with, else what
-	 * {@code class} answers -- {@code rontolisp::%clojure-type-designator} over
-	 * {@code class}'s kind keyword. A registry lookup falls through to {@code (type x)}
-	 * on a miss, where the oracle's class misses every entry but {@code Pattern}'s: the
-	 * designator misses the same way, so an unregistered function, keyword, string,
-	 * symbol, boolean, nil, map or set refuses with {@code :malli.core/invalid-schema}
-	 * instead of looping through (or mistyping under) the colliding kind entry. Inside a
-	 * {@code defmulti} dispatch function a nil answers nil, as {@code class} does there.
+	 * ({@code rontolisp::%clojure-type-tag}), else the host class where the oracle
+	 * answers one, else what {@code class} answers. A pattern answers the host
+	 * {@code java.util.regex.Pattern} class where a host is, its {@code (:C%CLASS
+	 * name)} designator where none is -- the same split a bare class literal lowers to --
+	 * since only the oracle's answer hits the registry's {@code class-schemas} entry, so
+	 * {@code (m/schema #"a")} builds the regex schema (f98); {@code class} keeps the
+	 * {@code :pattern} keyword. Every other colliding kind answers the designator
+	 * ({@code rontolisp::%clojure-type-designator} over {@code class}'s kind keyword): a
+	 * registry lookup falls through to {@code (type x)} on a miss, where the oracle's
+	 * class misses every entry but {@code Pattern}'s, so the designator misses the same
+	 * way and an unregistered function, keyword, string, symbol, boolean, nil, map or set
+	 * refuses with {@code :malli.core/invalid-schema} instead of looping through (or
+	 * mistyping under) the colliding kind entry. Inside a {@code defmulti} dispatch
+	 * function a nil answers nil, as {@code class} does there.
 	 */
 	static LispVal typeForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol tag = ctx.freshTemp();
 		LispSymbol kind = ctx.freshTemp();
+		LispVal designator = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(kind, classForm(ctx, one))),
+				ClojureLowerUtil.list(new LispSymbol(TYPE_DESIGNATOR), kind, one));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(one, lowered),
 						ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(TYPE_TAG), one))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-								ClojureLowerUtil.list(ClojureLowerUtil.list(kind, classForm(ctx, one))),
-								ClojureLowerUtil.list(new LispSymbol(TYPE_DESIGNATOR), kind, one))));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureStringLowering.isPatternForm(one),
+								patternClass(ctx), designator)));
 	}
+
+	/**
+	 * What {@code type} answers for a pattern: the host {@code java.util.regex.Pattern}
+	 * class where a host is (the {@code Class/forName} object a bare class literal lowers
+	 * to), its {@code (:C%CLASS name)} designator where none is (which a bare class
+	 * literal lowers to instead, never a {@code java:static} wasm refuses).
+	 */
+	private static LispVal patternClass(ClojureLowering ctx) {
+		if (!ctx.hostTarget) {
+			return ClojureCoreLowering.classDesignator(PATTERN_CLASS);
+		}
+		return ClojureLowerUtil.cons(ClojureInteropLowering.JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
+				LispString.literal("forName"), LispString.literal(PATTERN_CLASS)));
+	}
+
+	/** The host class {@code type} answers for a pattern. */
+	private static final String PATTERN_CLASS = "java.util.regex.Pattern";
 
 	/** {@code type} as a value: a one-argument lambda over the same read. */
 	static LispVal typeValue(ClojureLowering ctx) {

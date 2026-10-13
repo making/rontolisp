@@ -2453,11 +2453,24 @@
    K: a class keyword takes a value of that class, a condition whose class
    chain holds it (a subclass) and a host object of it; a host class object
    asks the host. A type designator reads as its kind, so instance? of a type
-   answer takes what the keyword did. nil is the oracle's NullPointerException,
+   answer takes what the keyword did. A pattern is an instance of the Pattern
+   class type answers for it: the host class object where a host is (which the
+   host's own isInstance would misread, since a pattern here is a wrapper, not
+   a host object), its (:C%CLASS name) designator where none is -- an instance
+   when X's class is that very class, exact, never a subclass, since without a
+   host no hierarchy answers one. nil is the oracle's NullPointerException,
    any other value its ClassCastException."
   (cond ((rontolisp::%clojure-designator-kind c)
          (rontolisp::%clojure-class-instance-p
           (rontolisp::%clojure-designator-kind c) x k))
+        ((and (rontolisp::%clojure-re-pattern-p x)
+              (equal (rontolisp::%clojure-host-class-name c)
+                     "java.util.regex.Pattern"))
+         t)
+        ((and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
+              (stringp (car (cdr c))))
+         (and (not (null x))
+              (equal (rontolisp::%clojure-class-name-of x) (car (cdr c)))))
         ((rontolisp::%clojure-keyword-p c)
          (cond ((null x) nil)
                ((equal k c) t)
@@ -13406,12 +13419,14 @@
 ;; else mistypes (child-error, invalid-entry). So type answers the host class
 ;; designator (:C%CLASS name) for exactly those kinds -- the names
 ;; %clojure-class-name-of answers, so a value reads as its class -- and nil for
-;; nil, like the oracle. class keeps the kind keyword; the multimethod
-;; dispatcher and instance? read a designator back as its kind, so dispatch
-;; answers what the keyword did. A kind no entry collides with (numbers,
-;; vectors, records, ...) keeps its keyword: its miss already refuses right.
-;; Pattern keeps :pattern for now: its class is registered, so its accept needs
-;; the host object where a host is, a case of its own.
+;; nil, like the oracle. A pattern answers the host Pattern class object where
+;; a host is, its (:C%CLASS name) designator where none is (typeForm splits the
+;; way a bare class literal does): only the oracle's answer hits the registry's
+;; class-schemas entry, so (m/schema #"a") builds the regex schema. class keeps
+;; the kind keyword; the multimethod dispatcher and instance? read a designator
+;; back as its kind, so dispatch answers what the keyword did. A kind no entry
+;; collides with (numbers, vectors, records, ...) keeps its keyword: its miss
+;; already refuses right.
 
 (defvar rontolisp::%clojure-type-class-names
   '(("clojure.lang.AFunction" . "function") ("clojure.lang.Keyword" . "keyword")

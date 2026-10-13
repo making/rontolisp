@@ -2631,6 +2631,34 @@ cases:
       str:a :kw! :was-nil :dflt :dflt
       true false
       true true false
+  - name: type-of-a-pattern-is-the-pattern-class
+    # type of a pattern is what the oracle answers: the host
+    # java.util.regex.Pattern class where a host is, its (:C%CLASS name)
+    # designator where none is (the same split a bare class literal is) -- so
+    # a schema registry lookup falls through to it and hits the class-schemas
+    # entry, and (m/schema #"a") builds the regex schema (f98). class keeps
+    # the :pattern keyword; instance? of the computed type and a defmulti on
+    # type answer the oracle's, as does the class-keyed lookup malli's -lookup
+    # runs. Every line the oracle's (clj 1.12.6, 2026-10-13) but the printed
+    # class and the printed type, which read the host object there.
+    source: |
+      (println (= (type #"a") java.util.regex.Pattern) (= (type #"a") (type #"b")))
+      (println (class #"a") (class (re-matcher #"a" "a")))
+      (println (instance? (type #"a") #"a") (instance? (type #"a") "s") (instance? (type #"a") nil))
+      (println (instance? (class #"a") #"a"))
+      (defmulti pat98 type)
+      (defmethod pat98 java.util.regex.Pattern [x] (str "pat:" x))
+      (defmethod pat98 :default [x] :dflt)
+      (println (pat98 #"a") (pat98 "s"))
+      (let [registry {java.util.regex.Pattern :found}]
+        (println (get registry #"a" (get registry (type #"a") :miss))))
+    expected: |
+      true true
+      :pattern :matcher
+      true false false
+      true
+      pat:a :dflt
+      :found
   - name: print-method-of-a-record-or-deftype-is-how-every-printer-writes-it
     # A print-method a program defines for a record or deftype is how pr, prn, print,
     # println and their string forms write a value of the type, at any depth, the
