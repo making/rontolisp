@@ -13705,7 +13705,9 @@ cases:
       :npe
       "does not define or inherit an implementation of the resolved method store of interface iface_defined_calls.Ops62"
       false
-      9  - name: string-getChars-subSequence-and-char-array-strings-read-on-every-backend
+      9
+      3
+  - name: string-getChars-subSequence-and-char-array-strings-read-on-every-backend
     # String.getChars copies into a char array, .subSequence answers the range and
     # String. of a char array (whole or ranged) its characters, on every backend (a
     # char[] is a vector of characters here); .isArray of a class keyword is true
