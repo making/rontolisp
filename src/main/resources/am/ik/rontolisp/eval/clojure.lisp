@@ -2456,8 +2456,8 @@
    answer takes what the keyword did. nil is the oracle's NullPointerException,
    any other value its ClassCastException."
   (cond ((rontolisp::%clojure-designator-kind c)
-         (rontolisp::%clojure-class-instance-p (rontolisp::%clojure-designator-kind c)
-                                               x k))
+         (rontolisp::%clojure-class-instance-p
+          (rontolisp::%clojure-designator-kind c) x k))
         ((rontolisp::%clojure-keyword-p c)
          (cond ((null x) nil)
                ((equal k c) t)
@@ -13414,10 +13414,8 @@
 ;; the host object where a host is, a case of its own.
 
 (defvar rontolisp::%clojure-type-class-names
-  '(("clojure.lang.AFunction" . "function")
-    ("clojure.lang.Keyword" . "keyword")
-    ("java.lang.String" . "string")
-    ("clojure.lang.Symbol" . "symbol")
+  '(("clojure.lang.AFunction" . "function") ("clojure.lang.Keyword" . "keyword")
+    ("java.lang.String" . "string") ("clojure.lang.Symbol" . "symbol")
     ("java.lang.Boolean" . "boolean")
     ("clojure.lang.PersistentArrayMap" . "map")
     ("clojure.lang.PersistentHashMap" . "map")
@@ -13437,30 +13435,24 @@
    caller, over class's answer."
   (if (rontolisp::%clojure-keyword-p k)
       (let ((spelling (car (cdr k))))
-        (cond ((equal spelling "function")
-               (list :c%class "clojure.lang.AFunction"))
-              ((equal spelling "keyword")
-               (list :c%class "clojure.lang.Keyword"))
-              ((equal spelling "string")
-               (list :c%class "java.lang.String"))
-              ((equal spelling "symbol")
-               (list :c%class "clojure.lang.Symbol"))
-              ((equal spelling "boolean")
-               (list :c%class "java.lang.Boolean"))
-              ((equal spelling "nil") nil)
-              ((equal spelling "map")
-               (list :c%class
-                     (if (and (consp x) (eq (car x) :C%SORTED))
-                         "clojure.lang.PersistentTreeMap"
-                         (if (> (hash-table-count x) 8)
-                             "clojure.lang.PersistentHashMap"
-                             "clojure.lang.PersistentArrayMap"))))
-              ((equal spelling "set")
-               (list :c%class
-                     (if (and (consp x) (eq (car x) :C%SORTED))
-                         "clojure.lang.PersistentTreeSet"
-                         "clojure.lang.PersistentHashSet")))
-              (t k)))
+        (cond
+         ((equal spelling "function") (list :c%class "clojure.lang.AFunction"))
+         ((equal spelling "keyword") (list :c%class "clojure.lang.Keyword"))
+         ((equal spelling "string") (list :c%class "java.lang.String"))
+         ((equal spelling "symbol") (list :c%class "clojure.lang.Symbol"))
+         ((equal spelling "boolean") (list :c%class "java.lang.Boolean"))
+         ((equal spelling "nil") nil)
+         ((equal spelling "map")
+          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
+                             "clojure.lang.PersistentTreeMap"
+                             (if (> (hash-table-count x) 8)
+                                 "clojure.lang.PersistentHashMap"
+                                 "clojure.lang.PersistentArrayMap"))))
+         ((equal spelling "set")
+          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
+                             "clojure.lang.PersistentTreeSet"
+                             "clojure.lang.PersistentHashSet")))
+         (t k)))
       k))
 
 (defun rontolisp::%clojure-designator-kind (v)
@@ -13471,9 +13463,10 @@
    did; a designator of any other class stays one, as before."
   (if (and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
            (stringp (car (cdr v))))
-      (let ((spelling (cdr (assoc (car (cdr v))
-                                  rontolisp::%clojure-type-class-names
-                                  :test #'equal))))
+      (let ((spelling
+             (cdr
+              (assoc (car (cdr v)) rontolisp::%clojure-type-class-names
+                     :test #'equal))))
         (if spelling (list :c%keyword spelling) nil))
       nil))
 
