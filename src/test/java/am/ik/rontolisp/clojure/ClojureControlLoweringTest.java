@@ -111,6 +111,24 @@ class ClojureControlLoweringTest {
 	}
 
 	@Test
+	void monitorEnterAndExitHoldOneMonitor() {
+		// the two halves of locking: where threads exist they acquire and release
+		// the same reentrant per-value mutex locking holds, answering nil; on
+		// wasm the object evaluates and nil answers (dynaload's locking2)
+		assertThat(lowered("(let [m 1] (monitor-enter m))"))
+			.contains("(RONTOLISP:MUTEX-ACQUIRE (RONTOLISP::%CLOJURE-MONITOR");
+		assertThat(lowered("(let [m 1] (monitor-exit m))"))
+			.contains("(RONTOLISP:MUTEX-RELEASE (RONTOLISP::%CLOJURE-MONITOR");
+		assertThat(loweredForWasm("(let [m 1] (monitor-enter m))")).doesNotContain("MUTEX-ACQUIRE")
+			.doesNotContain("%CLOJURE-MONITOR");
+		assertThat(loweredForWasm("(let [m 1] (monitor-exit m))")).doesNotContain("MUTEX-RELEASE")
+			.doesNotContain("%CLOJURE-MONITOR");
+		refused("(monitor-enter)", "Wrong number of args (0) passed to: clojure.core/monitor-enter");
+		refused("(monitor-enter 1 2)", "Wrong number of args (2) passed to: clojure.core/monitor-enter");
+		refused("(monitor-exit)", "Wrong number of args (0) passed to: clojure.core/monitor-exit");
+	}
+
+	@Test
 	void aDefnNoWithRedefsNamesStaysADirectCall() {
 		assertThat(lowered("(defn f [] 1) (defn g [] (f))"))
 			.contains("(DEFUN |c%g| NIL " + ClojureLoweringTest.arity("user/g") + " (|c%f|))")

@@ -616,14 +616,16 @@ public final class ClojureArms {
 		 * keyword or symbol of one namespace. Only a qualified keyword or symbol makes
 		 * one -- a literal of either ({@link Family#qualifiedIdents}), or one of the
 		 * library functions that build a keyword or symbol from a computed spelling, or
-		 * call one that does (the constructors, {@code find-keyword} and the reader).
+		 * call one that does (the constructors, {@code find-keyword}, {@code intern} and
+		 * {@code loaded-libs} over the symbol constructor, and the reader).
 		 */
 		NAMESPACE_MAP("namespace-map", Set.of("RONTOLISP::%CLOJURE-PRINT-NS-MAP-P"), Set.of(), Map.of(), Set.of(
 				"RONTOLISP::%CLOJURE-KEYWORD-1", "RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-SYMBOL-1",
 				"RONTOLISP::%CLOJURE-SYMBOL-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD",
-				"RONTOLISP::%CLOJURE-FIND-KEYWORD-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD-V", "RONTOLISP::%CLOJURE-READ",
-				"RONTOLISP::%CLOJURE-READ-V", "RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM",
-				"RONTOLISP::%CLOJURE-READ-STRING", "RONTOLISP::%CLOJURE-READ-STRING-V",
+				"RONTOLISP::%CLOJURE-FIND-KEYWORD-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD-V",
+				"RONTOLISP::%CLOJURE-INTERN", "RONTOLISP::%CLOJURE-INTERN-V", "RONTOLISP::%CLOJURE-LOADED-LIBS",
+				"RONTOLISP::%CLOJURE-READ", "RONTOLISP::%CLOJURE-READ-V", "RONTOLISP::%CLOJURE-READ-OPTS",
+				"RONTOLISP::%CLOJURE-READ-FROM", "RONTOLISP::%CLOJURE-READ-STRING", "RONTOLISP::%CLOJURE-READ-STRING-V",
 				"RONTOLISP::%CLOJURE-READ-STRING-OPTS", "RONTOLISP::%CLOJURE-RD-ANON-FN", "RONTOLISP::%CLOJURE-RD-ARG",
 				"RONTOLISP::%CLOJURE-RD-ARG-PARAM", "RONTOLISP::%CLOJURE-RD-ATOM",
 				"RONTOLISP::%CLOJURE-RD-BUILD-RECORD", "RONTOLISP::%CLOJURE-RD-CONDITIONAL",

@@ -2481,6 +2481,26 @@ class ClojureInteropTest {
 		assertThatThrownBy(() -> runOnJvm("(println (update {:a 1} :missing inc))")).isInstanceOf(Exception.class);
 	}
 
+	@Test
+	void clojureLangCollectionStaticsLowerPortably() throws Exception {
+		// LazilyPersistentVector/createOwning takes ownership of the array, which
+		// is already the vector here, and PersistentArrayMap/createWithCheck
+		// builds checking duplicate keys (malli's entry parsers); answers measured
+		// against clj 1.12.6
+		assertBothEqual("(println (clojure.lang.LazilyPersistentVector/createOwning (object-array [1 2])))", "[1 2]\n");
+		assertBothEqual(
+				"(println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2]))))",
+				"{:a 1, :b 2}\n");
+		assertBothEqual("(println (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a 2]))"
+				+ " (catch IllegalArgumentException e :dup)))", ":dup\n");
+		assertBothEqual("(println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array []))))",
+				"{}\n");
+		assertBothEqual("(println (count (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b]))))",
+				"1\n");
+		assertBothEqual("(println (try (clojure.lang.PersistentArrayMap/createWithCheck nil)"
+				+ " (catch NullPointerException e :nil)))", ":nil\n");
+	}
+
 	private static void assertBothEqual(String source, String expected) throws Exception {
 		assertThat(interpret(source)).isEqualTo(expected);
 		assertThat(runOnJvm(source)).isEqualTo(expected);

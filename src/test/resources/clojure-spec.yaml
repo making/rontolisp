@@ -25,6 +25,36 @@ cases:
       (println (fwd-a))
     expected: |
       42
+  - name: locals-and-definitions-shadow-lowering-rows-but-not-specials
+    # A local binding shadows every lowering row but the special forms': a
+    # parameter named fn, when or -> is called, never defined through; a defn of
+    # a core name (deref) replaces the core verb from there on, like the oracle's
+    # form-by-form compile. The special forms never shadow: do and if stay the
+    # specials. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println ((fn [f] (f 20 1)) (fn [a b] (+ a b))))
+      (println ((fn [myfn] (myfn 1 2 3)) (fn [a b c] (+ a b c))))
+      (println (let [wh (fn [a b] (+ a b))] (try (wh true 1) (catch Exception e :thrown))))
+      (defn sh-deref [x] [x])
+      (println (sh-deref 5))
+      (defn sh-multi ([x] (sh-multi x nil)) ([x y] [x y]))
+      (println (sh-multi 1))
+      (println (let [iff 5] iff))
+      (println ((fn [x] (if (pos? x) :p :n)) 3))
+      (println ((fn [do] (+ do 1)) 5))
+      (println (let [do 5] (list do)))
+      (println ((fn [when] (when 1 2)) (fn [a b] (+ a b))))
+    expected: |
+      21
+      6
+      :thrown
+      [5]
+      [1 nil]
+      5
+      :p
+      6
+      (5)
+      3
   - name: defn-with-docstring-and-variadic-rest
     source: |
       (defn vrest "a docstring" [x & xs] xs)
@@ -414,7 +444,8 @@ cases:
   - name: finite-range-take-and-drop
     # range with an end builds the strict list; an over-long take/drop answers the
     # whole/empty seq as nil, where the oracle prints (). An end-less (range) is
-    # refused by name (ClojureLoweringTest); lazy seqs terminate behind take.
+    # the infinite lazy integers from zero (endless-range-answers-the-lazy-
+    # integers-from-zero); lazy seqs terminate behind take.
     source: |
       (println (range 5))
       (println (range 2 8))
@@ -437,6 +468,33 @@ cases:
       (3 4)
       (1 2)
       nil
+  - name: endless-range-answers-the-lazy-integers-from-zero
+    # (range) without an end is the infinite lazy integers from 0, like the
+    # oracle's: take, nth, map, filter, drop and reduce walk it, first answers
+    # 0, empty? is false. Runs on every backend. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println (take 5 (range)))
+      (println (nth (range) 1000))
+      (println (take 3 (map #(* % %) (range))))
+      (println (first (range)))
+      (println (empty? (range)))
+      (println (take 3 (filter even? (range))))
+      (println (reduce + (take 101 (range))))
+      (println (take 2 ((fn [r] (r)) range)))
+      (println (seq? (range)))
+      (println (take 3 (drop 2 (range))))
+    expected: |
+      (0 1 2 3 4)
+      1000
+      (0 1 4)
+      0
+      false
+      (0 2 4)
+      5050
+      (0 1)
+      true
+      (2 3 4)
   - name: lazy-seq-memoizes-once
     # A lazy-seq body runs at most once per seq object, however often it is
     # realized; first/rest/take all answer through the memoized seq.
@@ -1379,6 +1437,31 @@ cases:
       (2 3)
       (1 2 3 4)
       (1 2)
+  - name: recur-through-threading-forms-stays-in-tail-position
+    # The threading rewrites lower in the incoming tail position, so a recur in a
+    # step's tail is its target's, like the oracle's macroexpansions: cond->,
+    # cond->>, as->, some-> and -> around them. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (defn thc-loop [x flag] (cond-> x flag (do (recur (inc x) false))))
+      (println (thc-loop 1 true))
+      (defn thc-as [x] (as-> x v (if (zero? v) :z (recur (dec v)))))
+      (println (thc-as 3))
+      (defn thc-first [x] (-> x inc (cond-> (pos? x) (do (recur (dec x))))))
+      (println (thc-first 5))
+      (defn thc-some [x] (some-> x inc (cond-> (pos? x) (do (recur (dec x))))))
+      (println (thc-some 3))
+      (defn thc-last [x] (->> x (map inc) (filter even?) (take 3)))
+      (println (thc-last (range)))
+      (defn thc-count [n] (loop [i n] (cond-> i (pos? i) (do (recur (dec i))))))
+      (println (thc-count 3))
+    expected: |
+      2
+      :z
+      1
+      1
+      (2 4 6)
+      0
   - name: multi-arity-defn-and-fn-dispatch-by-count
     source: |
       (defn mar-f ([x] x) ([x y] (+ x y)))
@@ -2309,6 +2392,31 @@ cases:
       <"s"> <[1 <:k>]>
       <s>
       "P\"x\"" "Px"
+  - name: print-method-of-a-type-keyword-prints-its-carriers-first
+    # A print-method for a :type keyword prints every value carrying it, ahead of
+    # the record-or-deftype tag's own -- the oracle dispatches print-method on
+    # (:type (meta x)) first (malli's schemas print this way). Oracle-identical
+    # (clj 1.12.6, 2026-10-13).
+    source: |
+      (defmethod print-method :pmb/box [x w] (.write w (str "#Box " (pr-str (:v x)))))
+      (println (pr-str (with-meta {:v 5} {:type :pmb/box})))
+      (println (pr-str (with-meta [1 2] {:type :pmb/box})))
+      (println (pr-str (try (with-meta 1 {:type :pmb/box}) (catch Exception e :refused))))
+      (defrecord PmbPt [x])
+      (defmethod print-method PmbPt [p w] (.write w (str "Pt!")))
+      (println (pr-str (->PmbPt 1)))
+      (println (pr-str (with-meta (->PmbPt 2) {:type :pmb/box})))
+      (println (pr-str (with-meta (->PmbPt 3) {:type :other})))
+      (println (pr-str {:v 6}))
+      (remove-method print-method :pmb/box)
+    expected: |
+      #Box 5
+      #Box nil
+      :refused
+      Pt!
+      #Box nil
+      Pt!
+      {:v 6}
   - name: indirect-named-class-dispatch-hits-the-nil-method
     # A call to a named class-calling function nested inside an inline dispatch
     # datum answers the nil method for nil: the call site inlines the recorded
@@ -4299,6 +4407,24 @@ cases:
       nil
       1
       :npe
+  - name: monitor-enter-and-monitor-exit-hold-one-monitor
+    # monitor-enter and monitor-exit are the two halves of locking: where threads
+    # exist they acquire and release the same reentrant per-value mutex locking
+    # holds, answering nil; on wasm the object evaluates and nil answers. nil is
+    # the oracle's NullPointerException. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println (let [x 1] (monitor-enter x) (monitor-exit x) :paired))
+      (println (locking :k :held))
+      (println (try (let [x nil] (monitor-enter x)) (catch NullPointerException e :npe)))
+      (println (let [x :k] (monitor-enter x) (monitor-enter x) (monitor-exit x) (monitor-exit x) :reentrant))
+      (println (let [a (atom 0)] (monitor-enter a) (swap! a inc) (monitor-exit a)))
+    expected: |
+      :paired
+      :held
+      :npe
+      :reentrant
+      nil
   - name: with-redefs-replaces-var-roots-for-the-body
     # A defn the program redefines calls through its var, so the replaced root
     # reaches g's call to f; a captured function value keeps the old one.
@@ -4497,6 +4623,60 @@ cases:
       s
       [1 2]
       ab
+  - name: reader-metadata-attaches-to-fn-reify-and-literals
+    # Reader metadata attaches to the value a vector, map or set literal builds,
+    # and to the function or instance a fn or reify form builds (its :type entry
+    # is what type and the print-method dispatch read); on a symbol, a call or a
+    # quoted form it parses and drops. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (pr-str (meta ^:foo [1 2])))
+      (println (pr-str (meta ^:foo (fn [x] x))))
+      (println (pr-str (meta ^{:type :rm-type} (reify Object (toString [_] "r")))))
+      (println (pr-str (meta ^:foo (list 1 2))))
+      (println (pr-str (meta ^:foo (quote sym))))
+      (println (pr-str (let [x (with-meta [1] {:a 1})] (meta ^:foo x))))
+      (println (pr-str (type ^{:type :rm-type} (reify Object (toString [_] "r")))))
+      (println (pr-str (meta ^:foo {:a 1})))
+      (println (pr-str (meta ^:private (quote foo))))
+    expected: |
+      {:foo true}
+      {:foo true}
+      {:type :rm-type}
+      nil
+      nil
+      {:a 1}
+      :rm-type
+      {:foo true}
+      nil
+  - name: macro-arguments-keep-their-reader-metadata
+    # Argument datums travel to the expander with their reader metadata, like the
+    # oracle's forms carry it: a ^:volatile-mutable deftype field below a
+    # selecting macro keeps its flag, so set! compiles (dynaload's if-bb), and a
+    # quoted shape decodes back with it. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (defmacro mm-pick [then else]
+        (if (System/getProperty "no.such.property") then else))
+      (mm-pick (defn mm-was-bb [] :bb)
+               (deftype MmLazy [f ^:volatile-mutable cached]
+                 clojure.lang.IDeref
+                 (deref [_this]
+                   (if-not (nil? cached)
+                     cached
+                     (let [x (f)]
+                       (when-not (nil? x)
+                         (set! cached x))
+                       x)))))
+      (println (deref (MmLazy. (fn [] 7) nil)))
+      (println (deref (MmLazy. (fn [] nil) nil)))
+      (defmacro mm-idm [x] x)
+      (println (pr-str (meta (mm-idm ^:foo [1 2]))))
+      (println (pr-str (let [n 3] (mm-idm ^:foo [n]))))
+    expected: |
+      7
+      nil
+      {:foo true}
+      [3]
   - name: defstruct-struct-and-struct-map
     # A defstruct holds its key vector; struct pairs keys with values (missing
     # values are nil, too many signal), struct-map seeds the same keys. Only
@@ -5813,6 +5993,26 @@ cases:
       false false
       true true true true
       (true false false true true)
+  - name: boolean-true-and-false-predicates-answer-as-values
+    # boolean?, true? and false? lower inline in calls and answer the same
+    # lambdas as values (a function position takes), so a map holding one calls
+    # it. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println ((:pred {:pred boolean?}) true))
+      (println ((:pred {:pred boolean?}) 1))
+      (println ((:pred {:pred true?}) true))
+      (println ((:pred {:pred false?}) false))
+      (println (map boolean? [true false nil 0 ""]))
+      (println (filter true? [true false nil 1]))
+      (println ((:pred {:pred nil?}) nil))
+    expected: |
+      true
+      false
+      true
+      true
+      (true true false false false)
+      (true)
+      true
   - name: char-converts-code-points
     # char answers the character itself, or the truncated code point of a number;
     # int reads it back (int exists).
@@ -12857,6 +13057,32 @@ cases:
       "array element type mismatch" :refused "Don't know how to create ISeq from: java.lang.Long"
       "argument type mismatch" "integer overflow" "Value out of range for short: 100000" "Value out of range for byte: 300" "Value out of range for char: -1"
       :empty :npe :npe
+  - name: create-with-check-builds-checking-duplicate-keys
+    # PersistentArrayMap/createWithCheck builds the map of a flat object array's
+    # alternating keys and values: a repeated key is the oracle's Duplicate key
+    # (even a dangling last one, which itself is dropped), nil the oracle's
+    # NullPointerException. Runs on every backend. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2]))))
+      (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
+      (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array []))))
+      (println (pr-str (count (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a])))))
+      (println (pr-str (count (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b])))))
+      (println (pr-str (get (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b])) :a)))
+      (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a])) (catch IllegalArgumentException e :dup))))
+      (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck nil) (catch NullPointerException e :nil))))
+      (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2 :c 3]))))
+    expected: |
+      {:a 1, :b 2}
+      :dup
+      {}
+      0
+      1
+      1
+      :dup
+      :nil
+      {:a 1, :b 2, :c 3}
   - name: typed-array-constructors-coerce-like-the-oracles
     # int/long/short narrow (a double saturating, NaN 0), double/float widen,
     # char takes characters, boolean booleans; of a size, or of a size and an

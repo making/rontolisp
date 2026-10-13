@@ -1070,8 +1070,8 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * The store of a {@code print-method} a program defines for a record or deftype
-	 * ({@code clojure.lisp}): the print-method family's producer
+	 * The store of a {@code print-method} a program defines for a record, deftype or
+	 * {@code :type} keyword ({@code clojure.lisp}): the print-method family's producer
 	 * ({@link ClojureArms.Family#PRINT_METHOD}).
 	 */
 	static final String PRINT_METHOD_ROW = "RONTOLISP::%CLOJURE-PRINT-METHOD-ROW";
@@ -1093,25 +1093,31 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * The type tag a {@code print-method} dispatch value names: a record or deftype the
-	 * program defines. Any other dispatch value -- a {@code :type} keyword, a host or
-	 * {@code clojure.lang} class, {@code Object}, nil -- is refused by name: the printer
-	 * consults a program's print-methods for its own types only.
+	 * program defines, or a {@code :type} keyword -- the oracle's dispatch reads
+	 * {@code (:type (meta x))} first, so a method for one prints every value carrying it
+	 * (malli's schemas). Any other dispatch value -- a host or {@code clojure.lang}
+	 * class, {@code Object}, nil -- is refused by name: the printer consults a program's
+	 * print-methods for its own types and type keywords only.
 	 */
 	private static LispVal printMethodTag(ClojureLowering ctx, LispVal keyDatum) {
 		ClojureLowering.TypeDef type = keyDatum instanceof LispSymbol s ? ctx.typeDefOf(s.name()) : null;
-		if (type == null) {
-			throw new LispReadException("print-method of " + keyDatum.print()
-					+ " is not supported yet: the printer consults a print-method of a record or deftype only");
+		if (type != null) {
+			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
 		}
-		return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
+		if (keyDatum instanceof LispSymbol s && s.name().startsWith(":")) {
+			return ClojureCollectionLowering
+				.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(ctx, s.name()));
+		}
+		throw new LispReadException("print-method of " + keyDatum.print()
+				+ " is not supported yet: the printer consults a print-method of a record, deftype or :type keyword only");
 	}
 
 	/**
 	 * {@code (defmethod print-method R [x writer] body...)} of a record or deftype
-	 * {@code R}: the method stored under the type's tag, where the printer writes every
-	 * value of the type through it -- {@code pr}, {@code prn}, {@code print},
-	 * {@code println} and their string forms, at any depth ({@code clojure.lisp}
-	 * "print-method").
+	 * {@code R}, or of a {@code :type} keyword: the method stored under the type's tag
+	 * (the keyword itself for one), where the printer writes every value of the type
+	 * through it -- {@code pr}, {@code prn}, {@code print}, {@code println} and their
+	 * string forms, at any depth ({@code clojure.lisp} "print-method").
 	 */
 	private static LispVal printMethodForm(ClojureLowering ctx, List<LispVal> items) {
 		LispVal tag = printMethodTag(ctx, items.get(2));

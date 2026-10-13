@@ -40,6 +40,45 @@ final class ClojureCoreLowering {
 	 * @return the lowered call, or null
 	 */
 	static @Nullable LispVal callOf(ClojureLowering ctx, String name, List<LispVal> items) {
+		// The dispatch is sliced across callSeqHead..callTail below because one
+		// switch over every verb made this method past HotSpot's HugeMethodLimit
+		// (8,000 B): past it a method is never JIT-compiled, and this one runs once
+		// per lowered call. HugeMethodTest pins every slice under the limit. Each
+		// slice answers null for a name outside it, so the router tries them in the
+		// switch's old order; every verb keeps its old arm. A checked-arithmetic or
+		// other new verb joins the slice of its neighbours.
+		LispVal answered = callSeqHead(ctx, name, items);
+		if (answered != null) {
+			return answered;
+		}
+		answered = callNumbers(ctx, name, items);
+		if (answered != null) {
+			return answered;
+		}
+		answered = callSeqRest(ctx, name, items);
+		if (answered != null) {
+			return answered;
+		}
+		answered = callPrintAndNs(ctx, name, items);
+		if (answered != null) {
+			return answered;
+		}
+		answered = callLoadAndRefusals(ctx, name, items);
+		if (answered != null) {
+			return answered;
+		}
+		return callTail(ctx, name, items);
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the seq
+	 * backlog's head and the numeric and array constructors.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callSeqHead(ClojureLowering ctx, String name, List<LispVal> items) {
 		int n = items.size() - 1;
 		switch (name) {
 			case "drop-last":
@@ -97,6 +136,23 @@ final class ClojureCoreLowering {
 			case "aset-byte":
 				arity(name, n, 3, 3);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the
+	 * unchecked arithmetic, the compare and hash helpers, the bit operations, the
+	 * map-entry reader, the sorted walk, the iterator seq and {@code find-keyword}.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callNumbers(ClojureLowering ctx, String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		switch (name) {
 			case "unchecked-inc", "unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
 					"unchecked-negate-int":
 				arity(name, n, 1, 1);
@@ -156,6 +212,22 @@ final class ClojureCoreLowering {
 				arity(name, n, 1, 2);
 				return n == 1 ? worker(name, ctx.lower(items.get(1)))
 						: worker("find-keyword-2", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the seq
+	 * backlog's rest.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callSeqRest(ClojureLowering ctx, String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		switch (name) {
 			case "subvec":
 				arity(name, n, 2, 3);
 				return n == 2 ? worker("subvec-from", ctx.lower(items.get(1)), ctx.lower(items.get(2)))
@@ -228,6 +300,22 @@ final class ClojureCoreLowering {
 				// the tree-seq over the :content of maps holding it
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the printing
+	 * verbs and the namespace mappings.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callPrintAndNs(ClojureLowering ctx, String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		switch (name) {
 			case "printf":
 				// the format printed, answering nil
 				arity(name, n, 1, -1);
@@ -280,6 +368,22 @@ final class ClojureCoreLowering {
 				// it cannot know refuses at run time
 				arity(name, n, 1, 1);
 				return ClojureNamespaceLowering.mappingsOf(ctx, name, items.get(1));
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the loading
+	 * verbs, the host-only refusals and the thread bindings.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callLoadAndRefusals(ClojureLowering ctx, String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		switch (name) {
 			case "requiring-resolve":
 				arity(name, n, 1, 1);
 				return requiringResolveOf(ctx, items);
@@ -343,6 +447,22 @@ final class ClojureCoreLowering {
 				return ClojureStateLowering.withBindingsStarOf(ctx, items);
 			case "push-thread-bindings", "pop-thread-bindings":
 				return ClojureStateLowering.unpairedThreadBindings(name);
+			default:
+				return null;
+		}
+	}
+
+	/**
+	 * One slice of the backlog-verb dispatch of {@link #callOf} (see there): the var,
+	 * metadata, namespace and reader verbs and the higher-order rest.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @param items the call, head included
+	 * @return the lowered call, or null when {@code name} is none of this slice's verbs
+	 */
+	private static @Nullable LispVal callTail(ClojureLowering ctx, String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		switch (name) {
 			case "find-var":
 				return ClojureVarLowering.findVarOf(ctx, items);
 			case "tree-seq":
@@ -520,10 +640,12 @@ final class ClojureCoreLowering {
 
 	/**
 	 * Reader metadata ({@code ^meta form}) in value position: on a vector, map or set
-	 * literal it attaches to the fresh collection, like the oracle's reader; anywhere
-	 * else (a type hint on a local, a flag on a call) it parses and drops. Nested layers
-	 * merge with the outer one winning, like the oracle's reader; a keyword is {@code {:k
-	 * true}}, a symbol or string {@code {:tag x}}.
+	 * literal it attaches to the fresh collection, like the oracle's reader; on a
+	 * {@code fn} or {@code reify} form to the function or instance it builds (malli's
+	 * {@code ^{:type ::schema} (reify ...)}); anywhere else (a type hint on a local, a
+	 * flag on a call) it parses and drops. Nested layers merge with the outer one
+	 * winning, like the oracle's reader; a keyword is {@code {:k true}}, a symbol or
+	 * string {@code {:tag x}}.
 	 * @param ctx the hub
 	 * @param form the {@code (%with-meta form meta)} datum
 	 * @return the lowered value
@@ -540,7 +662,7 @@ final class ClojureCoreLowering {
 		}
 		boolean literal = parts != null && !parts.isEmpty()
 				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
-						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
+						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set") || isMetaCarryingForm(ctx, parts));
 		if (!literal) {
 			LispVal tags = ClojureInteropLowering.paramTags(form);
 			if (tags != null && target instanceof LispSymbol member && ctx.hostMemberName(member.name())) {
@@ -558,6 +680,22 @@ final class ClojureCoreLowering {
 		}
 		return ClojureLowerUtil.list(runtime("put-meta"), ctx.lower(target),
 				ClojureCollectionLowering.mapBuild(ctx.lowers(entries, 0)));
+	}
+
+	/**
+	 * Whether the form builds a value reader metadata attaches to: {@code fn*} or
+	 * {@code reify*}, always, and {@code fn} or {@code reify} unless a local or program
+	 * definition shadows the macro.
+	 */
+	private static boolean isMetaCarryingForm(ClojureLowering ctx, List<LispVal> parts) {
+		if (!(parts.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		if (head.name().equals("fn*") || head.name().equals("reify*")) {
+			return true;
+		}
+		return (head.name().equals("fn") || head.name().equals("reify")) && !ctx.isLocal(head.name())
+				&& ctx.resolveVar(head.name()) == null;
 	}
 
 	/** One reader metadata datum as map entries (key and value datums). */
