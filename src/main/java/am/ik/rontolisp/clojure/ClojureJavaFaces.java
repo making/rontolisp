@@ -462,7 +462,8 @@ final class ClojureJavaFaces {
 		Map<String, List<ClojureJavaClasses.Member>> out = new java.util.TreeMap<>();
 		for (ClojureJavaClasses.JavaClass iface : interfaces) {
 			// An interface that cannot link contributes no row: the face still names it,
-			// so the run-time java:reify refuses with the missing class (.todo/f65).
+			// so the run-time java:reify refuses with the missing class
+			// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
 			List<ClojureJavaClasses.Member> declared;
 			try {
 				declared = iface.methods();

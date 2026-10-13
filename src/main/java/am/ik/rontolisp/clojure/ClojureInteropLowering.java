@@ -861,7 +861,8 @@ final class ClojureInteropLowering {
 		}
 		catch (LinkageError | SecurityException _) {
 			// A class that cannot link is no plain throwable: the construction keeps
-			// java:new, whose run-time error names the missing class (.todo/f65).
+			// java:new, whose run-time error names the missing class
+			// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
 			return null;
 		}
 		return type;

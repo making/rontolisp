@@ -207,7 +207,7 @@ class ClojureInteropTest {
 	void aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass() throws Exception {
 		// the fixture jar holds a class compiled against a type it omits: calling it or
 		// constructing it refuses, naming the missing class, on the interpreter and the
-		// JVM (.todo/f65)
+		// JVM (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
 		java.nio.file.Path jar = unlinkableJar();
 		String staticCall = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
 				+ " (catch Exception e (ex-message e))))";
@@ -227,7 +227,8 @@ class ClojureInteropTest {
 	void aCompiledProgramFindsADependencyJarOnItsRunClasspath() throws Exception {
 		// a -o Prog.class output carries no dependency jar: with the fixture jar on the
 		// run class path the call refuses as it does in process, without it the class is
-		// missing (.kb/java-interop.md, "The program's Java class path"; .todo/f65)
+		// missing (.kb/java-interop.md, "The program's Java class path";
+		// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
 		java.nio.file.Path jar = unlinkableJar();
 		String program = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
 				+ " (catch Exception e (ex-message e))))";

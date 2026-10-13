@@ -8,9 +8,9 @@ Found by the parent full suite (2026-10-13, tree `dc585b9cc`):
 
 - `src/main/java/am/ik/rontolisp/clojure/ClojureInteropLowering.java:846`
 - `src/main/java/am/ik/rontolisp/clojure/ClojureJavaFaces.java:465`
-- `src/main/java/am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate.java:2681,2721`
+- `src/main/java/am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate.java:2682-2723`
 - `src/main/java/am/ik/rontolisp/eval/JavaInterop.java:2121`
-- `src/test/java/am/ik/rontolisp/clojure/ClojureInteropTest.java:220,240`
+- `src/test/java/am/ik/rontolisp/clojure/ClojureInteropTest.java:210-231`
 
 ## Plan
 
