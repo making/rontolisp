@@ -90,6 +90,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final MethodRefEntry lookupRef;
 
+		private final @Nullable MethodRefEntry funcrefRef;
+
 		private final MethodRefEntry notFnRef;
 
 		private final FieldRefEntry genvField;
@@ -137,6 +139,7 @@ final class JvmEvalRuntimeBuilder {
 			this.storeRef = Objects.requireNonNull(b.storeRef);
 			this.envLookupRef = Objects.requireNonNull(b.envLookupRef);
 			this.lookupRef = Objects.requireNonNull(b.lookupRef);
+			this.funcrefRef = b.funcrefRef;
 			this.notFnRef = Objects.requireNonNull(b.notFnRef);
 			this.genvField = Objects.requireNonNull(b.genvField);
 			this.fenvField = Objects.requireNonNull(b.fenvField);
@@ -226,6 +229,15 @@ final class JvmEvalRuntimeBuilder {
 
 		MethodRefEntry lookupRef() {
 			return this.lookupRef;
+		}
+
+		/**
+		 * {@code _funcref(int)}: the canonical function-value box of a funcId, or null
+		 * when this class carries no {@code _funcrefs} table -- then a registry hit boxes
+		 * fresh per resolution, as it always did.
+		 */
+		@Nullable MethodRefEntry funcrefRef() {
+			return this.funcrefRef;
 		}
 
 		/** {@code _notFn(Object)}: the exception applying a non-function raises. */
@@ -345,6 +357,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable MethodRefEntry envLookupRef;
 
 			private @Nullable MethodRefEntry lookupRef;
+
+			private @Nullable MethodRefEntry funcrefRef;
 
 			private @Nullable MethodRefEntry notFnRef;
 
@@ -474,6 +488,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder lookupRef(MethodRefEntry m) {
 				this.lookupRef = m;
+				return this;
+			}
+
+			Builder funcrefRef(@Nullable MethodRefEntry m) {
+				this.funcrefRef = m;
 				return this;
 			}
 
@@ -810,16 +829,33 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(tmpSlot);
 		a.aload(tmpSlot);
 		a.ifnull(miss);
-		a.loadConstant(1);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.loadConstant(0);
-		a.aload(tmpSlot);
-		a.checkcast(this.k.objectArrayClass());
-		a.loadConstant(0);
-		a.aaload();
-		a.aastore();
-		a.areturn();
+		if (this.k.funcrefRef() != null) {
+			// The canonical box for the resolved funcId (_funcref): what eval'd
+			// code resolves shares with every compiled site, so an eval'd
+			// (eq (symbol-function s) #'f) is t like on the interpreter. The table
+			// covers the registry whenever eval runs (JvmLispCompiler), so the
+			// cell is never null here.
+			a.aload(tmpSlot);
+			a.checkcast(this.k.objectArrayClass());
+			a.loadConstant(0);
+			a.aaload();
+			a.checkcast(this.k.integerClass());
+			a.invokevirtual(this.k.integerValue());
+			a.invokestatic(this.k.funcrefRef());
+			a.areturn();
+		}
+		else {
+			a.loadConstant(1);
+			a.anewarray(this.k.objectClass());
+			a.dup();
+			a.loadConstant(0);
+			a.aload(tmpSlot);
+			a.checkcast(this.k.objectArrayClass());
+			a.loadConstant(0);
+			a.aaload();
+			a.aastore();
+			a.areturn();
+		}
 		a.labelBinding(miss);
 	}
 

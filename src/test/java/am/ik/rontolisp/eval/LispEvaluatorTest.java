@@ -18161,6 +18161,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aComputedSymbolFunctionAnswersTheCanonicalFunctionValue() {
+		// A computed (symbol-function x) / (fdefinition x) answers the same object
+		// #'name denotes -- the function namespace holds one object per definition
+		// (SBCL 2.2.9 answers (T T) for both lines, pinned on all four backends).
+		assertThat(evalMulti("""
+				(defun csf-f (x) (+ x 1))
+				(let ((s 'csf-f))
+				  (list (eq (symbol-function s) #'csf-f) (eq (symbol-function s) (symbol-function s))
+				        (eq (fdefinition s) #'csf-f) (eq (fdefinition s) (symbol-function s))))
+				""").print()).isEqualTo("(T T T T)");
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() {
 		// symbol-function / fdefinition of a computed name fmakunbound retired signal
 		// undefined-function, and a name given a function again answers it -- sbcl's

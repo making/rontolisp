@@ -317,8 +317,10 @@ or same position in byte-identical `rec`-group entries NEITHER of which referenc
 first-class function value is a closure STRUCT whose dispatch id is plain `i32` data, so two folded
 definitions keep distinct funcIds, `_lookup` rows and ladder arms; `eq` on WASM is `ref.eq` plus
 char/bignum/string value fallbacks with NO closure arm (`WasmEmitHelper.emitEqComparison`), so
-`(eq #'f #'g)` is NIL either way -- ci-spec `identical-function-bodies-keep-distinct-identity`
-(`(eq #'f #'f)` already diverges interpreter-vs-compilers and stays out of the pin). `ref.func`
+`(eq #'f #'g)` is NIL either way -- ci-spec `identical-function-bodies-keep-distinct-identity`.
+(Measured 2026-10-13: `(eq #'f #'f)` is T on every backend since f85's canonical per-defun box,
+and a computed `(symbol-function s)` of the same name answers that box since f94, so only
+DISTINCT definitions stay out of the pin.) `ref.func`
 values have no comparator, and the component wrapper reaches core functions by export NAME only.
 
 Identical bodies compress well, so on small clack Workers the RAW win comes with a few hundred

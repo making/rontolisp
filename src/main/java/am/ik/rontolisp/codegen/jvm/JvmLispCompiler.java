@@ -3390,8 +3390,24 @@ public final class JvmLispCompiler implements LispCompiler {
 				funcrefIds.add(entry.getValue().funcId());
 			}
 		}
+		// A name resolved at run time -- a computed (symbol-function x) /
+		// (fdefinition x), or one the eval runtime resolves -- boxes through the
+		// same _funcref, so the table covers every funcId the registry can answer
+		// whenever such a box can run: the pre-pass scan predicts the sites, and
+		// the Pass 2 cell catches one a macro synthesized behind its back (a
+		// misprediction without it would reference a cell the fill never stored).
+		// Without either, and without eval, the table stays exactly the static
+		// one above.
+		if (LispMacroExpander.usesRuntimeFunctionBox(program) || usesEval || mainCtx.computedFunctionBox[0]) {
+			Set<Integer> covered = new HashSet<>(funcrefIds);
+			for (int id : registryFuncIds) {
+				if (covered.add(id)) {
+					funcrefIds.add(id);
+				}
+			}
+		}
 		java.util.Collections.sort(funcrefIds);
-		boolean needsFuncRef = !funcrefIds.isEmpty();
+		boolean needsFuncRef = !funcrefIds.isEmpty() || mainCtx.computedFunctionBox[0];
 		if (needsLookup) {
 			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
 			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
@@ -3429,6 +3445,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				.storeRef(storeRef)
 				.envLookupRef(envLookupRef)
 				.lookupRef(lookupRef)
+				// The canonical box the eval runtime's own registry hit answers: only
+				// when the table is there (a class without one keeps the fresh box, as
+				// it always did, and the pool gains no unused entry).
+				.funcrefRef(needsFuncRef ? cp.methodRef(thisClass, "_funcref", "(I)Ljava/lang/Object;") : null)
 				.notFnRef(cp.methodRef(thisClass, JvmRuntimeBuilder.NOT_FN_NAME, JvmRuntimeBuilder.NOT_FN_DESC))
 				.genvField(genvField)
 				.fenvField(fenvField)
@@ -4812,13 +4832,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			if (funcrefsFieldRef != null) {
 				// _funcrefs = new Object[maxId + 1], then one canonical box per
-				// defun taken as a static value. Before the top-level runner below:
-				// top-level
+				// covered defun: every static function value, plus every registry
+				// row when a runtime box can run (see funcrefIds above). Before the
+				// top-level runner below: top-level
 				// forms can take function values. Past one chunk the fill moves
 				// into _funcref$fill$ segments: a big program fills thousands of
 				// boxes (the spec corpora take hundreds of workers as values),
-				// which outgrows the 64 KB method limit inline.
-				emitIntConstant(clinitCode, cp, funcrefIds.get(funcrefIds.size() - 1) + 1);
+				// which outgrows the 64 KB method limit inline. An empty cover with
+				// a computed site behind it (no function at all, so the site always
+				// misses) still seeds one null cell, so _funcref resolves.
+				emitIntConstant(clinitCode, cp, funcrefIds.isEmpty() ? 1 : funcrefIds.get(funcrefIds.size() - 1) + 1);
 				clinitCode.anewarray(objectClass);
 				clinitCode.putstatic(funcrefsFieldRef);
 				if (funcrefIds.size() <= FUNCREF_FILL_CHUNK) {
@@ -7362,6 +7385,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean[] spreadBounces;
 
 		/**
+		 * Whether a computed {@code (symbol-function x)} / {@code (fdefinition x)} box
+		 * was emitted anywhere ({@link JvmFunctionFormCompiler}): the class then sizes
+		 * the {@code _funcrefs} table over the registry too, so a resolution the pre-pass
+		 * scans never predicted still finds its canonical cell. One cell shared by every
+		 * {@code Ctx}.
+		 */
+		boolean[] computedFunctionBox;
+
+		/**
 		 * The argument counts a tail call through a value was emitted with, one
 		 * {@code _vtc<n>} each ({@link JvmTailBounce#emitValueTail}). One set shared by
 		 * every {@code Ctx}, like {@link #indirectCallArities}.
@@ -8325,6 +8357,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.valueFuncIds = builder.valueFuncIds;
 			this.bouncingBodies = builder.bouncingBodies;
 			this.spreadBounces = builder.spreadBounces;
+			this.computedFunctionBox = builder.computedFunctionBox;
 			this.valueTailArities = builder.valueTailArities;
 			this.arityGuardShapes = builder.arityGuardShapes;
 			this.arityOperators = builder.arityOperators;
@@ -8703,6 +8736,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * {@link Ctx#spreadBounces}.
 			 */
 			private final boolean[] spreadBounces = new boolean[1];
+
+			/**
+			 * One cell for every {@code Ctx} this builder makes: see
+			 * {@link Ctx#computedFunctionBox}.
+			 */
+			private final boolean[] computedFunctionBox = new boolean[1];
 
 			/**
 			 * One set for every {@code Ctx} this builder makes: see
