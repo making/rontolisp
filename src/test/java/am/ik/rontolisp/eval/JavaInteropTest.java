@@ -697,6 +697,18 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aSingleCandidateTakesAKindlessArgumentHoweverItConverts.
+	// Before, measured 2026-10-13: a kindless argument at a run-time site with one
+	// candidate of its arity was "No matching method ..." -- which killed the
+	// clojure-spec corpus once an earlier case loads clojure.java.io and the receiver
+	// wrappers stay -- and a forced conversion marshal() refuses was an internal error.
+	@Test
+	void aSingleCandidateTakesAKindlessArgumentHoweverItConverts() {
+		assertThat(output(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aCallEndingInJavaFalseAnswersJavasFalseAsFalse.
 	// Before, measured 2026-10-08: every value Java answers false was nil.
 	@Test

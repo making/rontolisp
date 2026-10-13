@@ -243,6 +243,51 @@ class JavaBridgeTemplateParityTest {
 			.isEqualTo("java.lang.StringBuilder");
 	}
 
+	// A kindless argument at a run-time site with one candidate of its arity takes it
+	// however it converts, in both copies: the bridge's resolve answers forced, as the
+	// shared rule's singleFixed answers the member, and a forced conversion marshal()
+	// refuses throws the oracle's ClassCastException -- never "No matching method".
+	// Before, measured 2026-10-13: the kindless path never tried its only candidate,
+	// which killed the clojure-spec corpus on both host legs at putAll of a vector.
+	@Test
+	void theBridgeForcesASingleCandidateForAKindlessArgument() throws Exception {
+		Object list = new Object[] { 1L, 2L };
+		Object[] member = (Object[]) Objects
+			.requireNonNull(invoke("member", new Class<?>[] { String.class }, "putAll"));
+		Supplier<List<?>> candidates = () -> {
+			try {
+				List<?> methods = (List<?>) invoke("methods", new Class<?>[] { Class.class, String.class },
+						HashMap.class, "putAll");
+				return (List<?>) invoke("filterByTag", new Class<?>[] { List.class, String[].class }, methods,
+						(String[]) member[1]);
+			}
+			catch (Exception ex) {
+				throw new IllegalStateException(ex);
+			}
+		};
+		Object[] resolution = (Object[]) invoke("resolve",
+				new Class<?>[] { Class.class, String.class, Supplier.class, Object[].class }, HashMap.class,
+				"putAll#parity-kindless", candidates, new Object[] { list });
+		assertThat(resolution).isNotNull();
+		assertThat(((Method) ((Object[]) Objects.requireNonNull(resolution)[0])[0]).getName()).isEqualTo("putAll");
+		assertThat(resolution[1]).isEqualTo(Boolean.TRUE);
+		int functions = (Integer) Objects.requireNonNull(constant("FUNCTIONS_PROXY"));
+		try {
+			invoke("convertForced", new Class<?>[] { Object.class, Class.class, int.class, Object.class, String.class },
+					list, java.util.Map.class, functions, null, "calling java.util.HashMap.putAll");
+			assertThat(true).as("a forced conversion marshal() refuses throws").isFalse();
+		}
+		catch (java.lang.reflect.InvocationTargetException ex) {
+			Throwable carried = Objects.requireNonNull(ex.getCause()).getCause();
+			assertThat(carried).isInstanceOf(ClassCastException.class);
+			assertThat(carried.getMessage())
+				.isEqualTo("class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map");
+		}
+		JavaOverloads.Overload shared = JavaOverloads
+			.singleFixed(ReflectiveJavaClasses.of(HashMap.class).methods("putAll"), 1);
+		assertThat(Objects.requireNonNull(shared).executable().name()).isEqualTo("putAll");
+	}
+
 	// A java:reify / java:proxy the bridge implements when it runs declares the slots
 	// the shared rule chooses (compiler/JavaImplementations) -- the ones the
 	// interpreter and a compiled program's generated class declare -- and refuses a

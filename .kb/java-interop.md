@@ -591,6 +591,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   packed-varargs flag) and reads no argument value: over `kindCost` of kinds it is a pure
   function of candidates x kinds (the shape a compile-time resolver can call). A call with a
   kindless argument passes `marshal` as the cost instead and is never remembered.
+  When no overload takes it that way, one candidate of the arity still takes it however
+  it converts -- the run-time half of the single-candidate rule (`JavaOverloads.
+  singleFixed`, g03: a kindless `putAll` of a vector reaches `putAll(Map)` and its
+  checked cast, as the oracle's reflector calls one method directly) -- converting
+  forced (`convertForced`'s checked casts, a refusal the error calling the member),
+  still never remembered.
   `marshalArguments` then converts the values for the chosen overload only. The tie-break
   signature is built only on a cost tie.
 - Caches: class by name, constructors of a class, accessible methods of (class, name), field

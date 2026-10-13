@@ -491,7 +491,8 @@ final class JavaBridgeTemplate {
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = forced ? marshalForcedArguments(overload, values, functions, through)
+			@Nullable Object[] handed = forced
+					? marshalForcedArguments(overload, values, functions, through, "constructing " + name)
 					: marshalArguments(overload, values, functions, through);
 			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
 			return unmarshal(made, javaFalse, octets);
@@ -1508,7 +1509,9 @@ final class JavaBridgeTemplate {
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = forced ? marshalForcedArguments(overload, values, functions, through)
+			@Nullable Object[] handed = forced
+					? marshalForcedArguments(overload, values, functions, through,
+							"calling " + cls.getName() + "." + ((Method) overload[0]).getName())
 					: marshalArguments(overload, values, functions, through);
 			Object answer = ((Method) overload[0]).invoke(receiver, handed);
 			return unmarshal(answer, javaFalse, octets);
@@ -1675,7 +1678,9 @@ final class JavaBridgeTemplate {
 	// remembered
 	// for their kinds, otherwise select() over the candidates by argument kind (and
 	// remembered). A cons or Lisp array has no kind: such a call is costed by marshalling
-	// its arguments and never remembered.
+	// its arguments and never remembered -- but one candidate of the arity still takes
+	// them however they convert (as the oracle's reflector calls one directly),
+	// converting forced when it runs.
 	private static Object @Nullable [] resolve(Class<?> cls, String member,
 			Supplier<? extends List<? extends Executable>> candidates, @Nullable Object[] values) {
 		// Returns {overload, forced}: forced when the only candidate of the arity takes
@@ -1686,7 +1691,11 @@ final class JavaBridgeTemplate {
 			@Nullable Object[] slot = new @Nullable Object[1];
 			Object[] chosen = select(candidates.get(), values.length,
 					(i, target) -> marshal(values[i], target, slot, 0));
-			return chosen == null ? null : new Object[] { chosen, Boolean.FALSE };
+			if (chosen != null) {
+				return new Object[] { chosen, Boolean.FALSE };
+			}
+			Object[] only = singleFixed(candidates.get(), values.length);
+			return only == null ? null : new Object[] { only, Boolean.TRUE };
 		}
 		Object[] remembered = remembered(cls, member, kinds);
 		if (remembered != null) {
@@ -2071,20 +2080,20 @@ final class JavaBridgeTemplate {
 	// The Java arguments for the overload a run-time resolution's only candidate
 	// takes however they convert (as the oracle's reflector calls one directly).
 	private static @Nullable Object[] marshalForcedArguments(Object[] overload, @Nullable Object[] values,
-			int functions, @Nullable Object through) {
+			int functions, @Nullable Object through, String what) {
 		Class<?>[] params = (Class<?>[]) overload[1];
 		boolean packs = (Boolean) overload[2];
 		@Nullable Object[] out = new @Nullable Object[params.length];
 		int fixed = packs ? params.length - 1 : params.length;
 		for (int i = 0; i < fixed; i++) {
-			out[i] = convertForced(values[i], params[i], functions, through);
+			out[i] = convertForced(values[i], params[i], functions, through, what);
 		}
 		if (packs) {
 			Class<?> component = params[fixed].getComponentType();
 			Object packed = Array.newInstance(component, values.length - fixed);
 			@Nullable Object[] slot = new @Nullable Object[1];
 			for (int i = fixed; i < values.length; i++) {
-				slot[0] = convertForced(values[i], component, functions, through);
+				slot[0] = convertForced(values[i], component, functions, through, what);
 				Array.set(packed, i - fixed, slot[0]);
 			}
 			out[fixed] = packed;
@@ -2092,16 +2101,20 @@ final class JavaBridgeTemplate {
 		return out;
 	}
 
-	// A value converted however the target takes it: a value with a kind by the
-	// unchecked arms, anything else as marshal converts it.
+	// A value converted however the target of a run-time resolution's only candidate
+	// takes it: a value with a kind by the unchecked arms, anything else by the
+	// checked casts (as a resolved site converts it): what marshal() cannot convert
+	// refuses with the oracle's ClassCastException, as the oracle's reflector's
+	// checked cast does (mirrors eval/JavaInterop.convertForced). The refusal is the
+	// error calling the member WHAT names, carrying the real exception.
 	private static @Nullable Object convertForced(@Nullable Object value, Class<?> target, int functions,
-			@Nullable Object through) {
+			@Nullable Object through, String what) {
 		if (kindOf(value) != null) {
 			return convert(value, target, functions, through);
 		}
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (marshal(value, target, slot, 0, functions, through) == NO_MATCH) {
-			throw new IllegalStateException("java interop: the selected overload rejects " + describe(value));
+			throw fail(what, castFailure(castFromName(value), castTargetName(target)));
 		}
 		return slot[0];
 	}
@@ -2822,6 +2835,48 @@ final class JavaBridgeTemplate {
 	// java:java-exception, as the program's _jfail decides for a failed call.
 	private static RuntimeException noMatch(String what, String oracleWords) {
 		return fail(what, new IllegalArgumentException(oracleWords));
+	}
+
+	// The ClassCastException of a forced conversion marshal() refuses, in the
+	// oracle's words but without its module tail (as the portable lowering spells
+	// them; mirrors eval/JavaInterop's checked conversions, whose Lisp class names
+	// castFromName spells here too -- this class must stand alone).
+	private static ClassCastException castFailure(String from, String to) {
+		return new ClassCastException("class " + from + " cannot be cast to class " + to);
+	}
+
+	// The class a forced conversion casts to for the target: the box for a
+	// primitive (as the oracle's emitUnboxArg casts a primitive target through its
+	// box), the target's own name otherwise (mirrors eval/JavaInterop).
+	private static String castTargetName(Class<?> target) {
+		if (target == boolean.class) {
+			return "java.lang.Boolean";
+		}
+		if (target == char.class) {
+			return "java.lang.Character";
+		}
+		if (target.isPrimitive()) {
+			return "java.lang.Number";
+		}
+		return target.getName();
+	}
+
+	// The class a forced conversion names a kindless value with: a list's LispCons
+	// (an instance's LispInstance) or a ratio's LispRatio (as the direct sites'
+	// _jcls spells them), anything else the representation's own (a view's, as the
+	// interpreter's checked conversion refuses it).
+	private static String castFromName(@Nullable Object value) {
+		if (value != null && value.getClass() == Object[].class) {
+			Object[] arr = (Object[]) value;
+			if (arr.length > 0 && arr[0] instanceof String[]) {
+				return "am.ik.rontolisp.LispInstance";
+			}
+			return "am.ik.rontolisp.LispCons";
+		}
+		if (value instanceof BigInteger[]) {
+			return "am.ik.rontolisp.LispRatio";
+		}
+		return value == null ? "null" : value.getClass().getName();
 	}
 
 	// What a failed Java call throws when the failure is already a throwable (a

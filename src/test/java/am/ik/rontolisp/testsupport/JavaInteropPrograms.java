@@ -359,6 +359,37 @@ public final class JavaInteropPrograms {
 			java:call expects a java object as the first argument, got #<function CAR>""";
 
 	/**
+	 * A run-time call with a single candidate of its arity and a kindless argument -- a
+	 * list, which no kind names: the one member is called however the argument converts,
+	 * as the oracle's reflector calls one directly. A hash table converts to the
+	 * {@code Map} (over the cost rule), nothing else does: a list where a {@code Map} or
+	 * a {@code String} is expected refuses with the oracle's {@code ClassCastException}.
+	 * At a site left to run time (an unknown receiver, the class in a variable: the
+	 * compiled program's bridge). Prints {@link #SINGLE_CANDIDATE_FORCED_OUTPUT}.
+	 */
+	public static final String SINGLE_CANDIDATE_FORCED_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun putall0 (h m) (java:call h "putAll" m))
+			(defun parse1 (cls s) (java:static cls "parseInt" s))
+			(let ((h (java:new "java.util.HashMap")))
+			  (row (lambda () (let ((table (make-hash-table :test 'equal)))
+			                    (setf (gethash "k" table) 1)
+			                    (list (putall0 h table) (java:call h "size")))))
+			  (row (lambda () (putall0 h nil)))
+			  (row (lambda () (putall0 h '(1 2))))
+			  (row (lambda () (parse1 "java.lang.Integer" '(1)))))
+			""";
+
+	/** What {@link #SINGLE_CANDIDATE_FORCED_PROGRAM} prints. */
+	public static final String SINGLE_CANDIDATE_FORCED_OUTPUT = """
+			(NIL 1)
+			error calling java.util.HashMap.putAll: java.lang.NullPointerException: Cannot invoke "java.util.Map.size()" because "m" is null
+			error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map
+			error calling java.lang.Integer.parseInt: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.lang.String""";
+
+	/**
 	 * The symbol {@code |false|} and hash tables as arguments, at a resolved site (a
 	 * quoted {@code |false|}), a dispatched one ({@code ts}, {@code bool}, {@code copy})
 	 * and one left to run time (the class name in a variable: the compiled program's

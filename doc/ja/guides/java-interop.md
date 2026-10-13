@@ -254,6 +254,15 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 ; => "error calling java.lang.Character.charCount: java.lang.ClassCastException: class java.lang.Character cannot be cast to class java.lang.Number"
 ```
 
+種類を持たないリスト・ベクター・ハッシュ表の引数は、実行時まで残った呼び出しでは同じ単一候補の経路を通ります。ハッシュ表は `Map` に変換され、それ以外は変換に失敗します。
+
+```lisp
+(defun putall0 (h m) (java:call h "putAll" m))
+(handler-case (putall0 (java:new "java.util.HashMap") '(1 2))
+  (error (e) (format nil "~a" e)))
+; => "error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map"
+```
+
 関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。
 
 ```lisp

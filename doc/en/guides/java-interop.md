@@ -405,6 +405,17 @@ one `double` of `sqrt`, and a value of the wrong type fails in conversion:
 ; => "error calling java.lang.Character.charCount: java.lang.ClassCastException: class java.lang.Character cannot be cast to class java.lang.Number"
 ```
 
+A list, vector or hash table argument -- which no kind names -- takes the same
+single-candidate path at a site left to run time: a hash table still converts to
+the `Map`, and anything else fails in conversion:
+
+```lisp
+(defun putall0 (h m) (java:call h "putAll" m))
+(handler-case (putall0 (java:new "java.util.HashMap") '(1 2))
+  (error (e) (format nil "~a" e)))
+; => "error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map"
+```
+
 A function costs less for a functional interface (one abstract method) than for
 `java.lang.Object`, and less for `Object` than for any other interface, so
 `TreeSet(Comparator)` wins over `TreeSet(Collection)`, as a Java lambda's target does, and

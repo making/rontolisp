@@ -296,7 +296,7 @@ final class JavaInterop {
 			throw noMatch("constructing " + name, JavaOverloads.noMatchingCtor(name));
 		}
 		JavaOverloads.Overload overload = resolution.overload();
-		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller)
+		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller, "constructing " + name)
 				: marshalArguments(overload, args, caller);
 		try {
 			Constructor<?> constructor = (Constructor<?>) executable(overload);
@@ -367,7 +367,9 @@ final class JavaInterop {
 					bareName(methodName), args.size(), receiver == null ? null : receiver.getClass().getName()));
 		}
 		JavaOverloads.Overload overload = resolution.overload();
-		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller)
+		@Nullable Object[] handed = resolution.forced()
+				? marshalForcedArguments(overload, args, caller,
+						"calling " + type.name() + "." + overload.executable().name())
 				: marshalArguments(overload, args, caller);
 		try {
 			Method method = (Method) executable(overload);
@@ -416,7 +418,9 @@ final class JavaInterop {
 	// The overload of `member` on `type` for these arguments: the one remembered for
 	// their kinds, otherwise select() over the candidates by argument kind (and
 	// remembered). A list or vector has no kind: such a call is costed by marshalling its
-	// arguments and never remembered.
+	// arguments and never remembered -- but one candidate of the arity still takes them
+	// however they convert (the oracle's reflector calls one directly), converting
+	// forced when it runs.
 	private static @Nullable Resolution resolve(ReflectiveJavaClasses.Type type, String member,
 			Supplier<? extends List<? extends JavaExecutable>> candidates, List<LispVal> args, Caller caller) {
 		JavaKind[] kinds = kindsOf(args);
@@ -424,7 +428,11 @@ final class JavaInterop {
 			@Nullable Object[] slot = new @Nullable Object[1];
 			JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), args.size(),
 					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
-			return chosen == null ? null : new Resolution(chosen, false);
+			if (chosen != null) {
+				return new Resolution(chosen, false);
+			}
+			JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates.get(), args.size());
+			return only == null ? null : new Resolution(only, true);
 		}
 		Memo remembered = remembered(type.type(), member, kinds);
 		if (remembered != null) {
@@ -600,23 +608,48 @@ final class JavaInterop {
 		return slot[0];
 	}
 
+	// A value converted however the target of a run-time resolution's only candidate
+	// takes it: a value with a kind by the unchecked arms, anything else by the checked
+	// casts (as a resolved site converts it): what marshal() cannot convert refuses
+	// with the oracle's ClassCastException, as the oracle's reflector's checked cast
+	// does. The refusal is the error calling the member WHAT names, carrying the real
+	// exception.
+	private static @Nullable Object convertForced(LispVal value, Class<?> target, Caller caller, String what) {
+		if (kindOf(value) != null) {
+			return convertForced(value, target, caller);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+			throw fail(what, castFailure(castFromName(value), castTargetName(target)));
+		}
+		return slot[0];
+	}
+
+	// The class a forced conversion names a kindless value with: a view's own, anything
+	// else the Lisp object's (as a resolved site's checked conversion refuses it).
+	private static String castFromName(LispVal value) {
+		if (value instanceof LispJavaObject object) {
+			return object.ref().getClass().getName();
+		}
+		return value.getClass().getName();
+	}
+
 	// The Java arguments for the overload a run-time resolution's only candidate
 	// takes however they convert (as the oracle's reflector calls one directly):
-	// each value with a kind by the unchecked arms, anything else as marshal
-	// converts it. A conversion's failure propagates as the reflector's does.
+	// each value with a kind by the unchecked arms, anything else by the checked casts.
 	private static @Nullable Object[] marshalForcedArguments(JavaOverloads.Overload overload, List<LispVal> args,
-			Caller caller) {
+			Caller caller, String what) {
 		List<? extends JavaType> params = overload.executable().parameterTypes();
 		@Nullable Object[] out = new @Nullable Object[params.size()];
 		int fixed = overload.packed() ? params.size() - 1 : params.size();
 		for (int i = 0; i < fixed; i++) {
-			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller);
+			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller, what);
 		}
 		if (overload.packed()) {
 			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
 			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
 			for (int i = fixed; i < args.size(); i++) {
-				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller));
+				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller, what));
 			}
 			out[fixed] = packed;
 		}

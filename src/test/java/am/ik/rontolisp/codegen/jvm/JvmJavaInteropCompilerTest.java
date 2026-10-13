@@ -1315,6 +1315,15 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aSingleCandidateTakesAKindlessArgumentHoweverItConverts:
+	// run-time sites go through the bridge, whose single-candidate choice and forced
+	// conversion match the interpreter's.
+	@Test
+	void aSingleCandidateTakesAKindlessArgumentHoweverItConverts() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aCallEndingInJavaFalseAnswersJavasFalseAsFalse: direct
 	// sites through _junf / _jarf and the boolean arms, the bridge through its own
 	// unmarshal.
