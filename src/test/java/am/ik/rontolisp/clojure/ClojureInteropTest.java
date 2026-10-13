@@ -521,6 +521,31 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void stringWriterConstructionWithACapacityStartsEmptyWithTheOracleRefusals() throws Exception {
+		// A one-argument (java.io.StringWriter.) is an empty string output stream:
+		// a number is a capacity (ignored), anything else the oracle's
+		// ClassCastException to Number, nil its NullPointerException (a
+		// StringWriter has no String constructor). The all-four-backend pin is the
+		// clojure-spec.yaml case; the spellings and the refusal messages live here
+		// with the other interop pins.
+		assertBothEqual("(println (str (java.io.StringWriter. 16)))", "\n");
+		assertBothEqual("(println (str (new java.io.StringWriter 8)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter/new 4)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter. 1.5)))", "\n");
+		assertBothEqual("(println (let [w (java.io.StringWriter. 16)] (.append w \"c\") (str w)))", "c\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter. \"ab\"))" + " (catch ClassCastException e (ex-message e))))",
+				"class java.lang.String cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (new java.io.StringWriter :k))" + " (catch ClassCastException e (ex-message e))))",
+				"class clojure.lang.Keyword cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter/new nil))"
+						+ " (catch NullPointerException e (ex-message e))))",
+				"Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n");
+	}
+
+	@Test
 	void classNamesAnswerAsValuesAndStringsAnswerGetClass() throws Exception {
 		assertBothEqual("(println (= String (Class/forName \"java.lang.String\")))", "true\n");
 		assertBothEqual("(println (.getName String))", "java.lang.String\n");

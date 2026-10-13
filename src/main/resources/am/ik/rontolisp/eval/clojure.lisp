@@ -659,6 +659,19 @@
             (concatenate 'string "No matching ctor found for class "
                          class-name)))))
 
+(defun rontolisp::%clojure-string-writer-1 (x)
+  "A one-argument java.io.StringWriter construction of X: a number is a
+   capacity (ignored, the stream starts empty), nil the oracle's
+   NullPointerException, anything else its ClassCastException to Number (a
+   StringWriter has no String constructor, so the reflector's cast fails)."
+  (cond ((numberp x) (make-string-output-stream))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
    SOURCE itself when it is already an input stream (a reader over a reader,

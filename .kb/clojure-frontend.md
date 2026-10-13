@@ -4339,12 +4339,19 @@ host alone answers ("Host arms where the host is not").
   it, an integer is a capacity (ignored, the stream starts empty), anything else the
   oracle's `No matching ctor found for class ...` (nil among them, where the oracle
   throws a `NullPointerException`). A tagged construction names the host overload and
-  keeps `java:new`, on the interpreter and the JVM only. `class` and `instance?` see the
+  keeps `java:new`, on the interpreter and the JVM only. A one-argument
+  `java.io.StringWriter` construction (f80, 2026-10-13) is an empty stream instead
+  (`%clojure-string-writer-1`, a stream producer): a number is a capacity (ignored,
+  the stream starts empty), anything else the oracle's `ClassCastException` to
+  `Number` (nil its `NullPointerException`) -- a `StringWriter` has no `String`
+  constructor, so no shared no-such-constructor helper; the message carries no
+  module tail. `class` and `instance?` see the
   builder as the `StringWriter` it is. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
   `.toUpperCase`/`.toLowerCase` of one argument take, mapping as the bare call, and
   `.intern` of a string is the string. Pins: clojure-spec
   `string-builder-builds-through-append-and-answers-its-text`,
   `string-builder-construction-with-an-initial-text-or-capacity`,
+  `string-writer-construction-with-an-initial-capacity`,
   `to-upper-and-lower-case-with-a-locale-map-like-without-one`,
   `intern-of-a-string-is-the-string` (all four backends), honeysql 2.7.1479 and hiccup
   2.0.0 `=` on wasm ("Library probes").
@@ -5967,7 +5974,8 @@ resolve var`.
   `str`'s `%clojure-stream-p` tests are `ClojureArms.Family.STREAM`, whose producers are the
   Clojure-only wrappers a stream reaches a program through -- `%clojure-out`/`-in`/`-err`,
   `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-builder-1` (a one-argument
-  `StringBuilder`/`StringBuffer` construction, f71), `%clojure-string-reader` (a reader over a
+  `StringBuilder`/`StringBuffer` construction, f71), `%clojure-string-writer-1` (a
+  one-argument `StringWriter` construction, f80), `%clojure-string-reader` (a reader over a
   StringReader), `%clojure-reader`, and the io kernels opening a file
   (`ClojureIoLowering.STREAM_PRODUCERS`, "clojure.java.io") -- never `open` or
   `make-string-output-stream`, which `ClojureLibrary.references` would read as a library

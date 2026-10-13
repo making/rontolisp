@@ -129,7 +129,8 @@ class ClojureArmsTest {
 		for (String producer : List.of("(rontolisp::%clojure-out)", "(rontolisp::%clojure-in)",
 				"(rontolisp::%clojure-err)", "(rontolisp::%clojure-string-writer)",
 				"(rontolisp::%clojure-string-builder-1 \"java.lang.StringBuilder\" \"s\")",
-				"(rontolisp::%clojure-string-reader \"s\")", "(rontolisp::%clojure-reader \"f\")")) {
+				"(rontolisp::%clojure-string-writer-1 16)", "(rontolisp::%clojure-string-reader \"s\")",
+				"(rontolisp::%clojure-reader \"f\")")) {
 			assertThat(ClojureArms.scan(read("(print " + producer + ")"), ClojureArms.Family.STREAM).builds())
 				.as(producer)
 				.isTrue();

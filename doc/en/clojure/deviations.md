@@ -343,7 +343,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   and refuses an ambiguous argument (`(.append sb nil)`). A one-argument construction
   pre-fills the stream with the text, an integer argument being a capacity (ignored); any
   other argument is refused as `No matching ctor found for class ...`, nil among them,
-  where the oracle throws a `NullPointerException`. `class` and `instance?` see the
+  where the oracle throws a `NullPointerException`. A one-argument `java.io.StringWriter`
+  is an empty such stream instead: a number is a capacity (ignored), any other argument
+  the oracle's `ClassCastException` to `Number` (nil its `NullPointerException`), whose
+  message carries no module tail. `class` and `instance?` see the
   builder as the `StringWriter` it is (`(instance? CharSequence (StringBuilder. "a"))` is
   `false`). `.intern` of a string is the
   string, so only `identical?` could tell the interning apart. `java.util.Locale/US` (and

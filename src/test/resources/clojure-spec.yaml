@@ -1715,6 +1715,34 @@ cases:
       No matching ctor found for class java.lang.StringBuilder
       No matching ctor found for class java.lang.StringBuffer
       No matching ctor found for class java.lang.StringBuilder
+  - name: string-writer-construction-with-an-initial-capacity
+    # A one-argument (java.io.StringWriter.), (new java.io.StringWriter) or
+    # (java.io.StringWriter/new) is an empty string output stream on every
+    # backend: a number is a capacity (ignored, the stream starts empty), nil the
+    # oracle's NullPointerException, anything else its ClassCastException to
+    # Number (a StringWriter has no String constructor, so the reflector's cast
+    # fails). Oracle-identical (clj 1.12.6, 2026-10-13) but for the exception
+    # message's module tail, which names no part of the refusal here.
+    source: |
+      (println (str (java.io.StringWriter. 16)))
+      (println (str (new java.io.StringWriter 8)))
+      (println (str (java.io.StringWriter/new 4)))
+      (println (str (java.io.StringWriter. 1.5)))
+      (println (str (java.io.StringWriter. (long 16))))
+      (println (let [w (java.io.StringWriter. 16)] (.append w "c") (str w)))
+      (println (try (str (java.io.StringWriter. "ab")) (catch ClassCastException e (ex-message e))))
+      (println (try (str (new java.io.StringWriter :k)) (catch ClassCastException e (ex-message e))))
+      (println (try (str (java.io.StringWriter/new nil)) (catch NullPointerException e (ex-message e))))
+    expected: |
+      
+      
+      
+      
+      
+      c
+      class java.lang.String cannot be cast to class java.lang.Number
+      class clojure.lang.Keyword cannot be cast to class java.lang.Number
+      Cannot invoke "java.lang.Character.charValue()" because "x" is null
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,

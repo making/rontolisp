@@ -329,7 +329,10 @@
   解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。1引数の構築は
   そのテキストでストリームを満たして開始し、整数の引数は容量です（無視します）。それ以外の
   引数は `No matching ctor found for class ...` として拒否します。nil もその中に含まれますが、
-  オラクルは `NullPointerException` を投げます。`class` と `instance?` はビルダーをその実体で
+  オラクルは `NullPointerException` を投げます。1引数の `java.io.StringWriter` は代わりに
+  空のそのようなストリームです。数値は容量であり（無視します）、それ以外の引数はオラクルの
+  `Number` への `ClassCastException`（nil はその `NullPointerException`）で、そのメッセージに
+  モジュール名の尾部は付きません。`class` と `instance?` はビルダーをその実体で
   ある `StringWriter` として見るので（`(instance? CharSequence (StringBuilder. "a"))` は
   `false` です）。文字列の `.intern`
   はその文字列自身なので、インターニングの有無がわかるのは `identical?` だけです。
