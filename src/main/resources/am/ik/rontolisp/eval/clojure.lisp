@@ -2731,15 +2731,20 @@
 (defun rontolisp::%clojure-equal (a b)
   "Clojure = over two values, T or NIL: a value other than a number is = to
    itself without a look inside, like the oracle's Util.equiv (a collection
-   holding NaN, an endless lazy seq); two sets by membership, two records by
-   tag plus entries, a deftype or reify by identity, two maps entry by entry,
-   two sequentials element by element, two floats numerically, anything else
-   with equal (numbers keep their category, strings and characters compare by
-   value)."
+   holding NaN, an endless lazy seq); two functions by identity (one shared
+   function object per defun on every backend, so two references to one
+   definition are = and two definitions never are); two sets by membership,
+   two records by tag plus entries, a deftype or reify by identity, two maps
+   entry by entry, two sequentials element by element, two floats numerically,
+   anything else with equal (numbers keep their category, strings and
+   characters compare by value)."
   (cond
    ;; a number keeps its numeric test: NaN is not = to itself here, which the
    ;; oracle answers for a primitive double and not for one boxed object
    ((and (eq a b) (not (numberp a))) t)
+   ;; two functions are = only when identical, like the oracle: two distinct
+   ;; closures never compare structurally, even when their bodies agree
+   ((and (functionp a) (functionp b)) nil)
    ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
     ;; two vectors read in place, without the seq view's copies
     (and (eql (length a) (length b))

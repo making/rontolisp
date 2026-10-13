@@ -25,6 +25,14 @@ and a named `fn` binds itself for self-calls; `#(...)` reads as the oracle's `(f
 rest parameter for `%&`, its body forms wrapped as one call. `declare`
 names what is defined below, so a definition may use one.
 
+A function value is one object per definition on every backend: two references
+to one `defn` answer the same object, so they are `identical?` and `=`; two
+definitions never are -- not even two closures over one body -- and a function
+is never `=` to a non-function, like the oracle. A `defmulti` is a dispatcher
+`defun`, so the same holds for multimethods (`remove-all-methods` answers the
+multimethod itself). A `lambda` form still evaluates to a fresh closure each
+time it runs.
+
 ## Namespaces and files
 
 Every namespace has its own vars. A definition belongs to the current namespace (`user`

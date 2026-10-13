@@ -284,15 +284,14 @@ final class WasmFunctionFormCompiler {
 		}
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
-			// Create closure struct {funcId, null env}
-			// This is one of the two places a funcId becomes a callable VALUE, so it is
-			// where the dispatch ladders learn they must carry a case for it.
+			// The canonical box for this funcId, shared by every site that names
+			// it: two (function name) sites answer the SAME object, like the
+			// interpreter's function namespace does, so (eq #'f #'f) is t on
+			// every backend. This is one of the two places a funcId becomes a
+			// callable VALUE, so it is where the dispatch ladders learn they must
+			// carry a case for it.
 			ctx.noteFunctionValue(fi.funcId());
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(fi.funcId());
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-			WasmEmitHelper.emitNewClosure(ctx);
+			WasmQuoteCompiler.compileSharedFunctionBox(fi.funcId(), ctx);
 		}
 		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

@@ -3376,6 +3376,22 @@ public final class JvmLispCompiler implements LispCompiler {
 				nameResolvable, symbolBuilders, callOnlyRuntimes);
 		Set<Integer> dispatchableFuncIds = new HashSet<>(valueFuncIds);
 		dispatchableFuncIds.addAll(registryFuncIds);
+		// One shared function-value box per defun taken as a static value
+		// (_funcref, below): every static (function name) site of one definition
+		// answers the SAME object, like the interpreter's function namespace
+		// does. Lambda funcIds stay out: each evaluation of a lambda form is a
+		// distinct closure on every backend. Sorted, so the <clinit> fill is
+		// deterministic. A program taking no static function value keeps its
+		// bytes exactly: valueFuncIds is filled where the sites are emitted, so
+		// the gate is exact, including for names a macro synthesized in Pass 2.
+		List<Integer> funcrefIds = new ArrayList<>();
+		for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
+			if (valueFuncIds.contains(entry.getValue().funcId())) {
+				funcrefIds.add(entry.getValue().funcId());
+			}
+		}
+		java.util.Collections.sort(funcrefIds);
+		boolean needsFuncRef = !funcrefIds.isEmpty();
 		if (needsLookup) {
 			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
 			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
@@ -3960,6 +3976,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_POSITIONS_DESC) : null;
 		Utf8Entry streamCountFieldName = cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
 		Utf8Entry streamCountFieldDesc = cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
+		// The canonical function-value boxes (see needsFuncRef below): created only
+		// when the program can ask for one, so every other class keeps its bytes.
+		Utf8Entry funcrefsFieldName = cp.utf8Entry("_funcrefs");
+		Utf8Entry funcrefsFieldDesc = cp.utf8Entry("[Ljava/lang/Object;");
 		// Tracks whether stdout is at the start of a line (0 = at line start), so
 		// fresh-line
 		// can decide whether to emit a newline. A static int defaults to 0 (at line
@@ -4207,9 +4227,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.fieldRef(thisClass, streamsFieldName, streamsFieldDesc) : null;
 		final @Nullable FieldRefEntry streamCountFieldRef = usesErrorOutput
 				? cp.fieldRef(thisClass, streamCountFieldName, streamCountFieldDesc) : null;
+		final @Nullable FieldRefEntry funcrefsFieldRef = needsFuncRef
+				? cp.fieldRef(thisClass, funcrefsFieldName, funcrefsFieldDesc) : null;
 		final boolean initsClinit = seedsStandardStream || usesErrorOutput || topLevelInClinit || usesComplex;
 		final Utf8Entry standardOutputClinitName = initsClinit ? cp.utf8Entry("<clinit>") : null;
 		final Utf8Entry standardOutputClinitDesc = initsClinit ? cp.utf8Entry("()V") : null;
+		// The <clinit> name constants when the canonical function-value fill is
+		// what brings the initializer: every other disjunct above brings its own
+		// namer, so without these a program whose only clinit work is the fill
+		// would fall through to the bignum pool's (null without a literal).
+		final @Nullable Utf8Entry funcrefClinitName = funcrefsFieldRef != null ? cp.utf8Entry("<clinit>") : null;
+		final @Nullable Utf8Entry funcrefClinitDesc = funcrefsFieldRef != null ? cp.utf8Entry("()V") : null;
 
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
@@ -4275,6 +4303,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, streamsFieldName,
 				streamsFieldDesc);
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, streamCountFieldName, streamCountFieldDesc);
+		if (funcrefsFieldRef != null) {
+			// The canonical function-value boxes, one Object[]{Integer funcId} per
+			// defun taken as a static value, filled once in <clinit> below. Final: class
+			// initialization publishes the filled table to every request thread,
+			// and no store ever replaces it (Ring handlers share the class).
+			// The <clinit> store keeps the field alive for the shake exactly when
+			// the class needs it.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_FINAL,
+					funcrefsFieldName, funcrefsFieldDesc);
+		}
 		if (streamPathsFieldName != null) {
 			// VOLATILE for the same reason _streams is: _setStreamPath is
 			// synchronized and its write-back publishes the table.
@@ -4616,7 +4654,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
-				|| dynVarRuntime != null || unboundMarker != null || initsClinit
+				|| dynVarRuntime != null || unboundMarker != null || initsClinit || funcrefsFieldRef != null
 				|| (mvChannel != null && mvChannel.perThread() != null) || javaSignals != null) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
@@ -4772,6 +4810,37 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (structTableClinitFinal != null) {
 				clinitCode.append(structTableClinitFinal);
 			}
+			if (funcrefsFieldRef != null) {
+				// _funcrefs = new Object[maxId + 1], then one canonical box per
+				// defun taken as a static value. Before the top-level runner below:
+				// top-level
+				// forms can take function values. Past one chunk the fill moves
+				// into _funcref$fill$ segments: a big program fills thousands of
+				// boxes (the spec corpora take hundreds of workers as values),
+				// which outgrows the 64 KB method limit inline.
+				emitIntConstant(clinitCode, cp, funcrefIds.get(funcrefIds.size() - 1) + 1);
+				clinitCode.anewarray(objectClass);
+				clinitCode.putstatic(funcrefsFieldRef);
+				if (funcrefIds.size() <= FUNCREF_FILL_CHUNK) {
+					emitFuncrefFill(clinitCode, funcrefsFieldRef, funcrefIds, objectClass, integerValueOf, cp);
+				}
+				else {
+					int segment = 0;
+					for (int from = 0; from < funcrefIds.size(); from += FUNCREF_FILL_CHUNK) {
+						MethodCode fillCode = new MethodCode();
+						emitFuncrefFill(fillCode, funcrefsFieldRef,
+								funcrefIds.subList(from, Math.min(from + FUNCREF_FILL_CHUNK, funcrefIds.size())),
+								objectClass, integerValueOf, cp);
+						fillCode.return_();
+						Utf8Entry fillName = cp.utf8Entry("_funcref$fill$" + segment);
+						Utf8Entry fillDesc = cp.utf8Entry("()V");
+						definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fillName, fillDesc,
+								fillCode);
+						clinitCode.invokestatic(cp.methodRef(thisClass, fillName, fillDesc));
+						segment++;
+					}
+				}
+			}
 			if (topRunnerRef != null) {
 				// Run the top level last, after every piece of runtime infra
 				// above is seeded — this is the export-carrying class's
@@ -4784,16 +4853,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			// bound-special-only
 			// program has neither, so the dyn-var runtime carries its own.
 			Utf8Entry clinitNameUtf = channel.clinitName != null ? channel.clinitName
-					: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
-							: dynVarRuntime != null ? dynVarRuntime.clinitName()
-									: unboundMarker != null ? unboundMarker.clinitName()
-											: standardOutputClinitName != null ? standardOutputClinitName
+					: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName : dynVarRuntime != null
+							? dynVarRuntime.clinitName()
+							: unboundMarker != null ? unboundMarker.clinitName()
+									: standardOutputClinitName != null ? standardOutputClinitName
+											: funcrefClinitName != null ? funcrefClinitName
 													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
 			Utf8Entry clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
-					: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
-							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
-									: unboundMarker != null ? unboundMarker.clinitDesc()
-											: standardOutputClinitDesc != null ? standardOutputClinitDesc
+					: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc : dynVarRuntime != null
+							? dynVarRuntime.clinitDesc()
+							: unboundMarker != null ? unboundMarker.clinitDesc()
+									: standardOutputClinitDesc != null ? standardOutputClinitDesc
+											: funcrefClinitDesc != null ? funcrefClinitDesc
 													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
 			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitCode);
 		}
@@ -5064,6 +5135,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
 					nm.code());
+		}
+		if (funcrefsFieldRef != null) {
+			// _funcref(id): the canonical function-value box of a dispatchable
+			// defun -- the one Object[]{Integer funcId} every static (function
+			// name) site of it shares, and a computed symbol-function resolution
+			// boxes through it too. Straight-line, so no stack-map frame work.
+			MethodCode funcrefCode = new MethodCode();
+			funcrefCode.getstatic(funcrefsFieldRef);
+			funcrefCode.iload(0);
+			funcrefCode.aaload();
+			funcrefCode.areturn();
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry("_funcref"),
+					cp.utf8Entry("(I)Ljava/lang/Object;"), funcrefCode);
 		}
 		// The gated complex helpers, present only when the program may
 		// create a complex -- a complex-free program keeps its bytes.
@@ -5630,6 +5714,49 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Pushes an int onto a {@code MethodCode} body in its shortest form -- the
+	 * {@code iconst/bipush/sipush} half of {@link JvmEmitHelper#emitIntConst}, which
+	 * needs a {@code Ctx}, plus the {@code ldc} a wider funcId takes. A funcId past the
+	 * short range needs a program of absurd size to exist, but the fill shares the fix.
+	 */
+	private static void emitIntConstant(MethodCode code, ConstantPool cp, int value) {
+		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			code.loadConstant(value);
+		}
+		else {
+			code.ldc(cp.entries().intEntry(value));
+		}
+	}
+
+	/**
+	 * How many canonical function-value boxes one {@code _funcref$fill$} segment builds:
+	 * a box is ~20 bytes, so 256 stay far under the 64 KB method limit (and under
+	 * HotSpot's 8000-bytecode inlining cliff).
+	 */
+	private static final int FUNCREF_FILL_CHUNK = 256;
+
+	/**
+	 * Stores one canonical {@code Object[]{Integer funcId}} box per id into the
+	 * {@code _funcrefs} table: the {@code <clinit>} fill, inline for a small program or
+	 * once per {@code _funcref$fill$} segment.
+	 */
+	private static void emitFuncrefFill(MethodCode code, FieldRefEntry funcrefsFieldRef, List<Integer> ids,
+			ClassEntry objectClass, MethodRefEntry integerValueOf, ConstantPool cp) {
+		for (int id : ids) {
+			code.getstatic(funcrefsFieldRef);
+			emitIntConstant(code, cp, id);
+			code.iconst_1();
+			code.anewarray(objectClass);
+			code.dup();
+			code.iconst_0();
+			emitIntConstant(code, cp, id);
+			code.invokestatic(integerValueOf);
+			code.aastore();
+			code.aastore();
+		}
 	}
 
 	/**

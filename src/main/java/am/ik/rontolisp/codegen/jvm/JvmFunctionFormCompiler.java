@@ -145,9 +145,12 @@ final class JvmFunctionFormCompiler {
 			// ... and the edge the shake keeps that case by: the case is live while this
 			// body is (JvmClassSplitter).
 			ctx.body.makesValueOf(fi.nameUtf8().stringValue(), fi.descUtf8().stringValue());
-			ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
+			// The canonical box for this funcId (_funcref), shared by every site that
+			// names it: two (function name) sites answer the SAME object, like the
+			// interpreter's function namespace does, so (eq #'f #'f) is t on every
+			// backend. A lambda value still boxes fresh per evaluation.
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
-			ctx.body.invokestatic(ctx.integerValueOf).aastore();
+			ctx.body.invokestatic(funcrefRef(ctx, className));
 		}
 		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -260,6 +263,18 @@ final class JvmFunctionFormCompiler {
 
 	private static MethodRefEntry lookupRef(JvmLispCompiler.Ctx ctx, String className) {
 		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_lookup", "(Ljava/lang/Object;)[Ljava/lang/Object;");
+	}
+
+	/**
+	 * The canonical function-value box of a funcId: {@code _funcref} answers the one
+	 * {@code Object[]{Integer funcId}} every static {@code (function name)} site of the
+	 * funcId shares. Emitted only when the program takes a static function value, so
+	 * every other class is byte-identical to a build that never knew about it. A name
+	 * resolved at run time (a computed {@code symbol-function} / {@code fdefinition})
+	 * still boxes fresh per resolution, as does a lambda value per evaluation.
+	 */
+	static MethodRefEntry funcrefRef(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_funcref", "(I)Ljava/lang/Object;");
 	}
 
 	/**

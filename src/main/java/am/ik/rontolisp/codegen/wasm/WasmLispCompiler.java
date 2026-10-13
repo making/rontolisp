@@ -8365,7 +8365,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// One (mut (ref null eq)) = null per quoted aggregate datum
 				// (.kb/quoted-data.md), filled lazily by its quote site's first
-				// evaluation (WasmQuoteCompiler.compile). Discovered during body
+				// evaluation (WasmQuoteCompiler.compile) -- and per canonical
+				// function-value box, filled lazily by its first (function name)
+				// site (WasmQuoteCompiler.compileSharedFunctionBox), keyed by a
+				// token no quoted datum can be. Discovered during body
 				// compilation, hence appended after every fixed-index global.
 				for (int i = 0; i < quoteGlobals.count(); i++) {
 					gs.add(g -> {
@@ -10999,6 +11002,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final java.util.IdentityHashMap<LispVal, Integer> byDatum = new java.util.IdentityHashMap<>();
 
+		// One stable identity token per funcId with a shared function-value box,
+		// so the box allocator below keys the same table the quoted data uses.
+		private final java.util.HashMap<Integer, LispVal> funcBoxTokens = new java.util.HashMap<>();
+
 		QuoteGlobals(int base) {
 			this.base = base;
 		}
@@ -11016,6 +11023,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			int index = this.base + this.byDatum.size();
 			this.byDatum.put(datum, index);
 			return index;
+		}
+
+		/**
+		 * The stable identity token the canonical function-value box of a named function
+		 * is keyed by in the table above: one object per funcId (never a datum the
+		 * program quotes, and never inspected -- the table compares by identity), so the
+		 * boxes share the quoted-data globals and their section without renumbering
+		 * either.
+		 * @param funcId the named function's funcId
+		 * @return the token to pass to {@link #indexFor}
+		 */
+		LispVal funcBoxTokenFor(int funcId) {
+			LispVal token = this.funcBoxTokens.get(funcId);
+			if (token == null) {
+				token = new am.ik.rontolisp.LispSymbol("#<function-box " + funcId + ">");
+				this.funcBoxTokens.put(funcId, token);
+			}
+			return token;
 		}
 
 		/**

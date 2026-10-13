@@ -14582,6 +14582,39 @@ cases:
       :no-method
       {} {}
       :no-method
+  - name: function-values-compare-by-identity
+    # = over functions is identity on every backend, like the oracle's
+    # Util.equiv: two references to one defn or defmulti are =, two
+    # definitions never are -- not even two closures over one body -- a
+    # function is never = to a non-function, and remove-all-methods answers
+    # the multimethod itself. identical? agrees (it is eql): two references to
+    # one definition are identical, two closures are not. Every line matches
+    # the oracle (clj 1.12.6, 2026-10-13); before, two (function name) sites
+    # boxed distinct objects on the JVM and both wasm backends, so (= f85-f
+    # f85-f) and (= f85-m f85-m) were false there, while two closures over one
+    # body were = on the interpreter.
+    source: |
+      (defn f85-f [] 1)
+      (defn f85-g [] 2)
+      (prn (= f85-f f85-f) (= f85-f f85-g))
+      (prn (= (fn [] 1) (fn [] 1)))
+      (prn (= f85-f :a) (= :a f85-f) (= f85-f 1))
+      (defmulti f85-m :k)
+      (defmethod f85-m :a [_] [:a!])
+      (defmulti f85-n :k)
+      (defmethod f85-n :a [_] [:a!])
+      (prn (= f85-m f85-m) (= f85-m f85-n) (= f85-m f85-f))
+      (prn (f85-m {:k :a}) (= f85-m (remove-all-methods f85-m)))
+      (prn (try (f85-m {:k :a}) (catch IllegalArgumentException e :no-method)))
+      (prn (identical? f85-f f85-f) (identical? (fn [] 1) (fn [] 1)) (identical? f85-m f85-m))
+    expected: |
+      true false
+      false
+      false false false
+      true false false
+      [:a!] true
+      :no-method
+      true false true
   - name: protocol-extenders-and-find-protocol-impl-and-method
     # extenders answers the extended tags as a seq (:object last for the Object
     # default), find-protocol-impl the tag row's map and find-protocol-method
