@@ -6368,14 +6368,17 @@ resolve var`.
   notifies behind them the same way, with the previous test function as the replaced
   root. `set-validator!` of a literal macro var checks the present expander through
   `%clojure-set-validator-macro` (a `WATCH` producer), since the var's site reads no
-  value. Both statements drop at top level and in `progn` (a program naming no watch
-  verb lowers byte-identically); the macro evaluator reads a store's init lazily like
-  a `setq`'s (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a
+  value; a computed one checks the expander the note behind its `defmacro` registered
+  under its var key (`%clojure-note-macro-expander`, through the plain worker), never
+  touching the signaling site. All three statements drop at top level and in `progn`
+  (a program naming no watch verb lowers byte-identically); the macro evaluator reads
+  a store's init lazily like a `setq`'s and skips the arms
+  (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a
   later input's watch or validator sees every earlier root. Deviation: a `defn` with
   no value cell validates only once its definition is bound, so a refused one still
   routes to the new function (the oracle keeps the old one); a refused `defmacro`
-  still serves its new expander (the oracle keeps the old root and drops the macro);
-  `set-validator!` of a computed macro var reads the signaling site, like `deref`;
+  still serves its new expander (the oracle keeps the old root and drops the macro,
+  and the note carries the new one too);
   `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
   refuse anything but an atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
   `swap-vals-and-reset-vals-answer-the-old-and-the-new-value`,
@@ -6384,6 +6387,7 @@ resolve var`.
   `a-def-with-redefs-and-a-validator-notify-a-var-s-watches`,
   `a-redefined-defn-and-a-dynamic-def-notify-a-var-s-watches`,
   `a-redefined-defmacro-notifies-a-var-s-watches`,
+  `set-validator-of-a-computed-macro-var-answers-nil`,
   `a-redefined-deftest-notifies-a-var-s-watches`,
   `await-for-answers-whether-the-actions-ran-in-time` (all oracle-identical, four backends),
   `ClojureLibraryTest#aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers`,
@@ -6391,6 +6395,7 @@ resolve var`.
   `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsRedefinedMacroAndTestUnchanged`,
   `ClojureSessionTest#aLaterBufferRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
   `ClojureSessionTest#aLaterBufferMacroRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
+  `ClojureSessionTest#aLaterBufferSetValidatorOfAComputedMacroVarAnswersNil`,
   `ClojureSessionTest#aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
   `ClojureAtomConcurrentRequestsTest` (its second round watches and validates under a burst).
 

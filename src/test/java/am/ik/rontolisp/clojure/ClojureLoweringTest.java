@@ -2418,6 +2418,14 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
 		assertThat(loweredWithMacros("(set-validator! #'mu-sv pos?) (defmacro mu-sv [] 1)"))
 			.doesNotContain("SET-VALIDATOR-MACRO");
+		// every defmacro site notes its present expander under its var key, so a
+		// computed set-validator! of its var checks the expander without touching
+		// the signaling site; a computed target reads the plain worker
+		assertThat(loweredWithMacros("(defmacro mu-nt [] 1)"))
+			.contains("(RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER \"user/mu-nt\"");
+		assertThat(loweredWithMacros("(defmacro mu-cv [] 1) ((fn [v] (set-validator! v pos?)) #'mu-cv)"))
+			.contains("(RONTOLISP::%CLOJURE-SET-VALIDATOR ")
+			.doesNotContain("SET-VALIDATOR-MACRO");
 	}
 
 	@Test

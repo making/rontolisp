@@ -490,8 +490,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Invalid reference state`, but later calls reach the refused definition (the oracle
   keeps the old one). A refused `defmacro` redefinition still serves its new expander
   (the call sites below it expanded with it while lowering and the table holds it),
-  where the oracle keeps the old root and drops the macro; `set-validator!` of a
-  computed macro var reads the var's site, which signals like `deref`.
+  where the oracle keeps the old root and drops the macro.
 - `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
   ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
   atom).

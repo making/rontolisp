@@ -469,8 +469,7 @@
   `Invalid reference state` を報告しますが、以降の呼び出しは拒否された定義に届きます
   （オラクルは古い定義を保ちます）。拒否された `defmacro` の再定義は新しいエクスパンダがそのまま使われます
   （下にある呼び出しは lowering 時にそれで展開され、テーブルもそれを保持します）。
-  オラクルは古いルートを保ちマクロを外します。計算で求めたマクロ var への `set-validator!` は var のサイトを読み、
-  これは `deref` 同様にシグナルします。
+  オラクルは古いルートを保ちマクロを外します。
 - `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` は、atom と
   セルを共有する ref と volatile も受け付けます（オラクルは atom 以外を拒否します）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの

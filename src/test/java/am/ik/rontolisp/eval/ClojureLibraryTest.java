@@ -402,10 +402,12 @@ class ClojureLibraryTest {
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		String own = program(plain, source);
 		assertThat(own).contains("(DEFUN |c%wmt/wt%def2| NIL").doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(own).doesNotContain("%CLOJURE-NOTE-MACRO-EXPANDER");
 		String watched = source + " (add-watch #'wm :k (fn [k v o n] nil))";
 		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
 		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wm\"")
-			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"");
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"")
+			.contains("(RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER \"wmt/wm\"");
 	}
 
 	@Test

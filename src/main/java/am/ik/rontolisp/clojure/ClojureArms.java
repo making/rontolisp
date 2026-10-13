@@ -516,13 +516,17 @@ public final class ClojureArms {
 		 * {@code def}, {@code defn} or {@code with-redefs} replacing a var's root goes
 		 * through the same validator and watches: the test asks whether the var is
 		 * guarded, the stores validate and notify around the cell's {@code setq}, and the
-		 * statements validate and notify behind a definition keeping its shape.
+		 * statements validate and notify behind a definition keeping its shape. A
+		 * {@code defmacro} site notes its present expander under its var key, so a
+		 * computed {@code set-validator!} of its var checks the expander without touching
+		 * the var's signaling site.
 		 */
 		WATCH("watched-reference", Set.of("RONTOLISP::%CLOJURE-VAR-GUARDED-P"), ClojureStateLowering.WATCH_VIEWS,
 				ClojureStateLowering.WATCH_ALIASES, ClojureStateLowering.WATCH_PRODUCERS, Set.of(), false, Set.of(),
 				Set.of(), Set.of(), Map.of(), Map.of("RONTOLISP::%CLOJURE-VAR-STORE", "SETQ"),
-				Set.of("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY"), null, null,
-				Set.of()),
+				Set.of("RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY",
+						"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER"),
+				null, null, Set.of()),
 
 		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the

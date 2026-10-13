@@ -117,7 +117,12 @@ final class ClojureMacroLowering {
 	 * its body and template name, the template's qualified symbols included (the dispatch
 	 * gate reads a spelled defun name as a call it may resolve). A call above the
 	 * definition names the missing expander instead of an unknown name, unless the name
-	 * is a {@code clojure.core} one, whose core meaning holds there.
+	 * is a {@code clojure.core} one, whose core meaning holds there. Behind the table
+	 * entry the site notes its present expander under its var key
+	 * ({@link ClojureStateLowering#NOTE_MACRO_EXPANDER}), so a computed
+	 * {@code set-validator!} of its var checks the expander without touching the var's
+	 * signaling site -- a statement the strip drops where the program names no watch
+	 * verb.
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
@@ -206,6 +211,10 @@ final class ClojureMacroLowering {
 					new LispInteger(ctx.macroExpanders.size())));
 			ctx.macroExpanders.add(expander);
 		}
+		// the present expander noted under the var key, ahead of the notify
+		// statement: a refused redefinition still serves its new expander, so the
+		// note carries it too
+		forms.add(ClojureLowerUtil.list(ClojureStateLowering.NOTE_MACRO_EXPANDER, LispString.literal(key), expander));
 		forms.addAll(metaStore);
 		LispVal redefined = macroNotify(ctx, key, expander, superseded);
 		if (redefined != null) {
@@ -348,7 +357,8 @@ final class ClojureMacroLowering {
 					}
 				}
 			}
-			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY" -> {
+			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY",
+					"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER" -> {
 				// a watch/validator arm behind a definition: nothing to hand over
 			}
 			default -> {
