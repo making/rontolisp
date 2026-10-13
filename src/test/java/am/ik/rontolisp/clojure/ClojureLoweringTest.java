@@ -1892,8 +1892,11 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(java.io.StringWriter.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		// an initial capacity keeps the host construction, like any other class
-		assertThat(lowered("(new java.io.StringWriter 16)")).contains("JAVA:NEW").contains("java.io.StringWriter");
+		// an initial capacity is an empty string output stream, never a java:new
+		// (which wasm refuses); anything else at run time is the oracle's
+		// ClassCastException to Number, nil its NullPointerException
+		assertThat(lowered("(new java.io.StringWriter 16)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 16)")
+			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains(
 				"((RONTOLISP::%CLOJURE-STREAM-P |__clojure_0|) (RONTOLISP::%CLOJURE-STREAM-STRING |__clojure_0|))");
 	}
@@ -1912,9 +1915,6 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(StringBuffer.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		// an initial text or capacity keeps the host construction, like any other class
-		assertThat(lowered("(new StringBuilder \"ab\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
-		assertThat(lowered("(new StringBuilder 16)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
 		assertThat(lowered("(let [s (StringBuilder.)] (.length s))"))
 			.contains("(RONTOLISP::%CLOJURE-STRING-OUTPUT-P |__clojure_0|)")
 			.contains("RONTOLISP::%CLOJURE-STREAM-STRING");
@@ -1930,6 +1930,78 @@ class ClojureLoweringTest {
 		// where the host is not, no java: operator is left for any of them
 		String portable = "(let [sb (StringBuilder.)] (.append sb \"a\") (println (str sb) (.length sb)))"
 				+ " (println (.toUpperCase \"hi\" java.util.Locale/US) (.intern \"x\"))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aOneArgumentStringBuilderLowersToAStreamTheArgumentFills() {
+		// A one-argument (StringBuilder.), (new StringBuilder), (StringBuilder/new) or
+		// (StringBuffer.) is a fresh string output stream the argument fills at run
+		// time, on every backend, never a java:new (which wasm refuses): the class
+		// travels for the refusal, a string is written into the stream, an integer is
+		// a capacity (ignored), anything else the oracle's no-such-constructor
+		// refusal. Two arguments, and a tagged construction naming the host overload,
+		// keep the host construction, like any other class.
+		assertThat(lowered("(StringBuilder. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuilder 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder/new \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuffer. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuffer 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder. \"a\" \"b\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// a tagged construction names the host overload and keeps java:new, on the
+		// interpreter and the JVM only
+		assertThat(lowered("(^[String] StringBuilder/new \"z\")")).contains("JAVA:NEW")
+			.contains("java.lang.StringBuilder");
+		assertThat(lowered("(^[int] StringBuilder/new 64)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (str (StringBuilder. \"ab\")))" + " (println (str (new StringBuffer 16)))"
+				+ " (println (let [sb (StringBuilder/new \"x\")] (.append sb \"y\") (str sb)))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aOneArgumentStringWriterLowersToAnEmptyStreamWithTheOracleRefusals() {
+		// A one-argument (java.io.StringWriter.), (new java.io.StringWriter) or
+		// (java.io.StringWriter/new) is an empty string output stream on every
+		// backend, never a java:new (which wasm refuses): a number is a capacity
+		// (ignored), anything else the oracle's ClassCastException to Number at
+		// run time (nil its NullPointerException) -- a StringWriter has no String
+		// constructor, so no shared no-such-constructor helper. Two arguments, and
+		// a tagged construction naming the host overload, keep the host
+		// construction, like any other class.
+		assertThat(lowered("(java.io.StringWriter. 16)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new java.io.StringWriter \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter/new 8)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 8)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter. \"a\" \"b\")")).contains("JAVA:NEW")
+			.contains("java.io.StringWriter");
+		// a tagged construction names the host overload and keeps java:new, on the
+		// interpreter and the JVM only
+		assertThat(lowered("(^[int] java.io.StringWriter/new 64)")).contains("JAVA:NEW")
+			.contains("java.io.StringWriter");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (str (java.io.StringWriter. 16)))"
+				+ " (println (str (new java.io.StringWriter (long 8))))"
+				+ " (println (let [w (java.io.StringWriter/new 4)] (.append w \"y\") (str w)))";
 		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
 			.stream()
 			.map(LispVal::print)
@@ -2325,6 +2397,27 @@ class ClojureLoweringTest {
 			.contains("|c%mu-unless%macro|")
 			.contains("LAMBDA")
 			.contains("wrong number of arguments passed to macro: mu-unless");
+	}
+
+	@Test
+	void aRedefinedDefmacroNotifiesBehindItsRegistration() {
+		// a redefined defmacro validates and notifies like a cell-less defn: the
+		// replaced root is the previous expander, in a statement the strip drops
+		// where the program names no watch verb; a first definition emits none
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1)")).doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// over a valued or declared root the replaced root is the cell's, as for defn
+		assertThat(loweredWithExpanders("(def mu-rd 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		assertThat(loweredWithExpanders("(declare mu-rd) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// set-validator! of a literal macro checks the present expander, since the
+		// var's site reads no value; above the definition it reads the plain worker
+		assertThat(loweredWithMacros("(defmacro mu-sv [] 1) (set-validator! #'mu-sv pos?)"))
+			.contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
+		assertThat(loweredWithMacros("(set-validator! #'mu-sv pos?) (defmacro mu-sv [] 1)"))
+			.doesNotContain("SET-VALIDATOR-MACRO");
 	}
 
 	@Test
@@ -3781,6 +3874,26 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"t\") '(\"user\" \"t\")");
 		// a test is a zero-argument function a later form may call
 		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%t/b|)");
+	}
+
+	@Test
+	void aRedefinedDeftestVersionsItsFunctionsAndNotifies() {
+		// a redefined deftest validates and notifies like a redefined defn: each
+		// definition keeps its own function, the calls below it run the newest, and
+		// the replaced root travels in the notify statement the strip drops where
+		// the program names no watch verb; a single definition lowers as before
+		String out = lowered("(ns t (:use clojure.test)) (deftest a (is true)) (deftest a (is false)) (a)");
+		assertThat(out).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.contains("(DEFUN |c%t/a%def2| NIL")
+			.contains("(DEFUN |c%t/a%def2%body| NIL")
+			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%t/a%def2|)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"t/a\" #'|c%t/a%def2| #'|c%t/a|)")
+			.contains("(|c%t/a%def2|)");
+		assertThat(lowered("(ns t (:use clojure.test)) (deftest a (is true)) (a)")).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY")
+			.doesNotContain("%def2");
 	}
 
 	@Test

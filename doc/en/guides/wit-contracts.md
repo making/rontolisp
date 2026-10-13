@@ -460,7 +460,16 @@ A `.wit` file rontolisp accepts is one every other tool accepts too: an
 interface that defines one name twice — a type and a function sharing a name,
 two functions, two types, or a `use`d name against a local one — is a compile
 error naming the WIT line, the way `wasm-tools component wit` refuses it with
-`name \`quote\` is defined more than once`.
+`name \`quote\` is defined more than once`. The same holds outside interfaces:
+a world that imports one name twice (`import \`quote\` conflicts with prior
+func of same name`, or `interface cannot be imported more than once` for a
+repeated bare `import a;`), two top-level items in one package sharing a name
+(`duplicate item named \`i\``), two resource methods sharing a name
+(`duplicate function name \`m\``), and a function repeating a parameter
+(`param \`x\` is defined more than once`) are all compile errors in that
+tool's words. What it accepts, the reader accepts too: repeated `record`
+fields and `enum`/`flags`/`variant` cases, one name in two interfaces of a
+package, and a world that imports and exports one name.
 
 A component imports **only the functions the program actually calls** (there
 is no core tree shaker on this path, so unused interface members are dropped

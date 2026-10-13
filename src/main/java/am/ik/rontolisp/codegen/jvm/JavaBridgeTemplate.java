@@ -2678,7 +2678,8 @@ final class JavaBridgeTemplate {
 		try {
 			// Initializing, as a direct call's class constant does: static state is
 			// ready when the member runs. A class that cannot link refuses here, naming
-			// the missing class (.todo/f65).
+			// the missing class (.kb/clojure-frontend.md, "Classes compiled against
+			// `clojure.lang`").
 			Class<?> cls = Class.forName(name);
 			remember(CLASSES, name, cls);
 			return cls;
@@ -2718,7 +2719,8 @@ final class JavaBridgeTemplate {
 	// What a java: site over a class that cannot link throws: the interpreter's
 	// refusal in words (eval/JavaInterop.unlinkable), as the RuntimeException a
 	// program's catch takes -- a dependency's class compiled against a language that
-	// is not here (metosin/reitit-core's reitit.Trie over clojure.lang, .todo/f65).
+	// is not here (metosin/reitit-core's reitit.Trie over clojure.lang;
+	// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
 	// Any other LinkageError is not caught: it propagates as it did.
 	// KEEP THE TWO IN SYNC (JavaBridgeTemplateParityTest).
 	private static RuntimeException unlinkable(String className, NoClassDefFoundError ex) {

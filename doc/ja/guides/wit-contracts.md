@@ -267,7 +267,7 @@ wasmtime run -S keyvalue=y counter.wasm
 
 コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
-rontolisp が受け付ける `.wit` ファイルは、他のすべてのツールも受け付けるものでなければなりません: 1 つの名前を 2 回定義するインターフェース — 型と関数が同じ名前を共有する場合、2 つの関数、2 つの型、`use` した名前とローカル定義の衝突 — は WIT の行を示すコンパイルエラーになります。これは `wasm-tools component wit` が `name \`quote\` is defined more than once` として拒否するのと同じです。
+rontolisp が受け付ける `.wit` ファイルは、他のすべてのツールも受け付けるものでなければなりません: 1 つの名前を 2 回定義するインターフェース — 型と関数が同じ名前を共有する場合、2 つの関数、2 つの型、`use` した名前とローカル定義の衝突 — は WIT の行を示すコンパイルエラーになります。これは `wasm-tools component wit` が `name \`quote\` is defined more than once` として拒否するのと同じです。インターフェースの外側も同じです: 同じ名前を 2 回インポートする world (`import \`quote\` conflicts with prior func of same name`、素の `import a;` の繰り返しなら `interface cannot be imported more than once`)、同じ名前を共有する 1 つのパッケージ内の 2 つのトップレベル項目 (`duplicate item named \`i\``)、同じ名前を共有する 2 つの resource メソッド (`duplicate function name \`m\``)、仮引数を重複させる関数 (`param \`x\` is defined more than once`) はいずれも、そのツールの文面による WIT の行を示すコンパイルエラーになります。そのツールが受け付けるものはリーダーも受け付けます: 重複した `record` フィールドや `enum`/`flags`/`variant` の case、1 つのパッケージの 2 つのインターフェースにおける同名、1 つの名前をインポートしかつエクスポートする world です。
 
 コンポーネントが**インポートするのはプログラムが実際に呼ぶ関数だけ**です (この経路にはコアのツリーシェイカーがないため、使われないインターフェースメンバーはインポート自体から落とされます。`--no-prune` ですべて残せます)。[`--emit-wit`](#emitting-the-wit-world---emit-wit) はその刈り込まれたインターフェースをコンポーネントの world に書き出し、`wasm-tools component wit` の出力とバイト単位で一致します。何もインポートしないコンポーネントは、この機能が存在しなかった頃のビルドとバイト単位で同一です。
 

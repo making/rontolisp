@@ -1673,6 +1673,76 @@ cases:
       [104 101 0 0]
       d
       e
+  - name: string-builder-construction-with-an-initial-text-or-capacity
+    # A one-argument (StringBuilder.), (new StringBuilder), (StringBuilder/new) or
+    # (StringBuffer.) is a string output stream pre-filled with the text on every
+    # backend: a string is written into the fresh stream, an integer is a capacity
+    # (ignored, the stream starts empty), anything else the oracle's
+    # no-such-constructor refusal. Oracle-identical (clj 1.12.6, 2026-10-13); nil
+    # is refused here (no such constructor), where the oracle throws a
+    # NullPointerException.
+    source: |
+      (println (str (StringBuilder. "ab")))
+      (println (str (StringBuilder. 16)))
+      (println (str (StringBuffer. "ab")))
+      (println (str (StringBuffer. 16)))
+      (println (str (new StringBuilder "xy")))
+      (println (str (StringBuilder/new "wz")))
+      (println (str (new StringBuffer 8)))
+      (println (let [sb (StringBuilder. "ab")] (.append sb "c") (str sb)))
+      (println (.length (StringBuilder. "abcd")))
+      (println (str (doto (StringBuilder. "ab") (.append "cd"))))
+      (println (str (StringBuilder. "")))
+      (println (str (StringBuilder. (str "a" "b"))))
+      (println (str (StringBuilder. (long 16))))
+      (println (try (str (StringBuilder. 1.5)) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (str (StringBuffer. :k)) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (str (StringBuilder. nil)) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      ab
+
+      ab
+
+      xy
+      wz
+
+      abc
+      4
+      abcd
+
+      ab
+
+      No matching ctor found for class java.lang.StringBuilder
+      No matching ctor found for class java.lang.StringBuffer
+      No matching ctor found for class java.lang.StringBuilder
+  - name: string-writer-construction-with-an-initial-capacity
+    # A one-argument (java.io.StringWriter.), (new java.io.StringWriter) or
+    # (java.io.StringWriter/new) is an empty string output stream on every
+    # backend: a number is a capacity (ignored, the stream starts empty), nil the
+    # oracle's NullPointerException, anything else its ClassCastException to
+    # Number (a StringWriter has no String constructor, so the reflector's cast
+    # fails). Oracle-identical (clj 1.12.6, 2026-10-13) but for the exception
+    # message's module tail, which names no part of the refusal here.
+    source: |
+      (println (str (java.io.StringWriter. 16)))
+      (println (str (new java.io.StringWriter 8)))
+      (println (str (java.io.StringWriter/new 4)))
+      (println (str (java.io.StringWriter. 1.5)))
+      (println (str (java.io.StringWriter. (long 16))))
+      (println (let [w (java.io.StringWriter. 16)] (.append w "c") (str w)))
+      (println (try (str (java.io.StringWriter. "ab")) (catch ClassCastException e (ex-message e))))
+      (println (try (str (new java.io.StringWriter :k)) (catch ClassCastException e (ex-message e))))
+      (println (try (str (java.io.StringWriter/new nil)) (catch NullPointerException e (ex-message e))))
+    expected: |
+      
+      
+      
+      
+      
+      c
+      class java.lang.String cannot be cast to class java.lang.Number
+      class clojure.lang.Keyword cannot be cast to class java.lang.Number
+      Cannot invoke "java.lang.Character.charValue()" because "x" is null
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,
@@ -4819,6 +4889,82 @@ cases:
       Invalid reference state :orig
       :newer
       Invalid reference state 10
+  - name: a-redefined-defmacro-notifies-a-var-s-watches
+    # Oracle-identical (clj 1.12.6, 2026-10-13): a defmacro redefinition calls
+    # the var's watches with the old and the new expander, like the oracle's
+    # bindRoot; a redefinition the validator refuses throws and calls no watch.
+    # Past a remove-watch a redefinition stores silently. Deviation: the refused
+    # expander still serves here (the call sites below it expanded with it while
+    # lowering and the table holds it), where the oracle keeps the old root and
+    # drops the macro.
+    source: |
+      (defmacro wmm [] :m1)
+      (def wmmlog (atom []))
+      (add-watch #'wmm :k (fn [k v o n] (swap! wmmlog conj [(fn? o) (fn? n)])))
+      (defmacro wmm [] :m2)
+      (println (macroexpand '(wmm)) @wmmlog)
+      (def wmm-ok (atom true))
+      (set-validator! #'wmm (fn [v] @wmm-ok))
+      (reset! wmm-ok false)
+      (println (try (defmacro wmm [] :m3) (catch IllegalStateException e (ex-message e))) @wmmlog)
+      (reset! wmm-ok true)
+      (remove-watch #'wmm :k)
+      (defmacro wmm [] :m4)
+      (println (macroexpand '(wmm)) @wmmlog)
+    expected: |
+      :m2 [[true true]]
+      Invalid reference state [[true true]]
+      :m4 [[true true]]
+  - name: a-redefined-deftest-notifies-a-var-s-watches
+    # Oracle-identical (clj 1.12.6, 2026-10-13): a deftest redefinition calls the
+    # var's watches with the old and the new test function, like the oracle's
+    # bindRoot; a redefinition the validator refuses throws, calls no watch, and
+    # still runs the new body (the oracle's test metadata lands with it). The case
+    # requires clojure.test without switching namespaces, so the cases below it
+    # still run where the earlier ones left them.
+    source: |
+      (require '[clojure.test :refer :all])
+      (deftest wdt (is (= 1 1)))
+      (def wdtlog (atom []))
+      (add-watch #'wdt :k (fn [k v o n] (swap! wdtlog conj [(fn? o) (fn? n)])))
+      (deftest wdt (is (= 2 2)))
+      (println @wdtlog)
+      (println (let [s (run-tests)] [(:test s) (:pass s) (:fail s) (:error s)]))
+      (def wdt-ok (atom true))
+      (set-validator! #'wdt (fn [v] @wdt-ok))
+      (reset! wdt-ok false)
+      (println (try (deftest wdt (is (= 3 4))) (catch IllegalStateException e (ex-message e))) @wdtlog)
+      (reset! wdt-ok true)
+      (println (let [s (run-tests)] [(:test s) (:pass s) (:fail s) (:error s)]))
+      (deftest wdt (is (= 5 5)))
+      (println @wdtlog)
+      (println (let [s (run-tests)] [(:test s) (:pass s) (:fail s) (:error s)]))
+    expected: |
+      [[true true]]
+
+      Testing runs-ns
+
+      Ran 1 tests containing 1 assertions.
+      0 failures, 0 errors.
+      [1 1 0 0]
+      Invalid reference state [[true true]]
+
+      Testing runs-ns
+
+      FAIL in (wdt) (spec.clj:N)
+      expected: (= 3 4)
+        actual: (not (= 3 4))
+
+      Ran 1 tests containing 1 assertions.
+      1 failures, 0 errors.
+      [1 0 1 0]
+      [[true true] [true true]]
+
+      Testing runs-ns
+
+      Ran 1 tests containing 1 assertions.
+      0 failures, 0 errors.
+      [1 1 0 0]
   - name: await-for-answers-whether-the-actions-ran-in-time
     # Oracle-identical (clj 1.12.6, 2026-10-12): await-for runs like await and answers
     # true when every agent's actions sent so far ran; await and await-for refuse

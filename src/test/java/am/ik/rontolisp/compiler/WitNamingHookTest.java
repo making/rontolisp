@@ -331,7 +331,7 @@ class WitNamingHookTest {
 				  export a: func();
 				  export a: func();
 				}
-				""", "w.wit")).hasMessageContaining("w.wit:4: duplicate export 'a'");
+				""", "w.wit")).hasMessageContaining("export `a` conflicts with prior func of same name");
 	}
 
 }

@@ -208,6 +208,7 @@ public final class ClojureArms {
 	private static Set<String> streamProducers() {
 		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
+				"RONTOLISP::%CLOJURE-STRING-BUILDER-1", "RONTOLISP::%CLOJURE-STRING-WRITER-1",
 				"RONTOLISP::%CLOJURE-READER"));
 		out.addAll(ClojureIoLowering.STREAM_PRODUCERS);
 		return Set.copyOf(out);
@@ -554,8 +555,10 @@ public final class ClojureArms {
 		 * A stream value, which the printer and {@code str} spell as the oracle's
 		 * {@code #object} of the host class its kind is: only a read of {@code *out*},
 		 * {@code *in*} or {@code *err*} as a value, a {@code java.io.StringWriter}, a
-		 * reader over a {@code java.io.StringReader} and the {@code clojure.java.io}
-		 * kernels and {@code java.io} constructions opening a file
+		 * one-argument {@code StringBuilder}/{@code StringBuffer} or
+		 * {@code java.io.StringWriter} construction, a reader over a
+		 * {@code java.io.StringReader} and the {@code clojure.java.io} kernels and
+		 * {@code java.io} constructions opening a file
 		 * ({@link ClojureIoLowering#STREAM_PRODUCERS}) hand one to the program. The
 		 * Common Lisp constructors the library and the binding forms call are no
 		 * producer: naming one would splice the library into a Common Lisp program.

@@ -41,16 +41,6 @@ class ClojureInteropTest {
 	}
 
 	@Test
-	void aStringBuilderWithAnInitialTextOrCapacityStaysTheHosts() throws Exception {
-		// answers measured against clj 1.12.6: an argument keeps java:new, which
-		// only the interpreter and the JVM run; a zero-argument one is a string
-		// output stream on every backend (clojure-spec.yaml)
-		assertBothEqual("(println (str (StringBuilder. \"ab\")))", "ab\n");
-		assertBothEqual("(println (str (StringBuilder. 16)))", "\n");
-		assertBothEqual("(println (let [sb (StringBuilder. \"ab\")] (.append sb \"c\") (str sb)))", "abc\n");
-	}
-
-	@Test
 	void aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs() throws Exception {
 		// answers measured against clj 1.12.6: iterator-seq steps a host Iterator, and an
 		// Iterable type's iterator may hand one on to seq, reduce and into
@@ -217,7 +207,7 @@ class ClojureInteropTest {
 	void aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass() throws Exception {
 		// the fixture jar holds a class compiled against a type it omits: calling it or
 		// constructing it refuses, naming the missing class, on the interpreter and the
-		// JVM (.todo/f65)
+		// JVM (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
 		java.nio.file.Path jar = unlinkableJar();
 		String staticCall = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
 				+ " (catch Exception e (ex-message e))))";
@@ -237,7 +227,8 @@ class ClojureInteropTest {
 	void aCompiledProgramFindsADependencyJarOnItsRunClasspath() throws Exception {
 		// a -o Prog.class output carries no dependency jar: with the fixture jar on the
 		// run class path the call refuses as it does in process, without it the class is
-		// missing (.kb/java-interop.md, "The program's Java class path"; .todo/f65)
+		// missing (.kb/java-interop.md, "The program's Java class path";
+		// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
 		java.nio.file.Path jar = unlinkableJar();
 		String program = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
 				+ " (catch Exception e (ex-message e))))";
@@ -395,13 +386,16 @@ class ClojureInteropTest {
 		// measured against clj 1.12.6: class of a host object is its class object, which
 		// isa? the classes it extends and implements, Object among them; java.util.List
 		// lowers to :list in a hierarchy position, which the host class still reaches (a
-		// java.net.URI: a java.io.File is clojure.java.io's own value on every backend)
+		// java.net.URI: a java.io.File is clojure.java.io's own value on every backend).
+		// A one-argument StringBuilder is no host object anymore (a string output
+		// stream on every backend, clojure-spec.yaml), so the CharSequence case spells
+		// (String. "x").
 		assertBothEqual("(println (isa? (class (java.net.URI. \"x\")) Object)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.List)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
 				+ " (isa? (class (java.util.ArrayList.)) Exception)"
 				+ " (isa? (class (java.net.URI. \"x\")) java.io.Serializable)"
-				+ " (isa? (class (StringBuilder. \"x\")) CharSequence))", "true true false false true true\n");
+				+ " (isa? (class (String. \"x\")) CharSequence))", "true true false false true true\n");
 		// a class object parent: the class's own spelling, or one of a value's class
 		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.AbstractList)"
@@ -466,10 +460,12 @@ class ClojureInteropTest {
 						+ " (instance? java.util.Map [1]) (instance? java.io.File \"x\")"
 						+ " (instance? java.util.RandomAccess (java.util.ArrayList.)))",
 				"true true false false true\n");
-		// a core class a host object may also be: Number, CharSequence
+		// a core class a host object may also be: Number, CharSequence. A one-argument
+		// StringBuilder is no host object anymore (a string output stream on every
+		// backend, clojure-spec.yaml), so the CharSequence case spells (String. "a").
 		assertBothEqual(
 				"(println (instance? Number (java.math.BigDecimal. \"1.5\")) (instance? Number 1)"
-						+ " (instance? Number \"1\") (instance? CharSequence (StringBuilder. \"a\"))"
+						+ " (instance? Number \"1\") (instance? CharSequence (String. \"a\"))"
 						+ " (instance? CharSequence \"a\") (instance? CharSequence 1))",
 				"true true false true true false\n");
 		assertBothEqual(
@@ -522,6 +518,31 @@ class ClojureInteropTest {
 				"(defmacro with-out-str [& body] `(let [s# (new java.io.StringWriter)]"
 						+ " (binding [*out* s#] ~@body (str s#)))) (println (with-out-str (print 1) (print 2)))",
 				"12\n");
+	}
+
+	@Test
+	void stringWriterConstructionWithACapacityStartsEmptyWithTheOracleRefusals() throws Exception {
+		// A one-argument (java.io.StringWriter.) is an empty string output stream:
+		// a number is a capacity (ignored), anything else the oracle's
+		// ClassCastException to Number, nil its NullPointerException (a
+		// StringWriter has no String constructor). The all-four-backend pin is the
+		// clojure-spec.yaml case; the spellings and the refusal messages live here
+		// with the other interop pins.
+		assertBothEqual("(println (str (java.io.StringWriter. 16)))", "\n");
+		assertBothEqual("(println (str (new java.io.StringWriter 8)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter/new 4)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter. 1.5)))", "\n");
+		assertBothEqual("(println (let [w (java.io.StringWriter. 16)] (.append w \"c\") (str w)))", "c\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter. \"ab\"))" + " (catch ClassCastException e (ex-message e))))",
+				"class java.lang.String cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (new java.io.StringWriter :k))" + " (catch ClassCastException e (ex-message e))))",
+				"class clojure.lang.Keyword cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter/new nil))"
+						+ " (catch NullPointerException e (ex-message e))))",
+				"Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n");
 	}
 
 	@Test
@@ -837,7 +858,9 @@ class ClojureInteropTest {
 	// is the fn -- a list, a map, a set and Optional hold it and hand it back, identical?
 	// to it, one object however many calls hand it over -- and it is a Runnable Java
 	// checks (a checked list of Runnable takes it); an Object overload takes it before an
-	// interface it is none of (StringBuilder.append(Object)). Before, measured 2026-10-11
+	// interface it is none of (StringBuilder.append(Object) over a tagged construction,
+	// an untagged one being a string output stream on every backend since f71).
+	// Before, measured 2026-10-11
 	// on the interpreter and the JVM: "No matching method java.util.ArrayList.add with 1
 	// argument(s)".
 	@Test
@@ -853,7 +876,7 @@ class ClojureInteropTest {
 				+ " (identical? f (.get l 0))))"
 				+ " (let [a (atom 0) l (java.util.ArrayList.)] (.add l (fn [] (swap! a inc)))"
 				+ " (.run ^Runnable (.get l 0)) (prn @a))"
-				+ " (prn (.contains (str (.append (StringBuilder. \"x\") f)) \"clojure.lang.AFunction@\")"
+				+ " (prn (.contains (str (.append (^[String] StringBuilder/new \"x\") f)) \"clojure.lang.AFunction@\")"
 				+ " (.startsWith (String/valueOf f) \"clojure.lang.AFunction@\"))",
 				"true true true [true 1] [1 true] true true true\n1\ntrue true\n");
 	}
@@ -2011,12 +2034,12 @@ class ClojureInteropTest {
 						(println (seq al) (vec al) (first al) (rest al) (next al) (last al) (nth al 1) (seq ea))
 						(println (map inc al) (filter odd? al) (reduce + al) (reduce + 10 al) (apply + al) (mapv inc al))
 						(println (into {} hm) (into [] al) (into #{} ts) (seq ts) (sort ts) (set al) (frequencies al))
-						(println (count al) (count hm) (count ts) (count ea) (count (StringBuilder. "abc")))
+						(println (count al) (count hm) (count ts) (count ea) (count (String. "abc")))
 						(println (empty? al) (empty? ea) (empty? hm) (empty? (java.util.HashMap.)) (seq (java.util.HashMap.)))
 						(println (get hm "a") (get hm "z") (get hm "z" :none) (vec (get tm "b")) (get al 0) (get al 0 :d))
 						(println (contains? hm "a") (contains? hm "z") (contains? ts 3) (contains? ts 2))
 						(println (keys tm) (first (vals tm)) (map key tm) (for [[k v] hm] (str k v)) (= (vec (second (vals tm))) [3]))
-						(println (seq (StringBuilder. "ab")) (map str path) (map count [al hm]))
+						(println (seq (String. "ab")) (map str path) (map count [al hm]))
 						(println (let [[a b] al] (+ a b)) (zipmap al [:x :y]) (clojure.string/join "," al) (concat al [3]))
 						(println (try (contains? al 0) (catch Exception e (.getMessage e))))
 						(println (try (count path) (catch Exception e (.getMessage e))))

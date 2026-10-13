@@ -33,8 +33,15 @@ A zero-argument `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`)
 string output stream on every backend, like `(new java.io.StringWriter)`: `.append` of one
 value writes its `str` (nil writes `"null"`), answering the builder, `.toString` and `str`
 answer the text so far, and `.length`, `.charAt` and `.setLength` read and resize it
-(`.setLength` answers nil). An initial text or capacity keeps the host construction, on the
-interpreter and the JVM only. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is the locale's
+(`.setLength` answers nil). A one-argument construction starts the stream with the text
+(`(StringBuilder. "ab")`, `(new StringBuilder "ab")`, `(StringBuffer. "ab")`), an integer
+argument being a capacity (ignored, the stream starts empty); anything else is refused as
+`No matching ctor found for class ...`. A one-argument `java.io.StringWriter`
+(`(java.io.StringWriter. 16)`, `(new java.io.StringWriter 16)`) is an empty string output
+stream instead: a number is a capacity (ignored, the stream starts empty), and anything
+else is the oracle's `ClassCastException` to `Number` -- a `StringWriter` has no `String`
+constructor -- nil being its `NullPointerException`. A `^[...]`-tagged construction names the host
+overload instead and keeps the host construction, on the interpreter and the JVM only. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is the locale's
 `toString` text (`"en_US"`, `""`, `"en"`), which `.toUpperCase` and `.toLowerCase` of one
 argument take on every backend, mapping as the bare call (the mapping ignores the locale).
 `.intern` of a string is the string, on every backend.
@@ -49,5 +56,7 @@ argument take on every backend, mapping as the bare call (the mapping ignores th
 (defrecord R [a] P (m [this] (str "m" a)))
 (println (.m (->R 1)) (.a (->R 1))) ; m1 1
 (let [sb (StringBuilder.)] (.append sb "a") (.append sb 1) (println (str sb) (.length sb))) ; a1 2
+(println (str (StringBuilder. "ab") (StringBuffer. 16))) ; ab
+(println (let [w (java.io.StringWriter. 16)] (.append w "ab") (str w))) ; ab
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 ```
