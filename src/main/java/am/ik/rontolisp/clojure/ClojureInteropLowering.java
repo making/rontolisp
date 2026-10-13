@@ -1106,6 +1106,16 @@ final class ClojureInteropLowering {
 			// a map entry is the two-member vector here
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
 		}
+		if (cls.equals("clojure.lang.LazilyPersistentVector") && member.equals("createOwning") && args.size() == 1) {
+			// an owned array is already the vector here (object-array answers one),
+			// so taking ownership is vec, like the oracle's :bb branch (malli's
+			// -vmap and -eager-entry-parser)
+			return ClojureCollectionLowering.vecForm(ctx, args.get(0));
+		}
+		if (cls.equals("clojure.lang.PersistentArrayMap") && member.equals("createWithCheck") && args.size() == 1) {
+			// the duplicate-checking map build here (malli's -eager-entry-parser)
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CREATE-WITH-CHECK"), args.get(0));
+		}
 		if (cls.equals("clojure.lang.RT") && member.equals("iter") && args.size() == 1) {
 			// an Iterable's own iterator, else the iterator over the seq
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));

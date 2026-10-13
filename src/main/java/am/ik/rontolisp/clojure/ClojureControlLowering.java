@@ -19,8 +19,8 @@ import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Control forms of the Clojure lowering: {@code case}, {@code condp}, {@code while} and
- * {@code locking}.
+ * Control forms of the Clojure lowering: {@code case}, {@code condp}, {@code while},
+ * {@code locking} and the {@code monitor-enter}/{@code monitor-exit} halves.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -332,6 +332,38 @@ final class ClojureControlLowering {
 		LispVal body = ClojureStateLowering.barrierBody(ctx, items, 2);
 		LispVal held = ctx.hostTarget ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP:WITH-MUTEX"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(MONITOR, temp)), body) : body;
+		LispVal nullCheck = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), temp),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+						LispString.literal("Cannot enter synchronized block because \"locklocal\" is null")));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(temp, lockee)), nullCheck, held);
+	}
+
+	/**
+	 * {@code (monitor-enter x)} / {@code (monitor-exit x)}: the two halves of
+	 * {@code locking}, which dynaload's {@code locking2} spells out (its {@code :default}
+	 * branch). Where threads exist the same reentrant mutex {@code locking} holds is
+	 * acquired or released, answering nil like the oracle's void; on wasm,
+	 * single-threaded by construction, the object evaluates and nil answers. {@code nil}
+	 * is the oracle's {@code NullPointerException}, like there.
+	 */
+	static LispVal monitorEnterOf(ClojureLowering ctx, List<LispVal> items) {
+		return monitorOf(ctx, items, "monitor-enter", "RONTOLISP:MUTEX-ACQUIRE");
+	}
+
+	static LispVal monitorExitOf(ClojureLowering ctx, List<LispVal> items) {
+		return monitorOf(ctx, items, "monitor-exit", "RONTOLISP:MUTEX-RELEASE");
+	}
+
+	private static LispVal monitorOf(ClojureLowering ctx, List<LispVal> items, String name, String primitive) {
+		ClojureLowerUtil.isTrue(items.size() == 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/" + name);
+		LispVal lockee = ctx.lower(items.get(1));
+		LispSymbol temp = ctx.freshTemp();
+		LispVal held = ctx.hostTarget ? ClojureLowerUtil.list(ClojureLowerUtil.sym("PROGN"),
+				ClojureLowerUtil.list(new LispSymbol(primitive), ClojureLowerUtil.list(MONITOR, temp)),
+				ClojureLowering.NIL_CONST) : ClojureLowering.NIL_CONST;
 		LispVal nullCheck = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), temp),
 				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,

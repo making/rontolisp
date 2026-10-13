@@ -295,6 +295,11 @@ final class ClojurePredicateLowering {
 					name.equals("any?") ? T : ctx.falseVariable);
 		}
 		switch (name) {
+			case "true?", "false?", "boolean?":
+				// the boolean predicates lower inline (ClojureLowering), so they are no
+				// TESTS entry, but as values they are the same lambdas a function
+				// position takes (malli's {:pred boolean?})
+				return ClojureFnLowering.predicateValue(ctx, name);
 			case "not-any?", "not-every?": {
 				LispSymbol pred = new LispSymbol(ClojureLowering.mangle(name + "-pred"));
 				LispSymbol coll = new LispSymbol(ClojureLowering.mangle(name + "-coll"));

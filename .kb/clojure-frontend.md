@@ -120,6 +120,7 @@ answered `2 5 3` before).
 | `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr` |
 | `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
 | `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
+| `monitor-enter` `monitor-exit` | the two halves of `locking` (dynaload's `locking2` spells them out): the same reentrant mutex acquired or released, answering nil; on wasm the object evaluates and nil answers (`ClojureControlLowering.monitorOf`, 2026-10-13, f66) | nil the same `NullPointerException`; a lone release of an unheld lock is the oracle's `IllegalMonitorStateException`, like the mutex's own. An unbalanced hold across top-level forms (the oracle's boundary `IllegalMonitorStateException`) stays held here, a documented deviation |
 | `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn stores... body) restores...)` where each store is the guarded `%clojure-var-store` over the value cell, folding to its `setq` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
 | `alter-var-root` `alter-meta!` `reset-meta!` | `(%clojure-alter-root var setter f args)` for a literal `#'x` of a value cell, else `(%clojure-alter-var-root v f args)`; `(%clojure-alter-meta r f args)`, `(%clojure-reset-meta r m)` (`ClojureVarLowering.alterRootOf`/`alterMetaOf`/`resetMetaOf`) | "Vars and metadata", alter-var-root |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
@@ -180,7 +181,7 @@ answered `2 5 3` before).
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
 | `ffirst` `nfirst` `fnext` `nnext` | `car`/`cdr` of the seq of the head / of the tail | each level seqs (`fnext`/`nnext` since 2026-10-10, clojure-spec `fnext-and-nnext-step-past-the-head`, oracle-identical) |
-| `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
+| `range` | a strict list (1/2/3-arity); without an end the infinite lazy integers from 0 (`%clojure-range`, 2026-10-13, f66) | a zero step signals; the end-less range is lazy like the oracle's (`take`, `nth`, `map`, `filter`, `drop`, `reduce` walk it; no chunking, like every lazy seq here) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
 | `delay` `force` | `(rontolisp::%clojure-delay (lambda () body))` / `%clojure-force` | "Laziness", delays |
 | `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` `empty` `comparator` `hash-set` `tree-seq` `flatten` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `tree-seq` is always lazy, a stack of pending seqs (`%clojure-tree-walk`) calling `branch?`/`children` as a node's cell realizes, and `flatten` the oracle's `(rest (tree-seq sequential? seq x))` filtered (2026-10-12, tools.cli); `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value (one to three predicates walk the first three arguments predicate-major failing with the last `(p x)`, `(string? 2)`'s false; until 2026-10-12 three predicates failed with nil and two walked argument-major); `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a hash map; a sorted collection goes through its items vector (`%clojure-sorted-items`, "Sorted collections"), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; `empty` answers a fresh empty vector, map, set or sorted collection (comparator kept: `%clojure-sorted-with` over an empty items vector, a `cond` clause on `%clojure-sorted-p` the strip folds like any arm) carrying the metadata through `%clojure-put-meta`, nil for a string, nil and any non-collection, and signals `Can't create empty: <record class>` on a record; a list, lazy seq and seq answer nil (the empty-as-nil position, so no metadata; the oracle's `()`) and a map entry `[]` (the oracle nil); `comparator` is a closure over the predicate answering -1 / 1 / 0 from two `%clojure-truthy` tests (a false object counts as false); `hash-set` is `%clojure-set-of` over the argument list (`-v` takes the rest list); type errors use CL wording |
@@ -193,7 +194,7 @@ answered `2 5 3` before).
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword or symbol reaching `%clojure-call`, a keyword function value (`ClojureFnLowering.keywordFn`, also a `defmulti` dispatch fn) or a quoted-symbol `defmulti` dispatch fn (`realFun` wraps it in `%clojure-as-fn`) takes one or two arguments and signals the oracle's `Wrong number of args (N) passed to: :kw` / `clojure.lang.Symbol` otherwise (a literal keyword head refuses at lower time) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
-| `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
+| `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `boolean?`/`true?`/`false?` as values are the same lambdas a function position takes (malli's `{:pred boolean?}`, 2026-10-13, f66). `fn?` is false for keywords, sets and maps |
 | the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"), `bytes?` where nothing makes a byte array ("Byte arrays") and `delay?` where nothing makes a delay ("Laziness", delays): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` | `rontolisp::%clojure-int-cast` / `%clojure-long-cast` (`ClojureCoreLowering.castOf`; `-int-v` / `-long-v` as a value, arity checked at run time), a literal argument folded at lower time through the cast of its own type (`foldedCast`: a double literal's `intCast(double)`, a long's, a bigint's or ratio's object cast), an out-of-range literal folding to its refusal carrier with the oracle's message | the oracle's `RT.intCast` / `RT.longCast` of an object: range checks and messages included; a non-literal double takes the object cast (`(int x)` of a var holding `1e10` "integer overflow", where the oracle's primitive-typed double -- a `let` local, `(* 2.0 x)` -- says "Value out of range for int: 2.0E10"); pinned oracle-identical (clj 1.12.6, 2026-10-08) by clojure-spec `int-and-long-are-the-oracles-range-checked-casts` |
 | `char` `quot` | `code-char` / `truncate` | a non-number signals |
@@ -1165,7 +1166,10 @@ body lowers). `loop` inits are sequential and destructure.
 
 - Tail position is enforced like the oracle: only a `recur` in its target's tail (`if`
   arms, `let*`/`progn` tails, `labels` bodies, `cond` arms, `do`, `when`, the dispatch
-  lets) lowers; elsewhere `Can only recur from tail position`.
+  lets) lowers; elsewhere `Can only recur from tail position`. The threading rewrites
+  (`->`, `->>`, `as->`, `cond->`, `cond->>`, `some->`) lower in the incoming tail
+  position, so a `recur` in a step's tail is its target's, like the oracle's
+  macroexpansions (2026-10-13, f66; malli's `cond->`/`recur`).
 - A `try` between the `recur` and its target is `Cannot recur across try` (a barrier
   beside the stack, so a target opened inside the `try` still recurs). `binding`, a
   non-empty `with-open` and `is` bodies lower behind the same barrier (the oracle wraps
@@ -1530,7 +1534,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
-| malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
+| malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
 `read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`). The gaps
@@ -3319,6 +3323,22 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   whose `defmacro` is refused. Above the definition `lookupVar` hides a `pendingCoreMacro`
   (a name in `ClojureCoreNames`, the oracle's 679 `clojure.core` publics). A definition
   head a macro above shadows pre-declares nothing.
+- **A local or program definition shadows every lowering row but the special forms'**
+  (2026-10-13, f66): `lowerRow` routes a call whose unqualified head names a local or a
+  resolved program var straight to `call`, unless the head is one of the oracle's
+  special forms (`ClojureMacroLowering.SPECIAL_FORMS`). So a parameter named `fn` is
+  called, never defined through (malli's `-proxy-schema`), and a `defn` of a core name
+  replaces the core verb from there on -- while `do`, `if`, `recur` and the rest stay
+  the specials under same-named locals, like the oracle. Deviation: a bare `do` as an
+  entire `fn`/`let`/`loop` body answers nil in the oracle (its analyzer quirk) and the
+  local here.
+- **A shadowing definition is invisible above itself** (2026-10-13, f66): the pre-scan
+  (`declareOne`) skips `def`/`defn`/`defonce`/`defmulti`/`defstruct`/`deftest` of a core
+  name, so a use above keeps the core meaning like the oracle's form-by-form compile
+  (malli's `(@c k)` in `-cached`, above its `defn deref`); the definition registers when
+  lowered, so uses below resolve to it. An explicit `declare` still pre-registers, and a
+  `defmacro` stays timed through `pendingCoreMacro`. Non-core names keep the pre-scan's
+  forward visibility (the pinned leniency).
 - `clojure.core/name` (`ClojureCoreNames.coreSpelling`) lowers the core row with
   `coreOnly` (no macro, no program var, no filter); outside the list it is `No such var`.
   The lowering's own datum rewrites spell their heads this way, so a program macro never
@@ -3343,7 +3363,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   before, 373,358 / 415,713 B after. Pins: `ClojureMacroRuntimeTableTest`, clojure-spec
   `a-run-time-expansion-reads-template-symbols-as-data`.
 - **An argument datum travels quoted and its answer decodes back (`decodeDatum`)**, so
-  every reader form must survive the round trip. A regex literal answers its
+  every reader form must survive the round trip. Macro arguments keep their reader
+  metadata through it (`quoteForMacro`, above). A regex literal answers its
   `(:C%PATTERN ...)`, decoded to `(%regex source)` (a fresh pattern; the oracle's
   expansion holds the one object). `#()` needs no decoding since it READS as `fn*` over
   plain symbols; until 2026-10-04 it read as `(fn %anon ...)`, whose marker matched by
@@ -3504,10 +3525,15 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `PRINT_FLAGS` too, whose readable view the nested `pr` reads (so a print-method program
   carries the cut/deep arms as well). Called, `print-method` is `%clojure-print-method` (the
   method, else the value as `pr` writes it); `remove-method`/`get-method` reach the table (a miss
-  answers `print-method` itself, the oracle its default method). Refused by name: a `:type`
-  keyword, a class, `Object` or nil dispatch value, `methods`/`prefer-method` of it. Pins:
+  answers `print-method` itself, the oracle its default method). Refused by name: a
+  class, `Object` or nil dispatch value, `methods`/`prefer-method` of it. A method for
+  a `:type` keyword stores under the keyword itself, and the printer consults
+  `(:type (meta x))` first -- the oracle dispatches `print-method` on the `:type`
+  entry first, so malli's schemas print through `::into-schema`/`::schema`
+  (2026-10-13, f66). Pins:
   clojure-spec `print-method-of-a-record-or-deftype-is-how-every-printer-writes-it`
-  (oracle-identical, four backends).
+  (oracle-identical, four backends) and
+  `print-method-of-a-type-keyword-prints-its-carriers-first` (oracle-identical).
 - `type` (`ClojureDispatchLowering.typeForm`, 2026-10-11; instaparse's `failure-type`) is the
   oracle's `(or (get (meta x) :type) (class x))`: `%clojure-type-tag` (the logically true
   `:type` entry, through `%clojure-meta-method`), else `classForm` over the same temp, so a
@@ -3985,6 +4011,10 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `%clojure-iter-has-next`/`-next` step it, a typed `Iterator` row, or a host iterator
   (`java:call`, a `HOST` arm). `iterator-seq` realizes one member at a time (the oracle 32).
   `clojure.lang.MapEntry.` and `MapEntry/create` build a `[k v]` vector, the map entry here.
+  `LazilyPersistentVector/createOwning` of one array is `vec` (the array is the vector
+  here already, like the oracle's `:bb` branch), `PersistentArrayMap/createWithCheck` of
+  one flat array the duplicate-checking map build (`%clojure-create-with-check`, 2026-10-13,
+  f66; malli's entry parsers).
 - `java.util` default methods (`getOrDefault`, `forEach`, `stream` ...) are declared
   (`HostInterface.defaults`) but stored only when the body defines them; an instance call of a
   method only defaults declare goes through `%clojure-default-method`, refusing by name when
@@ -4888,7 +4918,8 @@ oracle's `Cons`).
 
 - `lazy-seq`: `%clojure-make-lazy` over a lambda of the body, which is its own zero-arity
   `recur` target; `lazy-cat` desugars to `(concat (lazy-seq e) ...)`. Infinite
-  `repeat`/`cycle`/`iterate`/`repeatedly` are wrapper chains.
+  `repeat`/`cycle`/`iterate`/`repeatedly` are wrapper chains, and so is the end-less
+  `(range)` (`%clojure-range`, one wrapper per integer from 0; 2026-10-13, f66).
 - `for`: `(%clojure-for coll step depth)`, one step closure per level
   (`ClojureLoopLowering.forStep`: binds the pattern, runs the modifiers, answers
   `:C%FOR-SKIP`/`:C%FOR-STOP`, the body's value innermost, else `(next-coll . next-step)`).
@@ -6058,8 +6089,15 @@ resolve var`.
   boolean, atom, deftype or pattern signals; a symbol answers itself).
 - Reader `^m x` reads as `(%with-meta x m)` (a head no Clojure call spells; `#^` reads the
   same): dropped everywhere except on a collection literal, where it attaches without a
-  copy. A type hint never reaches `with-meta`. Layers merge outer-wins; a keyword is
-  `{:k true}`, a symbol or string `{:tag x}`. Quoted data strips it. On a definition's
+  copy, and on a `fn`/`fn*` or `reify`/`reify*` form, where it attaches to the function
+  or instance built (unless the macro name is shadowed) -- the oracle attaches there
+  too (malli's `^{:type ::schema} (reify ...)`, 2026-10-13, f66). A type hint never reaches
+  `with-meta`. Layers merge outer-wins; a keyword is
+  `{:k true}`, a symbol or string `{:tag x}`. Quoted data strips it, but a macro
+  argument keeps it: `quoteForMacro` carries each `(%with-meta form meta)` as a
+  three-element list over the quoted parts, so the expansion decodes back with it
+  (a mutable deftype flag below a selecting macro survives; 2026-10-13, f66).
+  On a definition's
   name, `^:dynamic` and `^:private` (bare or a non-false map entry) are read.
 
 ## State

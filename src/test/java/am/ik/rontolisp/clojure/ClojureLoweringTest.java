@@ -399,6 +399,91 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void localsAndProgramDefinitionsShadowLoweringRowsButNotSpecials() {
+		// a parameter named fn is called, never defined through (malli's
+		// -proxy-schema destructures fn); the same for when and ->
+		assertThat(lowered("((fn [fn] (fn 1 2)) (fn [a] a))")).contains("%CLOJURE-CALL");
+		assertThat(lowered("(let [wh 1] (wh 2))")).contains("%CLOJURE-CALL");
+		// the special forms never shadow: if stays the special under a local if
+		assertThat(lowered("(let [if 1] (if 1 2 3))")).contains("(IF ").contains("|c%if|");
+		assertThat(lowered("(let [do 5] (do do))")).contains("|c%do|");
+		// a defn of a core name replaces the core verb from there on, like the
+		// oracle's form-by-form compile (malli's defn deref)
+		assertThat(lowered("(defn shd-deref ([x] [x])) (shd-deref 1)")).contains("(|c%shd-deref| 1)");
+		assertThat(lowered("(defn deref ([x] [x])) (deref 1)")).contains("(|c%deref| 1)")
+			.doesNotContain("%CLOJURE-DEREF");
+		// above the definition the core meaning stays: the pre-scan leaves a
+		// shadowing definition invisible until lowered
+		assertThat(lowered("(deref 1) (defn deref [x] [x])")).contains("%CLOJURE-DEREF");
+		// a non-core definition keeps the pre-scan's forward visibility
+		assertThat(lowered("(defn shd-f [] (shd-g)) (defn shd-g [] 1)")).contains("(|c%shd-g|)");
+	}
+
+	@Test
+	void recurThroughThreadingFormsKeepsTailPosition() {
+		// the threading rewrites lower in the incoming tail position, so a recur
+		// in a step's tail is its target's, like the oracle's macroexpansions
+		assertThat(lowered("((fn [n] (cond-> n true (do (recur (inc n))))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (-> n (do (recur (inc n))))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (as-> n v (if (zero? v) :z (recur (dec v))))) 1)")).contains("LABELS");
+		// outside tail position the refusal stays, like the oracle's
+		assertThatThrownBy(() -> Clojure.read("(defn f [x] (list (-> x (recur x))))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		assertThatThrownBy(() -> Clojure.read("(defn f [x] [(cond-> x true (do (recur x)))])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+	}
+
+	@Test
+	void macroArgumentsKeepTheirReaderMetadata() {
+		// argument datums travel to the expander with their reader metadata, so
+		// a ^:volatile-mutable deftype field below a selecting macro keeps its
+		// flag and set! compiles (dynaload's if-bb, which malli loads through)
+		assertThat(loweredWithMacros(
+				"(defmacro mm-pick [then else] (if (System/getProperty \"no.such.property\") then else))"
+						+ " (mm-pick :bb (deftype MmT [f ^:volatile-mutable c]"
+						+ " clojure.lang.IDeref (deref [_] (set! c 1))))"))
+			.contains("SETF");
+		// a quoted shape decodes back with it, so meta reads through the call
+		assertThat(loweredWithMacros("(defmacro mm-id [x] x) (println (meta (mm-id ^:foo [1 2])))"))
+			.contains("%CLOJURE-PUT-META");
+	}
+
+	@Test
+	void readerMetadataAttachesToFnReifyAndLiterals() {
+		// a fn or reify form takes the metadata on the value it builds (malli's
+		// ^{:type ::schema} (reify ...)), like a vector, map or set literal
+		assertThat(lowered("^:foo (fn [x] x)")).contains("%CLOJURE-PUT-META");
+		assertThat(lowered("^{:type :rm-t} (reify Object (toString [_] \"r\"))")).contains("%CLOJURE-PUT-META");
+		// anywhere else it parses and drops: a symbol, a call, a quoted shape
+		assertThat(lowered("(let [x 1] ^:foo x)")).doesNotContain("PUT-META");
+		assertThat(lowered("^:foo (inc 1)")).doesNotContain("PUT-META");
+	}
+
+	@Test
+	void booleanPredicatesAnswerTheSameLambdasAsValues() {
+		// boolean?, true? and false? lower inline in calls and answer the same
+		// lambdas as values (what a function position takes), so a map holding
+		// one calls it (malli's {:pred boolean?})
+		assertThat(lowered("(:pred {:pred boolean?})")).contains("LAMBDA").contains("(EQ ");
+		assertThat(lowered("(:pred {:pred true?})")).contains("LAMBDA").contains("(EQ ");
+		assertThat(lowered("(:pred {:pred false?})")).contains("LAMBDA").contains("(EQ ");
+	}
+
+	@Test
+	void printMethodOfATypeKeywordStoresUnderTheKeyword() {
+		// a :type keyword dispatch stores under the keyword itself, where the
+		// printer's :type-first lookup finds it (malli's ::into-schema); any
+		// other non-type dispatch value stays refused by name
+		assertThat(lowered("(defmethod print-method :kw [x w] x)"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW (LIST :C%KEYWORD \"kw\")");
+		assertThatThrownBy(() -> Clojure.read("(defmethod print-method Object [x w] x)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("print-method of |Object| is not supported yet");
+	}
+
+	@Test
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
 			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) " + arity("user/fn") + " (+ |c%a| |c%b|)) 1 2)");
@@ -476,8 +561,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(drop 2 [1 2])")).contains("%CLOJURE-DROP");
 		assertThat(lowered("(range 3)")).contains("LABELS").contains("REVERSE");
 		assertThat(lowered("(range 1 5 2)")).contains("LABELS");
-		assertThatThrownBy(() -> Clojure.read("(range)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("infinite range is not supported: range needs an end");
+		// an end-less range is the infinite lazy integers from zero, on every
+		// backend, as a value too
+		assertThat(lowered("(range)")).contains("(RONTOLISP::%CLOJURE-RANGE)");
+		assertThat(lowered("((fn [r] (r)) range)")).contains("RONTOLISP::%CLOJURE-RANGE");
+		assertThatThrownBy(() -> Clojure.read("(range 1 2 3 4)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("range takes an end, or a start, an end and an optional step");
 		assertThatThrownBy(() -> Clojure.read("(take)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("take takes a count and a collection");
 		assertThatThrownBy(() -> Clojure.read("(drop)", null)).isInstanceOf(LispReadException.class)

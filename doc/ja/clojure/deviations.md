@@ -35,10 +35,10 @@
  `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
  サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
- [print-method](reference/print-method.md) はプログラム自身の record と deftype だけが対象です。
- `:type` キーワードやクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
- 同様です。メソッドのない型の `get-method` は `print-method` 自身を返します（オラクルは
- 既定のメソッドを返します）。
+ [print-method](reference/print-method.md) はプログラム自身の record・deftype・`:type`
+ キーワードだけが対象です。クラスのメソッドは名前で拒否し、その `methods` と
+ `prefer-method` も同様です。メソッドのない型の `get-method` は `print-method` 自身を
+ 返します（オラクルは既定のメソッドを返します）。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
  （`defn` なら `my.app/f`、外にない場合は名前空間）に、`fn` 自身の名前か `fn` を続けます

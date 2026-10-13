@@ -34,8 +34,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
   a CL surface; `clojure.pprint/cl-format` writes them as Clojure).
-  [print-method](reference/print-method.md) takes a program's own records and deftypes
-  only: a method for a `:type` keyword or a class is refused by name, `methods` and
+  [print-method](reference/print-method.md) takes a program's own records, deftypes and
+  `:type` keywords only: a method for a class is refused by name, `methods` and
   `prefer-method` of it are too, and `get-method` of a type without one answers
   `print-method` itself where the oracle's answers its default method.
 - A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a

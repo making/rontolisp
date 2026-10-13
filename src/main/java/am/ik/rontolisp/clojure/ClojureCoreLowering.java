@@ -520,10 +520,12 @@ final class ClojureCoreLowering {
 
 	/**
 	 * Reader metadata ({@code ^meta form}) in value position: on a vector, map or set
-	 * literal it attaches to the fresh collection, like the oracle's reader; anywhere
-	 * else (a type hint on a local, a flag on a call) it parses and drops. Nested layers
-	 * merge with the outer one winning, like the oracle's reader; a keyword is {@code {:k
-	 * true}}, a symbol or string {@code {:tag x}}.
+	 * literal it attaches to the fresh collection, like the oracle's reader; on a
+	 * {@code fn} or {@code reify} form to the function or instance it builds (malli's
+	 * {@code ^{:type ::schema} (reify ...)}); anywhere else (a type hint on a local, a
+	 * flag on a call) it parses and drops. Nested layers merge with the outer one
+	 * winning, like the oracle's reader; a keyword is {@code {:k true}}, a symbol or
+	 * string {@code {:tag x}}.
 	 * @param ctx the hub
 	 * @param form the {@code (%with-meta form meta)} datum
 	 * @return the lowered value
@@ -540,7 +542,7 @@ final class ClojureCoreLowering {
 		}
 		boolean literal = parts != null && !parts.isEmpty()
 				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
-						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
+						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set") || isMetaCarryingForm(ctx, parts));
 		if (!literal) {
 			LispVal tags = ClojureInteropLowering.paramTags(form);
 			if (tags != null && target instanceof LispSymbol member && ctx.hostMemberName(member.name())) {
@@ -558,6 +560,22 @@ final class ClojureCoreLowering {
 		}
 		return ClojureLowerUtil.list(runtime("put-meta"), ctx.lower(target),
 				ClojureCollectionLowering.mapBuild(ctx.lowers(entries, 0)));
+	}
+
+	/**
+	 * Whether the form builds a value reader metadata attaches to: {@code fn*} or
+	 * {@code reify*}, always, and {@code fn} or {@code reify} unless a local or program
+	 * definition shadows the macro.
+	 */
+	private static boolean isMetaCarryingForm(ClojureLowering ctx, List<LispVal> parts) {
+		if (!(parts.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		if (head.name().equals("fn*") || head.name().equals("reify*")) {
+			return true;
+		}
+		return (head.name().equals("fn") || head.name().equals("reify")) && !ctx.isLocal(head.name())
+				&& ctx.resolveVar(head.name()) == null;
 	}
 
 	/** One reader metadata datum as map entries (key and value datums). */

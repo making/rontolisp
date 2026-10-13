@@ -713,6 +713,38 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramNamingNoRangeOrCreateWithCheckPrunesThemAway() {
+		// the infinite range and the duplicate-checking map build are plain
+		// workers, not family arms: the compile-path pruner drops them when no
+		// kept form reaches them, so a program naming neither carries neither,
+		// and one naming one carries only its own
+		List<String> names = List.of("RONTOLISP::%CLOJURE-RANGE", "RONTOLISP::%CLOJURE-RANGE-FROM",
+				"RONTOLISP::%CLOJURE-CREATE-WITH-CHECK");
+		List<LispVal> plain = Clojure.read("(prn (range 3) (into-array [1]))", null);
+		assertThat(LibraryDefunPruner.prune(ClojureLibrary.process(plain, false))
+			.stream()
+			.map(LispVal::print)
+			.flatMap(text -> names.stream().filter(text::contains))
+			.toList()).isEmpty();
+		String kept = LibraryDefunPruner
+			.prune(ClojureLibrary.process(Clojure.read("(prn (take 1 (range)) (map range [[1]]))", null), false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(kept).contains("(DEFUN RONTOLISP::%CLOJURE-RANGE ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-RANGE-FROM ")
+			.doesNotContain("%CLOJURE-CREATE-WITH-CHECK");
+		String checked = LibraryDefunPruner.prune(ClojureLibrary.process(
+				Clojure.read("(prn (clojure.lang.PersistentArrayMap/createWithCheck (object-array [1])))", null),
+				false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(checked).contains("(DEFUN RONTOLISP::%CLOJURE-CREATE-WITH-CHECK ")
+			.doesNotContain("%CLOJURE-RANGE-FROM");
+	}
+
+	@Test
 	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
 		// str of a number passes no io test where the program can hold no io value; the
 		// library loaded on first use keeps every arm for what a session reads next

@@ -108,8 +108,9 @@ final class ClojureLazyLowering {
 	}
 
 	/**
-	 * {@code range} as a value: the one-, two- and three-argument call shapes over the
-	 * rest list. Any other count signals, like a call's arity refusal.
+	 * {@code range} as a value: the infinite integers from zero, or the one-, two- and
+	 * three-argument call shapes over the rest list. Any other count signals, like a
+	 * call's arity refusal.
 	 */
 	static LispVal rangeValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("range-args"));
@@ -125,7 +126,8 @@ final class ClojureLazyLowering {
 		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("range takes an end, or a start, an end and an optional step"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RANGE"))),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)), one),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
@@ -338,15 +340,15 @@ final class ClojureLazyLowering {
 
 	/**
 	 * {@code range} with an end: the strict list, built by a labels self call. Without an
-	 * end there is no strict lowering -- an infinite seq cannot be spelled -- so it is
-	 * refused by name, like {@code lazy-seq}. A zero step signals at run time.
+	 * end the infinite lazy integers from 0 ({@code clojure.lisp}
+	 * {@code %clojure-range}), like the oracle's. A zero step signals at run time.
 	 */
 	static LispVal rangeOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
+		ClojureLowerUtil.isTrue(n >= 0 && n <= 3, "range takes an end, or a start, an end and an optional step");
 		if (n == 0) {
-			throw new LispReadException("infinite range is not supported: range needs an end");
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RANGE"));
 		}
-		ClojureLowerUtil.isTrue(n >= 1 && n <= 3, "range takes an end, or a start, an end and an optional step");
 		LispVal start = n >= 2 ? ctx.lower(items.get(1)) : new LispInteger(0);
 		LispVal end = n >= 2 ? ctx.lower(items.get(2)) : ctx.lower(items.get(1));
 		LispVal step = n == 3 ? ctx.lower(items.get(3)) : new LispInteger(1);

@@ -496,7 +496,9 @@ final class ClojureMacroLowering {
 	 * One macro call expanded: the argument datums travel quoted (the same values a
 	 * quoted form answers at run time, so the two expanders agree) into one application
 	 * of the expander, the answer decodes back to a datum and lowers like any other form
-	 * -- which expands the macros the expansion calls, one depth deeper.
+	 * -- which expands the macros the expansion calls, one depth deeper. Reader metadata
+	 * travels with the arguments ({@link ClojureLowering#quoteForMacro}), like the
+	 * oracle's forms carry it: a mutable deftype flag below a selecting macro survives.
 	 */
 	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items,
 			boolean bindsEnv) {
@@ -509,7 +511,7 @@ final class ClojureMacroLowering {
 		}
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			quoted.add(ctx.quote(items.get(i)));
+			quoted.add(ctx.quoteForMacro(items.get(i)));
 		}
 		// the body reads the load's specials where the call expands, like the oracle's
 		// macroexpansion inside the load, and a body reading &env or &form the call's
@@ -520,7 +522,8 @@ final class ClojureMacroLowering {
 				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))));
 		if (bindsEnv) {
 			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), envValue(ctx)));
-			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quote(ClojureLowerUtil.list(items))));
+			bindings.add(
+					ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteForMacro(ClojureLowerUtil.list(items))));
 		}
 		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,

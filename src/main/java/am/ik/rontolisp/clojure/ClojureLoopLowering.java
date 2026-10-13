@@ -40,7 +40,8 @@ final class ClojureLoopLowering {
 
 	/**
 	 * {@code (-> x form...)}: each step with the value inserted second (a bare name calls
-	 * with it, a keyword step reads through it); a pure datum rewrite.
+	 * with it, a keyword step reads through it); a pure datum rewrite, lowered in the
+	 * incoming tail position like every other rewrite.
 	 */
 	static LispVal threadFirst(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "-> takes a value and forms to thread it through");
@@ -48,12 +49,12 @@ final class ClojureLoopLowering {
 		for (int i = 2; i < items.size(); i++) {
 			acc = threadInsert(items.get(i), acc, false);
 		}
-		return ctx.lower(acc);
+		return ctx.lowerTailSlot(acc);
 	}
 
 	/**
 	 * {@code (->> x form...)}: each step with the value appended last; a pure datum
-	 * rewrite like {@link #threadFirst}.
+	 * rewrite like {@link #threadFirst}, lowered in the incoming tail position.
 	 */
 	static LispVal threadLast(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "->> takes a value and forms to thread it through");
@@ -61,7 +62,7 @@ final class ClojureLoopLowering {
 		for (int i = 2; i < items.size(); i++) {
 			acc = threadInsert(items.get(i), acc, true);
 		}
-		return ctx.lower(acc);
+		return ctx.lowerTailSlot(acc);
 	}
 
 	/**
@@ -95,7 +96,8 @@ final class ClojureLoopLowering {
 
 	/**
 	 * {@code (as-> x name form...)}: nested {@code let}s rebinding the name step by step,
-	 * so shadowing matches the oracle exactly.
+	 * so shadowing matches the oracle exactly. The rewrite lowers in the incoming tail
+	 * position.
 	 */
 	static LispVal threadAs(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "as-> takes a value, a name and forms");
@@ -107,7 +109,7 @@ final class ClojureLoopLowering {
 		for (int i = items.size() - 2; i >= 3; i--) {
 			acc = ClojureBindingLowering.letDatum(name, items.get(i), acc);
 		}
-		return ctx.lower(ClojureBindingLowering.letDatum(name, items.get(1), acc));
+		return ctx.lowerTailSlot(ClojureBindingLowering.letDatum(name, items.get(1), acc));
 	}
 
 	/**
@@ -136,7 +138,8 @@ final class ClojureLoopLowering {
 	/**
 	 * {@code (cond-> x test form...)} (or {@code cond->>} threading last): each pair
 	 * rebinds one temporary to the running value and threads only when its test is
-	 * truthy.
+	 * truthy. The rewrite lowers in the incoming tail position, so a recur in a step's
+	 * tail is the target's, like the oracle's macroexpansion.
 	 */
 	static LispVal condThread(ClojureLowering ctx, List<LispVal> items, boolean last) {
 		String arrow = last ? "cond->>" : "cond->";
@@ -152,14 +155,14 @@ final class ClojureLoopLowering {
 				acc = ClojureBindingLowering.letDatum(temp, acc, ClojureLowerUtil
 					.list(List.of(new LispSymbol("if"), items.get(i), threadInsert(items.get(i + 1), ref, last), ref)));
 			}
-			return ctx.lower(acc);
+			return ctx.lowerTailSlot(acc);
 		});
 	}
 
 	/**
 	 * {@code (some-> x form...)} (or {@code some->>} threading last): each step threaded
 	 * around one temporary, short-circuiting to nil when it is nil -- but not when it is
-	 * false, like the oracle.
+	 * false, like the oracle. The rewrite lowers in the incoming tail position.
 	 */
 	static LispVal someThread(ClojureLowering ctx, List<LispVal> items, boolean last) {
 		String arrow = last ? "some->>" : "some->";
@@ -176,7 +179,7 @@ final class ClojureLoopLowering {
 								ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "nil?"), ref)),
 								LispNil.INSTANCE, threadInsert(items.get(i), ref, last))));
 			}
-			return ctx.lower(acc);
+			return ctx.lowerTailSlot(acc);
 		});
 	}
 
