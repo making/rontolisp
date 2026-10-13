@@ -13794,6 +13794,18 @@
   (rontolisp::%clojure-check-arity args 2 2 "set-validator!")
   (rontolisp::%clojure-set-validator (car args) (car (cdr args))))
 
+(defun rontolisp::%clojure-set-validator-macro (ref f current)
+  "set-validator! of a macro's var: F (nil to remove) as REF's validator, once
+   CURRENT, the macro's present expander, passes it; answers nil. A macro has
+   no value for its var site to read, so the expander travels with the call."
+  (let ((f (if (rontolisp::%clojure-truthy f) f nil)))
+    (rontolisp::%clojure-stm-validate current f)
+    (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+      (if f
+          (setf (gethash ref rontolisp::%clojure-var-validators) f)
+          (remhash ref rontolisp::%clojure-var-validators))))
+  nil)
+
 (defun rontolisp::%clojure-get-validator (ref)
   "get-validator: REF's validator, nil for none."
   (rontolisp::%clojure-watchable-ref ref "get-validator")

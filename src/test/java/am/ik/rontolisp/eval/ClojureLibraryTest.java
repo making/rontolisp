@@ -394,6 +394,21 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramNamingNoWatchVerbLowersItsRedefinedMacroAndTestUnchanged() {
+		// a redefined defmacro and deftest validate and notify like a redefined
+		// defn, through the same statement arm; a program naming no watch verb
+		// folds the arm back, so it lowers as before watches on either existed
+		String source = "(ns wmt (:require [clojure.test :refer :all])) (defmacro wm [] 1) (defmacro wm [] 2) (deftest wt (is true)) (deftest wt (is false)) (println (macroexpand '(wm)) (wt))";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(DEFUN |c%wmt/wt%def2| NIL").doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		String watched = source + " (add-watch #'wm :k (fn [k v o n] nil))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wm\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"");
+	}
+
+	@Test
 	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
 		// only delay makes a delay: a program naming it keeps deref's and the printer's
 		// delay arms, any other derefs and prints as before delays, and its force and

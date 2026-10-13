@@ -2348,6 +2348,27 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aRedefinedDefmacroNotifiesBehindItsRegistration() {
+		// a redefined defmacro validates and notifies like a cell-less defn: the
+		// replaced root is the previous expander, in a statement the strip drops
+		// where the program names no watch verb; a first definition emits none
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1)")).doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// over a valued or declared root the replaced root is the cell's, as for defn
+		assertThat(loweredWithExpanders("(def mu-rd 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		assertThat(loweredWithExpanders("(declare mu-rd) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// set-validator! of a literal macro checks the present expander, since the
+		// var's site reads no value; above the definition it reads the plain worker
+		assertThat(loweredWithMacros("(defmacro mu-sv [] 1) (set-validator! #'mu-sv pos?)"))
+			.contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
+		assertThat(loweredWithMacros("(set-validator! #'mu-sv pos?) (defmacro mu-sv [] 1)"))
+			.doesNotContain("SET-VALIDATOR-MACRO");
+	}
+
+	@Test
 	void macroCallsExpandAtLowerTime() {
 		String out = loweredWithMacros(
 				"(defmacro mu-unless [c t] (list 'if c nil t)) (defn f [c] (mu-unless c 42)) (mu-unless false 7)");
@@ -3801,6 +3822,26 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"t\") '(\"user\" \"t\")");
 		// a test is a zero-argument function a later form may call
 		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%t/b|)");
+	}
+
+	@Test
+	void aRedefinedDeftestVersionsItsFunctionsAndNotifies() {
+		// a redefined deftest validates and notifies like a redefined defn: each
+		// definition keeps its own function, the calls below it run the newest, and
+		// the replaced root travels in the notify statement the strip drops where
+		// the program names no watch verb; a single definition lowers as before
+		String out = lowered("(ns t (:use clojure.test)) (deftest a (is true)) (deftest a (is false)) (a)");
+		assertThat(out).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.contains("(DEFUN |c%t/a%def2| NIL")
+			.contains("(DEFUN |c%t/a%def2%body| NIL")
+			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%t/a%def2|)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"t/a\" #'|c%t/a%def2| #'|c%t/a|)")
+			.contains("(|c%t/a%def2|)");
+		assertThat(lowered("(ns t (:use clojure.test)) (deftest a (is true)) (a)")).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY")
+			.doesNotContain("%def2");
 	}
 
 	@Test

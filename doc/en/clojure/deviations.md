@@ -476,11 +476,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `*agent*` is bound only while an action runs (`nil` outside one, where the
   oracle leaves it unbound). `(await-for 0 a)` answers `true` once the actions it
   ran finished; the oracle's races its pool and may answer `false`.
-- A `defmacro` redefinition replaces its root without calling its watches or checking
-  its validator (the oracle does both), and a `defn` with no value cell validates its
-  new function only once its definition is bound: where the validator refuses it, the
-  call still reports the oracle's `Invalid reference state`, but later calls reach the
-  refused definition (the oracle keeps the old one).
+- A `defn` with no value cell validates its new function only once its definition is
+  bound: where the validator refuses it, the call still reports the oracle's
+  `Invalid reference state`, but later calls reach the refused definition (the oracle
+  keeps the old one). A refused `defmacro` redefinition still serves its new expander
+  (the call sites below it expanded with it while lowering and the table holds it),
+  where the oracle keeps the old root and drops the macro; `set-validator!` of a
+  computed macro var reads the var's site, which signals like `deref`.
 - `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
   ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
   atom).

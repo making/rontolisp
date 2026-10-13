@@ -3191,7 +3191,10 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
   time. Docstring and attr map skipped, `&` rest works. A call
   above the definition names the missing expander; a macro has no function value; a
-  later `def`/`defn` wins the call sites back.
+  later `def`/`defn` wins the call sites back. A redefined `defmacro` (or a first one
+  over a macro, function, valued or declared root) validates and notifies like the
+  oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
+  expander registration ("State", validators and watches).
 - **`&form` and `&env`** (2026-10-11; instaparse's `defclone`/`set-global-var!` read
   `(contains? &env :locals)`): in a `defmacro` body (`ClojureLowering.macroBodyDepth`) they
   lower to the specials `%clojure-macro-form` / `%clojure-macro-env` (library defvars, nil).
@@ -6279,25 +6282,38 @@ resolve var`.
   init through the `%clojure-var-validated` view (which stashes the replaced root) with
   the `%clojure-var-notify-stored` statement behind the store; a `defn` with no value
   cell (a redefinition, or a first one over a declared or valued root) validates and
-  notifies behind its `defun`s through the `%clojure-var-defn-notify` statement. Both
-  statements drop at top level and in `progn` (a program naming no watch verb lowers
-  byte-identically); the macro evaluator reads a store's init lazily like a `setq`'s
-  (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a later input's
-  watch or validator sees every earlier root. Deviation: a `defmacro` redefinition
-  replaces its root without calling its watches or checking its validator (the oracle
-  does both), and a `defn` with no value cell validates only once its definition is
-  bound, so a refused one still routes to the new function (the oracle keeps the old
-  one); `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
+  notifies behind its `defun`s through the `%clojure-var-defn-notify` statement. A
+  `defmacro` redefinition (or a first one over a macro, function, valued or declared
+  root) notifies behind its expander registration through the same statement, with the
+  previous expander, the current function or the cell's root as the replaced one; a
+  `deftest` versions its functions like a `defn` (the first keeps the bare names) and
+  notifies behind them the same way, with the previous test function as the replaced
+  root. `set-validator!` of a literal macro var checks the present expander through
+  `%clojure-set-validator-macro` (a `WATCH` producer), since the var's site reads no
+  value. Both statements drop at top level and in `progn` (a program naming no watch
+  verb lowers byte-identically); the macro evaluator reads a store's init lazily like
+  a `setq`'s (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a
+  later input's watch or validator sees every earlier root. Deviation: a `defn` with
+  no value cell validates only once its definition is bound, so a refused one still
+  routes to the new function (the oracle keeps the old one); a refused `defmacro`
+  still serves its new expander (the oracle keeps the old root and drops the macro);
+  `set-validator!` of a computed macro var reads the signaling site, like `deref`;
+  `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
   refuse anything but an atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
   `swap-vals-and-reset-vals-answer-the-old-and-the-new-value`,
   `add-watch-calls-a-watch-after-every-change-of-an-atom`,
   `refs-agents-and-vars-call-their-watches-and-validators`,
   `a-def-with-redefs-and-a-validator-notify-a-var-s-watches`,
   `a-redefined-defn-and-a-dynamic-def-notify-a-var-s-watches`,
+  `a-redefined-defmacro-notifies-a-var-s-watches`,
+  `a-redefined-deftest-notifies-a-var-s-watches`,
   `await-for-answers-whether-the-actions-ran-in-time` (all oracle-identical, four backends),
   `ClojureLibraryTest#aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers`,
   `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsVarStoresUnchanged`,
+  `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsRedefinedMacroAndTestUnchanged`,
   `ClojureSessionTest#aLaterBufferRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
+  `ClojureSessionTest#aLaterBufferMacroRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
+  `ClojureSessionTest#aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
   `ClojureAtomConcurrentRequestsTest` (its second round watches and validates under a burst).
 
 ## clojure.test
@@ -6307,7 +6323,10 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 
 - `deftest name body` -> `(defun c%name%body () body)` (the `recur` target), `(defun c%name
   () (%clojure-test-var ...))` and a registration per namespace in definition order. The
-  pre-scan registers the name as a function, so `(name)` calls it.
+  pre-scan registers the name as a function, so `(name)` calls it. A redefined `deftest`
+  versions its functions like a `defn` (the first keeps the bare names, later ones
+  `%defN`), so the calls below it run the newest, and validates and notifies like the
+  oracle's `bindRoot` behind them ("State", validators and watches).
 - `is` -> `%clojure-test-try` over a lambda, behind the `try` barrier. The assertion kind
   is the oracle's `assert-expr`: `thrown?`/`thrown-with-msg?` (bare names only); a
   PREDICATE when the head resolves to a function var (not a local, keyword, interop
