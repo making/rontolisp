@@ -178,6 +178,7 @@ final class ClojureMacroLowering {
 			ctx.envMacros.remove(key);
 		}
 		LispSymbol table = macroTable(key);
+		LispVal superseded = ctx.macros.get(key);
 		ctx.macros.put(key, expander);
 		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
 		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1),
@@ -206,8 +207,49 @@ final class ClojureMacroLowering {
 			ctx.macroExpanders.add(expander);
 		}
 		forms.addAll(metaStore);
+		LispVal redefined = macroNotify(ctx, key, expander, superseded);
+		if (redefined != null) {
+			forms.add(redefined);
+		}
 		forms.add(ClojureLowering.NIL_CONST);
 		return List.of(ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
+	}
+
+	/**
+	 * The validate-and-notify statement behind a {@code defmacro} replacing a root: the
+	 * new expander validated against the var's validator and its watches called with the
+	 * replaced root and the expander, like the oracle's {@code bindRoot} -- a statement
+	 * arm the strip drops where the program names no watch verb. A macro has no function
+	 * value and no value cell, so this is the same statement shape as a cell-less
+	 * {@code defn}'s. Null for a first definition over no root.
+	 * @param ctx the hub
+	 * @param key the var key
+	 * @param expander the new expander
+	 * @param superseded the previous definition's expander, or null
+	 * @return the statement, or null
+	 */
+	private static @Nullable LispVal macroNotify(ClojureLowering ctx, String key, LispVal expander,
+			@Nullable LispVal superseded) {
+		if (superseded != null) {
+			// a redefinition: the replaced root is the previous expander
+			return ClojureStateLowering.varDefnNotify(key, expander, superseded);
+		}
+		if (ctx.defnCounts.containsKey(key)) {
+			// over a function definition: the replaced root is its current one
+			return ClojureStateLowering.varDefnNotify(key, expander,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.currentDefnSym(key)));
+		}
+		if (ctx.valuedAbove.contains(key)) {
+			// over a valued root: the value cell still holds it, read where bound
+			return ClojureStateLowering.varDefnNotify(key, expander,
+					ClojureStateLowering.guardedOldRead(ClojureLowering.varSym(key), key));
+		}
+		if (ctx.declaredAbove.contains(key)) {
+			// over a declared root: the unbound root
+			return ClojureStateLowering.varDefnNotify(key, expander,
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key)));
+		}
+		return null;
 	}
 
 	/**
@@ -545,7 +587,10 @@ final class ClojureMacroLowering {
 		}
 		ctx.macroDepth++;
 		try {
-			return ctx.lower(expansion);
+			// the expansion stands where the call stood, so it inherits the call's
+			// tail position: a recur it holds recurs (data.json's codepoint-case
+			// around a loop's recur), one in an argument slot still refuses
+			return ctx.lowerTailSlot(expansion);
 		}
 		finally {
 			ctx.macroDepth--;

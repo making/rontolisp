@@ -180,6 +180,13 @@ final class ClojureInterfaces {
 	static final String APPLIED_FN = "RONTOLISP::%CLOJURE-APPLIED-FN";
 
 	/**
+	 * The store of a program-defined interface's row: {@code (store tag
+	 * interface-names methods)}, like every family's store ({@code clojure.lisp}, "Host
+	 * interfaces").
+	 */
+	static final String DEFINED_ROW = "RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW";
+
+	/**
 	 * The library's reader of a value's interface row entry: an interface flag or a
 	 * method.
 	 */
@@ -224,7 +231,8 @@ final class ClojureInterfaces {
 			Map.entry(ClojureArms.Family.ITERABLE, ITERABLE_ROW), Map.entry(ClojureArms.Family.ITERATOR, ITERATOR_ROW),
 			Map.entry(ClojureArms.Family.JAVA_COLLECTION, JAVA_COLLECTION_ROW),
 			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.HASHEQ, HASHEQ_ROW),
-			Map.entry(ClojureArms.Family.MARKER, MARKER_ROW));
+			Map.entry(ClojureArms.Family.MARKER, MARKER_ROW),
+			Map.entry(ClojureArms.Family.DEFINED_INTERFACE, DEFINED_ROW));
 
 	/**
 	 * One interface: its binary name, the abstract methods it declares (name to the
@@ -566,6 +574,67 @@ final class ClojureInterfaces {
 	 */
 	static @Nullable HostInterface named(String name) {
 		return INTERFACES.get(name);
+	}
+
+	/**
+	 * The interface a {@code deftype} or {@code reify} group symbol names that a
+	 * {@code definterface} of the program defined: the current namespace's own, a
+	 * referred one, or one reached through an alias; null when it names none. The row the
+	 * body stores is keyed by the interface's own binary name, in the defined-interface
+	 * family, which no core verb reads.
+	 * @param ctx the hub
+	 * @param symbol the group symbol, which names no protocol
+	 * @return the interface, or null
+	 */
+	static @Nullable HostInterface defined(ClojureLowering ctx, String symbol) {
+		String key = ctx.isLocal(symbol) ? null : ctx.resolveVar(symbol);
+		if (key == null) {
+			return null;
+		}
+		ClojureLowering.DefinedInterface declared = ctx.definedInterfaces.get(key);
+		if (declared == null) {
+			return null;
+		}
+		return new HostInterface(declared.binaryName(), declared.methods(), Map.of(), List.of(),
+				ClojureArms.Family.DEFINED_INTERFACE, "");
+	}
+
+	/**
+	 * The binary names of the program-defined interfaces declaring the method at the
+	 * parameter count, the target included, in name order, which an instance call of the
+	 * method asks its receiver's row for.
+	 * @param ctx the hub
+	 * @param method the method name
+	 * @param count the parameter count, the target included
+	 * @return the names
+	 */
+	static List<String> definedTests(ClojureLowering ctx, String method, int count) {
+		List<String> names = new ArrayList<>();
+		for (ClojureLowering.DefinedInterface declared : ctx.definedInterfaces.values()) {
+			Set<Integer> counts = declared.methods().get(method);
+			if (counts != null && counts.contains(count)) {
+				names.add(declared.binaryName());
+			}
+		}
+		names.sort(String::compareTo);
+		return names;
+	}
+
+	/**
+	 * Whether a program-defined interface declares the method at any parameter count: a
+	 * site naming one refuses any other receiver in the oracle's words, since the method
+	 * exists.
+	 * @param ctx the hub
+	 * @param method the method name
+	 * @return {@code true} when one declares it
+	 */
+	static boolean definedDeclares(ClojureLowering ctx, String method) {
+		for (ClojureLowering.DefinedInterface declared : ctx.definedInterfaces.values()) {
+			if (declared.methods().containsKey(method)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

@@ -426,7 +426,10 @@ final class ClojureInteropLowering {
 	 * own {@code with-out-str} construction), and so are a zero-argument
 	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}: to these
 	 * programs a builder is the same object ({@code .append} of any value's {@code str},
-	 * {@code .toString}, {@code .length}, {@code .setLength}, {@code .charAt}).
+	 * {@code .toString}, {@code .length}, {@code .setLength}, {@code .charAt}). A
+	 * one-argument builder or buffer construction is one the argument fills at run time
+	 * ({@link #STRING_BUILDER_1}); a one-argument {@code java.io.StringWriter}
+	 * construction is an empty one ({@link #STRING_WRITER_1}).
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
 
@@ -436,6 +439,17 @@ final class ClojureInteropLowering {
 
 	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
 	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
+
+	/**
+	 * A one-argument {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}
+	 * construction: a string output stream.
+	 */
+	static final String STRING_BUILDER_1 = "RONTOLISP::%CLOJURE-STRING-BUILDER-1";
+
+	/**
+	 * A one-argument {@code java.io.StringWriter} construction: a string output stream.
+	 */
+	static final String STRING_WRITER_1 = "RONTOLISP::%CLOJURE-STRING-WRITER-1";
 
 	/**
 	 * Whether X is a string output stream: a {@code java.io.StringWriter},
@@ -673,10 +687,15 @@ final class ClojureInteropLowering {
 	/**
 	 * A host construction over argument datums, shared by {@code (Class. ...)},
 	 * {@code (new Class ...)} and {@code (Class/new ...)}: the reader wrappers and the
-	 * zero-argument {@code java.io.StringWriter} as streams, a Date, Timestamp or UUID as
-	 * the value it is here ({@link ClojureTimeValueLowering#construction}), an untagged
-	 * plain throwable as an exception ({@link #throwableConstruction}), anything else
-	 * {@code java:new}, under the param-tag designator when tagged.
+	 * zero-argument {@code java.io.StringWriter} as streams, a one-argument
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer} as a stream the
+	 * argument fills (untagged only; a tagged one keeps {@code java:new} under the
+	 * param-tag designator), a one-argument {@code java.io.StringWriter} of a capacity as
+	 * an empty stream (any other argument the oracle's {@code ClassCastException}, nil
+	 * its {@code NullPointerException}), a Date, Timestamp or UUID as the value it is
+	 * here ({@link ClojureTimeValueLowering#construction}), an untagged plain throwable
+	 * as an exception ({@link #throwableConstruction}), anything else {@code java:new},
+	 * under the param-tag designator when tagged.
 	 */
 	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
 			@Nullable List<String> types) {
@@ -685,10 +704,26 @@ final class ClojureInteropLowering {
 			if (wrapped != null) {
 				return wrapped;
 			}
+			LispVal printed = printWriterConstruction(ctx, cls, argDatums);
+			if (printed != null) {
+				return printed;
+			}
 		}
 		LispVal stringStream = stringStreamConstruction(cls, argDatums.size());
 		if (stringStream != null) {
 			return stringStream;
+		}
+		if (argDatums.size() == 1 && types == null) {
+			// untagged only: param tags name the host overload, which keeps java:new
+			LispVal arg = ctx.lower(argDatums.get(0));
+			LispVal builder = stringBuilderConstruction(cls, arg);
+			if (builder != null) {
+				return builder;
+			}
+			LispVal writer = stringWriterConstruction(cls, arg);
+			if (writer != null) {
+				return writer;
+			}
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
@@ -724,7 +759,7 @@ final class ClojureInteropLowering {
 	private static LispVal newCall(ClojureLowering ctx, String cls, @Nullable List<String> types, List<LispVal> parts) {
 		LispVal call = hostCall(ctx, JAVA_NEW, parts, 1);
 		if (types == null && cls.equals("java.lang.String")) {
-			LispVal string = ClojureBytesLowering.stringConstruction(cls, parts.size() - 1, call);
+			LispVal string = ClojureBytesLowering.stringConstruction(ctx, cls, parts.size() - 1, call);
 			if (string != null) {
 				return string;
 			}
@@ -843,7 +878,8 @@ final class ClojureInteropLowering {
 		}
 		catch (LinkageError | SecurityException _) {
 			// A class that cannot link is no plain throwable: the construction keeps
-			// java:new, whose run-time error names the missing class (.todo/f65).
+			// java:new, whose run-time error names the missing class
+			// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
 			return null;
 		}
 		return type;
@@ -1323,15 +1359,28 @@ final class ClojureInteropLowering {
 
 	/**
 	 * {@link #hostConstruction} over already-lowered arguments: the zero-argument
-	 * {@code java.io.StringWriter} a string output stream, a Date, Timestamp or UUID the
-	 * value it is here, an untagged plain throwable an exception, anything else
-	 * {@code java:new}.
+	 * {@code java.io.StringWriter} a string output stream, an untagged one-argument
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer} a stream the
+	 * argument fills, an untagged one-argument {@code java.io.StringWriter} of a capacity
+	 * an empty stream, a Date, Timestamp or UUID the value it is here, an untagged plain
+	 * throwable an exception, anything else {@code java:new}.
 	 */
 	static LispVal hostConstructionLowered(ClojureLowering ctx, String cls, List<LispVal> args,
 			@Nullable List<String> types) {
 		LispVal stringStream = stringStreamConstruction(cls, args.size());
 		if (stringStream != null) {
 			return stringStream;
+		}
+		if (args.size() == 1 && types == null) {
+			// untagged only: param tags name the host overload, which keeps java:new
+			LispVal builder = stringBuilderConstruction(cls, args.get(0));
+			if (builder != null) {
+				return builder;
+			}
+			LispVal writer = stringWriterConstruction(cls, args.get(0));
+			if (writer != null) {
+				return writer;
+			}
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
 		if (timeValue != null) {
@@ -1440,6 +1489,41 @@ final class ClojureInteropLowering {
 	}
 
 	/**
+	 * A one-argument {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}
+	 * construction (dotted or imported, resolved) over the already-lowered argument: a
+	 * fresh string output stream the argument fills at run time
+	 * ({@code %clojure-string-builder-1}, a stream producer), so every backend runs it --
+	 * wasm included, which never sees the refused {@code java:new}. Only untagged
+	 * constructions reach it (the callers keep a tagged one, whose param tags name the
+	 * host overload, on {@code java:new}). Null for any other class, so the call keeps
+	 * its {@code java:new} shape.
+	 */
+	static @Nullable LispVal stringBuilderConstruction(String cls, LispVal arg) {
+		if (cls.equals(STRING_BUILDER_CLASS) || cls.equals(STRING_BUFFER_CLASS)) {
+			return ClojureLowerUtil.list(new LispSymbol(STRING_BUILDER_1), LispString.literal(cls), arg);
+		}
+		return null;
+	}
+
+	/**
+	 * A one-argument {@code java.io.StringWriter} construction (dotted or imported,
+	 * resolved) over the already-lowered argument: an empty string output stream when the
+	 * argument is a capacity, the oracle's {@code ClassCastException} to {@code Number}
+	 * (nil its {@code NullPointerException}) otherwise ({@code %clojure-string-writer-1},
+	 * a stream producer), so every backend runs it -- wasm included, which never sees the
+	 * refused {@code java:new}. Only untagged constructions reach it (the callers keep a
+	 * tagged one, whose param tags name the host overload, on {@code java:new}). A
+	 * construction of any other count keeps its {@code java:new} shape. Null for any
+	 * other class, so the call keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal stringWriterConstruction(String cls, LispVal arg) {
+		if (cls.equals(STRING_WRITER_CLASS)) {
+			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER_1), arg);
+		}
+		return null;
+	}
+
+	/**
 	 * The host reader classes a construction of which over a Common Lisp character input
 	 * stream answers the stream itself: such a stream already peeks one character, which
 	 * is all {@code read} needs, so {@code (java.io.PushbackReader. (reader path))} reads
@@ -1495,6 +1579,55 @@ final class ClojureInteropLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
 						ClojureLowerUtil.cons(JAVA_NEW, host));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/**
+	 * A {@code java.io.PrintWriter} construction (an autoflush flag behind the writer):
+	 * over a stream the stream itself, which {@code .append} writes and {@code .flush}
+	 * flushes, like the oracle's writer over one; over anything else the host
+	 * construction. The flag is evaluated for its effects and dropped: a stream here
+	 * flushes at the end either way. Decided at run time unless the argument lowers to
+	 * one of the output producers, like the reader wrappers'.
+	 */
+	static @Nullable LispVal printWriterConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
+		if (!cls.equals("java.io.PrintWriter") || args.isEmpty() || args.size() > 2) {
+			return null;
+		}
+		LispVal writer = ctx.lower(args.get(0));
+		LispSymbol source = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(source, writer));
+		List<LispVal> host = new ArrayList<>();
+		host.add(LispString.literal(cls));
+		host.add(source);
+		if (args.size() == 2) {
+			LispSymbol flush = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(flush, ctx.lower(args.get(1))));
+			host.add(flush);
+		}
+		LispVal body = isOutputStreamForm(writer) ? source
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
+						ClojureLowerUtil.cons(JAVA_NEW, host));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/**
+	 * Whether a lowered form surely answers a Common Lisp character output stream: a read
+	 * of {@code *out*} or a {@code java.io.StringWriter} construction, or a binding form
+	 * ending in one.
+	 */
+	static boolean isOutputStreamForm(LispVal lowered) {
+		List<LispVal> items = ClojureLowerUtil.items(lowered);
+		if (items == null || items.isEmpty()) {
+			return false;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "RONTOLISP::%CLOJURE-OUT")
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STRING_WRITER)) {
+			return true;
+		}
+		return items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), "LET*")
+				&& isOutputStreamForm(items.get(2));
 	}
 
 	/**
@@ -2460,6 +2593,17 @@ final class ClojureInteropLowering {
 						ClojureStringLowering.bound(args.get(0)), ClojureStringLowering.bound(args.get(1)));
 				default -> null;
 			};
+			// .subSequence of two indices is the substring of the same range, like
+			// the oracle's String, whose subSequence answers one
+			case "subSequence" ->
+				args.size() == 2
+						? ClojureLowerUtil.list(
+								new LispSymbol(typed ? ClojureRefusals.SUBS : ClojureRefusals.SUBS_BY_REFLECTION), recv,
+								ClojureStringLowering.bound(args.get(0)), ClojureStringLowering.bound(args.get(1)))
+						: null;
+			// .getChars copies the range into the char array, which is a vector of
+			// characters here, so an aset loop writes it on every backend
+			case "getChars" -> args.size() == 4 ? getCharsForm(ctx, recv, args) : null;
 			case "charAt" -> args.size() == 1 ? ClojureLowerUtil.list(
 					new LispSymbol(typed ? ClojureRefusals.CHAR_AT : ClojureRefusals.CHAR_AT_BY_REFLECTION), recv,
 					ClojureStringLowering.bound(args.get(0))) : null;
@@ -2499,6 +2643,32 @@ final class ClojureInteropLowering {
 					: null;
 			default -> null;
 		};
+	}
+
+	/**
+	 * {@code String.getChars} over an already-bound string receiver: the characters of
+	 * the range copied into the array, answering nil, like the oracle's void. The bounds
+	 * the oracle checks are the loop's own.
+	 */
+	static LispVal getCharsForm(ClojureLowering ctx, LispVal recv, List<LispVal> args) {
+		LispSymbol from = ctx.freshTemp();
+		LispSymbol to = ctx.freshTemp();
+		LispSymbol dst = ctx.freshTemp();
+		LispSymbol at = ctx.freshTemp();
+		LispSymbol i = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(from, ClojureStringLowering.bound(args.get(0))),
+						ClojureLowerUtil.list(to, ClojureStringLowering.bound(args.get(1))),
+						ClojureLowerUtil.list(dst, args.get(2)),
+						ClojureLowerUtil.list(at, ClojureStringLowering.bound(args.get(3))))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
+						ClojureLowerUtil.list(i, ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), to, from)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), dst,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), at, i)),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("char"), recv,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), from, i)))),
+				ClojureLowering.NIL_CONST);
 	}
 
 	/**

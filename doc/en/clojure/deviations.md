@@ -340,7 +340,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `class` answers `:java.io.StringWriter` and it prints as one's `#object`, `(.length w)`
   answers on a `StringWriter` too (the oracle has no such method there), and `.append` of
   one value appends its `str` (nil appends `"null"`), where the oracle resolves overloads
-  and refuses an ambiguous argument (`(.append sb nil)`). `.intern` of a string is the
+  and refuses an ambiguous argument (`(.append sb nil)`). A one-argument construction
+  pre-fills the stream with the text, an integer argument being a capacity (ignored); any
+  other argument is refused as `No matching ctor found for class ...`, nil among them,
+  where the oracle throws a `NullPointerException`. A one-argument `java.io.StringWriter`
+  is an empty such stream instead: a number is a capacity (ignored), any other argument
+  the oracle's `ClassCastException` to `Number` (nil its `NullPointerException`), whose
+  message carries no module tail. `class` and `instance?` see the
+  builder as the `StringWriter` it is (`(instance? CharSequence (StringBuilder. "a"))` is
+  `false`). `.intern` of a string is the
   string, so only `identical?` could tell the interning apart. `java.util.Locale/US` (and
   `ROOT`, `ENGLISH`) is its `toString` text (`"en_US"`, `""`, `"en"`): `str` and `.toString`
   match the oracle, while `pr`, `class` (`:string`) and `string?` read the string.
@@ -386,6 +394,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without hashing; a map, set or sequential type is bucketed by its contents rather than its
   `hasheq` ([map keys](reference/reify.md#map-keys-and-set-members)). `sort` and `distinct`
   take a type implementing `Seqable` alone through its seq, where the oracle refuses both.
+- A program-defined interface (`definterface`) joins the same rows under its own
+  binary name, which `instance?` tests and a `.method` call dispatches on
+  ([reify](reference/reify.md#host-interfaces)). Deviations: the name's value is the
+  binary-name string (the oracle's class object), so `resolve` answers its var and
+  `str` spells the name bare; redefining the interface replaces it, and instances
+  made before the redefinition still satisfy it, where the oracle's are instances of
+  the old class only; a wrong-count call on a `reify` names `java.lang.Object` (a
+  reify's class is no host class here), and the abstract refusal of a method the body
+  leaves out names the method and the interface but no receiver class.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
@@ -468,11 +485,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `*agent*` is bound only while an action runs (`nil` outside one, where the
   oracle leaves it unbound). `(await-for 0 a)` answers `true` once the actions it
   ran finished; the oracle's races its pool and may answer `false`.
-- A `defmacro` redefinition replaces its root without calling its watches or checking
-  its validator (the oracle does both), and a `defn` with no value cell validates its
-  new function only once its definition is bound: where the validator refuses it, the
-  call still reports the oracle's `Invalid reference state`, but later calls reach the
-  refused definition (the oracle keeps the old one).
+- A `defn` with no value cell validates its new function only once its definition is
+  bound: where the validator refuses it, the call still reports the oracle's
+  `Invalid reference state`, but later calls reach the refused definition (the oracle
+  keeps the old one). A refused `defmacro` redefinition still serves its new expander
+  (the call sites below it expanded with it while lowering and the table holds it),
+  where the oracle keeps the old root and drops the macro; `set-validator!` of a
+  computed macro var reads the var's site, which signals like `deref`.
 - `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
   ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
   atom).

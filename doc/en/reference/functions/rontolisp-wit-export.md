@@ -117,7 +117,9 @@ offending export:
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a
-  duplicate export, or the reserved name `run` (the component's `wasi:cli/run`
+  duplicate export (refused by the WIT reader first, in `wasm-tools component
+  wit`'s words: `` export `a` conflicts with prior func of same name ``), or
+  the reserved name `run` (the component's `wasi:cli/run`
   entry point)
 - a world with no exports, a `:world` the file does not declare, or an omitted
   `:world` when the file declares several

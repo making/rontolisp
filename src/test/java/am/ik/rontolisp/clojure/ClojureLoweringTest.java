@@ -214,6 +214,15 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(loop [i 0] ((fn [j] j) (recur (inc i))))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can only recur from tail position");
+		// a macro expansion in tail position keeps it: a recur the expansion holds
+		// recurs (data.json's codepoint-case around a loop's recur), while one in an
+		// argument slot of the expansion still refuses, like the oracle's
+		assertThat(loweredWithMacros("(defmacro mwhen [c x] `(if ~c :d (recur ~x))) (loop [i 0] (mwhen (zero? i) i))"))
+			.contains("LABELS");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mno [x] `(+ ~x 1)) (loop [i 0] (mno (recur i)))", null,
+				ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
 		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
@@ -1204,8 +1213,6 @@ class ClojureLoweringTest {
 			.hasMessageContaining("protocols are not supported yet: gen-class");
 		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: gen-interface");
-		assertThatThrownBy(() -> Clojure.read("(definterface I (m [x]))", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("protocols are not supported yet: definterface");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a defprotocol method signature is its name over one parameter vector per arity");
@@ -1407,6 +1414,51 @@ class ClojureLoweringTest {
 				{ "(defrecord R [a] clojure.lang.Counted (count [_] 1))",
 						"Duplicate method name \"count\" in defrecord" },
 				{ "(defrecord R [a] Object (equals [_ o] true))", "Duplicate method name \"equals\" in defrecord" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
+	}
+
+	@Test
+	void aDefinterfaceDefinesAnInterfaceADefTypeImplementsThroughItsOwnRow() {
+		// definterface binds the binary name and stores no row of its own; a deftype
+		// or reify body naming it stores its methods in the defined-interface row
+		// under that name, which instance? tests and an instance call dispatches on
+		String defined = lowered("(definterface PBR (^int readChar []) (^long readChars [b s l]))");
+		assertThat(defined).contains("\"user.PBR\"").doesNotContain("-ROW (");
+		String type = lowered("(definterface PBR (^int readChar [])) (deftype R [n] PBR (readChar [_] n))");
+		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"R\")"
+				+ " '(\"user.PBR\") (LIST \"readChar\" (LAMBDA (");
+		String reified = lowered("(definterface PBR (^int readChar [])) (def r (reify PBR (readChar [_] 1)))");
+		assertThat(reified).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("'(\"user.PBR\") (LIST \"readChar\"");
+		// instance? of the interface reads the row under its binary name, and a call
+		// of its method the row's entry
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (instance? PBR x))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (.m x 1))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		// a program defining none lowers a .m call and an instance? without the rows
+		assertThat(lowered("(defn f [x] (.m x 1))")).doesNotContain("DEFINED-INTERFACE-ROW");
+		for (String[] refused : new String[][] { { "(definterface)", "definterface takes a name and methods" },
+				{ "(definterface PBR (1 2))", "definterface takes method signatures, not (1 2)" },
+				{ "(definterface PBR foo)", "definterface takes method signatures, not |foo|" },
+				{ "(definterface PBR (m [x] [y]))",
+						"definterface takes method signatures, not (|m| (|%vector| |x|) (|%vector| |y|))" },
+				{ "(definterface PBR (m [1 y]))", "definterface method m takes parameter names, not 1" },
+				{ "(definterface PBR (^int q []) (^int q []))",
+						"Duplicate method name \"q\" with signature \"()I\" in class file user.PBR" },
+				{ "(definterface PBR (q [x]) (q [x]))",
+						"Duplicate method name \"q\" with signature \"(Ljava.lang.Object;)Ljava.lang.Object;\""
+								+ " in class file user.PBR" },
+				{ "(gen-class)", "protocols are not supported yet: gen-class" },
+				{ "(gen-interface)", "protocols are not supported yet: gen-interface" },
+				{ "(definterface PBR (m [x])) (extend-protocol PBR nil (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(definterface PBR (m [x])) (extend-type String PBR (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(deftype R [] PBR (m [_] 1))", "Unable to resolve symbol: PBR in this context" } }) {
 			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
 				.isInstanceOf(LispReadException.class)
 				.hasMessageContaining(refused[1]);
@@ -1929,8 +1981,11 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(java.io.StringWriter.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		// an initial capacity keeps the host construction, like any other class
-		assertThat(lowered("(new java.io.StringWriter 16)")).contains("JAVA:NEW").contains("java.io.StringWriter");
+		// an initial capacity is an empty string output stream, never a java:new
+		// (which wasm refuses); anything else at run time is the oracle's
+		// ClassCastException to Number, nil its NullPointerException
+		assertThat(lowered("(new java.io.StringWriter 16)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 16)")
+			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains(
 				"((RONTOLISP::%CLOJURE-STREAM-P |__clojure_0|) (RONTOLISP::%CLOJURE-STREAM-STRING |__clojure_0|))");
 	}
@@ -1949,9 +2004,6 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA:NEW");
 		assertThat(lowered("(StringBuffer.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		// an initial text or capacity keeps the host construction, like any other class
-		assertThat(lowered("(new StringBuilder \"ab\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
-		assertThat(lowered("(new StringBuilder 16)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
 		assertThat(lowered("(let [s (StringBuilder.)] (.length s))"))
 			.contains("(RONTOLISP::%CLOJURE-STRING-OUTPUT-P |__clojure_0|)")
 			.contains("RONTOLISP::%CLOJURE-STREAM-STRING");
@@ -1967,6 +2019,78 @@ class ClojureLoweringTest {
 		// where the host is not, no java: operator is left for any of them
 		String portable = "(let [sb (StringBuilder.)] (.append sb \"a\") (println (str sb) (.length sb)))"
 				+ " (println (.toUpperCase \"hi\" java.util.Locale/US) (.intern \"x\"))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aOneArgumentStringBuilderLowersToAStreamTheArgumentFills() {
+		// A one-argument (StringBuilder.), (new StringBuilder), (StringBuilder/new) or
+		// (StringBuffer.) is a fresh string output stream the argument fills at run
+		// time, on every backend, never a java:new (which wasm refuses): the class
+		// travels for the refusal, a string is written into the stream, an integer is
+		// a capacity (ignored), anything else the oracle's no-such-constructor
+		// refusal. Two arguments, and a tagged construction naming the host overload,
+		// keep the host construction, like any other class.
+		assertThat(lowered("(StringBuilder. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuilder 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder/new \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuilder\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuffer. \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuffer 16)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-BUILDER-1 \"java.lang.StringBuffer\" 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuilder. \"a\" \"b\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// a tagged construction names the host overload and keeps java:new, on the
+		// interpreter and the JVM only
+		assertThat(lowered("(^[String] StringBuilder/new \"z\")")).contains("JAVA:NEW")
+			.contains("java.lang.StringBuilder");
+		assertThat(lowered("(^[int] StringBuilder/new 64)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (str (StringBuilder. \"ab\")))" + " (println (str (new StringBuffer 16)))"
+				+ " (println (let [sb (StringBuilder/new \"x\")] (.append sb \"y\") (str sb)))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aOneArgumentStringWriterLowersToAnEmptyStreamWithTheOracleRefusals() {
+		// A one-argument (java.io.StringWriter.), (new java.io.StringWriter) or
+		// (java.io.StringWriter/new) is an empty string output stream on every
+		// backend, never a java:new (which wasm refuses): a number is a capacity
+		// (ignored), anything else the oracle's ClassCastException to Number at
+		// run time (nil its NullPointerException) -- a StringWriter has no String
+		// constructor, so no shared no-such-constructor helper. Two arguments, and
+		// a tagged construction naming the host overload, keep the host
+		// construction, like any other class.
+		assertThat(lowered("(java.io.StringWriter. 16)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 16)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new java.io.StringWriter \"ab\")"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 \"ab\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter/new 8)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER-1 8)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter. \"a\" \"b\")")).contains("JAVA:NEW")
+			.contains("java.io.StringWriter");
+		// a tagged construction names the host overload and keeps java:new, on the
+		// interpreter and the JVM only
+		assertThat(lowered("(^[int] java.io.StringWriter/new 64)")).contains("JAVA:NEW")
+			.contains("java.io.StringWriter");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (str (java.io.StringWriter. 16)))"
+				+ " (println (str (new java.io.StringWriter (long 8))))"
+				+ " (println (let [w (java.io.StringWriter/new 4)] (.append w \"y\") (str w)))";
 		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
 			.stream()
 			.map(LispVal::print)
@@ -2362,6 +2486,27 @@ class ClojureLoweringTest {
 			.contains("|c%mu-unless%macro|")
 			.contains("LAMBDA")
 			.contains("wrong number of arguments passed to macro: mu-unless");
+	}
+
+	@Test
+	void aRedefinedDefmacroNotifiesBehindItsRegistration() {
+		// a redefined defmacro validates and notifies like a cell-less defn: the
+		// replaced root is the previous expander, in a statement the strip drops
+		// where the program names no watch verb; a first definition emits none
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1)")).doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(loweredWithExpanders("(defmacro mu-rd [] 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// over a valued or declared root the replaced root is the cell's, as for defn
+		assertThat(loweredWithExpanders("(def mu-rd 1) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		assertThat(loweredWithExpanders("(declare mu-rd) (defmacro mu-rd [] 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/mu-rd\"");
+		// set-validator! of a literal macro checks the present expander, since the
+		// var's site reads no value; above the definition it reads the plain worker
+		assertThat(loweredWithMacros("(defmacro mu-sv [] 1) (set-validator! #'mu-sv pos?)"))
+			.contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
+		assertThat(loweredWithMacros("(set-validator! #'mu-sv pos?) (defmacro mu-sv [] 1)"))
+			.doesNotContain("SET-VALIDATOR-MACRO");
 	}
 
 	@Test
@@ -3818,6 +3963,26 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"t\") '(\"user\" \"t\")");
 		// a test is a zero-argument function a later form may call
 		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%t/b|)");
+	}
+
+	@Test
+	void aRedefinedDeftestVersionsItsFunctionsAndNotifies() {
+		// a redefined deftest validates and notifies like a redefined defn: each
+		// definition keeps its own function, the calls below it run the newest, and
+		// the replaced root travels in the notify statement the strip drops where
+		// the program names no watch verb; a single definition lowers as before
+		String out = lowered("(ns t (:use clojure.test)) (deftest a (is true)) (deftest a (is false)) (a)");
+		assertThat(out).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.contains("(DEFUN |c%t/a%def2| NIL")
+			.contains("(DEFUN |c%t/a%def2%body| NIL")
+			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%t/a%def2|)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"t/a\" #'|c%t/a%def2| #'|c%t/a|)")
+			.contains("(|c%t/a%def2|)");
+		assertThat(lowered("(ns t (:use clojure.test)) (deftest a (is true)) (a)")).contains("(DEFUN |c%t/a| NIL")
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY")
+			.doesNotContain("%def2");
 	}
 
 	@Test

@@ -117,7 +117,7 @@ answered `2 5 3` before).
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
 | `if-some` `when-some` | `if-let`/`when-let` with `(null tmp)` as the test (`ClojureSeqLowering.testedBinding`, shared by all four) | `false` binds. The pattern destructures inside the taken branch only, so the else sees the outer names and a failing init destructures nothing; until 2026-10-08 `if-let`/`when-let` destructured before the test (`(let [x 1] (if-let [x nil] :t x))` answered nil, `(when-let [[a] false] a)` signalled `nth`), clojure-spec `if-let-and-when-let-destructure-only-in-the-taken-branch`. Refusals in the oracle's words (`if-some requires a vector for its binding`, `... exactly 2 forms in binding vector`, `... 1 or 2 forms after binding vector`) |
 | `case` | `(let ((tmp e)) (if TEST1 R1 (if TEST2 R2 ... DEFAULT)))` (`ClojureControlLowering.caseOf`) | one test per constant, picked at lower time by its kind -- the oracle's hash-then-`=` (measured 2026-10-08, clj 1.12.6): `eql` for a number or char (`1.0` never matches `1`, `-0.0` never `0.0`, `##NaN` lowers to no test), `equal` for a string or keyword constant, `eq` for a symbol, `null`/`eq` for nil/true/false, `%clojure-equal` for a vector, map, set or `((1 2))` list constant (a vector constant matches a list or lazy seq). A list test is the alternatives. Duplicates are refused at lower time (`Duplicate case test constant: X`, `caseKey`: `1`=`1N`, `-0.0`=`0.0`, a map or set in any order, `[1]`=`((1))`; NaN never), an empty list test is refused (the oracle's `max` arity error). No default: `%clojure-illegal-argument-exception` over `No matching clause: ` + `str` of the value. Linear, never a jump table: `1M` is the integer `1` here (deviation) |
-| `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr` |
+| `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr`. `(condp instance? ...)` has no function value to bind: each clause tests `(instance? test expr)` (`instanceApplied`), the class evaluated like the oracle's |
 | `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
 | `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
 | `monitor-enter` `monitor-exit` | the two halves of `locking` (dynaload's `locking2` spells them out): the same reentrant mutex acquired or released, answering nil; on wasm the object evaluates and nil answers (`ClojureControlLowering.monitorOf`, 2026-10-13, f66) | nil the same `NullPointerException`; a lone release of an unheld lock is the oracle's `IllegalMonitorStateException`, like the mutex's own. An unbalanced hold across top-level forms (the oracle's boundary `IllegalMonitorStateException`) stays held here, a documented deviation |
@@ -215,7 +215,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `eval` and `resolve` of a computed symbol at run time ("Macros"); `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `future-call` `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `halt-when` (transducer); `compile` `get-thread-bindings` `bound-fn*` `read+string` |
+| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `gen-class` `gen-interface`; `use-fixtures`; `eval` and `resolve` of a computed symbol at run time ("Macros"); `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `future-call` `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `halt-when` (transducer); `compile` `get-thread-bindings` `bound-fn*` `read+string` |
 
 ## Deviations
 
@@ -1170,6 +1170,10 @@ body lowers). `loop` inits are sequential and destructure.
   (`->`, `->>`, `as->`, `cond->`, `cond->>`, `some->`) lower in the incoming tail
   position, so a `recur` in a step's tail is its target's, like the oracle's
   macroexpansions (2026-10-13, f66; malli's `cond->`/`recur`).
+- A macro expansion stands where its call stood, so it inherits the call's tail
+  position: a `recur` the expansion holds recurs (data.json 2.5.2's `codepoint-case`
+  around a `loop`'s `recur`), one in an argument slot of the expansion still refuses
+  (`ClojureMacroLowering.expandMacro` lowers through `lowerTailSlot`).
 - A `try` between the `recur` and its target is `Cannot recur across try` (a barrier
   beside the stack, so a target opened inside the `try` still recurs). `binding`, a
   non-empty `with-open` and `is` bodies lower behind the same barrier (the oracle wraps
@@ -1530,10 +1534,10 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | medley 1.10.0 | = | = | = | = | |
 | tools.cli 1.4.256 | = | = | = | = | |
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
-| honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
-| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
+| honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
+| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | refused | refused | refused | refused | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang"); with `clojure-trie-compiler` `=` on the interpreter and the JVM, wasm builds but the construction fails (`.todo/f73`) |
-| data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
+| data.json 2.5.2 | = | = | refused | refused | the load reads `DateTimeFormatter/ISO_INSTANT` (`.todo/f81`) |
 | malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`) and would reach `System/getProperty` and `java.util.HashMap` at load (host-only; `.todo/f84`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -3195,7 +3199,10 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
   time. Docstring and attr map skipped, `&` rest works. A call
   above the definition names the missing expander; a macro has no function value; a
-  later `def`/`defn` wins the call sites back.
+  later `def`/`defn` wins the call sites back. A redefined `defmacro` (or a first one
+  over a macro, function, valued or declared root) validates and notifies like the
+  oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
+  expander registration ("State", validators and watches).
 - **`&form` and `&env`** (2026-10-11; instaparse's `defclone`/`set-global-var!` read
   `(contains? &env :locals)`): in a `defmacro` body (`ClojureLowering.macroBodyDepth`) they
   lower to the specials `%clojure-macro-form` / `%clojure-macro-env` (library defvars, nil).
@@ -3577,7 +3584,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `satisfies?` reads both tables, never metadata.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
   class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
-  instants and the UUID ("Instants and UUIDs"), and any other class `instance?` resolves
+  instants and the UUID ("Instants and UUIDs"), `clojure.lang.BigInt` (a `1N` literal
+  reads as the integer 1 here, so an extension to it reads every integer through the
+  number's row), and any other class `instance?` resolves
   (a name no class has is its `unknown name: X`). The three answer nil like the oracle
   (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
   last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
@@ -3966,6 +3975,68 @@ measured on clj 1.12.6, 2026-10-08).
   `#aProgramStoringNoCharSequenceRowReadsItsStringsWithoutTheView`,
   `ClojureInteropTest#aCharSequenceTypeReachesJavaAsACharSequence`.
 
+## Defined interfaces
+
+**A `definterface` defines an interface with no host class: the name is bound to
+the binary name, and a `deftype` or `reify` body naming it stores its methods in
+the type's row under that name, which `instance?` tests and a `.method` call
+dispatches on** (f62, 2026-10-13; data.json 2.5.2's `InternalPBR`, which stopped
+its probe at `json.clj:22:1`). The rows join the Host-interfaces machinery keyed
+by the interface's own name: every verb below measured on clj 1.12.6.
+- Parse (`ClojureProtocolLowering.parseInterface`): the name's binary name (the
+  defining namespace with `-` munged to `_`, then the name verbatim, like a
+  deftype's class) and every method with its parameter counts, the target
+  included. A signature is the method name over one parameter vector, each
+  parameter a plain symbol (a hint rides along, read only for the duplicate
+  refusal); without one, `(m)`, a zero-argument method, like the oracle's. A
+  repeated signature is the oracle's `ClassFormatError` (`Duplicate method name
+  "q" with signature "()I" in class file user.IDup`, the descriptors the
+  oracle's: primitives and the array words by letter, a class by its binary
+  name); any other shape is `definterface takes method signatures, not ...`.
+  The pre-scan registers the interface with the var (like a protocol), and the
+  form binds the name to the binary name through an ordinary `def`, so
+  `resolve`, redefinition and a later session buffer see it; `gen-class` and
+  `gen-interface` stay `protocols are not supported yet`.
+- Bodies (`typeBody`): a group symbol naming a defined interface (resolved like a
+  protocol's) joins the closure as a `HostInterface` of the new
+  `ClojureArms.Family.DEFINED_INTERFACE` family, whose store
+  (`%clojure-defined-interface-row`) writes the row; `instance?` of the name
+  reads the row under the binary name (`ClojureDispatchLowering`, ahead of the
+  var's own reading, so the var holding the name still tests the interface; a
+  local of the name is evaluated, like the oracle's class position); a `.method`
+  call whose method a defined interface declares at the count dispatches on the
+  row's entry ahead of the refusal (`ClojureValueMethodLowering`, both arms),
+  and any other receiver is refused in the oracle's words (`No matching field
+  found` of no argument, `No matching method ... found taking N args` else,
+  since the method exists). A method the body leaves out stores the oracle's
+  `AbstractMethodError`. An extension to the interface is the oracle's
+  `interface user.IA is not a protocol`.
+- Deviations (user doc): the name's value is the binary-name string (the
+  oracle's class object); a redefinition replaces the interface, and instances
+  made before it still satisfy it; a wrong-count call on a `reify` names
+  `java.lang.Object`; the abstract refusal names no receiver class. `supers` and
+  `bases` of the interface answer nil, like the oracle's.
+- Pins: clojure-spec
+  `a-definterface-defines-methods-a-deftype-implements-and-calls-dispatch`,
+  `a-definterface-method-on-a-reify-refuses-foreign-receivers` (all four
+  backends, the oracle's but the two commented lines),
+  `ClojureLoweringTest#aDefinterfaceDefinesAnInterfaceADefTypeImplementsThroughItsOwnRow`
+  (the stores, the `instance?` and call shapes, every refusal),
+  `ClojureArmsTest#theDefinedInterfaceFamilyIsMadeByTheStoreOfItsRow`.
+- Re-probe, data.json 2.5.2 (`{:deps {org.clojure/data.json {:mvn/version
+  "2.5.2"}}}`, oracle `clj` 1.12.6.1673): the interpreter and the JVM print the
+  oracle's lines for `write-str`, `read-str` with `:key-fn`, big numbers and
+  `pprint` (a bignum prints without its `N`, a `bigdec` decimal as its exact
+  ratio, the `N`/`M` literal rule); both wasm backends refuse the load on the
+  `DateTimeFormatter/ISO_INSTANT` the defaults read (`.todo/f81`). What the probe
+  needed past the interface (each oracle-measured, each in its own section):
+  a `recur` a macro expansion holds recurs ("Macros"); `extend` of
+  `clojure.lang.BigInt` reads every integer ("Dispatch"); `(condp instance?
+  ...)` applies `instance?` per clause ("The lowering table", `condp`);
+  `String.getChars`, `.subSequence` and `String.` of a char array read
+  portably, `.isArray` of a class keyword is true only of a byte array's, and
+  `java.io.PrintWriter` over a stream is the stream ("Java interop").
+
 ## Collection interfaces
 
 **A body implementing a collection interface is a collection to the core verbs, each group of
@@ -4345,6 +4416,16 @@ host alone answers ("Host arms where the host is not").
   false is the false object through the call's own `:java-false`, whatever the receiver
   (`(.matches "abc" "x")` false, not nil; "Host booleans" below). Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
   Pins: `ClojureInteropTest#unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject`.
+  `.getChars` copies the range into the char array (a vector of characters here) through
+  an `aset` loop, `.subSequence` of two indices is the substring of the range, and
+  `(String. x [off len])` of a char array is the string of its characters (else the
+  host's constructor), all on every backend (data.json 2.5.2's reader); `.isArray` of
+  a class keyword is true only of a byte array's (`[B`: a char array is a character
+  vector, a host array unmarshals to a list). A `java.io.PrintWriter` construction
+  over a stream is that stream (an autoflush flag behind it is evaluated and dropped),
+  over anything else the host construction. Pins: clojure-spec
+  `string-getChars-subSequence-and-char-array-strings-read-on-every-backend` (all four
+  backends, oracle-identical).
   `.toString` of a number, character, symbol (booleans too), cons, array, table or
   function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
   backend (`ClojureInteropLowering.valueToString`); nil signals (the oracle's NPE); only
@@ -4363,11 +4444,25 @@ host alone answers ("Host arms where the host is not").
   `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is the same string
   output stream (f63, 2026-10-13): `.append` of one value writes its `str` (nil `"null"`),
   answering the builder, `.length`/`.charAt`/`.setLength` read a string output stream's
-  text so far (`.setLength` answering nil, any other stream the oracle's refusal),
-  `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
+  text so far (`.setLength` answering nil, any other stream the oracle's refusal). A
+  one-argument construction (f71, 2026-10-13) is a fresh stream the argument fills at
+  run time (`%clojure-string-builder-1`, a stream producer): a string is written into
+  it, an integer is a capacity (ignored, the stream starts empty), anything else the
+  oracle's `No matching ctor found for class ...` (nil among them, where the oracle
+  throws a `NullPointerException`). A tagged construction names the host overload and
+  keeps `java:new`, on the interpreter and the JVM only. A one-argument
+  `java.io.StringWriter` construction (f80, 2026-10-13) is an empty stream instead
+  (`%clojure-string-writer-1`, a stream producer): a number is a capacity (ignored,
+  the stream starts empty), anything else the oracle's `ClassCastException` to
+  `Number` (nil its `NullPointerException`) -- a `StringWriter` has no `String`
+  constructor, so no shared no-such-constructor helper; the message carries no
+  module tail. `class` and `instance?` see the
+  builder as the `StringWriter` it is. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
   `.toUpperCase`/`.toLowerCase` of one argument take, mapping as the bare call, and
   `.intern` of a string is the string. Pins: clojure-spec
   `string-builder-builds-through-append-and-answers-its-text`,
+  `string-builder-construction-with-an-initial-text-or-capacity`,
+  `string-writer-construction-with-an-initial-capacity`,
   `to-upper-and-lower-case-with-a-locale-map-like-without-one`,
   `intern-of-a-string-is-the-string` (all four backends), honeysql 2.7.1479 and hiccup
   2.0.0 `=` on wasm ("Library probes").
@@ -5990,7 +6085,9 @@ resolve var`.
   `java.io.BufferedReader` (`clojure.java.io/reader`). **Arms**: the printer's and
   `str`'s `%clojure-stream-p` tests are `ClojureArms.Family.STREAM`, whose producers are the
   Clojure-only wrappers a stream reaches a program through -- `%clojure-out`/`-in`/`-err`,
-  `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-reader` (a reader over a
+  `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-builder-1` (a one-argument
+  `StringBuilder`/`StringBuffer` construction, f71), `%clojure-string-writer-1` (a
+  one-argument `StringWriter` construction, f80), `%clojure-string-reader` (a reader over a
   StringReader), `%clojure-reader`, and the io kernels opening a file
   (`ClojureIoLowering.STREAM_PRODUCERS`, "clojure.java.io") -- never `open` or
   `make-string-output-stream`, which `ClojureLibrary.references` would read as a library
@@ -6301,25 +6398,38 @@ resolve var`.
   init through the `%clojure-var-validated` view (which stashes the replaced root) with
   the `%clojure-var-notify-stored` statement behind the store; a `defn` with no value
   cell (a redefinition, or a first one over a declared or valued root) validates and
-  notifies behind its `defun`s through the `%clojure-var-defn-notify` statement. Both
-  statements drop at top level and in `progn` (a program naming no watch verb lowers
-  byte-identically); the macro evaluator reads a store's init lazily like a `setq`'s
-  (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a later input's
-  watch or validator sees every earlier root. Deviation: a `defmacro` redefinition
-  replaces its root without calling its watches or checking its validator (the oracle
-  does both), and a `defn` with no value cell validates only once its definition is
-  bound, so a refused one still routes to the new function (the oracle keeps the old
-  one); `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
+  notifies behind its `defun`s through the `%clojure-var-defn-notify` statement. A
+  `defmacro` redefinition (or a first one over a macro, function, valued or declared
+  root) notifies behind its expander registration through the same statement, with the
+  previous expander, the current function or the cell's root as the replaced one; a
+  `deftest` versions its functions like a `defn` (the first keeps the bare names) and
+  notifies behind them the same way, with the previous test function as the replaced
+  root. `set-validator!` of a literal macro var checks the present expander through
+  `%clojure-set-validator-macro` (a `WATCH` producer), since the var's site reads no
+  value. Both statements drop at top level and in `progn` (a program naming no watch
+  verb lowers byte-identically); the macro evaluator reads a store's init lazily like
+  a `setq`'s (`ClojureMacroLowering.handOverForm`). A session keeps the arms, so a
+  later input's watch or validator sees every earlier root. Deviation: a `defn` with
+  no value cell validates only once its definition is bound, so a refused one still
+  routes to the new function (the oracle keeps the old one); a refused `defmacro`
+  still serves its new expander (the oracle keeps the old root and drops the macro);
+  `set-validator!` of a computed macro var reads the signaling site, like `deref`;
+  `swap-vals!` and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's
   refuse anything but an atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
   `swap-vals-and-reset-vals-answer-the-old-and-the-new-value`,
   `add-watch-calls-a-watch-after-every-change-of-an-atom`,
   `refs-agents-and-vars-call-their-watches-and-validators`,
   `a-def-with-redefs-and-a-validator-notify-a-var-s-watches`,
   `a-redefined-defn-and-a-dynamic-def-notify-a-var-s-watches`,
+  `a-redefined-defmacro-notifies-a-var-s-watches`,
+  `a-redefined-deftest-notifies-a-var-s-watches`,
   `await-for-answers-whether-the-actions-ran-in-time` (all oracle-identical, four backends),
   `ClojureLibraryTest#aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers`,
   `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsVarStoresUnchanged`,
+  `ClojureLibraryTest#aProgramNamingNoWatchVerbLowersItsRedefinedMacroAndTestUnchanged`,
   `ClojureSessionTest#aLaterBufferRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
+  `ClojureSessionTest#aLaterBufferMacroRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
+  `ClojureSessionTest#aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded`,
   `ClojureAtomConcurrentRequestsTest` (its second round watches and validates under a burst).
 
 ## clojure.test
@@ -6329,7 +6439,10 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 
 - `deftest name body` -> `(defun c%name%body () body)` (the `recur` target), `(defun c%name
   () (%clojure-test-var ...))` and a registration per namespace in definition order. The
-  pre-scan registers the name as a function, so `(name)` calls it.
+  pre-scan registers the name as a function, so `(name)` calls it. A redefined `deftest`
+  versions its functions like a `defn` (the first keeps the bare names, later ones
+  `%defN`), so the calls below it run the newest, and validates and notifies like the
+  oracle's `bindRoot` behind them ("State", validators and watches).
 - `is` -> `%clojure-test-try` over a lambda, behind the `try` barrier. The assertion kind
   is the oracle's `assert-expr`: `thrown?`/`thrown-with-msg?` (bare names only); a
   PREDICATE when the head resolves to a function var (not a local, keyword, interop

@@ -654,6 +654,33 @@
   "A reader over (java.io.StringReader. TEXT): a string input stream."
   (make-string-input-stream text))
 
+(defun rontolisp::%clojure-string-builder-1 (class-name x)
+  "A one-argument java.lang.StringBuilder or java.lang.StringBuffer construction
+   of X (CLASS-NAME its name for the refusal): a string is written into a fresh
+   string output stream, an integer is a capacity (ignored, the stream starts
+   empty), anything else the oracle's no-such-constructor refusal."
+  (cond ((stringp x)
+         (let ((s (make-string-output-stream)))
+           (write-string x s)
+           s))
+        ((integerp x) (make-string-output-stream))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "No matching ctor found for class "
+                         class-name)))))
+
+(defun rontolisp::%clojure-string-writer-1 (x)
+  "A one-argument java.io.StringWriter construction of X: a number is a
+   capacity (ignored, the stream starts empty), nil the oracle's
+   NullPointerException, anything else its ClassCastException to Number (a
+   StringWriter has no String constructor, so the reflector's cast fails)."
+  (cond ((numberp x) (make-string-output-stream))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
    SOURCE itself when it is already an input stream (a reader over a reader,
@@ -13785,6 +13812,18 @@
   (rontolisp::%clojure-check-arity args 2 2 "set-validator!")
   (rontolisp::%clojure-set-validator (car args) (car (cdr args))))
 
+(defun rontolisp::%clojure-set-validator-macro (ref f current)
+  "set-validator! of a macro's var: F (nil to remove) as REF's validator, once
+   CURRENT, the macro's present expander, passes it; answers nil. A macro has
+   no value for its var site to read, so the expander travels with the call."
+  (let ((f (if (rontolisp::%clojure-truthy f) f nil)))
+    (rontolisp::%clojure-stm-validate current f)
+    (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+      (if f
+          (setf (gethash ref rontolisp::%clojure-var-validators) f)
+          (remhash ref rontolisp::%clojure-var-validators))))
+  nil)
+
 (defun rontolisp::%clojure-get-validator (ref)
   "get-validator: REF's validator, nil for none."
   (rontolisp::%clojure-watchable-ref ref "get-validator")
@@ -15551,6 +15590,12 @@
 (defun rontolisp::%clojure-marker-row (tag names methods)
   "Stores a row of an interface no core verb reads (Serializable,
    IEditableCollection, the transients)."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-defined-interface-row (tag names methods)
+  "Stores the row of an interface a definterface defines, under its binary
+   name: instance? tests the name and an instance call dispatches on the
+   row's method."
   (rontolisp::%clojure-interface-store tag names methods))
 
 ;; The tests: whether X's type implements the interface.
@@ -24836,6 +24881,18 @@
     (if (rontolisp::%clojure-bytes-p x)
         (rontolisp::%clojure-string-of-bytes x more)
         (rontolisp::%clojure-host-string-new x more))))
+
+(defun rontolisp::%clojure-char-vector-p (x)
+  "Whether X is a char array: a vector of characters, which a String
+   construction reads on every backend (a string, also a vector, takes the
+   host's copy constructor instead)."
+  (and (vectorp x) (not (stringp x)) (every #'characterp x)))
+
+(defun rontolisp::%clojure-string-of-chars (x &rest more)
+  "(String. x more...) of a char array X: the string of its characters, or of
+   the range MORE names (an offset and a count), like the oracle's String."
+  (let ((s (coerce x 'string)))
+    (if (null more) s (subseq s (car more) (+ (car more) (car (cdr more)))))))
 
 ;; (String. x more...) of an X that is no byte array: the host's constructor. A
 ;; host arm: where the host is not (wasm) it refuses by name

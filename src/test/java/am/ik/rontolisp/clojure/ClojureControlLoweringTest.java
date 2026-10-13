@@ -90,6 +90,15 @@ class ClojureControlLoweringTest {
 	}
 
 	@Test
+	void condpOfInstanceAppliesInstancePerClause() {
+		// (condp instance? ...) has no function value to bind: each clause tests
+		// (instance? test expr), the class evaluated like the oracle's
+		// (data.json's read-json)
+		assertThat(lowered("(defn f [x] (condp instance? x String :s :d))")).contains("STRINGP");
+		refused("(condp instance?)", "Wrong number of args (1) passed to: clojure.core/condp");
+	}
+
+	@Test
 	void whileAndLockingBodiesAreNoRecurTail() {
 		refused("(loop [i 0] (while (< i 3) (recur (inc i))))", "Can only recur from tail position");
 		refused("(loop [i 0] (locking :k (recur (inc i))))", "Cannot recur across try");

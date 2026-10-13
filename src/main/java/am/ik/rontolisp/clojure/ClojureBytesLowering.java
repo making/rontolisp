@@ -8,6 +8,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -66,6 +67,12 @@ final class ClojureBytesLowering {
 	 * operands it keeps.
 	 */
 	static final String STRING_NEW = PREFIX + "STRING-NEW";
+
+	/** Whether a value is a char array: a vector of characters, never a string. */
+	static final String CHAR_VECTOR_P = PREFIX + "CHAR-VECTOR-P";
+
+	/** {@code (String. x ...)} of a char array: the string of its characters. */
+	static final String STRING_OF_CHARS = PREFIX + "STRING-OF-CHARS";
 
 	/**
 	 * An argument of a {@code java.lang.String} construction: a byte array as it is,
@@ -215,7 +222,7 @@ final class ClojureBytesLowering {
 	 * @param hostCall the {@code java:new} call
 	 * @return the construction, or null
 	 */
-	static @Nullable LispVal stringConstruction(String cls, int argCount, LispVal hostCall) {
+	static @Nullable LispVal stringConstruction(ClojureLowering ctx, String cls, int argCount, LispVal hostCall) {
 		if (!cls.equals("java.lang.String") || argCount < 1 || argCount > 4 || !(hostCall instanceof LispCons call)
 				|| !ClojureLowerUtil.isSymbolNamed(call.car(), ClojureInteropLowering.JAVA_NEW.name())) {
 			return null;
@@ -227,7 +234,29 @@ final class ClojureBytesLowering {
 					&& ClojureLowerUtil.isSymbolNamed(value.car(), ClojureInteropLowering.HOST_VALUE)
 							? LispCons.rebuilt(value, new LispSymbol(HOST_VALUE), value.cdr()) : each);
 		}
-		return LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(operands));
+		LispVal string = LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(operands));
+		if (argCount != 1 && argCount != 3 || operands.get(1) instanceof LispString) {
+			return string;
+		}
+		// (String. x [off len]) of a char array reads its characters on every
+		// backend (a char[] is a vector of characters here); anything else keeps
+		// the host's constructor, which a program making no byte array calls
+		// directly (the family's alias). The call's trailing markers (:function,
+		// :java-false) stay out of the characters' range.
+		LispSymbol one = ctx.freshTemp();
+		List<LispVal> chars = new ArrayList<>();
+		chars.add(new LispSymbol(STRING_OF_CHARS));
+		chars.add(one);
+		chars.addAll(operands.subList(2, 1 + argCount));
+		List<LispVal> rebuilt = new ArrayList<>();
+		rebuilt.add(operands.get(0));
+		rebuilt.add(one);
+		rebuilt.addAll(operands.subList(2, operands.size()));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, operands.get(1)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(CHAR_VECTOR_P), one), ClojureLowerUtil.list(chars),
+						LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(rebuilt))));
 	}
 
 	/**

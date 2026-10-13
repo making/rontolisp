@@ -399,6 +399,14 @@ also finds a method in the target's metadata under the namespace-qualified metho
 symbol -- after an implementation in a `defrecord`/`deftype`/`reify` body and before
 the extension rows, like the oracle (see [defprotocol](reference/defprotocol.md)).
 
+A `definterface` declares methods without generating a host class: the name is bound
+to the binary name, and a `deftype` or `reify` body naming it stores its methods in
+the type's row under that name, which `instance?` tests and a `.method` call
+dispatches on, like the oracle's class. A signature is the method name over one
+parameter vector, `(m [x y])` -- without one, `(m)`, a zero-argument method; a
+repeated signature is refused naming the duplicate with its signature. Type hints
+(`^int`, `^chars`) parse and drop, never affecting dispatch.
+
 A `defrecord` value is a map with a type tag: the entry table every map uses,
 wrapped as `(:C%RECORD tag fields table class)`, so the map verbs read through it
 (`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` read the entries;
@@ -477,7 +485,7 @@ Each refusal names the missing design, never `unknown name`:
 | Refused | Message shape | Why |
 |---|---|---|
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
-| `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
+| `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no class generation on any backend |
 | a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other interfaces (`IChunkedSeq`, `java.util.Deque` ...) have no consulting functions yet |
 | a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
 | an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |

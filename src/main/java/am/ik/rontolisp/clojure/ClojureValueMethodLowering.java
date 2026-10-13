@@ -337,6 +337,15 @@ final class ClojureValueMethodLowering {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
 		row("getClass", 0, arm(List.of(), core("class", R)));
+		// .isArray of a class keyword: only a byte array's class ([B) is an array
+		// class here (a char[] is a vector of characters, a host array unmarshals
+		// to a list), so its name decides, like the oracle's Class#isArray
+		// .isArray of a class keyword: only a byte array's class ([B) is an array
+		// class here (a char[] is a vector of characters, a host array unmarshals
+		// to a list), so its name decides, like the oracle's Class#isArray. The =
+		// already answers true-or-false, so no booleanAnswer wraps it (whose test
+		// would read the false object as true).
+		row("isArray", 0, arm(List.of("keyword?"), core("=", core("name", R), LispString.literal("[B"))));
 		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
 		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
@@ -412,9 +421,11 @@ final class ClojureValueMethodLowering {
 			LispVal call) {
 		List<Arm> arms = ROWS.get(method + "/" + args.size());
 		// a row at another arity: the method exists, so the refusal is the oracle's own
-		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"));
+		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"))
+				|| ClojureInterfaces.definedDeclares(ctx, method);
 		TypedMembers typed = typedMembers(ctx, method, args.size());
 		List<String> implemented = ClojureInterfaces.instanceTests(method, args.size() + 1);
+		List<String> defined = ClojureInterfaces.definedTests(ctx, method, args.size() + 1);
 		LispVal arm;
 		if (arms == null && typed == null) {
 			arm = unmappedArm(ctx, method, designator, recv, args);
@@ -426,10 +437,15 @@ final class ClojureValueMethodLowering {
 				// program storing no such row sheds, leaving the refusal)
 				arm = interfaceArm(method, recv, args, implemented, arm);
 			}
+			if (!defined.isEmpty()) {
+				// a type implementing a program-defined interface answers its own
+				// method, read off its row under the interface's binary name
+				arm = definedArm(method, recv, args, defined, arm);
+			}
 		}
 		else {
 			arm = boundArm(ctx, method, designator, recv, args, arms == null ? List.of() : arms, known, typed,
-					implemented);
+					implemented, defined);
 		}
 		LispVal matcherCall = matcherMethod(method, recv, args);
 		if (matcherCall != null) {
@@ -545,6 +561,30 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * {@code (if defined call otherwise)}: the call of a record's, deftype's or reify's
+	 * own method for a program-defined interface ahead of {@code otherwise}. The test
+	 * reads the receiver's row for each declaring interface's binary name, which only a
+	 * body implementing one stores.
+	 */
+	private static LispVal definedArm(String method, LispVal recv, List<LispVal> args, List<String> names,
+			LispVal otherwise) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), definedTest(names, recv),
+				interfaceCall(method, recv, args), otherwise);
+	}
+
+	/**
+	 * The test of a receiver whose type implements a program-defined interface declaring
+	 * the called method: its row holds the interface's binary name.
+	 */
+	private static LispVal definedTest(List<String> names, LispVal recv) {
+		List<LispVal> tests = new ArrayList<>();
+		for (String name : names) {
+			tests.add(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), recv, LispString.literal(name)));
+		}
+		return tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+	}
+
+	/**
 	 * What a site's method name is on a record, deftype or reify: the protocols declaring
 	 * it at the site's arity, each with the record and deftype classes whose body
 	 * implements it ({@code classes}; a reify is read at run time), and whether it is an
@@ -602,7 +642,8 @@ final class ClojureValueMethodLowering {
 	 * site names a typed member, since its class is fully known.
 	 */
 	private static LispVal boundArm(ClojureLowering ctx, String method, String designator, LispSymbol recv,
-			List<LispVal> args, List<Arm> arms, boolean known, @Nullable TypedMembers typed, List<String> implemented) {
+			List<LispVal> args, List<Arm> arms, boolean known, @Nullable TypedMembers typed, List<String> implemented,
+			List<String> defined) {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
 		for (int i = 0; i < args.size(); i++) {
@@ -630,6 +671,11 @@ final class ClojureValueMethodLowering {
 				// program storing no such row sheds, ClojureArms)
 				clauses.add(
 						ClojureLowerUtil.list(implementedTest(implemented, self), interfaceCall(method, self, locals)));
+			}
+			if (!defined.isEmpty()) {
+				// a type implementing a program-defined interface answers its own
+				// method, read off its row under the interface's binary name
+				clauses.add(ClojureLowerUtil.list(definedTest(defined, self), interfaceCall(method, self, locals)));
 			}
 			for (Arm arm : arms) {
 				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));

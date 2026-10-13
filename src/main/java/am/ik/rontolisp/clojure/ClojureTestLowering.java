@@ -192,7 +192,12 @@ final class ClojureTestLowering {
 		ctx.globals.put(key, ClojureLowering.Kind.FUNCTION);
 		ctx.macros.remove(key);
 		String loc = location(ctx, form);
-		LispSymbol fn = ClojureLowering.varSym(key);
+		// a redefined test gets a fresh function per definition, like a redefined
+		// defn: the first keeps the bare names, later ones version them, so the
+		// calls below each definition run the newest while the replaced root is
+		// still bound for the validate-and-notify statement behind them
+		int definition = ctx.defnCounts.merge(key, 1, Integer::sum);
+		LispSymbol fn = ClojureLowering.defnSym(key, definition);
 		LispSymbol bodyFn = new LispSymbol(fn.name() + "%body");
 		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(bodyFn.name(), true);
 		String outer = ctx.testLocation;
@@ -213,7 +218,44 @@ final class ClojureTestLowering {
 		forms.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-REGISTER"),
 				LispString.literal(ctx.currentNs), LispString.literal(name),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
+		LispVal redefined = testNotify(ctx, key, fn, definition);
+		if (redefined != null) {
+			forms.add(redefined);
+		}
 		return forms;
+	}
+
+	/**
+	 * The validate-and-notify statement behind a {@code deftest} replacing a root: the
+	 * new test function validated against the var's validator and its watches called with
+	 * the replaced root and the new one, like the oracle's {@code bindRoot} -- the same
+	 * statement shape as a cell-less {@code defn}'s, a statement arm the strip drops
+	 * where the program names no watch verb. Null for a first definition over no root.
+	 * @param ctx the hub
+	 * @param key the var key
+	 * @param fn the new test function
+	 * @param definition the 1-based definition number
+	 * @return the statement, or null
+	 */
+	private static @Nullable LispVal testNotify(ClojureLowering ctx, String key, LispSymbol fn, int definition) {
+		LispVal next = ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn);
+		if (definition > 1) {
+			// a redefinition: the replaced root is the previous test function,
+			// still bound under its versioned name
+			return ClojureStateLowering.varDefnNotify(key, next, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					ClojureLowering.defnSym(key, definition - 1)));
+		}
+		if (ctx.valuedAbove.contains(key)) {
+			// over a valued root: the value cell still holds it, read where bound
+			return ClojureStateLowering.varDefnNotify(key, next,
+					ClojureStateLowering.guardedOldRead(ClojureLowering.varSym(key), key));
+		}
+		if (ctx.declaredAbove.contains(key)) {
+			// over a declared root: the unbound root
+			return ClojureStateLowering.varDefnNotify(key, next,
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key)));
+		}
+		return null;
 	}
 
 	/**

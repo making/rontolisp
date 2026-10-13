@@ -400,7 +400,7 @@ final class ClojureStateLowering {
 	 */
 	static final Set<String> WATCH_PRODUCERS = Set.of("RONTOLISP::%CLOJURE-ADD-WATCH",
 			"RONTOLISP::%CLOJURE-ADD-WATCH-V", "RONTOLISP::%CLOJURE-SET-VALIDATOR",
-			"RONTOLISP::%CLOJURE-SET-VALIDATOR-V", ATOM_OPTIONS.name());
+			"RONTOLISP::%CLOJURE-SET-VALIDATOR-V", "RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO", ATOM_OPTIONS.name());
 
 	/**
 	 * The WATCH-family test of a var named by its {@code "ns/name"}: whether the interned
@@ -567,12 +567,44 @@ final class ClojureStateLowering {
 	 * A validator or watch verb's call, or null when the call names none of them.
 	 */
 	static @Nullable LispVal watchRow(ClojureLowering ctx, String name, List<LispVal> items) {
+		if (name.equals("set-validator!") && items.size() == 3) {
+			LispVal macroValidator = macroValidatorOf(ctx, items);
+			if (macroValidator != null) {
+				return macroValidator;
+			}
+		}
 		AgentVerb verb = WATCH_VERBS.get(name);
 		if (verb == null) {
 			return null;
 		}
 		ClojureCoreLowering.arity(name, items.size() - 1, verb.arity(), verb.arity());
 		return ClojureLowerUtil.cons(new LispSymbol(verb.worker()), ctx.lowers(items, 1));
+	}
+
+	/**
+	 * {@code set-validator!} of a macro's var, as the lowering's own worker: the var's
+	 * site reads no value (a macro has none -- deref of it signals), so the macro's
+	 * present expander travels as the value the validator checks. Only a literal
+	 * {@code #'name} below its definition takes this path; a computed one still reads the
+	 * signaling site, like deref.
+	 */
+	static final LispSymbol SET_VALIDATOR_MACRO = new LispSymbol("RONTOLISP::%CLOJURE-SET-VALIDATOR-MACRO");
+
+	/**
+	 * {@code set-validator!} of a literal macro var below its definition, or null for any
+	 * other target.
+	 */
+	private static @Nullable LispVal macroValidatorOf(ClojureLowering ctx, List<LispVal> items) {
+		String target = ClojureVarLowering.literalVarName(items.get(1));
+		String key = target == null ? null : ctx.resolveVar(target);
+		LispVal expander = key == null ? null : ctx.macros.get(key);
+		if (key == null || expander == null || ctx.globals.get(key) != ClojureLowering.Kind.MACRO) {
+			return null;
+		}
+		List<LispVal> call = new ArrayList<>(ctx.lowers(items, 1));
+		call.add(0, SET_VALIDATOR_MACRO);
+		call.add(expander);
+		return ClojureLowerUtil.list(call);
 	}
 
 	/** A validator or watch verb as a value: its library function, or null for none. */

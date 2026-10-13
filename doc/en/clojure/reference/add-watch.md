@@ -28,5 +28,5 @@ value.
 11
 ```
 
-A var's watches do not run when a later `def` or `defn` or a `with-redefs` replaces its root
-([Deviations](../deviations.md)).
+A var's watches also run when a later `def`, `defn`, `defmacro`, `deftest` or `with-redefs`
+replaces its root, like the oracle's `bindRoot` ([Deviations](../deviations.md)).

@@ -391,6 +391,14 @@ lazy 入力はどの seq 動詞にも届きます。コレクション全体を�
 `defrecord`/`deftype`/`reify` 本体の実装の後、extend の行の前です
 （[defprotocol](reference/defprotocol.md) 参照）。
 
+`definterface` はホストクラスを生成せずにメソッドを宣言します。名前はバイナリ名に
+束縛され、それを挙げた `deftype` や `reify` の本体は、その名前の下に型の行にメソッドを
+格納します。オラクルのクラス同様、`instance?` はその名前を調べ、`.method` 呼び出しは
+その行のメソッドにディスパッチします。シグネチャは1つのパラメータベクターを伴う
+メソッド名（`(m [x y])`）で、ベクターなし（`(m)`）は引数なしメソッドです。重複した
+シグネチャは、重複をシグネチャ付きで名指して拒否されます。型ヒント（`^int`、
+`^chars`）は読み取られて捨てられ、ディスパッチに影響しません。
+
 `defrecord` 値は型タグ付きのマップです。すべてのマップが使うエントリ表を
 `(:C%RECORD tag fields table class)` で包むため、マップ動詞はそれを通して読みます
 （`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` はエントリを読み、
@@ -471,7 +479,7 @@ var はエクスポートより下で定義してかまいません。
 | 拒否されるもの | メッセージ形 | 理由 |
 |---|---|---|
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
-| `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
+| `gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもクラス生成がない |
 | コア関数が参照するもの以外のインタフェースを挙げた `reify`/`deftype`/`defrecord` の本体（[reify](reference/reify.md#host-interfaces)） | `... is not supported yet as an interface of ...` | それ以外のインタフェース（`IChunkedSeq`、`java.util.Deque` など）を参照する関数がまだない |
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |
 | 本体が書かなかった `java.util` の default メソッドのインスタンス呼び出し | `the default method ... is not supported yet` | default メソッドの本体は Java で、どのバックエンドもそれを実行しない |

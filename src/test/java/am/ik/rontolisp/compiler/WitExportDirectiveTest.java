@@ -410,6 +410,8 @@ class WitExportDirectiveTest {
 
 	@Test
 	void rejectsADuplicateExport() {
+		// The reader refuses a twice-exported name first, in wasm-tools' words --
+		// the directive's own duplicate check only sees what the reader accepts.
 		assertThatThrownBy(() -> lower("""
 				package root:component;
 
@@ -418,7 +420,7 @@ class WitExportDirectiveTest {
 				  export count-vowels: func(s: string) -> s32;
 				}
 				""", Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessage("world.wit:5: duplicate export 'count-vowels'");
+			.hasMessage("world.wit: export `count-vowels` conflicts with prior func of same name at line 5, column 10");
 	}
 
 	@Test

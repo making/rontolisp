@@ -118,7 +118,8 @@ class ClojureArmsTest {
 	@Test
 	void theStreamFamilyFoldsThePrinterArmOfAProgramMakingNoStream() {
 		// a stream reaches a value only through a read of *out*/*in*/*err*, a
-		// StringWriter, a reader over a StringReader or a clojure.java.io/reader
+		// StringWriter, a one-argument StringBuilder/StringBuffer construction, a
+		// reader over a StringReader or a clojure.java.io/reader
 		List<LispVal> forms = read("(cond ((rontolisp::%clojure-stream-p x) (w x)) ((functionp x) 1) (t 2))");
 		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.STREAM);
 		assertThat(scan.builds()).isFalse();
@@ -127,7 +128,9 @@ class ClojureArmsTest {
 			.containsExactly("(COND ((FUNCTIONP X) 1) (T 2))");
 		for (String producer : List.of("(rontolisp::%clojure-out)", "(rontolisp::%clojure-in)",
 				"(rontolisp::%clojure-err)", "(rontolisp::%clojure-string-writer)",
-				"(rontolisp::%clojure-string-reader \"s\")", "(rontolisp::%clojure-reader \"f\")")) {
+				"(rontolisp::%clojure-string-builder-1 \"java.lang.StringBuilder\" \"s\")",
+				"(rontolisp::%clojure-string-writer-1 16)", "(rontolisp::%clojure-string-reader \"s\")",
+				"(rontolisp::%clojure-reader \"f\")")) {
 			assertThat(ClojureArms.scan(read("(print " + producer + ")"), ClojureArms.Family.STREAM).builds())
 				.as(producer)
 				.isTrue();
@@ -815,6 +818,17 @@ class ClojureArmsTest {
 				.isTrue();
 		}
 		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-java-map-row tag nil nil)"), ClojureArms.Family.SEQABLE)
+			.builds()).isTrue();
+	}
+
+	@Test
+	void theDefinedInterfaceFamilyIsMadeByTheStoreOfItsRow() {
+		// a program-defined interface's row makes its family, which has no arm
+		// tests of its own: instance? and a .method call read the row's entries
+		// directly, so only the store marks the program
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-defined-interface-row tag '(\"user.PBR\") (list))"),
+					ClojureArms.Family.DEFINED_INTERFACE)
 			.builds()).isTrue();
 	}
 

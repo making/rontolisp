@@ -326,7 +326,15 @@
   `:java.io.StringWriter` を返し、`StringWriter` の `#object` として印字します。`(.length w)`
   は `StringWriter` についても答えます（オラクルにそのメソッドはありません）。1引数の `.append`
   はその値の `str` を追加します（nil は `"null"` を追加します）。オラクルはオーバーロードを
-  解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。文字列の `.intern`
+  解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。1引数の構築は
+  そのテキストでストリームを満たして開始し、整数の引数は容量です（無視します）。それ以外の
+  引数は `No matching ctor found for class ...` として拒否します。nil もその中に含まれますが、
+  オラクルは `NullPointerException` を投げます。1引数の `java.io.StringWriter` は代わりに
+  空のそのようなストリームです。数値は容量であり（無視します）、それ以外の引数はオラクルの
+  `Number` への `ClassCastException`（nil はその `NullPointerException`）で、そのメッセージに
+  モジュール名の尾部は付きません。`class` と `instance?` はビルダーをその実体で
+  ある `StringWriter` として見るので（`(instance? CharSequence (StringBuilder. "a"))` は
+  `false` です）。文字列の `.intern`
   はその文字列自身なので、インターニングの有無がわかるのは `identical?` だけです。
   `java.util.Locale/US`（`ROOT`・`ENGLISH` も）はその `toString` のテキスト（`"en_US"`・`""`・
   `"en"`）です。`str` と `.toString` はオラクルと一致しますが、`pr`・`class`（`:string`）・
@@ -369,6 +377,15 @@
   使わずに比べます。マップ・集合・シーケンシャルの型の値は `hasheq` ではなく中身で振り分けられます
   （[マップのキー](reference/reify.md#map-keys-and-set-members)）。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
+- プログラムが定義したインタフェース（`definterface`）は、同じ行に自前のバイナリ名で
+  加わります。`instance?` はその名前を調べ、`.method` 呼び出しはその行のメソッドに
+  ディスパッチします（[reify](reference/reify.md#host-interfaces)）。相違点: 名前の値は
+  バイナリ名の文字列です（オラクルはクラスオブジェクト）。そのため `resolve` は var を
+  答え、`str` は名前を bare に綴ります。インタフェースを再定義すると置き換わり、
+  再定義より前のインスタンスもそれを満たします（オラクルでは古いクラスのインスタンス
+  だけです）。`reify` への個数の違う呼び出しは `java.lang.Object` を名指します
+  （reify のクラスはここのホストクラスではありません）。本体が書かなかったメソッドの
+  abstract 拒否はメソッドとインタフェースを名指しますが、レシーバーのクラスは名指しません。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
   `Cat` の木を返し、その fold は半分ずつの fold を結合します。
@@ -448,11 +465,12 @@
   ます（外側は `nil`。オラクルでは unbound です）。`(await-for 0 a)` は、走らせた
   アクションが終わっていれば `true` を答えます（オラクルはプールと競合し `false` を
   答えることがあります）。
-- `defmacro` の再定義は var のルートを置き換えますが、watch を呼ばず validator も
-  検査しません（オラクルはどちらも行います）。値セルを持たない `defn` は新しい関数を
-  定義の束縛の後に検証します。validator が拒否した場合もオラクルと同じ
+- 値セルを持たない `defn` は新しい関数を定義の束縛の後に検証します。validator が拒否した場合もオラクルと同じ
   `Invalid reference state` を報告しますが、以降の呼び出しは拒否された定義に届きます
-  （オラクルは古い定義を保ちます）。
+  （オラクルは古い定義を保ちます）。拒否された `defmacro` の再定義は新しいエクスパンダがそのまま使われます
+  （下にある呼び出しは lowering 時にそれで展開され、テーブルもそれを保持します）。
+  オラクルは古いルートを保ちマクロを外します。計算で求めたマクロ var への `set-validator!` は var のサイトを読み、
+  これは `deref` 同様にシグナルします。
 - `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` は、atom と
   セルを共有する ref と volatile も受け付けます（オラクルは atom 以外を拒否します）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの

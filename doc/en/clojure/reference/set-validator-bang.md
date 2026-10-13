@@ -6,7 +6,8 @@ Makes `f` the validator of an atom, a ref, an agent or a var, answering `nil`: e
 the reference would take must pass `f` (any function value), else the store refuses with
 `IllegalStateException` `Invalid reference state` and the value stays. The current value
 must pass `f` first; `nil` removes the validator. An atom checks it on every store, a ref
-when its transaction commits, an agent on each action's answer, a var on `alter-var-root`.
+when its transaction commits, an agent on each action's answer, a var on `alter-var-root`
+and on every `def`, `defn`, `defmacro`, `deftest` or `with-redefs` replacing its root.
 `get-validator` answers it. Works as a function value.
 
 ```clojure

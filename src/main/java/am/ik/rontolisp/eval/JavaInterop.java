@@ -2118,7 +2118,8 @@ final class JavaInterop {
 	// What a java: site over a class that cannot link throws: a catchable refusal
 	// naming the missing class, not the raw NoClassDefFoundError reflection throws --
 	// a dependency's class compiled against a language that is not here
-	// (metosin/reitit-core's reitit.Trie over clojure.lang, .todo/f65). The missing
+	// (metosin/reitit-core's reitit.Trie over clojure.lang;
+	// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`"). The missing
 	// name is the error's own, slashes to dots. Any other LinkageError is not caught:
 	// it propagates as it did.
 	private static LispEvalException unlinkable(String className, NoClassDefFoundError ex) {

@@ -355,6 +355,32 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferMacroRedefinitionNotifiesTheWatchesAnEarlierOneAdded() {
+		// a session keeps the macro watch arms too: a later buffer's defmacro
+		// validates and notifies like the oracle's bindRoot, with the previous
+		// expander as the replaced root; set-validator! of a literal macro var
+		// checks the present expander, since the var's site reads no value
+		assertThat(
+				runSession("(defmacro sm [] :a)", "(add-watch #'sm :k (fn [k v o n] (println :macro (fn? o) (fn? n))))",
+						"(defmacro sm [] :b)", "(println (sm))", "(def sm-ok (atom true))",
+						"(set-validator! #'sm (fn [v] @sm-ok))", "(reset! sm-ok false)",
+						"(println (try (defmacro sm [] :c) (catch IllegalStateException e (ex-message e))))",
+						"(reset! sm-ok true)", "(remove-watch #'sm :k)", "(defmacro sm [] :d)", "(println (sm))"))
+			.isEqualTo(":macro true true\n:b\nInvalid reference state\n:d\n");
+	}
+
+	@Test
+	void aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded() {
+		// and a later buffer's deftest: the calls below it run the newest
+		// definition while the watches see the replaced test function
+		assertThat(runSession("(ns stest (:require [clojure.test :refer :all]))",
+				"(deftest st (do (println :old-body) (is (= 1 1))))",
+				"(add-watch #'st :k (fn [k v o n] (println :test (fn? o) (fn? n))))",
+				"(deftest st (do (println :new-body) (is (= 2 2))))", "(st)"))
+			.isEqualTo(":test true true\n:new-body\n");
+	}
+
+	@Test
 	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
 		// eval in a macro body lowers through the session's one lowering
 		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",

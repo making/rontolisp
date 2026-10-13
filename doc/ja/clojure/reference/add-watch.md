@@ -20,4 +20,4 @@ atom、ref、agent、var が変わるたびに、変えたスレッドで `(f ke
 11
 ```
 
-後の `def`・`defn` や `with-redefs` が var のルートを置き換えても、その var の watch は走りません（[仕様との差異](../deviations.md)）。
+後の `def`・`defn`・`defmacro`・`deftest` や `with-redefs` が var のルートを置き換えたときも、その var の watch はオラクルの `bindRoot` 同様に走ります（[仕様との差異](../deviations.md)）。
