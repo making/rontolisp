@@ -105,6 +105,20 @@ final class ClojureCoreLowering {
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "bit-and", "bit-or", "bit-xor", "bit-and-not":
+				// the oracle's on longs, two's complement over 64 bits (clojure.lisp
+				// "Bit operations"): variadic, two or more arguments
+				arity(name, n, 2, -1);
+				return worker(name, ctx.lowers(items, 1).toArray(new LispVal[0]));
+			case "bit-not":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right", "bit-set", "bit-clear", "bit-flip",
+					"bit-test":
+				// a shift count or bit index masked to 6 bits, the answer wrapped
+				// to 64 bits; bit-test answers T-or-false
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "key", "val", "map-entry?":
 				arity(name, n, 1, 1);
 				return worker("map-entry?".equals(name) ? "map-entry-p" : name, ctx.lower(items.get(1)));
@@ -147,6 +161,165 @@ final class ClojureCoreLowering {
 			case "partition-by":
 				arity(name, n, 2, 2);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
+			case "reductions":
+				// the running reductions, stopping past a reduced answer's; of
+				// one collection the reductions from its first member
+				arity(name, n, 2, 3);
+				return n == 2
+						? worker("reductions-2", ClojureBindingLowering.realFnValue(ctx, items.get(1)),
+								ctx.lower(items.get(2)))
+						: worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
+								ctx.lower(items.get(3)));
+			case "random-sample":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "bounded-count":
+				arity(name, n, 2, 2);
+				return boundedCountForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "partitionv":
+				// partition's runs, each as a vector, in a vector
+				arity(name, n, 2, 4);
+				if (n == 2) {
+					// the size is also the step: one evaluation, bound once
+					LispSymbol size = ctx.freshTemp();
+					return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+							ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(size, ctx.lower(items.get(1))))),
+							worker(name, size, size, ctx.lower(items.get(2))));
+				}
+				return n == 3 ? worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)))
+						: worker("partitionv-pad", ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+								ctx.lower(items.get(3)), ctx.lower(items.get(4)));
+			case "partitionv-all":
+				arity(name, n, 2, 3);
+				if (n == 2) {
+					LispSymbol size = ctx.freshTemp();
+					return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+							ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(size, ctx.lower(items.get(1))))),
+							worker("partitionv-all", size, size, ctx.lower(items.get(2))));
+				}
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+			case "splitv-at":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "replicate":
+				// N copies of X, like repeat
+				arity(name, n, 2, 2);
+				return worker("repeat-n", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "xml-seq":
+				// the tree-seq over the :content of maps holding it
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "printf":
+				// the format printed, answering nil
+				arity(name, n, 1, -1);
+				return printfOf(ctx, items);
+			case "char-escape-string", "char-name-string", "munge", "namespace-munge":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "print-simple", "print-dup":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "print-ctor":
+				arity(name, n, 3, 3);
+				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.realFnValue(ctx, items.get(2)),
+						ctx.lower(items.get(3)));
+			case "all-ns":
+				arity(name, n, 0, 0);
+				return worker(name, ctx.knownNamespaces());
+			case "create-ns":
+				// the namespace made at run time; of a literal, later lower-time
+				// lookups find it too
+				arity(name, n, 1, 1);
+				noteCreatedNamespace(ctx, items.get(1));
+				return worker(name, ctx.lower(items.get(1)));
+			case "remove-ns":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "loaded-libs":
+				arity(name, n, 0, 0);
+				return worker(name, ctx.knownLoadedLibs());
+			case "intern":
+				// over a cell of its own; of a literal namespace, later
+				// lower-time lookups find the namespace too
+				arity(name, n, 2, 3);
+				noteCreatedNamespace(ctx, items.get(1));
+				return n == 2 ? worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)))
+						: worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)),
+								ClojureLowering.TRUE_CONST);
+			case "var-set", "with-redefs-fn":
+				arity(name, n, 2, 2);
+				if (name.equals("with-redefs-fn")) {
+					// a computed store may reach the map's vars: the program
+					// lowers again with every value-cell var site carrying its
+					// root setter, like a computed alter-var-root's
+					ctx.needRootSetters();
+				}
+				return name.equals("var-set") ? worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)))
+						: worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.realFnValue(ctx, items.get(2)));
+			case "ns-publics", "ns-interns", "ns-map", "ns-refers", "ns-aliases", "ns-imports":
+				// what the lowering knows of the namespace: anything computed
+				// it cannot know refuses at run time
+				arity(name, n, 1, 1);
+				return ClojureNamespaceLowering.mappingsOf(ctx, name, items.get(1));
+			case "requiring-resolve":
+				arity(name, n, 1, 1);
+				return requiringResolveOf(ctx, items);
+			case "load-string":
+				arity(name, n, 1, 1);
+				return items.get(1) instanceof LispString text ? loadStringOf(ctx, text.value())
+						: worker("load-string-here", ctx.lower(items.get(1)));
+			case "load-file":
+				arity(name, n, 1, 1);
+				return items.get(1) instanceof LispString path
+						? loadStringOf(ctx, ClojureNamespaceLowering.fileTextOf(ctx, path.value()))
+						: worker("load-file-here", ctx.lower(items.get(1)));
+			case "load-reader":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "compile":
+				throw new LispReadException(
+						"compile is not supported yet: namespaces compile ahead of time, never at run time");
+			case "bean", "supers", "bases":
+				throw new LispReadException(
+						name + " is not supported yet: host classes are not answered on every backend");
+			case "clojure-version":
+				throw new LispReadException("clojure-version is not supported yet: no release of Clojure runs here");
+			case "destructure":
+				throw new LispReadException("destructure is not supported yet: the destructuring map has no lowering");
+			case "proxy-mappings", "proxy-name", "proxy-super", "proxy-call-with-super", "construct-proxy",
+					"init-proxy", "update-proxy", "get-proxy-class", "method-sig":
+				throw new LispReadException(name + " is not supported yet: proxy construction is not reified here");
+			case "chunk", "chunk-append", "chunk-buffer", "chunk-cons", "chunk-first", "chunk-next", "chunk-rest",
+					"->ArrayChunk":
+				throw new LispReadException(name + " is not supported yet: sequences chunk nowhere here");
+			case "->Vec", "->VecNode", "->VecSeq", "->Eduction", "-cache-protocol-fn", "-reset-methods":
+				throw new LispReadException(
+						name + " is not supported yet: construction of clojure.lang internals is not supported");
+			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!":
+				throw new LispReadException(name + " is not supported yet: streaming reduction has no lowering");
+			case "future-call", "pcalls", "seque", "await1":
+				throw new LispReadException(name + " is not supported yet: there is no thread pool on any backend");
+			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!":
+				throw new LispReadException(
+						name + " is not supported yet: agents take no custom executor on any backend");
+			case "tap>", "add-tap", "remove-tap":
+				throw new LispReadException(name + " is not supported yet: taps have no rendezvous design");
+			case "enumeration-seq":
+				throw new LispReadException(
+						"enumeration-seq is not supported yet: host enumerations stop at the host boundary");
+			case "resultset-seq":
+				throw new LispReadException("resultset-seq is not supported yet: JDBC stops at the host boundary");
+			case "halt-when":
+				throw new LispReadException("halt-when is not supported yet: its transducer has no lowering");
+			case "get-thread-bindings":
+				throw new LispReadException(
+						"get-thread-bindings is not supported yet: thread bindings are not reified at run time");
+			case "bound-fn*":
+				throw new LispReadException(
+						"bound-fn* is not supported yet: thread bindings are not reified at run time");
+			case "read+string":
+				throw new LispReadException(
+						"read+string is not supported yet: reading the consumed text needs a position-tracking reader");
 			case "with-bindings*":
 				return ClojureStateLowering.withBindingsStarOf(ctx, items);
 			case "push-thread-bindings", "pop-thread-bindings":
@@ -263,18 +436,27 @@ final class ClojureCoreLowering {
 					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
 					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
 					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta", "empty", "comparator", "hash-set",
-					"int", "long", "double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec",
-					"rationalize", "numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short",
-					"unchecked-byte", "unchecked-char", "unchecked-double", "unchecked-float", "unchecked-inc",
-					"unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
-					"unchecked-negate-int", "unchecked-add", "unchecked-subtract", "unchecked-multiply",
-					"unchecked-add-int", "unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
+					"bit-and", "bit-or", "bit-xor", "bit-and-not", "bit-not", "bit-shift-left", "bit-shift-right",
+					"unsigned-bit-shift-right", "bit-set", "bit-clear", "bit-flip", "bit-test", "int", "long", "double",
+					"float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize", "numerator",
+					"denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
+					"unchecked-char", "unchecked-double", "unchecked-float", "unchecked-inc", "unchecked-dec",
+					"unchecked-negate", "unchecked-inc-int", "unchecked-dec-int", "unchecked-negate-int",
+					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
+					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
 					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
-					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method", "tree-seq",
-					"flatten" ->
+					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method", "tree-seq", "flatten",
+					"reductions", "random-sample", "partitionv", "partitionv-all", "splitv-at", "replicate", "xml-seq",
+					"printf", "char-escape-string", "char-name-string", "print-simple", "print-dup", "print-ctor",
+					"munge", "namespace-munge", "create-ns", "remove-ns", "intern", "var-set", "load-string",
+					"load-file", "load-reader", "requiring-resolve" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "with-redefs-fn" -> {
+				ctx.needRootSetters();
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("with-redefs-fn-v"));
+			}
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
@@ -290,6 +472,25 @@ final class ClojureCoreLowering {
 				LispSymbol arg = ctx.freshTemp();
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(arg),
 						worker(name, arg, ctx.knownNamespaces()));
+			}
+			case "bounded-count" -> {
+				// count has no worker of its own: the value is a two-argument
+				// lambda over the inlined count, like the call
+				LispSymbol count = ctx.freshTemp();
+				LispSymbol coll = ctx.freshTemp();
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(count, coll),
+						boundedCountForm(ctx, count, coll));
+			}
+			case "all-ns", "loaded-libs" -> {
+				LispVal known = name.equals("all-ns") ? ctx.knownNamespaces() : ctx.knownLoadedLibs();
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+						worker(name, known));
+			}
+			case "ns-publics", "ns-interns", "ns-map", "ns-refers", "ns-aliases", "ns-imports" -> {
+				// only what the lowering knows maps; anything computed refuses
+				LispSymbol designator = ctx.freshTemp();
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(designator),
+						worker("ns-computed-here", LispString.literal(name), designator));
 			}
 			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);
 			default -> null;
@@ -454,6 +655,130 @@ final class ClojureCoreLowering {
 		if (n < min || (max >= 0 && n > max)) {
 			throw new LispReadException("Wrong number of args (" + n + ") passed to: clojure.core/" + name);
 		}
+	}
+
+	/**
+	 * {@code (bounded-count n coll)} over already-lowered forms: the count when the
+	 * collection is counted, else the seq walked up to N -- count has no worker of its
+	 * own, so the inlined count answers the counted arm. Both forms evaluate in order,
+	 * bound once.
+	 * @param ctx the hub
+	 * @param count the lowered bound
+	 * @param coll the lowered collection
+	 * @return the lowered call
+	 */
+	static LispVal boundedCountForm(ClojureLowering ctx, LispVal count, LispVal coll) {
+		LispSymbol bound = ctx.freshTemp();
+		LispSymbol target = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil
+					.list(List.of(ClojureLowerUtil.list(bound, count), ClojureLowerUtil.list(target, coll))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), worker("is-counted", target),
+						ClojureCollectionLowering.countForm(ctx, target),
+						worker("bounded-count-walk", bound, ClojureSeqLowering.seqForm(ctx, target))));
+	}
+
+	/**
+	 * {@code (printf fmt args...)}: the format printed to {@code *out*}, answering nil --
+	 * the {@code format} lowering's text through {@code princ}.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal printfOf(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> formatItems = new ArrayList<>();
+		formatItems.add(new LispSymbol("format"));
+		formatItems.addAll(items.subList(1, items.size()));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), ClojureFormatLowering.formatOf(ctx, formatItems)),
+				ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * The namespace a {@code create-ns} or {@code intern} names literally, recorded where
+	 * the program lowers, so a later lower-time lookup finds what the call makes at run
+	 * time.
+	 * @param ctx the hub
+	 * @param designator the namespace designator datum
+	 */
+	static void noteCreatedNamespace(ClojureLowering ctx, LispVal designator) {
+		String ns = ClojureNamespaceLowering.literalSymbol(designator);
+		if (ns != null) {
+			ctx.createdNamespaces.add(ns);
+		}
+	}
+
+	/**
+	 * {@code (requiring-resolve sym)} of a quoted symbol: the namespace loaded where it
+	 * is a project one, then the var {@code resolve} answers -- nil for a name that names
+	 * nothing, like the oracle's. Any other argument resolves at run time, which refuses.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal requiringResolveOf(ClojureLowering ctx, List<LispVal> items) {
+		String name = ClojureNamespaceLowering.literalSymbol(items.get(1));
+		if (name == null || name.startsWith(":")) {
+			return worker("requiring-resolve-here", ctx.lower(items.get(1)));
+		}
+		int slash = ClojureLowering.qualifierSlash(name);
+		if (slash > 0) {
+			String ns = name.substring(0, slash);
+			if (!ClojureNamespaceLowering.isKnownNamespace(ns) && !ns.equals(ClojureCoreNames.NAMESPACE)) {
+				ClojureNamespaceLowering.loadNamespace(ctx, ns);
+				LispVal init = ctx.requireCall(ns, ClojureLowering.LoadMode.GUARDED);
+				if (init != null) {
+					ctx.hoisted.add(init);
+				}
+			}
+		}
+		return ClojureVarLowering.resolved(ctx, name);
+	}
+
+	/**
+	 * {@code (load-string text)} of a literal string: its datums lowered where the call
+	 * stands, in the current namespace -- definitions declare ahead like a file's, macros
+	 * hand over for the rest of the string -- answering the last datum's value, nil of an
+	 * empty string. A namespace the text switches to is restored for the lowering after
+	 * the call (its switch still runs).
+	 * @param ctx the hub
+	 * @param text the string
+	 * @return the lowered call
+	 */
+	static LispVal loadStringOf(ClojureLowering ctx, String text) {
+		ClojureReader reader = new ClojureReader(text, ctx.loadingFile);
+		List<LispVal> datums = reader.readAll();
+		ctx.declare(datums);
+		String outerNs = ctx.currentNs;
+		boolean top = ctx.atTopLevel();
+		List<LispVal> forms = new ArrayList<>();
+		try {
+			for (LispVal datum : datums) {
+				if (top) {
+					List<LispVal> own = ctx.topLevels(datum);
+					for (LispVal one : own) {
+						ClojureMacroLowering.handOver(ctx, datum, List.of(one));
+					}
+					forms.addAll(own);
+				}
+				else {
+					forms.add(ctx.lowerDetached(datum));
+				}
+			}
+		}
+		finally {
+			ctx.currentNs = outerNs;
+		}
+		if (forms.isEmpty()) {
+			return ClojureLowering.NIL_CONST;
+		}
+		if (forms.size() == 1) {
+			return forms.get(0);
+		}
+		List<LispVal> progn = new ArrayList<>();
+		progn.add(ClojureLowerUtil.sym("progn"));
+		progn.addAll(forms);
+		return ClojureLowerUtil.list(progn);
 	}
 
 }

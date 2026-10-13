@@ -13,6 +13,26 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 | `find-ns` | `(find-ns 'no-such)` | `nil` |
 | `ns-name` | `(ns-name *ns*)` | `user` |
 | `ns-resolve` | `(ns-resolve 'clojure.core 'inc)` | `#'clojure.core/inc` |
+| `all-ns` | `(contains? (set (map str (all-ns))) "clojure.core")` | `true` |
+| `create-ns` | `(ns-name (create-ns 'demo))` | `demo` |
+| `remove-ns` | `(do (create-ns 'gone) (remove-ns 'gone) (some? (find-ns 'gone)))` | `false` |
+| `loaded-libs` | `(do (require 'clojure.string) (contains? (set (map str (loaded-libs))) "clojure.string"))` | `true` |
+| `intern` | `(intern 'user 'eg 7)` | `#'user/eg` |
+| `var-set` | `(try (var-set (intern 'user 'eg) 1) (catch IllegalStateException e :refused))` | `:refused` |
+| `with-redefs-fn` | `(def rd-x 1) (with-redefs-fn {(var rd-x) 99} (fn [] rd-x))` | `99` |
+| `ns-publics` | `(get (ns-publics 'clojure.core) 'map)` | `#'clojure.core/map` |
+| `ns-interns` | `(contains? (ns-interns 'clojure.core) 'map)` | `true` |
+| `ns-map` | `(get (ns-map 'user) 'map)` | `#'clojure.core/map` |
+| `ns-refers` | `(do (refer 'clojure.string :only '[join]) (some? (get (ns-refers 'user) 'join)))` | `true` |
+| `ns-aliases` | `(do (alias 's 'clojure.string) (ns-name (get (ns-aliases 'user) 's)))` | `clojure.string` |
+| `ns-imports` | `(get (ns-imports 'user) 'String)` | `java.lang.String` |
+| `alias` | `(do (alias 's 'clojure.string) (s/join "-" ["a"]))` | `a-b` |
+| `refer` | `(do (refer 'clojure.string :only '[upper-case]) (upper-case "ab"))` | `AB` |
+| `ns-unmap` | `(do (refer 'clojure.string :only '[join]) (ns-unmap 'user 'join) (get (ns-refers 'user) 'join))` | `nil` |
+| `ns-unalias` | `(do (alias 's 'clojure.string) (ns-unalias 'user 's) (get (ns-aliases 'user) 's))` | `nil` |
+| `requiring-resolve` | `(requiring-resolve 'clojure.string/join)` | `#'clojure.string/join` |
+| `load-string` | `(load-string "(+ 1 2)")` | `3` |
+| `load-file` | `(load-file "helper.clj")` | the file's last value |
 
 ## Built-in namespaces
 

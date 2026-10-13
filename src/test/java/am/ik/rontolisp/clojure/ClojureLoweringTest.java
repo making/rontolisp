@@ -2413,9 +2413,8 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("clojure.core/nope", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such var: clojure.core/nope");
-		assertThatThrownBy(() -> Clojure.read("(clojure.core/bit-shift-left 1 2)", null, ClojureMacroTime.create()))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.core/bit-shift-left");
+		// bit-shift-left lowers since f67 (was unknown)
+		assertThat(lowered("(clojure.core/bit-shift-left 1 2)")).contains("RONTOLISP::%CLOJURE-BIT-SHIFT-LEFT");
 	}
 
 	@Test
@@ -2441,6 +2440,125 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("`~@x", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unquote-splicing outside a sequence");
 		assertThat(lowered("(def spl-v [1]) `{:a ~@spl-v}")).contains("APPEND");
+	}
+
+	@Test
+	void bitOperationsLowerToWorkersWithOracleArities() {
+		// f67: the bit operations are backlog workers (ClojureCoreLowering), each
+		// with its -v value
+		assertThat(lowered("(bit-and 1 2 3)")).contains("(RONTOLISP::%CLOJURE-BIT-AND ");
+		assertThat(lowered("(bit-and-not 1 2)")).contains("(RONTOLISP::%CLOJURE-BIT-AND-NOT ");
+		assertThat(lowered("(bit-not 1)")).contains("(RONTOLISP::%CLOJURE-BIT-NOT ");
+		assertThat(lowered("(unsigned-bit-shift-right 1 2)"))
+			.contains("(RONTOLISP::%CLOJURE-UNSIGNED-BIT-SHIFT-RIGHT ");
+		assertThat(lowered("(map bit-test [1])")).contains("#'RONTOLISP::%CLOJURE-BIT-TEST-V");
+		assertThatThrownBy(() -> Clojure.read("(bit-and 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/bit-and");
+		assertThatThrownBy(() -> Clojure.read("(bit-not 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/bit-not");
+		assertThatThrownBy(() -> Clojure.read("(bit-test 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/bit-test");
+		assertThatThrownBy(() -> Clojure.read("(bit-shift-left 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/bit-shift-left");
+	}
+
+	@Test
+	void seqAndPrintingBacklogLowersToWorkersWithOracleArities() {
+		// f67: reductions, random-sample, bounded-count, partitionv,
+		// partitionv-all, splitv-at, replicate, xml-seq and the printing verbs
+		assertThat(lowered("(reductions + [1])")).contains("(RONTOLISP::%CLOJURE-REDUCTIONS-2 ");
+		assertThat(lowered("(reductions + 0 [1])")).contains("(RONTOLISP::%CLOJURE-REDUCTIONS ");
+		assertThat(lowered("(random-sample 0.5 [1])")).contains("(RONTOLISP::%CLOJURE-RANDOM-SAMPLE ");
+		assertThat(lowered("(bounded-count 2 [1])")).contains("(RONTOLISP::%CLOJURE-BOUNDED-COUNT-WALK ");
+		assertThat(lowered("(partitionv 2 [1])")).contains("(RONTOLISP::%CLOJURE-PARTITIONV ");
+		assertThat(lowered("(partitionv-all 2 [1])")).contains("(RONTOLISP::%CLOJURE-PARTITIONV-ALL ");
+		assertThat(lowered("(splitv-at 1 [1])")).contains("(RONTOLISP::%CLOJURE-SPLITV-AT ");
+		assertThat(lowered("(replicate 2 :a)")).contains("(RONTOLISP::%CLOJURE-REPEAT-N ");
+		assertThat(lowered("(xml-seq {:a 1})")).contains("(RONTOLISP::%CLOJURE-XML-SEQ ");
+		assertThat(lowered("(printf \"%d\" 1)")).contains("PRINC");
+		assertThat(lowered("(char-escape-string \\a)")).contains("(RONTOLISP::%CLOJURE-CHAR-ESCAPE-STRING ");
+		assertThat(lowered("(char-name-string \\a)")).contains("(RONTOLISP::%CLOJURE-CHAR-NAME-STRING ");
+		assertThat(lowered("(munge \"a\")")).contains("(RONTOLISP::%CLOJURE-MUNGE ");
+		assertThat(lowered("(namespace-munge \"a\")")).contains("(RONTOLISP::%CLOJURE-NAMESPACE-MUNGE ");
+		assertThat(lowered("(print-simple :a *out*)")).contains("(RONTOLISP::%CLOJURE-PRINT-SIMPLE ");
+		assertThat(lowered("(print-dup :a *out*)")).contains("(RONTOLISP::%CLOJURE-PRINT-DUP ");
+		assertThat(lowered("(print-ctor :a (fn [o w] o) *out*)")).contains("(RONTOLISP::%CLOJURE-PRINT-CTOR ");
+		assertThatThrownBy(() -> Clojure.read("(reductions +)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/reductions");
+		assertThatThrownBy(() -> Clojure.read("(partitionv 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/partitionv");
+		assertThatThrownBy(() -> Clojure.read("(print-simple :a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/print-simple");
+		assertThatThrownBy(() -> Clojure.read("(printf)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/printf");
+	}
+
+	@Test
+	void namespaceMappingsAnswerWhatTheLoweringKnows() {
+		// f67: all-ns, create-ns, remove-ns, loaded-libs, intern, var-set,
+		// with-redefs-fn and the mapping verbs lower; anything computed refuses
+		// at run time
+		assertThat(lowered("(all-ns)")).contains("(RONTOLISP::%CLOJURE-ALL-NS '(");
+		assertThat(lowered("(create-ns 'foo)")).contains("(RONTOLISP::%CLOJURE-CREATE-NS ");
+		assertThat(lowered("(remove-ns 'foo)")).contains("(RONTOLISP::%CLOJURE-REMOVE-NS ");
+		assertThat(lowered("(loaded-libs)")).contains("(RONTOLISP::%CLOJURE-LOADED-LIBS ");
+		assertThat(lowered("(intern 'user 'x 1)")).contains("(RONTOLISP::%CLOJURE-INTERN ");
+		assertThat(lowered("(def f67-vs 1) (var-set (var f67-vs) 2)")).contains("(RONTOLISP::%CLOJURE-VAR-SET ");
+		assertThat(lowered("(with-redefs-fn {} (fn [] 1))")).contains("(RONTOLISP::%CLOJURE-WITH-REDEFS-FN ");
+		assertThat(lowered("(def f67-ns-x 1) (get (ns-publics 'user) 'f67-ns-x)"))
+			.contains("RONTOLISP::%CLOJURE-VAR \"user/f67-ns-x\"");
+		assertThat(lowered("(get (ns-map 'user) 'map)")).contains("RONTOLISP::%CLOJURE-VAR \"clojure.core/map\"");
+		assertThat(lowered("(ns-publics (the-ns 'user))")).contains("(RONTOLISP::%CLOJURE-NS-COMPUTED-HERE ");
+		assertThat(lowered("(fn [s] (load-string s))")).contains("(RONTOLISP::%CLOJURE-LOAD-STRING-HERE ");
+		assertThat(lowered("(load-string \"(prn 1)\")")).contains("RONTOLISP::%CLOJURE-WRITE-DATUM");
+		assertThat(lowered("(requiring-resolve 'clojure.string/join)"))
+			.contains("RONTOLISP::%CLOJURE-VAR \"clojure.string/join\"");
+		assertThatThrownBy(() -> Clojure.read("(intern 'user)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/intern");
+		assertThatThrownBy(() -> Clojure.read("(create-ns)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/create-ns");
+	}
+
+	@Test
+	void hostOnlyVarsAreRefusedByName() {
+		// f67: what no backend answers is refused naming the reason, never an
+		// unknown name
+		assertThatThrownBy(() -> Clojure.read("(bean x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("bean is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(supers x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("supers is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(clojure-version)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("clojure-version is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(destructure x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("destructure is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(future-call f)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("there is no thread pool on any backend");
+		assertThatThrownBy(() -> Clojure.read("(seque x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("there is no thread pool on any backend");
+		assertThatThrownBy(() -> Clojure.read("(tap> x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("taps have no rendezvous design");
+		assertThatThrownBy(() -> Clojure.read("(send-via e a f)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("agents take no custom executor");
+		assertThatThrownBy(() -> Clojure.read("(halt-when p)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("halt-when is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(enumeration-seq x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("enumeration-seq is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(resultset-seq x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("resultset-seq is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(compile 'foo)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("compile is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(bound-fn* f)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("bound-fn* is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(get-thread-bindings)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("get-thread-bindings is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(read+string s)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("read+string is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(chunk x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("sequences chunk nowhere here");
+		assertThatThrownBy(() -> Clojure.read("(->Vec x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("clojure.lang internals is not supported");
+		assertThatThrownBy(() -> Clojure.read("(proxy-mappings x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy construction is not reified here");
 	}
 
 	@Test
@@ -2614,8 +2732,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("#'*ns*"))
 			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*ns*\" (LAMBDA NIL RONTOLISP::%CLOJURE-NS)")
 			.contains("(LAMBDA NIL 1)");
-		assertThatThrownBy(() -> Clojure.read("#'all-ns", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/all-ns");
+		// all-ns names a zero-argument function value since f67 (was refused)
+		assertThat(lowered("#'all-ns")).contains("RONTOLISP::%CLOJURE-ALL-NS '(");
 		assertThatThrownBy(() -> Clojure.read("#'if", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve var: if in this context");
 		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)

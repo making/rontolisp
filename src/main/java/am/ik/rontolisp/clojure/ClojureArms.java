@@ -926,7 +926,10 @@ public final class ClojureArms {
 		 * {@code find-ns} hand one to the program.
 		 */
 		NAMESPACE("namespace", Set.of("RONTOLISP::%CLOJURE-NS-OBJECT-P"), Set.of(), Map.of(),
-				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS"),
+				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS",
+						"RONTOLISP::%CLOJURE-ALL-NS", "RONTOLISP::%CLOJURE-CREATE-NS", "RONTOLISP::%CLOJURE-REMOVE-NS",
+						"RONTOLISP::%CLOJURE-LOADED-LIBS", "RONTOLISP::%CLOJURE-INTERN", "RONTOLISP::%CLOJURE-VAR-SET",
+						"RONTOLISP::%CLOJURE-WITH-REDEFS-FN"),
 				Set.of()),
 
 		/**

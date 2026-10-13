@@ -327,9 +327,12 @@
 
 (defun rontolisp::%clojure-print-method-p (x readable stream)
   "Write X through its type's print-method when it is a record or deftype with
-   one, READABLE the side the printer is on, and answer T; NIL otherwise."
+   one, READABLE the side the printer is on, and answer T; NIL otherwise.
+   print-dup never applies one (the oracle's is its own multimethod), so under
+   %clojure-print-dup-quiet there is none."
   (let ((method
-         (if (and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
+         (if (and (null rontolisp::%clojure-print-dup-quiet) (consp x)
+                  (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
              (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
              nil)))
     (if method
@@ -1105,6 +1108,191 @@
   (rontolisp::%clojure-check-arity args 0 0 "flush")
   (finish-output *standard-output*)
   nil)
+
+;;;; The printing backlog: printf, char-escape-string, char-name-string,
+;; print-simple, print-dup, print-ctor, munge and namespace-munge. Each is one
+;; worker after a lower-time arity check in the oracle's wording, and a -v
+;; entry as a value. print-simple writes as print writes, print-dup as pr
+;; writes except for the readable #= constructions (an array map's and the
+;; sorted collections'; a record, a queue and every other value print as pr
+;; prints them).
+
+(defun rontolisp::%clojure-printf-v (&rest args)
+  "printf as a value: the format printed, nil."
+  (rontolisp::%clojure-check-arity args 1 nil "printf")
+  (princ (apply #'rontolisp::%clojure-format-v args))
+  nil)
+
+(defun rontolisp::%clojure-char-escape-string (c)
+  "(char-escape-string c): the escape of the character C (tab, newline,
+   return, formfeed, backspace, backslash, double quote), nil for any other
+   character and for anything else, like the oracle's."
+  (if (characterp c)
+      (let ((code (char-code c)))
+        (cond ((= code 9) "\\t")
+              ((= code 10) "\\n")
+              ((= code 13) "\\r")
+              ((= code 12) "\\f")
+              ((= code 8) "\\b")
+              ((= code 92) "\\\\")
+              ((= code 34) "\\\"")
+              (t nil)))
+      nil))
+
+(defun rontolisp::%clojure-char-escape-string-v (&rest args)
+  "char-escape-string as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "char-escape-string")
+  (rontolisp::%clojure-char-escape-string (car args)))
+
+(defun rontolisp::%clojure-char-name-string (c)
+  "(char-name-string c): the name of the character C (space, tab, newline,
+   return, backspace, formfeed), nil for any other character and for anything
+   else, like the oracle's."
+  (if (characterp c)
+      (let ((code (char-code c)))
+        (cond ((= code 32) "space")
+              ((= code 9) "tab")
+              ((= code 10) "newline")
+              ((= code 13) "return")
+              ((= code 8) "backspace")
+              ((= code 12) "formfeed")
+              (t nil)))
+      nil))
+
+(defun rontolisp::%clojure-char-name-string-v (&rest args)
+  "char-name-string as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "char-name-string")
+  (rontolisp::%clojure-char-name-string (car args)))
+
+(defun rontolisp::%clojure-munge-char (code)
+  "The munged spelling of the character of code CODE: a dash is an
+   underscore, every other mapped character its _NAME_, anything else the
+   character itself."
+  (cond ((= code 45) "_")
+        ((= code 43) "_PLUS_")
+        ((= code 42) "_STAR_")
+        ((= code 63) "_QMARK_")
+        ((= code 33) "_BANG_")
+        ((= code 60) "_LT_")
+        ((= code 62) "_GT_")
+        ((= code 61) "_EQ_")
+        ((= code 39) "_SQUOTE_")
+        ((= code 34) "_DQUOTE_")
+        ((= code 47) "_SLASH_")
+        ((= code 58) "_COLON_")
+        ((= code 126) "_TILDE_")
+        ((= code 64) "_CIRCA_")
+        ((= code 35) "_SHARP_")
+        ((= code 37) "_PERCENT_")
+        ((= code 94) "_CARET_")
+        ((= code 38) "_AMPERSAND_")
+        ((= code 124) "_BAR_")
+        ((= code 123) "_LBRACE_")
+        ((= code 125) "_RBRACE_")
+        ((= code 92) "_BSLASH_")
+        (t (string (code-char code)))))
+
+(defun rontolisp::%clojure-munge (x)
+  "(munge x): the str of X with every character munged, like the oracle's."
+  (let ((s (rontolisp::%clojure-str-of x "" nil)) (acc nil))
+    (dotimes (i (length s))
+      (setq acc
+            (cons (rontolisp::%clojure-munge-char (char-code (char s i))) acc)))
+    (apply #'concatenate 'string (reverse acc))))
+
+(defun rontolisp::%clojure-munge-v (&rest args)
+  "munge as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "munge")
+  (rontolisp::%clojure-munge (car args)))
+
+(defun rontolisp::%clojure-namespace-munge (x)
+  "(namespace-munge x): the str of X with every dash an underscore, like the
+   oracle's."
+  (let ((s (rontolisp::%clojure-str-of x "" nil)) (acc nil))
+    (dotimes (i (length s))
+      (setq acc (cons (if (char= (char s i) #\-) "_" (string (char s i))) acc)))
+    (apply #'concatenate 'string (reverse acc))))
+
+(defun rontolisp::%clojure-namespace-munge-v (&rest args)
+  "namespace-munge as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "namespace-munge")
+  (rontolisp::%clojure-namespace-munge (car args)))
+
+(defun rontolisp::%clojure-print-simple (x w)
+  "(print-simple x w): X printed as print prints it, on W; answers nil. A
+   writer that is no stream signals the CL type error, which reads as the
+   oracle's ClassCastException."
+  (rontolisp::%clojure-print x "nil" nil w)
+  nil)
+
+(defun rontolisp::%clojure-print-simple-v (&rest args)
+  "print-simple as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "print-simple")
+  (rontolisp::%clojure-print-simple (car args) (car (cdr args))))
+
+(defvar rontolisp::%clojure-print-dup-quiet
+  nil
+  "When true, the printer skips a program print-method: print-dup's side.")
+
+(defun rontolisp::%clojure-print-dup-to (x w)
+  "(print-dup x w): X printed as pr prints it, on W -- except an array map
+   (eight or fewer entries) and the sorted collections, which print as the
+   oracle's readable #= constructions; answers nil. A program print-method
+   never applies: the oracle's print-dup is its own multimethod."
+  (cond ((and (hash-table-p x) (<= (hash-table-count x) 8))
+         (write-string "#=(" w)
+         (write-string (rontolisp::%clojure-class-name-of x) w)
+         (write-string "/create " w)
+         (rontolisp::%clojure-print x "nil" t w)
+         (write-char #\) w))
+        ((rontolisp::%clojure-sorted-map-p x)
+         (write-string "#=(clojure.lang.PersistentTreeMap/create " w)
+         (rontolisp::%clojure-print (rontolisp::%clojure-sorted-dup-map x) "nil"
+                                    t w)
+         (write-char #\) w))
+        ((rontolisp::%clojure-sorted-set-p x)
+         (write-string "#=(clojure.lang.PersistentTreeSet/create " w)
+         (rontolisp::%clojure-print (car (cdr (cdr (cdr x)))) "nil" t w)
+         (write-char #\) w))
+        (t (rontolisp::%clojure-print x "nil" t w)))
+  nil)
+
+(defun rontolisp::%clojure-sorted-dup-map (s)
+  "The sorted map S as a plain insertion-ordered table: the readable map its
+   print-dup #= construction carries."
+  (let ((m (make-hash-table :test 'equal)))
+    (let ((items (car (cdr (cdr (cdr s))))))
+      (dotimes (i (length items))
+        (let ((entry (aref items i)))
+          (setf (gethash (aref entry 0) m) (aref entry 1)))))
+    m))
+
+(defun rontolisp::%clojure-print-dup (x w)
+  "(print-dup x w): X through %clojure-print-dup-to, outside any program
+   print-method."
+  (let ((rontolisp::%clojure-print-dup-quiet t))
+    (rontolisp::%clojure-print-dup-to x w)))
+
+(defun rontolisp::%clojure-print-dup-v (&rest args)
+  "print-dup as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "print-dup")
+  (rontolisp::%clojure-print-dup (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-print-ctor (x f w)
+  "(print-ctor x f w): the #= construction of X's class around what the
+   function F writes of X on W; answers nil."
+  (write-string "#=(" w)
+  (write-string (rontolisp::%clojure-class-name-of x) w)
+  (write-string ". " w)
+  (rontolisp::%clojure-call f (list x w))
+  (write-char #\) w)
+  nil)
+
+(defun rontolisp::%clojure-print-ctor-v (&rest args)
+  "print-ctor as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "print-ctor")
+  (rontolisp::%clojure-print-ctor (car args) (car (cdr args))
+                                  (car (cdr (cdr args)))))
 
 (defun rontolisp::%clojure-read-line-v (&rest args)
   "read-line as a value: the next line of *in*, nil past the end."
@@ -5162,6 +5350,137 @@
   "flatten as a value."
   (rontolisp::%clojure-check-arity args 1 1 "flatten")
   (rontolisp::%clojure-flatten (car args)))
+
+;;;; The seq backlog: reductions, random-sample, bounded-count, partitionv,
+;; partitionv-all, splitv-at, replicate and xml-seq. Each is one worker after a
+;; lower-time arity check in the oracle's wording, and a -v entry as a value
+;; (bounded-count's value is a lambda over the inlined count, which has no
+;; worker of its own).
+
+(defun rontolisp::%clojure-reductions (f init coll)
+  "(reductions f init coll): INIT and each reduction of the real function F,
+   stopping past a reduced value's answer; lazy when COLL is lazy, strict
+   otherwise."
+  (rontolisp::%clojure-lazy-or-strict coll
+   (rontolisp::%clojure-reductions-lazy f init (rontolisp::%clojure-seq coll))))
+
+(defun rontolisp::%clojure-reductions-2 (f coll)
+  "(reductions f coll): the reductions from the first member, or ((f)) of an
+   empty collection, like the oracle's."
+  (let ((s (rontolisp::%clojure-seq coll)))
+    (if (null s)
+        (list (rontolisp::%clojure-call f nil))
+        (rontolisp::%clojure-reductions f (car s) (cdr s)))))
+
+(defun rontolisp::%clojure-reductions-lazy (f acc s)
+  "The lazy arm of %clojure-reductions: ACC emitted, then the reductions from
+   ACC over S; a reduced answer is emitted unwrapped after ACC and ends the
+   seq."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (if (null s)
+         (list acc)
+         (let ((next (rontolisp::%clojure-call f (list acc (car s)))))
+           (if (rontolisp::%clojure-reduced-p next)
+               (list acc (rontolisp::%clojure-unreduced next))
+               (cons acc
+                     (rontolisp::%clojure-reductions-lazy f next (cdr s)))))))))
+
+(defun rontolisp::%clojure-reductions-v (&rest args)
+  "reductions as a value."
+  (rontolisp::%clojure-check-arity args 2 3 "reductions")
+  (if (cdr (cdr args))
+      (rontolisp::%clojure-reductions (rontolisp::%clojure-as-fn (car args))
+                                      (car (cdr args)) (car (cdr (cdr args))))
+      (rontolisp::%clojure-reductions-2 (rontolisp::%clojure-as-fn (car args))
+                                        (car (cdr args)))))
+
+(defun rontolisp::%clojure-random-sample (prob coll)
+  "(random-sample prob coll): the members kept with probability PROB, the
+   oracle's filter over its rand; lazy when COLL is lazy, strict otherwise."
+  (rontolisp::%clojure-filter (lambda (x)
+                                (declare (ignore x))
+                                (< (random 1.0) prob)) coll))
+
+(defun rontolisp::%clojure-random-sample-v (&rest args)
+  "random-sample as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "random-sample")
+  (rontolisp::%clojure-random-sample (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-bounded-count-walk (n s)
+  "The non-counted arm of bounded-count: S walked up to N members."
+  (let ((i 0))
+    (do ()
+        ((or (null s) (not (< i n))) i)
+      (setq i (+ i 1))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-partitionv (n step coll)
+  "(partitionv n step coll): partition's runs as vectors, in order -- a lazy
+   seq when COLL is lazy, a strict list otherwise, like the oracle's map over
+   partition."
+  (rontolisp::%clojure-map (lambda (run) (apply #'vector run))
+                           (list (rontolisp::%clojure-partition n step coll))))
+
+(defun rontolisp::%clojure-partitionv-pad (n step pad coll)
+  "(partitionv n step pad coll): partition-pad's runs as vectors, in order."
+  (rontolisp::%clojure-map (lambda (run) (apply #'vector run))
+   (list (rontolisp::%clojure-partition-pad n step pad coll))))
+
+(defun rontolisp::%clojure-partitionv-v (&rest args)
+  "partitionv as a value: [n coll], [n step coll] or [n step pad coll]."
+  (let ((n (rontolisp::%clojure-check-arity args 2 4 "partitionv")))
+    (cond ((= n 2)
+           (rontolisp::%clojure-partitionv (car args) (car args)
+                                           (car (cdr args))))
+          ((= n 3)
+           (rontolisp::%clojure-partitionv (car args) (car (cdr args))
+                                           (car (cdr (cdr args)))))
+          (t (rontolisp::%clojure-partitionv-pad (car args) (car (cdr args))
+              (car (cdr (cdr args))) (car (cdr (cdr (cdr args)))))))))
+
+(defun rontolisp::%clojure-partitionv-all (n step coll)
+  "(partitionv-all n step coll): partition-all's runs as vectors, in order."
+  (rontolisp::%clojure-map (lambda (run) (apply #'vector run))
+   (list (rontolisp::%clojure-partition-all n step coll))))
+
+(defun rontolisp::%clojure-partitionv-all-v (&rest args)
+  "partitionv-all as a value: [n coll] or [n step coll]."
+  (let ((n (rontolisp::%clojure-check-arity args 2 3 "partitionv-all")))
+    (if (= n 2)
+        (rontolisp::%clojure-partitionv-all (car args) (car args)
+                                            (car (cdr args)))
+        (rontolisp::%clojure-partitionv-all (car args) (car (cdr args))
+                                            (car (cdr (cdr args)))))))
+
+(defun rontolisp::%clojure-splitv-at (n coll)
+  "(splitv-at n coll): [(vec (take n coll)) (drop n coll)]."
+  (vector (apply #'vector (rontolisp::%clojure-take n coll))
+          (rontolisp::%clojure-drop n coll)))
+
+(defun rontolisp::%clojure-splitv-at-v (&rest args)
+  "splitv-at as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "splitv-at")
+  (rontolisp::%clojure-splitv-at (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-replicate-v (&rest args)
+  "replicate as a value: N copies of X, like repeat."
+  (rontolisp::%clojure-check-arity args 2 2 "replicate")
+  (rontolisp::%clojure-repeat-n (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-xml-seq (root)
+  "(xml-seq root): ROOT and the :content trees under it, in document order --
+   the oracle's tree-seq over non-strings."
+  (rontolisp::%clojure-tree-seq (lambda (n) (not (stringp n)))
+                                (lambda (n)
+                                  (if (hash-table-p n)
+                                      (gethash (list :C%KEYWORD "content") n)
+                                      nil)) root))
+
+(defun rontolisp::%clojure-xml-seq-v (&rest args)
+  "xml-seq as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "xml-seq")
+  (rontolisp::%clojure-xml-seq (car args)))
 
 (defun rontolisp::%clojure-repeatedly (f)
   "The infinite seq of (f) calls of the real function F."
@@ -12247,6 +12566,172 @@
   (rontolisp::%clojure-check-arity args 2 2 "unchecked-remainder-int")
   (rontolisp::%clojure-unchecked-remainder-int (car args) (cadr args)))
 
+;;;; Bit operations: the oracle's on longs.
+;;
+;; Every operand is a 64-bit integer (%clojure-bit-long, else the oracle's
+;; refusal); every shift count or bit index is masked to 6 bits, so
+;; (bit-shift-left 1 64) is 1; every answer is wrapped to 64 bits, so
+;; (bit-shift-left 1 63) is -9223372036854775808. CL logand/logior/logxor/lognot
+;; over two's-complement integers agree with the 64-bit operation wherever the
+;; operands are in range, and ash shifts them; the unsigned shift walks the
+;; value mod 2^64. An N-suffixed literal in range reads as a plain integer
+;; here, so (bit-and 5N 2) answers where the oracle refuses its BigInt.
+
+(defun rontolisp::%clojure-bit-long (x)
+  "X as a bit operation takes it: a 64-bit integer, else the oracle's
+   IllegalArgumentException over its class (its NullPointerException for
+   nil)."
+  (if (and (integerp x) (typep x '(signed-byte 64)))
+      x
+      (rontolisp::%clojure-illegal-argument-exception-of
+       (concatenate 'string "bit operation not supported for: "
+                    (if (null x)
+                        "null"
+                        (concatenate 'string "class "
+                                     (rontolisp::%clojure-class-name-of x))))
+       x)))
+
+(defun rontolisp::%clojure-bit-shift-count (n)
+  "N as a shift count or bit index: a 64-bit integer masked to 6 bits, else
+   the oracle's refusal."
+  (logand (rontolisp::%clojure-bit-long n) 63))
+
+(defun rontolisp::%clojure-bit-and (&rest xs)
+  "(bit-and xs): the operands ANDed, two's complement over 64 bits."
+  (let ((acc (rontolisp::%clojure-bit-long (car xs))))
+    (dolist (x (cdr xs) (rontolisp::%clojure-wrap-long acc))
+      (setq acc (logand acc (rontolisp::%clojure-bit-long x))))))
+
+(defun rontolisp::%clojure-bit-or (&rest xs)
+  "(bit-or xs): the operands ORed, two's complement over 64 bits."
+  (let ((acc (rontolisp::%clojure-bit-long (car xs))))
+    (dolist (x (cdr xs) (rontolisp::%clojure-wrap-long acc))
+      (setq acc (logior acc (rontolisp::%clojure-bit-long x))))))
+
+(defun rontolisp::%clojure-bit-xor (&rest xs)
+  "(bit-xor xs): the operands XORed, two's complement over 64 bits."
+  (let ((acc (rontolisp::%clojure-bit-long (car xs))))
+    (dolist (x (cdr xs) (rontolisp::%clojure-wrap-long acc))
+      (setq acc (logxor acc (rontolisp::%clojure-bit-long x))))))
+
+(defun rontolisp::%clojure-bit-and-not (&rest xs)
+  "(bit-and-not x ys): X ANDed with each member of YS complemented, two's
+   complement over 64 bits."
+  (let ((acc (rontolisp::%clojure-bit-long (car xs))))
+    (dolist (y (cdr xs) (rontolisp::%clojure-wrap-long acc))
+      (setq acc (logand acc (lognot (rontolisp::%clojure-bit-long y)))))))
+
+(defun rontolisp::%clojure-bit-not (x)
+  "(bit-not x): X complemented, two's complement over 64 bits."
+  (rontolisp::%clojure-wrap-long (lognot (rontolisp::%clojure-bit-long x))))
+
+(defun rontolisp::%clojure-bit-shift-left (x n)
+  "(bit-shift-left x n): X shifted left N places (N masked to 6 bits),
+   wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long
+   (ash (rontolisp::%clojure-bit-long x)
+        (rontolisp::%clojure-bit-shift-count n))))
+
+(defun rontolisp::%clojure-bit-shift-right (x n)
+  "(bit-shift-right x n): X shifted arithmetically right N places (N masked
+   to 6 bits)."
+  (rontolisp::%clojure-wrap-long
+   (ash (rontolisp::%clojure-bit-long x)
+        (- (rontolisp::%clojure-bit-shift-count n)))))
+
+(defun rontolisp::%clojure-unsigned-bit-shift-right (x n)
+  "(unsigned-bit-shift-right x n): X, read unsigned, shifted logically right
+   N places (N masked to 6 bits), wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long
+   (ash (logand (rontolisp::%clojure-bit-long x) (1- (ash 1 64)))
+        (- (rontolisp::%clojure-bit-shift-count n)))))
+
+(defun rontolisp::%clojure-bit-set (x n)
+  "(bit-set x n): X with bit N (masked to 6 bits) set."
+  (rontolisp::%clojure-wrap-long
+   (logior (rontolisp::%clojure-bit-long x)
+           (ash 1 (rontolisp::%clojure-bit-shift-count n)))))
+
+(defun rontolisp::%clojure-bit-clear (x n)
+  "(bit-clear x n): X with bit N (masked to 6 bits) cleared."
+  (rontolisp::%clojure-wrap-long
+   (logand (rontolisp::%clojure-bit-long x)
+           (lognot (ash 1 (rontolisp::%clojure-bit-shift-count n))))))
+
+(defun rontolisp::%clojure-bit-flip (x n)
+  "(bit-flip x n): X with bit N (masked to 6 bits) flipped."
+  (rontolisp::%clojure-wrap-long
+   (logxor (rontolisp::%clojure-bit-long x)
+           (ash 1 (rontolisp::%clojure-bit-shift-count n)))))
+
+(defun rontolisp::%clojure-bit-test (x n)
+  "(bit-test x n): whether bit N (masked to 6 bits) of X is set, T or false."
+  (if (zerop
+       (logand (rontolisp::%clojure-bit-long x)
+               (ash 1 (rontolisp::%clojure-bit-shift-count n))))
+      rontolisp::%clojure-false
+      t))
+
+(defun rontolisp::%clojure-bit-and-v (&rest args)
+  "bit-and as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "bit-and")
+  (apply #'rontolisp::%clojure-bit-and args))
+
+(defun rontolisp::%clojure-bit-or-v (&rest args)
+  "bit-or as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "bit-or")
+  (apply #'rontolisp::%clojure-bit-or args))
+
+(defun rontolisp::%clojure-bit-xor-v (&rest args)
+  "bit-xor as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "bit-xor")
+  (apply #'rontolisp::%clojure-bit-xor args))
+
+(defun rontolisp::%clojure-bit-and-not-v (&rest args)
+  "bit-and-not as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "bit-and-not")
+  (apply #'rontolisp::%clojure-bit-and-not args))
+
+(defun rontolisp::%clojure-bit-not-v (&rest args)
+  "bit-not as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bit-not")
+  (rontolisp::%clojure-bit-not (car args)))
+
+(defun rontolisp::%clojure-bit-shift-left-v (&rest args)
+  "bit-shift-left as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-shift-left")
+  (rontolisp::%clojure-bit-shift-left (car args) (cadr args)))
+
+(defun rontolisp::%clojure-bit-shift-right-v (&rest args)
+  "bit-shift-right as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-shift-right")
+  (rontolisp::%clojure-bit-shift-right (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unsigned-bit-shift-right-v (&rest args)
+  "unsigned-bit-shift-right as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unsigned-bit-shift-right")
+  (rontolisp::%clojure-unsigned-bit-shift-right (car args) (cadr args)))
+
+(defun rontolisp::%clojure-bit-set-v (&rest args)
+  "bit-set as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-set")
+  (rontolisp::%clojure-bit-set (car args) (cadr args)))
+
+(defun rontolisp::%clojure-bit-clear-v (&rest args)
+  "bit-clear as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-clear")
+  (rontolisp::%clojure-bit-clear (car args) (cadr args)))
+
+(defun rontolisp::%clojure-bit-flip-v (&rest args)
+  "bit-flip as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-flip")
+  (rontolisp::%clojure-bit-flip (car args) (cadr args)))
+
+(defun rontolisp::%clojure-bit-test-v (&rest args)
+  "bit-test as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "bit-test")
+  (rontolisp::%clojure-bit-test (car args) (cadr args)))
+
 (defun rontolisp::%clojure-rationalize-v (&rest args)
   "rationalize as a value."
   (rontolisp::%clojure-check-arity args 1 1 "rationalize")
@@ -13913,15 +14398,6 @@
       (write-string (car (cdr x)) stream))
   (write-char #\] stream))
 
-(defun rontolisp::%clojure-find-ns (x known)
-  "find-ns: the namespace the symbol X names when the program created it
-   (KNOWN, the names it created before the call), else nil."
-  (if (not (rontolisp::%clojure-real-symbol-p x))
-      (rontolisp::%clojure-class-cast-exception-of "find-ns needs a symbol" x))
-  (let ((name (rontolisp::%clojure-symbol-full-name x)) (found nil))
-    (dolist (k known) (if (equal k name) (setq found t)))
-    (if found (rontolisp::%clojure-ns-object name) nil)))
-
 (defun rontolisp::%clojure-the-ns (x known)
   "the-ns: X itself for a namespace, else the namespace the symbol X names,
    signalling like the oracle when the program created none."
@@ -13939,6 +14415,324 @@
    symbol."
   (rontolisp::%clojure-symbol-1
    (car (cdr (rontolisp::%clojure-the-ns x known)))))
+
+;;;; Namespaces as the program answers them: all-ns, create-ns, remove-ns,
+;; loaded-libs, intern, var-set and with-redefs-fn. The lowering answers the
+;; mappings (ns-publics, ns-interns, ns-map, ns-refers, ns-aliases,
+;; ns-imports) and the wirings (alias, refer, ns-unmap, ns-unalias,
+;; requiring-resolve, load-string, load-file) for what it knows while the
+;; program lowers; anything computed it cannot know refuses at run time.
+;;
+;; find-ns and the-ns read the run-time namespace table beside the names the
+;; program created before the call (KNOWN): a namespace create-ns made is
+;; found, one remove-ns took is gone (so all-ns skips it too). Namespaces
+;; exist at run time only as values -- what one defines is decided where the
+;; program lowers.
+
+(defvar rontolisp::%clojure-ns-removed
+  (make-hash-table :test 'equal)
+  "The namespaces remove-ns took: an equal table from the name to T, read by
+   find-ns, the-ns and all-ns.")
+
+(defun rontolisp::%clojure-find-ns (x known)
+  "find-ns: the namespace the symbol X names when the program created it
+   (KNOWN, the names it created before the call) or created it at run time,
+   else nil; a removed one is gone."
+  (if (not (rontolisp::%clojure-real-symbol-p x))
+      (rontolisp::%clojure-class-cast-exception-of "find-ns needs a symbol" x))
+  (let ((name (rontolisp::%clojure-symbol-full-name x)))
+    (if (gethash name rontolisp::%clojure-ns-removed)
+        nil
+        (if (or (member name known :test #'equal)
+                (gethash name rontolisp::%clojure-ns-table))
+            (rontolisp::%clojure-ns-object name)
+            nil))))
+
+(defun rontolisp::%clojure-all-ns (known)
+  "(all-ns): the namespaces the program created before the call, minus
+   removed ones, as namespace objects."
+  (let ((acc nil))
+    (dolist (name known (reverse acc))
+      (if (not (gethash name rontolisp::%clojure-ns-removed))
+          (setq acc (cons (rontolisp::%clojure-ns-object name) acc))))))
+
+(defun rontolisp::%clojure-create-ns (x)
+  "(create-ns x): the namespace the symbol X names, made when missing; a
+   removed one is made again. Anything but a symbol is the oracle's cast
+   refusal."
+  (if (not (rontolisp::%clojure-real-symbol-p x))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class clojure.lang.Symbol") x))
+  (let ((name (rontolisp::%clojure-symbol-full-name x)))
+    (remhash name rontolisp::%clojure-ns-removed)
+    (rontolisp::%clojure-ns-object name)))
+
+(defun rontolisp::%clojure-create-ns-v (&rest args)
+  "create-ns as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "create-ns")
+  (rontolisp::%clojure-create-ns (car args)))
+
+(defun rontolisp::%clojure-remove-ns (x)
+  "(remove-ns x): the namespace the symbol X names taken out of the table,
+   nil for one never made; anything but a symbol is the oracle's cast
+   refusal."
+  (if (not (rontolisp::%clojure-real-symbol-p x))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class clojure.lang.Symbol") x))
+  (let ((name (rontolisp::%clojure-symbol-full-name x)))
+    (rontolisp:with-mutex (rontolisp::%clojure-ns-guard)
+      (let ((ns (gethash name rontolisp::%clojure-ns-table)))
+        (if (null ns)
+            nil
+            (progn
+              (remhash name rontolisp::%clojure-ns-table)
+              (setf (gethash name rontolisp::%clojure-ns-removed) t)
+              ns))))))
+
+(defun rontolisp::%clojure-remove-ns-v (&rest args)
+  "remove-ns as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "remove-ns")
+  (rontolisp::%clojure-remove-ns (car args)))
+
+(defun rontolisp::%clojure-loaded-libs (libs)
+  "(loaded-libs): the LIBS names (what the program loaded before the call)
+   as a set of symbols."
+  (rontolisp::%clojure-set-of
+   (let ((acc nil))
+     (dolist (name libs (reverse acc))
+       (setq acc (cons (rontolisp::%clojure-symbol-1 name) acc))))))
+
+(defun rontolisp::%clojure-intern (ns name &optional (val nil) (val-p nil))
+  "(intern ns name [val]): the var NAME (a symbol) in NS (a symbol or a
+   namespace) -- an existing one kept (given VAL, rebound like bindRoot),
+   else made with VAL (unbound without one) over a cell of its own. The cell
+   answers var-get, deref, alter-var-root and with-redefs-fn; a def or defn
+   of the name keeps its own cell, so a direct call never sees the interned
+   root, like the oracle's static link."
+  (if (rontolisp::%clojure-ns-object-p ns)
+      (setq ns (rontolisp::%clojure-symbol-1 (car (cdr ns)))))
+  (if (not (rontolisp::%clojure-real-symbol-p ns))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of ns)
+                    " cannot be cast to class clojure.lang.Symbol") ns))
+  (if (not (rontolisp::%clojure-real-symbol-p name))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of name)
+                    " cannot be cast to class clojure.lang.Symbol") name))
+  (let ((key
+         (concatenate 'string (rontolisp::%clojure-symbol-full-name ns) "/"
+                      (rontolisp::%clojure-symbol-full-name name))))
+    (let ((v
+           (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+             (values (gethash key rontolisp::%clojure-var-table)))))
+      (if (null v)
+          (let* ((cell (list (if val-p val (rontolisp::%clojure-unbound key))))
+                 (getter (lambda () (car cell)))
+                 (setter (lambda (n) (setf (car cell) n))))
+            (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+              (setq v (list :C%VAR key getter))
+              (setf (gethash key rontolisp::%clojure-var-table) v))
+            (rontolisp::%clojure-var-setter v setter)
+            v)
+          (if (not val-p)
+              v
+              (let ((old (rontolisp::%clojure-var-get v))
+                    (new
+                     (rontolisp::%clojure-stm-validate val
+                      (rontolisp::%clojure-ref-validator v)))
+                    (setter
+                     (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+                       (values (gethash v rontolisp::%clojure-var-setters)))))
+                (if setter
+                    (funcall setter new)
+                    (rplaca (cdr (cdr v)) (let ((n new)) (lambda () n))))
+                (rontolisp::%clojure-ref-notify v old new)
+                v))))))
+
+(defun rontolisp::%clojure-intern-v (&rest args)
+  "intern as a value: [ns name] or [ns name val]."
+  (let ((n (rontolisp::%clojure-check-arity args 2 3 "intern")))
+    (if (= n 2)
+        (rontolisp::%clojure-intern (car args) (car (cdr args)) nil nil)
+        (rontolisp::%clojure-intern (car args) (car (cdr args))
+                                    (car (cdr (cdr args))) t))))
+
+(defun rontolisp::%clojure-var-short-name (v)
+  "The short name of the var V (\"ns/name\" past its slash)."
+  (let ((name (car (cdr v))) (at nil))
+    (dotimes (i (length name)) (if (char= (char name i) #\/) (setq at i)))
+    (if at (subseq name (+ at 1)) name)))
+
+(defun rontolisp::%clojure-var-set (v val)
+  "(var-set v val): refused -- a var that is not thread-locally bound takes
+   no root through set, like the oracle's."
+  (if (not (rontolisp::%clojure-var-p v))
+      (rontolisp::%clojure-class-cast-exception-of "var-set needs a var" v))
+  (rontolisp::%clojure-illegal-state-exception
+   (concatenate 'string "Can't change/establish root binding of: "
+                (rontolisp::%clojure-var-short-name v) " with set")))
+
+(defun rontolisp::%clojure-var-set-v (&rest args)
+  "var-set as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "var-set")
+  (rontolisp::%clojure-var-set (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-with-redefs-fn (binding-map f)
+  "(with-redefs-fn binding-map f): F called with each var of the map bound to
+   its value, restored after -- the validations and notifications of bindRoot.
+   A var with a registered root setter stores through its value cell, so a
+   direct call sees the rebound root; any other var swaps its getter, so only
+   var-mediated reads see it, like the oracle's static link. A binding
+   failure leaves the earlier ones bound, like the oracle's."
+  (let ((restores nil))
+    (dolist (entry (rontolisp::%clojure-seq binding-map))
+      (let ((v (aref entry 0)) (n (aref entry 1)))
+        (if (not (rontolisp::%clojure-var-p v))
+            (rontolisp::%clojure-class-cast-exception-of
+             (concatenate 'string "class " (rontolisp::%clojure-class-name-of v)
+                          " cannot be cast to class clojure.lang.Var") v))
+        (let* ((old (rontolisp::%clojure-var-get v))
+               (new
+                (rontolisp::%clojure-stm-validate n
+                 (rontolisp::%clojure-ref-validator v)))
+               (setter
+                (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+                  (values (gethash v rontolisp::%clojure-var-setters))))
+               (getter (car (cdr (cdr v)))))
+          (if setter
+              (funcall setter new)
+              (rplaca (cdr (cdr v)) (let ((n new)) (lambda () n))))
+          (setq restores
+                (cons (let ((var v) (was old) (had getter) (through setter))
+                        (lambda ()
+                          (let ((now (rontolisp::%clojure-var-get var))
+                                (back
+                                 (rontolisp::%clojure-stm-validate was
+                                  (rontolisp::%clojure-ref-validator var))))
+                            (if through
+                                (funcall through back)
+                                (rplaca (cdr (cdr var)) had))
+                            (rontolisp::%clojure-ref-notify var now back))))
+                      restores))
+          (rontolisp::%clojure-ref-notify v old new))))
+    (unwind-protect (rontolisp::%clojure-call f nil)
+      (dolist (restore (reverse restores)) (funcall restore)))))
+
+(defun rontolisp::%clojure-with-redefs-fn-v (&rest args)
+  "with-redefs-fn as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "with-redefs-fn")
+  (rontolisp::%clojure-with-redefs-fn (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-ns-map-merge (&rest maps)
+  "MAPS merged into a fresh table, later ones winning: how a namespace
+   mapping too large for one method answers."
+  (let ((m (make-hash-table :test 'equal)))
+    (dolist (src maps m) (maphash (lambda (k v) (setf (gethash k m) v)) src))))
+
+(defun rontolisp::%clojure-ns-computed-here (what x)
+  "(ns-publics ns-interns ns-map ns-refers ns-aliases ns-imports of a
+   computed namespace at run time: refused -- only what the lowering knows
+   maps."
+  (declare (ignore x))
+  (rontolisp::%clojure-unsupported-operation-exception
+   (concatenate 'string what
+                " of a computed namespace is not supported at run time: only what the lowering knows maps")))
+
+(defun rontolisp::%clojure-load-string-here (x)
+  "(load-string x) of a computed string at run time: refused -- only a
+   literal string loads, where the call stands."
+  (declare (ignore x))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "load-string of a computed string is not supported at run time: only a literal string loads, where the call stands"))
+
+(defun rontolisp::%clojure-load-string-v (&rest args)
+  "load-string as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "load-string")
+  (rontolisp::%clojure-load-string-here (car args)))
+
+(defun rontolisp::%clojure-load-file-here (x)
+  "(load-file x) of a computed path at run time: refused -- only a literal
+   path loads, where the call stands."
+  (declare (ignore x))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "load-file of a computed path is not supported at run time: only a literal path loads, where the call stands"))
+
+(defun rontolisp::%clojure-load-file-v (&rest args)
+  "load-file as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "load-file")
+  (rontolisp::%clojure-load-file-here (car args)))
+
+(defun rontolisp::%clojure-load-reader (x)
+  "(load-reader x): refused -- nothing reads a reader at run time."
+  (declare (ignore x))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "load-reader is not supported at run time: only load-string and load-file of literals load, where the call stands"))
+
+(defun rontolisp::%clojure-load-reader-v (&rest args)
+  "load-reader as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "load-reader")
+  (rontolisp::%clojure-load-reader (car args)))
+
+(defun rontolisp::%clojure-requiring-resolve-here (x)
+  "(requiring-resolve x) of a computed symbol at run time: refused -- vars
+   exist only while the program lowers."
+  (declare (ignore x))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "requiring-resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+
+(defun rontolisp::%clojure-requiring-resolve-v (&rest args)
+  "requiring-resolve as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "requiring-resolve")
+  (rontolisp::%clojure-requiring-resolve-here (car args)))
+
+(defun rontolisp::%clojure-alias-here (x y)
+  "(alias x y) of computed names at run time: refused -- aliases wire while
+   the program lowers."
+  (declare (ignore x y))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "alias of computed names is not supported at run time: aliases wire while the program lowers"))
+
+(defun rontolisp::%clojure-alias-v (&rest args)
+  "alias as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "alias")
+  (rontolisp::%clojure-alias-here (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-refer-here (&rest args)
+  "(refer ...) of computed names at run time: refused -- refers wire while
+   the program lowers."
+  (declare (ignore args))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "refer of computed names is not supported at run time: refers wire while the program lowers"))
+
+(defun rontolisp::%clojure-refer-v (&rest args)
+  "refer as a value."
+  (rontolisp::%clojure-refer-here args))
+
+(defun rontolisp::%clojure-ns-unmap-here (x y)
+  "(ns-unmap x y) of computed names at run time: refused -- mappings unmap
+   while the program lowers."
+  (declare (ignore x y))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "ns-unmap of computed names is not supported at run time: mappings unmap while the program lowers"))
+
+(defun rontolisp::%clojure-ns-unmap-v (&rest args)
+  "ns-unmap as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "ns-unmap")
+  (rontolisp::%clojure-ns-unmap-here (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-ns-unalias-here (x y)
+  "(ns-unalias x y) of computed names at run time: refused -- aliases unalias
+   while the program lowers."
+  (declare (ignore x y))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "ns-unalias of computed names is not supported at run time: aliases unalias while the program lowers"))
+
+(defun rontolisp::%clojure-ns-unalias-v (&rest args)
+  "ns-unalias as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "ns-unalias")
+  (rontolisp::%clojure-ns-unalias-here (car args) (car (cdr args))))
 
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result

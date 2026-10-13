@@ -13084,3 +13084,244 @@ cases:
     expected: |
       2 (2 3) ("1" "2") 2 "mine:1" 42 clojure.core/dec
       2
+  - name: bit-operations-are-the-oracles-on-longs
+    # The bit operations are the oracle's on longs: two's complement over 64
+    # bits, a shift count masked to 6 bits, unsigned-bit-shift-right over the
+    # unsigned value. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (bit-and 5 3) (bit-or 5 3) (bit-xor 5 3) (bit-and-not 5 3) (bit-and 1 2 3 4) (bit-and-not 5 5))
+      (println (bit-not 5) (bit-not 0))
+      (println (bit-shift-left 1 64) (bit-shift-left 1 65) (bit-shift-left 1 63) (bit-shift-left 3 -1))
+      (println (bit-shift-right -8 2) (bit-shift-right 8 64) (bit-shift-right -1 63))
+      (println (unsigned-bit-shift-right -8 2) (unsigned-bit-shift-right -1 0) (unsigned-bit-shift-right -1 1) (unsigned-bit-shift-right 8 64))
+      (println (bit-set 0 3) (bit-clear 7 1) (bit-flip 5 1) (bit-set 5 64) (bit-clear 5 64) (bit-flip 5 64))
+      (println (bit-test 5 0) (bit-test 5 1) (bit-test 5 64) (bit-test -1 63))
+    expected: |
+      1 7 6 4 0 0
+      -6 -1
+      1 2 -9223372036854775808 -9223372036854775808
+      -2 8 -1
+      4611686018427387902 -1 9223372036854775807 8
+      8 5 7 5 4 4
+      true false true true
+  - name: bit-operations-as-values-and-refuse-non-longs
+    # Every bit operation names a function value, and anything but a 64-bit
+    # integer is the oracle's refusal (its NullPointerException for nil).
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (map bit-not [1 2]) ((fn [f] (f 6 3)) bit-xor) (apply bit-or [1 2 4]) (apply bit-and [7 3]))
+      (println (try (bit-and 1.5 2) (catch IllegalArgumentException e (str "IAE:" (.getMessage e)))))
+      (println (try (bit-and 9223372036854775808 1) (catch IllegalArgumentException e (str "IAE:" (.getMessage e)))))
+      (println (try (bit-and nil 1) (catch NullPointerException e :npe)))
+      (println (try ((fn [f] (f 1)) bit-and) (catch clojure.lang.ArityException e :arity)))
+    expected: |
+      (-2 -3) 5 7 3
+      IAE:bit operation not supported for: class java.lang.Double
+      IAE:bit operation not supported for: class clojure.lang.BigInt
+      :npe
+      :arity
+  - name: reductions-answers-the-running-reductions
+    # reductions walks init and each reduction, stopping past a reduced
+    # answer's, like the oracle's. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (reductions + [1 2 3]) (reductions + 10 [1 2]) (reductions + []) (reductions + 10 nil))
+      (println (reductions conj [] [[1] [2]]))
+      (println (reductions (fn [a b] (if (> a 5) (reduced a) (+ a b))) [1 2 3 4 5]))
+      (println ((fn [r] (r + [1 2])) reductions))
+    expected: |
+      (1 3 6) (10 11 13) (0) (10)
+      ([] [[1]] [[1] [2]])
+      (1 3 6 6)
+      (1 3)
+  - name: random-sample-keeps-members-by-probability
+    # A probability of one keeps every member in order, of zero or less none;
+    # only the kept members print, so no draw is asserted.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (random-sample 1.0 [3 1 2]) (count (random-sample 0.0 [1 2])) (count (random-sample 2 [1 2])) (count (random-sample -1 [1 2])))
+    expected: |
+      (3 1 2) 0 2 0
+  - name: bounded-count-counts-counted-collections-and-walks-the-rest
+    # A counted collection answers its count whatever the bound; any other
+    # collection walks up to it. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (bounded-count 5 [1 2 3]) (bounded-count 2 [1 2 3]) (bounded-count 5 nil) (bounded-count 0 nil) (bounded-count 2 '(1 2 3)))
+      (println ((fn [b] (b 2 [1 2 3])) bounded-count))
+    expected: |
+      3 3 0 0 3
+      3
+  - name: partitionv-and-partitionv-all-answer-vectors
+    # partitionv drops an incomplete tail (or fills it from the pad) and
+    # partitionv-all keeps it, each run as a vector in order.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (partitionv 2 [1 2 3 4]) (partitionv 2 [1 2 3]) (partitionv 2 1 [1 2 3]))
+      (println (partitionv 2 1 [0 0 0] [1 2]) (partitionv-all 2 [1 2 3]) (partitionv-all 2 1 [1 2 3]))
+      (println (apply partitionv [2 [1 2 3]]))
+    expected: |
+      ([1 2] [3 4]) ([1 2]) ([1 2] [2 3])
+      ([1 2] [2 0]) ([1 2] [3]) ([1 2] [2 3] [3])
+      ([1 2])
+  - name: splitv-at-replicate-and-xml-seq
+    # splitv-at is split-at with the taken part as a vector, replicate copies
+    # like repeat, and xml-seq walks a tree's :content maps in document order.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (splitv-at 2 [1 2 3 4]) (splitv-at -1 [1 2]) (replicate 3 :a))
+      (println (xml-seq {:tag :a :content [{:tag :b :content ["x"]}]}))
+      (println (xml-seq "s") (xml-seq nil))
+    expected: |
+      [[1 2] (3 4)] [[] (1 2)] (:a :a :a)
+      ({:tag :a, :content [{:tag :b, :content [x]}]} {:tag :b, :content [x]} x)
+      (s) (nil)
+  - name: printf-prints-the-format-and-answers-nil
+    # printf prints the format like format formats it, answering nil.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (with-out-str (printf "%d %s" 42 "hi")))
+      (println (with-out-str (printf "x") (printf "%d" 1 2)))
+    expected: |
+      42 hi
+      x1
+  - name: char-escape-string-and-char-name-string
+    # The escape and the name of a character, nil for any other character and
+    # for anything else. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn (char-escape-string \newline) (char-escape-string \tab) (char-escape-string \a))
+      (prn (char-name-string \newline) (char-name-string \space) (char-name-string \a))
+    expected: |
+      "\\n" "\\t" nil
+      "newline" "space" nil
+  - name: munge-and-namespace-munge
+    # munge spells every special character _NAME_ (a dash is an underscore)
+    # and namespace-munge only the dashes, over the str of the value.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn (munge "foo-bar") (munge "+") (munge "a,b") (munge 1))
+      (prn (namespace-munge "a.b-c") (namespace-munge "a/b"))
+    expected: |
+      "foo_bar" "_PLUS_" "a,b" "1"
+      "a.b_c" "a/b"
+  - name: print-simple-print-dup-and-print-ctor
+    # print-simple writes as print writes, print-dup as pr writes except for
+    # the readable #= constructions, and print-ctor wraps a writer's output in
+    # one. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (with-out-str (print-simple :a *out*)))
+      (println (with-out-str (print-simple [1] *out*)))
+      (println (with-out-str (print-dup [1 2] *out*)))
+      (println (with-out-str (print-dup {:a 1} *out*)))
+      (println (with-out-str (print-dup (sorted-map :a 1) *out*)))
+      (println (with-out-str (print-ctor {:a 1} (fn [o w] (print-dup o w)) *out*)))
+    expected: |
+      :a
+      [1]
+      [1 2]
+      #=(clojure.lang.PersistentArrayMap/create {:a 1})
+      #=(clojure.lang.PersistentTreeMap/create {:a 1})
+      #=(clojure.lang.PersistentArrayMap. #=(clojure.lang.PersistentArrayMap/create {:a 1}))
+  - name: all-ns-and-loaded-libs-name-the-programs-namespaces
+    # all-ns holds the namespaces the program created (clojure.core and user
+    # among them, never removed ones) and loaded-libs the ones it loaded (a
+    # required library, never user or clojure.core); membership pins, never
+    # order. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (contains? (set (map str (all-ns))) "user") (contains? (set (map str (all-ns))) "clojure.core"))
+      (println (contains? (set (map str (loaded-libs))) "user") (contains? (set (map str (loaded-libs))) "clojure.core"))
+      (require 'clojure.string)
+      (println (contains? (set (map str (loaded-libs))) "clojure.string"))
+    expected: |
+      true true
+      false false
+      true
+  - name: create-ns-find-ns-and-remove-ns-round-trip
+    # A namespace create-ns makes is found, and gone after remove-ns; never
+    # made is neither. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (some? (find-ns 'f67-trip-ns)))
+      (println (ns-name (create-ns 'f67-trip-ns)))
+      (println (some? (find-ns 'f67-trip-ns)) (some? (find-ns 'f67-no-such-ns)))
+      (println (ns-name (remove-ns 'f67-trip-ns)))
+      (println (some? (find-ns 'f67-trip-ns)) (some? (remove-ns 'f67-no-such-ns)))
+      (println (ns-name (the-ns 'user)))
+    expected: |
+      false
+      f67-trip-ns
+      true false
+      f67-trip-ns
+      false false
+      user
+  - name: ns-publics-and-ns-interns-map-names-to-vars
+    # ns-publics holds the public interns, ns-interns every intern, each as
+    # its var. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (def f67-pub-x 1)
+      (defn- f67-priv-f [] 2)
+      (println (get (ns-publics 'user) 'f67-pub-x))
+      (println (get (ns-publics 'user) 'f67-priv-f))
+      (println (get (ns-interns 'user) 'f67-priv-f))
+      (println (get (ns-publics 'user) 'f67-no-such-var))
+    expected: |
+      #'user/f67-pub-x
+      nil
+      #'user/f67-priv-f
+      nil
+  - name: ns-map-answers-interns-refers-and-core-vars
+    # ns-map holds the interns, the refers and the referred core vars, each
+    # as its var. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (get (ns-map 'user) 'f67-pub-x))
+      (println (get (ns-map 'user) 'map))
+      (println (get (ns-map 'user) 'f67-no-such-var))
+    expected: |
+      #'user/f67-pub-x
+      #'clojure.core/map
+      nil
+  - name: alias-refer-ns-unmap-and-ns-unalias-wire-namespaces
+    # alias wires an alias and refer refers vars for the forms below; ns-unmap
+    # and ns-unalias forget them again. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (alias 'f67s 'clojure.string)
+      (println (ns-name (get (ns-aliases 'user) 'f67s)) (f67s/join "-" ["a" "b"]))
+      (refer 'clojure.string :only '[upper-case])
+      (println (upper-case "ab"))
+      (ns-unmap 'user 'upper-case)
+      (println (get (ns-refers 'user) 'upper-case))
+      (println (ns-unalias 'user 'f67s))
+      (println (get (ns-aliases 'user) 'f67s))
+    expected: |
+      clojure.string a-b
+      AB
+      nil
+      nil
+      nil
+  - name: intern-var-set-and-with-redefs-fn
+    # intern makes a var over a cell of its own, var-set refuses one that is
+    # not thread-locally bound, and with-redefs-fn rebinds roots for its call.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (intern 'user 'f67-iv 7))
+      (println @(intern 'user 'f67-iv))
+      (println (try (var-set (intern 'user 'f67-iv) 8) (catch IllegalStateException e (.getMessage e))))
+      (def f67-rd 1)
+      (println (with-redefs-fn {(var f67-rd) 99} (fn [] f67-rd)) f67-rd)
+    expected: |
+      #'user/f67-iv
+      7
+      Can't change/establish root binding of: f67-iv with set
+      99 1
+  - name: requiring-resolve-and-load-string
+    # requiring-resolve loads the namespace and answers the var, and
+    # load-string of a literal runs where the call stands.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (requiring-resolve 'clojure.string/join))
+      (println (load-string "(+ 1 2)"))
+      (println (load-string "(def f67-ls 40) (+ f67-ls 2)"))
+      (println f67-ls)
+    expected: |
+      #'clojure.string/join
+      3
+      42
+      40

@@ -28,3 +28,11 @@ strings over Clojure-notation arguments.
 | `prn-str` | `(prn-str 1 "a")` | `"1 \"a\"\n"` |
 | `println-str` | `(println-str 1 "a")` | `"1 a\n"` |
 | `flush` | `(flush)` | `nil` |
+| `printf` | `(with-out-str (printf "%d" 42))` | `"42"` |
+| `char-escape-string` | `(char-escape-string \newline)` | `"\\n"` |
+| `char-name-string` | `(char-name-string \newline)` | `"newline"` |
+| `print-simple` | `(with-out-str (print-simple :a *out*))` | `":a"` |
+| `print-dup` | `(with-out-str (print-dup {:a 1} *out*))` | `"#=(clojure.lang.PersistentArrayMap/create {:a 1})"` |
+| `print-ctor` | `(with-out-str (print-ctor {:a 1} (fn [o w] (print-dup o w)) *out*))` | `"#=(clojure.lang.PersistentArrayMap. #=(clojure.lang.PersistentArrayMap/create {:a 1}))"` |
+| `munge` | `(munge "foo-bar")` | `"foo_bar"` |
+| `namespace-munge` | `(namespace-munge "my.ns-name")` | `"my.ns_name"` |

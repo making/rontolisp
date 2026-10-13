@@ -442,6 +442,14 @@ public final class ClojureLowering {
 	final Set<String> loadedNamespaces = new HashSet<>();
 
 	/**
+	 * The namespaces whose files ran: what {@code loaded-libs} answers, with the required
+	 * libraries and the loaded startup namespaces. An {@code ns} or {@code in-ns} form
+	 * alone loads nothing (like the oracle's), only a file a {@code require} read or a
+	 * namespace the oracle loads first does.
+	 */
+	final Set<String> loadedFiles = new HashSet<>();
+
+	/**
 	 * The namespaces loaded from a built-in file ({@link ClojureBuiltinNamespaces}): the
 	 * only ones that may require {@code rontolisp.internal.ring}, and whose left-out vars
 	 * are refused by name.
@@ -2915,6 +2923,9 @@ public final class ClojureLowering {
 				}
 			}
 			this.loadedNamespaces.add(ns);
+			if (!ns.startsWith("load:")) {
+				this.loadedFiles.add(ns);
+			}
 		}
 		finally {
 			this.loadingNamespaces.pop();
@@ -3152,6 +3163,36 @@ public final class ClojureLowering {
 			names.add(LispString.literal(name));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+	}
+
+	/**
+	 * The libraries {@code loaded-libs} answers where it lowers: the namespaces whose
+	 * files ran before the call, the libraries the program required and the startup
+	 * namespaces that loaded, as a quoted list of names.
+	 * @return the lowered list
+	 */
+	LispVal knownLoadedLibs() {
+		Set<String> loaded = new java.util.TreeSet<>(this.requiredLibraries);
+		loaded.addAll(this.loadedFiles);
+		for (String ns : STARTUP_NAMESPACES) {
+			if (this.loadedNamespaces.contains(ns)) {
+				loaded.add(ns);
+			}
+		}
+		List<LispVal> names = new ArrayList<>();
+		for (String name : loaded) {
+			names.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+	}
+
+	/**
+	 * Whether the lowering stands inside top-level datums (rather than a body): what a
+	 * {@code load-string} of a literal lowers its datums through.
+	 * @return {@code true} at top level
+	 */
+	boolean atTopLevel() {
+		return this.topLevelDepth > 0;
 	}
 
 	/**
@@ -3942,6 +3983,18 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "use")) {
 			List<LispVal> calls = requireSpecsWhere(form, ClojureNamespaceLowering.specsOf(items, "use"), true);
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "refer")) {
+			return ClojureNamespaceLowering.referOf(this, form != this.topDatum, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "alias")) {
+			return ClojureNamespaceLowering.aliasOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "ns-unmap")) {
+			return ClojureNamespaceLowering.unmapOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "ns-unalias")) {
+			return ClojureNamespaceLowering.unaliasOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "import")) {
 			ClojureNamespaceLowering.importSpecs(this, ClojureNamespaceLowering.specsOf(items, "import"));
@@ -5029,6 +5082,14 @@ public final class ClojureLowering {
 			case "ns-resolve" -> ClojureVarLowering.nsResolveValue();
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
+			case "refer" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-REFER-V"));
+			case "alias" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-ALIAS-V"));
+			case "ns-unmap" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-V"));
+			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
 			default -> {
 				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
 				if (predicate != null) {

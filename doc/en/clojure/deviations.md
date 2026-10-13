@@ -258,7 +258,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Deref of a macro's var signals (the oracle answers its expander function). A
   `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
   oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
-  with no value here (`#'all-ns`) is refused.
+  with no value here (`#'inc'`) is refused.
 - A namespace prints as the oracle's `#object[clojure.lang.Namespace "user"]` without the
   identity hash, and `class` of one answers `:clojure.lang.Namespace`. `the-ns` and
   `find-ns` know the namespaces the program created above the call, the libraries it
@@ -266,7 +266,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `clojure.java.io`, `clojure.string`); `in-ns` answers `nil` (the oracle's answers the
   namespace). `set!` and `binding` of `*ns*` change what `*ns*` reads, not the namespace the
   forms below resolve in, which `ns` and `in-ns` with a literal name decide. A compiled
-  program's `*file*` is the entry file's path when it was compiled.
+  program's `*file*` is the entry file's path when it was compiled. The namespace mappings
+  (`ns-publics`, `ns-map`, ...) answer what the lowering knows when the call lowers: a
+  `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class,
+  and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
+  the program lowers, so inside a body they still reach the whole file (the oracle's run
+  when the body runs); a `load-string` of a literal declares ahead like a file, so the
+  same form may already name what it defines (the oracle's needs a later form).
+  `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
+  oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
+  `pr` prints it, where the oracle prints its `toString`; a bit operation takes an
+  `N`-suffixed literal in range as its plain integer, where the oracle refuses its `BigInt`.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.

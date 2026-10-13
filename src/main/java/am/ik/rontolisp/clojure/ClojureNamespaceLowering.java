@@ -743,8 +743,366 @@ final class ClojureNamespaceLowering {
 		}
 	}
 
+	/**
+	 * The symbol a datum names literally: a quoted symbol's name, or null for any other
+	 * datum (a computed one).
+	 * @param datum the datum
+	 * @return the name, or null
+	 */
+	static @Nullable String literalSymbol(LispVal datum) {
+		List<LispVal> quoted = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
+				&& ClojureLowerUtil.stripMeta(quoted.get(1)) instanceof LispSymbol target
+				&& !target.name().startsWith(":")) {
+			return target.name();
+		}
+		return null;
+	}
+
+	/**
+	 * The namespace a mapping or wiring designator names literally: a quoted symbol's
+	 * name, a string literal's text, or the current namespace for {@code *ns*} -- null
+	 * for anything computed, which only the run time sees.
+	 * @param ctx the hub
+	 * @param designator the designator datum
+	 * @return the namespace name, or null
+	 */
+	static @Nullable String namespaceDesignator(ClojureLowering ctx, LispVal designator) {
+		LispVal bare = ClojureLowerUtil.stripMeta(designator);
+		if (bare instanceof LispSymbol sym && sym.name().equals("*ns*")) {
+			return ctx.currentNs;
+		}
+		if (bare instanceof LispString text) {
+			return text.value();
+		}
+		return literalSymbol(designator);
+	}
+
+	/**
+	 * {@code ns-publics}, {@code ns-interns}, {@code ns-map}, {@code ns-refers},
+	 * {@code ns-aliases} and {@code ns-imports} of a literal namespace: the map the
+	 * lowering knows -- interns (public ones for {@code ns-publics}), refers, the
+	 * referred core vars (for {@code ns-map}) and imports -- with var values and
+	 * namespace objects. Anything computed refuses at run time, and an unknown namespace
+	 * is the oracle's failure.
+	 * @param ctx the hub
+	 * @param name the mapping verb
+	 * @param designator the namespace designator datum
+	 * @return the lowered map
+	 */
+	static LispVal mappingsOf(ClojureLowering ctx, String name, LispVal designator) {
+		String target = namespaceDesignator(ctx, designator);
+		if (target == null) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NS-COMPUTED-HERE"),
+					LispString.literal(name), ctx.lower(designator));
+		}
+		if (!ctx.knowsNamespace(target) && !isKnownNamespace(target) && !target.equals(ClojureCoreNames.NAMESPACE)) {
+			return ClojureRefusals.refusal(ClojureRefusals.EXCEPTION,
+					LispString.literal("No namespace: " + target + " found"));
+		}
+		if (ClojureBuiltinNamespaces.isStartup(target) && !ctx.loadedNamespaces.contains(target)) {
+			// a startup namespace loads where it is first reached, like a
+			// qualified name reaching one
+			preload(ctx, target);
+		}
+		String outer = ctx.currentNs;
+		ctx.currentNs = target;
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			switch (name) {
+				case "ns-publics" -> internPairs(ctx, target, true, pairs);
+				case "ns-interns" -> internPairs(ctx, target, false, pairs);
+				case "ns-map" -> {
+					internPairs(ctx, target, false, pairs);
+					referPairs(ctx, target, pairs);
+					corePairs(ctx, target, pairs);
+					importPairs(ctx, target, pairs);
+				}
+				case "ns-refers" -> referPairs(ctx, target, pairs);
+				case "ns-aliases" -> aliasPairs(ctx, target, pairs);
+				default -> importPairs(ctx, target, pairs);
+			}
+			return mapsOf(ctx, pairs);
+		}
+		finally {
+			ctx.currentNs = outer;
+		}
+	}
+
+	/**
+	 * PAIRS as a map: directly, or -- past 120 pairs -- bounded by construction, each
+	 * 60-pair chunk a top-level defun of its own merged at run time, so no method
+	 * outgrows the backends' size limits (a clojure.core mapping is several hundred
+	 * pairs).
+	 * @param ctx the hub
+	 * @param pairs the alternating keys and values
+	 * @return the lowered map
+	 */
+	private static LispVal mapsOf(ClojureLowering ctx, List<LispVal> pairs) {
+		if (pairs.size() <= 240) {
+			return ClojureCollectionLowering.mapBuild(pairs);
+		}
+		List<LispVal> calls = new ArrayList<>();
+		for (int i = 0; i < pairs.size(); i += 120) {
+			LispSymbol chunk = ctx.freshTemp();
+			ctx.hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), chunk, ClojureLowerUtil.list(),
+					ClojureCollectionLowering
+						.mapBuild(new ArrayList<>(pairs.subList(i, Math.min(i + 120, pairs.size()))))));
+			calls.add(ClojureLowerUtil.list(chunk));
+		}
+		List<LispVal> merge = new ArrayList<>();
+		merge.add(new LispSymbol("RONTOLISP::%CLOJURE-NS-MAP-MERGE"));
+		merge.addAll(calls);
+		return ClojureLowerUtil.list(merge);
+	}
+
+	/** The interned vars of TARGET in PAIRS: public ones only when PUBLICS. */
+	private static void internPairs(ClojureLowering ctx, String target, boolean publics, List<LispVal> pairs) {
+		if (target.equals(ClojureCoreNames.NAMESPACE)) {
+			// every core var the subset implements (an unimplemented one
+			// resolves to nil, like resolve of it, and stays out)
+			for (String var : new java.util.TreeSet<>(ClojureCoreNames.NAMES)) {
+				LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + var);
+				if (value != ClojureLowering.NIL_CONST) {
+					pairs.add(quotedSymbol(ctx, var));
+					pairs.add(value);
+				}
+			}
+			return;
+		}
+		if (isKnownNamespace(target)) {
+			for (String var : new java.util.TreeSet<>(varsOf(target))) {
+				pairs.add(quotedSymbol(ctx, var));
+				pairs.add(namespaceValue(ctx, new ClojureLowering.VarRef(target, var)));
+			}
+			return;
+		}
+		ClojureNsState state = ctx.namespaces.get(target);
+		if (state == null) {
+			return;
+		}
+		for (Map.Entry<String, Boolean> intern : state.interns.entrySet()) {
+			if (!publics || !intern.getValue()) {
+				pairs.add(quotedSymbol(ctx, intern.getKey()));
+				pairs.add(ClojureVarLowering.resolved(ctx, intern.getKey()));
+			}
+		}
+	}
+
+	/** The referred vars of TARGET in PAIRS. */
+	private static void referPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
+		ClojureNsState state = ctx.namespaces.get(target);
+		if (state == null) {
+			return;
+		}
+		for (String name : new java.util.TreeSet<>(state.refers.keySet())) {
+			pairs.add(quotedSymbol(ctx, name));
+			pairs.add(ClojureVarLowering.resolved(ctx, name));
+		}
+	}
+
+	/** The referred core vars of TARGET in PAIRS, under its refer-clojure filter. */
+	private static void corePairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
+		for (String var : new java.util.TreeSet<>(ClojureCoreNames.NAMES)) {
+			if (!coreAllowed(ctx, var)) {
+				continue;
+			}
+			LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + var);
+			if (value != ClojureLowering.NIL_CONST) {
+				pairs.add(quotedSymbol(ctx, var));
+				pairs.add(value);
+			}
+		}
+		ClojureNsState state = ctx.namespaces.get(target);
+		if (state != null) {
+			for (Map.Entry<String, String> rename : new java.util.TreeMap<>(state.coreRenames).entrySet()) {
+				LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + rename.getValue());
+				if (value != ClojureLowering.NIL_CONST) {
+					pairs.add(quotedSymbol(ctx, rename.getKey()));
+					pairs.add(value);
+				}
+			}
+		}
+	}
+
+	/**
+	 * The imported classes of TARGET in PAIRS, each a symbol of its FQN: the explicit
+	 * imports over the default {@code java.lang} ones they shadow.
+	 */
+	private static void importPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
+		Map<String, String> imports = new java.util.TreeMap<>();
+		for (String name : JAVA_LANG) {
+			imports.put(name, "java.lang." + name);
+		}
+		ClojureNsState state = ctx.namespaces.get(target);
+		if (state != null) {
+			imports.putAll(state.classNames);
+		}
+		for (Map.Entry<String, String> imported : imports.entrySet()) {
+			pairs.add(quotedSymbol(ctx, imported.getKey()));
+			pairs.add(quotedSymbol(ctx, imported.getValue()));
+		}
+	}
+
+	/** The aliases of TARGET in PAIRS: each alias to its namespace object. */
+	private static void aliasPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
+		ClojureNsState state = ctx.namespaces.get(target);
+		if (state == null) {
+			return;
+		}
+		for (Map.Entry<String, String> alias : new java.util.TreeMap<>(state.aliases).entrySet()) {
+			pairs.add(quotedSymbol(ctx, alias.getKey()));
+			pairs.add(ClojureCoreSpecials.namespaceObject(alias.getValue()));
+		}
+	}
+
+	/** NAME as a quoted symbol lowered where it is read, like user code reads it. */
+	private static LispVal quotedSymbol(ClojureLowering ctx, String name) {
+		return ctx.lower(ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol(name)));
+	}
+
+	/**
+	 * {@code (refer ns & filters)}: the namespace loaded and its vars referred into the
+	 * current one -- bare, every public one (like {@code use} without an alias);
+	 * {@code :only}, {@code :exclude} and {@code :rename} narrow -- answering nil.
+	 * Anything computed refuses at run time.
+	 * @param ctx the hub
+	 * @param deferMissing whether a missing library fails where the call runs (in a body)
+	 * rather than where it lowers
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal referOf(ClojureLowering ctx, boolean deferMissing, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "refer takes a namespace");
+		String ns = literalSymbol(items.get(1));
+		if (ns == null) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REFER-HERE"), ctx.lower(items.get(1)),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
+		}
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(new LispSymbol(ns));
+		parts.addAll(items.subList(2, items.size()));
+		boolean outer = ctx.defersMissingLibraries;
+		ctx.defersMissingLibraries = deferMissing;
+		try {
+			LispVal call = requireOne(ctx, null, parts, true, items.get(1), ClojureLowering.LoadMode.GUARDED);
+			return call == null ? ClojureLowering.NIL_CONST
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), call, ClojureLowering.NIL_CONST);
+		}
+		finally {
+			ctx.defersMissingLibraries = outer;
+		}
+	}
+
+	/**
+	 * {@code (alias alias-sym ns-sym)}: the alias wired into the current namespace for
+	 * the forms below, answering nil. Anything computed refuses at run time.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal aliasOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3, "alias takes an alias and a namespace");
+		String alias = literalSymbol(items.get(1));
+		String ns = literalSymbol(items.get(2));
+		if (alias == null || ns == null) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ALIAS-HERE"), ctx.lower(items.get(1)),
+					ctx.lower(items.get(2)));
+		}
+		ctx.ns().aliases.put(alias, ns);
+		return ClojureLowering.NIL_CONST;
+	}
+
+	/**
+	 * {@code (ns-unmap ns sym)}: the mapping forgotten where the program lowers -- an
+	 * intern, a refer, or a referred core var -- answering nil. Anything computed refuses
+	 * at run time.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal unmapOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3, "ns-unmap takes a namespace and a symbol");
+		String ns = namespaceDesignator(ctx, items.get(1));
+		String name = literalSymbol(items.get(2));
+		if (ns == null || name == null) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-HERE"), ctx.lower(items.get(1)),
+					ctx.lower(items.get(2)));
+		}
+		ClojureNsState state = ctx.namespaces.get(ns);
+		if (state != null) {
+			state.interns.remove(name);
+			state.refers.remove(name);
+			state.coreRenames.remove(name);
+			if (ClojureCoreNames.contains(name)) {
+				state.referClojureExclude.add(name);
+			}
+		}
+		else if (ClojureCoreNames.contains(name)) {
+			ctx.namespaces.computeIfAbsent(ns, ignored -> new ClojureNsState()).referClojureExclude.add(name);
+		}
+		return ClojureLowering.NIL_CONST;
+	}
+
+	/**
+	 * {@code (ns-unalias ns alias)}: the alias forgotten where the program lowers,
+	 * answering nil. Anything computed refuses at run time.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal unaliasOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3, "ns-unalias takes a namespace and an alias");
+		String ns = namespaceDesignator(ctx, items.get(1));
+		String alias = literalSymbol(items.get(2));
+		if (ns == null || alias == null) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-HERE"), ctx.lower(items.get(1)),
+					ctx.lower(items.get(2)));
+		}
+		ClojureNsState state = ctx.namespaces.get(ns);
+		if (state != null) {
+			state.aliases.remove(alias);
+		}
+		return ClojureLowering.NIL_CONST;
+	}
+
+	/**
+	 * The text of the file a literal {@code load-file} path names, resolved like a
+	 * {@code load} path: root-relative with a leading slash, else under the current
+	 * namespace's directory, trying the path itself and its {@code .clj} and
+	 * {@code .cljc} extensions.
+	 * @param ctx the hub
+	 * @param path the path
+	 * @return the file's text
+	 */
+	static String fileTextOf(ClojureLowering ctx, String path) {
+		String relative;
+		if (path.startsWith("/")) {
+			relative = path.substring(1);
+		}
+		else {
+			String own = ClojureSourcePath.resourceOf(ctx.currentNs);
+			relative = own.substring(0, own.lastIndexOf('/') + 1) + path;
+		}
+		List<String> candidates = new ArrayList<>();
+		candidates.add(relative);
+		if (!relative.endsWith(".clj") && !relative.endsWith(".cljc")) {
+			candidates.add(relative + ".clj");
+			candidates.add(relative + ".cljc");
+		}
+		for (String candidate : candidates) {
+			ClojureSourcePath.Found found = ctx.sourcePath.findFile(candidate);
+			if (found != null) {
+				return found.text();
+			}
+		}
+		throw new LispReadException("Could not locate " + relative + ".clj or " + relative + ".cljc on the source path"
+				+ ctx.sourcePath.describeRoots());
+	}
+
 	static List<String> referNames(LispVal arg, LispVal spec) {
-		List<LispVal> elements = ClojureLowerUtil.items(arg);
+		// a quoted filter evaluates to the vector or map, like the oracle's
+		List<LispVal> elements = ClojureLowerUtil.items(unwrapQuote(arg));
 		if (elements == null || elements.isEmpty()) {
 			throw new LispReadException("a :refer/:only/:exclude takes a vector of names, not " + spec.print());
 		}
@@ -824,7 +1182,8 @@ final class ClojureNamespaceLowering {
 	 * as old name to new name.
 	 */
 	static Map<String, String> renameMap(LispVal arg, LispVal spec) {
-		List<LispVal> entries = ClojureLowerUtil.items(arg);
+		// a quoted filter evaluates to the map, like the oracle's
+		List<LispVal> entries = ClojureLowerUtil.items(unwrapQuote(arg));
 		if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")
 				|| entries.size() % 2 == 0) {
 			throw new LispReadException(":rename takes a map of names, not " + spec.print());

@@ -45,6 +45,18 @@
 | `long` | `(long -2.7)` | `-2` |
 | `double` | `(double 1)` | `1.0` |
 | `float` | `(float 1/2)` | `0.5` |
+| `bit-and` | `(bit-and 5 3)` | `1` |
+| `bit-or` | `(bit-or 5 3)` | `7` |
+| `bit-xor` | `(bit-xor 5 3)` | `6` |
+| `bit-and-not` | `(bit-and-not 5 3)` | `4` |
+| `bit-not` | `(bit-not 5)` | `-6` |
+| `bit-shift-left` | `(bit-shift-left 1 64)` | `1` |
+| `bit-shift-right` | `(bit-shift-right -8 2)` | `-2` |
+| `unsigned-bit-shift-right` | `(unsigned-bit-shift-right -1 0)` | `-1` |
+| `bit-set` | `(bit-set 0 3)` | `8` |
+| `bit-clear` | `(bit-clear 7 1)` | `5` |
+| `bit-flip` | `(bit-flip 5 1)` | `7` |
+| `bit-test` | `(bit-test 5 0)` | `true` |
 | `byte` | `(byte 1.9)` | `1` |
 | `short` | `(short 1.9)` | `1` |
 | `num` | `(num 1/2)` | `1/2` |

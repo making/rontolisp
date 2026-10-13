@@ -71,3 +71,11 @@ seq は任意のコレクション上のリストビューです:strict なコ�
 | `pmap` | `(pmap inc [1 2])` | `(2 3)` |
 | `tree-seq` | `(tree-seq vector? seq [1 [2]])` | `([1 [2]] 1 [2] 2)` |
 | `flatten` | `(flatten [1 [2 [3]]])` | `(1 2 3)` |
+| `reductions` | `(reductions + [1 2 3])` | `(1 3 6)` |
+| `random-sample` | `(random-sample 1.0 [3 1 2])` | `(3 1 2)` |
+| `bounded-count` | `(bounded-count 5 [1 2 3])` | `3` |
+| `partitionv` | `(partitionv 2 [1 2 3 4])` | `([1 2] [3 4])` |
+| `partitionv-all` | `(partitionv-all 2 [1 2 3])` | `([1 2] [3])` |
+| `splitv-at` | `(splitv-at 2 [1 2 3 4])` | `[[1 2] (3 4)]` |
+| `replicate` | `(replicate 3 :a)` | `(:a :a :a)` |
+| `xml-seq` | `(xml-seq {:tag :a :content ["x"]})` | `({:tag :a, :content [x]} x)` |

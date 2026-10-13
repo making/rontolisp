@@ -132,6 +132,14 @@ categories:
       - { slug: pmap, name: "pmap" }
       - { slug: tree-seq, name: "tree-seq" }
       - { slug: flatten, name: "flatten" }
+      - { slug: reductions, name: "reductions" }
+      - { slug: random-sample, name: "random-sample" }
+      - { slug: bounded-count, name: "bounded-count" }
+      - { slug: partitionv, name: "partitionv" }
+      - { slug: partitionv-all, name: "partitionv-all" }
+      - { slug: splitv-at, name: "splitv-at" }
+      - { slug: replicate, name: "replicate" }
+      - { slug: xml-seq, name: "xml-seq" }
   - title: "反復"
     index_page: clojure/reference/iteration.md
     functions:
@@ -258,6 +266,18 @@ categories:
       - { slug: long, name: "long" }
       - { slug: double, name: "double" }
       - { slug: float, name: "float" }
+      - { slug: bit-and, name: "bit-and" }
+      - { slug: bit-or, name: "bit-or" }
+      - { slug: bit-xor, name: "bit-xor" }
+      - { slug: bit-and-not, name: "bit-and-not" }
+      - { slug: bit-not, name: "bit-not" }
+      - { slug: bit-shift-left, name: "bit-shift-left" }
+      - { slug: bit-shift-right, name: "bit-shift-right" }
+      - { slug: unsigned-bit-shift-right, name: "unsigned-bit-shift-right" }
+      - { slug: bit-set, name: "bit-set" }
+      - { slug: bit-clear, name: "bit-clear" }
+      - { slug: bit-flip, name: "bit-flip" }
+      - { slug: bit-test, name: "bit-test" }
       - { slug: byte, name: "byte" }
       - { slug: short, name: "short" }
       - { slug: num, name: "num" }
@@ -450,6 +470,26 @@ categories:
       - { slug: find-ns, name: "find-ns" }
       - { slug: ns-name, name: "ns-name" }
       - { slug: ns-resolve, name: "ns-resolve" }
+      - { slug: all-ns, name: "all-ns" }
+      - { slug: create-ns, name: "create-ns" }
+      - { slug: remove-ns, name: "remove-ns" }
+      - { slug: loaded-libs, name: "loaded-libs" }
+      - { slug: intern, name: "intern" }
+      - { slug: var-set, name: "var-set" }
+      - { slug: with-redefs-fn, name: "with-redefs-fn" }
+      - { slug: ns-publics, name: "ns-publics" }
+      - { slug: ns-interns, name: "ns-interns" }
+      - { slug: ns-map, name: "ns-map" }
+      - { slug: ns-refers, name: "ns-refers" }
+      - { slug: ns-aliases, name: "ns-aliases" }
+      - { slug: ns-imports, name: "ns-imports" }
+      - { slug: alias, name: "alias" }
+      - { slug: refer, name: "refer" }
+      - { slug: ns-unmap, name: "ns-unmap" }
+      - { slug: ns-unalias, name: "ns-unalias" }
+      - { slug: requiring-resolve, name: "requiring-resolve" }
+      - { slug: load-string, name: "load-string" }
+      - { slug: load-file, name: "load-file" }
   - title: "名前とキーワード"
     index_page: clojure/reference/names.md
     functions:
@@ -557,6 +597,14 @@ categories:
       - { slug: prn-str, name: "prn-str" }
       - { slug: println-str, name: "println-str" }
       - { slug: flush, name: "flush" }
+      - { slug: printf, name: "printf" }
+      - { slug: char-escape-string, name: "char-escape-string" }
+      - { slug: char-name-string, name: "char-name-string" }
+      - { slug: print-simple, name: "print-simple" }
+      - { slug: print-dup, name: "print-dup" }
+      - { slug: print-ctor, name: "print-ctor" }
+      - { slug: munge, name: "munge" }
+      - { slug: namespace-munge, name: "namespace-munge" }
   - title: "Ring アダプター"
     index_page: clojure/reference/ring.md
     functions:
