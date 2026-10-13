@@ -302,6 +302,17 @@
   フィールドでもない名前はコレクションと同じように扱います。
   後の REPL 入力が record・deftype を定義しても、それより前に lower された呼び出し箇所は
   そのメソッドもフィールドも見ません。
+- 引数なしの `(StringBuilder.)`（`(new StringBuilder)`・`(StringBuffer.)` も）は全バックエンドで
+  文字列出力ストリームであり、`(new java.io.StringWriter)` と同じオブジェクトです。`class` は
+  `:java.io.StringWriter` を返し、`StringWriter` の `#object` として印字します。`(.length w)`
+  は `StringWriter` についても答えます（オラクルにそのメソッドはありません）。1引数の `.append`
+  はその値の `str` を追加します（nil は `"null"` を追加します）。オラクルはオーバーロードを
+  解決するので、あいまいな引数（`(.append sb nil)`）はあちらでは拒否されます。文字列の `.intern`
+  はその文字列自身なので、インターニングの有無がわかるのは `identical?` だけです。
+  `java.util.Locale/US`（`ROOT`・`ENGLISH` も）はその `toString` のテキスト（`"en_US"`・`""`・
+  `"en"`）です。`str` と `.toString` はオラクルと一致しますが、`pr`・`class`（`:string`）・
+  `string?` は文字列として読みます。1引数の `.toUpperCase`/`.toLowerCase` は引数が何であっても
+  引数なしと同じ写像になりますが、オラクルは引数を `Locale` にキャストします。
 - `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて

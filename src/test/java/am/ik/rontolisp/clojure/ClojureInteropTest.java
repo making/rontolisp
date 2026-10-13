@@ -38,6 +38,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aStringBuilderWithAnInitialTextOrCapacityStaysTheHosts() throws Exception {
+		// answers measured against clj 1.12.6: an argument keeps java:new, which
+		// only the interpreter and the JVM run; a zero-argument one is a string
+		// output stream on every backend (clojure-spec.yaml)
+		assertBothEqual("(println (str (StringBuilder. \"ab\")))", "ab\n");
+		assertBothEqual("(println (str (StringBuilder. 16)))", "\n");
+		assertBothEqual("(println (let [sb (StringBuilder. \"ab\")] (.append sb \"c\") (str sb)))", "abc\n");
+	}
+
+	@Test
 	void aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs() throws Exception {
 		// answers measured against clj 1.12.6: iterator-seq steps a host Iterator, and an
 		// Iterable type's iterator may hand one on to seq, reduce and into
@@ -309,7 +319,7 @@ class ClojureInteropTest {
 				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
 				+ " (isa? (class (java.util.ArrayList.)) Exception)"
 				+ " (isa? (class (java.net.URI. \"x\")) java.io.Serializable)"
-				+ " (isa? (class (StringBuilder.)) CharSequence))", "true true false false true true\n");
+				+ " (isa? (class (StringBuilder. \"x\")) CharSequence))", "true true false false true true\n");
 		// a class object parent: the class's own spelling, or one of a value's class
 		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.AbstractList)"
@@ -761,7 +771,7 @@ class ClojureInteropTest {
 				+ " (identical? f (.get l 0))))"
 				+ " (let [a (atom 0) l (java.util.ArrayList.)] (.add l (fn [] (swap! a inc)))"
 				+ " (.run ^Runnable (.get l 0)) (prn @a))"
-				+ " (prn (.startsWith (str (.append (StringBuilder.) f)) \"clojure.lang.AFunction@\")"
+				+ " (prn (.contains (str (.append (StringBuilder. \"x\") f)) \"clojure.lang.AFunction@\")"
 				+ " (.startsWith (String/valueOf f) \"clojure.lang.AFunction@\"))",
 				"true true true [true 1] [1 true] true true true\n1\ntrue true\n");
 	}

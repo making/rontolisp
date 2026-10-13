@@ -726,6 +726,33 @@
         text)
       (rontolisp::%clojure-stream-class x)))
 
+(defun rontolisp::%clojure-string-output-p (x)
+  "Whether X is a string output stream: a java.io.StringWriter,
+   java.lang.StringBuilder or java.lang.StringBuffer here, one object."
+  (if (rontolisp::%clojure-stream-p x)
+      (equal (%obj-ref x 1) :string-output)
+      nil))
+
+(defun rontolisp::%clojure-string-builder-set-length (s n)
+  "(.setLength S N) of a string output stream: the text so far cut to N, or
+   padded with null characters past its end, answering nil like the oracle's
+   void method. A negative N is the oracle's StringIndexOutOfBoundsException
+   (the text left in place), a bound that is no number its NullPointerException
+   or ClassCastException."
+  (rontolisp::%clojure-string-bound-number n nil)
+  (let ((text (rontolisp::%clojure-stream-string s)))
+    (get-output-stream-string s)
+    (let ((have (length text)))
+      (cond ((< n 0)
+             (write-string text s)
+             (rontolisp::%clojure-string-index-out-of-bounds-exception
+              (format nil "String index out of range: ~D" n)))
+            ((< n have) (write-string (subseq text 0 n) s))
+            (t
+             (write-string text s)
+             (dotimes (i (- n have)) (write-char (code-char 0) s)))))
+    nil))
+
 (defun rontolisp::%clojure-write-stream (x readable stream)
   "Write stream X as the oracle's #object of its host class, the toString
    quoted under pr, the identity hash left out. The toString is taken before

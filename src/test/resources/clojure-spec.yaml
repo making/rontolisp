@@ -1624,6 +1624,90 @@ cases:
       "SSa" "Ασ" "Aας" "SS" "İx"
       "SS|SS|SS    |FFFF|:SS"
       ("SS" "FF") ("SSß")
+  - name: string-builder-builds-through-append-and-answers-its-text
+    # A zero-argument (StringBuilder.), (new StringBuilder) or (StringBuffer.) is a
+    # string output stream on every backend, like (new java.io.StringWriter): .append
+    # of one value writes its str, answering the builder, .toString and str answer
+    # the text so far, .length its length, .charAt its character, .setLength cutting
+    # or null-padding to the length and answering nil. doto and .. thread it.
+    # Oracle-identical (clj 1.12.6, 2026-10-13); .append of nil is refused there
+    # (ambiguous overloads) and answered "null" here.
+    source: |
+      (let [sb (StringBuilder.)]
+        (.append sb "a")
+        (.append sb "bc")
+        (.append sb 5)
+        (.append sb 5.5)
+        (.append sb true)
+        (.append sb \c)
+        (.append sb :kw)
+        (.append sb [1 2])
+        (println (str sb))
+        (println (.toString sb))
+        (println (.length sb)))
+      (let [sb (new StringBuilder)]
+        (.append sb "x")
+        (println (str sb)))
+      (let [sb (StringBuffer.)]
+        (.append sb "y")
+        (println (str sb) (.length sb)))
+      (let [sb (StringBuilder.)]
+        (.append sb "hello")
+        (println (.charAt sb 1))
+        (.setLength sb 2)
+        (println (str sb))
+        (println (let [sb3 (StringBuilder.)] (.append sb3 "hi") (.setLength sb3 1)))
+        (.setLength sb 4)
+        (println (mapv int (str sb))))
+      (println (str (doto (StringBuilder.) (.append "d"))))
+      (println (.. (StringBuilder.) (append "e") (toString)))
+    expected: |
+      abc55.5truec:kw[1 2]
+      abc55.5truec:kw[1 2]
+      20
+      x
+      y 1
+      e
+      he
+      nil
+      [104 101 0 0]
+      d
+      e
+  - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
+    # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
+    # the mapping is locale-independent but for tr/az/lt, which nothing here models,
+    # so the locale -- a value of this front end's own on every backend -- is
+    # evaluated and ignored. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (.toUpperCase "straße" java.util.Locale/US))
+      (println (.toUpperCase "straße" java.util.Locale/ROOT))
+      (println (.toLowerCase "STRASSE" java.util.Locale/ENGLISH))
+      (println (.toUpperCase "hi" java.util.Locale/US) (.toLowerCase "HI" java.util.Locale/US))
+      (println (. "hi" toUpperCase java.util.Locale/US))
+    expected: |
+      STRASSE
+      STRASSE
+      strasse
+      HI hi
+      HI
+  - name: intern-of-a-string-is-the-string
+    # (.intern s) of a string is the string, on every backend; anything else is
+    # refused in the oracle's words. Oracle-identical (clj 1.12.6, 2026-10-13);
+    # only identical? could tell the interning apart, which no row pins.
+    source: |
+      (println (.intern "hi"))
+      (println (.intern (str "h" "i")))
+      (println (= (.intern (str "h" "i")) "hi"))
+      (println (.intern (str "a" 1)))
+      (println (str (.intern "x") (.intern "y")))
+      (println (try (.intern :kw) (catch Exception e (.getMessage e))))
+    expected: |
+      hi
+      hi
+      true
+      a1
+      xy
+      No matching field found: intern for class clojure.lang.Keyword
   - name: index-of-reads-its-start-as-java-does
     # A start past the end answers nil (the length for an empty match), a negative one
     # is 0, a fractional one truncates -- where CL's search refuses a start outside
