@@ -1872,6 +1872,40 @@ cases:
       class java.lang.String cannot be cast to class java.lang.Number
       class clojure.lang.Keyword cannot be cast to class java.lang.Number
       Cannot invoke "java.lang.Character.charValue()" because "x" is null
+  - name: writer-append-of-a-range-writes-it-and-answers-the-writer
+    # .append of a string range writes the part and answers the stream, on every
+    # backend (data.json's write-string slow path): a whole, partial or empty range,
+    # nil spelling "null" like the host, chained through doto, over a StringBuilder
+    # or a StringBuffer too. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (let [w (java.io.StringWriter.)]
+        (println (identical? w (.append w "hello" 0 5)))
+        (println (str w)))
+      (let [w (java.io.StringWriter.)]
+        (.append w "hello" 1 3)
+        (println (str w)))
+      (let [w (java.io.StringWriter.)]
+        (.append w "hello" 2 2)
+        (println (str w) "empty"))
+      (let [w (java.io.StringWriter.)]
+        (.append w nil 0 4)
+        (println (str w)))
+      (println (str (doto (java.io.StringWriter.) (.append "abcdef" 2 5))))
+      (let [sb (StringBuilder.)]
+        (.append sb "hello" 1 4)
+        (println (str sb)))
+      (let [sb (StringBuffer.)]
+        (.append sb "hello" 0 5)
+        (println (str sb)))
+    expected: |
+      true
+      hello
+      el
+       empty
+      null
+      cde
+      ell
+      hello
   - name: hash-map-construction-builds-the-map-itself-where-the-host-is-not
     # A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
     # (java.util.HashMap/new) is the empty map, and a one-argument construction of
@@ -10498,6 +10532,26 @@ cases:
       true
       :ok
       "temporal"
+  - name: to-instant-of-a-date-or-timestamp-formats-through-iso-instant
+    # .toInstant of a Date or a Timestamp made here answers the instant data.json's
+    # write-date formats: where the host is the host's Instant through the host call,
+    # where no host is (wasm) the value itself, which the portable ISO_INSTANT
+    # formatter then spells. inst-ms reads it back everywhere. Every line is the
+    # oracle's (clj 1.12.6, 2026-10-13), on all four backends.
+    source: |
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 1500))))
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.sql.Timestamp. 1500))))
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 0))))
+      (println (inst-ms (.toInstant (java.util.Date. 1500))))
+      (require '[clojure.instant :as iso-to-inst])
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT
+                        (.toInstant (iso-to-inst/read-instant-timestamp "1970-01-01T00:00:01.123456789Z"))))
+    expected: |
+      1970-01-01T00:00:01.500Z
+      1970-01-01T00:00:01.500Z
+      1970-01-01T00:00:00Z
+      1500
+      1970-01-01T00:00:01.123456789Z
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per

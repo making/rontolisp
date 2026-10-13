@@ -125,15 +125,19 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends() throws Exception {
-		// a construction is the value #inst reads, so it runs here: a member only the
-		// host
-		// answers is refused by name, where the interpreter and the JVM call it on the
+		// a construction is the value #inst reads, so it runs here: .toInstant of
+		// it answers the instant itself (data.json's write-date), which inst-ms and
+		// the portable ISO_INSTANT formatter read; a member only the host answers
+		// is refused by name, where the interpreter and the JVM call it on the
 		// host Date it stands for (ClojureInteropTest)
-		String program = "(println (try (.toInstant (java.util.Date. 5)) (catch Exception e (ex-message e)))"
+		String program = "(println (inst-ms (.toInstant (java.util.Date. 5)))"
+				+ " (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 5)))"
+				+ " (try (.getYear (java.util.Date. 5)) (catch Exception e (ex-message e)))"
 				+ " (inst-ms (java.util.Date. 5)) (uuid? (java.util.UUID/randomUUID)))";
 		for (boolean component : new boolean[] { false, true }) {
 			assertThat(run(program, component)).as(component ? "component" : "preview 1")
-				.isEqualTo("Method toInstant taking 0 args is not supported for class java.util.Date 5 true\n");
+				.isEqualTo("5 1970-01-01T00:00:00.005Z Method getYear taking 0 args is not supported"
+						+ " for class java.util.Date 5 true\n");
 		}
 	}
 

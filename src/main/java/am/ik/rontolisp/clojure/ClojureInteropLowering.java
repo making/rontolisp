@@ -2647,6 +2647,21 @@ final class ClojureInteropLowering {
 							recv),
 					recv);
 		}
+		if (method.equals("append") && args.size() == 3) {
+			// Writer.append(CharSequence, start, end) (data.json's write-string
+			// slow path): the subsequence (nil spelling "null", like the host),
+			// the stream answered
+			return ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil
+							.list(ClojureLowerUtil.sym("write-string"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), args.get(0),
+													LispString.literal("null")),
+											args.get(1), args.get(2)),
+									recv),
+						recv);
+		}
 		if (method.equals("length") && args.isEmpty()) {
 			// StringBuilder.length: the text so far (a StringWriter's too, the same
 			// object here); any other stream the oracle's refusal

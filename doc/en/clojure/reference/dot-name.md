@@ -31,7 +31,9 @@ interpreter and the JVM only -- the wasm backends reject `java:`.
 
 A zero-argument `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is a
 string output stream on every backend, like `(new java.io.StringWriter)`: `.append` of one
-value writes its `str` (nil writes `"null"`), answering the builder, `.toString` and `str`
+value writes its `str` (nil writes `"null"`), answering the builder, and `.append` of a range
+(`(.append w s start end)`) writes that part of the string (nil spells `"null"`), answering
+the stream too. `.toString` and `str`
 answer the text so far, and `.length`, `.charAt` and `.setLength` read and resize it
 (`.setLength` answers nil). A one-argument construction starts the stream with the text
 (`(StringBuilder. "ab")`, `(new StringBuilder "ab")`, `(StringBuffer. "ab")`), an integer
@@ -70,6 +72,7 @@ argument shape or a `^[...]`-tagged construction keeps the host construction eve
 (let [sb (StringBuilder.)] (.append sb "a") (.append sb 1) (println (str sb) (.length sb))) ; a1 2
 (println (str (StringBuilder. "ab") (StringBuffer. 16))) ; ab
 (println (let [w (java.io.StringWriter. 16)] (.append w "ab") (str w))) ; ab
+(println (let [w (java.io.StringWriter. 16)] (.append w "hello" 1 3) (str w))) ; el
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 ```

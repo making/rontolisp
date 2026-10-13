@@ -1544,7 +1544,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free); f71: builder portions (4-line format probe) re-run `=` on both wasm backends since 2026-10-13 |
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
-| data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); write escapes and instant writes are the follow-up |
+| data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); f89: the write path's three-argument `Writer.append` and `.toInstant` of a Date or Timestamp run portably since 2026-10-13 (`write-str` with escapes, `write-str` of instants) |
 | malli 0.20.3 | = | = | refused | refused | f66: the 12-line probe (`validate`, `explain` + `malli.error/humanize`, `decode` with `string-transformer`, `form`) is the oracle's line for line on the interpreter and the JVM since 2026-10-13 (`object-array` etc. in `.todo/f57`, bit operations in `.todo/f67`, then reader metadata through macros, `monitor-enter`/`monitor-exit`, `print-method` of `:type` keywords, `recur` through threading, `boolean?` as a value, end-less `range`, `defn`-of-core shadowing timing, `LazilyPersistentVector/createOwning`, `PersistentArrayMap/createWithCheck`). Wasm stops at dynaload's 11-20-arity `IFn` invokes (the backend compiles lambdas of at most 10 parameters; `.todo/f83`); past it the load-time host calls run there since 2026-10-13 (f84: `System/getProperty` of a literal key, `(HashMap. capacity load)` of two number datums, `.putAll`). Wasm compiles dynaload's invokes since 2026-10-13 (f83: wide lambdas bundle to one rest list; a dynaload-only require compiles on both wasm backends) and stops past them at load-time host interop -- `(Object.)` behind `dynalock`, then a `JAVA:FIELD` while `malli.core` loads (`.todo/f91`) |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -4587,7 +4587,11 @@ host alone answers ("Host arms where the host is not").
   over a `(StringReader. s)` argument a string input stream ("Reading"). A zero-argument
   `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is the same string
   output stream (f63, 2026-10-13): `.append` of one value writes its `str` (nil `"null"`),
-  answering the builder, `.length`/`.charAt`/`.setLength` read a string output stream's
+  answering the builder, `.append` of a range (`(.append w s start end)`, f89,
+  2026-10-13) writes the subsequence (nil spelling `"null"`, like the host),
+  answering the stream -- data.json 2.5.2's `write-string` slow path, which fell
+  through to `java:call` on every backend before,
+  `.length`/`.charAt`/`.setLength` read a string output stream's
   text so far (`.setLength` answering nil, any other stream the oracle's refusal). A
   one-argument construction (f71, 2026-10-13) is a fresh stream the argument fills at
   run time (`%clojure-string-builder-1`, a stream producer): a string is written into
@@ -6070,7 +6074,11 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `Date`-typed answer, `clone`, back through `%clojure-time-value-from-host`), a mutator (all
   overloads void) or any method on wasm is refused by name (`not supported`), a method the
   class lacks in the oracle's words (`No matching field found: foo for class
-  java.util.Date`). A Calendar never crosses (no host object; its methods refused by name).
+  java.util.Date`). Where the host is not (wasm) `.toInstant` of a Date or a Timestamp
+  answers the instant itself instead (f89, 2026-10-13): the portable ISO_INSTANT
+  formatter ("The ISO_INSTANT formatter") then spells it, like the host `Instant` --
+  data.json 2.5.2's `write-date` to `write-instant`, which refused every such write on
+  wasm before. Where the host is the call stays the host's. A Calendar never crosses (no host object; its methods refused by name).
   Host to own is not converted: a host Date/Timestamp/UUID a member answers stays host, `=`
   to the own one by the first's `equals` (`%clojure-host-equal-p`'s clauses, the instant
   clause of `%clojure-equal` falling through to it), ordered by `compareTo`
@@ -6155,12 +6163,21 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `:key-fn`, big numbers and `pprint` print the interpreter's lines on both
   wasm backends (a bignum without its `N`, a `bigdec` decimal as its exact
   ratio: the `N`/`M` literal rule). Past the probe by hand: escapes read
-  (`\u00e9`), doubles read and write, and instants read; write escapes stop at
-  the three-argument `Writer.append` on every backend and instant writes at
-  `.toInstant` on wasm (`.todo` follow-up).
+  (`\u00e9`), doubles read and write, and instants read. The write-path
+  remainder (f89, 2026-10-13, `.todo/f89`): the three-argument `Writer.append`
+  writes the range and answers the stream on every backend, and `.toInstant`
+  of a Date or Timestamp answers the instant itself on wasm, so `write-str`
+  with escapes and `write-str` of instants print the oracle's lines on all
+  four backends.
 - **Pins**: clojure-spec `iso-instant-is-a-portable-value-where-no-host-is`
   (four backends); `ClojureWasmInteropRefusalTest#isoInstantFormatsInstantsOnBothBackends`
-  (both wasm backends, the oracle's lines).
+  (both wasm backends, the oracle's lines); since f89, clojure-spec
+  `writer-append-of-a-range-writes-it-and-answers-the-writer` and
+  `to-instant-of-a-date-or-timestamp-formats-through-iso-instant` (four
+  backends, oracle-identical), `ClojureInteropTest#writerAppendOfARangeWritesItAndAnswersTheWriter`
+  (interpreter and JVM) and
+  `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`
+  (both wasm backends: `.toInstant` answers, another host-only member is refused by name).
 
 ## Data readers
 
