@@ -289,6 +289,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`(aset bs 0 5)` is refused there, `(aset bs 0 (byte 5))` is not). A seq over a byte array
   holds the elements the array had when the seq was taken, where the oracle's reads the
   array as it walks.
+- A narrowing cast (`byte`, `short`, `int`) answers a plain integer (g02, measured clj
+  1.12.6 2026-10-13); the oracle answers `Byte`/`Short`/`Integer`. Printing, `=`,
+  hashing, `compare`, `sort`, `case`, map and set keys, arithmetic (which answers plain
+  integers there too), conversions and truthiness all read the oracle's values, and a byte
+  array reads plain integers where the oracle reads `Byte`s. What needs the box diverges:
+  a member taking `byte` takes only a `Byte` there, so `(.put bb (byte 7))` is refused
+  like `(.put bb 7)` -- write a single byte through a one-element byte array instead
+  (`(.put bb (byte-array [7]))` puts `[7 0]` on both); a lone `short`, `int` or `long`
+  member converts its fixnum argument as the oracle converts its number (one candidate
+  of the arity takes its arguments however they convert, on both).
+  `instance?` of `Byte`/`Short`/`Integer` is false for a cast (and of `Long` true),
+  `class` answers `:number`, and `.compareTo` reads the cast as its `Long` (the oracle
+  throws handing a `Long` to `Byte.compareTo`). Boxing the casts would move the whole
+  value model (`+`, `=`, printing, every `unmarshal`) on every backend for that one
+  overload family, so the casts stay plain integers.
 - A [typed array](reference/int-array.md) (`object-array`, `to-array`, `to-array-2d`,
   `into-array`, `int-array`, `long-array`, `double-array`, `float-array`, `short-array`,
   `char-array`, `boolean-array`) is a vector, as one `make-array` makes: `class` answers

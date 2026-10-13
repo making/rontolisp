@@ -4,7 +4,9 @@
 
 Answers the truncation toward zero of a number or a character's code, when it lies in -128..127;
 otherwise `Value out of range for byte: 200`, like the oracle. A double is compared before it is
-truncated, so `(byte 127.9)` is out of range. A non-number signals. As a value a one-argument
+truncated, so `(byte 127.9)` is out of range. A non-number signals. The answer is a plain
+integer; the oracle answers a `Byte`, which matters only where Java takes a `byte`
+([deviations](../deviations.md)). As a value a one-argument
 function.
 
 ```clojure

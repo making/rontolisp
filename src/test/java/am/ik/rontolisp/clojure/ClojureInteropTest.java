@@ -1067,9 +1067,10 @@ class ClojureInteropTest {
 		// it runs, and stores into that array. A byte array is the byte[] itself on both
 		// backends (before, the JVM held copies behind a width: [0 0 0 0] and [0 0] for
 		// the first two). The single-element writes spell putChar: a (byte x) cast
-		// answers a fixnum here, which the oracle's reflector refuses where a byte is
-		// expected (as it refuses a long), while a character unboxes to a char there
-		// and here.
+		// answers a plain integer here (g02, measured clj 1.12.6 2026-10-13), which the
+		// oracle's reflector refuses where a byte is expected (as it refuses a long),
+		// while a character unboxes to a char there and here -- so (.put bb (byte 7))
+		// stays refused by design, like (.put bb 7), and the workaround stays.
 		assertBothEqual("(let [b (byte-array 4) bb (java.nio.ByteBuffer/wrap b)] (.putInt bb 42) (prn (vec b)))"
 				+ " (let [bb (java.nio.ByteBuffer/allocate 2) a (.array bb)] (.putChar bb \\a) (prn (vec a)))"
 				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
@@ -1078,6 +1079,34 @@ class ClojureInteropTest {
 				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
 				+ " (.forEach l (fn [x] (.putChar bb \\a) (aset-byte x 1 5))) (prn (vec (.array bb))))",
 				"[0 0 0 42]\n[0 97]\n[0 97]\n[0 97]\n[0 5]\n");
+	}
+
+	@Test
+	void narrowingCastsBehaveAsPlainIntegersAtTheCallLayer() throws Exception {
+		// g02 (measured clj 1.12.6 2026-10-13): (byte x), (short x) and (int x)
+		// answer plain integers -- the oracle answers Byte/Short/Integer -- so at a
+		// host call a cast behaves exactly like the integer it answers. (.put bb
+		// (byte 7)) is refused like (.put bb 7): a byte parameter takes only a Byte
+		// there, while a lone short, int or long member converts its fixnum argument
+		// as the oracle converts its number (the singleFixed rule both share: one
+		// candidate of the arity takes its arguments however they convert). instance?
+		// tells the same story: a cast is no Byte, Short or Integer here (it is a
+		// Long), where the oracle's boxes are; Number still takes one. .compareTo
+		// reads the cast as its Long (the oracle throws handing a Long to
+		// Byte.compareTo). A single byte still crosses through a one-element byte
+		// array (the last row).
+		assertBothEqual(
+				"(let [bb (java.nio.ByteBuffer/allocate 2)]"
+						+ " (prn (try (do (.put bb (byte 7)) :ok) (catch Exception e :refused))"
+						+ " (try (do (.put bb 7) :ok) (catch Exception e :refused))))"
+						+ " (let [bb (java.nio.ByteBuffer/allocate 2)]"
+						+ " (prn (try (do (.putShort bb 7) (vec (.array bb))) (catch Exception e :refused))))"
+						+ " (prn (instance? Byte (byte 7)) (instance? Long (byte 7))"
+						+ " (instance? Short (short 5)) (instance? Integer (int 5)) (instance? Number (byte 7)))"
+						+ " (prn (.compareTo (byte 7) 7))"
+						+ " (let [bb (java.nio.ByteBuffer/allocate 2)] (.put bb (byte-array [7]))"
+						+ " (prn (vec (.array bb))))",
+				":refused :refused\n[0 7]\nfalse true false false true\n0\n[7 0]\n");
 	}
 
 	@Test

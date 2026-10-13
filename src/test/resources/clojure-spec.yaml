@@ -9799,7 +9799,45 @@ cases:
       AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | AE integer overflow | IAE Value out of range for long: -Infinity | 0 | IAE Value out of range for long: 92233720368547758080
       AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | (2 -2 0) (98 7) 9
       (:refused :refused :refused :refused :refused)
-  - name: number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts
+  - name: narrowing-casts-answer-plain-integers
+    # Deviation (g02, measured clj 1.12.6 2026-10-13): (byte x), (short x) and
+    # (int x) answer plain integers here, where the oracle answers
+    # Byte/Short/Integer. Every value-level behavior is the oracle's -- printing,
+    # =, hash, compare, sort, case, map and set keys, arithmetic (which answers
+    # plain integers there too), conversions, truthiness, and what a byte array
+    # reads -- so only the box-typed axes differ: class answers :number (no wasm
+    # backend has a host class), identical? compares numbers by value (as pinned
+    # by identical-compares-numbers-and-symbols-by-value), and a member taking
+    # byte needs a Byte (pinned in ClojureInteropTest's ByteBuffer cases). Only
+    # that a refusal signals is pinned (the texts are the casts' own, as in
+    # primitive-casts-double-float-byte-short-and-num).
+    source: |
+      (defn nb2-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (= (byte 7) 7) (= (byte 7) (short 7)) (= (int 7) 7) (= (hash (byte 7)) (hash 7)))
+      (prn (identical? (byte 7) 7) (identical? (byte 7) (byte 7)))
+      (prn [(byte 7) (short 7) (int 7) 7] (str (byte 7) (short 7) (int 7)) (format "%d" (byte 7)))
+      (prn (+ (byte 7) 1) (+ (byte 7) (byte 8)) (inc (byte 127)) (dec (byte -128)) (odd? (byte 7)) (zero? (byte 0)))
+      (prn (compare (byte 7) 7) (sort [(byte 2) 1 (short 3)]) (case (int 1) 1 :one :other))
+      (prn (get {(byte 7) :b} 7) (contains? #{(byte 7)} 7))
+      (prn (long (byte 7)) (short (byte 7)) (int (byte 7)) (byte (int 7)) (char (byte 65)))
+      (prn (num (byte 7)) (rationalize (byte 7)) (str (bigint (byte 7))))
+      (prn (class (byte 7)) (class (short 7)) (class (int 7)))
+      (prn (aget (byte-array [1 2 3]) 0) (first (byte-array [1 2])))
+      (prn (if (byte 0) :t :f) (boolean (byte 0)))
+      (prn (map nb2-refused [#(byte 200) #(byte 127.9) #(short 70000) #(int 3000000000) #(byte nil) #(short "a") #(int :k)]))
+    expected: |
+      true true true true
+      true true
+      [7 7 7 7] "777" "7"
+      8 15 128 -129 true true
+      0 (1 2 3) :one
+      :b true
+      7 7 7 7 \A
+      7 7 "7"
+      :number :number :number
+      1 1
+      :t true
+      (:refused :refused :refused :refused :refused :refused :refused)
     # Oracle-identical (clj 1.12.6) in the values; the representation deviates (see
     # decimal-and-bigint-literals-are-plain-rationals), so a bigint prints through str and a
     # bigdec through double, and the refusal texts are ours (only that it signals is pinned).

@@ -277,6 +277,20 @@
   （オラクルでは `(aset bs 0 5)` は拒否され、`(aset bs 0 (byte 5))` は拒否されません）。
   バイト配列の seq は、seq を取った時点の要素を保持し、オラクルの seq はたどる時点の配列を
   読みます。
+- 縮小変換（`byte`・`short`・`int`）は普通の整数を返します（g02、clj 1.12.6 で 2026-10-13
+  に測定）。オラクルは `Byte`・`Short`・`Integer` を返します。印字・`=`・ハッシュ・
+  `compare`・`sort`・`case`・map/set のキー・算術演算（オラクルでも普通の整数を返します）・
+  変換・真偽値はすべてオラクルの値と同じで、バイト配列の要素もオラクルの `Byte` に対して
+  普通の整数で読めます。ボックス型が必要な箇所だけが異なります。`byte` を取るメンバーは
+  オラクルでは `Byte` しか受け取らないため、`(.put bb (byte 7))` は `(.put bb 7)` 同様に
+  拒否されます。1バイトだけ書く場合は1要素のバイト配列を渡してください
+  （`(.put bb (byte-array [7]))` はどちらでも `[7 0]` になります）。候補が1つしかない
+  `short`・`int`・`long` メンバーは、オラクルが数を変換するのと同様に fixnum 引数を変換します
+  （どちらも、引数の個数に合う候補が1つだけなら、その候補が引数をどう変換しても受け取ります）。`instance?` の `Byte`・`Short`・`Integer` はキャスト結果に偽で
+  （`Long` には真）、`class` は `:number` を答え、`.compareTo` はキャスト結果を `Long`
+  として読みます（オラクルは `Long` を `Byte.compareTo` に渡すと例外を投げます）。
+  キャストをボックス化すると、その1系統のオーバーロードのために全バックエンドの値モデル
+  全体（`+`・`=`・印字・すべての `unmarshal`）が動くため、キャストは普通の整数のままです。
 - [型付き配列](reference/int-array.md)（`object-array`・`to-array`・`to-array-2d`・`into-array`・`int-array`・
   `long-array`・`double-array`・`float-array`・`short-array`・`char-array`・`boolean-array`）はベクターです（`make-array` の作るものと同じ）。`class` は `:vector` を答え、`str` と `pr` は
   ベクターを印字し、`=` は要素を比べ、`coll?`・`vector?`・`sequential?`・`counted?` は真で、
