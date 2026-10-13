@@ -1,8 +1,11 @@
 package am.ik.wit;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+
+import org.jspecify.annotations.Nullable;
 
 /**
  * Recursive-descent parser for the WIT textual format, covering the grammar subset the
@@ -177,10 +180,10 @@ public final class WitParser {
 			return new WitItem.Include(meta, target);
 		}
 		if (keyword.isWord("use")) {
-			return parseUse(meta);
+			return parseUse(meta, null);
 		}
 		if (isTypeDefKeyword(keyword)) {
-			return parseTypeDef(meta);
+			return parseTypeDef(meta, null);
 		}
 		throw error("Unexpected world item", keyword);
 	}
@@ -194,8 +197,9 @@ public final class WitParser {
 			next();
 			expectPunct("{");
 			List<WitItem> items = new ArrayList<>();
+			Set<String> scope = new HashSet<>();
 			while (!peek().isPunct("}")) {
-				items.add(parseInterfaceItem());
+				items.add(parseInterfaceItem(scope));
 			}
 			expectPunct("}");
 			return new WitItem.Extern.ExternInterface(List.copyOf(items));
@@ -203,6 +207,21 @@ public final class WitParser {
 		WitFunc func = parseFuncType();
 		expectPunct(";");
 		return new WitItem.Extern.ExternFunc(func);
+	}
+
+	// An interface -- named or inline in a world -- defines each member name once: a
+	// type and a function may not share a name, nor may two types, two functions, or
+	// a `use`d name and a local one. `wasm-tools component wit` refuses every such
+	// shape with "name `x` is defined more than once" (measured 2026-10-13,
+	// wasm-tools 1.254.0); every `wit-import`/`wit-export` path parses here, so
+	// refusing here covers them all. A `use`d name counts under its alias when
+	// renamed (`use types.{quote as q}` frees `quote`); names in different
+	// interfaces never collide. World members, top-level items, resource bodies and
+	// function parameters keep their own scopes and stay unchecked here.
+	private void checkInterfaceName(Set<String> scope, String name, int offset) {
+		if (!scope.add(name)) {
+			throw new WitParseException("name `" + name + "` is defined more than once", this.source, offset);
+		}
 	}
 
 	// Parses the rest of a reference whose first word is already consumed:
@@ -228,28 +247,30 @@ public final class WitParser {
 		String name = expectWordText();
 		expectPunct("{");
 		List<WitItem> items = new ArrayList<>();
+		Set<String> scope = new HashSet<>();
 		while (!peek().isPunct("}")) {
-			items.add(parseInterfaceItem());
+			items.add(parseInterfaceItem(scope));
 		}
 		expectPunct("}");
 		return new WitItem.InterfaceDef(meta, name, List.copyOf(items));
 	}
 
-	private WitItem parseInterfaceItem() {
+	private WitItem parseInterfaceItem(Set<String> scope) {
 		int start = peek().offset();
-		return locate(start, parseInterfaceItemBody());
+		return locate(start, parseInterfaceItemBody(scope));
 	}
 
-	private WitItem parseInterfaceItemBody() {
+	private WitItem parseInterfaceItemBody(Set<String> scope) {
 		WitMeta meta = parseMeta();
 		WitToken keyword = peek();
 		if (keyword.isWord("use")) {
-			return parseUse(meta);
+			return parseUse(meta, scope);
 		}
 		if (isTypeDefKeyword(keyword)) {
-			return parseTypeDef(meta);
+			return parseTypeDef(meta, scope);
 		}
 		// A named function: `name: [static] [async] func(...) [-> type];`
+		int nameOffset = peek().offset();
 		String name = expectWordText();
 		expectPunct(":");
 		WitItem.FuncKind kind = WitItem.FuncKind.PLAIN;
@@ -259,6 +280,7 @@ public final class WitParser {
 		}
 		WitFunc func = parseFuncType();
 		expectPunct(";");
+		checkInterfaceName(scope, name, nameOffset);
 		return new WitItem.FuncDef(meta, name, kind, func);
 	}
 
@@ -267,9 +289,13 @@ public final class WitParser {
 				|| token.isWord("flags") || token.isWord("resource");
 	}
 
-	private WitItem parseTypeDef(WitMeta meta) {
+	private WitItem parseTypeDef(WitMeta meta, @Nullable Set<String> scope) {
 		WitToken keyword = next();
+		int nameOffset = peek().offset();
 		String name = expectWordText();
+		if (scope != null) {
+			checkInterfaceName(scope, name, nameOffset);
+		}
 		switch (keyword.text()) {
 			case "type": {
 				expectPunct("=");
@@ -371,18 +397,26 @@ public final class WitParser {
 		return new WitItem.FuncDef(meta, name, kind, func);
 	}
 
-	private WitItem.Use parseUse(WitMeta meta) {
+	private WitItem.Use parseUse(WitMeta meta, @Nullable Set<String> scope) {
 		expectWord("use");
 		WitRef path = parseRef(expectWordText());
 		expectPunct(".");
 		expectPunct("{");
 		List<WitItem.UseName> names = new ArrayList<>();
 		while (!peek().isPunct("}")) {
+			int nameOffset = peek().offset();
 			String name = expectWordText();
 			String alias = null;
+			int aliasOffset = nameOffset;
 			if (peek().isWord("as")) {
 				next();
+				aliasOffset = peek().offset();
 				alias = expectWordText();
+			}
+			// A renamed import introduces only the alias (`use types.{quote as q}`
+			// frees `quote`); an unrenamed one introduces the name itself.
+			if (scope != null) {
+				checkInterfaceName(scope, alias != null ? alias : name, aliasOffset);
 			}
 			names.add(new WitItem.UseName(name, alias));
 			if (!consumeIfPunct(",")) {

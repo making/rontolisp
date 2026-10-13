@@ -456,6 +456,12 @@ cannot import the same interface twice, so that is a compile error too:
 drive the interface through the WIT binding *instead of* the built-in, not
 alongside it.
 
+A `.wit` file rontolisp accepts is one every other tool accepts too: an
+interface that defines one name twice — a type and a function sharing a name,
+two functions, two types, or a `use`d name against a local one — is a compile
+error naming the WIT line, the way `wasm-tools component wit` refuses it with
+`name \`quote\` is defined more than once`.
+
 A component imports **only the functions the program actually calls** (there
 is no core tree shaker on this path, so unused interface members are dropped
 from the import itself; `--no-prune` keeps them all), and

@@ -1835,6 +1835,44 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aZeroArgumentStringBuilderLowersToAStringOutputStream() {
+		// A zero-argument (StringBuilder.), (new StringBuilder) or (StringBuffer.) is
+		// the same string output stream as (new java.io.StringWriter) on every
+		// backend, never a java:new (which wasm refuses); .length/.charAt/.setLength
+		// read a string output stream's text, refusing any other stream in the
+		// oracle's words; .intern of a string is the string; .toUpperCase of one
+		// argument maps, its locale evaluated and ignored.
+		assertThat(lowered("(StringBuilder.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(new StringBuilder)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(StringBuffer.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
+			.doesNotContain("JAVA:NEW");
+		// an initial text or capacity keeps the host construction, like any other class
+		assertThat(lowered("(new StringBuilder \"ab\")")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		assertThat(lowered("(new StringBuilder 16)")).contains("JAVA:NEW").contains("java.lang.StringBuilder");
+		assertThat(lowered("(let [s (StringBuilder.)] (.length s))"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-OUTPUT-P |__clojure_0|)")
+			.contains("RONTOLISP::%CLOJURE-STREAM-STRING");
+		assertThat(lowered("(let [s (StringBuilder.)] (.charAt s 1))")).contains("RONTOLISP::%CLOJURE-CHAR-AT");
+		assertThat(lowered("(let [s (StringBuilder.)] (.setLength s 2))"))
+			.contains("RONTOLISP::%CLOJURE-STRING-BUILDER-SET-LENGTH");
+		assertThat(lowered("(.intern \"hi\")")).contains("JAVA:CALL").contains("intern");
+		assertThat(lowered("(.toUpperCase \"hi\" java.util.Locale/US)")).contains("PROGN")
+			.contains("en_US")
+			.contains("JAVA:CALL");
+		assertThat(lowered("(println java.util.Locale/US java.util.Locale/ROOT java.util.Locale/ENGLISH)"))
+			.contains("\"en_US\"");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(let [sb (StringBuilder.)] (.append sb \"a\") (println (str sb) (.length sb)))"
+				+ " (println (.toUpperCase \"hi\" java.util.Locale/US) (.intern \"x\"))";
+		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
 	void setBangWritesADeftypeMutableFieldThroughItsSlot() {
 		String out = lowered("(defprotocol P (bump! [c])) "
 				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");

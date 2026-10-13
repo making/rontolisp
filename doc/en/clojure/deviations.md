@@ -312,6 +312,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is treated as on a collection; a site lowered
   before a later REPL input defines a record or deftype does not see its methods or
   fields.
+- A zero-argument `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is a
+  string output stream on every backend, the same object as `(new java.io.StringWriter)`:
+  `class` answers `:java.io.StringWriter` and it prints as one's `#object`, `(.length w)`
+  answers on a `StringWriter` too (the oracle has no such method there), and `.append` of
+  one value appends its `str` (nil appends `"null"`), where the oracle resolves overloads
+  and refuses an ambiguous argument (`(.append sb nil)`). `.intern` of a string is the
+  string, so only `identical?` could tell the interning apart. `java.util.Locale/US` (and
+  `ROOT`, `ENGLISH`) is its `toString` text (`"en_US"`, `""`, `"en"`): `str` and `.toString`
+  match the oracle, while `pr`, `class` (`:string`) and `string?` read the string.
+  `.toUpperCase`/`.toLowerCase` of one argument map as the bare call whatever the argument
+  is, where the oracle casts it to a `Locale`.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector

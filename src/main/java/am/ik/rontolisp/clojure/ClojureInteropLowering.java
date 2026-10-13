@@ -420,15 +420,34 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * The one host class the lowering builds itself: a zero-argument
-	 * {@code java.io.StringWriter} is a Common Lisp string output stream on every backend
-	 * -- never a host {@code Writer}, which no backend writes to and wasm refuses
-	 * outright.
+	 * The host classes the lowering builds itself as a Common Lisp string output stream
+	 * on every backend -- never a host object, which no backend writes to and wasm
+	 * refuses outright. A zero-argument {@code java.io.StringWriter} is one (the oracle's
+	 * own {@code with-out-str} construction), and so are a zero-argument
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer}: to these
+	 * programs a builder is the same object ({@code .append} of any value's {@code str},
+	 * {@code .toString}, {@code .length}, {@code .setLength}, {@code .charAt}).
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
 
+	static final String STRING_BUILDER_CLASS = "java.lang.StringBuilder";
+
+	static final String STRING_BUFFER_CLASS = "java.lang.StringBuffer";
+
 	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
 	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
+
+	/**
+	 * Whether X is a string output stream: a {@code java.io.StringWriter},
+	 * {@code java.lang.StringBuilder} or {@code java.lang.StringBuffer} here, one object.
+	 */
+	static final String STRING_OUTPUT_P = "RONTOLISP::%CLOJURE-STRING-OUTPUT-P";
+
+	/**
+	 * {@code StringBuilder.setLength} of a string output stream: the text so far cut or
+	 * null-padded to the length, answering nil.
+	 */
+	static final String STRING_BUILDER_SET_LENGTH = "RONTOLISP::%CLOJURE-STRING-BUILDER-SET-LENGTH";
 
 	/** A reader over a {@code java.io.StringReader}: a string input stream. */
 	static final String STRING_READER = "RONTOLISP::%CLOJURE-STRING-READER";
@@ -667,9 +686,9 @@ final class ClojureInteropLowering {
 				return wrapped;
 			}
 		}
-		LispVal stringWriter = stringWriterConstruction(cls, argDatums.size());
-		if (stringWriter != null) {
-			return stringWriter;
+		LispVal stringStream = stringStreamConstruction(cls, argDatums.size());
+		if (stringStream != null) {
+			return stringStream;
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
@@ -1126,6 +1145,11 @@ final class ClojureInteropLowering {
 		if (charset != null) {
 			return charset;
 		}
+		LispVal locale = ClojureLocaleLowering.field(cls, member);
+		if (locale != null) {
+			// Locale/US (and ROOT, ENGLISH): the value the case-mapping verbs take
+			return locale;
+		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
 					answersBytes(cls, member, 0, true));
@@ -1190,6 +1214,10 @@ final class ClojureInteropLowering {
 		LispVal charset = ClojureCharsetLowering.field(cls, member);
 		if (charset != null) {
 			return charset;
+		}
+		LispVal locale = ClojureLocaleLowering.field(cls, member);
+		if (locale != null) {
+			return locale;
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
@@ -1280,9 +1308,9 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal hostConstructionLowered(ClojureLowering ctx, String cls, List<LispVal> args,
 			@Nullable List<String> types) {
-		LispVal stringWriter = stringWriterConstruction(cls, args.size());
-		if (stringWriter != null) {
-			return stringWriter;
+		LispVal stringStream = stringStreamConstruction(cls, args.size());
+		if (stringStream != null) {
+			return stringStream;
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
 		if (timeValue != null) {
@@ -1375,14 +1403,16 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * A zero-argument {@code java.io.StringWriter} construction (dotted or imported,
-	 * resolved): a fresh string output stream ({@code %clojure-string-writer}, a stream
-	 * producer), so every backend runs it -- wasm included, which never sees the refused
-	 * {@code java:new}. Anything else (an initial-capacity argument, another class) is
+	 * A zero-argument {@code java.io.StringWriter}, {@code java.lang.StringBuilder} or
+	 * {@code java.lang.StringBuffer} construction (dotted or imported, resolved): a fresh
+	 * string output stream ({@code %clojure-string-writer}, a stream producer), so every
+	 * backend runs it -- wasm included, which never sees the refused {@code java:new}.
+	 * Anything else (an initial-capacity or initial-text argument, another class) is
 	 * null, so the call keeps its {@code java:new} shape.
 	 */
-	static @Nullable LispVal stringWriterConstruction(String cls, int argCount) {
-		if (cls.equals(STRING_WRITER_CLASS) && argCount == 0) {
+	static @Nullable LispVal stringStreamConstruction(String cls, int argCount) {
+		if (argCount == 0 && (cls.equals(STRING_WRITER_CLASS) || cls.equals(STRING_BUILDER_CLASS)
+				|| cls.equals(STRING_BUFFER_CLASS))) {
 			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER));
 		}
 		return null;
@@ -2248,8 +2278,13 @@ final class ClojureInteropLowering {
 	 * both refusing a closed stream as the oracle's {@code IOException}, and
 	 * {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
-	 * without reaching {@code java:call}. {@code toString} is {@link #valueToString}'s.
-	 * Null when the method maps to nothing, so the call goes to {@code java:call}.
+	 * without reaching {@code java:call}. {@code append} writes any value's {@code str}
+	 * (nil is {@code "null"}), answering the stream, like {@code StringBuilder.append};
+	 * {@code length}, {@code charAt} and {@code setLength} read a string output stream's
+	 * text so far (a {@code StringBuilder} here, and a {@code StringWriter}, the same
+	 * object), refusing any other stream in the oracle's words. {@code toString} is
+	 * {@link #valueToString}'s. Null when the method maps to nothing, so the call goes to
+	 * {@code java:call}.
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -2287,16 +2322,44 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("terpri"), recv), ClojureLowering.NIL_CONST);
 		}
 		if (method.equals("append") && args.size() == 1) {
-			// Writer.append: the characters written, the writer answered (nil is "null")
+			// StringBuilder.append (and Writer.append): any value's str (nil is
+			// "null"), the stream answered
 			LispSymbol value = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
-									LispString.literal("null"), value),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"),
+							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, value, LispString.literal("null"),
+									ClojureLowering.NIL_CONST),
 							recv),
 					recv);
+		}
+		if (method.equals("length") && args.isEmpty()) {
+			// StringBuilder.length: the text so far (a StringWriter's too, the same
+			// object here); any other stream the oracle's refusal
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(STRING_OUTPUT_P), recv),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
+							ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv)),
+					ClojureValueMethodLowering.refusal(recv, method, true, List.of()));
+		}
+		if (method.equals("charAt") && args.size() == 1) {
+			// StringBuilder.charAt: the character at the index of the text so far,
+			// refusing outside it like a string's
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(STRING_OUTPUT_P), recv),
+					ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.CHAR_AT),
+							ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv),
+							ClojureStringLowering.bound(args.get(0))),
+					ClojureValueMethodLowering.refusal(recv, method, true, args));
+		}
+		if (method.equals("setLength") && args.size() == 1) {
+			// StringBuilder.setLength: the text cut or null-padded to the length,
+			// answering nil like the oracle's void method
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(STRING_OUTPUT_P), recv),
+					ClojureLowerUtil.list(new LispSymbol(STRING_BUILDER_SET_LENGTH), recv,
+							ClojureStringLowering.bound(args.get(0))),
+					ClojureValueMethodLowering.refusal(recv, method, true, args));
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("finish-output"), recv);
@@ -2330,8 +2393,21 @@ final class ClojureInteropLowering {
 	static @Nullable LispVal stringMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args,
 			boolean typed) {
 		return switch (method) {
-			case "toUpperCase" -> args.isEmpty() ? ClojureStringLowering.caseMapped(recv, true) : null;
-			case "toLowerCase" -> args.isEmpty() ? ClojureStringLowering.caseMapped(recv, false) : null;
+			case "toUpperCase" -> switch (args.size()) {
+				case 0 -> ClojureStringLowering.caseMapped(recv, true);
+				// the mapping is locale-independent (but for tr/az/lt, which nothing
+				// here models), so a Locale argument is evaluated for its effects and
+				// ignored
+				case 1 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), args.get(0),
+						ClojureStringLowering.caseMapped(recv, true));
+				default -> null;
+			};
+			case "toLowerCase" -> switch (args.size()) {
+				case 0 -> ClojureStringLowering.caseMapped(recv, false);
+				case 1 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), args.get(0),
+						ClojureStringLowering.caseMapped(recv, false));
+				default -> null;
+			};
 			case "trim" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"),
 					ClojureStringLowering.javaTrimBag(), recv) : null;
 			case "strip" -> args.isEmpty()
@@ -2346,6 +2422,9 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), recv))) : null;
 			case "isBlank" -> args.isEmpty() ? ctx.booleanAnswer(ClojureStringLowering.blankForm(recv)) : null;
 			case "toString" -> args.isEmpty() ? recv : null;
+			// .intern of a string is the string (no interning is observable here but
+			// identical?)
+			case "intern" -> args.isEmpty() ? recv : null;
 			case "getClass" ->
 				args.isEmpty() ? ClojureLowerUtil.cons(JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
 						LispString.literal("forName"), LispString.literal("java.lang.String"))) : null;

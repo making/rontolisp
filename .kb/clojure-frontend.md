@@ -1499,8 +1499,8 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | medley 1.10.0 | = | = | = | = | |
 | tools.cli 1.4.256 | = | = | = | = | |
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
-| honeysql 2.7.1479 | = | = | trap | trap | `StringBuilder`, `Locale/US` on wasm (`.todo/f63`) |
-| hiccup 2.0.0 | = | compile | trap | trap | a 69,502 B top-level method (`.todo/f64`); `StringBuilder` on wasm (`f63`) |
+| honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
+| hiccup 2.0.0 | = | compile | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); a 69,502 B top-level method (`.todo/f64`) |
 | reitit-core 0.11.0 | crash | | | | `reitit.Trie`, Java over `clojure.lang` (`.todo/f65`); with `clojure-trie-compiler` the interpreter prints the oracle's default-compiler lines |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
 | malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
@@ -4110,7 +4110,18 @@ host alone answers ("Host arms where the host is not").
   went `true` when `.toString` took the printer behind `streamp`). `(new
   java.io.StringWriter)` with no argument is a string output stream on every backend; a
   `java.io.PushbackReader`/`BufferedReader` construction over a stream is that stream and
-  over a `(StringReader. s)` argument a string input stream ("Reading").
+  over a `(StringReader. s)` argument a string input stream ("Reading"). A zero-argument
+  `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is the same string
+  output stream (f63, 2026-10-13): `.append` of one value writes its `str` (nil `"null"`),
+  answering the builder, `.length`/`.charAt`/`.setLength` read a string output stream's
+  text so far (`.setLength` answering nil, any other stream the oracle's refusal),
+  `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is its `toString` text, which
+  `.toUpperCase`/`.toLowerCase` of one argument take, mapping as the bare call, and
+  `.intern` of a string is the string. Pins: clojure-spec
+  `string-builder-builds-through-append-and-answers-its-text`,
+  `to-upper-and-lower-case-with-a-locale-map-like-without-one`,
+  `intern-of-a-string-is-the-string` (all four backends), honeysql 2.7.1479 and hiccup
+  2.0.0 `=` on wasm ("Library probes").
 - A collection, keyword, symbol, ratio or atom has no host object (`java:call` refused every
   one: `(.count [1 2 3])` was `java:call expects a java object ..., got #(1 2 3)`). With the
   receiver class unknown, `ClojureValueMethodLowering.valueArm` puts `(if

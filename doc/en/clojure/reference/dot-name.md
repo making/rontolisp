@@ -29,6 +29,16 @@ user.R`). A name that is no protocol method and no field of a record or deftype 
 defined is treated as on a collection (a record is a `java.util.Map`). Anything else runs on the
 interpreter and the JVM only -- the wasm backends reject `java:`.
 
+A zero-argument `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is a
+string output stream on every backend, like `(new java.io.StringWriter)`: `.append` of one
+value writes its `str` (nil writes `"null"`), answering the builder, `.toString` and `str`
+answer the text so far, and `.length`, `.charAt` and `.setLength` read and resize it
+(`.setLength` answers nil). An initial text or capacity keeps the host construction, on the
+interpreter and the JVM only. `java.util.Locale/US` (and `ROOT`, `ENGLISH`) is the locale's
+`toString` text (`"en_US"`, `""`, `"en"`), which `.toUpperCase` and `.toLowerCase` of one
+argument take on every backend, mapping as the bare call (the mapping ignores the locale).
+`.intern` of a string is the string, on every backend.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -38,4 +48,6 @@ interpreter and the JVM only -- the wasm backends reject `java:`.
 (defprotocol P (m [this]))
 (defrecord R [a] P (m [this] (str "m" a)))
 (println (.m (->R 1)) (.a (->R 1))) ; m1 1
+(let [sb (StringBuilder.)] (.append sb "a") (.append sb 1) (println (str sb) (.length sb))) ; a1 2
+(println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 ```
