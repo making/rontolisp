@@ -20,4 +20,9 @@ unobservable (`_equal`/`_hash`/`eql` go through `BigInteger.equals`/`compareTo`)
 
 ## Tests
 `JvmLispCompilerTest#aBignumLiteralIsBuiltOnceAndLoadedFromAField`,
-`#aProgramWithoutABignumLiteralGetsNoPoolAndNoClassInitializer`, `IroncladE2eTest`.
+`#aProgramWithoutABignumLiteralGetsNoPool`, `IroncladE2eTest`.
+
+Measured 2026-10-13: a literal-free program (`(print (+ 1 2))`) still carries a
+`<clinit>`, but from f94's `_funcrefs` fill, not the pool -- the pool interns
+nothing, mints no constant and appends no initializer when empty, so the pin
+covers only the `_bi$` absence, not the initializer.

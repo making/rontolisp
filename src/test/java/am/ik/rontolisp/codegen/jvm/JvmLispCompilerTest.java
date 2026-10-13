@@ -8528,14 +8528,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void aProgramWithoutABignumLiteralGetsNoPoolAndNoClassInitializer() throws Exception {
-		// The pool must not perturb a program that has no bignum literal: no field, and
-		// -- the part that would otherwise change every emitted class -- no <clinit>
-		// where there was none.
+	void aProgramWithoutABignumLiteralGetsNoPool() throws Exception {
+		// The pool must not perturb a program that has no bignum literal: no
+		// field, and no pool byte anywhere in the class. No <clinit> assertion:
+		// this program still gets one, but from the canonical function-value
+		// table (f94 fills _funcrefs there), not from the pool -- the pool's
+		// half of <clinit> is empty and mints no constant.
 		byte[] classBytes = compileToBytes("(print (+ 1 2))");
 		assertThat(bignumPoolFieldNames(classBytes)).isEmpty();
 		assertThat(countOccurrences(classBytes, "_bi$")).isZero();
-		assertThat(countOccurrences(classBytes, "<clinit>")).isZero();
 	}
 
 	private byte[] compileToBytes(String lispCode) {
