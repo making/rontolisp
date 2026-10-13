@@ -700,6 +700,17 @@ before the library splice.
   signals. `sort`/`sort-by` with a comparator read the same rule (before 2026-10-03 a
   number was truthy, so `(sort (fn [a b] (- a b)) xs)` answered garbage; pinned by
   `sort-reads-a-comparator-answering-a-number`).
+- A `java.util.Comparator` is a comparator too (f58, 2026-10-13): a host one
+  (`Comparator/naturalOrder`) or a record, deftype or reify implementing it. One
+  helper, `%clojure-comparator-compare`, answers its int order -- the host's
+  `compare` through `java:call` (a `HOST` arm, so wasm lowers as before), a type's
+  `compare` row, else `%clojure-cmp-call` -- which `%clojure-sorted-order` and the
+  `sort`/`sort-by` inline preds (`sortBefore`: the int below zero, else the function
+  reading) read. Calling a host comparator as a function stays the oracle's
+  `ClassCastException`. Pinned by `ClojureInteropTest`
+  (`aHostComparatorSortsAndConstructsSortedCollections`, interpreter and JVM) and
+  clojure-spec `a-comparator-type-sorts-and-orders-sorted-collections-through-compare`
+  (all four backends).
 - The default order of `sort`/`sort-by` is `(neg? (compare a b))` (`defaultCmpBody`), with
   `<` kept inline for two numbers (`sort-without-a-comparator-orders-by-compare`). Measured
   2026-10-03 on `(sort xs)` over 100,000 pseudo-random integers, twice per run: the
@@ -1500,7 +1511,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | tools.cli 1.4.256 | = | = | = | = | |
 | camel-snake-kebab 0.4.3 | = | = | = | = | |
 | honeysql 2.7.1479 | = | = | = | = | f63: `StringBuilder`, `Locale/US` run on wasm since 2026-10-13 (12-line probe `=` on all four, warning-free) |
-| hiccup 2.0.0 | = | compile | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); a 69,502 B top-level method (`.todo/f64`) |
+| hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | crash | | | | `reitit.Trie`, Java over `clojure.lang` (`.todo/f65`); with `clojure-trie-compiler` the interpreter prints the oracle's default-compiler lines |
 | data.json 2.5.2 | refused | | | | `definterface` (`.todo/f62`) |
 | malli 0.20.3 | refused | | | | `object-array` (`.todo/f57`), then `bit-shift-right` (`.todo/f66`, `.todo/f67`) |
@@ -3607,7 +3618,9 @@ measured on clj 1.12.6, 2026-10-08).
   (next.jdbc's `plan`, `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`,
   `IKVReduce`, `Seqable`, `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and
   `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`,
-  `java.lang.CharSequence` (f27, below), and the collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
+  `java.lang.CharSequence` (f27, below), `java.util.Comparator` (f58, 2026-10-13:
+  `compare`, in the `Comparable` row's family, read by `sort`, `sort-by` and the
+  sorted `-by` constructors), and the collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
   `IChunkedSeq`, `IRef` ...) or loadable host interface (`java.util.Deque`) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
@@ -3759,7 +3772,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `reduced`), else the seq; `peek`/`pop` an `IPersistentStack`; `rseq` a `Reversible`;
   `realized?` an `IPending`; `subseq`/`rsubseq` a `Sorted`'s `seqFrom`/`seq`/`comparator`/
   `entryKey`; `compare`, `sort` and a sorted collection's default order a `Comparable`'s
-  `compareTo`; `empty` its `empty`; `keys`/`vals`/`reduce-kv`/`select-keys` a map type's
+  `compareTo`, and `sort`, `sort-by` and the sorted `-by` constructors a `Comparator`
+  type's `compare` (f58, 2026-10-13); `empty` its `empty`; `keys`/`vals`/`reduce-kv`/`select-keys` a map type's
   entries; the printer by kind (`%clojure-typed-print-kind`: map, set, vector, seq; a
   `java.util` one under `pr`, like the oracle's `print-method`).
 - Families, each stored by `%clojure-<family>-row`: `COLLECTION`, `ASSOCIATIVE`,
@@ -3883,7 +3897,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
 ## Java faces
 
 **A deftype or reify whose body implements a Java interface of the table ("Host interfaces":
-`Runnable`, `Callable`, `Comparable`, `Iterable`, `Iterator`, the `java.util` collections,
+`Runnable`, `Callable`, `Comparable`, `java.util.Comparator` (f58, 2026-10-13: its
+`compare` row joins the `Comparable` row's family), `Iterable`, `Iterator`, the `java.util` collections,
 `Serializable` -- never a `clojure.lang` one, which no Java code here is written against) or
 overrides an `Object` method crosses into Java as its FACE: an object implementing those
 interfaces that stands for the value** (`clojure/ClojureJavaFaces`, f10, 2026-10-10). The

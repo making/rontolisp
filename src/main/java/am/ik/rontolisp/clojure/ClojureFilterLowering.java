@@ -444,7 +444,7 @@ final class ClojureFilterLowering {
 						.list(List.of(ClojureLowerUtil.list(got, ctx.callFun(cmp.real(), fun, List.of(left, right))))),
 					comparatorBefore(ctx, got));
 			pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(left, right)),
-					before);
+					sortBefore(ctx, fun, before, left, right));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("sort"), coll, pred));
@@ -465,6 +465,26 @@ final class ClojureFilterLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
 						ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+	}
+
+	/**
+	 * A sort's reading of its comparator over two already-bound values: a host
+	 * {@code Comparator} or a record, deftype or reify implementing it orders by the sign
+	 * of {@code rontolisp::%clojure-comparator-compare}, anything else by
+	 * {@code fnBefore} -- the function reading. Each test is an arm of its family over a
+	 * bound variable, so a program sorting only with functions strips both and keeps the
+	 * reading it had.
+	 */
+	static LispVal sortBefore(ClojureLowering ctx, LispSymbol fun, LispVal fnBefore, LispSymbol left,
+			LispSymbol right) {
+		LispVal order = ClojureLowerUtil.list(ClojureLowerUtil.sym("<"),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COMPARATOR-COMPARE"), fun, left, right),
+				new LispInteger(0));
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ICOMPARATOR-P"), fun), order, fnBefore);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil
+			.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-OBJECT-P"), fun, LispString.literal("java.util.Comparator")),
+				order, typed);
 	}
 
 	/**
@@ -550,8 +570,9 @@ final class ClojureFilterLowering {
 			LispSymbol got = ctx.freshTemp();
 			LispVal invoked = ctx.callFun(cmp.real(), fun, List.of(keyedLeft, keyedRight));
 			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
-			predBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))), comparatorBefore(ctx, got));
+			predBody = sortBefore(ctx, fun, ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))), comparatorBefore(ctx, got)),
+					left, right);
 		}
 		LispVal pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(left, right)), predBody);

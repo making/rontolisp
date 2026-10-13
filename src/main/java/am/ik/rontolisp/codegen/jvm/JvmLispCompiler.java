@@ -433,6 +433,24 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	}
 
+	/**
+	 * A top-level chunk measured past the per-method cap because one form in it is too
+	 * large to share a method. The chunker only splits BETWEEN forms, so the form itself
+	 * is cut into its own methods next time and the chunk fits. Never escapes
+	 * {@link #compile(List)}.
+	 */
+	private static final class TopLevelTooLarge extends RuntimeException {
+
+		/** The top-level form indexes to cut next time, by emission order. */
+		private final Map<Integer, AstOutliner.Budget> budgets;
+
+		private TopLevelTooLarge(Map<Integer, AstOutliner.Budget> budgets) {
+			super(null, null, false, false);
+			this.budgets = budgets;
+		}
+
+	}
+
 	/** HotSpot's {@code HugeMethodLimit}: a method over this is never JIT-compiled. */
 	private static final int HUGE_METHOD_LIMIT = 8000;
 
@@ -448,6 +466,30 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * pieces so small the closures cost more than the cliff.
 	 */
 	private static final int OUTLINE_TARGET_FLOOR_BYTES = 2000;
+
+	/**
+	 * A top-level chunk past this is re-compiled with its largest form cut into its own
+	 * methods. Under the JVM's 65535-byte cap by the writer's widening margin: a far
+	 * branch another widening pushes out of reach (+2/+5) or an {@code ldc} landing past
+	 * 255 in the class's pool (+1) is the only way the written method outgrows the
+	 * measured one, and the jose suite's 7038-branch method measured 1,851 bytes short of
+	 * its fixpoint.
+	 */
+	private static final int TOP_CHUNK_LIMIT_BYTES = 60000;
+
+	/**
+	 * What an outlined top-level piece should come in at: the chunk-budget parity. A
+	 * chunk holds at most one chunk budget (24,000 bytes) of forms beside the cut one, so
+	 * a residual under this keeps the re-chunked method under ~48 KB, and each piece -- a
+	 * method of its own, run once -- fits the per-method cap with room.
+	 */
+	private static final int TOP_OUTLINE_TARGET_BYTES = 24000;
+
+	/**
+	 * Below this, another whole compile is not worth it for a top-level form either: what
+	 * is left no target can cut small enough, and the writer reports it loudly.
+	 */
+	private static final int TOP_OUTLINE_FLOOR_BYTES = 8000;
 
 	/**
 	 * Create a new JVM compiler targeting the given class name, every option at its
@@ -892,8 +934,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// `forced` it strictly grows -- a name is added, or its target shrinks toward
 		// the floor -- so the loop terminates.
 		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
+		// The third retry dimension: the top-level forms to cut into their own methods
+		// because the attempt that just ran MEASURED their chunk over the 64 KB
+		// per-method cap. Grows the same way, toward its own floor.
+		Map<Integer, AstOutliner.Budget> topOutline = new LinkedHashMap<>();
 		try {
-			return compileAttempts(program, forced, outline);
+			return compileAttempts(program, forced, outline, topOutline);
 		}
 		finally {
 			JvmClassFileLookup classes = this.javaClasses;
@@ -904,7 +950,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private byte[] compileAttempts(List<LispVal> program, Set<String> forced, Map<String, AstOutliner.Budget> outline) {
+	private byte[] compileAttempts(List<LispVal> program, Set<String> forced, Map<String, AstOutliner.Budget> outline,
+			Map<Integer, AstOutliner.Budget> topOutline) {
 		while (true) {
 			// A retried attempt's bytecode is thrown away, and so are its warnings: a
 			// warning printed as it was emitted said the same thing twice for one compile
@@ -912,7 +959,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// only the attempt that SHIPS gets to print.
 			CompileWarnings.startAttempt();
 			try {
-				byte[] bytes = compile(program, forced, outline);
+				byte[] bytes = compile(program, forced, outline, topOutline);
 				CompileWarnings.flushAttempt();
 				return bytes;
 			}
@@ -922,6 +969,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					System.err.println("[outline] retry " + signal.budgets);
 				}
 				outline.putAll(signal.budgets);
+			}
+			catch (TopLevelTooLarge signal) {
+				CompileWarnings.discardAttempt();
+				if (System.getProperty("rontolisp.debug.outline") != null) {
+					System.err.println("[outline-top] retry " + signal.budgets);
+				}
+				topOutline.putAll(signal.budgets);
 			}
 			catch (GateUnderpredicted signal) {
 				CompileWarnings.discardAttempt();
@@ -940,7 +994,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private byte[] compile(List<LispVal> program, Set<String> forcedGroups,
-			Map<String, AstOutliner.Budget> outlineBudgets) {
+			Map<String, AstOutliner.Budget> outlineBudgets, Map<Integer, AstOutliner.Budget> topOutlineBudgets) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -2843,16 +2897,31 @@ public final class JvmLispCompiler implements LispCompiler {
 				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
 				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL),
 				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
+		// Cut a top-level form an earlier attempt measured too large for one method
+		// into methods of its own: the chunker below only splits BETWEEN forms, so one
+		// form past the per-method cap has no split point otherwise
+		// (.kb/jvm-method-size-limits.md). Empty (and a no-op, the same list back) on a
+		// first attempt, so a program with no oversized form never sees this pass.
+		AstOutliner.Result topOutlined = AstOutliner.outlineTopLevel(topLevelExprs, topOutlineBudgets);
+		topLevelExprs = topOutlined.program();
 		Ctx chunkCtx = null;
-		for (LispVal expr : topLevelExprs) {
+		// The emitted size of each top-level form, and each chunk's form range: the
+		// over-limit check below cuts the largest form of an over-limit chunk.
+		List<Integer> topFormSizes = new ArrayList<>(topLevelExprs.size());
+		List<int[]> topChunkRanges = new ArrayList<>();
+		int chunkStart = 0;
+		for (int formIndex = 0; formIndex < topLevelExprs.size(); formIndex++) {
+			LispVal expr = topLevelExprs.get(formIndex);
 			if (chunkCtx == null || chunkCtx.body.size() >= chunkCodeBudget) {
 				if (chunkCtx != null) {
 					chunkCtx.body.return_();
+					topChunkRanges.add(new int[] { chunkStart, formIndex });
 				}
 				chunkCtx = ctxBuilder.build();
 				chunkCtx.topLevel = true;
 				chunkCtx.evalStoreRef = evalStoreRef;
 				chunkCtx.shareDefinedGlobals(sharedDefinedGlobals);
+				chunkStart = formIndex;
 				Utf8Entry nameUtf8 = cp.utf8Entry("_top$" + topChunks.size());
 				topChunks.add(chunkCtx);
 				topChunkNames.add(nameUtf8);
@@ -2869,6 +2938,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// stack and still gets its pop.
 			boolean offered = ToplevelStatements.isNameValuedDefiner(expr);
 			chunkCtx.definerNameDropped = offered ? expr : null;
+			int formSizeBefore = chunkCtx.body.size();
 			try {
 				JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
 			}
@@ -2886,9 +2956,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (!taken) {
 				chunkCtx.body.pop();
 			}
+			topFormSizes.add(chunkCtx.body.size() - formSizeBefore);
 		}
 		if (chunkCtx != null) {
 			chunkCtx.body.return_();
+			topChunkRanges.add(new int[] { chunkStart, topLevelExprs.size() });
 		}
 
 		// main() simply calls each top-level chunk in order, then returns. With any
@@ -3177,6 +3249,37 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (!tooLarge.isEmpty()) {
 			throw new MethodTooLarge(tooLarge);
+		}
+		// The top-level chunks are measured against the HARD cap, not the cliff: they
+		// run once, so only the 64 KB Code limit matters. The chunker splits BETWEEN
+		// forms, so an over-limit chunk's largest form is cut into its own methods
+		// next time (AstOutliner.outlineTopLevel, above); a chunk no target can cut is
+		// left for the writer's loud report, as today.
+		Map<Integer, AstOutliner.Budget> tooLargeTop = new LinkedHashMap<>();
+		for (int c = 0; c < topChunks.size(); c++) {
+			if (topChunks.get(c).emittedSize() <= TOP_CHUNK_LIMIT_BYTES) {
+				continue;
+			}
+			int largest = -1;
+			int largestSize = -1;
+			int[] range = topChunkRanges.get(c);
+			for (int i = range[0]; i < range[1]; i++) {
+				if (topFormSizes.get(i) > largestSize) {
+					largestSize = topFormSizes.get(i);
+					largest = i;
+				}
+			}
+			if (largest < 0) {
+				continue;
+			}
+			AstOutliner.Budget next = topOutlined.nextTopBudget(largest, largestSize, topOutlineBudgets.get(largest),
+					TOP_OUTLINE_TARGET_BYTES, TOP_OUTLINE_FLOOR_BYTES);
+			if (next != null) {
+				tooLargeTop.put(largest, next);
+			}
+		}
+		if (!tooLargeTop.isEmpty()) {
+			throw new TopLevelTooLarge(tooLargeTop);
 		}
 		// Debug hook (-Drontolisp.jvm.debug-method-sizes=true): rank the emitted
 		// method bodies by code size. The JVM caps a method at 65535 code bytes and

@@ -831,6 +831,32 @@ class ClojureInteropTest {
 						+ " | No matching field found: reversed for class clojure.lang.PersistentArrayMap\n");
 	}
 
+	// Oracle-identical (clj 1.12.6, measured 2026-10-13): sort, sort-by and the
+	// sorted constructors take a java.util.Comparator -- a host one or a reify or
+	// deftype implementing it -- and calling a host one as a function stays the
+	// oracle's ClassCastException. Before, on the interpreter and the JVM: "not a
+	// function" and "a sorted collection needs a comparator function", and the
+	// interface was refused by name at the reify and deftype.
+	@Test
+	void aHostComparatorSortsAndConstructsSortedCollections() throws Exception {
+		assertBothEqual("(println (sort (java.util.Comparator/naturalOrder) [3 1 2]))", "(1 2 3)\n");
+		assertBothEqual("(println (sort-by count (java.util.Comparator/reverseOrder) [\"a\" \"ccc\" \"bb\"]))",
+				"(ccc bb a)\n");
+		assertBothEqual("(println (sorted-set-by (java.util.Comparator/reverseOrder) 1 3 2))", "#{3 2 1}\n");
+		assertBothEqual("(println (sorted-map-by (java.util.Comparator/reverseOrder) 1 :a 2 :b))", "{2 :b, 1 :a}\n");
+		assertBothEqual("(println (sort (java.util.Comparator/comparing count) [\"ccc\" \"a\" \"bb\"]))",
+				"(a bb ccc)\n");
+		assertBothEqual("(println (sort (reify java.util.Comparator (compare [_ a b] (compare b a))) [1 3 2]))",
+				"(3 2 1)\n");
+		assertBothEqual("(println (sorted-set-by (reify java.util.Comparator (compare [_ a b] (compare b a))) 1 3 2))",
+				"#{3 2 1}\n");
+		assertBothEqual("(deftype D [] java.util.Comparator (compare [_ a b] (compare b a)))"
+				+ " (println (sort (D.) [1 3 2]) (sorted-set-by (D.) 1 3 2)"
+				+ " (instance? java.util.Comparator (D.)) (.compare (D.) 1 2))", "(3 2 1) #{3 2 1} true 1\n");
+		assertBothEqual("(println (try ((java.util.Comparator/naturalOrder) 1 2) (catch ClassCastException e :cce)))",
+				":cce\n");
+	}
+
 	@Test
 	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the

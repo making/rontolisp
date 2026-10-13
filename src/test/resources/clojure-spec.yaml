@@ -11478,6 +11478,28 @@ cases:
       true ([3 :c] [4 :d]) ([1 :a] [2 :b]) ([2 :b] [1 :a]) ([4 :d] [3 :c]) ([2 :b] [3 :c]) ([3 :c] [2 :b])
       :no-iterator :no-cons
       true true true false true
+  - name: a-comparator-type-sorts-and-orders-sorted-collections-through-compare
+    # java.util.Comparator in a reify or deftype body (.kb/clojure-frontend.md
+    # "Host interfaces"): sort, sort-by and the sorted collections' -by constructors
+    # order through its compare, and instance? and an instance call reach it. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-comparator)
+      (prn (sort (reify java.util.Comparator (compare [_ a b] (compare b a))) [1 3 2]))
+      (prn (sort-by identity (reify java.util.Comparator (compare [_ a b] (compare b a))) [1 3 2]))
+      (prn (sorted-set-by (reify java.util.Comparator (compare [_ a b] (compare b a))) 1 3 2))
+      (prn (sorted-map-by (reify java.util.Comparator (compare [_ a b] (compare b a))) 1 :a 2 :b))
+      (prn (instance? java.util.Comparator (reify java.util.Comparator (compare [_ a b] 0))) (.compare (reify java.util.Comparator (compare [_ a b] (compare b a))) 1 2))
+      (deftype DescT [] java.util.Comparator (compare [_ a b] (compare b a)))
+      (prn (sort (DescT.) [1 3 2]) (sorted-set-by (DescT.) 1 3 2) (instance? java.util.Comparator (DescT.)) (.compare (DescT.) 1 2))
+      (in-ns 'user)
+    expected: |
+      (3 2 1)
+      (3 2 1)
+      #{3 2 1}
+      {2 :b, 1 :a}
+      true 1
+      (3 2 1) #{3 2 1} true 1
   - name: a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it
     # extend-protocol to clojure.lang.IPersistentMap, IPersistentVector, IPersistentSet and
     # java.util.Map, which also key the core kinds' rows, and to ISeq

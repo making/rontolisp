@@ -48,6 +48,10 @@
   (doseq [k [3 1 2]] (.put tree k (str "v" k)))
   (println (.firstKey tree) (vec (.keySet tree)) (.get tree 2)))
 
+;; a reify of Comparator sorts Clojure collections too
+(let [descending (reify Comparator (compare [_ a b] (compare b a)))]
+  (println (sort descending [1 3 2]) (sorted-set-by descending 1 3 2)))
+
 (println "== reify and deftype as Java objects")
 (let [task (reify Runnable (run [_] (println "  a reified Runnable ran")))]
   (doto (Thread. ^Runnable task) (.start) (.join)))

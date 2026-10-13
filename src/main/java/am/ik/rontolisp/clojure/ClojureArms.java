@@ -374,9 +374,12 @@ public final class ClojureArms {
 		/**
 		 * A record, deftype or reify whose body implements {@code java.lang.Comparable},
 		 * which {@code compare} (and the default comparator of {@code sort} and the
-		 * sorted collections) reaches through its {@code compareTo}.
+		 * sorted collections) reaches through its {@code compareTo}, or
+		 * {@code java.util.Comparator}, which {@code sort}, {@code sort-by} and the
+		 * sorted collections' {@code -by} constructors reach through its {@code compare}.
 		 */
-		COMPARABLE("comparable-interface", Set.of("RONTOLISP::%CLOJURE-ICOMPARABLE-P"), Set.of(), Map.of(),
+		COMPARABLE("comparable-interface",
+				Set.of("RONTOLISP::%CLOJURE-ICOMPARABLE-P", "RONTOLISP::%CLOJURE-ICOMPARATOR-P"), Set.of(), Map.of(),
 				Set.of(ClojureInterfaces.COMPARABLE_ROW), Set.of()),
 
 		/**
