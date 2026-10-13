@@ -5007,6 +5007,28 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The program-wide value of a core name whose value is site-independent (a predicate,
+	 * {@code not}, {@code boolean}): one call to the
+	 * {@code rontolisp::%clojure-shared-value} worker, which stores the value on first
+	 * use and answers the stored object after, so two references to one core name
+	 * evaluate to one object -- {@code =} and {@code identical?}, like the oracle's var
+	 * roots, and usable as a map key (malli's registry keys its schemas by their
+	 * predicate values). A fresh lambda per site used to make two references distinct
+	 * objects, which identity equality (f85) then told apart. The worker and its table
+	 * live per environment (the program's library, the macro-time runtime), so macro-time
+	 * evaluation shares macro-time-wide. Only rows whose body closes over nothing but its
+	 * parameters may come here; a parameterized value (a keyword's lookup) keeps its own
+	 * lambda, which compares as its value anyway.
+	 * @param name the Clojure name
+	 * @param lambda the one-argument value form, built as before
+	 * @return the shared-value call
+	 */
+	LispVal sharedValue(String name, LispVal lambda) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SHARED-VALUE"), LispString.literal(name),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), lambda));
+	}
+
+	/**
 	 * A builtin as a function value: a lambda with the Clojure argument order and the
 	 * Clojure coercions, so {@code (map inc ...)} runs what a call would run. Only the
 	 * builtins whose call lowering is more than a direct Common Lisp call need an entry
@@ -5025,9 +5047,9 @@ public final class ClojureLowering {
 			case "not=" -> notEqualValue();
 			case "==" -> comparisonValue("=");
 			case "<", ">", "<=", ">=" -> comparisonValue(name);
-			case "vector?" -> ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw);
-			case "fn?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
+			case "vector?" -> sharedValue("vector?", ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw));
+			case "fn?" -> sharedValue("fn?", ClojureFnLowering.predValue(this,
+					x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x)));
 			case "str" -> ClojureStringLowering.strValue(this);
 			case "pr-str" -> ClojureStringLowering.prStrValue(this);
 			case "print-str" -> ClojureStringLowering.printStrValue(false, false);
@@ -5095,7 +5117,7 @@ public final class ClojureLowering {
 			case "nfirst" -> ClojureFilterLowering.nfirstValue(this);
 			case "fnext" -> ClojureFilterLowering.fnextValue(this);
 			case "nnext" -> ClojureFilterLowering.nnextValue(this);
-			case "boolean" -> ClojureFnLowering.booleanValue(this);
+			case "boolean" -> sharedValue("boolean", ClojureFnLowering.booleanValue(this));
 			case "char" -> ClojureFnLowering.charValue(this);
 			case "name" -> ClojureFnLowering.nameValue(this);
 			case "namespace" -> ClojureFnLowering.namespaceValue(this);
@@ -5133,8 +5155,8 @@ public final class ClojureLowering {
 			case "identity" -> ClojureFnLowering.identityValue(this);
 			case "memoize" -> ClojureFnLowering.memoizeValue(this);
 			case "trampoline" -> ClojureFnLowering.trampolineValue(this);
-			case "string?" -> ClojureFnLowering.stringPredValue(this);
-			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
+			case "string?" -> sharedValue("string?", ClojureFnLowering.stringPredValue(this));
+			case "symbol?" -> sharedValue("symbol?", ClojureFnLowering.symbolPredValue(this));
 			case "class" -> ClojureDispatchLowering.classValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
@@ -5159,21 +5181,21 @@ public final class ClojureLowering {
 				ClojureStateLowering.agentVerbValue(name);
 			case "send" -> ClojureStateLowering.sendValue(this, "send");
 			case "send-off" -> ClojureStateLowering.sendValue(this, "send-off");
-			case "odd?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x));
-			case "even?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("evenp"), x));
-			case "zero?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), x));
-			case "pos?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), x));
-			case "neg?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("minusp"), x));
-			case "nil?" ->
-				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x));
-			case "some?" -> ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
-			case "not" -> ClojureFnLowering.notValue(this);
+			case "odd?" -> sharedValue("odd?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x)));
+			case "even?" -> sharedValue("even?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("evenp"), x)));
+			case "zero?" -> sharedValue("zero?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), x)));
+			case "pos?" -> sharedValue("pos?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), x)));
+			case "neg?" -> sharedValue("neg?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("minusp"), x)));
+			case "nil?" -> sharedValue("nil?",
+					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
+			case "some?" -> sharedValue("some?", ClojureFnLowering.predValue(this, x -> ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("not"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x))));
+			case "not" -> sharedValue("not", ClojureFnLowering.notValue(this));
 			case "ex-data" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_DATA);
 			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
 			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
@@ -5689,6 +5711,7 @@ public final class ClojureLowering {
 		ClojureLowering ctx = new ClojureLowering();
 		List<LispVal> forms = new ArrayList<>(ClojureStateLowering.stmRuntime());
 		forms.addAll(ClojureStateLowering.exInfoRuntime(ctx));
+		forms.addAll(ClojureFnLowering.sharedValueRuntime());
 		// a definition's dispatcher may walk: the walk finds no class at macro time
 		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));
 		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));

@@ -378,11 +378,26 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
   itself, where the oracle builds an empty mutable map. Where the host is (the
   interpreter and the JVM) the construction stays that mutable object.
+- A zero-argument `(Object.)` is a fresh uninterned symbol on the wasm backends, so a
+  load-time lock builds; two constructions are never `=` or `identical?`, like two host
+  objects, but one prints as a gensym where the oracle prints the object's identity.
+  Where the host is it stays the host object.
 - `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
   its default on the wasm backends, where no properties exist (like a host without the
   property, which is what a library load reads); nil is the oracle's
   `NullPointerException`. A computed key stays the host call, which the wasm backends
   reject.
+- `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs) is itself on
+  the wasm backends, so a load-time constant reads; any other member stays the host
+  field.
+- A bare class name is its `(:C%CLASS name)` designator on the wasm backends, so a
+  class-keyed map builds at load; two literals of one class are equal, like two
+  `forName` answers, but one prints as the list where the oracle prints the name, and
+  `class?` and `str` read the designator.
+- A `DateTimeFormatterBuilder` chain evaluates on the wasm backends (each builder call
+  threads a marker, `toFormatter` the formatter, `ofPattern` and `ZoneId/of` their
+  own), so a load-time formatter builds; parsing or formatting with one is rejected in
+  the oracle's words.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector

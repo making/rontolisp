@@ -2034,6 +2034,57 @@ cases:
       :npe
       Cannot invoke "java.util.Map.size()" because "m" is null
       :cce
+  - name: object-construction-answers-a-fresh-token-where-the-host-is-not
+    # (Object.) where the host is not (wasm) is a fresh uninterned symbol, so
+    # dynaload's dynalock defonce loads -- locking only needs the lock to
+    # evaluate. Two constructions are never = or identical?, like two host
+    # objects. Where the host is the construction keeps its java:new.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (identical? (Object.) (Object.)))
+      (println (= (Object.) (Object.)))
+      (println (identical? (new Object) (new Object)))
+    expected: |
+      false
+      false
+      false
+  - name: boxed-integer-limits-answer-themselves-where-the-host-is-not
+    # Long/MAX_VALUE (and MIN_VALUE, the Integer/Short/Byte pairs) is itself
+    # where the host is not (wasm), so malli's +max-size+ def loads -- never a
+    # java:field, which wasm refuses. The values are exact integers, so where
+    # the host is the field read stays untouched. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println Long/MAX_VALUE Long/MIN_VALUE)
+      (println Integer/MAX_VALUE Integer/MIN_VALUE)
+      (println Short/MAX_VALUE Short/MIN_VALUE)
+      (println Byte/MAX_VALUE Byte/MIN_VALUE)
+    expected: |
+      9223372036854775807 -9223372036854775808
+      2147483647 -2147483648
+      32767 -32768
+      127 -128
+  - name: class-literals-and-date-builder-chains-evaluate-where-the-host-is-not
+    # A bare class literal where the host is not (wasm) is its (:C%CLASS name)
+    # designator, so a class-keyed map (malli's class-schemas, read at load
+    # into the default registry) builds; two literals of one class are equal,
+    # like two forName answers. A DateTimeFormatterBuilder chain threads its
+    # marker the same way (appendPattern/optionalStart/appendFraction/
+    # optionalEnd/appendOffset/parseDefaulting answer the builder, toFormatter
+    # the formatter, ofPattern and ZoneId/of their own), so malli's formatter
+    # defs load; using one still refuses in the oracle's words. Where the host
+    # is everything keeps its host object. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println (= java.util.regex.Pattern java.util.regex.Pattern))
+      (println (do (-> (java.time.format.DateTimeFormatterBuilder.) (.appendPattern "yyyy") (.toFormatter)) :built))
+      (println (do java.time.temporal.ChronoField/MICRO_OF_SECOND :field))
+      (println (do (-> (java.time.format.DateTimeFormatter/ofPattern "yyyy") (.withZone (java.time.ZoneId/of "UTC"))) :formatter))
+    expected: |
+      true
+      :built
+      :field
+      :formatter
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,
@@ -14632,6 +14683,28 @@ cases:
       [:a!] true
       :no-method
       true false true
+  - name: predicate-values-are-shared-across-references
+    # Two references to one predicate are = and identical? on every backend,
+    # like two references to one defn (f85) and like the oracle's var roots: a
+    # site-independent core value lives in one program-wide cell, so malli's
+    # registry (keyed by predicate values) hits. A fresh lambda per site used
+    # to make them distinct objects, which identity equality then told apart,
+    # looping malli's -lookup through the :function schema. Every line matches
+    # the oracle (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= pos-int? pos-int?) (identical? pos-int? pos-int?))
+      (println (= string? string?) (= odd? odd?) (= not not))
+      (println (= boolean boolean) (= identical? identical?))
+      (println (map pos-int? [3 -1]))
+      (let [f pos-int?] (println (= f pos-int?)))
+      (println (= (get {pos-int? :hit} pos-int?) :hit))
+    expected: |
+      true true
+      true true true
+      true true
+      (true false)
+      true
+      true
   - name: protocol-extenders-and-find-protocol-impl-and-method
     # extenders answers the extended tags as a seq (:object last for the Object
     # default), find-protocol-impl the tag row's map and find-protocol-method

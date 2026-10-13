@@ -31,7 +31,9 @@ definitions never are -- not even two closures over one body -- and a function
 is never `=` to a non-function, like the oracle. A `defmulti` is a dispatcher
 `defun`, so the same holds for multimethods (`remove-all-methods` answers the
 multimethod itself). A `lambda` form still evaluates to a fresh closure each
-time it runs.
+time it runs. A core predicate used as a value is one object too: two references
+to `pos-int?` answer the same object, so they are `identical?` and `=`, and it
+works as a map key.
 
 ## Namespaces and files
 

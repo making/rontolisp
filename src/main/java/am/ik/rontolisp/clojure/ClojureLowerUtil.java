@@ -63,7 +63,7 @@ final class ClojureLowerUtil {
 	private static final Set<String> FUNCTION_WORKERS = Set.of("AS-FN", "JUXT", "FNIL", "EVERY-PRED", "SOME-FN",
 			"COMPLETING", "XF-MAP", "XF-FILTER", "XF-KEEP", "XF-INDEXED", "XF-TAKE", "XF-DROP", "XF-TAKE-WHILE",
 			"XF-DROP-WHILE", "XF-TAKE-NTH", "XF-MAPCAT", "XF-PARTITION-ALL", "XF-PARTITION-BY", "XF-INTERPOSE",
-			"XF-DEDUPE", "XF-DISTINCT", "XF-COMP", "XF-CAT");
+			"XF-DEDUPE", "XF-DISTINCT", "XF-COMP", "XF-CAT", "SHARED-VALUE");
 
 	/**
 	 * Whether the lowered form always evaluates to a real function, so it can be

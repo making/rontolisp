@@ -60,6 +60,11 @@ nil builds to the oracle's `NullPointerException`. Where the host is (the interp
 and the JVM) the construction stays the mutable `java.util.HashMap`, and any other
 argument shape or a `^[...]`-tagged construction keeps the host construction everywhere.
 
+A zero-argument `(Object.)` is a fresh uninterned symbol where the host is not (the wasm
+backends), so a load-time lock (dynaload's `dynalock`) builds; two constructions are
+never `=` or `identical?`, like two host objects. Where the host is it stays the host
+object.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -75,4 +80,5 @@ argument shape or a `^[...]`-tagged construction keeps the host construction eve
 (println (let [w (java.io.StringWriter. 16)] (.append w "hello" 1 3) (str w))) ; el
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
+(println (identical? (Object.) (Object.))) ; false
 ```

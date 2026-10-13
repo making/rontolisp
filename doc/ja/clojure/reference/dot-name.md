@@ -8,6 +8,8 @@
 
 引数なしの `(java.util.HashMap.)`（`(new java.util.HashMap)` も）は空のマップであり、マップからの1引数の構築はそのマップ自身、2つの数値からの2引数の構築（`(java.util.HashMap. 1024 0.25)`）は空のマップです（ホストがない場合、すなわち wasm バックエンド）。`.get`・`.size`・`.containsKey` などの読み取りは通常のマップと同じようにそれを読みますが、`.put` はオラクルのメッセージなしの `UnsupportedOperationException` を投げます（インタープリターと JVM と同じです。そこでは値が Java へ渡るときに読み取り専用マップになるため）。マップからの `.putAll` はそのエントリーをマップに格納して nil を返します。レコードやソート済みマップへの `.putAll` は同じ `UnsupportedOperationException` を投げます。nil からの構築はオラクルの `NullPointerException` です。ホストがある場合（インタープリターと JVM）は可変の `java.util.HashMap` のまま残り、それ以外の引数の形や `^[...]` タグ付きの構築は全域でホストの構築のまま残ります。
 
+引数なしの `(Object.)` はホストがない場合（wasm バックエンド）に新しい uninterned シンボルになるため、ロード時のロック（dynaload の `dynalock`）が構築できます。2 つの構築はホストのオブジェクトと同様に `=` にも `identical?` にもなりません。ホストがある場合はホストのオブジェクトのまま残ります。
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -23,4 +25,5 @@
 (println (let [w (java.io.StringWriter. 16)] (.append w "hello" 1 3) (str w))) ; el
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
+(println (identical? (Object.) (Object.))) ; false
 ```

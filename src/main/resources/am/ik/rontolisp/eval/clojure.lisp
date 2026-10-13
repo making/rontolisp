@@ -13422,6 +13422,26 @@
       (or (gethash key table)
           (setf (gethash key table) (rontolisp:make-mutex))))))
 
+;;;; Shared core values: one object per site-independent core function value.
+;;
+;; A predicate (or not, or boolean) as a value must be one object program-wide --
+;; = and identical? like the oracle's var roots, and usable as a map key
+;; (malli's registry keys its schemas by predicate values). A fresh lambda per
+;; reference site used to make them distinct objects, which identity equality
+;; then told apart. rontolisp::%clojure-shared-values maps the core name to its
+;; object, made on first use; later references answer the stored one. The table
+;; lives per environment, so macro-time evaluation shares macro-time-wide and
+;; the program shares run-wide. Only rows whose body closes over nothing but
+;; its parameters come here.
+
+(defvar rontolisp::%clojure-shared-values (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-shared-value (name make)
+  "The program-wide value of the site-independent core function NAME: (funcall
+   MAKE) on first use, the stored object after."
+  (or (gethash name rontolisp::%clojure-shared-values)
+      (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
+
 ;;;; Atoms across request threads.
 ;;
 ;; A Ring handler runs one thread per request on the interpreter and the JVM, and an

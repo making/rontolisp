@@ -13,10 +13,16 @@ variadic-only member is refused. A static call or member value whose overloads
 all answer a boolean answers `true`/`false`. `(System/getProperty k)` of a literal
 key is nil and `(System/getProperty k dflt)` its default on the wasm backends, where
 no properties exist (nil is the oracle's `NullPointerException`); a computed key stays
-the host call. The class resolves dotted,
+the host call. `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs)
+is itself on the wasm backends, where no host field exists; any other member stays the
+host field. The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
-string answers it. A class object prints its name (`java.lang.String`), and `str`
+string answers it; on the wasm backends it is its `(:C%CLASS name)` designator instead,
+so a class-keyed map builds at load, and two literals of one class are still equal.
+A `DateTimeFormatterBuilder` chain evaluates on the wasm backends (each builder call
+threads a marker, `toFormatter` the formatter, `ofPattern` and `ZoneId/of` their own),
+but parsing or formatting with one is rejected. A class object prints its name (`java.lang.String`), and `str`
 answers its `toString` (`class java.lang.String`), like the oracle. Runs on the
 interpreter and the JVM only -- the wasm backends reject `java:`.
 
@@ -38,6 +44,8 @@ argument count is refused when the program is read.
 (println (every? Character/isWhitespace "   ")) ; true
 (println (> (System/currentTimeMillis) 0)) ; true
 (println (System/getProperty "no.such.property" "dflt")) ; dflt
+(println Long/MAX_VALUE Long/MIN_VALUE) ; 9223372036854775807 -9223372036854775808
+(println (= String String)) ; true
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
 (println String (str String)) ; java.lang.String class java.lang.String

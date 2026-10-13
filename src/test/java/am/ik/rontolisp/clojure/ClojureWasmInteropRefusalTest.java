@@ -20,10 +20,12 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * static field as a value, a member as a value, a zero-arg static call and a host-boolean
  * instance call, a proxy over a class, and the qualified {@code Class/new},
  * {@code Class/.method} and param-tagged forms all compile to the undefined-function
- * call-time error (pinned here by the compile warning naming it) and trap when run. The
- * behavior itself lives in {@link ClojureInteropTest} on the interpreter and the JVM. A
- * Date or UUID construction is no refusal: it makes the value {@code #inst} or
- * {@code #uuid} reads, whose host-only members alone are refused, by name.
+ * call-time error (pinned here by the compile warning naming it) and trap when run. A
+ * bare class name is no refusal: it answers its (:C%CLASS name) designator, so a
+ * class-keyed map builds at load. The behavior itself lives in {@link ClojureInteropTest}
+ * on the interpreter and the JVM. A Date or UUID construction is no refusal: it makes the
+ * value {@code #inst} or {@code #uuid} reads, whose host-only members alone are refused,
+ * by name.
  */
 class ClojureWasmInteropRefusalTest {
 
@@ -62,13 +64,21 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
-	void classValueRefusesOnPreview1() throws Exception {
-		assertRefusal("(println String)", "JAVA:STATIC", false);
+	void classValueAnswersTheDesignatorOnPreview1() throws Exception {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not, so a class-keyed map builds at load (malli's class-schemas); two
+		// literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", false))
+			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
 	}
 
 	@Test
-	void classValueRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println String)", "JAVA:STATIC", true);
+	void classValueAnswersTheDesignatorOnTheComponent() throws Exception {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not, so a class-keyed map builds at load (malli's class-schemas); two
+		// literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", true))
+			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
 	}
 
 	@Test

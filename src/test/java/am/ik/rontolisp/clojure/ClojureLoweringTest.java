@@ -2199,6 +2199,88 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void predicateValuesLiveInOneProgramWideCell() {
+		// a predicate as a value goes through the shared-value worker, which
+		// stores the value on first use and answers the stored object after, so
+		// two references are = and identical? like the oracle's var roots (and
+		// malli's registry, keyed by predicate values, hits): a fresh lambda per
+		// site used to make them distinct objects. Calls stay inline, on every
+		// backend.
+		assertThat(lowered("(pos-int? 1)")).contains("IS-POS-INT").doesNotContain("SHARED-VALUE");
+		String shared = lowered("(println (= pos-int? pos-int?))");
+		assertThat(shared).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"pos-int?\"")
+			.contains("RONTOLISP::%CLOJURE-IS-POS-INT");
+		assertThat(wasmLowered("(println (= string? string?) (identical? odd? odd?))")).contains("\"string?\"")
+			.contains("\"odd?\"")
+			.doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aZeroArgumentObjectConstructionIsAFreshTokenWhereTheHostIsNot() {
+		// (Object.) is a fresh uninterned symbol where the host is not (wasm), so
+		// dynaload's dynalock defonce loads -- never a java:new (which wasm
+		// refuses). Two constructions are never = or identical?, like two host
+		// objects. Where the host is every spelling keeps java:new; any other
+		// count keeps it everywhere.
+		assertThat(wasmLowered("(Object.)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new Object)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Object/new)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(lowered("(Object.)")).contains("JAVA:NEW").contains("java.lang.Object");
+	}
+
+	@Test
+	void boxedIntegerLimitsAnswerThemselvesWhereTheHostIsNot() {
+		// Long/MAX_VALUE (and MIN_VALUE, the Integer/Short/Byte pairs) is itself
+		// where the host is not (wasm), so malli's +max-size+ def loads -- never
+		// a java:field (which wasm refuses). Where the host is the field read
+		// stays untouched; any other member keeps it everywhere.
+		assertThat(wasmLowered("(println Long/MAX_VALUE Long/MIN_VALUE)")).contains("9223372036854775807")
+			.contains("-9223372036854775808")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println Integer/MAX_VALUE Integer/MIN_VALUE)")).contains("2147483647")
+			.contains("-2147483648")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println Short/MAX_VALUE Byte/MIN_VALUE)")).contains("32767")
+			.contains("-128")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println Long/MAX_VALUE)")).contains("JAVA:FIELD");
+		assertThat(wasmLowered("(println Long/SIZE)")).contains("JAVA:FIELD");
+	}
+
+	@Test
+	void aClassLiteralIsItsDesignatorWhereTheHostIsNot() {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not (wasm), so a class-keyed map (malli's class-schemas, read at load
+		// into the default registry) builds -- never a java:static (which wasm
+		// refuses). Where the host is it keeps the forName object.
+		assertThat(wasmLowered("(println String)")).contains(":C%CLASS")
+			.contains("java.lang.String")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println String)")).contains("JAVA:STATIC").contains("forName");
+	}
+
+	@Test
+	void dateBuilderChainsThreadTheirMarkerWhereTheHostIsNot() {
+		// a DateTimeFormatterBuilder chain evaluates to its marker where the host
+		// is not (wasm), so malli's formatter defs load: the construction is the
+		// builder marker, each builder call it again, toFormatter the formatter,
+		// ofPattern and ZoneId/of their own -- never a java: operator. Where the
+		// host is every spelling keeps its host call.
+		String chain = "(-> (java.time.format.DateTimeFormatterBuilder.)"
+				+ " (.appendPattern \"yyyy\") (.toFormatter))";
+		assertThat(wasmLowered(chain)).contains(":C%DATE-FORMATTER-BUILDER")
+			.contains(":C%DATE-FORMATTER")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.time.format.DateTimeFormatter/ofPattern \"yyyy\")")).contains(":C%DATE-FORMATTER")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.time.ZoneId/of \"UTC\")")).contains(":C%ZONE-ID").doesNotContain("JAVA:");
+		assertThat(wasmLowered("java.time.temporal.ChronoField/MICRO_OF_SECOND")).contains(":C%CHRONO-FIELD")
+			.doesNotContain("JAVA:");
+		assertThat(lowered(chain)).contains("JAVA:NEW");
+	}
+
+	@Test
 	void setBangWritesADeftypeMutableFieldThroughItsSlot() {
 		String out = lowered("(defprotocol P (bump! [c])) "
 				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");
