@@ -26,6 +26,11 @@ class ClojureLoweringTest {
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
+	private static String wasmLowered(String source) {
+		List<LispVal> forms = Clojure.read(source, null, null, ClojureFiles.NONE, false);
+		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
 	private static final String FALSE_BINDING = "(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)\n";
 
 	/**
@@ -2095,6 +2100,47 @@ class ClojureLoweringTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void aHashMapConstructionLowersToTheMapItselfWhereTheHostIsNot() {
+		// A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
+		// (java.util.HashMap/new) is the empty map, and a one-argument construction
+		// the map itself (nil the oracle's NullPointerException), where the host is
+		// not (wasm), never a java:new (which wasm refuses). Two arguments, and a
+		// tagged construction naming the host overload, keep the host construction,
+		// like any other class; where the host is every spelling keeps java:new,
+		// whose mutable object the host tests pin.
+		assertThat(wasmLowered("(java.util.HashMap.)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new java.util.HashMap)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.HashMap/new)")).contains("PLIST-HASH-TABLE").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(let [m {:a 1}] (java.util.HashMap. m))")).doesNotContain("JAVA:")
+			.contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION");
+		assertThat(wasmLowered("(java.util.HashMap. nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.HashMap. 16 0.5)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(wasmLowered("(^[int] java.util.HashMap/new 64)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap.)")).contains("JAVA:NEW").contains("java.util.HashMap");
+		assertThat(lowered("(java.util.HashMap. {:a 1})")).contains("JAVA:NEW").contains("java.util.HashMap");
+		// where the host is not, no java: operator is left for any of them
+		String portable = "(println (.get (java.util.HashMap. {:a 1}) :a))"
+				+ " (println (.get (new java.util.HashMap {:a 1}) :a))"
+				+ " (println (let [m (java.util.HashMap.)] (.size m)))";
+		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
+	}
+
+	@Test
+	void putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot() {
+		// .put of a key and a value on a value of unknown class throws the
+		// message-less UnsupportedOperationException construction where the host is
+		// not (wasm) -- the map is an unmodifiable java.util.Map there, like the
+		// read-only view Java is handed it as where the host is. Any other receiver
+		// keeps the oracle's no-such-method refusal, on every backend.
+		assertThat(wasmLowered("(defn f [m k v] (.put m k v))")).contains("RONTOLISP::%CLOJURE-THROW")
+			.contains("java.lang.UnsupportedOperationException")
+			.contains("No matching method put");
+		assertThat(lowered("(defn f [m k v] (.put m k v))")).contains("JAVA:CALL")
+			.doesNotContain("RONTOLISP::%CLOJURE-THROW");
 	}
 
 	@Test

@@ -822,6 +822,16 @@ final class ClojureValueMethodLowering {
 			parts.addAll(args);
 			answer = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2, true);
 		}
+		else if (method.equals("put") && n == 2) {
+			// .put of a key and a value on a map: the map is an unmodifiable
+			// java.util.Map here -- the read-only view Java is handed it as where
+			// the host is -- so writing it is the oracle's
+			// UnsupportedOperationException, a message-less construction like the
+			// seq iterator's .remove (.kb/clojure-frontend.md, "HashMap
+			// construction")
+			answer = ctx.lower(ClojureLowerUtil.list(new LispSymbol("throw"),
+					ClojureLowerUtil.list(new LispSymbol("new"), new LispSymbol(UNSUPPORTED_OPERATION))));
+		}
 		else {
 			answer = refusal(recv, method, false, args);
 		}

@@ -29,6 +29,7 @@ class ClojureWasmHostArmsTest {
 			"(println (let [sb (StringBuilder.)] (.append sb \"a\") (.append sb :k) (str sb) (.length sb)))",
 			"(println (str (StringBuilder. \"ab\") (StringBuffer. 16) (new StringBuilder \"c\")))",
 			"(println (str (java.io.StringWriter. 16) (new java.io.StringWriter 8)))",
+			"(println (.get (java.util.HashMap. {:a 1}) :a) (.size (java.util.HashMap.)) (.get (new java.util.HashMap {:a 1}) :a))",
 			"(println (.toUpperCase \"straße\" java.util.Locale/US) (.intern (str \"a\")))",
 			"(deftype K [s] Object (equals [this o] (and (instance? K o) (= s (.-s ^K o))))"
 					+ " (hashCode [this] (hash s)))" + " (println (= (K. 1) (K. 1)) (= (K. 1) (K. 2)))");
