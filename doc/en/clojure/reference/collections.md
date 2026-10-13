@@ -3,7 +3,9 @@
 A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. A map or set prints its entries, and `seq`, `keys` and `vals` walk them, in insertion order. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
 `aset`, and measures through `alength`; a byte array (`byte-array`, or `make-array` of
-`Byte/TYPE`) holds signed bytes. A transient (`transient`) edits a copy of a vector, map or set in place until `persistent!` hands it back. A persistent queue (`clojure.lang.PersistentQueue/EMPTY`) adds at the rear and pops from the front.
+`Byte/TYPE`) holds signed bytes. The typed constructors (`object-array`, `to-array`,
+`into-array`, `int-array` and friends) coerce their members like the oracle's and answer
+the same vectors. A transient (`transient`) edits a copy of a vector, map or set in place until `persistent!` hands it back. A persistent queue (`clojure.lang.PersistentQueue/EMPTY`) adds at the rear and pops from the front.
 
 | Name | Example | Result |
 |---|---|---|
@@ -64,6 +66,16 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `bytes` | `(bytes nil)` | `nil` |
 | `aclone` | `(vec (aclone (byte-array [1 2])))` | `[1 2]` |
 | `aset-byte` | `(aset-byte (byte-array 1) 0 -5)` | `-5` |
+| `object-array` | `(vec (object-array [1 nil]))` | `[1 nil]` |
+| `to-array` | `(vec (to-array [1 nil]))` | `[1 nil]` |
+| `into-array` | `(vec (into-array [1 2]))` | `[1 2]` |
+| `int-array` | `(vec (int-array [1.9 300]))` | `[1 300]` |
+| `long-array` | `(vec (long-array [1.9]))` | `[1]` |
+| `double-array` | `(vec (double-array [1 2]))` | `[1.0 2.0]` |
+| `float-array` | `(vec (float-array [1 2]))` | `[1.0 2.0]` |
+| `short-array` | `(vec (short-array [100000]))` | `[-31072]` |
+| `char-array` | `(vec (char-array [\a \b]))` | `[\a \b]` |
+| `boolean-array` | `(vec (boolean-array [true]))` | `[true]` |
 | `hash` | `(hash [1 2])` | `156247261` |
 | `hash-ordered-coll` | `(hash-ordered-coll '(1 2))` | `156247261` |
 | `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |

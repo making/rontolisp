@@ -1,6 +1,6 @@
 # マップ・セット・ベクター
 
-マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set はエントリを挿入順に印字し、`seq`・`keys`・`vals` も挿入順にたどります。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。トランジェント（`transient`）は、`persistent!` が返すまでベクター・マップ・セットのコピーをその場で編集します。永続キュー（`clojure.lang.PersistentQueue/EMPTY`）は末尾に加え、先頭から取り除きます。
+マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set はエントリを挿入順に印字し、`seq`・`keys`・`vals` も挿入順にたどります。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。型付きコンストラクタ（`object-array`・`to-array`・`into-array`・`int-array` など）は、要素をオラクルと同じように変換して同じベクターとして返します。トランジェント（`transient`）は、`persistent!` が返すまでベクター・マップ・セットのコピーをその場で編集します。永続キュー（`clojure.lang.PersistentQueue/EMPTY`）は末尾に加え、先頭から取り除きます。
 
 | Name | Example | Result |
 |---|---|---|
@@ -61,6 +61,16 @@
 | `bytes` | `(bytes nil)` | `nil` |
 | `aclone` | `(vec (aclone (byte-array [1 2])))` | `[1 2]` |
 | `aset-byte` | `(aset-byte (byte-array 1) 0 -5)` | `-5` |
+| `object-array` | `(vec (object-array [1 nil]))` | `[1 nil]` |
+| `to-array` | `(vec (to-array [1 nil]))` | `[1 nil]` |
+| `into-array` | `(vec (into-array [1 2]))` | `[1 2]` |
+| `int-array` | `(vec (int-array [1.9 300]))` | `[1 300]` |
+| `long-array` | `(vec (long-array [1.9]))` | `[1]` |
+| `double-array` | `(vec (double-array [1 2]))` | `[1.0 2.0]` |
+| `float-array` | `(vec (float-array [1 2]))` | `[1.0 2.0]` |
+| `short-array` | `(vec (short-array [100000]))` | `[-31072]` |
+| `char-array` | `(vec (char-array [\a \b]))` | `[\a \b]` |
+| `boolean-array` | `(vec (boolean-array [true]))` | `[true]` |
 | `hash` | `(hash [1 2])` | `156247261` |
 | `hash-ordered-coll` | `(hash-ordered-coll '(1 2))` | `156247261` |
 | `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |

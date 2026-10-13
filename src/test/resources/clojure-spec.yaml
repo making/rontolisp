@@ -12595,6 +12595,168 @@ cases:
       #object["[B" "[B"] "[B" :[B "[B"
       #object[[B [B] [#object[[B [B]]
       :java.io.ByteArrayInputStream #object[java.io.ByteArrayOutputStream "A"]
+  - name: parse-long-parses-decimal-digits-like-long-value-of
+    # clojure.core/parse-long is Long/valueOf's regex-free grammar: an optional
+    # sign, decimal digits (ASCII and every Unicode decimal-digit block), refused
+    # past the long range; a non-string is the oracle's IllegalArgumentException,
+    # anything else nil. Runs on every backend, where a portable program had no
+    # number parser but read-string (no host Long/parseLong on wasm).
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn (map parse-long ["12" "-12" "+12" "007" "+0" "-0"]))
+      (prn (map parse-long [" 12" "12 " "" "+" "-" "1_2" "0x10" "12.0" "12L" "+-12"]))
+      (prn (map parse-long ["9223372036854775807" "9223372036854775808" "-9223372036854775808" "-9223372036854775809" "99999999999999999999999"]))
+      (prn (map parse-long ["١٢" "１２"]))
+      (prn (map parse-long ["12" "xx" "+7"]))
+      (prn (try (parse-long 12) (catch IllegalArgumentException e (ex-message e))) (try (parse-long nil) (catch IllegalArgumentException e (ex-message e))) (try (parse-long :a) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      (12 -12 12 7 0 0)
+      (nil nil nil nil nil nil nil nil nil nil)
+      (9223372036854775807 nil -9223372036854775808 nil nil)
+      (12 12)
+      (12 nil 7)
+      "Expected string, got java.lang.Long" "Expected string, got nil" "Expected string, got clojure.lang.Keyword"
+  - name: parse-double-parses-like-double-value-of
+    # clojure.core/parse-double is Double/valueOf's grammar: surrounding codes at
+    # most 32 stripped, then an optional sign and NaN, Infinity, a decimal or a
+    # hex float with an optional d/D/f/F suffix (which never rounds through
+    # float: 0.1f is 0.1); a non-string is the oracle's IllegalArgumentException,
+    # anything else nil. Runs on every backend. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (prn (map parse-double ["1.5" "-1.5" "+.5" "-.5" "-0.0" "5" "5." ".5" "5.e3" "1e10" "1E3" "1e+3" "1e-3"]))
+      (prn (map parse-double ["1D" "1f" "0.1f" "10D" "5.D" ".5d" "5e3D" "1e1000" "-1e1000" "1e-1000" "1e-323" "0.1" "3.141592653589793"]))
+      (prn (map parse-double ["0x1.0p3" "0x1p-2" "0x.8p1" "0x10p0" "0X1P3" "0xAP1" "0x1p3f" "0x1.8p1" "-0x1p3"]))
+      (prn (map parse-double ["NaN" "+NaN" "-NaN" "Infinity" "+Infinity" "-Infinity" "  1.5  "]))
+      (prn (map parse-double [" 12" "12 " "" "  " "abc" "0x10" "1_2" "１２" "1 2" "e10" "." "NaN!" "Infinityx" "Infinityd" "NaNd" "inf" "1e" "1D2" "1.2.3" "0xp3" "0x1p" "D"]))
+      (prn (map parse-double ["1.5" "xx"]))
+      (prn (try (parse-double 1.5) (catch IllegalArgumentException e (ex-message e))) (try (parse-double nil) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      (1.5 -1.5 0.5 -0.5 -0.0 5.0 5.0 0.5 5000.0 1.0E10 1000.0 1000.0 0.001)
+      (1.0 1.0 0.1 10.0 5.0 0.5 5000.0 ##Inf ##-Inf 0.0 9.9E-324 0.1 3.141592653589793)
+      (8.0 0.25 1.0 16.0 8.0 20.0 8.0 3.0 -8.0)
+      (##NaN ##NaN ##NaN ##Inf ##Inf ##-Inf 1.5)
+      (12.0 12.0 nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil)
+      (1.5 nil)
+      "Expected string, got java.lang.Double" "Expected string, got nil"
+  - name: parse-boolean-parses-true-and-false
+    # clojure.core/parse-boolean answers true of "true", false of "false", nil
+    # of any other string; a non-string is the oracle's IllegalArgumentException.
+    # Runs on every backend. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (prn (map parse-boolean ["true" "false" "True" "TRUE" "False" "" "yes" "1" " true" "nil"]))
+      (prn (map parse-boolean ["true" "xx"]))
+      (prn (try (parse-boolean true) (catch IllegalArgumentException e (ex-message e))) (try (parse-boolean nil) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      (true false nil nil nil nil nil nil nil nil)
+      (true nil)
+      "Expected string, got java.lang.Boolean" "Expected string, got nil"
+  - name: object-array-to-array-and-into-array-answer-vectors
+    # object-array of a number is that many nils, else the members as a vector;
+    # to-array is always an Object vector; into-array infers the component from
+    # its first member (Object for none or a nil first) or takes the class TYPE
+    # spells -- a primitive class casting each member, any other checking it --
+    # and answers a vector. A small N literal is a Long here, so it takes a Long
+    # component where the oracle's BigInt refuses. Runs on every backend.
+    # Oracle-identical (clj 1.12.6, 2026-10-13) but the N deviation.
+    source: |
+      (prn (vec (object-array [1 "a" nil])) (vec (object-array 3)) (vec (object-array 2.5)) (vec (object-array nil)) (vec (object-array "ab")) (vec (object-array '(1 2))) (alength (object-array [1 2])))
+      (prn (try (vec (object-array -1)) (catch NegativeArraySizeException e (ex-message e))) (try (vec (object-array true)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (vec (to-array [1 "a" nil])) (vec (to-array nil)) (vec (to-array "ab")) (alength (to-array [])))
+      (prn (try (vec (to-array 5)) (catch RuntimeException e (ex-message e))))
+      (prn (vec (into-array [1 2])) (vec (into-array ["a"])) (vec (into-array [])) (vec (into-array [nil])) (vec (into-array [1 nil])) (vec (into-array [nil "a"])) (vec (into-array [true false])) (mapv int (into-array [\a \b])) (vec (into-array [[1] [2]])))
+      (prn (mapv vec (map object-array [[1] [2]])) (mapv vec (map to-array [[1] [2]])))
+      (prn (try (vec (into-array [1 "a"])) (catch IllegalArgumentException e (ex-message e))) (try (vec (into-array [1 2.5])) (catch IllegalArgumentException e (ex-message e))))
+      (prn (vec (into-array [1N 2])))
+      (prn (vec (into-array String ["a" "b"])) (vec (into-array Object [1 "a"])) (vec (into-array Number [1 2.5])) (vec (into-array String [nil "a"])) (vec (into-array String [])))
+      (prn (vec (into-array Integer/TYPE [1.9 2])) (vec (into-array Long/TYPE [5])) (vec (into-array Double/TYPE [1 \a])) (vec (into-array Boolean/TYPE [true])) (mapv int (into-array Character/TYPE [97 \a])) (vec (into-array Short/TYPE [1.9])) (vec (into-array Byte/TYPE [1.9])) (vec (into-array Float/TYPE [1 2])))
+      (prn (mapv vec (map #(into-array String [%]) ["a" "b"])))
+      (prn (try (vec (into-array String [1])) (catch IllegalArgumentException e (ex-message e))) (try (vec (into-array "String" ["a"])) (catch ClassCastException e :refused)) (try (vec (into-array String -1)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (vec (into-array Long/TYPE [1.9])) (catch IllegalArgumentException e (ex-message e))) (try (vec (into-array Integer/TYPE [1e10])) (catch ArithmeticException e (ex-message e))) (try (vec (into-array Short/TYPE [100000])) (catch IllegalArgumentException e (ex-message e))) (try (vec (into-array Byte/TYPE [300])) (catch IllegalArgumentException e (ex-message e))) (try (vec (into-array Character/TYPE [-1])) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (vec (into-array Long/TYPE [nil])) (catch IllegalArgumentException e :empty)) (try (vec (into-array Integer/TYPE [nil])) (catch NullPointerException e :npe)) (try (vec (into-array Character/TYPE [nil])) (catch NullPointerException e :npe)))
+    expected: |
+      [1 "a" nil] [nil nil nil] [nil nil] [] [\a \b] [1 2] 2
+      "-1" "Don't know how to create ISeq from: java.lang.Boolean"
+      [1 "a" nil] [] [\a \b] 0
+      "Unable to convert: class java.lang.Long to Object[]"
+      [1 2] ["a"] [] [nil] [1 nil] [nil "a"] [true false] [97 98] [[1] [2]]
+      [[1] [2]] [[1] [2]]
+      "array element type mismatch" "array element type mismatch"
+      [1 2]
+      ["a" "b"] [1 "a"] [1 2.5] [nil "a"] []
+      [1 2] [5] [1.0 97.0] [true] [97 97] [1] [1] [1.0 2.0]
+      [["a"] ["b"]]
+      "array element type mismatch" :refused "Don't know how to create ISeq from: java.lang.Long"
+      "argument type mismatch" "integer overflow" "Value out of range for short: 100000" "Value out of range for byte: 300" "Value out of range for char: -1"
+      :empty :npe :npe
+  - name: typed-array-constructors-coerce-like-the-oracles
+    # int/long/short narrow (a double saturating, NaN 0), double/float widen,
+    # char takes characters, boolean booleans; of a size, or of a size and an
+    # init value or a seq. A float holds a double here, like float, so 1/3
+    # prints long; a short fills for any in-range integer, the oracle only for
+    # a Short (a Short is an integer here). Runs on every backend.
+    # Oracle-identical (clj 1.12.6, 2026-10-13) but the two deviations.
+    source: |
+      (prn (vec (int-array [1 2])) (vec (int-array 3)) (vec (int-array 2.5)) (vec (int-array nil)) (vec (int-array 3 7)) (vec (int-array 2 [1 2 3])) (vec (int-array [1.9 2.5 7/2])) (vec (int-array [300])) (alength (int-array [1])))
+      (prn (try (vec (int-array -1)) (catch NegativeArraySizeException e (ex-message e))) (try (vec (int-array [1 "a"])) (catch ClassCastException e :refused)) (try (vec (int-array [nil])) (catch NullPointerException e :npe)) (try (vec (int-array [true])) (catch ClassCastException e :refused)))
+      (prn (vec (long-array [1 2])) (vec (long-array 2)) (vec (long-array [1.9])) (vec (long-array 2 5)) (vec (long-array [1e20])) (vec (long-array [7/2])))
+      (prn (try (vec (long-array [nil])) (catch NullPointerException e :npe)) (try (vec (long-array [\a])) (catch ClassCastException e :refused)))
+      (prn (vec (double-array [1.5 2])) (vec (double-array 2)) (vec (double-array [1/3])) (vec (double-array 2 1.5)) (vec (double-array [1e1000])) (vec (double-array [1e-1000])))
+      (prn (try (vec (double-array [\a])) (catch ClassCastException e :refused)))
+      (prn (vec (float-array [1 2])) (vec (float-array 2)) (vec (float-array 2 5)))
+      (prn (vec (short-array [1 2])) (vec (short-array 2)) (vec (short-array [1.9])) (vec (short-array [100000])) (vec (short-array [65536])) (vec (short-array 2 [7])) (count (short-array 4294967297)))
+      (prn (try (vec (short-array [nil])) (catch NullPointerException e :npe)) (try (vec (short-array [\a])) (catch ClassCastException e :refused)))
+      (prn (mapv int (char-array [\a \b])) (mapv int (char-array 2)) (mapv int (char-array 2 \z)) (mapv int (char-array 2 "xy")) (mapv int (char-array 2 nil)))
+      (prn (try (vec (char-array [1])) (catch ClassCastException e :refused)) (try (vec (char-array [nil])) (catch NullPointerException e :npe)) (try (vec (char-array 2 5)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (vec (boolean-array [true false])) (vec (boolean-array 2)) (vec (boolean-array 2 true)) (vec (boolean-array 2 nil)))
+      (prn (try (vec (boolean-array [1])) (catch ClassCastException e :refused)) (try (vec (boolean-array 2 1)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (mapv vec (map int-array [[1] [2]])))
+      (prn (vec (float-array [1/3])) (vec (short-array 2 5)))
+    expected: |
+      [1 2] [0 0 0] [0 0] [] [7 7 7] [1 2] [1 2 3] [300] 1
+      "-1" :refused :npe :refused
+      [1 2] [0 0] [1] [5 5] [9223372036854775807] [3]
+      :npe :refused
+      [1.5 2.0] [0.0 0.0] [0.3333333333333333] [1.5 1.5] [##Inf] [0.0]
+      :refused
+      [1.0 2.0] [0.0 0.0] [5.0 5.0]
+      [1 2] [0 0] [1] [-31072] [0] [7 0] 1
+      :npe :refused
+      [97 98] [0 0] [122 122] [120 121] [0 0]
+      :refused :npe "Don't know how to create ISeq from: java.lang.Long"
+      [true false] [false false] [true true] [false false]
+      :refused "Don't know how to create ISeq from: java.lang.Long"
+      [[1] [2]]
+      [0.3333333333333333] [5 5]
+  - name: typed-arrays-are-vectors-to-aget-aset-alength-aclone-and-the-verbs
+    # Deviations, all of the vector stand-in (an array is a vector here, as one
+    # make-array makes): class answers :vector, str and pr print the vector,
+    # = compares elements, coll?/vector?/sequential?/counted? are true, aset
+    # stores any value, and alength/aclone take a vector -- the oracle's
+    # classes, printing, identity and refusals. aget, aset, alength, aclone and
+    # every seq verb otherwise run over one as over a vector. Runs on every
+    # backend; oracle-checked (clj 1.12.6, 2026-10-13) for the non-deviating
+    # lines.
+    source: |
+      (prn (let [a (int-array [1 2 3])] [(aget a 1) (alength a) (count a) (nth a 0) (get a 2) (first a) (last a) (into [] a) (reduce + a) (= a a)]))
+      (prn (let [a (object-array [1 2])] (aset a 0 9) [(vec a) (aget a 0)]))
+      (prn (let [a (int-array [1 2])] (aset a 0 5) (vec a)))
+      (prn (let [a (int-array [1 2]) c (aclone a)] (aset c 0 9) [(vec c) (vec a) (= c c)]))
+      (prn (coll? (int-array [1])) (vector? (int-array [1])) (seqable? (int-array [1])) (sequential? (int-array [1])) (counted? (int-array [1])) (empty? (int-array [])) (empty? (int-array [1])) (first (int-array [])) (rest (int-array [1 2])) (nth (int-array [1 2]) 5 :d) (contains? (int-array [1 2]) 1) (get (int-array [1 2]) :a :d))
+      (prn (vec (boolean-array 2)) (vec (object-array 3)) (vec (double-array 2)) (vec (float-array 2)) (vec (short-array 2)) (vec (long-array 2)) (mapv int (char-array 3)))
+      (prn (class (int-array [1])) (class (object-array [1])) (str (int-array [1 2])) (= (int-array [1 2]) (int-array [1 2])))
+      (prn (try (aget (int-array [1 2]) 5) (catch IndexOutOfBoundsException e :oob)) (aclone [1 2]))
+      (prn (let [a (int-array [1 2])] (aset a 0 1.9) (vec a)))
+    expected: |
+      [2 3 3 1 3 1 3 [1 2 3] 6 true]
+      [[9 2] 9]
+      [5 2]
+      [[9 2] [1 2] true]
+      true true true true true true false nil (2) :d true :d
+      [false false] [nil nil nil] [0.0 0.0] [0.0 0.0] [0 0] [0 0] [0 0 0]
+      :vector :vector "[1 2]" true
+      :oob [1 2]
+      [1.9 2]
   - name: standard-charsets-and-charset-for-name-of-a-literal-are-charsets
     # The six StandardCharsets fields and Charset/forName of a string literal are
     # a value standing for the charset on every backend: named (.name, .displayName,

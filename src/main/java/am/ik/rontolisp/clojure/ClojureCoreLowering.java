@@ -75,6 +75,25 @@ final class ClojureCoreLowering {
 			case "bytes", "aclone":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "parse-long", "parse-double", "parse-boolean", "object-array", "to-array":
+				// the portable parsers and the object constructors: one call to the
+				// spliced worker, which runs on every backend (no host to call)
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "into-array":
+				// the component is the first member's class, or the class TYPE
+				// spells: a class name the lowering resolves to a (:C%CLASS name)
+				// designator, so every backend reads it -- a computed type travels
+				// as its value, a host Class by its name
+				arity(name, n, 1, 2);
+				return n == 1 ? worker(name, ctx.lower(items.get(1)))
+						: worker("into-array-2", intoArrayType(ctx, items.get(1)), ctx.lower(items.get(2)));
+			case "int-array", "long-array", "double-array", "float-array", "short-array", "char-array", "boolean-array":
+				// a primitive array as a vector: of a size or a seq, or of a size
+				// and an init value or a seq
+				arity(name, n, 1, 2);
+				return n == 1 ? worker(name, ctx.lower(items.get(1)))
+						: worker(name + "-2", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "aset-byte":
 				arity(name, n, 3, 3);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
@@ -272,8 +291,10 @@ final class ClojureCoreLowering {
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
 					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
-					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method", "tree-seq",
-					"flatten" ->
+					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method", "tree-seq", "flatten",
+					"parse-long", "parse-double", "parse-boolean", "object-array", "to-array", "into-array",
+					"int-array", "long-array", "double-array", "float-array", "short-array", "char-array",
+					"boolean-array" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
@@ -454,6 +475,58 @@ final class ClojureCoreLowering {
 		if (n < min || (max >= 0 && n > max)) {
 			throw new LispReadException("Wrong number of args (" + n + ") passed to: clojure.core/" + name);
 		}
+	}
+
+	/**
+	 * The component an {@code into-array} class spelling names: a {@code (:C%CLASS name)}
+	 * designator over the resolved class, a primitive name ({@code "int"}, ...) for an
+	 * {@code X/TYPE} spelling of a boxed primitive, so every backend reads it without the
+	 * host. A spelling no program definition claims that names no class, and any other
+	 * datum, travels as its lowered value: the worker reads a host Class by its name and
+	 * refuses anything else as no Class.
+	 * @param ctx the hub
+	 * @param datum the class argument as written
+	 * @return the designator, or the lowered value
+	 */
+	private static LispVal intoArrayType(ClojureLowering ctx, LispVal datum) {
+		if (datum instanceof LispSymbol s && !ctx.known(s.name())) {
+			String spelling = s.name();
+			if (spelling.endsWith("/TYPE")) {
+				String base = spelling.substring(0, spelling.length() - "/TYPE".length());
+				if (ClojureInteropLowering.isClassSpelling(base)) {
+					String primitive = primitiveComponent(ClojureNamespaceLowering.resolveClass(ctx, base));
+					if (primitive != null) {
+						return classDesignator(primitive);
+					}
+				}
+			}
+			else if (ClojureInteropLowering.isClassSpelling(spelling)
+					&& ClojureNamespaceLowering.isClasslike(ctx, spelling)) {
+				return classDesignator(ClojureNamespaceLowering.resolveClass(ctx, spelling));
+			}
+		}
+		return ctx.lower(datum);
+	}
+
+	/** The primitive component a resolved boxed class spells, or null. */
+	private static @Nullable String primitiveComponent(String cls) {
+		return switch (cls) {
+			case "java.lang.Byte" -> "byte";
+			case "java.lang.Short" -> "short";
+			case "java.lang.Integer" -> "int";
+			case "java.lang.Long" -> "long";
+			case "java.lang.Float" -> "float";
+			case "java.lang.Double" -> "double";
+			case "java.lang.Character" -> "char";
+			case "java.lang.Boolean" -> "boolean";
+			default -> null;
+		};
+	}
+
+	/** A component designator: {@code (list :C%CLASS name)} building the data. */
+	private static LispVal classDesignator(String name) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), new LispSymbol(":C%CLASS"),
+				LispString.literal(name));
 	}
 
 }

@@ -276,6 +276,19 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`(aset bs 0 5)` is refused there, `(aset bs 0 (byte 5))` is not). A seq over a byte array
   holds the elements the array had when the seq was taken, where the oracle's reads the
   array as it walks.
+- A [typed array](reference/int-array.md) (`object-array`, `to-array`, `into-array`,
+  `int-array`, `long-array`, `double-array`, `float-array`, `short-array`, `char-array`,
+  `boolean-array`) is a vector, as one `make-array` makes: `class` answers `:vector`,
+  `str` and `pr` print the vector, `=` compares elements, `coll?`, `vector?`,
+  `sequential?` and `counted?` are true, `aset` stores any value, and `alength` and
+  `aclone` take a vector -- where the oracle answers its array classes, prints `#object`
+  with the identity hash, compares by identity, takes no collection predicate, refuses a
+  mistyped `aset`, and refuses a vector to `alength`/`aclone`. A `float` holds a double,
+  like `float`, so `(first (float-array [1/3]))` prints long where the oracle's prints
+  `0.33333334`. A `short` two-argument init fills for any integer in the short range,
+  where the oracle fills only for a `Short` (a `Short` is an integer here). A small `N`
+  literal is a `Long`, so it takes a `Long` component in `into-array` where the oracle's
+  `BigInt` refuses, and a computed `Class` object is refused as no `Class`.
 - A `java.nio.charset.StandardCharsets` field or `Charset/forName` of a string literal (a
   [charset](reference/byte-array.md)) prints as the oracle's `#object` without the identity
   hash, and `class` answers its class's keyword. Only UTF-8, ISO-8859-1 and US-ASCII encode
