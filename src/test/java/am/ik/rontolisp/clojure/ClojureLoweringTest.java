@@ -214,6 +214,15 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(loop [i 0] ((fn [j] j) (recur (inc i))))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can only recur from tail position");
+		// a macro expansion in tail position keeps it: a recur the expansion holds
+		// recurs (data.json's codepoint-case around a loop's recur), while one in an
+		// argument slot of the expansion still refuses, like the oracle's
+		assertThat(loweredWithMacros("(defmacro mwhen [c x] `(if ~c :d (recur ~x))) (loop [i 0] (mwhen (zero? i) i))"))
+			.contains("LABELS");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mno [x] `(+ ~x 1)) (loop [i 0] (mno (recur i)))", null,
+				ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
 		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
@@ -1115,8 +1124,6 @@ class ClojureLoweringTest {
 			.hasMessageContaining("protocols are not supported yet: gen-class");
 		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: gen-interface");
-		assertThatThrownBy(() -> Clojure.read("(definterface I (m [x]))", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("protocols are not supported yet: definterface");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a defprotocol method signature is its name over one parameter vector per arity");
@@ -1318,6 +1325,51 @@ class ClojureLoweringTest {
 				{ "(defrecord R [a] clojure.lang.Counted (count [_] 1))",
 						"Duplicate method name \"count\" in defrecord" },
 				{ "(defrecord R [a] Object (equals [_ o] true))", "Duplicate method name \"equals\" in defrecord" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
+	}
+
+	@Test
+	void aDefinterfaceDefinesAnInterfaceADefTypeImplementsThroughItsOwnRow() {
+		// definterface binds the binary name and stores no row of its own; a deftype
+		// or reify body naming it stores its methods in the defined-interface row
+		// under that name, which instance? tests and an instance call dispatches on
+		String defined = lowered("(definterface PBR (^int readChar []) (^long readChars [b s l]))");
+		assertThat(defined).contains("\"user.PBR\"").doesNotContain("-ROW (");
+		String type = lowered("(definterface PBR (^int readChar [])) (deftype R [n] PBR (readChar [_] n))");
+		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"R\")"
+				+ " '(\"user.PBR\") (LIST \"readChar\" (LAMBDA (");
+		String reified = lowered("(definterface PBR (^int readChar [])) (def r (reify PBR (readChar [_] 1)))");
+		assertThat(reified).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("'(\"user.PBR\") (LIST \"readChar\"");
+		// instance? of the interface reads the row under its binary name, and a call
+		// of its method the row's entry
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (instance? PBR x))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (.m x 1))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		// a program defining none lowers a .m call and an instance? without the rows
+		assertThat(lowered("(defn f [x] (.m x 1))")).doesNotContain("DEFINED-INTERFACE-ROW");
+		for (String[] refused : new String[][] { { "(definterface)", "definterface takes a name and methods" },
+				{ "(definterface PBR (1 2))", "definterface takes method signatures, not (1 2)" },
+				{ "(definterface PBR foo)", "definterface takes method signatures, not |foo|" },
+				{ "(definterface PBR (m [x] [y]))",
+						"definterface takes method signatures, not (|m| (|%vector| |x|) (|%vector| |y|))" },
+				{ "(definterface PBR (m [1 y]))", "definterface method m takes parameter names, not 1" },
+				{ "(definterface PBR (^int q []) (^int q []))",
+						"Duplicate method name \"q\" with signature \"()I\" in class file user.PBR" },
+				{ "(definterface PBR (q [x]) (q [x]))",
+						"Duplicate method name \"q\" with signature \"(Ljava.lang.Object;)Ljava.lang.Object;\""
+								+ " in class file user.PBR" },
+				{ "(gen-class)", "protocols are not supported yet: gen-class" },
+				{ "(gen-interface)", "protocols are not supported yet: gen-interface" },
+				{ "(definterface PBR (m [x])) (extend-protocol PBR nil (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(definterface PBR (m [x])) (extend-type String PBR (m [_] 1))",
+						"interface user.PBR is not a protocol" },
+				{ "(deftype R [] PBR (m [_] 1))", "Unable to resolve symbol: PBR in this context" } }) {
 			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
 				.isInstanceOf(LispReadException.class)
 				.hasMessageContaining(refused[1]);

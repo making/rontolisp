@@ -63,6 +63,25 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
+	 * {@code instance?} of a class datum over an already-bound value, as a
+	 * {@code T}-or-false answer: what {@code condp} with an {@code instance?} predicate
+	 * asks per clause. A class spelling tests like one written in place (a bare class
+	 * name stays a spelling: lowering it first would make it a host class object);
+	 * anything else (a local, a computed value) is lowered and tests what {@code class}
+	 * answers, like the oracle's evaluated class.
+	 * @param ctx the lowering
+	 * @param classDatum the class datum
+	 * @param value the bound value
+	 * @return the answer
+	 */
+	static LispVal instanceApplied(ClojureLowering ctx, LispVal classDatum, LispSymbol value) {
+		if (classDatum instanceof LispSymbol name && namesClass(ctx, name.name())) {
+			return instanceAnswer(ctx, name.name(), value, false);
+		}
+		return classValueInstance(ctx, ctx.lower(classDatum), value);
+	}
+
+	/**
 	 * Whether {@code instance?}'s class argument spells a class (or a keyword, which
 	 * {@link #instanceAnswer} refuses) rather than a value: no local or var holds it, and
 	 * it is a type's name or reads like a class.
@@ -71,7 +90,14 @@ final class ClojureDispatchLowering {
 		if (name.startsWith(":")) {
 			return true;
 		}
-		if (ctx.isLocal(name) || ctx.lookupVar(name) != null) {
+		if (ctx.isLocal(name)) {
+			return false;
+		}
+		if (ClojureProtocolLowering.definedInterfaceOf(ctx, name) != null) {
+			// a program-defined interface reads its row, not the var holding its name
+			return true;
+		}
+		if (ctx.lookupVar(name) != null) {
 			return false;
 		}
 		return ctx.typeDefOf(name) != null || ClojureNamespaceLowering.isClasslike(ctx, name);
@@ -123,6 +149,12 @@ final class ClojureDispatchLowering {
 			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
 					ClojureProtocolLowering.typeTagForm(known.tagSpelling())));
+		}
+		ClojureLowering.DefinedInterface defined = ClojureProtocolLowering.definedInterfaceOf(ctx, name);
+		if (defined != null) {
+			// a program-defined interface tests the type's row for its binary name
+			return answer.apply(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), lowered,
+					LispString.literal(defined.binaryName())));
 		}
 		if (name.startsWith(":") || !ClojureNamespaceLowering.isClasslike(ctx, name)) {
 			throw new LispReadException("instance? takes a class name, not " + name);

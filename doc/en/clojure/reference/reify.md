@@ -56,6 +56,16 @@ parameter count against every group of the body, so a `toString` may stand under
 | `java.lang.CharSequence` | `count` (`length`), `nth`, `seq` and every function over a seq (`charAt`), `seqable?`; `re-matcher` and `re-find` read its characters (`charAt`) as far as a match needs, `re-seq`, `re-matches`, `clojure.string` and a string's `.contains` and `.replace` the string of all of them |
 | `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` and `hash` without `IHashEq` (`hashCode`) |
 
+A `definterface` of the program defines an interface with no host class: the name is
+bound to the binary name (`my-app.core.Name`, like a deftype's class), and a body
+naming it stores its methods in the type's row under that name, in the same shape as
+the rows above. `instance?` tests the name and a `.method` call dispatches on the
+row's method, like the oracle's class. A signature is the method name over one
+parameter vector (`(m [x y])`; without one, `(m)`, a zero-argument method); a repeated
+signature is refused naming the duplicate with its signature, and any other shape is
+refused. Extending a protocol to the interface is refused as one that is not a
+protocol.
+
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
 too, and so does a protocol extended to the interface. A method the body leaves out is the
 oracle's `AbstractMethodError` when called (a `java.util` default method keeps the

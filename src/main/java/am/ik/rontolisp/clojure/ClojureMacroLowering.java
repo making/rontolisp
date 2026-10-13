@@ -542,7 +542,10 @@ final class ClojureMacroLowering {
 		}
 		ctx.macroDepth++;
 		try {
-			return ctx.lower(expansion);
+			// the expansion stands where the call stood, so it inherits the call's
+			// tail position: a recur it holds recurs (data.json's codepoint-case
+			// around a loop's recur), one in an argument slot still refuses
+			return ctx.lowerTailSlot(expansion);
 		}
 		finally {
 			ctx.macroDepth--;

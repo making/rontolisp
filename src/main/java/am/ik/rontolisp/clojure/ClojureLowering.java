@@ -1244,6 +1244,19 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * An interface a {@code definterface} defines: its binary name
+	 * ({@code my_app.core.Name}: the defining namespace with {@code -} munged to
+	 * {@code _}, then the name verbatim, like the oracle's, which {@code str} of no value
+	 * here spells) and its methods, each to the parameter counts of its signatures, the
+	 * target included. A {@code deftype} or {@code reify} body naming it stores its
+	 * methods in the type's interface row under the binary name, which {@code instance?}
+	 * tests and an instance call dispatches on, like the oracle's class, which no backend
+	 * here generates.
+	 */
+	record DefinedInterface(String binaryName, Map<String, Set<Integer>> methods) {
+	}
+
+	/**
 	 * One entry of {@link TypeDef#inlineMethods}: the protocol's var key and the method
 	 * name.
 	 */
@@ -1269,6 +1282,12 @@ public final class ClojureLowering {
 	 * resolves a class spelling to one.
 	 */
 	final Map<String, TypeDef> types = new HashMap<>();
+
+	/**
+	 * The interfaces defined so far, by the var key their name takes in the defining
+	 * namespace (the whole-file pre-scan fills it first, like the protocols).
+	 */
+	final Map<String, DefinedInterface> definedInterfaces = new HashMap<>();
 
 	/**
 	 * Whether the program uses protocols, records, deftypes or reify: the protocol
@@ -2252,6 +2271,9 @@ public final class ClojureLowering {
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "deftype")) {
 			ClojureProtocolLowering.declareRecordType(this, items);
+		}
+		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "definterface")) {
+			ClojureProtocolLowering.declareInterface(this, items);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
 			// a macro name, so a call above its definition names the missing
@@ -3868,7 +3890,10 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "satisfies?")) {
 			return ClojureProtocolLowering.satisfiesOf(this, items);
 		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "definterface") || ClojureLowerUtil.isSymbolNamed(head, "gen-class")
+		if (ClojureLowerUtil.isSymbolNamed(head, "definterface")) {
+			return ClojureProtocolLowering.definterfaceForms(this, form, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "gen-class")
 				|| ClojureLowerUtil.isSymbolNamed(head, "gen-interface")) {
 			throw new LispReadException("protocols are not supported yet: " + ((LispSymbol) head).name());
 		}

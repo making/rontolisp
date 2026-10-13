@@ -386,6 +386,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without hashing; a map, set or sequential type is bucketed by its contents rather than its
   `hasheq` ([map keys](reference/reify.md#map-keys-and-set-members)). `sort` and `distinct`
   take a type implementing `Seqable` alone through its seq, where the oracle refuses both.
+- A program-defined interface (`definterface`) joins the same rows under its own
+  binary name, which `instance?` tests and a `.method` call dispatches on
+  ([reify](reference/reify.md#host-interfaces)). Deviations: the name's value is the
+  binary-name string (the oracle's class object), so `resolve` answers its var and
+  `str` spells the name bare; redefining the interface replaces it, and instances
+  made before the redefinition still satisfy it, where the oracle's are instances of
+  the old class only; a wrong-count call on a `reify` names `java.lang.Object` (a
+  reify's class is no host class here), and the abstract refusal of a method the body
+  leaves out names the method and the interface but no receiver class.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.

@@ -57,6 +57,15 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `java.lang.CharSequence` | `count`（`length`）、`nth`、`seq` と seq を辿るすべての関数（`charAt`）、`seqable?`。`re-matcher` と `re-find` は照合に要るところまでその文字を（`charAt` で）読み、`re-seq`・`re-matches`・`clojure.string`・文字列の `.contains` と `.replace` は全文字を並べた文字列を読みます |
 | `Object` | `str` と印字（`toString`）、`=`（`equals`）、`.hashCode` と `IHashEq` がない場合の `hash`（`hashCode`） |
 
+プログラムの `definterface` はホストクラスなしのインタフェースを定義します。名前は
+バイナリ名（`my-app.core.Name`、deftype のクラス同様）に束縛され、それを挙げた本体は
+その名前の下に型の行にメソッドを格納します。形は上の行と同じです。オラクルのクラス同様、
+`instance?` はその名前を調べ、`.method` 呼び出しは行のメソッドにディスパッチします。
+シグネチャは1つのパラメータベクターを伴うメソッド名（`(m [x y])`）で、ベクターなし
+（`(m)`）は引数なしメソッドです。重複したシグネチャは、重複をシグネチャ付きで名指して
+拒否されます。それ以外の形も拒否されます。そのインタフェースへのプロトコルの拡張は、
+プロトコルでないものとして拒否されます。
+
 インタフェースへの `instance?` と、そのメソッドのインスタンス呼び出し（`(.count x)`）も型に
 届きます。そのインタフェースへ拡張したプロトコルも同様です。本体が書かなかったメソッドを呼ぶと
 オラクルの `AbstractMethodError` になり（`java.util` の default メソッドはインタフェース側の実装の

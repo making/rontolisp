@@ -13487,3 +13487,115 @@ cases:
       3
       42
       40
+  - name: a-definterface-defines-methods-a-deftype-implements-and-calls-dispatch
+    # definterface (.kb/clojure-frontend.md "Defined interfaces"): no host class, the
+    # name bound to the binary name; a deftype body naming it stores its methods in the
+    # type's row under that name, which a .method call dispatches on and instance?
+    # tests, like the oracle's class. Every line is the oracle's (clj 1.12.6), on all
+    # four backends.
+    source: |
+      (ns iface-defined)
+      (definterface PBR62
+        (^int readChar [])
+        (^long readChars [^chars buffer ^long start ^long bufflen])
+        (^void unreadChar [^int c])
+        (^String toStr []))
+      (deftype Reader62 [n]
+        PBR62
+        (readChar [_] (int n))
+        (readChars [_ buffer start bufflen] (long (+ start bufflen)))
+        (unreadChar [_ c] nil)
+        (toStr [_] (str "n=" n)))
+      (def rdr62 (Reader62. 41))
+      (prn (.readChar rdr62))
+      (prn (.readChars rdr62 (char-array 3) 1 2))
+      (prn (.unreadChar rdr62 5))
+      (prn (.toStr rdr62))
+      (prn (.toStr ^PBR62 rdr62))
+      (prn (instance? PBR62 rdr62))
+      (prn (instance? PBR62 nil))
+      (prn (= PBR62 PBR62))
+      (in-ns 'user)
+    expected: |
+      41
+      3
+      nil
+      "n=41"
+      "n=41"
+      true
+      false
+      true
+  - name: a-definterface-method-on-a-reify-refuses-foreign-receivers
+    # A reify implements a program-defined interface the same way, and a call of its
+    # method on any other value refuses in the oracle's words (clj 1.12.6): a map or a
+    # wrong count names the class, nil is a NullPointerException, a method the body
+    # leaves out an AbstractMethodError. An empty interface and a signature without a
+    # parameter vector define zero-argument methods, and a redefinition replaces the
+    # interface. Two lines deviate, by comment: a reify's class is no host class here,
+    # so a wrong count names java.lang.Object where the oracle names its reify class
+    # (whose counter would differ per run anyway), and the abstract refusal names the
+    # method and the interface but no receiver class. On all four backends.
+    source: |
+      (ns iface-defined-calls)
+      (definterface Ops62 (fetch [x]) (store [x y]))
+      (def r62 (reify Ops62 (fetch [_ x] x) (store [_ x y] [x y])))
+      (prn (.fetch r62 1) (.store r62 1 2) (instance? Ops62 r62))
+      (prn (try (.fetch {:a 1}) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (.store r62 1 2 3) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (.fetch nil) (catch NullPointerException e :npe)))
+      (prn (try (.store (reify Ops62 (fetch [_ x] x)) 1 2) (catch AbstractMethodError e (ex-message e))))
+      (definterface Empty62)
+      (prn (instance? Empty62 nil))
+      (definterface NoVec62 (qq))
+      (prn (.qq (reify NoVec62 (qq [_] 9))))
+      (definterface Redef62 (^int q []))
+      (definterface Redef62 (^int q []) (^int w [x]))
+      (prn (.w (reify Redef62 (q [_] 1) (w [_ x] x)) 3))
+      (in-ns 'user)
+    expected: |
+      1 [1 2] true
+      "No matching field found: fetch for class clojure.lang.PersistentArrayMap"
+      "No matching method store found taking 3 args for class java.lang.Object"
+      :npe
+      "does not define or inherit an implementation of the resolved method store of interface iface_defined_calls.Ops62"
+      false
+      9  - name: string-getChars-subSequence-and-char-array-strings-read-on-every-backend
+    # String.getChars copies into a char array, .subSequence answers the range and
+    # String. of a char array (whole or ranged) its characters, on every backend (a
+    # char[] is a vector of characters here); .isArray of a class keyword is true
+    # only of a byte array's, and java.io.PrintWriter over a stream is the stream.
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (let [b (char-array 5)]
+        (.getChars "hello" 1 4 b 1)
+        (prn (String. b 1 3) (= (aget b 0) \u0000) (= (aget b 4) \u0000)))
+      (prn (.subSequence "hello" 1 4))
+      (prn (String. (char-array 2 \z)))
+      (prn (String. (char-array 2 \z) 0 2))
+      (prn (.isArray (class 1)) (.isArray (class "s")))
+      (prn (let [pw (java.io.StringWriter.)] (.append pw "ab") (.append pw \c) (str pw)))
+      (prn (with-out-str (let [pw (java.io.PrintWriter. *out*)] (.append pw "hi") nil)))
+    expected: |
+      "ell" true true
+      "ell"
+      "zz"
+      "zz"
+      false false
+      "abc"
+      "hi"
+  - name: condp-of-instance-applies-instance-per-clause
+    # (condp instance? ...) has no function value to bind: each clause tests
+    # (instance? test expr), the class evaluated like the oracle's. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (prn (condp instance? 1 String :s Long :l :d))
+      (prn (condp instance? "a" String :s :d))
+      (prn (let [c (class 1)] (condp instance? 1 c :s :d)))
+      (prn (condp instance? nil String :s :d))
+      (prn (condp instance? [1] java.util.List :l :d))
+    expected: |
+      :l
+      :s
+      :s
+      :d
+      :l

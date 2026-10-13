@@ -467,6 +467,15 @@ public final class ClojureArms {
 				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
 
 		/**
+		 * An interface a {@code definterface} defines, which a {@code deftype} or
+		 * {@code reify} body implements: {@code instance?} tests the type's row for the
+		 * interface's binary name and an instance call dispatches on the row's method, so
+		 * no core verb grows an arm for one. Only the store of such a row makes one.
+		 */
+		DEFINED_INTERFACE("defined-interface", Set.of(), Set.of(), Map.of(), Set.of(ClojureInterfaces.DEFINED_ROW),
+				Set.of()),
+
+		/**
 		 * A transient, which {@code persistent!} and the bang verbs edit and
 		 * {@code count}, {@code empty?}, {@code get}, {@code nth}, {@code contains?},
 		 * {@code find}, a call, a keyword's call, {@code counted?}, {@code ifn?},

@@ -15535,6 +15535,12 @@
    IEditableCollection, the transients)."
   (rontolisp::%clojure-interface-store tag names methods))
 
+(defun rontolisp::%clojure-defined-interface-row (tag names methods)
+  "Stores the row of an interface a definterface defines, under its binary
+   name: instance? tests the name and an instance call dispatches on the
+   row's method."
+  (rontolisp::%clojure-interface-store tag names methods))
+
 ;; The tests: whether X's type implements the interface.
 
 (defun rontolisp::%clojure-icollection-p (x)
@@ -24788,6 +24794,18 @@
     (if (rontolisp::%clojure-bytes-p x)
         (rontolisp::%clojure-string-of-bytes x more)
         (rontolisp::%clojure-host-string-new x more))))
+
+(defun rontolisp::%clojure-char-vector-p (x)
+  "Whether X is a char array: a vector of characters, which a String
+   construction reads on every backend (a string, also a vector, takes the
+   host's copy constructor instead)."
+  (and (vectorp x) (not (stringp x)) (every #'characterp x)))
+
+(defun rontolisp::%clojure-string-of-chars (x &rest more)
+  "(String. x more...) of a char array X: the string of its characters, or of
+   the range MORE names (an offset and a count), like the oracle's String."
+  (let ((s (coerce x 'string)))
+    (if (null more) s (subseq s (car more) (+ (car more) (car (cdr more)))))))
 
 ;; (String. x more...) of an X that is no byte array: the host's constructor. A
 ;; host arm: where the host is not (wasm) it refuses by name
