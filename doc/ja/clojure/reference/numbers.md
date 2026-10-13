@@ -68,6 +68,9 @@
 | `denominator` | `(denominator 6/4)` | `2` |
 | `boolean` | `(boolean 1)` | `true` |
 | `char` | `(char 97)` | `a` |
+| `parse-long` | `(parse-long "12")` | `12` |
+| `parse-double` | `(parse-double "1.5")` | `1.5` |
+| `parse-boolean` | `(parse-boolean "true")` | `true` |
 | `rand` | `(rand 5)` | a double in `[0,5)` |
 | `rand-int` | `(rand-int 1)` | `0` |
 | `unchecked-add` | `(unchecked-add 9223372036854775807 1)` | `-9223372036854775808` |

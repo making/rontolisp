@@ -9,8 +9,9 @@
 (def rates {"EUR" 1 "USD" 108/100 "JPY" 162})
 
 (defn- parse-int [s]
-  ;; Long/parseLong is a host call, which the WASM targets do not have
-  #?(:rontolisp (reduce (fn [n c] (+ (* 10 n) (- (int c) (int \0)))) 0 s)
+  ;; parse-long is portable: it runs on the WASM targets, where Long/parseLong
+  ;; (a host call) does not exist
+  #?(:rontolisp (parse-long s)
      :clj (Long/parseLong s)
      :cljs (js/parseInt s 10)))
 

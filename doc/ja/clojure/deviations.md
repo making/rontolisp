@@ -275,6 +275,16 @@
   （オラクルでは `(aset bs 0 5)` は拒否され、`(aset bs 0 (byte 5))` は拒否されません）。
   バイト配列の seq は、seq を取った時点の要素を保持し、オラクルの seq はたどる時点の配列を
   読みます。
+- [型付き配列](reference/int-array.md)（`object-array`・`to-array`・`into-array`・`int-array`・
+  `long-array`・`double-array`・`float-array`・`short-array`・`char-array`・`boolean-array`）はベクターです（`make-array` の作るものと同じ）。`class` は `:vector` を答え、`str` と `pr` は
+  ベクターを印字し、`=` は要素を比べ、`coll?`・`vector?`・`sequential?`・`counted?` は真で、
+  `aset` はどんな値も格納し、`alength` と `aclone` はベクターを受けます。オラクルは配列のクラスを答え、
+  識別ハッシュ付きの `#object` を印字し、同一性で比べ、コレクション述語は偽で、型違いの `aset` を拒否し、
+  `alength`・`aclone` にベクターを拒否します。`float` は `float` と同じく倍精度を持つので、
+  `(first (float-array [1/3]))` は長く印字されます（オラクルは `0.33333334`）。2 引数の `short` の初期値は
+  short 範囲の整数ならどれでも詰めます。オラクルは `Short` にだけ詰めます（`Short` はここでは整数です）。
+  小さな `N` リテラルは `Long` なので、オラクルの `BigInt` が拒否するところで `Long` の要素型を取ります。
+  計算で求めた `Class` オブジェクトは `Class` でないとして拒否されます。
 - `java.nio.charset.StandardCharsets` のフィールドと、文字列リテラルの `Charset/forName`
   （[文字セット](reference/byte-array.md)）は、オラクルの `#object` から識別ハッシュを除いた形で
   印字し、`class` はそのクラスのキーワードで答えます。符号化と復号ができるのは UTF-8、

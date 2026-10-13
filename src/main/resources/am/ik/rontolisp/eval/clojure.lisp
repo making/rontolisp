@@ -23890,6 +23890,797 @@
   (rontolisp::%clojure-check-arity args 1 1 "aclone")
   (rontolisp::%clojure-aclone (car args)))
 
+;;;; Parsers: parse-long, parse-double and parse-boolean, the oracle's portable
+;;;; number and boolean readers (clojure.core/parse-long is Long/valueOf's
+;;;; grammar, parse-double Double/valueOf's, parse-boolean exactly "true" and
+;;;; "false"). A non-string is the oracle's IllegalArgumentException, a
+;;;; malformed string nil. They run on every backend: the wasm targets have no
+;;;; host Long/parseLong to call, so a portable program had no number parser
+;;;; but read-string (clojure/ClojureCoreLowering).
+
+(defun rontolisp::%clojure-parsing-error (s)
+  "The oracle's IllegalArgumentException of parsing S, no string: Expected
+   string, got the value's class, nil for nil."
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string "Expected string, got "
+                (if (null s) "nil" (rontolisp::%clojure-class-name-of s)))))
+
+(defvar rontolisp::%clojure-decimal-digit-starts
+  '(48 1632 1776 1984 2406 2534 2662 2790 2918 3046 3174 3302 3430 3558 3664
+    3792 3872 4160 4240 6112 6160 6470 6608 6784 6800 6992 7088 7232 7248 42528
+    43216 43264 43472 43504 43600 44016 65296 66720 68912 69734 69872 69942
+    70096 70384 70736 70864 71248 71360 71472 71904 72016 72784 73040 73120
+    73552 92768 92864 93008 120782 120792 120802 120812 120822 123200 123632
+    124144 125264 130032)
+  "The code of every decimal digit zero: ASCII 0-9 first, then every Unicode
+   decimal-digit block's, each ten consecutive codes. Character.digit's
+   radix-10 table, which Long/valueOf reads (clj 1.12.6).")
+
+(defun rontolisp::%clojure-decimal-digit-value (code)
+  "CODE's decimal digit value, or nil: Character.digit of radix 10 over
+   %clojure-decimal-digit-starts."
+  (do ((rest rontolisp::%clojure-decimal-digit-starts (cdr rest)) (v nil))
+      ((or (null rest) v) v)
+    (if (and (>= code (car rest)) (< code (+ (car rest) 10)))
+        (setq v (- code (car rest))))))
+
+(defun rontolisp::%clojure-parse-long (s)
+  "(parse-long s), the oracle's Long/valueOf: an optional sign and decimal
+   digits, refused past the long range; anything else nil."
+  (if (not (stringp s))
+      (rontolisp::%clojure-parsing-error s)
+      (let ((n (length s))
+            (i 0)
+            (neg nil)
+            (value 0)
+            (digits 0)
+            (limit 9223372036854775807)
+            (ok t))
+        (when (and (< i n) (or (char= (char s i) #\+) (char= (char s i) #\-)))
+          (setq neg (char= (char s i) #\-))
+          (setq i (+ i 1))
+          (if neg (setq limit 9223372036854775808)))
+        (do ()
+            ((or (>= i n) (not ok)))
+          (let ((d
+                 (rontolisp::%clojure-decimal-digit-value
+                  (char-code (char s i)))))
+            (if (or (null d) (> value (truncate (/ (- limit d) 10))))
+                (setq ok nil)
+                (progn
+                  (setq value (+ (* value 10) d))
+                  (setq digits (+ digits 1))
+                  (setq i (+ i 1))))))
+        (if (and ok (> digits 0)) (if neg (- value) value) nil))))
+
+(defun rontolisp::%clojure-parse-long-v (&rest args)
+  "parse-long as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "parse-long")
+  (rontolisp::%clojure-parse-long (car args)))
+
+(defun rontolisp::%clojure-hex-digit-value (code)
+  "CODE's hex digit value, or nil: ASCII 0-9, a-f and A-F, which is all
+   Double/valueOf reads."
+  (cond ((and (>= code 48) (<= code 57)) (- code 48))
+        ((and (>= code 65) (<= code 70)) (- code 55))
+        ((and (>= code 97) (<= code 102)) (- code 87))))
+
+(defun rontolisp::%clojure-parse-double (s)
+  "(parse-double s), the oracle's Double/valueOf: surrounding codes at most 32
+   stripped, then an optional sign and NaN, Infinity, a decimal or a hex float
+   with an optional d/D/f/F suffix; anything else nil."
+  (if (not (stringp s))
+      (rontolisp::%clojure-parsing-error s)
+      (let ((hi (length s)) (lo 0))
+        (do ()
+            ((or (>= lo hi) (> (char-code (char s lo)) 32)))
+          (setq lo (+ lo 1)))
+        (do ()
+            ((or (>= lo hi) (> (char-code (char s (- hi 1))) 32)))
+          (setq hi (- hi 1)))
+        (if (>= lo hi) nil (rontolisp::%clojure-parse-double-range s lo hi)))))
+
+(defun rontolisp::%clojure-word-at (s i hi word)
+  "Whether WORD spells S at I short of HI: the NaN and Infinity match, which
+   read the characters in place (no subseq, which links the sequence
+   machinery)."
+  (let ((m (length word)) (k 0))
+    (do ()
+        ((or (>= k m) (>= (+ i k) hi)
+             (not (char= (char s (+ i k)) (char word k))))
+         (= k m))
+      (setq k (+ k 1)))))
+
+(defun rontolisp::%clojure-parse-double-range (s lo hi)
+  "The double S spells from LO short of HI, or nil: the sign, NaN and
+   Infinity, else the float grammar. Infinity is (/ 1.0 0.0) and NaN
+   (/ 0.0 0.0): building them from most-positive-double-float costs a
+   parse-double program about 200 KB of wasm over this (279 to 63 KB,
+   measured 2026-10-13)."
+  (let ((i lo) (neg nil))
+    (when (and (< i hi) (or (char= (char s i) #\+) (char= (char s i) #\-)))
+      (setq neg (char= (char s i) #\-))
+      (setq i (+ i 1)))
+    (cond ((and (rontolisp::%clojure-word-at s i hi "NaN") (= (+ i 3) hi))
+           (let ((nan (/ 0.0 0.0))) (if neg (- nan) nan)))
+          ((and (rontolisp::%clojure-word-at s i hi "Infinity") (= (+ i 8) hi))
+           (let ((inf (/ 1.0 0.0))) (if neg (- inf) inf)))
+          (t (rontolisp::%clojure-parse-double-number s i hi neg)))))
+
+(defun rontolisp::%clojure-dec-digit-at (s i)
+  "The decimal digit value of the character at I of S, or nil."
+  (let ((code (char-code (char s i))))
+    (if (and (>= code 48) (<= code 57)) (- code 48))))
+
+(defun rontolisp::%clojure-parse-double-number (s i n neg)
+  "The decimal or hex float at I of S short of N, signed by NEG, or nil."
+  (let ((hex nil) (mant 0) (fraclen 0) (digits 0) (ex 0) (ok t))
+    (when (and (< (+ i 1) n) (char= (char s i) #\0)
+               (or (char= (char s (+ i 1)) #\x) (char= (char s (+ i 1)) #\X)))
+      (setq hex t)
+      (setq i (+ i 2)))
+    (if hex
+        (do ()
+            ((or (>= i n)
+                 (null
+                  (rontolisp::%clojure-hex-digit-value
+                   (char-code (char s i))))))
+          (setq mant
+                (+ (* mant 16)
+                 (rontolisp::%clojure-hex-digit-value (char-code (char s i)))))
+          (setq digits (+ digits 1))
+          (setq i (+ i 1)))
+        (do ()
+            ((or (>= i n) (null (rontolisp::%clojure-dec-digit-at s i))))
+          (setq mant (+ (* mant 10) (rontolisp::%clojure-dec-digit-at s i)))
+          (setq digits (+ digits 1))
+          (setq i (+ i 1))))
+    (when (and (< i n) (char= (char s i) #\.))
+      (setq i (+ i 1))
+      (if hex
+          (do ()
+              ((or (>= i n)
+                   (null
+                    (rontolisp::%clojure-hex-digit-value
+                     (char-code (char s i))))))
+            (setq mant
+                  (+ (* mant 16)
+                     (rontolisp::%clojure-hex-digit-value
+                      (char-code (char s i)))))
+            (setq digits (+ digits 1))
+            (setq fraclen (+ fraclen 1))
+            (setq i (+ i 1)))
+          (do ()
+              ((or (>= i n) (null (rontolisp::%clojure-dec-digit-at s i))))
+            (setq mant (+ (* mant 10) (rontolisp::%clojure-dec-digit-at s i)))
+            (setq digits (+ digits 1))
+            (setq fraclen (+ fraclen 1))
+            (setq i (+ i 1)))))
+    (if hex
+        (if (or (= digits 0) (>= i n)
+                (not (or (char= (char s i) #\p) (char= (char s i) #\P))))
+            (setq ok nil)
+            (progn
+              (setq i (+ i 1))
+              (let ((eneg nil) (edigits 0))
+                (when (and (< i n)
+                           (or (char= (char s i) #\-) (char= (char s i) #\+)))
+                  (setq eneg (char= (char s i) #\-))
+                  (setq i (+ i 1)))
+                (do ()
+                    ((or (>= i n)
+                         (null (rontolisp::%clojure-dec-digit-at s i))))
+                  (setq ex (+ (* ex 10) (rontolisp::%clojure-dec-digit-at s i)))
+                  (setq edigits (+ edigits 1))
+                  (setq i (+ i 1)))
+                (if (= edigits 0) (setq ok nil) (if eneg (setq ex (- ex)))))))
+        (when (and (> digits 0) (< i n)
+                   (or (char= (char s i) #\e) (char= (char s i) #\E)))
+          (setq i (+ i 1))
+          (let ((eneg nil) (edigits 0))
+            (when (and (< i n)
+                       (or (char= (char s i) #\-) (char= (char s i) #\+)))
+              (setq eneg (char= (char s i) #\-))
+              (setq i (+ i 1)))
+            (do ()
+                ((or (>= i n) (null (rontolisp::%clojure-dec-digit-at s i))))
+              (setq ex (+ (* ex 10) (rontolisp::%clojure-dec-digit-at s i)))
+              (setq edigits (+ edigits 1))
+              (setq i (+ i 1)))
+            (when (= edigits 0) (setq digits 0))
+            (when eneg (setq ex (- ex))))))
+    (when (and ok (< i n)
+               (let ((c (char s i)))
+                 (or (char= c #\d) (char= c #\D) (char= c #\f) (char= c #\F))))
+      (setq i (+ i 1)))
+    (if (or (not ok) (= digits 0) (< i n))
+        nil
+        (let ((v
+               (float
+                (* mant
+                   (if hex
+                       (expt 2 (- ex (* fraclen 4)))
+                       (expt 10 (- ex fraclen)))))))
+          (if neg (- v) v)))))
+(defun rontolisp::%clojure-parse-double-v (&rest args)
+  "parse-double as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "parse-double")
+  (rontolisp::%clojure-parse-double (car args)))
+
+(defun rontolisp::%clojure-parse-boolean (s)
+  "(parse-boolean s): true of \"true\", the false object of \"false\", nil of
+   any other string."
+  (if (not (stringp s))
+      (rontolisp::%clojure-parsing-error s)
+      (cond ((equal s "true") t)
+            ((equal s "false") rontolisp::%clojure-false)
+            (t nil))))
+
+(defun rontolisp::%clojure-parse-boolean-v (&rest args)
+  "parse-boolean as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "parse-boolean")
+  (rontolisp::%clojure-parse-boolean (car args)))
+
+;;;; Typed arrays: object-array, to-array, into-array and the primitive
+;;;; constructors (clojure.core/int-array and friends). An array is a vector
+;;;; here, as one make-array makes (doc deviations): the constructors coerce
+;;;; their members like the oracle's and answer a plain vector, so aget, aset,
+;;;; alength, aclone, the seq verbs, count, nth, get and = take one as they
+;;;; take a vector. class answers :vector, = compares elements, and a Java
+;;;; member takes one as it takes a vector (interop); the oracle's classes,
+;;;; printing and identity are the documented deviations. No shared verb grows
+;;;; an arm, so a program naming none of these compiles as before
+;;;; (clojure/ClojureCoreLowering).
+
+(defun rontolisp::%clojure-array-members (x)
+  "The seq of X, which the array constructors take the members of: the
+   oracle's refusal in its words when X is no seqable."
+  (if (or (rontolisp::%clojure-is-seqable x)
+          (rontolisp::%clojure-host-seqable-p x))
+      (rontolisp::%clojure-seq x)
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "Don't know how to create ISeq from: "
+                    (rontolisp::%clojure-class-name-of x)))))
+
+(defun rontolisp::%clojure-int-member (x)
+  "X as a Java int narrows it: an integer's low 32 bits, a double or a ratio
+   truncated inside the int range (NaN 0); nil is the oracle's
+   NullPointerException, anything else its ClassCastException to Number."
+  (cond ((numberp x) (rontolisp::%clojure-int-value x))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.intValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-long-member (x)
+  "X as a Java long narrows it: an integer's low 64 bits, a double or a ratio
+   truncated inside the long range (NaN 0); nil is the oracle's
+   NullPointerException, anything else its ClassCastException to Number."
+  (cond ((integerp x) (rontolisp::%clojure-wrap-bits x 64))
+        ((realp x)
+         (let ((d (float x)))
+           (cond ((/= d d) 0)
+                 ((>= d 9.223372036854775807e18) 9223372036854775807)
+                 ((<= d -9.223372036854775808e18) -9223372036854775808)
+                 (t (rontolisp::%clojure-wrap-bits (truncate d) 64)))))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.longValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-short-member (x)
+  "X as a Java short narrows it: the low 16 bits of its int narrowing; nil is
+   the oracle's NullPointerException, anything else its ClassCastException to
+   Number."
+  (cond ((numberp x)
+         (rontolisp::%clojure-wrap-bits (rontolisp::%clojure-int-value x) 16))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.shortValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-double-member (x)
+  "X as a Java double widens it: a number's double; nil is the oracle's
+   NullPointerException, anything else its ClassCastException to Number."
+  (cond ((numberp x) (float x))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.doubleValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-float-member (x)
+  "X as a Java float widens it: a number's double (doubles only here, like
+   float); nil is the oracle's NullPointerException, anything else its
+   ClassCastException to Number."
+  (cond ((numberp x) (float x))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.floatValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-boolean-member (x)
+  "X as a Java boolean: itself; nil is the oracle's NullPointerException,
+   anything else its ClassCastException to Boolean."
+  (cond ((eq x t) t)
+        ((eq x rontolisp::%clojure-false) rontolisp::%clojure-false)
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Boolean.booleanValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Boolean")))))
+
+(defun rontolisp::%clojure-char-member (x)
+  "X as a Java char: itself; nil is the oracle's NullPointerException,
+   anything else its ClassCastException to Character."
+  (cond ((characterp x) x)
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Character.charValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Character")))))
+
+(defun rontolisp::%clojure-build-array (members zero cast)
+  "The vector of the MEMBERS list, each through CAST (nil: as is), over the
+   initial element ZERO."
+  (let ((out (make-array (length members) :initial-element zero)) (i 0))
+    (dolist (e members out)
+      (setf (aref out i) (if cast (funcall cast e) e))
+      (setq i (+ i 1)))))
+
+(defun rontolisp::%clojure-build-array-sized (size members zero cast)
+  "The vector of SIZE elements from the MEMBERS list, each through CAST (nil:
+   as is), over the initial element ZERO: the members past SIZE drop."
+  (let ((out (make-array size :initial-element zero)) (i 0) (s members))
+    (do ()
+        ((or (>= i size) (null s)) out)
+      (setf (aref out i) (if cast (funcall cast (car s)) (car s)))
+      (setq i (+ i 1))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-object-array (x)
+  "(object-array size-or-seq), the oracle's RT.object_array: a number is the
+   size (its intValue) of nils, anything else a seq whose members stand
+   as is."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element nil)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) nil
+       nil)))
+
+(defun rontolisp::%clojure-object-array-v (&rest args)
+  "object-array as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "object-array")
+  (rontolisp::%clojure-object-array (car args)))
+
+(defun rontolisp::%clojure-to-array (coll)
+  "(to-array coll), the oracle's RT.toArray: the members as a vector; a value
+   that is no seqable is its RuntimeException."
+  (if (or (rontolisp::%clojure-is-seqable coll)
+          (rontolisp::%clojure-host-seqable-p coll))
+      (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
+                                       nil)
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "Unable to convert: class "
+                    (rontolisp::%clojure-class-name-of coll) " to Object[]"))))
+
+(defun rontolisp::%clojure-to-array-v (&rest args)
+  "to-array as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "to-array")
+  (rontolisp::%clojure-to-array (car args)))
+
+(defun rontolisp::%clojure-array-mismatch ()
+  "The oracle's refusal of a member no array component takes."
+  (rontolisp::%clojure-illegal-argument-exception
+   "array element type mismatch"))
+
+(defun rontolisp::%clojure-check-array-component (e cname)
+  "E against the reference component CNAME: nil stands, Object takes all,
+   Number the numbers (a host Number too), CharSequence the strings, any other
+   class its own members; anything else the oracle's mismatch."
+  (cond ((null e) nil)
+        ((equal cname "java.lang.Object") nil)
+        ((equal cname "java.lang.Number")
+         (if (not
+              (or (numberp e)
+                  (rontolisp::%clojure-host-instance-p e "java.lang.Number")))
+             (rontolisp::%clojure-array-mismatch)))
+        ((equal cname "java.lang.CharSequence")
+         (if (not
+              (or (stringp e)
+                  (rontolisp::%clojure-host-instance-p e
+                   "java.lang.CharSequence")))
+             (rontolisp::%clojure-array-mismatch)))
+        ((equal (rontolisp::%clojure-class-name-of e) cname) nil)
+        (t (rontolisp::%clojure-array-mismatch))))
+
+(defun rontolisp::%clojure-array-component-name (type)
+  "The component class name the into-array TYPE spells: a (:C%CLASS name) of
+   the lowering, or a host Class object's name; anything else nil."
+  (if (and (consp type) (eq (car type) :C%CLASS) (consp (cdr type))
+           (stringp (car (cdr type))))
+      (car (cdr type))
+      (rontolisp::%clojure-host-class-name type)))
+
+(defun rontolisp::%clojure-into-long-value (x null-message cast-message)
+  "X as a long the lenient primitive conversions take it: a character's code,
+   an integer or a truncated double or ratio in the long range; nil is the
+   oracle's NullPointerException of NULL-MESSAGE, anything else its
+   ClassCastException to CAST-MESSAGE."
+  (cond ((characterp x) (char-code x))
+        ((integerp x)
+         (if (or (< x -9223372036854775808) (> x 9223372036854775807))
+             (rontolisp::%clojure-illegal-argument-exception
+              (concatenate 'string "Value out of range for long: "
+                           (princ-to-string x)))
+             x))
+        ((realp x)
+         (let ((d (float x)))
+           (if (or (/= d d) (> d 9.223372036854775807e18)
+                   (< d -9.223372036854775808e18))
+               (if (/= d d)
+                   0
+                   (rontolisp::%clojure-illegal-argument-exception
+                    (concatenate 'string "Value out of range for long: "
+                                 (princ-to-string x))))
+               (truncate d))))
+        ((null x) (rontolisp::%clojure-null-pointer-exception null-message))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class " cast-message)))))
+
+(defun rontolisp::%clojure-into-int (x)
+  "X into an int component: its long conversion, refused past the int range
+   as the oracle's integer overflow."
+  (let ((v
+         (rontolisp::%clojure-into-long-value x
+                                              "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"
+                                              "java.lang.Character")))
+    (if (or (< v -2147483648) (> v 2147483647))
+        (rontolisp::%clojure-arithmetic-exception "integer overflow")
+        v)))
+
+(defun rontolisp::%clojure-into-short (x)
+  "X into a short component: its long conversion, refused past the short
+   range."
+  (let ((v
+         (rontolisp::%clojure-into-long-value x
+                                              "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"
+                                              "java.lang.Number")))
+    (if (or (< v -32768) (> v 32767))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for short: "
+                      (princ-to-string x)))
+        v)))
+
+(defun rontolisp::%clojure-into-byte (x)
+  "X into a byte component: its long conversion, refused past the byte
+   range."
+  (let ((v
+         (rontolisp::%clojure-into-long-value x
+                                              "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"
+                                              "java.lang.Number")))
+    (if (or (< v -128) (> v 127))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for byte: "
+                      (princ-to-string x)))
+        v)))
+
+(defun rontolisp::%clojure-into-long (x)
+  "X into a long component: an integer or a character's code, like the
+   oracle's unboxing; anything else its mismatch, nil its empty one."
+  (cond ((integerp x)
+         (if (or (< x -9223372036854775808) (> x 9223372036854775807))
+             (rontolisp::%clojure-illegal-argument-exception
+              "argument type mismatch")
+             x))
+        ((characterp x) (char-code x))
+        ((null x) (rontolisp::%clojure-illegal-argument-exception ""))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "argument type mismatch"))))
+
+(defun rontolisp::%clojure-into-double (x)
+  "X into a double component: an integer's, a double's or a character's code,
+   like the oracle's unboxing; anything else its mismatch, nil its empty
+   one."
+  (cond ((integerp x)
+         (if (or (< x -9223372036854775808) (> x 9223372036854775807))
+             (rontolisp::%clojure-illegal-argument-exception
+              "argument type mismatch")
+             (float x)))
+        ((floatp x) x)
+        ((characterp x) (float (char-code x)))
+        ((null x) (rontolisp::%clojure-illegal-argument-exception ""))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "argument type mismatch"))))
+
+(defun rontolisp::%clojure-into-char (x)
+  "X into a char component: a character, or a number truncated into the char
+   range; anything else the oracle's refusal."
+  (cond ((characterp x) x)
+   ((numberp x)
+    (let ((v
+           (if (integerp x)
+               x
+               (let ((d (float x))) (if (/= d d) 0 (truncate d))))))
+      (if (or (< v 0) (> v 65535))
+          (rontolisp::%clojure-illegal-argument-exception
+           (concatenate 'string "Value out of range for char: "
+                        (princ-to-string x)))
+          (code-char v))))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Number.longValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-into-array (aseq)
+  "(into-array aseq): the members as a vector; the component is the first
+   member's class, Object for no first member, and every other member must
+   be of it."
+  (let ((s
+         (rontolisp::%clojure-seq-all
+          (rontolisp::%clojure-array-members aseq))))
+    (if (null s)
+        (vector)
+        (let ((cname
+               (if (null (car s))
+                   "java.lang.Object"
+                   (rontolisp::%clojure-class-name-of (car s)))))
+          (dolist (e (cdr s))
+            (rontolisp::%clojure-check-array-component e cname))
+          (rontolisp::%clojure-build-array s nil nil)))))
+
+(defun rontolisp::%clojure-into-array-2 (type aseq)
+  "(into-array type aseq): the members as a vector of the component TYPE, a
+   primitive class casting each member, any other checking it; the seq is
+   read first, like the oracle's argument order."
+  (let ((s
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members aseq)))
+        (cname (rontolisp::%clojure-array-component-name type)))
+    (if (null cname)
+        (rontolisp::%clojure-class-cast-exception
+         (concatenate 'string "class " (rontolisp::%clojure-class-name-of type)
+                      " cannot be cast to class java.lang.Class"))
+        (if (find cname
+             '("int" "long" "short" "byte" "double" "float" "char" "boolean")
+             :test #'equal)
+            (rontolisp::%clojure-build-array s 0
+             (cond ((equal cname "int") #'rontolisp::%clojure-into-int)
+                   ((equal cname "long") #'rontolisp::%clojure-into-long)
+                   ((equal cname "short") #'rontolisp::%clojure-into-short)
+                   ((equal cname "byte") #'rontolisp::%clojure-into-byte)
+                   ((equal cname "double") #'rontolisp::%clojure-into-double)
+                   ((equal cname "float") #'rontolisp::%clojure-float-member)
+                   ((equal cname "char") #'rontolisp::%clojure-into-char)
+                   (t #'rontolisp::%clojure-boolean-member)))
+            (progn
+              (dolist (e s) (rontolisp::%clojure-check-array-component e cname))
+              (rontolisp::%clojure-build-array s nil nil))))))
+
+(defun rontolisp::%clojure-into-array-v (&rest args)
+  "into-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "into-array") 1)
+      (rontolisp::%clojure-into-array (car args))
+      (rontolisp::%clojure-into-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-int-array (x)
+  "(int-array size-or-seq): SIZE zeros, or the members of a seq narrowed like
+   Java's (int)."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element 0)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
+       #'rontolisp::%clojure-int-member)))
+
+(defun rontolisp::%clojure-int-array-2 (size init)
+  "(int-array size init): SIZE elements, each the int INIT -- any number -- or
+   the next member of the seq INIT, zeros past its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (numberp init)
+        (fill (make-array n :initial-element 0)
+              (rontolisp::%clojure-int-member init))
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         0 #'rontolisp::%clojure-int-member))))
+
+(defun rontolisp::%clojure-int-array-v (&rest args)
+  "int-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "int-array") 1)
+      (rontolisp::%clojure-int-array (car args))
+      (rontolisp::%clojure-int-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-long-array (x)
+  "(long-array size-or-seq): SIZE zeros, or the members of a seq narrowed like
+   Java's (long)."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element 0)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
+       #'rontolisp::%clojure-long-member)))
+
+(defun rontolisp::%clojure-long-array-2 (size init)
+  "(long-array size init): SIZE elements, each the long INIT -- any number --
+   or the next member of the seq INIT, zeros past its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (numberp init)
+        (fill (make-array n :initial-element 0)
+              (rontolisp::%clojure-long-member init))
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         0 #'rontolisp::%clojure-long-member))))
+
+(defun rontolisp::%clojure-long-array-v (&rest args)
+  "long-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "long-array") 1)
+      (rontolisp::%clojure-long-array (car args))
+      (rontolisp::%clojure-long-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-double-array (x)
+  "(double-array size-or-seq): SIZE zeros, or the members of a seq widened to
+   doubles."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element 0.0)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0.0
+       #'rontolisp::%clojure-double-member)))
+
+(defun rontolisp::%clojure-double-array-2 (size init)
+  "(double-array size init): SIZE elements, each the double INIT -- any
+   number -- or the next member of the seq INIT, zeros past its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (numberp init)
+        (fill (make-array n :initial-element 0.0)
+              (rontolisp::%clojure-double-member init))
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         0.0 #'rontolisp::%clojure-double-member))))
+
+(defun rontolisp::%clojure-double-array-v (&rest args)
+  "double-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "double-array") 1)
+      (rontolisp::%clojure-double-array (car args))
+      (rontolisp::%clojure-double-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-float-array (x)
+  "(float-array size-or-seq): SIZE zeros, or the members of a seq widened to
+   doubles (doubles only here, like float)."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element 0.0)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0.0
+       #'rontolisp::%clojure-float-member)))
+
+(defun rontolisp::%clojure-float-array-2 (size init)
+  "(float-array size init): SIZE elements, each the float INIT -- any
+   number -- or the next member of the seq INIT, zeros past its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (numberp init)
+        (fill (make-array n :initial-element 0.0)
+              (rontolisp::%clojure-float-member init))
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         0.0 #'rontolisp::%clojure-float-member))))
+
+(defun rontolisp::%clojure-float-array-v (&rest args)
+  "float-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "float-array") 1)
+      (rontolisp::%clojure-float-array (car args))
+      (rontolisp::%clojure-float-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-short-array (x)
+  "(short-array size-or-seq): SIZE zeros, or the members of a seq narrowed
+   like Java's (short) of its intValue."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element 0)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
+       #'rontolisp::%clojure-short-member)))
+
+(defun rontolisp::%clojure-short-array-2 (size init)
+  "(short-array size init): SIZE elements, each the short INIT -- an integer
+   in the short range, a Short to the oracle -- or the next member of the seq
+   INIT, zeros past its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (and (integerp init) (<= -32768 init 32767))
+        (fill (make-array n :initial-element 0) init)
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         0 #'rontolisp::%clojure-short-member))))
+
+(defun rontolisp::%clojure-short-array-v (&rest args)
+  "short-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "short-array") 1)
+      (rontolisp::%clojure-short-array (car args))
+      (rontolisp::%clojure-short-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-char-array (x)
+  "(char-array size-or-seq): SIZE nulls, or the members of a seq, each a
+   character."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element (code-char 0))
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x))
+       (code-char 0) #'rontolisp::%clojure-char-member)))
+
+(defun rontolisp::%clojure-char-array-2 (size init)
+  "(char-array size init): SIZE elements, each the character INIT -- a
+   Character to the oracle -- or the next member of the seq INIT, nulls past
+   its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (characterp init)
+        (fill (make-array n :initial-element (code-char 0)) init)
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         (code-char 0) #'rontolisp::%clojure-char-member))))
+
+(defun rontolisp::%clojure-char-array-v (&rest args)
+  "char-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "char-array") 1)
+      (rontolisp::%clojure-char-array (car args))
+      (rontolisp::%clojure-char-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-boolean-array (x)
+  "(boolean-array size-or-seq): SIZE falses, or the members of a seq, each a
+   boolean."
+  (if (numberp x)
+      (make-array (rontolisp::%clojure-array-size
+                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                  :initial-element rontolisp::%clojure-false)
+      (rontolisp::%clojure-build-array
+       (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x))
+       rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member)))
+
+(defun rontolisp::%clojure-boolean-array-2 (size init)
+  "(boolean-array size init): SIZE elements, each the boolean INIT -- a
+   Boolean to the oracle -- or the next member of the seq INIT, falses past
+   its end."
+  (let ((n
+         (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
+    (if (or (eq init t) (eq init rontolisp::%clojure-false))
+        (fill (make-array n :initial-element rontolisp::%clojure-false) init)
+        (rontolisp::%clojure-build-array-sized n
+         (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
+         rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member))))
+
+(defun rontolisp::%clojure-boolean-array-v (&rest args)
+  "boolean-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "boolean-array") 1)
+      (rontolisp::%clojure-boolean-array (car args))
+      (rontolisp::%clojure-boolean-array-2 (car args) (car (cdr args)))))
+
 (defun rontolisp::%clojure-bytes-seq (x)
   "The elements of the byte array X as a fresh list of Java bytes, nil when it
    has none."
