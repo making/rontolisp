@@ -22,7 +22,12 @@ interop の書き方も、すべてのバックエンドで同じ値を作りま
 2 つの半分と `version`、`variant` はどこでも答えます。インタプリタと JVM では、こうした値は
 Java のメンバーにホストオブジェクトとして渡り（`(.format sdf (java.util.Date.))`）、
 そのクラスのほかのメソッドはホストオブジェクトが答えます（`(.toInstant d)`）。メンバーが
-返したホストの Date や UUID は、こうした値と `=` になり、並べて比較できます。
+返したホストの Date や UUID は、こうした値と `=` になり、並べて比較できます。wasm
+バックエンドでは、Date や Timestamp の `.toInstant` はインスタント自身を返すため、下の
+持ち運べる `ISO_INSTANT` フォーマッタがそのまま綴ります
+（`(.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 0)))`
+は `"1970-01-01T00:00:00Z"` です）。ホストだけが答えるそれ以外のメソッドは、wasm では
+名前を挙げて拒否します。
 
 wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
 （ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
@@ -71,7 +76,7 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
   名前を挙げて拒否します。オラクルの Date はこれらで書き換わります。
 - [clojure.instant](clojure-instant.md) の Calendar にはホストオブジェクトがありません。Java の
   メンバーには渡らず、そのクラスのメソッドは名前を挙げて拒否します。wasm では、Date や UUID の
-  メソッドのうちホストだけが答えるもの（`toInstant`、`hashCode`）も同じく拒否します。
+  メソッドのうちホストだけが答えるその他のもの（たとえば `getYear` や `hashCode`）も同じく拒否します。
 - wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
   （ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
   `(.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0))` は

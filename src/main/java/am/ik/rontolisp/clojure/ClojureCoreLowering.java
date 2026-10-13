@@ -1203,7 +1203,7 @@ final class ClojureCoreLowering {
 	}
 
 	/** A component designator: {@code (list :C%CLASS name)} building the data. */
-	private static LispVal classDesignator(String name) {
+	static LispVal classDesignator(String name) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), new LispSymbol(":C%CLASS"),
 				LispString.literal(name));
 	}

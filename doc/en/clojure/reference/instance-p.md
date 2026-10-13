@@ -40,4 +40,5 @@ oracle.
 (println (instance? user.P (->R)) (instance? user.P (->S)) (satisfies? P (->S))) ; true false true
 (def rt (type (->R)))
 (println (instance? rt (->R)) (instance? rt (->S)) (instance? (class "s") "t")) ; true false true
+(println (instance? (type #"a") #"a") (instance? (type #"a") "s")) ; true false
 ```

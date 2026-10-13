@@ -609,6 +609,21 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void writerAppendOfARangeWritesItAndAnswersTheWriter() throws Exception {
+		// .append of a string range writes the part and answers the stream
+		// (data.json's write-string slow path): a whole, partial or empty range,
+		// nil spelling "null" like the host, chained through doto. The
+		// all-four-backend pin is the clojure-spec.yaml case; the spellings live
+		// here with the other interop pins.
+		assertBothEqual("(let [w (java.io.StringWriter.)] (println (identical? w (.append w \"hello\" 0 5)))"
+				+ " (println (str w)))", "true\nhello\n");
+		assertBothEqual("(let [w (java.io.StringWriter.)] (.append w \"hello\" 1 3) (println (str w)))", "el\n");
+		assertBothEqual("(let [w (java.io.StringWriter.)] (.append w nil 0 4) (println (str w)))", "null\n");
+		assertBothEqual("(println (str (doto (java.io.StringWriter.) (.append \"abcdef\" 2 5))))", "cde\n");
+		assertBothEqual("(let [sb (StringBuilder.)] (.append sb \"hello\" 1 4) (println (str sb)))", "ell\n");
+	}
+
+	@Test
 	void classNamesAnswerAsValuesAndStringsAnswerGetClass() throws Exception {
 		assertBothEqual("(println (= String (Class/forName \"java.lang.String\")))", "true\n");
 		assertBothEqual("(println (.getName String))", "java.lang.String\n");

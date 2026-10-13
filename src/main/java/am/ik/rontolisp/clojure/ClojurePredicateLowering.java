@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -260,60 +261,65 @@ final class ClojurePredicateLowering {
 	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
 		Test test = predicateTest(name);
 		if (test != null) {
-			return ClojureFnLowering.predValue(ctx, test::over);
+			return ctx.sharedValue(name, ClojureFnLowering.predValue(ctx, test::over));
 		}
 		if (name.equals("future?")) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-					hostFuture(ctx, one));
+			return ctx.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(one), hostFuture(ctx, one)));
 		}
 		String readerValue = READER_VALUE_PREDICATES.get(name);
 		if (readerValue != null) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-					ClojureLowerUtil.list(new LispSymbol(readerValue), one, ctx.falseVariable));
+			return ctx.sharedValue(name,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+							ClojureLowerUtil.list(new LispSymbol(readerValue), one, ctx.falseVariable)));
 		}
 		if (name.equals("bytes?")) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-					ClojureBytesLowering.bytesPredicate(ctx, one));
+			return ctx.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(one), ClojureBytesLowering.bytesPredicate(ctx, one)));
 		}
 		if (name.equals("delay?")) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-					ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.IS_DELAY), one, ctx.falseVariable));
+			return ctx
+				.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+						ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.IS_DELAY), one, ctx.falseVariable)));
 		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-					futureVerb(ctx, name, verb, one));
+			return ctx.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(one), futureVerb(ctx, name, verb, one)));
 		}
 		if (NEVER.contains(name) || name.equals("any?")) {
 			LispSymbol one = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), one,
-					name.equals("any?") ? T : ctx.falseVariable);
+			return ctx.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(one), one, name.equals("any?") ? T : ctx.falseVariable));
 		}
 		switch (name) {
 			case "true?", "false?", "boolean?":
 				// the boolean predicates lower inline (ClojureLowering), so they are no
 				// TESTS entry, but as values they are the same lambdas a function
 				// position takes (malli's {:pred boolean?})
-				return ClojureFnLowering.predicateValue(ctx, name);
+				return ctx.sharedValue(name, Objects.requireNonNull(ClojureFnLowering.predicateValue(ctx, name)));
 			case "not-any?", "not-every?": {
 				LispSymbol pred = new LispSymbol(ClojureLowering.mangle(name + "-pred"));
 				LispSymbol coll = new LispSymbol(ClojureLowering.mangle(name + "-coll"));
 				ClojureBindingLowering.FnArg fn = ClojureBindingLowering.FnArg.of(pred);
 				LispVal seq = ClojureSeqLowering.seqForm(ctx, coll);
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-						negated(ctx, name.equals("not-any?") ? ClojureFilterLowering.someForm(ctx, fn, seq)
-								: ClojureFilterLowering.everyForm(ctx, fn, seq)));
+				return ctx.sharedValue(name,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+								ClojureLowerUtil.list(List.of(pred, coll)),
+								negated(ctx, name.equals("not-any?") ? ClojureFilterLowering.someForm(ctx, fn, seq)
+										: ClojureFilterLowering.everyForm(ctx, fn, seq))));
 			}
 			case "identical?": {
 				LispSymbol a = ctx.freshTemp();
 				LispSymbol b = ctx.freshTemp();
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(a, b)),
-						ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-IDENTICAL"), a, b)));
+				return ctx.sharedValue(name,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(a, b)),
+								ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-IDENTICAL"), a, b))));
 			}
 			case "distinct?":
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-DISTINCT-V"));

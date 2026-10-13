@@ -569,7 +569,27 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return symfuncrefFuncBase() + (this.emitsFuncref ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code _funcref}, the canonical function-value box of a funcId: right
+	 * after the complex block, so adding it moves no fixed index -- only
+	 * {@link #userFuncBase()}, which every consumer already reads dynamically. Only
+	 * meaningful when {@link #emitsFuncref} is set.
+	 */
+	private int symfuncrefFuncBase() {
 		return complexBlockFuncBase() + (this.complexCapable ? WasmComplexBlock.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The module index of {@code _funcref}, or {@code -1} when this module carries none
+	 * ({@link #emitsFuncref}): a computed {@code symbol-function} site with no index
+	 * boxes fresh per resolution, as it always did.
+	 * @return the function index, or -1
+	 */
+	int symfuncrefFuncIndex() {
+		return this.emitsFuncref ? symfuncrefFuncBase() : -1;
 	}
 
 	/**
@@ -946,6 +966,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * site emitted against an index the module never reserved -- cannot happen.
 	 */
 	private boolean emitsLitStage;
+
+	/**
+	 * Whether this module carries {@code _funcref}, the canonical function-value box of a
+	 * funcId a computed {@code (symbol-function x)} / {@code (fdefinition x)} resolution
+	 * and the eval runtime's own registry hit answer instead of boxing fresh. Set in the
+	 * pre-pass, because it shifts {@link #userFuncBase()}. Deliberately loose like
+	 * {@code emitsArityChk}: the sites live in bodies not yet compiled, so it asks only
+	 * whether the program can resolve a name at run time (a runtime box) or runs the eval
+	 * runtime (whose registry hit answers through it); a module that turns out to have no
+	 * calling site pays one unreferenced function, while the reverse -- a site emitted
+	 * against an index the module never reserved -- cannot happen. A computed site
+	 * compiled while the slot is absent (a macro synthesized it behind the scan's back)
+	 * keeps the old fresh box.
+	 */
+	private boolean emitsFuncref;
 
 	/**
 	 * Whether the program may observe a complex value
@@ -2297,8 +2332,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
 	// (_rand_big), the path stat (_file_write_date), the link read (_read_link) and the
-	// hash-table runtime (_ht_*) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
+	// hash-table runtime (_ht_*) -- plus, under --simd, the vec: SIMD block, and the
+	// conditional helpers (the _arity_* / _undefined_function / _unbound_variable /
+	// _lit_stage / _funcref chain and the complex block). Use
+	// userFuncBase(), which adds those offsets.
 	static final int FUNC_USER_BASE = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
 
 	// Type indices
@@ -3907,6 +3944,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a silent bind (WasmRuntimeBuilder.buildArityChkBody).
 		this.emitsArityChk = usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns
 				|| bundlesWideLambdas;
+		// Whether this module carries _funcref (see emitsFuncref): decided here for
+		// the same reason, over the same pre-pass program the registry gate reads.
+		this.emitsFuncref = LispMacroExpander.usesRuntimeFunctionBox(program) || usesEval;
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
@@ -4947,6 +4987,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.namesArityOperators(this.emitsArityMessage)
 			.litStageFuncIndex(litStageFuncIndex())
 			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
+			.symfuncrefFuncIndex(symfuncrefFuncIndex())
 			.unboundVariableFuncIndex(unboundVariableFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
@@ -5940,6 +5981,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				? fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0) : -1;
 		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0)
 				+ (hostWriteDate ? 1 : 0);
+		// _funcref's (i32) -> (ref null eq) signature, appended after every entry
+		// above (the component string-ABI block or the arena pair, the :bytes
+		// helper, the park helper and the shared host-hook signature), so no
+		// existing type index moves. Only meaningful when this module carries
+		// _funcref (emitsFuncref); every other module's type section is untouched.
+		int funcrefTypeIndex = this.emitsFuncref
+				? abiTypeBase + (componentStringAbi ? 1 + componentPostKinds.size() + retptrShimPlans.size() : 0)
+						+ (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0) + (parkHelpers ? 1 : 0)
+						+ ((seedRandom || setTime) ? 1 : 0)
+				: -1;
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -6438,6 +6489,28 @@ public final class WasmLispCompiler implements LispCompiler {
 		// byte-identical to the one from before this table existed.
 		final int funNameBase = funNameCount == 0 ? -1
 				: stringTable.appendReaderOwnedBlobUnaligned(funNameRows.toByteArray());
+		// _funcref: the canonical function-value box of a funcId, shared by every
+		// static (function name) site and every computed resolution of one
+		// definition. The ladder covers every funcId the registry can answer plus
+		// every static box Pass 2 already took; a static box's global is reused, so
+		// all three paths -- static, computed, eval -- answer the SAME object.
+		// Globals for covered ids without one are allocated here, ascending, before
+		// the global section is emitted. Bodies are all compiled by now, so the
+		// cover is complete, including for names a macro synthesized in Pass 2.
+		final byte[] funcrefBody;
+		if (this.emitsFuncref) {
+			java.util.TreeSet<Integer> coveredIds = new java.util.TreeSet<>(registryFuncIds);
+			coveredIds.addAll(quoteGlobals.boxedFuncIds());
+			Map<Integer, Integer> boxGlobals = new HashMap<>();
+			for (int id : coveredIds) {
+				boxGlobals.put(id, quoteGlobals.indexFor(quoteGlobals.funcBoxTokenFor(id)));
+			}
+			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(new java.util.ArrayList<>(coveredIds), boxGlobals,
+					this.usesIdentityHashTables);
+		}
+		else {
+			funcrefBody = new byte[0];
+		}
 		if (usesEval) {
 			WasmEvalRuntimeBuilder.SpecialFormOffsets.Builder offsetsBuilder = WasmEvalRuntimeBuilder.SpecialFormOffsets
 				.builder()
@@ -6507,7 +6580,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					countShapes);
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
-					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables);
+					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables,
+					symfuncrefFuncIndex());
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
@@ -7489,6 +7563,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (seedRandom || setTime) {
 					types.addFunc(new Type[] { Type.I64 }, new Type[0]);
 				}
+				// _funcref (i32) -> (ref null eq): the canonical function-value box
+				// of a funcId. Appended last of all, so no existing type index moves,
+				// and only a module carrying _funcref gains the entry.
+				if (this.emitsFuncref) {
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(1);
+						w.write(Type.I32);
+						w.write(1);
+						w.writeRefType(true, Type.EQ.code());
+					});
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -8005,6 +8091,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(fn.typeIndex);
 					}
 				}
+				// _funcref, right after it, over the appended (i32) -> (ref null
+				// eq) signature: the canonical box a computed symbol-function
+				// resolution and the eval runtime's registry hit answer through.
+				if (this.emitsFuncref) {
+					fnDef.addFunction(funcrefTypeIndex);
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -8365,8 +8457,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// One (mut (ref null eq)) = null per quoted aggregate datum
 				// (.kb/quoted-data.md), filled lazily by its quote site's first
-				// evaluation (WasmQuoteCompiler.compile). Discovered during body
-				// compilation, hence appended after every fixed-index global.
+				// evaluation (WasmQuoteCompiler.compile) -- and per canonical
+				// function-value box, filled lazily by its first (function name)
+				// site (WasmQuoteCompiler.compileSharedFunctionBox) or its first
+				// _funcref call, keyed by a
+				// token no quoted datum can be. Discovered during body
+				// compilation -- the _funcref ladder's share of them just after,
+				// before this section is written -- hence appended after every
+				// fixed-index global.
 				for (int i = 0; i < quoteGlobals.count(); i++) {
 					gs.add(g -> {
 						g.writeRefType(true, Type.EQ.code());
@@ -9074,6 +9172,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (WasmComplexBlock.Fn fn : WasmComplexBlock.Fn.values()) {
 						code.addFunction(complexBlock.body(fn));
 					}
+				}
+				// The _funcref body, in symfuncrefFuncBase() order.
+				if (this.emitsFuncref) {
+					code.addFunction(funcrefBody);
 				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
@@ -10999,6 +11101,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final java.util.IdentityHashMap<LispVal, Integer> byDatum = new java.util.IdentityHashMap<>();
 
+		// One stable identity token per funcId with a shared function-value box,
+		// so the box allocator below keys the same table the quoted data uses.
+		private final java.util.HashMap<Integer, LispVal> funcBoxTokens = new java.util.HashMap<>();
+
 		QuoteGlobals(int base) {
 			this.base = base;
 		}
@@ -11016,6 +11122,34 @@ public final class WasmLispCompiler implements LispCompiler {
 			int index = this.base + this.byDatum.size();
 			this.byDatum.put(datum, index);
 			return index;
+		}
+
+		/**
+		 * The stable identity token the canonical function-value box of a named function
+		 * is keyed by in the table above: one object per funcId (never a datum the
+		 * program quotes, and never inspected -- the table compares by identity), so the
+		 * boxes share the quoted-data globals and their section without renumbering
+		 * either.
+		 * @param funcId the named function's funcId
+		 * @return the token to pass to {@link #indexFor}
+		 */
+		LispVal funcBoxTokenFor(int funcId) {
+			LispVal token = this.funcBoxTokens.get(funcId);
+			if (token == null) {
+				token = new am.ik.rontolisp.LispSymbol("#<function-box " + funcId + ">");
+				this.funcBoxTokens.put(funcId, token);
+			}
+			return token;
+		}
+
+		/**
+		 * The funcIds a static {@code (function name)} site already took a canonical box
+		 * for during body compilation: every token in the table above. A snapshot, in no
+		 * particular order.
+		 * @return the funcIds with a shared box global
+		 */
+		java.util.Set<Integer> boxedFuncIds() {
+			return new java.util.HashSet<>(this.funcBoxTokens.keySet());
 		}
 
 		/**
@@ -11970,6 +12104,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int undefinedFunctionFuncIndex = -1;
 
 		/**
+		 * The module index of {@code _funcref}, or {@code -1} when this module carries
+		 * none ({@code WasmLispCompiler.emitsFuncref}).
+		 */
+		int symfuncrefFuncIndex = -1;
+
+		/**
 		 * The module index of {@code _unbound_variable}, or {@code -1} when this module
 		 * carries none ({@code WasmLispCompiler.emitsUnboundVariable}).
 		 */
@@ -12151,6 +12291,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.arityNamedCallees = builder.arityNamedCallees;
 			this.litStageFuncIndex = builder.litStageFuncIndex;
 			this.undefinedFunctionFuncIndex = builder.undefinedFunctionFuncIndex;
+			this.symfuncrefFuncIndex = builder.symfuncrefFuncIndex;
 			this.unboundVariableFuncIndex = builder.unboundVariableFuncIndex;
 			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
@@ -12343,6 +12484,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int undefinedFunctionFuncIndex = -1;
 
+			private int symfuncrefFuncIndex = -1;
+
 			private int unboundVariableFuncIndex = -1;
 
 			private @Nullable WasmComplexBlock complexBlock;
@@ -12497,6 +12640,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.arityNamedCallees = proto.arityNamedCallees;
 				this.litStageFuncIndex = proto.litStageFuncIndex;
 				this.undefinedFunctionFuncIndex = proto.undefinedFunctionFuncIndex;
+				this.symfuncrefFuncIndex = proto.symfuncrefFuncIndex;
 				this.unboundVariableFuncIndex = proto.unboundVariableFuncIndex;
 				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
@@ -12821,6 +12965,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder undefinedFunctionFuncIndex(int undefinedFunctionFuncIndex) {
 				this.undefinedFunctionFuncIndex = undefinedFunctionFuncIndex;
+				return this;
+			}
+
+			Builder symfuncrefFuncIndex(int symfuncrefFuncIndex) {
+				this.symfuncrefFuncIndex = symfuncrefFuncIndex;
 				return this;
 			}
 

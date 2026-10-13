@@ -20,10 +20,12 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * static field as a value, a member as a value, a zero-arg static call and a host-boolean
  * instance call, a proxy over a class, and the qualified {@code Class/new},
  * {@code Class/.method} and param-tagged forms all compile to the undefined-function
- * call-time error (pinned here by the compile warning naming it) and trap when run. The
- * behavior itself lives in {@link ClojureInteropTest} on the interpreter and the JVM. A
- * Date or UUID construction is no refusal: it makes the value {@code #inst} or
- * {@code #uuid} reads, whose host-only members alone are refused, by name.
+ * call-time error (pinned here by the compile warning naming it) and trap when run. A
+ * bare class name is no refusal: it answers its (:C%CLASS name) designator, so a
+ * class-keyed map builds at load. The behavior itself lives in {@link ClojureInteropTest}
+ * on the interpreter and the JVM. A Date or UUID construction is no refusal: it makes the
+ * value {@code #inst} or {@code #uuid} reads, whose host-only members alone are refused,
+ * by name.
  */
 class ClojureWasmInteropRefusalTest {
 
@@ -62,13 +64,21 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
-	void classValueRefusesOnPreview1() throws Exception {
-		assertRefusal("(println String)", "JAVA:STATIC", false);
+	void classValueAnswersTheDesignatorOnPreview1() throws Exception {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not, so a class-keyed map builds at load (malli's class-schemas); two
+		// literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", false))
+			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
 	}
 
 	@Test
-	void classValueRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println String)", "JAVA:STATIC", true);
+	void classValueAnswersTheDesignatorOnTheComponent() throws Exception {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not, so a class-keyed map builds at load (malli's class-schemas); two
+		// literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", true))
+			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
 	}
 
 	@Test
@@ -125,15 +135,19 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends() throws Exception {
-		// a construction is the value #inst reads, so it runs here: a member only the
-		// host
-		// answers is refused by name, where the interpreter and the JVM call it on the
+		// a construction is the value #inst reads, so it runs here: .toInstant of
+		// it answers the instant itself (data.json's write-date), which inst-ms and
+		// the portable ISO_INSTANT formatter read; a member only the host answers
+		// is refused by name, where the interpreter and the JVM call it on the
 		// host Date it stands for (ClojureInteropTest)
-		String program = "(println (try (.toInstant (java.util.Date. 5)) (catch Exception e (ex-message e)))"
+		String program = "(println (inst-ms (.toInstant (java.util.Date. 5)))"
+				+ " (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 5)))"
+				+ " (try (.getYear (java.util.Date. 5)) (catch Exception e (ex-message e)))"
 				+ " (inst-ms (java.util.Date. 5)) (uuid? (java.util.UUID/randomUUID)))";
 		for (boolean component : new boolean[] { false, true }) {
 			assertThat(run(program, component)).as(component ? "component" : "preview 1")
-				.isEqualTo("Method toInstant taking 0 args is not supported for class java.util.Date 5 true\n");
+				.isEqualTo("5 1970-01-01T00:00:00.005Z Method getYear taking 0 args is not supported"
+						+ " for class java.util.Date 5 true\n");
 		}
 	}
 
@@ -186,7 +200,8 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends() throws Exception {
-		// Long/valueOf, Double/valueOf, Integer/parseInt of radix 16,
+		// Long/valueOf, Double/valueOf, Long/parseLong of one argument,
+		// Integer/parseInt of radix 16,
 		// Integer/toHexString and Math/min lower to the portable readers where no
 		// host is (data.json's read path): a malformed string is the oracle's
 		// NumberFormatException, anything else its coercion or refusal, each
@@ -197,6 +212,8 @@ class ClojureWasmInteropRefusalTest {
 				+ " (println (try (Long/valueOf :k) (catch IllegalArgumentException e (ex-message e))))"
 				+ " (println (try (Double/valueOf 5) (catch IllegalArgumentException e (ex-message e))))"
 				+ " (println (try (Double/valueOf 1/2) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Long/parseLong 5) (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Long/parseLong 1.5) (catch ClassCastException e (ex-message e))))"
 				+ " (println (try (Integer/parseInt 5 16) (catch ClassCastException e (ex-message e))))"
 				+ " (println (try (Integer/parseInt 1.5 16) (catch ClassCastException e (ex-message e))))"
 				+ " (println (Integer/toHexString 1.5) (Integer/toHexString 1/2) (Integer/toHexString -1.5)"
@@ -215,6 +232,8 @@ class ClojureWasmInteropRefusalTest {
 				+ "No matching method valueOf found taking 1 args\n"
 				+ "No matching method valueOf found taking 1 args\n"
 				+ "No matching method valueOf found taking 1 args\n"
+				+ "class java.lang.Long cannot be cast to class java.lang.String\n"
+				+ "class java.lang.Double cannot be cast to class java.lang.String\n"
 				+ "class java.lang.Long cannot be cast to class java.lang.String\n"
 				+ "class java.lang.Double cannot be cast to class java.lang.String\n" + "1 0 ffffffff 0\n"
 				+ "integer overflow\n" + "Value out of range for long: Infinity\n"

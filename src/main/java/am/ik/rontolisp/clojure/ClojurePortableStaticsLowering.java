@@ -10,12 +10,14 @@ import org.jspecify.annotations.Nullable;
 /**
  * The pure number statics data.json's read path calls ({@code .kb/clojure-frontend.md},
  * "Portable number statics"): {@code Long/valueOf} and {@code Double/valueOf} of one
- * argument, {@code Integer/parseInt} of a string and a literal radix 16,
- * {@code Integer/toHexString} of one argument and {@code Math/min} of two. Where the host
- * is not (wasm) each lowers to its portable worker in {@code clojure.lisp} -- never a
- * {@code java:static}, which wasm refuses; where the host is each stays the host's call.
- * Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s grammar being
- * {@code parse-long}'s and {@code Double/valueOf}'s {@code parse-double}'s.
+ * argument, {@code Long/parseLong} of one argument (malli's {@code -string->long}, which
+ * the string-transformer decode reads), {@code Integer/parseInt} of a string and a
+ * literal radix 16, {@code Integer/toHexString} of one argument and {@code Math/min} of
+ * two. Where the host is not (wasm) each lowers to its portable worker in
+ * {@code clojure.lisp} -- never a {@code java:static}, which wasm refuses; where the host
+ * is each stays the host's call. Each worker is measured against clj 1.12.6,
+ * {@code Long/valueOf}'s and {@code Long/parseLong}'s grammar being {@code parse-long}'s
+ * and {@code Double/valueOf}'s {@code parse-double}'s.
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -24,6 +26,9 @@ final class ClojurePortableStaticsLowering {
 
 	/** {@code (Long/valueOf s)}. */
 	static final String LONG_VALUE_OF = "RONTOLISP::%CLOJURE-LONG-VALUE-OF";
+
+	/** {@code (Long/parseLong s)} of one argument. */
+	static final String PARSE_LONG = "RONTOLISP::%CLOJURE-PARSE-LONG-STATIC";
 
 	/** {@code (Double/valueOf s)}. */
 	static final String DOUBLE_VALUE_OF = "RONTOLISP::%CLOJURE-DOUBLE-VALUE-OF";
@@ -59,6 +64,9 @@ final class ClojurePortableStaticsLowering {
 	static @Nullable LispVal staticCall(String cls, String member, List<LispVal> args) {
 		if (cls.equals("java.lang.Long") && member.equals("valueOf") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(LONG_VALUE_OF), args.get(0));
+		}
+		if (cls.equals("java.lang.Long") && member.equals("parseLong") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(PARSE_LONG), args.get(0));
 		}
 		if (cls.equals("java.lang.Double") && member.equals("valueOf") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(DOUBLE_VALUE_OF), args.get(0));

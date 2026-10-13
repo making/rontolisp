@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
@@ -2185,6 +2186,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot() {
+		// (Long/parseLong s) of one argument is the portable long reader where the
+		// host is not (wasm) -- malli's -string->long reads strings through it, so
+		// the string-transformer decode runs there -- never a java:static (which
+		// wasm refuses); as a value the arity lambda wraps the same worker for its
+		// one-argument arm (the four-argument arm stays the host call). Any other
+		// arity stays the host call, like every other member; where the host
+		// is every spelling keeps java:static, whose object the host tests pin.
+		assertThat(wasmLowered("(Long/parseLong \"12\")")).contains("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(map Long/parseLong [\"12\"])")).contains("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC")
+			.contains("JAVA:STATIC");
+		assertThat(wasmLowered("(Long/parseLong \"1\" 0 1 10)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC");
+		assertThat(lowered("(Long/parseLong \"12\")")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-PARSE-LONG-STATIC");
+	}
+
+	@Test
 	void putOnAMapThrowsTheOraclesUnsupportedOperationWhereTheHostIsNot() {
 		// .put of a key and a value on a value of unknown class throws the
 		// message-less UnsupportedOperationException construction where the host is
@@ -2196,6 +2216,215 @@ class ClojureLoweringTest {
 			.contains("No matching method put");
 		assertThat(lowered("(defn f [m k v] (.put m k v))")).contains("JAVA:CALL")
 			.doesNotContain("RONTOLISP::%CLOJURE-THROW");
+	}
+
+	@Test
+	void predicateValuesLiveInOneProgramWideCell() {
+		// a predicate as a value goes through the shared-value worker, which
+		// stores the value on first use and answers the stored object after, so
+		// two references are = and identical? like the oracle's var roots (and
+		// malli's registry, keyed by predicate values, hits): a fresh lambda per
+		// site used to make them distinct objects. Calls stay inline, on every
+		// backend.
+		assertThat(lowered("(pos-int? 1)")).contains("IS-POS-INT").doesNotContain("SHARED-VALUE");
+		String shared = lowered("(println (= pos-int? pos-int?))");
+		assertThat(shared).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"pos-int?\"")
+			.contains("RONTOLISP::%CLOJURE-IS-POS-INT");
+		assertThat(wasmLowered("(println (= string? string?) (identical? odd? odd?))")).contains("\"string?\"")
+			.contains("\"odd?\"")
+			.doesNotContain("JAVA:");
+	}
+
+	@Test
+	void coreFunctionValuesLiveInOneProgramWideCell() {
+		// every other site-independent core value goes through the same
+		// shared-value worker as the predicates, so two references are = and
+		// identical? like the oracle's var roots: a fresh lambda per site used
+		// to make (= map map) false. Calls stay inline, on every backend; a
+		// verb's transducer arity is shared with the verb. Values snapshotting
+		// lower-time state share one cell per snapshot: two references under one
+		// snapshot are one object, while references under different snapshots
+		// keep distinct cells, so a call through a value still reads its own
+		// site's snapshot. default-data-readers is no snapshot -- always the
+		// same two shipped reader vars -- so it shares one cell program-wide.
+		// The namespace-mapping values (ns-publics, ns-interns, ns-map,
+		// ns-refers, ns-aliases, ns-imports) close over nothing but their
+		// argument, so they share one cell program-wide with no snapshot key.
+		assertThat(lowered("(map inc [1])")).contains("%CLOJURE-MAP").contains("\"inc\"");
+		assertThat(lowered("(count [1 2])")).doesNotContain("SHARED-VALUE");
+		String shared = lowered("(println (= map map))");
+		assertThat(shared).contains("RONTOLISP::%CLOJURE-SHARED-VALUE").contains("\"map\"");
+		assertThat(lowered("(println (= filter filter))")).contains("\"filter\"")
+			.contains("RONTOLISP::%CLOJURE-XF-FILTER");
+		assertThat(lowered("(println (= not= not=))")).contains("\"not=\"");
+		assertThat(lowered("(println (= < <))")).contains("\"<\"");
+		assertThat(lowered("(println (= inc inc))")).contains("\"inc\"");
+		assertThat(lowered("(println (= str str))")).contains("\"str\"");
+		assertThat(lowered("(println (= count count))")).contains("\"count\"");
+		assertThat(lowered("(println (= comp comp))")).contains("\"comp\"");
+		assertThat(lowered("(println (= atom atom))")).contains("\"atom\"");
+		assertThat(lowered("(println (= keyword keyword))")).contains("\"keyword\"");
+		assertThat(lowered("(println (= clojure.core/map clojure.core/map))")).contains("\"map\"");
+		assertThat(lowered("(println (= ns-publics ns-publics))")).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"ns-publics\"")
+			.doesNotContain("\"ns-publics#");
+		assertThat(lowered("(println (= ns-interns ns-interns))")).contains("\"ns-interns\"")
+			.doesNotContain("\"ns-interns#");
+		assertThat(lowered("(println (= ns-map ns-map))")).contains("\"ns-map\"").doesNotContain("\"ns-map#");
+		assertThat(lowered("(println (= ns-refers ns-refers))")).contains("\"ns-refers\"")
+			.doesNotContain("\"ns-refers#");
+		assertThat(lowered("(println (= ns-aliases ns-aliases))")).contains("\"ns-aliases\"")
+			.doesNotContain("\"ns-aliases#");
+		assertThat(lowered("(println (= ns-imports ns-imports))")).contains("\"ns-imports\"")
+			.doesNotContain("\"ns-imports#");
+		assertThat(lowered("(println (= clojure.core/ns-map clojure.core/ns-map))")).contains("\"ns-map\"");
+		assertThat(lowered("(println (= = =))")).doesNotContain("SHARED-VALUE");
+		assertThat(lowered("(println (= + +))")).doesNotContain("SHARED-VALUE");
+		assertThat(lowered("(println (= apply apply))")).doesNotContain("SHARED-VALUE");
+		String snapshotting = lowered("(println all-ns all-ns read read find-ns find-ns loaded-libs loaded-libs)");
+		assertThat(snapshotting).contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"all-ns#")
+			.contains("\"read#")
+			.contains("\"find-ns#")
+			.contains("\"loaded-libs#");
+		assertThat(snapshotting).doesNotContain("\"all-ns\"")
+			.doesNotContain("\"read\"")
+			.doesNotContain("\"find-ns\"")
+			.doesNotContain("\"loaded-libs\"");
+		assertThat(lowered("(println (= default-data-readers default-data-readers))"))
+			.contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"default-data-readers\"")
+			.doesNotContain("\"default-data-readers#");
+		assertThat(snapshotCells(lowered("(println find-ns find-ns)"), "find-ns")).hasSize(1);
+		assertThat(snapshotCells(lowered("(println the-ns) (ns f97-lt) (println the-ns)"), "the-ns")).hasSize(2);
+		assertThat(wasmLowered("(println (= map map) (= count count))")).contains("\"map\"")
+			.contains("\"count\"")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println (= ns-publics ns-publics) (= ns-map ns-map) (= ns-imports ns-imports))"))
+			.contains("RONTOLISP::%CLOJURE-SHARED-VALUE")
+			.contains("\"ns-publics\"")
+			.contains("\"ns-map\"")
+			.contains("\"ns-imports\"")
+			.doesNotContain("JAVA:");
+	}
+
+	/**
+	 * The distinct snapshot digests a snapshotting core value's cells carry in the
+	 * lowered program: one per snapshot the references stood under.
+	 * @param lowered the lowered program
+	 * @param name the Clojure name
+	 * @return the distinct digests
+	 */
+	private static List<String> snapshotCells(String lowered, String name) {
+		return Pattern.compile("\"" + name + "#([0-9a-f]+)\"")
+			.matcher(lowered)
+			.results()
+			.map(match -> match.group(1))
+			.distinct()
+			.toList();
+	}
+
+	@Test
+	void typeAnswersTheDesignatorWhereARegistryCouldCollide() {
+		// type reads the designator of the host class where the oracle answers
+		// one no schema registry may collide with, else class's kind keyword: a
+		// registry lookup falls through to (type x) on a miss, so a kind keyword
+		// hit the :function/:keyword/... entry -- an unregistered function looped
+		// until the stack overflowed instead of refusing with
+		// :malli.core/invalid-schema (f96). class itself is untouched, and a
+		// dispatch value reads back as its kind.
+		String designator = "RONTOLISP::%CLOJURE-TYPE-DESIGNATOR";
+		assertThat(lowered("(println (type (fn [x] x)))")).contains(designator);
+		assertThat(lowered("(println (type nil))")).contains(designator);
+		assertThat(wasmLowered("(println (type \"s\"))")).contains(designator).doesNotContain("JAVA:");
+		assertThat(lowered("(println (class (fn [x] x)))")).contains(":C%KEYWORD").doesNotContain(designator);
+		assertThat(lowered("(println (type 1))")).contains(designator);
+		String multi = lowered("(defmulti m type) (defmethod m String [s] s)");
+		assertThat(multi).contains("RONTOLISP::%CLOJURE-DESIGNATOR-KIND");
+	}
+
+	@Test
+	void typeOfAPatternIsThePatternClass() {
+		// type of a pattern is what the oracle answers: the host Pattern class
+		// where a host is, its (:C%CLASS name) designator where none is -- the
+		// same split a bare class literal lowers to. Only the oracle's answer
+		// hits the registry's class-schemas entry, so (m/schema #"a") builds
+		// the regex schema (f98); class keeps the :pattern keyword.
+		assertThat(lowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
+			.contains("JAVA:STATIC")
+			.contains("forName")
+			.contains("java.util.regex.Pattern");
+		assertThat(wasmLowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
+			.contains(":C%CLASS")
+			.contains("java.util.regex.Pattern")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println (class #\"a\"))")).contains(":C%KEYWORD")
+			.doesNotContain("RONTOLISP::%CLOJURE-TYPE-DESIGNATOR");
+	}
+
+	@Test
+	void aZeroArgumentObjectConstructionIsAFreshTokenWhereTheHostIsNot() {
+		// (Object.) is a fresh uninterned symbol where the host is not (wasm), so
+		// dynaload's dynalock defonce loads -- never a java:new (which wasm
+		// refuses). Two constructions are never = or identical?, like two host
+		// objects. Where the host is every spelling keeps java:new; any other
+		// count keeps it everywhere.
+		assertThat(wasmLowered("(Object.)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new Object)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Object/new)")).contains("(GENSYM)").doesNotContain("JAVA:");
+		assertThat(lowered("(Object.)")).contains("JAVA:NEW").contains("java.lang.Object");
+	}
+
+	@Test
+	void boxedIntegerLimitsAnswerThemselvesWhereTheHostIsNot() {
+		// Long/MAX_VALUE (and MIN_VALUE, the Integer/Short/Byte pairs) is itself
+		// where the host is not (wasm), so malli's +max-size+ def loads -- never
+		// a java:field (which wasm refuses). Where the host is the field read
+		// stays untouched; any other member keeps it everywhere.
+		assertThat(wasmLowered("(println Long/MAX_VALUE Long/MIN_VALUE)")).contains("9223372036854775807")
+			.contains("-9223372036854775808")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println Integer/MAX_VALUE Integer/MIN_VALUE)")).contains("2147483647")
+			.contains("-2147483648")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println Short/MAX_VALUE Byte/MIN_VALUE)")).contains("32767")
+			.contains("-128")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println Long/MAX_VALUE)")).contains("JAVA:FIELD");
+		assertThat(wasmLowered("(println Long/SIZE)")).contains("JAVA:FIELD");
+	}
+
+	@Test
+	void aClassLiteralIsItsDesignatorWhereTheHostIsNot() {
+		// a bare class name is its (:C%CLASS name) designator where the host is
+		// not (wasm), so a class-keyed map (malli's class-schemas, read at load
+		// into the default registry) builds -- never a java:static (which wasm
+		// refuses). Where the host is it keeps the forName object.
+		assertThat(wasmLowered("(println String)")).contains(":C%CLASS")
+			.contains("java.lang.String")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println String)")).contains("JAVA:STATIC").contains("forName");
+	}
+
+	@Test
+	void dateBuilderChainsThreadTheirMarkerWhereTheHostIsNot() {
+		// a DateTimeFormatterBuilder chain evaluates to its marker where the host
+		// is not (wasm), so malli's formatter defs load: the construction is the
+		// builder marker, each builder call it again, toFormatter the formatter,
+		// ofPattern and ZoneId/of their own -- never a java: operator. Where the
+		// host is every spelling keeps its host call.
+		String chain = "(-> (java.time.format.DateTimeFormatterBuilder.)"
+				+ " (.appendPattern \"yyyy\") (.toFormatter))";
+		assertThat(wasmLowered(chain)).contains(":C%DATE-FORMATTER-BUILDER")
+			.contains(":C%DATE-FORMATTER")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.time.format.DateTimeFormatter/ofPattern \"yyyy\")")).contains(":C%DATE-FORMATTER")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.time.ZoneId/of \"UTC\")")).contains(":C%ZONE-ID").doesNotContain("JAVA:");
+		assertThat(wasmLowered("java.time.temporal.ChronoField/MICRO_OF_SECOND")).contains(":C%CHRONO-FIELD")
+			.doesNotContain("JAVA:");
+		assertThat(lowered(chain)).contains("JAVA:NEW");
 	}
 
 	@Test
@@ -3451,7 +3680,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map rand-nth [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map vals [{:a 1}])")).contains("LAMBDA").contains("MAPHASH");
 		assertThat(lowered("(mapcat reverse)")).contains(
-				"(RONTOLISP::%CLOJURE-XF-MAPCAT (LAMBDA (|c%reverse-coll|) (REVERSE (RONTOLISP::%CLOJURE-SEQ-ALL |c%reverse-coll|))))");
+				"(RONTOLISP::%CLOJURE-XF-MAPCAT (RONTOLISP::%CLOJURE-SHARED-VALUE \"reverse\" (LAMBDA NIL (LAMBDA (|c%reverse-coll|) (REVERSE (RONTOLISP::%CLOJURE-SEQ-ALL |c%reverse-coll|))))))");
 		assertThatThrownBy(() -> Clojure.read("(mapv inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("mapv takes a function and collections");
 	}
@@ -4036,7 +4265,8 @@ class ClojureLoweringTest {
 	void sortedVerbsAreOneWorkerCallEach() {
 		assertThat(lowered("(sorted-map :b 1 :a 2)"))
 			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE NIL NIL (LIST (LIST :C%KEYWORD \"b\") 1");
-		assertThat(lowered("(sorted-set-by > 3 1)")).contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (LAMBDA");
+		assertThat(lowered("(sorted-set-by > 3 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (RONTOLISP::%CLOJURE-SHARED-VALUE \">\"");
 		// a literal core test is its keyword, which picks the oracle's path the way its
 		// identity check does; anything else is a real function
 		assertThat(lowered("(def s (sorted-set 1)) (subseq s > 1)"))

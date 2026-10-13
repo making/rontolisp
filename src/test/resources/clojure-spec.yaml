@@ -1872,6 +1872,40 @@ cases:
       class java.lang.String cannot be cast to class java.lang.Number
       class clojure.lang.Keyword cannot be cast to class java.lang.Number
       Cannot invoke "java.lang.Character.charValue()" because "x" is null
+  - name: writer-append-of-a-range-writes-it-and-answers-the-writer
+    # .append of a string range writes the part and answers the stream, on every
+    # backend (data.json's write-string slow path): a whole, partial or empty range,
+    # nil spelling "null" like the host, chained through doto, over a StringBuilder
+    # or a StringBuffer too. Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (let [w (java.io.StringWriter.)]
+        (println (identical? w (.append w "hello" 0 5)))
+        (println (str w)))
+      (let [w (java.io.StringWriter.)]
+        (.append w "hello" 1 3)
+        (println (str w)))
+      (let [w (java.io.StringWriter.)]
+        (.append w "hello" 2 2)
+        (println (str w) "empty"))
+      (let [w (java.io.StringWriter.)]
+        (.append w nil 0 4)
+        (println (str w)))
+      (println (str (doto (java.io.StringWriter.) (.append "abcdef" 2 5))))
+      (let [sb (StringBuilder.)]
+        (.append sb "hello" 1 4)
+        (println (str sb)))
+      (let [sb (StringBuffer.)]
+        (.append sb "hello" 0 5)
+        (println (str sb)))
+    expected: |
+      true
+      hello
+      el
+       empty
+      null
+      cde
+      ell
+      hello
   - name: hash-map-construction-builds-the-map-itself-where-the-host-is-not
     # A zero-argument (java.util.HashMap.), (new java.util.HashMap) or
     # (java.util.HashMap/new) is the empty map, and a one-argument construction of
@@ -2000,6 +2034,57 @@ cases:
       :npe
       Cannot invoke "java.util.Map.size()" because "m" is null
       :cce
+  - name: object-construction-answers-a-fresh-token-where-the-host-is-not
+    # (Object.) where the host is not (wasm) is a fresh uninterned symbol, so
+    # dynaload's dynalock defonce loads -- locking only needs the lock to
+    # evaluate. Two constructions are never = or identical?, like two host
+    # objects. Where the host is the construction keeps its java:new.
+    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (identical? (Object.) (Object.)))
+      (println (= (Object.) (Object.)))
+      (println (identical? (new Object) (new Object)))
+    expected: |
+      false
+      false
+      false
+  - name: boxed-integer-limits-answer-themselves-where-the-host-is-not
+    # Long/MAX_VALUE (and MIN_VALUE, the Integer/Short/Byte pairs) is itself
+    # where the host is not (wasm), so malli's +max-size+ def loads -- never a
+    # java:field, which wasm refuses. The values are exact integers, so where
+    # the host is the field read stays untouched. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println Long/MAX_VALUE Long/MIN_VALUE)
+      (println Integer/MAX_VALUE Integer/MIN_VALUE)
+      (println Short/MAX_VALUE Short/MIN_VALUE)
+      (println Byte/MAX_VALUE Byte/MIN_VALUE)
+    expected: |
+      9223372036854775807 -9223372036854775808
+      2147483647 -2147483648
+      32767 -32768
+      127 -128
+  - name: class-literals-and-date-builder-chains-evaluate-where-the-host-is-not
+    # A bare class literal where the host is not (wasm) is its (:C%CLASS name)
+    # designator, so a class-keyed map (malli's class-schemas, read at load
+    # into the default registry) builds; two literals of one class are equal,
+    # like two forName answers. A DateTimeFormatterBuilder chain threads its
+    # marker the same way (appendPattern/optionalStart/appendFraction/
+    # optionalEnd/appendOffset/parseDefaulting answer the builder, toFormatter
+    # the formatter, ofPattern and ZoneId/of their own), so malli's formatter
+    # defs load; using one still refuses in the oracle's words. Where the host
+    # is everything keeps its host object. Oracle-identical (clj 1.12.6,
+    # 2026-10-13).
+    source: |
+      (println (= java.util.regex.Pattern java.util.regex.Pattern))
+      (println (do (-> (java.time.format.DateTimeFormatterBuilder.) (.appendPattern "yyyy") (.toFormatter)) :built))
+      (println (do java.time.temporal.ChronoField/MICRO_OF_SECOND :field))
+      (println (do (-> (java.time.format.DateTimeFormatter/ofPattern "yyyy") (.withZone (java.time.ZoneId/of "UTC"))) :formatter))
+    expected: |
+      true
+      :built
+      :field
+      :formatter
   - name: to-upper-and-lower-case-with-a-locale-map-like-without-one
     # (.toUpperCase s java.util.Locale/US) (and ROOT, ENGLISH) maps as the bare call:
     # the mapping is locale-independent but for tr/az/lt, which nothing here models,
@@ -2502,6 +2587,78 @@ cases:
       true true true true
       (:a :b :c)
       "circle 2" "record 3" "other" "nil!"
+  - name: type-answers-a-host-class-designator-where-the-oracle-answers-a-class
+    # Where the oracle answers a host class for a core value whose kind keyword
+    # would collide with a schema registry entry, type answers the (:C%CLASS
+    # name) designator instead (nil for nil, like the oracle): a registry lookup
+    # falls through to (type x) on a miss, where the oracle's class misses every
+    # entry but Pattern's -- so an unregistered function (which looped until the
+    # stack overflowed), keyword, string, symbol, boolean, map or set refuses
+    # with :malli.core/invalid-schema like the oracle, instead of looping
+    # through or mistyping under the colliding :function/:keyword/... entry
+    # (f96). class keeps the kind keyword. Metadata and records still answer
+    # first. The designator names the host class where the oracle prints its
+    # object; anything else is the oracle's (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (type (fn [x] x)) (type pos-int?) (= (type pos-int?) (type pos-int?)))
+      (println (type "s") (type :k) (type 's) (type true) (type nil))
+      (println (type (with-meta [1] {:type :foo})))
+      (println (type {}) (type {:a 1}) (type (sorted-map :a 1)) (type #{1}) (type [1]) (type 1))
+      (println (class (fn [x] x)) (class "s") (class nil))
+      (println (= (type "a") :string) (= (type 1) (class 1)))
+    expected: |
+      (:C%CLASS clojure.lang.AFunction) (:C%CLASS clojure.lang.AFunction) true
+      (:C%CLASS java.lang.String) (:C%CLASS clojure.lang.Keyword) (:C%CLASS clojure.lang.Symbol) (:C%CLASS java.lang.Boolean) nil
+      :foo
+      (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentTreeMap) (:C%CLASS clojure.lang.PersistentHashSet) :vector :number
+      :function :string :nil
+      false true
+  - name: a-type-designator-dispatches-and-instances-as-its-kind
+    # A (:C%CLASS name) designator type answers reads back as its kind where a
+    # class value is consumed: a defmulti on type finds the kind method a
+    # defmethod stores (nil still takes the nil method), and instance? of a
+    # computed type takes what the keyword did (f96).
+    source: |
+      (defmulti t96d type)
+      (defmethod t96d String [s] (str "str:" s))
+      (defmethod t96d clojure.lang.Keyword [k] :kw!)
+      (defmethod t96d nil [_] :was-nil)
+      (defmethod t96d :default [x] :dflt)
+      (println (t96d "a") (t96d :k) (t96d nil) (t96d 1) (t96d [1]))
+      (println (instance? (type "s") "t") (instance? (type "s") 1))
+      (println (instance? (type :a) :b) (instance? (type {:a 1}) {}) (instance? (type (fn [x] x)) "s"))
+    expected: |
+      str:a :kw! :was-nil :dflt :dflt
+      true false
+      true true false
+  - name: type-of-a-pattern-is-the-pattern-class
+    # type of a pattern is what the oracle answers: the host
+    # java.util.regex.Pattern class where a host is, its (:C%CLASS name)
+    # designator where none is (the same split a bare class literal is) -- so
+    # a schema registry lookup falls through to it and hits the class-schemas
+    # entry, and (m/schema #"a") builds the regex schema (f98). class keeps
+    # the :pattern keyword; instance? of the computed type and a defmulti on
+    # type answer the oracle's, as does the class-keyed lookup malli's -lookup
+    # runs. Every line the oracle's (clj 1.12.6, 2026-10-13) but the printed
+    # class and the printed type, which read the host object there.
+    source: |
+      (println (= (type #"a") java.util.regex.Pattern) (= (type #"a") (type #"b")))
+      (println (class #"a") (class (re-matcher #"a" "a")))
+      (println (instance? (type #"a") #"a") (instance? (type #"a") "s") (instance? (type #"a") nil))
+      (println (instance? (class #"a") #"a"))
+      (defmulti pat98 type)
+      (defmethod pat98 java.util.regex.Pattern [x] (str "pat:" x))
+      (defmethod pat98 :default [x] :dflt)
+      (println (pat98 #"a") (pat98 "s"))
+      (let [registry {java.util.regex.Pattern :found}]
+        (println (get registry #"a" (get registry (type #"a") :miss))))
+    expected: |
+      true true
+      :pattern :matcher
+      true false false
+      true
+      pat:a :dflt
+      :found
   - name: print-method-of-a-record-or-deftype-is-how-every-printer-writes-it
     # A print-method a program defines for a record or deftype is how pr, prn, print,
     # println and their string forms write a value of the type, at any depth, the
@@ -6208,6 +6365,23 @@ cases:
       (a b)
       a
       :refused
+  - name: char-refuses-numbers-outside-the-char-range
+    # Oracle-identical (clj 1.12.6, 2026-10-13): char is the oracle's charCast --
+    # a character itself, a number in 0..65535 (a double refused past its edges,
+    # any other number truncated first); a number outside it is the oracle's
+    # IllegalArgumentException, nil its NullPointerException, anything else its
+    # ClassCastException. Runs on every backend.
+    source: |
+      (defn char-oob-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (println (char 97.5) (char 197/2) (char 97N))
+      (prn (mapv int (map char [0 65 65535])) (map char [97 98]) (apply char [99]))
+      (prn (map char-oob-msg [#(char 70000) #(char -1) #(char 65536) #(char 65535.9) #(char -1.5) #(char ##NaN) #(char ##Inf) #(char ##-Inf) #(char 70000N)]))
+      (prn (map char-oob-msg [#(char nil) #(char "a") #(char :a) #(char true) #(mapv char [97 70000])]))
+    expected: |
+      a b a
+      [0 65 65535] (\a \b) \c
+      ("Value out of range for char: 70000" "Value out of range for char: -1" "Value out of range for char: 65536" "Value out of range for char: 65535.9" "Value out of range for char: -1.5" "Value out of range for char: NaN" "Value out of range for char: Infinity" "Value out of range for char: -Infinity" "Value out of range for char: 70000")
+      ("Cannot invoke \"java.lang.Number.longValue()\" because \"x\" is null" "class java.lang.String cannot be cast to class java.lang.Number" "class clojure.lang.Keyword cannot be cast to class java.lang.Number" "class java.lang.Boolean cannot be cast to class java.lang.Number" "Value out of range for char: 70000")
   - name: name-reads-past-the-slash
     # name answers a string itself, and a keyword's or symbol's spelling past the
     # first slash (the whole spelling when none); anything else signals.
@@ -10498,6 +10672,26 @@ cases:
       true
       :ok
       "temporal"
+  - name: to-instant-of-a-date-or-timestamp-formats-through-iso-instant
+    # .toInstant of a Date or a Timestamp made here answers the instant data.json's
+    # write-date formats: where the host is the host's Instant through the host call,
+    # where no host is (wasm) the value itself, which the portable ISO_INSTANT
+    # formatter then spells. inst-ms reads it back everywhere. Every line is the
+    # oracle's (clj 1.12.6, 2026-10-13), on all four backends.
+    source: |
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 1500))))
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.sql.Timestamp. 1500))))
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 0))))
+      (println (inst-ms (.toInstant (java.util.Date. 1500))))
+      (require '[clojure.instant :as iso-to-inst])
+      (println (.format java.time.format.DateTimeFormatter/ISO_INSTANT
+                        (.toInstant (iso-to-inst/read-instant-timestamp "1970-01-01T00:00:01.123456789Z"))))
+    expected: |
+      1970-01-01T00:00:01.500Z
+      1970-01-01T00:00:01.500Z
+      1970-01-01T00:00:00Z
+      1500
+      1970-01-01T00:00:01.123456789Z
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per
@@ -13231,6 +13425,31 @@ cases:
       5 (12 13)
       [:ok :ok :ok :ok :ok]
       "For input string: \"abc\"" "Cannot parse null string"
+  - name: long-parse-long-reads-like-the-host-static
+    # (Long/parseLong s) of one argument is the portable long reader where no
+    # host is (wasm): the long the string spells (parse-long's grammar, Unicode
+    # digits included); a malformed string is the oracle's NumberFormatException
+    # naming it, nil its null-string refusal, anything else its cast refusal to
+    # String (the reflector casts the argument). Malli's -string->long reads
+    # strings through it, so the string-transformer decode runs on every
+    # backend; any other arity stays the host's call. Oracle-identical (clj
+    # 1.12.6, 2026-10-13) but for the cast message's module tail, which names no
+    # part of the refusal here (pinned at the class).
+    source: |
+      (defmacro pl-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map Long/parseLong ["12" "-12" "+12" "007" "+0" "-0" "１２"]))
+      (prn (map Long/parseLong ["9223372036854775807" "-9223372036854775808"]))
+      (prn (map Long/parseLong ["12" "13"]))
+      (prn [(pl-rfc NumberFormatException (Long/parseLong "")) (pl-rfc NumberFormatException (Long/parseLong "abc")) (pl-rfc NumberFormatException (Long/parseLong "9999999999999999999999")) (pl-rfc NumberFormatException (Long/parseLong " 12")) (pl-rfc NumberFormatException (Long/parseLong nil))])
+      (prn (try (Long/parseLong "abc") (catch NumberFormatException e (ex-message e))) (try (Long/parseLong nil) (catch NumberFormatException e (ex-message e))))
+      (prn [(pl-rfc ClassCastException (Long/parseLong 5)) (pl-rfc ClassCastException (Long/parseLong 1.5)) (pl-rfc ClassCastException (Long/parseLong :k))])
+    expected: |
+      (12 -12 12 7 0 0 12)
+      (9223372036854775807 -9223372036854775808)
+      (12 13)
+      [:ok :ok :ok :ok :ok]
+      "For input string: \"abc\"" "Cannot parse null string"
+      [:ok :ok :ok]
   - name: double-value-of-reads-like-the-host-static
     # (Double/valueOf s) where no host is lowers to the portable reader: the
     # double the string spells (parse-double's grammar), a double as is; a
@@ -14528,6 +14747,234 @@ cases:
       :no-method
       {} {}
       :no-method
+  - name: function-values-compare-by-identity
+    # = over functions is identity on every backend, like the oracle's
+    # Util.equiv: two references to one defn or defmulti are =, two
+    # definitions never are -- not even two closures over one body -- a
+    # function is never = to a non-function, and remove-all-methods answers
+    # the multimethod itself. identical? agrees (it is eql): two references to
+    # one definition are identical, two closures are not. Every line matches
+    # the oracle (clj 1.12.6, 2026-10-13); before, two (function name) sites
+    # boxed distinct objects on the JVM and both wasm backends, so (= f85-f
+    # f85-f) and (= f85-m f85-m) were false there, while two closures over one
+    # body were = on the interpreter.
+    source: |
+      (defn f85-f [] 1)
+      (defn f85-g [] 2)
+      (prn (= f85-f f85-f) (= f85-f f85-g))
+      (prn (= (fn [] 1) (fn [] 1)))
+      (prn (= f85-f :a) (= :a f85-f) (= f85-f 1))
+      (defmulti f85-m :k)
+      (defmethod f85-m :a [_] [:a!])
+      (defmulti f85-n :k)
+      (defmethod f85-n :a [_] [:a!])
+      (prn (= f85-m f85-m) (= f85-m f85-n) (= f85-m f85-f))
+      (prn (f85-m {:k :a}) (= f85-m (remove-all-methods f85-m)))
+      (prn (try (f85-m {:k :a}) (catch IllegalArgumentException e :no-method)))
+      (prn (identical? f85-f f85-f) (identical? (fn [] 1) (fn [] 1)) (identical? f85-m f85-m))
+    expected: |
+      true false
+      false
+      false false false
+      true false false
+      [:a!] true
+      :no-method
+      true false true
+  - name: predicate-values-are-shared-across-references
+    # Two references to one predicate are = and identical? on every backend,
+    # like two references to one defn (f85) and like the oracle's var roots: a
+    # site-independent core value lives in one program-wide cell, so malli's
+    # registry (keyed by predicate values) hits. A fresh lambda per site used
+    # to make them distinct objects, which identity equality then told apart,
+    # looping malli's -lookup through the :function schema. Every line matches
+    # the oracle (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= pos-int? pos-int?) (identical? pos-int? pos-int?))
+      (println (= string? string?) (= odd? odd?) (= not not))
+      (println (= boolean boolean) (= identical? identical?))
+      (println (map pos-int? [3 -1]))
+      (let [f pos-int?] (println (= f pos-int?)))
+      (println (= (get {pos-int? :hit} pos-int?) :hit))
+    expected: |
+      true true
+      true true true
+      true true
+      (true false)
+      true
+      true
+  - name: core-function-values-are-shared-across-references
+    # Two references to one site-independent core function value are = and
+    # identical? on every backend, like the predicates (f92) and like the
+    # oracle's var roots: the whole widened value -- a seq verb's transducer
+    # arity included -- lives in one program-wide cell, so a shared value
+    # still runs ((f95-m inc [1 2])) and still answers its transducer arity
+    # ((apply filter [odd?])). A fresh lambda per site used to make them
+    # distinct objects, so (= map map) was false here and true on the oracle.
+    # rest and next stay distinct objects (separate cells, like the oracle's
+    # separate vars), while clojure.core/map and map share one cell. Every
+    # line matches the oracle (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= map map) (identical? map map))
+      (println (= filter filter) (= str str) (= count count) (= inc inc))
+      (println (= comp comp) (= partial partial) (= complement complement) (= constantly constantly))
+      (println (= identity identity) (= memoize memoize) (= trampoline trampoline))
+      (println (= seq seq) (= first first) (= rest rest) (= cons cons) (= take take) (= drop drop))
+      (println (= concat concat) (= reduce reduce) (= conj conj) (= assoc assoc) (= get get))
+      (println (= keyword keyword) (= symbol symbol) (= char char) (= name name))
+      (println (= not= not=) (= < <) (= atom atom) (= deref deref) (= swap! swap!))
+      (println (= update update) (= range range) (= keep keep) (= remove remove) (= sort sort))
+      (println (= nth nth) (= quot quot) (= reverse reverse) (= empty? empty?) (= distinct distinct))
+      (println (= take-while take-while) (= interpose interpose) (= zipmap zipmap) (= last last))
+      (println (= second second) (= dorun dorun) (= force force) (= subs subs) (= format format))
+      (println (= rand rand) (= shuffle shuffle) (= class class) (= spit spit) (= file-seq file-seq))
+      (println (= rest next))
+      (println (= clojure.core/map clojure.core/map) (= clojure.core/map map))
+      (println (= (get {map :hit} map) :hit))
+      (let [f95-m map] (println (= f95-m map) (f95-m inc [1 2])))
+      (println (filter odd? [1 2 3]) (reduce + 0 [1 2]) (update {:a 1} :a inc))
+      (println (into [] (apply filter [odd?]) [1 2 3]))
+      (println (= (deref (atom 1)) 1))
+    expected: |
+      true true
+      true true true true
+      true true true true
+      true true true
+      true true true true true true
+      true true true true true
+      true true true true
+      true true true true true
+      true true true true true
+      true true true true true
+      true true true true
+      true true true true true
+      true true true true true
+      false
+      true true
+      true
+      true (2 3)
+      (1 3) 3 {:a 2}
+      [1 3]
+      true
+  - name: snapshotting-core-values-share-one-object-per-snapshot
+    # Two references to one snapshotting core value under one snapshot are =
+    # and identical? on every backend, like the oracle's var roots: the-ns,
+    # find-ns and ns-name close over the namespaces known where the reference
+    # stands, all-ns over the same set, loaded-libs over the libraries loaded so
+    # far, read and read-string over the namespace and its aliases so far, and
+    # default-data-readers (no snapshot at all: always the same two shipped
+    # reader vars) shares one cell program-wide. A qualified spelling shares the
+    # bare name's cell, a let-bound value stays identical, and a shared value
+    # still runs and still works as a map key. Every line matches the oracle
+    # (clj 1.12.6, 2026-10-13).
+    source: |
+      (println (= the-ns the-ns) (identical? the-ns the-ns))
+      (println (= find-ns find-ns) (identical? find-ns find-ns))
+      (println (= ns-name ns-name) (identical? ns-name ns-name))
+      (println (= all-ns all-ns) (identical? all-ns all-ns))
+      (println (= loaded-libs loaded-libs) (identical? loaded-libs loaded-libs))
+      (println (= read read) (identical? read read))
+      (println (= read-string read-string) (identical? read-string read-string))
+      (println (= default-data-readers default-data-readers) (identical? default-data-readers default-data-readers))
+      (println (= clojure.core/all-ns all-ns) (= clojure.core/read-string read-string))
+      (let [f97-m all-ns] (println (= f97-m all-ns) (identical? f97-m all-ns) (= (count (f97-m)) (count (all-ns)))))
+      (println (= (get {all-ns :hit} all-ns) :hit))
+      (println (some? (get default-data-readers 'inst)) (some? (get default-data-readers 'uuid)))
+    expected: |
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true true
+      true
+      true true
+  - name: snapshotting-namespace-values-keep-their-sites-snapshot
+    # A call through a snapshotting namespace value reads the snapshot where the
+    # value was taken, on every backend: f97-f1 (taken before the require) never
+    # saw rontolisp.wasm, while f97-f2 (taken after) finds it, like the call.
+    # References under different snapshots keep distinct objects, so the four
+    # identity lines are false here and true on the oracle (clj 1.12.6,
+    # 2026-10-13, checked with clojure.set for the oracle-only twin: the oracle
+    # reads the current namespaces through every value, so its f1 finds the
+    # library too). Calls keep their own per-site snapshots either way: the
+    # all-ns call at the end counts what f97-a2 counts.
+    source: |
+      (ns f97-snap)
+      (def f97-f1 find-ns)
+      (def f97-t1 the-ns)
+      (def f97-a1 all-ns)
+      (def f97-l1 loaded-libs)
+      (require 'rontolisp.wasm)
+      (def f97-f2 find-ns)
+      (def f97-t2 the-ns)
+      (def f97-a2 all-ns)
+      (def f97-l2 loaded-libs)
+      (println (= f97-f1 f97-f2) (= f97-t1 f97-t2) (= f97-a1 f97-a2) (= f97-l1 f97-l2))
+      (println (nil? (f97-f1 'rontolisp.wasm)) (some? (f97-f2 'rontolisp.wasm)) (some? (find-ns 'rontolisp.wasm)))
+      (println (= (f97-f2 'rontolisp.wasm) (find-ns 'rontolisp.wasm)))
+      (println (= (ns-name (f97-t2 'rontolisp.wasm)) 'rontolisp.wasm))
+      (println (= (count (f97-a2)) (inc (count (f97-a1)))) (= (count (all-ns)) (count (f97-a2))))
+      (println (= (count (f97-l2)) (inc (count (f97-l1)))) (= (count (loaded-libs)) (count (f97-l2))))
+      (in-ns 'user)
+    expected: |
+      false false false false
+      true true true
+      true
+      true
+      true true
+      true true
+  - name: read-string-values-keep-their-sites-reader-context
+    # A call through a reading value resolves against the namespace and aliases
+    # where the value was taken, on every backend: f97-r1 reads ::x as
+    # :f97-ra/x under its own context, f97-r2 as :f97-rb/x. References under
+    # different contexts keep distinct objects, so the middle identity is false
+    # here and true on the oracle (clj 1.12.6, 2026-10-13: the oracle reads the
+    # calling namespace through every value, so both lines answer :f97-rb/x).
+    source: |
+      (ns f97-ra (:require [clojure.set :as q]))
+      (def f97-r1 read-string)
+      (ns f97-rb)
+      (def f97-r2 read-string)
+      (println (= f97-ra/f97-r1 f97-ra/f97-r1) (= f97-ra/f97-r1 f97-r2) (identical? f97-ra/f97-r1 f97-ra/f97-r1))
+      (println (f97-ra/f97-r1 "::x") (f97-r2 "::x"))
+      (println (f97-ra/f97-r1 "\"hi\"") ((fn [r] (r "42")) read-string))
+      (in-ns 'user)
+    expected: |
+      true false true
+      :f97-ra/x :f97-rb/x
+      hi 42
+  - name: namespace-mapping-values-are-shared-across-references
+    # Two references to one namespace-mapping value are = and identical? on
+    # every backend, like the oracle's var roots (clj 1.12.6, 2026-10-13): each
+    # of ns-publics, ns-interns, ns-map, ns-refers, ns-aliases and ns-imports
+    # closes over nothing but its argument -- anything computed refuses -- so
+    # all six share one program-wide cell through %clojure-shared-value, with
+    # no per-snapshot key. A qualified spelling shares the bare name's cell, a
+    # let-bound value stays identical, and a shared value works as a map key.
+    source: |
+      (println (= ns-publics ns-publics) (identical? ns-publics ns-publics))
+      (println (= ns-interns ns-interns) (identical? ns-interns ns-interns))
+      (println (= ns-map ns-map) (identical? ns-map ns-map))
+      (println (= ns-refers ns-refers) (identical? ns-refers ns-refers))
+      (println (= ns-aliases ns-aliases) (identical? ns-aliases ns-aliases))
+      (println (= ns-imports ns-imports) (identical? ns-imports ns-imports))
+      (println (= clojure.core/ns-map ns-map) (= clojure.core/ns-publics ns-publics))
+      (let [g00-m ns-map] (println (= g00-m ns-map) (identical? g00-m ns-map)))
+      (println (= (get {ns-map :hit} ns-map) :hit))
+    expected: |
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true true
+      true
   - name: protocol-extenders-and-find-protocol-impl-and-method
     # extenders answers the extended tags as a seq (:object last for the Object
     # default), find-protocol-impl the tag row's map and find-protocol-method

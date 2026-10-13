@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -285,12 +286,31 @@ final class ClojureTimeValueLowering {
 	 */
 	static LispVal methodArm(ClojureLowering ctx, String method, String designator, LispSymbol recv, List<LispVal> args,
 			Set<String> answered, LispVal otherwise) {
+		Set<String> taken = answered;
+		if (!ctx.hostTarget && method.equals("toInstant") && args.isEmpty()) {
+			// where no host is (wasm) .toInstant of a Date or a Timestamp made
+			// here answers the instant itself (data.json's write-date): the
+			// portable ISO_INSTANT formatter then formats it, like the host
+			// Instant. Where the host is the call below stays the host's.
+			List<String> instants = new ArrayList<>();
+			if (!answered.contains(ClojurePredicateLowering.DATE_P)) {
+				instants.add(ClojurePredicateLowering.DATE_P);
+			}
+			if (!answered.contains(ClojurePredicateLowering.TIMESTAMP_P)) {
+				instants.add(ClojurePredicateLowering.TIMESTAMP_P);
+			}
+			if (!instants.isEmpty()) {
+				otherwise = arm(instants, recv, recv, otherwise);
+				taken = new HashSet<>(answered);
+				taken.addAll(instants);
+			}
+		}
 		List<String> hosted = new ArrayList<>();
 		List<String> unsupported = new ArrayList<>();
 		List<String> missing = new ArrayList<>();
 		boolean answersDate = false;
 		for (Kind kind : KINDS) {
-			if (answered.contains(kind.test())) {
+			if (taken.contains(kind.test())) {
 				continue;
 			}
 			Members found = members(kind.host(), method, args.size());

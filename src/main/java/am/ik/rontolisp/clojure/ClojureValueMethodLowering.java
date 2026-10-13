@@ -462,6 +462,12 @@ final class ClojureValueMethodLowering {
 			// refuses it.
 			arm = ClojureDateFormatterLowering.formatArm(recv, args.get(0), arm);
 		}
+		if (!ctx.hostTarget) {
+			// where no host is, a date builder or formatter call threads the
+			// marker, so malli's formatter defs load; any other receiver keeps
+			// the arm it had
+			arm = ClojureDateBuilderLowering.methodArm(recv, method, args, arm);
+		}
 		if (matcherCall != null) {
 			// a matcher answers java.util.regex.Matcher's own method: an arm a program
 			// making no matcher sheds (ClojureArms.Family.MATCHER), leaving the arm it

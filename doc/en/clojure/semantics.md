@@ -25,6 +25,30 @@ and a named `fn` binds itself for self-calls; `#(...)` reads as the oracle's `(f
 rest parameter for `%&`, its body forms wrapped as one call. `declare`
 names what is defined below, so a definition may use one.
 
+A function value is one object per definition on every backend: two references
+to one `defn` answer the same object, so they are `identical?` and `=`; two
+definitions never are -- not even two closures over one body -- and a function
+is never `=` to a non-function, like the oracle. A `defmulti` is a dispatcher
+`defun`, so the same holds for multimethods (`remove-all-methods` answers the
+multimethod itself). A `lambda` form still evaluates to a fresh closure each
+time it runs. A site-independent core value used as a value is one object too: two
+references to `pos-int?` -- or to `map`, `str`, `count`, `inc`, `comp`, `atom`,
+`keyword`, `not=` or `<` -- answer the same object, so they are `identical?`
+and `=`, and it works as a map key. The namespace-mapping values share one
+object the same way: two references to `ns-publics`, `ns-interns`, `ns-map`,
+`ns-refers`, `ns-aliases` or `ns-imports` answer the same object -- each closes
+over nothing but its argument (a call of anything computed refuses at run
+time) -- so they are `identical?` and `=`. A value snapshotting lower-time state shares
+one object per snapshot instead of one program-wide: two references to `the-ns`,
+`find-ns`, `ns-name` or `all-ns` under the namespaces known at both sites, to
+`loaded-libs` under the libraries loaded at both, or to `read` or `read-string`
+under one namespace and aliases answer the same object, while references under
+different snapshots keep distinct objects -- a call through a value still reads
+the snapshot where the value was taken, and calls keep their own per-site
+snapshots. (`default-data-readers` is no snapshot: always the same two shipped
+reader vars, so one object.) Two references under different snapshots are never
+`=` here where the oracle's one var root answers `true`.
+
 ## Namespaces and files
 
 Every namespace has its own vars. A definition belongs to the current namespace (`user`

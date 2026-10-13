@@ -67,9 +67,9 @@ final class WasmFunctionFormCompiler {
 			throw new IllegalArgumentException(
 					LispNames.SYMBOL_FUNCTION + " expects exactly one argument: " + cons.print());
 		}
-		// A run-time name resolution BOXES the resolved funcId as a closure struct
-		// {funcId, null env} -- exactly the value #'name would have produced -- so
-		// functionp answers t and the value prints its registered name.
+		// A run-time name resolution answers the canonical box for the resolved
+		// funcId ({@code _funcref}) -- exactly the value #'name would have produced --
+		// so functionp answers t and the value prints its registered name.
 		// The runtime function namespace (GLOBAL_FENV, where (setf
 		// (symbol-function ...)) installs and fmakunbound leaves its tombstone) is
 		// probed first and decides on its own; otherwise the compiled-function
@@ -164,14 +164,25 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.I32_NE);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
-		// Reload (no i32 temp exists inline) and box {funcId, null env}.
+		// Reload (no i32 temp exists inline) and answer the canonical box for the
+		// resolved funcId: the SAME object every static (function name) site of the
+		// definition shares (WasmLispCompiler._funcref), so (eq (symbol-function s)
+		// #'f) is t like on the interpreter. Without a _funcref in this module (a
+		// macro synthesized this site behind the pre-pass scan's back) the box stays
+		// fresh per resolution, as it always did.
 		emitStringOffset(ctx, symTemp);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x04);
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		WasmEmitHelper.emitNewClosure(ctx);
+		if (ctx.symfuncrefFuncIndex >= 0) {
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.symfuncrefFuncIndex);
+		}
+		else {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			WasmEmitHelper.emitNewClosure(ctx);
+		}
 		ctx.writer.write(Instruction.ELSE);
 		emitUnboundSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.END);
@@ -284,15 +295,14 @@ final class WasmFunctionFormCompiler {
 		}
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
-			// Create closure struct {funcId, null env}
-			// This is one of the two places a funcId becomes a callable VALUE, so it is
-			// where the dispatch ladders learn they must carry a case for it.
+			// The canonical box for this funcId, shared by every site that names
+			// it: two (function name) sites answer the SAME object, like the
+			// interpreter's function namespace does, so (eq #'f #'f) is t on
+			// every backend. This is one of the two places a funcId becomes a
+			// callable VALUE, so it is where the dispatch ladders learn they must
+			// carry a case for it.
 			ctx.noteFunctionValue(fi.funcId());
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(fi.funcId());
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-			WasmEmitHelper.emitNewClosure(ctx);
+			WasmQuoteCompiler.compileSharedFunctionBox(fi.funcId(), ctx);
 		}
 		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

@@ -68,6 +68,29 @@ final class WasmQuoteCompiler {
 	}
 
 	/**
+	 * Pushes the canonical function-value box of a named function: one closure struct
+	 * {@code {funcId, null env}} per funcId, built once into a shared module global on
+	 * first evaluation, so every {@code (function name)} site of one definition answers
+	 * the SAME object -- like the interpreter's function namespace, where the reference
+	 * below always found one object. Lazy (not start-seeded) for the same reason the
+	 * quoted constants are: the global count is only known once every body has compiled,
+	 * and wasm is single-threaded here, so the first evaluation wins with no race. A
+	 * lambda value never comes here: each evaluation of a lambda form stays a distinct
+	 * closure on every backend.
+	 * @param funcId the named function's funcId
+	 * @param ctx the compilation context
+	 */
+	static void compileSharedFunctionBox(int funcId, WasmLispCompiler.Ctx ctx) {
+		emitSharedConstant(ctx.quoteGlobals.funcBoxTokenFor(funcId), ctx, () -> {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(funcId);
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			WasmEmitHelper.emitNewClosure(ctx);
+		});
+	}
+
+	/**
 	 * Whether a quoted datum is memoized into one shared constant. Exactly the mutable
 	 * aggregates: an atom (a number, a string, a symbol, a character, nil, t) has no
 	 * identity a program can observe diverging, so it keeps its inline emission.

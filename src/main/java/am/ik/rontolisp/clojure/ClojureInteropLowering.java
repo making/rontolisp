@@ -729,6 +729,14 @@ final class ClojureInteropLowering {
 			if (hashMap != null) {
 				return hashMap;
 			}
+			LispVal object = objectToken(cls, argDatums.size());
+			if (object != null) {
+				return object;
+			}
+			LispVal dateBuilder = ClojureDateBuilderLowering.construction(cls, argDatums.size());
+			if (dateBuilder != null) {
+				return dateBuilder;
+			}
 		}
 		if (argDatums.size() == 1 && types == null) {
 			// untagged only: param tags name the host overload, which keeps java:new
@@ -1185,6 +1193,12 @@ final class ClojureInteropLowering {
 			if (portable != null) {
 				return portable;
 			}
+			// where no host is, a date formatter or zone static is its marker,
+			// so malli's formatter defs load; the host's object elsewhere
+			LispVal dateStatic = ClojureDateBuilderLowering.staticCall(cls, member, args);
+			if (dateStatic != null) {
+				return dateStatic;
+			}
 		}
 		LispVal pattern = cls.equals("java.util.regex.Pattern") ? patternStatic(member, args) : null;
 		if (pattern != null) {
@@ -1268,6 +1282,19 @@ final class ClojureInteropLowering {
 			if (formatter != null) {
 				return formatter;
 			}
+			// where no host is, a boxed-integer limit is itself, so malli's
+			// +max-size+ def loads; the host's field read elsewhere
+			LispVal limit = ClojureNumericLimitsLowering.field(cls, member);
+			if (limit != null) {
+				return limit;
+			}
+			// where no host is, a ChronoField constant is its marker, which
+			// the builder calls take as an evaluated argument; the host's
+			// field elsewhere
+			LispVal chrono = ClojureDateBuilderLowering.field(cls, member);
+			if (chrono != null) {
+				return chrono;
+			}
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
@@ -1344,6 +1371,19 @@ final class ClojureInteropLowering {
 			LispVal formatter = ClojureDateFormatterLowering.field(cls, member);
 			if (formatter != null) {
 				return formatter;
+			}
+			// where no host is, a boxed-integer limit is itself, so malli's
+			// +max-size+ def loads; the host's field read elsewhere
+			LispVal limit = ClojureNumericLimitsLowering.field(cls, member);
+			if (limit != null) {
+				return limit;
+			}
+			// where no host is, a ChronoField constant is its marker, which
+			// the builder calls take as an evaluated argument; the host's
+			// field elsewhere
+			LispVal chrono = ClojureDateBuilderLowering.field(cls, member);
+			if (chrono != null) {
+				return chrono;
 			}
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
@@ -1502,6 +1542,16 @@ final class ClojureInteropLowering {
 		if (!ClojureHostClasses.exists(cls)) {
 			return null;
 		}
+		if (!ctx.hostTarget) {
+			// where no host is, a class literal is its (:C%CLASS name)
+			// designator, so a class-keyed map (malli's class-schemas, read at
+			// load into the default registry) builds -- never a java:static,
+			// which wasm refuses. Two literals of one class are equal, like
+			// two forName answers; anything needing the object itself
+			// (instance? of the value, class?) reads the designator as no
+			// host class. The host's object elsewhere.
+			return ClojureCoreLowering.classDesignator(cls);
+		}
 		return ClojureLowerUtil.cons(JAVA_STATIC,
 				List.of(LispString.literal("java.lang.Class"), LispString.literal("forName"), LispString.literal(cls)));
 	}
@@ -1617,6 +1667,25 @@ final class ClojureInteropLowering {
 	static @Nullable LispVal hashMapEmpty(String cls, int argCount) {
 		if (argCount == 0 && HASH_MAP_CLASS.equals(cls)) {
 			return ClojureCollectionLowering.mapBuild(List.of());
+		}
+		return null;
+	}
+
+	/**
+	 * A zero-argument {@code java.lang.Object} construction (dotted or imported,
+	 * resolved) where the host is not (wasm): a fresh uninterned symbol, so every backend
+	 * runs it -- dynaload's {@code dynalock} builds one at load, and {@code locking2}
+	 * only needs the lock to evaluate (on wasm {@code monitor-enter}/{@code monitor-exit}
+	 * answer nil over the evaluated object). A fresh symbol per evaluation keeps the
+	 * oracle's identity: two constructions are never {@code =} or {@code identical?},
+	 * like two host objects. Where the host is the construction keeps its
+	 * {@code java:new}, whose object the host tests pin. The callers try it only off a
+	 * host target; anything else (another count, another class) is null, so the call
+	 * keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal objectToken(String cls, int argCount) {
+		if (argCount == 0 && "java.lang.Object".equals(cls)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("gensym"));
 		}
 		return null;
 	}
@@ -2646,6 +2715,21 @@ final class ClojureInteropLowering {
 									ClojureLowering.NIL_CONST),
 							recv),
 					recv);
+		}
+		if (method.equals("append") && args.size() == 3) {
+			// Writer.append(CharSequence, start, end) (data.json's write-string
+			// slow path): the subsequence (nil spelling "null", like the host),
+			// the stream answered
+			return ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil
+							.list(ClojureLowerUtil.sym("write-string"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), args.get(0),
+													LispString.literal("null")),
+											args.get(1), args.get(2)),
+									recv),
+						recv);
 		}
 		if (method.equals("length") && args.isEmpty()) {
 			// StringBuilder.length: the text so far (a StringWriter's too, the same

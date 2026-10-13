@@ -150,8 +150,9 @@ final class ClojureFnLowering {
 
 	/**
 	 * {@code char} over an already-lowered value: one call to the spliced
-	 * {@code rontolisp::%clojure-char} (a character itself, a number through its
-	 * truncated code point, anything else a signal).
+	 * {@code rontolisp::%clojure-char}, the oracle's {@code charCast} (a character
+	 * itself, a number in the char range 0..65535, anything else and a number outside it
+	 * the oracle's refusal).
 	 */
 	static LispVal charForm(ClojureLowering ctx, LispVal lowered) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CHAR"), lowered);
@@ -709,6 +710,28 @@ final class ClojureFnLowering {
 		LispSymbol one = new LispSymbol(ClojureLowering.mangle("symbol-one"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
 				ctx.booleanAnswer(symbolRaw(ctx, one)));
+	}
+
+	/**
+	 * The shared-value worker and its table for the macro-time evaluator, which holds no
+	 * library: the same two forms the program carries from {@code clojure.lisp}, so a
+	 * core value a macro body evaluates shares macro-time-wide.
+	 * @return the forms
+	 */
+	static java.util.List<LispVal> sharedValueRuntime() {
+		LispSymbol table = new LispSymbol("RONTOLISP::%CLOJURE-SHARED-VALUES");
+		LispSymbol worker = new LispSymbol("RONTOLISP::%CLOJURE-SHARED-VALUE");
+		LispSymbol name = new LispSymbol("C%SHARED-NAME");
+		LispSymbol make = new LispSymbol("C%SHARED-MAKE");
+		LispVal get = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), name, table);
+		return java.util.List.of(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), table,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("make-hash-table"), ClojureLowerUtil.sym(":test"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("equal")))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), worker, ClojureLowerUtil.list(List.of(name, make)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), get,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), get,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), make)))));
 	}
 
 }

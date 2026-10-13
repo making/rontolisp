@@ -2452,9 +2452,26 @@
   "instance? of the class value C over X, whose class (what class answers) is
    K: a class keyword takes a value of that class, a condition whose class
    chain holds it (a subclass) and a host object of it; a host class object
-   asks the host. nil is the oracle's NullPointerException, any other value
-   its ClassCastException."
-  (cond ((rontolisp::%clojure-keyword-p c)
+   asks the host. A type designator reads as its kind, so instance? of a type
+   answer takes what the keyword did. A pattern is an instance of the Pattern
+   class type answers for it: the host class object where a host is (which the
+   host's own isInstance would misread, since a pattern here is a wrapper, not
+   a host object), its (:C%CLASS name) designator where none is -- an instance
+   when X's class is that very class, exact, never a subclass, since without a
+   host no hierarchy answers one. nil is the oracle's NullPointerException,
+   any other value its ClassCastException."
+  (cond ((rontolisp::%clojure-designator-kind c)
+         (rontolisp::%clojure-class-instance-p
+          (rontolisp::%clojure-designator-kind c) x k))
+        ((and (rontolisp::%clojure-re-pattern-p x)
+              (equal (rontolisp::%clojure-host-class-name c)
+                     "java.util.regex.Pattern"))
+         t)
+        ((and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
+              (stringp (car (cdr c))))
+         (and (not (null x))
+              (equal (rontolisp::%clojure-class-name-of x) (car (cdr c)))))
+        ((rontolisp::%clojure-keyword-p c)
          (cond ((null x) nil)
                ((equal k c) t)
                ((rontolisp::%clojure-exception-p x)
@@ -2731,15 +2748,20 @@
 (defun rontolisp::%clojure-equal (a b)
   "Clojure = over two values, T or NIL: a value other than a number is = to
    itself without a look inside, like the oracle's Util.equiv (a collection
-   holding NaN, an endless lazy seq); two sets by membership, two records by
-   tag plus entries, a deftype or reify by identity, two maps entry by entry,
-   two sequentials element by element, two floats numerically, anything else
-   with equal (numbers keep their category, strings and characters compare by
-   value)."
+   holding NaN, an endless lazy seq); two functions by identity (one shared
+   function object per defun on every backend, so two references to one
+   definition are = and two definitions never are); two sets by membership,
+   two records by tag plus entries, a deftype or reify by identity, two maps
+   entry by entry, two sequentials element by element, two floats numerically,
+   anything else with equal (numbers keep their category, strings and
+   characters compare by value)."
   (cond
    ;; a number keeps its numeric test: NaN is not = to itself here, which the
    ;; oracle answers for a primitive double and not for one boxed object
    ((and (eq a b) (not (numberp a))) t)
+   ;; two functions are = only when identical, like the oracle: two distinct
+   ;; closures never compare structurally, even when their bodies agree
+   ((and (functionp a) (functionp b)) nil)
    ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
     ;; two vectors read in place, without the seq view's copies
     (and (eql (length a) (length b))
@@ -5862,12 +5884,11 @@
         (rontolisp::%clojure-escape-part (if (null nm) "null" nm))))))
 
 (defun rontolisp::%clojure-char (x)
-  "The character for X: itself for a character, the code point (truncated)
-   for a number; anything else signals."
-  (cond ((characterp x) x)
-        ((numberp x) (code-char (truncate x)))
-        (t (rontolisp::%clojure-class-cast-exception-of
-            "char needs a character or a number" x))))
+  "The character for X, as the oracle's charCast takes it: itself for a
+   character, the code point for a number in the char range 0..65535 (a
+   double refused past its edges, any other number truncated first);
+   anything else, and a number outside it, the oracle's refusal."
+  (rontolisp::%clojure-char-cast x))
 
 ;;;; Case mapping: String.toUpperCase and String.toLowerCase, behind upper-case,
 ;;;; lower-case, capitalize, the uppercase format conversions and cl-format's
@@ -13388,6 +13409,82 @@
    (class x))."
   (rontolisp::%clojure-meta-method x (list :C%KEYWORD "type")))
 
+;;;; Type designators: what type answers where the oracle answers a host class.
+;;
+;; A schema registry lookup falls through to (type x) on a miss, and the oracle
+;; answers a host class there: every entry but Pattern's misses, so an
+;; unregistered value refuses with :malli.core/invalid-schema. A kind keyword
+;; here hits the :function/:keyword/:string/:symbol/:boolean/:nil/:map/:set
+;; entry instead: a function or set loops until the stack overflows, anything
+;; else mistypes (child-error, invalid-entry). So type answers the host class
+;; designator (:C%CLASS name) for exactly those kinds -- the names
+;; %clojure-class-name-of answers, so a value reads as its class -- and nil for
+;; nil, like the oracle. A pattern answers the host Pattern class object where
+;; a host is, its (:C%CLASS name) designator where none is (typeForm splits the
+;; way a bare class literal does): only the oracle's answer hits the registry's
+;; class-schemas entry, so (m/schema #"a") builds the regex schema. class keeps
+;; the kind keyword; the multimethod dispatcher and instance? read a designator
+;; back as its kind, so dispatch answers what the keyword did. A kind no entry
+;; collides with (numbers, vectors, records, ...) keeps its keyword: its miss
+;; already refuses right.
+
+(defvar rontolisp::%clojure-type-class-names
+  '(("clojure.lang.AFunction" . "function") ("clojure.lang.Keyword" . "keyword")
+    ("java.lang.String" . "string") ("clojure.lang.Symbol" . "symbol")
+    ("java.lang.Boolean" . "boolean")
+    ("clojure.lang.PersistentArrayMap" . "map")
+    ("clojure.lang.PersistentHashMap" . "map")
+    ("clojure.lang.PersistentTreeMap" . "map")
+    ("clojure.lang.PersistentHashSet" . "set")
+    ("clojure.lang.PersistentTreeSet" . "set"))
+  "Host class names type answers by designator, each to the spelling of the
+   kind keyword class answers for its values.")
+
+(defun rontolisp::%clojure-type-designator (k x)
+  "type's answer for the kind keyword K class answers for X: the (:C%CLASS
+   name) designator of X's host class when K collides with a schema registry
+   entry, nil for nil, else K itself. A map names its size's class, like the
+   oracle (an empty map PersistentArrayMap, nine entries up PersistentHashMap);
+   a sorted map or set its tree class (the (:C%SORTED setp cmp items) wrapper
+   %clojure-sorted-p names). K is never a designator here: type is the only
+   caller, over class's answer."
+  (if (rontolisp::%clojure-keyword-p k)
+      (let ((spelling (car (cdr k))))
+        (cond
+         ((equal spelling "function") (list :c%class "clojure.lang.AFunction"))
+         ((equal spelling "keyword") (list :c%class "clojure.lang.Keyword"))
+         ((equal spelling "string") (list :c%class "java.lang.String"))
+         ((equal spelling "symbol") (list :c%class "clojure.lang.Symbol"))
+         ((equal spelling "boolean") (list :c%class "java.lang.Boolean"))
+         ((equal spelling "nil") nil)
+         ((equal spelling "map")
+          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
+                             "clojure.lang.PersistentTreeMap"
+                             (if (> (hash-table-count x) 8)
+                                 "clojure.lang.PersistentHashMap"
+                                 "clojure.lang.PersistentArrayMap"))))
+         ((equal spelling "set")
+          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
+                             "clojure.lang.PersistentTreeSet"
+                             "clojure.lang.PersistentHashSet")))
+         (t k)))
+      k))
+
+(defun rontolisp::%clojure-designator-kind (v)
+  "The kind keyword class answers for the values of V's host class, when V is
+   a (:C%CLASS name) designator of one of %clojure-type-class-names, else NIL.
+   The multimethod dispatcher and instance? read a type answer through this,
+   so a designator finds the kind method a defmethod stores, like the keyword
+   did; a designator of any other class stays one, as before."
+  (if (and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
+           (stringp (car (cdr v))))
+      (let ((spelling
+             (cdr
+              (assoc (car (cdr v)) rontolisp::%clojure-type-class-names
+                     :test #'equal))))
+        (if spelling (list :c%keyword spelling) nil))
+      nil))
+
 ;;;; Monitors: the lock locking holds on the interpreter and the JVM, and the
 ;;;; one alter-var-root, alter-meta! and reset-meta! hold.
 ;;
@@ -13417,6 +13514,31 @@
           (key (if (rontolisp::%clojure-keyword-p x) (car (cdr x)) x)))
       (or (gethash key table)
           (setf (gethash key table) (rontolisp:make-mutex))))))
+
+;;;; Shared core values: one object per site-independent core function value.
+;;
+;; A predicate (or not, or boolean) as a value must be one object program-wide --
+;; = and identical? like the oracle's var roots, and usable as a map key
+;; (malli's registry keys its schemas by predicate values). A fresh lambda per
+;; reference site used to make them distinct objects, which identity equality
+;; then told apart. rontolisp::%clojure-shared-values maps the core name to its
+;; object, made on first use; later references answer the stored one. The table
+;; lives per environment, so macro-time evaluation shares macro-time-wide and
+;; the program shares run-wide. Only rows whose body closes over nothing but
+;; its parameters come here. A core value closing over lower-time state that
+;; still evolves while the program lowers (the namespaces known, the libraries
+;; loaded, the namespace and its aliases) shares one cell per snapshot instead
+;; of one program-wide: the lowering keys the cell by the snapshot's digest, so
+;; two references under one snapshot are one object while references under
+;; different snapshots keep distinct objects, and no call through a value moves.
+
+(defvar rontolisp::%clojure-shared-values (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-shared-value (name make)
+  "The program-wide value of the site-independent core function NAME: (funcall
+   MAKE) on first use, the stored object after."
+  (or (gethash name rontolisp::%clojure-shared-values)
+      (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
 
 ;;;; Atoms across request threads.
 ;;
@@ -24677,6 +24799,24 @@
           "Cannot parse null string"))
         (t (rontolisp::%clojure-illegal-argument-exception
             "No matching method valueOf found taking 1 args"))))
+
+(defun rontolisp::%clojure-parse-long-static (s)
+  "(Long/parseLong s) of one argument: the long S spells (parse-long's
+   grammar, Unicode digits included); a malformed string is the oracle's
+   NumberFormatException naming it, nil its null-string refusal, anything
+   else its cast refusal to String (the reflector casts the argument). Malli's
+   -string->long reads strings through this on every backend, so the
+   string-transformer decode runs where no host is (wasm)."
+  (cond ((stringp s)
+         (or (rontolisp::%clojure-parse-long s)
+             (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "For input string: \"" s "\""))))
+        ((null s)
+         (rontolisp::%clojure-number-format-exception
+          "Cannot parse null string"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
+                         " cannot be cast to class java.lang.String")))))
 
 (defun rontolisp::%clojure-double-blank-p (s)
   "Whether S is empty or holds only codes at most 32, which Double/valueOf

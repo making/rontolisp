@@ -1299,7 +1299,7 @@ final class ClojureBindingLowering {
 		if (form instanceof LispSymbol s) {
 			LispVal predicate = ClojureFnLowering.predicateValue(ctx, s.name());
 			if (predicate != null) {
-				return predicate;
+				return ctx.sharedValue(s.name(), predicate);
 			}
 		}
 		if (form instanceof LispSymbol s) {
