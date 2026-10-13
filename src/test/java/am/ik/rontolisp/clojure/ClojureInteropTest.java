@@ -224,6 +224,45 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aClassWhoseInitializerNeedsAMissingClassIsACatchableRefusal() throws Exception {
+		// beside aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass: the
+		// fixture jar holds a class whose static initializer needs the omitted type
+		// (the census's field-only classes, such as sci.impl.FISupport), so any use
+		// initializes with ExceptionInInitializerError -- the same refusal, naming
+		// the missing class, on the interpreter and the JVM
+		// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(println (try (fixture.unlinkable.Holder/hello)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(staticCall, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		String construction = "(println (try (fixture.unlinkable.Holder.)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(construction, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(construction, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		String fieldRead = "(println (try (fixture.unlinkable.Holder/VALUE)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(fieldRead, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(fieldRead, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+	}
+
+	@Test
+	void aGenuinelyBrokenInitializerKeepsPropagating() throws Exception {
+		// an ExceptionInInitializerError whose cause chain holds no missing class is
+		// no refusal: the initializer's own failure propagates as it did, on the
+		// interpreter and the JVM
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(fixture.unlinkable.Broken/hello)";
+		assertThatThrownBy(() -> interpretWithClasses(staticCall, jar)).isInstanceOf(ExceptionInInitializerError.class);
+		assertThatThrownBy(() -> runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isInstanceOf(IllegalStateException.class)
+			.hasStackTraceContaining("ExceptionInInitializerError");
+	}
+
+	@Test
 	void aCompiledProgramFindsADependencyJarOnItsRunClasspath() throws Exception {
 		// a -o Prog.class output carries no dependency jar: with the fixture jar on the
 		// run class path the call refuses as it does in process, without it the class is
@@ -252,6 +291,30 @@ class ClojureInteropTest {
 				""", "fixture/unlinkable/Missing.java", """
 				package fixture.unlinkable;
 				public class Missing {
+				}
+				""", "fixture/unlinkable/Holder.java", """
+				package fixture.unlinkable;
+				public class Holder {
+					public static final Object VALUE = new Missing();
+					public Holder() {
+					}
+					public static String hello() {
+						return "hi";
+					}
+				}
+				""", "fixture/unlinkable/Broken.java", """
+				package fixture.unlinkable;
+				public class Broken {
+					static {
+						if (System.currentTimeMillis() >= 0) {
+							throw new RuntimeException("broken");
+						}
+					}
+					public Broken() {
+					}
+					public static String hello() {
+						return "hi";
+					}
 				}
 				""");
 

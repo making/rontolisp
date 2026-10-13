@@ -281,6 +281,9 @@ final class JavaInterop {
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(name, ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
+		}
 		if (overload == null) {
 			throw new LispEvalException(
 					"No matching constructor for " + classDesignator + " with " + args.size() + " argument(s)");
@@ -294,6 +297,9 @@ final class JavaInterop {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(name, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
 		}
 	}
 
@@ -343,6 +349,9 @@ final class JavaInterop {
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(type.name(), ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(type.name(), ex);
+		}
 		if (overload == null) {
 			throw new LispEvalException(
 					"No matching method " + type.name() + "." + methodName + " with " + args.size() + " argument(s)");
@@ -356,6 +365,9 @@ final class JavaInterop {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(type.name(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(type.name(), ex);
 		}
 	}
 
@@ -557,6 +569,12 @@ final class JavaInterop {
 							: classOrObject.print();
 			throw unlinkable(name, ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			String name = classOrObject instanceof LispString s ? s.value()
+					: classOrObject instanceof LispJavaObject obj ? obj.ref().getClass().getName()
+							: classOrObject.print();
+			throw initializerFailed(name, ex);
+		}
 	}
 
 	/**
@@ -606,6 +624,9 @@ final class JavaInterop {
 			catch (NoClassDefFoundError ex) {
 				throw unlinkable(className, ex);
 			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(className, ex);
+			}
 		}
 		List<JavaSite.Argument> promised = site.arguments();
 		for (int i = 0; i < args.size(); i++) {
@@ -646,6 +667,9 @@ final class JavaInterop {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(className, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(className, ex);
 		}
 	}
 
@@ -743,6 +767,9 @@ final class JavaInterop {
 			catch (NoClassDefFoundError ex) {
 				throw unlinkable(String.join(",", interfaceNames), ex);
 			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(String.join(",", interfaceNames), ex);
+			}
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
 		return implement(dispatch, List.of(callable), caller);
@@ -803,6 +830,9 @@ final class JavaInterop {
 			catch (NoClassDefFoundError ex) {
 				throw unlinkable(superName.value(), ex);
 			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(superName.value(), ex);
+			}
 			dispatch = new SubclassDispatch(implementation, CLASSES.subclassOf(superclass, interfaces));
 			remember(SUBCLASSES, key, dispatch);
 		}
@@ -812,6 +842,9 @@ final class JavaInterop {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(superName.value(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
 		}
 		if (overload == null) {
 			throw new LispEvalException(
@@ -827,6 +860,9 @@ final class JavaInterop {
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(superName.value(), ex);
 		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
+		}
 		SUBCLASS_KINDS.putIfAbsent(proxyClass, dispatch.kind);
 		@Nullable Object[] javaArgs = marshalArguments(overload, ctorArgs, caller);
 		try {
@@ -841,6 +877,9 @@ final class JavaInterop {
 		}
 		catch (NoClassDefFoundError ex) {
 			throw unlinkable(superName.value(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
 		}
 	}
 
@@ -1042,6 +1081,9 @@ final class JavaInterop {
 			}
 			catch (NoClassDefFoundError ex) {
 				throw unlinkable(String.join(",", names), ex);
+			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(String.join(",", names), ex);
 			}
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
@@ -2126,6 +2168,32 @@ final class JavaInterop {
 		String detail = ex.getMessage();
 		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
 		return new LispEvalException("Cannot link class " + className + ": missing class " + missing);
+	}
+
+	// The missing class an ExceptionInInitializerError's cause chain holds, or
+	// null: a dependency class whose static initializer needs a missing class
+	// initializes with it, while a genuinely broken initializer holds none
+	// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
+	private static @Nullable NoClassDefFoundError unlinkableCause(Throwable ex) {
+		Throwable current = ex;
+		while (current != null) {
+			if (current instanceof NoClassDefFoundError missing) {
+				return missing;
+			}
+			current = current.getCause();
+		}
+		return null;
+	}
+
+	// What a java: site over a class whose initialization needs a missing class
+	// throws: the same refusal unlinkable answers; a genuinely broken
+	// initializer's own failure is rethrown as it was.
+	private static RuntimeException initializerFailed(String className, ExceptionInInitializerError ex) {
+		NoClassDefFoundError cause = unlinkableCause(ex);
+		if (cause != null) {
+			return unlinkable(className, cause);
+		}
+		throw ex;
 	}
 
 	// What a failed Java call throws: what a function called back from Java raised -- an

@@ -1629,6 +1629,21 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
   `#aCompiledProgramFindsADependencyJarOnItsRunClasspath` (the `-o Prog.class`
   contract: with the jar on the run class path the refusal, without it `No such
   class`).
+- Follow-up (`.todo/f74`, decided 2026-10-13): a class whose static initializer
+  needs the missing class -- the census's six field-only classes (`sci.impl.FISupport`,
+  one `hawk`, two `selmer`, two `shadow-cljs`), a static field of the missing type --
+  initializes with `ExceptionInInitializerError`, which refused nothing before (an
+  uncaught JVM crash). One whose cause chain holds a `NoClassDefFoundError` answers
+  the same refusal, naming the missing class from the cause and the site's class from
+  the site: the interpreter's `eval/JavaInterop.initializerFailed` at every `java:`
+  entry point, the bridge's beside its `unlinkable`, and a compiled direct call's
+  `memberFailed` handler through `_junlinkableCause` (whose range covers the `new`
+  as well as the `<init>` call, since making the object verifies the class). A
+  genuinely broken initializer keeps propagating. Pins:
+  `ClojureInteropTest#aClassWhoseInitializerNeedsAMissingClassIsACatchableRefusal`
+  (static call, construction and static-field read over a fixture jar holding a class
+  whose static field needs the omitted type) and
+  `#aGenuinelyBrokenInitializerKeepsPropagating`.
 
 ## Ring adapter
 

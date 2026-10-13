@@ -601,7 +601,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   class over it, such as `reitit.Trie`) cannot link here, and every call on it refuses
   with `Cannot link class C: missing class M`, naming the missing class -- catchable
   by `(catch Exception e ...)` on the interpreter and the JVM alike (on wasm every
-  `java:` call is a call-time error). There is no `clojure.lang` bridge, and none is
+  `java:` call is a call-time error). A class whose static initializer needs the
+  missing class (a static field of its type, as in `sci.impl.FISupport`) refuses the
+  same way: its `ExceptionInInitializerError` carries the missing class, so
+  construction, calls and static-field reads answer the same refusal, while a
+  genuinely broken initializer propagates as it did. There is no `clojure.lang` bridge, and none is
   planned: no value here is an `IPersistentMap`, so dependency code taking one could
   not read it anyway. Libraries that need one also ship a portable path (reitit's
   `clojure-trie-compiler` answers the oracle's lines), and the reader takes a

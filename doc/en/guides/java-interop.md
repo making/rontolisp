@@ -870,6 +870,11 @@ A class the class path holds but that cannot link refuses every call on it inste
 of crashing: a dependency's Java class compiled against a language that is not here
 (a Clojure library's class over `clojure.lang`, such as `reitit.Trie`) fails each
 `java:` call with `Cannot link class C: missing class M`, naming the missing class.
+A class whose static initializer needs the missing class (a static field of its
+type, as in `sci.impl.FISupport`) refuses the same way: its
+`ExceptionInInitializerError` carries the missing class, so construction, calls and
+static-field reads answer the same refusal. A genuinely broken initializer -- one
+whose failure names no missing class -- propagates as it did.
 The refusal is catchable like any other failure -- `(catch Exception e ...)` takes
 it on the interpreter and the JVM alike -- and a direct call the compile resolved
 from the class files refuses the same way when it runs. No `clojure.lang` bridge is
