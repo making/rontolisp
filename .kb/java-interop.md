@@ -61,9 +61,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`theBridgeSpellsTheRepresentationAsTheRuntimeDoes` checks the table string
   itself, `theBridgeReadsTheSharedRuleTable` every cost, `theBridgeConvertsScalars-
   AsTheSharedRuleDoes` every scalar conversion, plus the behavioral resolution,
-  receiver, unmarshal and handle corpora). Measured 2026-10-14: a resolved,
-  a bridged and a dispatched sample program compile byte-identical before/after,
-  the bridge `+35 B` (`78,742 -> 78,777`); the interpreter's `LispJavaObject.
+  receiver, unmarshal and handle corpora). Program-size neutral (2026-10-14): a
+  resolved, a bridged and a dispatched sample program compile to the same bytes as
+  before; the interpreter's `LispJavaObject.
   receiverObject` stays a hand copy (the root package cannot import `compiler`
   without a package cycle) pinned by the receiver corpus.
 - `accessibleMethod` (all three lookups: `ReflectiveJavaClasses`, the bridge template,
