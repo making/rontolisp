@@ -227,6 +227,35 @@ final class JavaBridgeTemplate {
 
 	private static final String KIND_FUNCTION = "function";
 
+	// The serialized per-kind rule table (compiler/JavaOverloads.ruleTable(); pinned by
+	// JavaBridgeTemplateParityTest):
+	// token|exact|widen|narrow|boxes|returnedExtras|receiver
+	private static final String RULE_TABLE = """
+			nil|||||boolean=0|0
+			t|boolean|java.lang.Boolean||java.lang.Boolean||1
+			false|boolean|java.lang.Boolean||java.lang.Boolean||1
+			integer|long|int,java.lang.Long||java.lang.Long,java.lang.Integer|double=2,java.lang.Double=2,float=2,java.lang.Float=2,java.math.BigInteger=2,short=4,java.lang.Short=4,byte=4,java.lang.Byte=4|1
+			bignum|java.math.BigInteger|||java.math.BigInteger||1
+			float|double|java.lang.Double|float,java.lang.Float|java.lang.Double|float=4,java.lang.Float=4|1
+			string/1|java.lang.String|||java.lang.String|char=4,java.lang.Character=4|1
+			string|java.lang.String|||java.lang.String||1
+			char|char|java.lang.Character||java.lang.Character|int=1,java.lang.Integer=1|1
+			char/supplementary|long|int,java.lang.Long||java.lang.Long,java.lang.Integer||1
+			function||||||0""";
+
+	// Parsed RULE_TABLE rows keyed by kind token:
+	// {token, exact, widen, narrow, boxes, returnedExtras, receiver}.
+	private static final Map<String, String[]> KIND_RULES = parseRuleTable();
+
+	private static Map<String, String[]> parseRuleTable() {
+		Map<String, String[]> rules = new HashMap<>();
+		for (String line : RULE_TABLE.split("\n")) {
+			String[] cols = line.split("\\|", -1);
+			rules.put(cols[0], cols);
+		}
+		return rules;
+	}
+
 	/**
 	 * The generated program's {@code _apply(Object fn, Object argList)} eval-runtime
 	 * method, used to apply Lisp callables from proxy invocation handlers.
@@ -356,41 +385,10 @@ final class JavaBridgeTemplate {
 		applyMethod = required(mainClass, "_apply", Object.class, Object.class);
 		signalMethod = required(mainClass, "_jsig", Throwable.class);
 		failMethod = required(mainClass, "_jfail", Throwable.class, String.class);
-		try {
-			Method strv = mainClass.getDeclaredMethod("_strv", Object.class);
-			strv.setAccessible(true);
-			strvMethod = strv;
-		}
-		catch (NoSuchMethodException ex) {
-			// No array runtime in this program: no character vector can exist.
-			strvMethod = null;
-		}
-		try {
-			Method print = mainClass.getDeclaredMethod("_lispToString", Object.class);
-			print.setAccessible(true);
-			lispToStringMethod = print;
-		}
-		catch (NoSuchMethodException ex) {
-			lispToStringMethod = null;
-		}
-		try {
-			Method bf16Value = mainClass.getDeclaredMethod("_bf16Value", int.class);
-			bf16Value.setAccessible(true);
-			bf16ValueMethod = bf16Value;
-		}
-		catch (NoSuchMethodException ex) {
-			// No packed float runtime in this program: no bfloat16 array can exist.
-			bf16ValueMethod = null;
-		}
-		try {
-			Method hashValues = mainClass.getDeclaredMethod("_hashValues", Object.class);
-			hashValues.setAccessible(true);
-			hashValuesMethod = hashValues;
-		}
-		catch (NoSuchMethodException ex) {
-			// No hash-table runtime in this program: no table can exist.
-			hashValuesMethod = null;
-		}
+		strvMethod = optional(mainClass, "_strv", Object.class);
+		lispToStringMethod = optional(mainClass, "_lispToString", Object.class);
+		bf16ValueMethod = optional(mainClass, "_bf16Value", int.class);
+		hashValuesMethod = optional(mainClass, "_hashValues", Object.class);
 		try {
 			Class<?> valueClass = Class.forName(JAVA_VALUE_CLASS, false, mainClass.getClassLoader());
 			javaValueMethod = valueClass.getMethod("value");
@@ -427,6 +425,17 @@ final class JavaBridgeTemplate {
 			// No runtime/RontoJavaBytesView beside this program: no view can exist.
 			javaBytesViewClass = null;
 			javaBytesViewBytes = null;
+		}
+	}
+
+	private static @Nullable Method optional(Class<?> mainClass, String name, Class<?>... parameterTypes) {
+		try {
+			Method method = mainClass.getDeclaredMethod(name, parameterTypes);
+			method.setAccessible(true);
+			return method;
+		}
+		catch (NoSuchMethodException ex) {
+			return null;
 		}
 	}
 
@@ -491,9 +500,8 @@ final class JavaBridgeTemplate {
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = forced
-					? marshalForcedArguments(overload, values, functions, through, "constructing " + name)
-					: marshalArguments(overload, values, functions, through);
+			@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
+					forced ? "constructing " + name : null);
 			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
 			return unmarshal(made, javaFalse, octets);
 		}
@@ -590,10 +598,11 @@ final class JavaBridgeTemplate {
 		}
 		Object value = rendered(target);
 		Object kind = kindOf(value);
-		if (kind == null || kind == KIND_NIL || kind == KIND_FUNCTION || kind instanceof Class) {
+		if (!(kind instanceof String token)) {
 			return null;
 		}
-		return convert(value, Object.class);
+		String[] rule = KIND_RULES.get(token);
+		return rule != null && "1".equals(rule[6]) ? convert(value, Object.class) : null;
 	}
 
 	/** Implements {@code (java:static "class" "method" args...)}. */
@@ -1509,10 +1518,8 @@ final class JavaBridgeTemplate {
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
 		try {
-			@Nullable Object[] handed = forced
-					? marshalForcedArguments(overload, values, functions, through,
-							"calling " + cls.getName() + "." + ((Method) overload[0]).getName())
-					: marshalArguments(overload, values, functions, through);
+			@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
+					forced ? "calling " + cls.getName() + "." + ((Method) overload[0]).getName() : null);
 			Object answer = ((Method) overload[0]).invoke(receiver, handed);
 			return unmarshal(answer, javaFalse, octets);
 		}
@@ -2054,46 +2061,33 @@ final class JavaBridgeTemplate {
 		return (Boolean) overload[2] ? sb.append('*').toString() : sb.toString();
 	}
 
-	// The Java arguments for the chosen overload, packing a varargs tail.
+	// The Java arguments for the chosen overload, packing a varargs tail; when
+	// FORCED_WHAT is non-null, converts forced for a single candidate.
 	private static @Nullable Object[] marshalArguments(Object[] overload, @Nullable Object[] values, int functions,
-			@Nullable Object through) {
+			@Nullable Object through, @Nullable String forcedWhat) {
 		Class<?>[] params = (Class<?>[]) overload[1];
 		boolean packs = (Boolean) overload[2];
 		@Nullable Object[] out = new @Nullable Object[params.length];
 		int fixed = packs ? params.length - 1 : params.length;
 		for (int i = 0; i < fixed; i++) {
-			marshalSelected(values[i], params[i], out, i, functions, through);
-		}
-		if (packs) {
-			Class<?> component = params[fixed].getComponentType();
-			Object packed = Array.newInstance(component, values.length - fixed);
-			@Nullable Object[] slot = new @Nullable Object[1];
-			for (int i = fixed; i < values.length; i++) {
-				marshalSelected(values[i], component, slot, 0, functions, through);
-				Array.set(packed, i - fixed, slot[0]);
+			if (forcedWhat != null) {
+				out[i] = convertForced(values[i], params[i], functions, through, forcedWhat);
 			}
-			out[fixed] = packed;
-		}
-		return out;
-	}
-
-	// The Java arguments for the overload a run-time resolution's only candidate
-	// takes however they convert (as the oracle's reflector calls one directly).
-	private static @Nullable Object[] marshalForcedArguments(Object[] overload, @Nullable Object[] values,
-			int functions, @Nullable Object through, String what) {
-		Class<?>[] params = (Class<?>[]) overload[1];
-		boolean packs = (Boolean) overload[2];
-		@Nullable Object[] out = new @Nullable Object[params.length];
-		int fixed = packs ? params.length - 1 : params.length;
-		for (int i = 0; i < fixed; i++) {
-			out[i] = convertForced(values[i], params[i], functions, through, what);
+			else {
+				marshalSelected(values[i], params[i], out, i, functions, through);
+			}
 		}
 		if (packs) {
 			Class<?> component = params[fixed].getComponentType();
 			Object packed = Array.newInstance(component, values.length - fixed);
 			@Nullable Object[] slot = new @Nullable Object[1];
 			for (int i = fixed; i < values.length; i++) {
-				slot[0] = convertForced(values[i], component, functions, through, what);
+				if (forcedWhat != null) {
+					slot[0] = convertForced(values[i], component, functions, through, forcedWhat);
+				}
+				else {
+					marshalSelected(values[i], component, slot, 0, functions, through);
+				}
 				Array.set(packed, i - fixed, slot[0]);
 			}
 			out[fixed] = packed;
@@ -2347,9 +2341,9 @@ final class JavaBridgeTemplate {
 		return null;
 	}
 
-	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH.
-	// Pure: it reads no value, so overload selection over kinds needs none. Mirrors
-	// eval/JavaInterop.kindCost.
+	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH,
+	// read from KIND_RULES (mirrors compiler/JavaOverloads.kindCost). Pure: it reads no
+	// value, so overload selection over kinds needs none.
 	private static int kindCost(Object kind, Class<?> target) {
 		if (kind instanceof Class<?> host) { // a wrapped host object's exact class
 			if (!target.isAssignableFrom(host)) {
@@ -2357,115 +2351,64 @@ final class JavaBridgeTemplate {
 			}
 			return target == host ? COST_EXACT : COST_WIDEN;
 		}
-		return switch ((String) kind) {
-			case KIND_NIL -> {
-				// nil carries no type, so any reference target ties; no primitive
-				// takes it, not even boolean (the oracle's compiler unboxes it to a
-				// NullPointerException).
-				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
-			}
-			// Java's false is t's twin.
-			case KIND_T, KIND_FALSE -> {
-				if (target == boolean.class) {
-					yield COST_EXACT;
-				}
-				if (target == Boolean.class) {
-					yield COST_WIDEN;
-				}
-				yield target.isAssignableFrom(Boolean.class) ? COST_BOXED : NO_MATCH;
-			}
-			case KIND_INTEGER -> integerCost(target);
-			// A bignum is a BigInteger: that class or a supertype, never narrower.
-			case KIND_BIGNUM -> target == BigInteger.class ? COST_EXACT
-					: (target.isAssignableFrom(BigInteger.class) ? COST_BOXED : NO_MATCH);
-			case KIND_FLOAT -> floatCost(target);
-			case KIND_STRING, KIND_STRING_1 -> {
-				if (target.isAssignableFrom(String.class)) {
-					yield target == String.class ? COST_EXACT : COST_BOXED;
-				}
-				// Not even a one-character string narrows to a char: the oracle
-				// refuses it.
-				yield NO_MATCH;
-			}
-			case KIND_CHAR, KIND_SUPPLEMENTARY_CHAR -> {
-				// A BMP character is a char, a Character, or a supertype of one; a
-				// supplementary code point is a fixnum, like an integer. A character
-				// converts to no int.
-				if (KIND_CHAR.equals(kind) && (target == char.class || target == Character.class
-						|| target.isAssignableFrom(Character.class))) {
-					yield target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
-				}
-				if (KIND_SUPPLEMENTARY_CHAR.equals(kind) && (target == int.class || target == long.class
-						|| target == Integer.class || target == Long.class || target.isAssignableFrom(Long.class)
-						|| target.isAssignableFrom(Integer.class))) {
-					yield target == long.class ? COST_EXACT
-							: (target == int.class || target == Long.class ? COST_WIDEN : COST_BOXED);
-				}
-				yield NO_MATCH;
-			}
-			case KIND_FUNCTION -> target == Object.class ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
+		String token = (String) kind;
+		if (KIND_NIL.equals(token)) {
+			return target.isPrimitive() ? NO_MATCH : COST_BOXED;
+		}
+		if (KIND_FUNCTION.equals(token)) {
+			return target == Object.class ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
 					: isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
-			default -> throw new IllegalArgumentException("unknown argument kind " + kind);
-		};
-	}
-
-	private static int integerCost(Class<?> target) {
-		if (target == long.class) {
+		}
+		String[] rule = KIND_RULES.get(token);
+		if (rule == null) {
+			throw new IllegalArgumentException("unknown argument kind " + kind);
+		}
+		String name = target.getName();
+		if (name.equals(rule[1])) {
 			return COST_EXACT;
 		}
-		if (target == int.class || target == Long.class) {
+		if (inList(rule[2], name)) {
 			return COST_WIDEN;
 		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
-				|| target.isAssignableFrom(Integer.class)) {
-			return COST_BOXED;
-		}
-		return NO_MATCH;
-	}
-
-	private static int floatCost(Class<?> target) {
-		if (target == double.class) {
-			return COST_EXACT;
-		}
-		if (target == Double.class) {
-			return COST_WIDEN;
-		}
-		if (target == float.class || target == Float.class) {
+		if (inList(rule[3], name)) {
 			return COST_NARROW;
 		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Double.class)) {
-			return COST_BOXED;
+		if (!target.isPrimitive() && !rule[4].isEmpty()) {
+			for (String box : rule[4].split(",")) {
+				if (target.isAssignableFrom(loadClass(box))) {
+					return COST_BOXED;
+				}
+			}
 		}
 		return NO_MATCH;
 	}
 
-	// What a java:reify / java:proxy function answers costs: what the value converts
-	// to however Java takes it, as java: always converted answers (mirrors
-	// compiler/JavaOverloads.returnedCost; this class must stand alone).
+	private static boolean inList(String csv, String item) {
+		if (csv.isEmpty()) {
+			return false;
+		}
+		for (String part : csv.split(",")) {
+			if (part.equals(item)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// What a java:reify / java:proxy function answers costs: read from KIND_RULES'
+	// returnedExtras, falling back to kindCost (mirrors
+	// compiler/JavaOverloads.returnedCost).
 	private static int returnedCost(Object kind, Class<?> target) {
-		if (KIND_NIL.equals(kind) && target == boolean.class) {
-			return COST_EXACT;
-		}
-		if (KIND_INTEGER.equals(kind)) {
-			if (target == double.class || target == Double.class || target == float.class || target == Float.class) {
-				return COST_CONVERT;
+		if (kind instanceof String token) {
+			String[] rule = KIND_RULES.get(token);
+			if (rule != null && !rule[5].isEmpty()) {
+				String prefix = target.getName() + "=";
+				for (String item : rule[5].split(",")) {
+					if (item.startsWith(prefix)) {
+						return Integer.parseInt(item.substring(prefix.length()));
+					}
+				}
 			}
-			if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
-				return COST_NARROW;
-			}
-			if (target == BigInteger.class) {
-				return COST_CONVERT;
-			}
-		}
-		if (KIND_FLOAT.equals(kind) && (target == float.class || target == Float.class)) {
-			return COST_NARROW;
-		}
-		if (KIND_STRING_1.equals(kind) && (target == char.class || target == Character.class)) {
-			return COST_NARROW;
-		}
-		if ((KIND_CHAR.equals(kind) || KIND_SUPPLEMENTARY_CHAR.equals(kind))
-				&& (target == int.class || target == Integer.class)) {
-			return COST_WIDEN;
 		}
 		return kindCost(kind, target);
 	}
@@ -2493,7 +2436,7 @@ final class JavaBridgeTemplate {
 			int cp = chBox[0];
 			return Character.isBmpCodePoint(cp)
 					&& (target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
-							? (Object) (char) cp : (Object) cp;
+							? (Object) (char) cp : convertLong(cp, target);
 		}
 		if (value instanceof String s) {
 			if (!isLispString(s)) {
@@ -2905,25 +2848,7 @@ final class JavaBridgeTemplate {
 	// What a failed call throws, as the program's _jfail decides for its direct calls:
 	// what a callback raised, as it is, or the error calling the member.
 	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
-		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
-		String text = "error " + what + ": ";
-		Method fail = failMethod;
-		Throwable answer = null;
-		if (fail != null) {
-			try {
-				answer = (Throwable) fail.invoke(null, cause, text);
-			}
-			catch (ReflectiveOperationException unexpected) {
-				// The error calling the member, below.
-			}
-		}
-		if (answer == null) {
-			return new RuntimeException(text + cause);
-		}
-		if (answer instanceof RuntimeException exception) {
-			return exception;
-		}
-		throw rethrow(answer);
+		return fail(what, ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex);
 	}
 
 	// What a java: site over a class that cannot link throws: the interpreter's

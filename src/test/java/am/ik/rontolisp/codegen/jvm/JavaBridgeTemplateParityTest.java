@@ -969,18 +969,34 @@ class JavaBridgeTemplateParityTest {
 
 	// The bridge may import nothing of rontolisp's, so it spells the hash table's
 	// class, the runtime package, Java's false, the markers, Comparator's compare, the
-	// class a handle or view is and a comparison's refusals itself.
+	// class a handle or view is, the rule table and a comparison's refusals itself.
 	@Test
 	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
+		assertThat(constant("RULE_TABLE")).isEqualTo(JavaOverloads.ruleTable());
+		assertThat(constant("COST_EXACT")).isEqualTo(JavaOverloads.COST_EXACT);
+		assertThat(constant("COST_WIDEN")).isEqualTo(JavaOverloads.COST_WIDEN);
+		assertThat(constant("COST_CONVERT")).isEqualTo(JavaOverloads.COST_CONVERT);
+		assertThat(constant("COST_NARROW")).isEqualTo(JavaOverloads.COST_NARROW);
+		assertThat(constant("COST_BOXED")).isEqualTo(JavaOverloads.COST_BOXED);
+		assertThat(constant("COST_PROXY")).isEqualTo(JavaOverloads.COST_PROXY);
+		assertThat(constant("COST_FUNCTION_OBJECT")).isEqualTo(JavaOverloads.COST_FUNCTION_OBJECT);
+		assertThat(constant("COST_PROXY_NOT_FUNCTIONAL")).isEqualTo(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
+		assertThat(constant("COST_VARARGS")).isEqualTo(JavaOverloads.COST_VARARGS);
+		assertThat(constant("NO_MATCH")).isEqualTo(JavaOverloads.NO_MATCH);
+		for (JavaKind.Lisp kind : JavaKind.Lisp.values()) {
+			assertThat(constant("KIND_" + kind.name())).isEqualTo(JavaOverloads.rule(kind).token());
+		}
 		assertThat(constant("HASH_TABLE_CLASS")).isEqualTo(RontoHashTable.MAP_CLASS.replace('/', '.'));
 		assertThat(constant("RUNTIME_PACKAGE_PREFIX")).isEqualTo(JvmJavaDirectSites.RUNTIME_PACKAGE_PREFIX);
 		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
 		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
 		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
 		assertThat(constant("OCTETS_MARKER")).isEqualTo(LispNames.JAVA_OCTETS_MARKER);
+		assertThat(constant("THROUGH_MARKER")).isEqualTo(LispNames.JAVA_THROUGH_MARKER);
 		assertThat(constant("VALUE_OPTION")).isEqualTo(LispNames.JAVA_VALUE_OPTION);
 		assertThat(constant("CLASS_OPTION")).isEqualTo(LispNames.JAVA_CLASS_OPTION);
 		assertThat(constant("REIFY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.REIFY_USAGE);
+		assertThat(constant("PROXY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
 		assertThat(constant("HANDLE_FUNCTION_USAGE"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.HANDLE_FUNCTION_USAGE);
 		assertThat(constant("COMPARATOR_COMPARE"))
@@ -991,12 +1007,94 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("JAVA_BYTES_VIEW_CLASS"))
 			.isEqualTo(am.ik.rontolisp.runtime.RontoJavaBytesView.class.getName());
 		assertThat(constant("COST_VIEW_ARRAY")).isEqualTo(JavaOverloads.COST_VIEW_ARRAY);
+		assertThat(JavaOverloads.COMPILED_SCALAR_CLASSES).containsExactly("java.lang.Long", "java.lang.Double",
+				"java.math.BigInteger", "java.lang.String");
 		assertThat(constant("COMPARISON_OF_NIL"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_OF_NIL);
 		assertThat(constant("COMPARISON_CAST_PREFIX"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_CAST_PREFIX);
 		assertThat(constant("COMPARISON_CAST_SUFFIX"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_CAST_SUFFIX);
+	}
+
+	// Over every Lisp kind and every target parameter class (primitives, boxes,
+	// supertypes, interfaces, arrays), the bridge's table-driven kindCost and
+	// returnedCost answer the exact cost the shared rule answers.
+	@Test
+	void theBridgeReadsTheSharedRuleTable() throws Exception {
+		List<Class<?>> targets = List.of(boolean.class, byte.class, short.class, char.class, int.class, long.class,
+				float.class, double.class, Boolean.class, Byte.class, Short.class, Character.class, Integer.class,
+				Long.class, Float.class, Double.class, BigInteger.class, BigDecimal.class, Number.class, String.class,
+				CharSequence.class, Comparable.class, java.io.Serializable.class, Object.class, Runnable.class,
+				java.util.Comparator.class, java.util.Collection.class, List.class, Map.class, int[].class,
+				byte[].class, Object[].class);
+		for (JavaKind.Lisp kind : JavaKind.Lisp.values()) {
+			String token = JavaOverloads.rule(kind).token();
+			for (Class<?> target : targets) {
+				ReflectiveJavaClasses.Type reflected = ReflectiveJavaClasses.of(target);
+				int expectedCost = JavaOverloads.kindCost(kind, reflected, ReflectiveJavaClasses.instance());
+				int expectedReturn = JavaOverloads.returnedCost(kind, reflected, ReflectiveJavaClasses.instance());
+				assertThat(invoke("kindCost", new Class<?>[] { Object.class, Class.class }, token, target))
+					.as("kindCost(%s, %s)", kind, target.getName())
+					.isEqualTo(expectedCost);
+				assertThat(invoke("returnedCost", new Class<?>[] { Object.class, Class.class }, token, target))
+					.as("returnedCost(%s, %s)", kind, target.getName())
+					.isEqualTo(expectedReturn);
+			}
+		}
+	}
+
+	// The bridge's scalar conversions answer what the shared rule's do: its private
+	// convertLong over fixnums, and its convert over every scalar compiled value,
+	// against JavaOverloads.convertLong / convertDouble / convertString / convertChar.
+	// A new convert rule lands in JavaOverloads and fails here until the bridge's
+	// hand copy (it must stand alone) follows.
+	@Test
+	void theBridgeConvertsScalarsAsTheSharedRuleDoes() throws Exception {
+		List<Long> fixnums = List.of(0L, 5L, -7L, (long) Integer.MAX_VALUE + 1, Long.MIN_VALUE, Long.MAX_VALUE);
+		List<Class<?>> longTargets = List.of(int.class, Integer.class, long.class, Long.class, double.class,
+				Double.class, float.class, Float.class, short.class, Short.class, byte.class, Byte.class,
+				BigInteger.class, Object.class, Number.class);
+		for (long v : fixnums) {
+			for (Class<?> target : longTargets) {
+				assertThat(invoke("convertLong", new Class<?>[] { long.class, Class.class }, v, target))
+					.as("convertLong(%s, %s)", v, target.getName())
+					.isEqualTo(JavaOverloads.convertLong(v, target));
+				assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, v, target))
+					.as("convert(%s, %s)", v, target.getName())
+					.isEqualTo(JavaOverloads.convertLong(v, target));
+			}
+		}
+		for (double v : new double[] { 1.5, -2.0 }) {
+			for (Class<?> target : List.of(double.class, Double.class, float.class, Float.class, Object.class,
+					Number.class)) {
+				assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, v, target))
+					.as("convert(%s, %s)", v, target.getName())
+					.isEqualTo(JavaOverloads.convertDouble(v, target));
+			}
+		}
+		for (String s : List.of("x", "str")) {
+			for (Class<?> target : List.of(String.class, Object.class, CharSequence.class)) {
+				assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, "\"" + s + "\"", target))
+					.as("convert(%s, %s)", s, target.getName())
+					.isEqualTo(JavaOverloads.convertString(s, target));
+			}
+		}
+		for (int codePoint : new int[] { 'a', 128512 }) {
+			for (Class<?> target : List.of(char.class, Character.class, int.class, Integer.class, long.class,
+					Long.class, Object.class)) {
+				assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, new int[] { codePoint },
+						target))
+					.as("convert(U+%X, %s)", codePoint, target.getName())
+					.isEqualTo(JavaOverloads.convertChar(codePoint, target));
+			}
+		}
+		BigInteger big = BigInteger.TWO.pow(100);
+		assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, big, BigInteger.class))
+			.isEqualTo(big);
+		assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, null, boolean.class))
+			.isEqualTo(Boolean.FALSE);
+		assertThat(invoke("convert", new Class<?>[] { Object.class, Class.class }, null, Object.class)).isNull();
 	}
 
 	private static @Nullable Object constant(String name) throws Exception {

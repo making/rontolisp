@@ -1683,47 +1683,6 @@ final class JavaInterop {
 				}
 				return cost;
 			}
-			case LispCons cons -> {
-				List<LispVal> elements = properListElements(cons);
-				if (elements == null) {
-					return NO_MATCH; // a dotted (improper) list is not a sequence
-				}
-				return marshalSequence(elements, target, caller, out, index, proxies);
-			}
-			case LispArray array -> {
-				if (array.dimensions().length != 1) {
-					return NO_MATCH; // only rank-1 vectors are bridged
-				}
-				// The fill pointer, when present, bounds the marshaled sequence.
-				int count = array.effectiveLength();
-				List<LispVal> elements = new ArrayList<>(count);
-				for (int i = 0; i < count; i++) {
-					LispVal element = array.readFlat(i);
-					elements.add(element == null ? LispNil.INSTANCE : element);
-				}
-				return marshalSequence(elements, target, caller, out, index, proxies);
-			}
-			case LispFloatArray array -> {
-				if (array.dims().length != 1) {
-					return NO_MATCH;
-				}
-				// A packed float vector's elements are the floats aref reads (every width
-				// widened to a double), as a compiled program's _jseq reads them.
-				int count = array.dims()[0];
-				List<LispVal> elements = new ArrayList<>(count);
-				for (int i = 0; i < count; i++) {
-					elements.add(new LispDouble(array.elementAt(i)));
-				}
-				return marshalSequence(elements, target, caller, out, index, proxies);
-			}
-			case LispIntVector vector -> {
-				// A packed (unsigned-byte 8|16|32) vector's elements, widened unsigned.
-				List<LispVal> elements = new ArrayList<>(vector.length());
-				for (int i = 0; i < vector.length(); i++) {
-					elements.add(new LispInteger(vector.elementAt(i)));
-				}
-				return marshalSequence(elements, target, caller, out, index, proxies);
-			}
 			case LispHashTable table -> {
 				List<LispVal> entries = new ArrayList<>(2 * table.count());
 				for (LispHashTable.Entry entry : table.entries()) {
@@ -1733,62 +1692,25 @@ final class JavaInterop {
 				return marshalTable(entries, target, caller, out, index, proxies);
 			}
 			default -> {
-				return NO_MATCH; // symbol, ratio, ... are not bridged
+				List<LispVal> elements = sequenceElements(value);
+				return elements != null ? marshalSequence(elements, target, caller, out, index, proxies) : NO_MATCH;
 			}
 		}
 	}
 
-	// The Java value of a value with a kind, for a target kindCost accepted.
+	// The Java value of a value with a kind, for a target kindCost accepted: delegates
+	// scalar conversions to JavaOverloads and receiver conversion to LispJavaObject.
 	private static @Nullable Object convert(LispVal value, Class<?> target, Caller caller) {
 		return switch (value) {
 			case LispNil ignored -> target == boolean.class ? Boolean.FALSE : null;
-			case LispTrue ignored -> Boolean.TRUE;
-			// |false|, the one symbol with a kind
-			case LispSymbol ignored -> Boolean.FALSE;
-			case LispInteger i -> convertLong(i.value(), target);
-			case LispBigInteger b -> b.value(); // a BigInteger or a supertype of it
-			case LispDouble d -> convertDouble(d.value(), target);
-			case LispString s -> target.isAssignableFrom(String.class) ? s.value() : (Object) s.value().charAt(0);
-			case LispChar c -> {
-				int cp = c.codePoint();
-				yield Character.isBmpCodePoint(cp) && (target == char.class || target == Character.class
-						|| target.isAssignableFrom(Character.class)) ? (Object) (char) cp : (Object) cp;
-			}
-			case LispJavaObject obj -> obj.ref();
+			case LispInteger i -> JavaOverloads.convertLong(i.value(), target);
+			case LispDouble d -> JavaOverloads.convertDouble(d.value(), target);
+			case LispString s -> JavaOverloads.convertString(s.value(), target);
+			case LispChar c -> JavaOverloads.convertChar(c.codePoint(), target);
 			case LispLambda lambda -> ((LispJavaObject) implementation(target, lambda, caller)).ref();
 			case LispFunction function -> ((LispJavaObject) implementation(target, function, caller)).ref();
-			default -> throw new IllegalArgumentException("no kind: " + value.print());
+			default -> java.util.Objects.requireNonNull(LispJavaObject.receiverObject(value));
 		};
-	}
-
-	private static Object convertLong(long v, Class<?> target) {
-		if (target == int.class || target == Integer.class) {
-			return (int) v;
-		}
-		if (target == long.class || target == Long.class) {
-			return v;
-		}
-		if (target == double.class || target == Double.class) {
-			return (double) v;
-		}
-		if (target == float.class || target == Float.class) {
-			return (float) v;
-		}
-		if (target == short.class || target == Short.class) {
-			return (short) v;
-		}
-		if (target == byte.class || target == Byte.class) {
-			return (byte) v;
-		}
-		if (target == BigInteger.class) {
-			return BigInteger.valueOf(v);
-		}
-		// Box to the narrowest type that holds the value, like Common Lisp fixnums.
-		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
-	}
-
-	private static Object convertDouble(double v, Class<?> target) {
-		return target == float.class || target == Float.class ? (Object) (float) v : (Object) v;
 	}
 
 	// What a failed resolution throws: the oracle's refusal -- a real
@@ -1817,112 +1739,31 @@ final class JavaInterop {
 		return failure;
 	}
 
-	// The ClassCastException of a checked conversion, in the oracle's words but
-	// without its module tail (as the portable lowering spells them).
 	private static ClassCastException castFailure(String from, String to) {
-		return new ClassCastException("class " + from + " cannot be cast to class " + to);
+		return JavaOverloads.castFailure(from, to);
 	}
 
-	// The class a checked conversion casts to for the target: the box for a
-	// primitive (as the oracle's emitUnboxArg casts a primitive target through its
-	// box), the target's own name otherwise.
 	private static String castTargetName(Class<?> target) {
-		if (target == boolean.class) {
-			return "java.lang.Boolean";
-		}
-		if (target == char.class) {
-			return "java.lang.Character";
-		}
-		if (target.isPrimitive()) {
-			return "java.lang.Number";
-		}
-		return target.getName();
-	}
-
-	// The NullPointerException of a checked conversion unboxing nil, in the oracle's
-	// words (its compiler's local is named x).
-	private static NullPointerException nullUnboxing(String method) {
-		return new NullPointerException("Cannot invoke \"" + method + "\" because \"x\" is null");
-	}
-
-	// The IllegalArgumentException of a checked conversion past a range, in the
-	// oracle's words (RT's casts, spelling the value as Java does).
-	private static IllegalArgumentException outOfRange(String name, Object value) {
-		return new IllegalArgumentException("Value out of range for " + name + ": " + value);
+		return JavaOverloads.checkedCastTargetName(target.getName());
 	}
 
 	// The Java value of a value for the target of a site resolved before it ran: the
-	// oracle's checked casts (clj 1.12.6, its compiler's emitUnboxArg over RT's casts,
-	// measured 2026-10-13). A primitive target unboxes the value's box with RT's
-	// range checks -- a fixnum narrows with Math.toIntExact (past the int range an
-	// ArithmeticException), a float through the long range first (past it an
-	// IllegalArgumentException naming the long range); nil unboxes to a
-	// NullPointerException; a box of another class to the target's ClassCastException.
-	// A dispatched site, whose member the run-time choice makes, converts with
-	// marshal() instead (the oracle's reflector's unchecked boxArgs). A sequence
-	// converts element-wise as marshal() converts it; a ratio answers its double for
-	// a floating target and truncates for an integral one, like the oracle's casts.
+	// oracle's checked casts (JavaOverloads.convertChecked*). A sequence converts
+	// element-wise as marshal() converts it; a ratio answers its double for a floating
+	// target and truncates for an integral one, like the oracle's casts.
 	private static @Nullable Object convertChecked(LispVal value, Class<?> target, Caller caller) {
 		return switch (value) {
-			case LispNil ignored -> {
-				if (target == boolean.class) {
-					throw nullUnboxing("java.lang.Boolean.booleanValue()");
-				}
-				if (target == char.class) {
-					throw nullUnboxing("java.lang.Character.charValue()");
-				}
-				if (target == int.class) {
-					throw nullUnboxing("java.lang.Character.charValue()");
-				}
-				if (target.isPrimitive() && target != void.class) {
-					throw nullUnboxing("java.lang.Number.doubleValue()");
-				}
-				yield null;
-			}
-			case LispTrue ignored -> convertCheckedBoolean(Boolean.TRUE, target);
+			case LispNil ignored -> JavaOverloads.convertCheckedNil(target);
+			case LispTrue ignored -> JavaOverloads.convertCheckedBoolean(Boolean.TRUE, target);
 			// |false|, the one symbol with a kind; any other symbol falls to the
 			// default arm (no Java object of its own, like a ratio)
 			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) ->
-				convertCheckedBoolean(Boolean.FALSE, target);
-			case LispInteger i -> convertCheckedLong(i.value(), target);
-			case LispBigInteger b -> convertCheckedBigInteger(b.value(), target);
-			case LispDouble d -> convertCheckedDouble(d.value(), target);
-			case LispString string -> {
-				String text = string.value();
-				if (target.isInstance(text)) {
-					yield text;
-				}
-				if (target == char.class || target == Character.class) {
-					throw castFailure("java.lang.String", "java.lang.Character");
-				}
-				if (target == boolean.class || target == Boolean.class) {
-					throw castFailure("java.lang.String", "java.lang.Boolean");
-				}
-				if (target.isPrimitive()) {
-					throw castFailure("java.lang.String", "java.lang.Number");
-				}
-				throw castFailure("java.lang.String", target.getName());
-			}
-			case LispChar c -> {
-				int codePoint = c.codePoint();
-				if (Character.isBmpCodePoint(codePoint)) {
-					Character boxed = (char) codePoint;
-					if (target == char.class) {
-						yield (char) codePoint;
-					}
-					if (target.isInstance(boxed)) {
-						yield boxed;
-					}
-					if (target == boolean.class || target == Boolean.class) {
-						throw castFailure("java.lang.Character", "java.lang.Boolean");
-					}
-					if (target.isPrimitive()) {
-						throw castFailure("java.lang.Character", "java.lang.Number");
-					}
-					throw castFailure("java.lang.Character", target.getName());
-				}
-				yield convertCheckedLong(codePoint, target);
-			}
+				JavaOverloads.convertCheckedBoolean(Boolean.FALSE, target);
+			case LispInteger i -> JavaOverloads.convertCheckedLong(i.value(), target);
+			case LispBigInteger b -> JavaOverloads.convertCheckedBigInteger(b.value(), target);
+			case LispDouble d -> JavaOverloads.convertCheckedDouble(d.value(), target);
+			case LispString string -> JavaOverloads.convertCheckedString(string.value(), target);
+			case LispChar c -> JavaOverloads.convertCheckedChar(c.codePoint(), target);
 			case LispRatio ratio -> convertCheckedRatio(ratio, target);
 			case LispJavaObject object -> {
 				Object ref = object.ref();
@@ -1940,31 +1781,7 @@ final class JavaInterop {
 					}
 					yield view.bytes();
 				}
-				if (target.isInstance(ref)) {
-					yield ref;
-				}
-				if (ref instanceof BigInteger big) {
-					yield convertCheckedBigInteger(big, numericTarget(target, ref));
-				}
-				if (ref instanceof Long || ref instanceof Integer || ref instanceof Short || ref instanceof Byte) {
-					yield convertCheckedLong(((Number) ref).longValue(), numericTarget(target, ref));
-				}
-				if (ref instanceof Number number) {
-					yield convertCheckedDouble(number.doubleValue(), numericTarget(target, ref));
-				}
-				if (ref instanceof Boolean boxed) {
-					if (target == boolean.class) {
-						yield boxed.booleanValue();
-					}
-					throw castFailure(ref.getClass().getName(), castTargetName(target));
-				}
-				if (ref instanceof Character boxed) {
-					if (target == char.class) {
-						yield boxed.charValue();
-					}
-					throw castFailure(ref.getClass().getName(), castTargetName(target));
-				}
-				throw castFailure(ref.getClass().getName(), castTargetName(target));
+				yield JavaOverloads.convertCheckedHost(ref, target);
 			}
 			case LispLambda ignored -> convertCheckedFunction(value, target, caller);
 			case LispFunction ignored -> convertCheckedFunction(value, target, caller);
@@ -1978,158 +1795,6 @@ final class JavaInterop {
 		};
 	}
 
-	// The primitive a host number converts to through its own value: its own for a
-	// numeric primitive, itself refused for anything else.
-	private static Class<?> numericTarget(Class<?> target, Object ref) {
-		if (target.isPrimitive() && target != boolean.class && target != char.class && target != void.class) {
-			return target;
-		}
-		throw castFailure(ref.getClass().getName(), castTargetName(target));
-	}
-
-	private static Object convertCheckedBoolean(Boolean boxed, Class<?> target) {
-		if (target == boolean.class) {
-			return boxed.booleanValue();
-		}
-		if (target.isInstance(boxed)) {
-			return boxed;
-		}
-		if (target == char.class || target == Character.class) {
-			throw castFailure("java.lang.Boolean", "java.lang.Character");
-		}
-		if (target.isPrimitive()) {
-			throw castFailure("java.lang.Boolean", "java.lang.Number");
-		}
-		throw castFailure("java.lang.Boolean", target.getName());
-	}
-
-	private static Object convertCheckedLong(long v, Class<?> target) {
-		if (target == long.class) {
-			return v;
-		}
-		if (target == int.class) {
-			return Math.toIntExact(v);
-		}
-		if (target == short.class) {
-			if (v < Short.MIN_VALUE || v > Short.MAX_VALUE) {
-				throw outOfRange("short", v);
-			}
-			return (short) v;
-		}
-		if (target == byte.class) {
-			if (v < Byte.MIN_VALUE || v > Byte.MAX_VALUE) {
-				throw outOfRange("byte", v);
-			}
-			return (byte) v;
-		}
-		if (target == float.class) {
-			return (float) v;
-		}
-		if (target == double.class) {
-			return (double) v;
-		}
-		if (target == Long.class) {
-			return v;
-		}
-		if (target == char.class || target == Character.class) {
-			throw castFailure("java.lang.Long", "java.lang.Character");
-		}
-		if (target == boolean.class || target == Boolean.class) {
-			throw castFailure("java.lang.Long", "java.lang.Boolean");
-		}
-		Long boxed = v;
-		if (target.isInstance(boxed)) {
-			// Boxed to the narrowest type that holds it, like a fixnum (and like the
-			// unchecked conversion): what Java stores, a view's items among them.
-			return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
-		}
-		throw castFailure("java.lang.Long", target.getName());
-	}
-
-	private static Object convertCheckedBigInteger(BigInteger v, Class<?> target) {
-		if (target.isInstance(v)) {
-			return v;
-		}
-		if (target == double.class) {
-			return v.doubleValue();
-		}
-		if (target == float.class) {
-			double d = v.doubleValue();
-			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
-				throw outOfRange("float", v);
-			}
-			return (float) d;
-		}
-		if (target == long.class) {
-			if (v.bitLength() < 64) {
-				return v.longValue();
-			}
-			throw outOfRange("long", v);
-		}
-		if (target == int.class) {
-			return Math.toIntExact(convertCheckedBigIntegerLong(v));
-		}
-		if (target == short.class || target == byte.class) {
-			return convertCheckedLong(convertCheckedBigIntegerLong(v), target);
-		}
-		if (target == char.class || target == Character.class) {
-			throw castFailure("java.math.BigInteger", "java.lang.Character");
-		}
-		if (target == boolean.class || target == Boolean.class) {
-			throw castFailure("java.math.BigInteger", "java.lang.Boolean");
-		}
-		throw castFailure("java.math.BigInteger", target.getName());
-	}
-
-	private static long convertCheckedBigIntegerLong(BigInteger v) {
-		if (v.bitLength() < 64) {
-			return v.longValue();
-		}
-		throw outOfRange("long", v);
-	}
-
-	private static Object convertCheckedDouble(double v, Class<?> target) {
-		if (target == double.class) {
-			return v;
-		}
-		if (target == float.class) {
-			if (v < -Float.MAX_VALUE || v > Float.MAX_VALUE) {
-				throw outOfRange("float", v);
-			}
-			return (float) v;
-		}
-		if (target == long.class) {
-			if (v < Long.MIN_VALUE || v > Long.MAX_VALUE) {
-				throw outOfRange("long", v);
-			}
-			return (long) v;
-		}
-		if (target == int.class) {
-			return Math.toIntExact(convertCheckedDoubleLong(v));
-		}
-		if (target == short.class || target == byte.class) {
-			return convertCheckedLong(convertCheckedDoubleLong(v), target);
-		}
-		Double boxed = v;
-		if (target.isInstance(boxed)) {
-			return boxed;
-		}
-		if (target == char.class || target == Character.class) {
-			throw castFailure("java.lang.Double", "java.lang.Character");
-		}
-		if (target == boolean.class || target == Boolean.class) {
-			throw castFailure("java.lang.Double", "java.lang.Boolean");
-		}
-		throw castFailure("java.lang.Double", target.getName());
-	}
-
-	private static long convertCheckedDoubleLong(double v) {
-		if (v < Long.MIN_VALUE || v > Long.MAX_VALUE) {
-			throw outOfRange("long", v);
-		}
-		return (long) v;
-	}
-
 	// A ratio answers its double for a floating target and truncates toward zero
 	// for an integral one, like the oracle's casts of one.
 	private static Object convertCheckedRatio(LispRatio ratio, Class<?> target) {
@@ -2139,18 +1804,14 @@ final class JavaInterop {
 		if (target == float.class || target == Float.class) {
 			double d = ratio.doubleValue();
 			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
-				throw outOfRange("float", ratio.print());
+				throw JavaOverloads.outOfRange("float", ratio.print());
 			}
 			return (float) d;
 		}
 		if (target == long.class || target == int.class || target == short.class || target == byte.class) {
-			return convertCheckedBigInteger(ratio.numerator().divide(ratio.denominator()), target);
+			return JavaOverloads.convertCheckedBigInteger(ratio.numerator().divide(ratio.denominator()), target);
 		}
-		throw castFailure(valueClassName(ratio), castTargetName(target));
-	}
-
-	private static String valueClassName(LispVal value) {
-		return value.getClass().getName();
+		throw castFailure(ratio.getClass().getName(), castTargetName(target));
 	}
 
 	private static Object convertCheckedFunction(LispVal function, Class<?> target, Caller caller) {
@@ -2693,31 +2354,11 @@ final class JavaInterop {
 	// name is the error's own, slashes to dots. Any other LinkageError is not caught:
 	// it propagates as it did.
 	private static LispEvalException unlinkable(String className, NoClassDefFoundError ex) {
-		String detail = ex.getMessage();
-		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
-		return new LispEvalException("Cannot link class " + className + ": missing class " + missing);
+		return new LispEvalException(JavaOverloads.unlinkableMessage(className, ex));
 	}
 
-	// The missing class an ExceptionInInitializerError's cause chain holds, or
-	// null: a dependency class whose static initializer needs a missing class
-	// initializes with it, while a genuinely broken initializer holds none
-	// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
-	private static @Nullable NoClassDefFoundError unlinkableCause(Throwable ex) {
-		Throwable current = ex;
-		while (current != null) {
-			if (current instanceof NoClassDefFoundError missing) {
-				return missing;
-			}
-			current = current.getCause();
-		}
-		return null;
-	}
-
-	// What a java: site over a class whose initialization needs a missing class
-	// throws: the same refusal unlinkable answers; a genuinely broken
-	// initializer's own failure is rethrown as it was.
 	private static RuntimeException initializerFailed(String className, ExceptionInInitializerError ex) {
-		NoClassDefFoundError cause = unlinkableCause(ex);
+		NoClassDefFoundError cause = JavaOverloads.unlinkableCause(ex);
 		if (cause != null) {
 			return unlinkable(className, cause);
 		}

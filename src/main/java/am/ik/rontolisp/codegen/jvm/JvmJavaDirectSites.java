@@ -1647,12 +1647,11 @@ final class JvmJavaDirectSites {
 			boolean packed = this.site.packed();
 			int fixed = packed ? params.size() - 1 : params.size();
 			for (int i = 0; i < fixed; i++) {
-				emitArgumentCheck(i, this.valueSlots[firstValue + i], arguments.get(i));
+				emitCheck(i, this.valueSlots[firstValue + i], arguments.get(i));
 			}
 			if (packed) {
-				JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
 				for (int j = 0; j < arguments.size() - fixed; j++) {
-					emitArgumentCheck(fixed + j, this.valueSlots[firstValue + fixed + j], arguments.get(fixed + j));
+					emitCheck(fixed + j, this.valueSlots[firstValue + fixed + j], arguments.get(fixed + j));
 				}
 			}
 		}
@@ -1697,59 +1696,6 @@ final class JvmJavaDirectSites {
 			emitKindTest(slot, JavaKind.Lisp.FUNCTION, false, notFunction);
 			throwDescribing(this.a, JavaImplementation.FUNCTION_OBJECT_REFUSAL, slot);
 			this.a.labelBinding(notFunction);
-		}
-
-		/**
-		 * Leaves the converted argument on the stack, or throws for a value of no kind it
-		 * counted on.
-		 */
-		private void emitArgumentCheck(int index, int slot, JavaSite.Argument argument) {
-			MethodCode.Label done = this.a.newLabel();
-			if (!argument.known()) {
-				if (argument.bound() == null) {
-					return;
-				}
-				String boundClass = java.util.Objects.requireNonNull(argument.bound());
-				MethodCode.Label fail = this.a.newLabel();
-				this.a.aload(slot);
-				this.a.ifnull(done);
-				this.a.aload(slot);
-				this.a.invokestatic(kind());
-				this.a.loadConstant(KIND_HOST);
-				this.a.if_icmpne(fail);
-				MethodCode.Label missing = this.boundMissing.get(boundClass);
-				if (missing == null) {
-					missing = this.a.newLabel();
-					this.boundMissing.put(boundClass, missing);
-				}
-				MethodCode.Label start = this.a.newBoundLabel();
-				this.a.aload(slot);
-				this.a.instanceOf(cls(
-						java.util.Objects.requireNonNull(JvmJavaDirectSites.this.lookup.find(boundClass), boundClass)));
-				handle(start, this.a.newBoundLabel(), missing, "java/lang/NoClassDefFoundError");
-				this.a.ifne(done);
-				this.a.labelBinding(fail);
-			}
-			else {
-				List<JavaKind> kinds = argument.kinds();
-				boolean bothStrings = kinds.contains(JavaKind.Lisp.STRING) && kinds.contains(JavaKind.Lisp.STRING_1);
-				for (JavaKind kind : kinds) {
-					if (kind == JavaKind.Lisp.STRING_1 && bothStrings) {
-						continue; // the STRING test covers both, converted alike
-					}
-					if (kind instanceof JavaType host && !isHostKind(host)) {
-						continue; // the bridge's kindOf never answers it (a bignum's
-									// class)
-					}
-					MethodCode.Label next = this.a.newLabel();
-					emitKindTest(slot, kind, bothStrings, next);
-					this.a.goto_(done);
-					this.a.labelBinding(next);
-				}
-			}
-			throwDescribing(this.a,
-					this.operator + ": argument " + (index + 1) + " is not " + argument.expected() + ", got ", slot);
-			this.a.labelBinding(done);
 		}
 
 		/**
@@ -2402,25 +2348,7 @@ final class JvmJavaDirectSites {
 						}
 					}
 				}
-				case FUNCTION -> {
-					ClassEntry objects = cls("[Ljava/lang/Object;");
-					a.aload(slot);
-					a.ifnull(fail);
-					a.aload(slot);
-					a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-					a.ldc(objects);
-					a.if_acmpne(fail);
-					a.aload(slot);
-					a.checkcast(objects);
-					a.arraylength();
-					a.ifeq(fail);
-					a.aload(slot);
-					a.checkcast(objects);
-					a.loadConstant(0);
-					a.aaload();
-					a.instanceOf(cls("java/lang/Integer"));
-					a.ifeq(fail);
-				}
+				case FUNCTION -> emitFunctionTest(a, slot, fail);
 			}
 		}
 
@@ -2598,27 +2526,31 @@ final class JvmJavaDirectSites {
 				}
 				case "java.math.BigInteger" ->
 					a.invokestatic(method("java/math/BigInteger", "valueOf", "(J)Ljava/math/BigInteger;"));
-				default -> {
-					// Boxed to the narrowest type that holds it, like a fixnum.
-					MethodCode.Label wide = a.newLabel();
-					MethodCode.Label end = a.newLabel();
-					a.lstore(this.longTemp);
-					a.lload(this.longTemp);
-					a.lload(this.longTemp);
-					a.l2i();
-					a.i2l();
-					a.lcmp();
-					a.ifne(wide);
-					a.lload(this.longTemp);
-					a.l2i();
-					a.invokestatic(method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;"));
-					a.goto_(end);
-					a.labelBinding(wide);
-					a.lload(this.longTemp);
-					a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
-					a.labelBinding(end);
-				}
+				default -> emitNarrowestLongBox(this.longTemp);
 			}
+		}
+
+		// Boxes the long on the stack to the narrowest Java integer box (Integer or
+		// Long).
+		private void emitNarrowestLongBox(int temp) {
+			MethodCode a = this.a;
+			MethodCode.Label wide = a.newLabel();
+			MethodCode.Label end = a.newLabel();
+			a.lstore(temp);
+			a.lload(temp);
+			a.lload(temp);
+			a.l2i();
+			a.i2l();
+			a.lcmp();
+			a.ifne(wide);
+			a.lload(temp);
+			a.l2i();
+			a.invokestatic(method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;"));
+			a.goto_(end);
+			a.labelBinding(wide);
+			a.lload(temp);
+			a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
+			a.labelBinding(end);
 		}
 
 		void longValue(int slot) {
@@ -2825,32 +2757,12 @@ final class JvmJavaDirectSites {
 				case "double" -> a.l2d();
 				default -> {
 					if (isCheckedBoxAssignable(target, "java.lang.Long")) {
-						// Boxed to the narrowest type that holds it, like a fixnum (and
-						// like the
-						// unchecked conversion): what Java stores, a view's items among
-						// them. An
-						// Integer is every such target a Long is.
-						MethodCode.Label wide = a.newLabel();
-						MethodCode.Label boxed = a.newLabel();
-						a.lstore(temp);
-						a.lload(temp);
-						a.lload(temp);
-						a.l2i();
-						a.i2l();
-						a.lcmp();
-						a.ifne(wide);
-						a.lload(temp);
-						a.l2i();
-						a.invokestatic(method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;"));
-						a.goto_(boxed);
-						a.labelBinding(wide);
-						a.lload(temp);
-						a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
-						a.labelBinding(boxed);
+						emitNarrowestLongBox(temp);
 						return true;
 					}
 					a.pop2();
-					throwCheckedCCE("java.lang.Long", checkedCastName(target.name()));
+					throwCheckedCCE(JavaOverloads.checkedBoxName(JavaKind.Lisp.INTEGER),
+							JavaOverloads.checkedCastTargetName(target.name()));
 					return false;
 				}
 			}
@@ -2880,7 +2792,8 @@ final class JvmJavaDirectSites {
 						return true;
 					}
 					a.pop2();
-					throwCheckedCCE("java.lang.Double", checkedCastName(target.name()));
+					throwCheckedCCE(JavaOverloads.checkedBoxName(JavaKind.Lisp.FLOAT),
+							JavaOverloads.checkedCastTargetName(target.name()));
 					return false;
 				}
 			}
@@ -2911,7 +2824,8 @@ final class JvmJavaDirectSites {
 				}
 				default -> {
 					a.pop();
-					throwCheckedCCE("java.math.BigInteger", checkedCastName(target.name()));
+					throwCheckedCCE(JavaOverloads.checkedBoxName(JavaKind.Lisp.BIGNUM),
+							JavaOverloads.checkedCastTargetName(target.name()));
 					return false;
 				}
 			}
@@ -2927,30 +2841,22 @@ final class JvmJavaDirectSites {
 				a.aload(slot);
 				return true;
 			}
+			JavaKind.Lisp lisp = (JavaKind.Lisp) kind;
 			String name = target.name();
-			switch ((JavaKind.Lisp) kind) {
+			switch (lisp) {
 				case NIL -> {
-					if ("boolean".equals(name)) {
-						throwCheckedNPE("java.lang.Boolean.booleanValue()");
+					String nullMethod = JavaOverloads.checkedNullMethod(name);
+					if (nullMethod != null) {
+						throwCheckedNPE(nullMethod);
 						return false;
 					}
-					else if ("char".equals(name) || "int".equals(name)) {
-						throwCheckedNPE("java.lang.Character.charValue()");
-						return false;
-					}
-					else if (target.isPrimitive()) {
-						throwCheckedNPE("java.lang.Number.doubleValue()");
-						return false;
-					}
-					else {
-						a.aconst_null();
-					}
+					a.aconst_null();
 				}
 				case T -> {
-					return emitCheckedBoolean(slot, true, target);
+					return emitCheckedBoolean(true, target);
 				}
 				case FALSE -> {
-					return emitCheckedBoolean(slot, false, target);
+					return emitCheckedBoolean(false, target);
 				}
 				case INTEGER -> {
 					longValue(slot);
@@ -2969,20 +2875,8 @@ final class JvmJavaDirectSites {
 					if (isCheckedBoxAssignable(target, "java.lang.String")) {
 						unframedString(slot);
 					}
-					else if ("char".equals(name) || "java.lang.Character".equals(name)) {
-						throwCheckedCCE("java.lang.String", "java.lang.Character");
-						return false;
-					}
-					else if ("boolean".equals(name) || "java.lang.Boolean".equals(name)) {
-						throwCheckedCCE("java.lang.String", "java.lang.Boolean");
-						return false;
-					}
-					else if (target.isPrimitive()) {
-						throwCheckedCCE("java.lang.String", "java.lang.Number");
-						return false;
-					}
 					else {
-						throwCheckedCCE("java.lang.String", name);
+						throwCheckedCCE(JavaOverloads.checkedBoxName(lisp), JavaOverloads.checkedCastTargetName(name));
 						return false;
 					}
 				}
@@ -2995,16 +2889,8 @@ final class JvmJavaDirectSites {
 						a.i2c();
 						a.invokestatic(method("java/lang/Character", "valueOf", "(C)Ljava/lang/Character;"));
 					}
-					else if ("boolean".equals(name) || "java.lang.Boolean".equals(name)) {
-						throwCheckedCCE("java.lang.Character", "java.lang.Boolean");
-						return false;
-					}
-					else if (target.isPrimitive()) {
-						throwCheckedCCE("java.lang.Character", "java.lang.Number");
-						return false;
-					}
 					else {
-						throwCheckedCCE("java.lang.Character", name);
+						throwCheckedCCE(JavaOverloads.checkedBoxName(lisp), JavaOverloads.checkedCastTargetName(name));
 						return false;
 					}
 				}
@@ -3016,13 +2902,13 @@ final class JvmJavaDirectSites {
 				case FUNCTION -> {
 					// The interface's generated proxy class over the function, as the
 					// unchecked conversion makes it: proxies are exact, never narrowing.
-					// Any
-					// other target refuses, as the interpreter's checked conversion does.
-					// The function-object refusal is signalled, so the call's handler
-					// throws it on unchanged instead of the error calling the member
-					// (a coercion failure still wraps, as the interpreter wraps it).
+					// Any other target refuses, as the interpreter's checked conversion
+					// does. The function-object refusal is signalled, so the call's
+					// handler throws it on unchanged instead of the error calling the
+					// member (a coercion failure still wraps, as the interpreter wraps
+					// it).
 					if (!target.isInterface() && !JavaOverloads.OBJECT.equals(name)) {
-						throwCheckedCCE(JavaImplementation.FUNCTION_CLASS, checkedCastName(name));
+						throwCheckedCCE(JavaOverloads.checkedBoxName(lisp), JavaOverloads.checkedCastTargetName(name));
 						return false;
 					}
 					MethodRefEntry factory = JavaOverloads.OBJECT.equals(name)
@@ -3047,7 +2933,7 @@ final class JvmJavaDirectSites {
 
 		// Pushes t's (or |false|'s) value as the target with the oracle's checked casts:
 		// the boolean, the box where it takes it, else the constant refusal.
-		private boolean emitCheckedBoolean(int slot, boolean truthy, JavaType target) {
+		private boolean emitCheckedBoolean(boolean truthy, JavaType target) {
 			MethodCode a = this.a;
 			String name = target.name();
 			if ("boolean".equals(name)) {
@@ -3058,15 +2944,7 @@ final class JvmJavaDirectSites {
 				a.getstatic(field("java/lang/Boolean", truthy ? "TRUE" : "FALSE", "Ljava/lang/Boolean;"));
 				return true;
 			}
-			if ("char".equals(name) || "java.lang.Character".equals(name)) {
-				throwCheckedCCE("java.lang.Boolean", "java.lang.Character");
-			}
-			else if (target.isPrimitive()) {
-				throwCheckedCCE("java.lang.Boolean", "java.lang.Number");
-			}
-			else {
-				throwCheckedCCE("java.lang.Boolean", name);
-			}
+			throwCheckedCCE(JavaOverloads.checkedBoxName(JavaKind.Lisp.T), JavaOverloads.checkedCastTargetName(name));
 			return false;
 		}
 
@@ -3281,6 +3159,188 @@ final class JvmJavaDirectSites {
 			return JavaStaticType.becomesLisp(declared, JvmJavaDirectSites.this.lookup)
 					|| JvmJavaDirectSites.this.handles
 							&& (declared.isInterface() || VIEW_SUPERCLASSES.contains(declared.name()));
+		}
+
+		// Converts a sequence in local 0 (when _jkind code in local 1 is KIND_CONS or
+		// KIND_ARRAY) to an array or ArrayList for TARGET, each element through EACH.
+		void emitSequenceConvert(JavaType target, MethodRefEntry each) {
+			MethodCode a = this.a;
+			JavaType element = Objects.requireNonNull(sequenceElement(target));
+			ClassEntry type = cls(target);
+			boolean needsCast = !target.isArray() && !"java.lang.Object".equals(target.name())
+					&& !"java.util.ArrayList".equals(target.name());
+			MethodCode.Label sequenceValue = a.newLabel();
+			MethodCode.Label notSequence = a.newLabel();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			int elements = this.nextSlot++;
+			int result = this.nextSlot++;
+			int index = this.nextSlot++;
+			a.iload(1);
+			a.loadConstant(KIND_CONS);
+			a.if_icmpeq(sequenceValue);
+			a.iload(1);
+			a.loadConstant(KIND_ARRAY);
+			a.if_icmpne(notSequence);
+			a.labelBinding(sequenceValue);
+			a.aload(0);
+			a.invokestatic(sequence());
+			a.astore(elements);
+			a.aload(elements);
+			a.ifnull(notSequence);
+			if (target.isArray()) {
+				a.aload(elements);
+				a.arraylength();
+				newArray(element);
+			}
+			else {
+				ClassEntry arrayList = cls("java/util/ArrayList");
+				a.new_(arrayList);
+				a.dup();
+				a.aload(elements);
+				a.arraylength();
+				a.invokespecial(method("java/util/ArrayList", "<init>", "(I)V"));
+			}
+			a.astore(result);
+			a.loadConstant(0);
+			a.istore(index);
+			a.labelBinding(loop);
+			a.iload(index);
+			a.aload(elements);
+			a.arraylength();
+			a.if_icmpge(done);
+			if (target.isArray()) {
+				a.aload(result);
+				a.checkcast(type);
+				a.iload(index);
+				a.aload(elements);
+				a.iload(index);
+				a.aaload();
+				a.invokestatic(each);
+				a.arrayStore(typeKind(element));
+			}
+			else {
+				a.aload(result);
+				a.checkcast(cls("java/util/ArrayList"));
+				a.aload(elements);
+				a.iload(index);
+				a.aaload();
+				a.invokestatic(each);
+				a.invokevirtual(method("java/util/ArrayList", "add", "(Ljava/lang/Object;)Z"));
+				a.pop();
+			}
+			a.iinc(index, 1);
+			a.goto_(loop);
+			a.labelBinding(done);
+			a.aload(result);
+			if (needsCast) {
+				a.checkcast(type);
+			}
+			a.areturn();
+			a.labelBinding(notSequence);
+		}
+
+		// Converts a hash table in local 0 (when _jkind code in local 1 is KIND_TABLE)
+		// to a fresh LinkedHashMap for TARGET, each key and value through EACH.
+		void emitTableConvert(JavaType target, MethodRefEntry each) {
+			MethodCode a = this.a;
+			MethodCode.Label notTable = a.newLabel();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			int entries = this.nextSlot++;
+			int result = this.nextSlot++;
+			int index = this.nextSlot++;
+			ClassEntry linkedHashMap = cls("java/util/LinkedHashMap");
+			a.iload(1);
+			a.loadConstant(KIND_TABLE);
+			a.if_icmpne(notTable);
+			a.aload(0);
+			a.invokestatic(tableEntries());
+			a.astore(entries);
+			a.new_(linkedHashMap);
+			a.dup();
+			a.invokespecial(method("java/util/LinkedHashMap", "<init>", "()V"));
+			a.astore(result);
+			a.loadConstant(0);
+			a.istore(index);
+			a.labelBinding(loop);
+			a.iload(index);
+			a.aload(entries);
+			a.arraylength();
+			a.if_icmpge(done);
+			a.aload(result);
+			a.checkcast(linkedHashMap);
+			a.aload(entries);
+			a.iload(index);
+			a.aaload();
+			a.invokestatic(each);
+			a.aload(entries);
+			a.iload(index);
+			a.loadConstant(1);
+			a.iadd();
+			a.aaload();
+			a.invokestatic(each);
+			a.invokevirtual(method("java/util/LinkedHashMap", "put",
+					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+			a.pop();
+			a.iinc(index, 2);
+			a.goto_(loop);
+			a.labelBinding(done);
+			a.aload(result);
+			if (!"java.lang.Object".equals(target.name()) && !"java.util.LinkedHashMap".equals(target.name())) {
+				a.checkcast(cls(target));
+			}
+			a.areturn();
+			a.labelBinding(notTable);
+		}
+
+		// Converts a java:view List (KIND_VIEW) or :bytes view (KIND_BYTES) in local 0.
+		// When SELF is non-null, a List view unpacks into an array through SELF where an
+		// array is expected.
+		void emitViewConvert(JavaType target, @Nullable MethodRefEntry self) {
+			MethodCode a = this.a;
+			ClassEntry type = cls(target);
+			boolean needsCast = !"java.lang.Object".equals(target.name());
+			MethodCode.Label notView = a.newLabel();
+			a.iload(1);
+			a.loadConstant(KIND_VIEW);
+			a.if_icmpne(notView);
+			JavaType component = target.componentType();
+			if (component == null || self == null) {
+				a.aload(0);
+				if (needsCast) {
+					a.checkcast(type);
+				}
+				a.areturn();
+			}
+			else {
+				MethodCode.Label hasItems = a.newLabel();
+				a.aload(0);
+				a.checkcast(cls(JAVA_LIST_VIEW));
+				a.invokevirtual(method(JAVA_LIST_VIEW, "items", "()Ljava/lang/Object;"));
+				a.dup();
+				a.ifnonnull(hasItems);
+				a.pop();
+				a.loadConstant(0);
+				newArray(component);
+				a.checkcast(type);
+				a.areturn();
+				a.labelBinding(hasItems);
+				a.invokestatic(self);
+				a.areturn();
+			}
+			a.labelBinding(notView);
+			if (JavaOverloads.bytesViewCost(target) != JavaOverloads.NO_MATCH) {
+				MethodCode.Label notBytes = a.newLabel();
+				a.iload(1);
+				a.loadConstant(KIND_BYTES);
+				a.if_icmpne(notBytes);
+				a.aload(0);
+				a.checkcast(cls(JAVA_BYTES_VIEW));
+				a.invokevirtual(method(JAVA_BYTES_VIEW, "bytes", "()[B"));
+				a.areturn();
+				a.labelBinding(notBytes);
+			}
 		}
 
 	}
@@ -4382,11 +4442,13 @@ final class JvmJavaDirectSites {
 					: JavaOverloads.returnedCost(kind, target, this.lookup) != JavaOverloads.NO_MATCH;
 			if (!convertible) {
 				// No unchecked arm takes it: the refusal, in the oracle's words.
-				if (kind == JavaKind.Lisp.NIL && target.isPrimitive()) {
-					body.throwCheckedNPE(checkedNullMethod(target.name()));
+				String nullMethod = kind == JavaKind.Lisp.NIL ? JavaOverloads.checkedNullMethod(target.name()) : null;
+				if (nullMethod != null) {
+					body.throwCheckedNPE(nullMethod);
 				}
 				else {
-					body.throwCheckedCCE(checkedBoxName(kind), checkedCastName(target.name()));
+					body.throwCheckedCCE(JavaOverloads.checkedBoxName(kind),
+							JavaOverloads.checkedCastTargetName(target.name()));
 				}
 			}
 			else {
@@ -4404,29 +4466,6 @@ final class JvmJavaDirectSites {
 		a.invokestatic(convert(target, true, true, markers));
 		a.return_(Body.typeKind(target));
 		return body.finish(name, desc);
-	}
-
-	// The box a value of the kind is to the oracle, for a refusal's words.
-	private static String checkedBoxName(JavaKind.Lisp kind) {
-		return switch (kind) {
-			case NIL -> "null";
-			case T, FALSE -> "java.lang.Boolean";
-			case INTEGER, SUPPLEMENTARY_CHAR -> "java.lang.Long";
-			case BIGNUM -> "java.math.BigInteger";
-			case FLOAT -> "java.lang.Double";
-			case STRING, STRING_1 -> "java.lang.String";
-			case CHAR -> "java.lang.Character";
-			case FUNCTION -> JavaImplementation.FUNCTION_CLASS;
-		};
-	}
-
-	// The method a nil unboxing names for the target, as the oracle's compiler names it.
-	private static String checkedNullMethod(String target) {
-		return switch (target) {
-			case "boolean" -> "java.lang.Boolean.booleanValue()";
-			case "char", "int" -> "java.lang.Character.charValue()";
-			default -> "java.lang.Number.doubleValue()";
-		};
 	}
 
 	// _jconv$N(Object)T for one type: the bridge's convert arm of the value's kind, a
@@ -4465,176 +4504,18 @@ final class JvmJavaDirectSites {
 			a.return_(Body.typeKind(target));
 			a.labelBinding(next);
 		}
-		JavaType element = sequences ? sequenceElement(target) : null;
-		if (element != null) {
-			MethodCode.Label sequenceValue = a.newLabel();
-			MethodCode.Label notSequence = a.newLabel();
-			MethodCode.Label loop = a.newLabel();
-			MethodCode.Label done = a.newLabel();
-			int elements = body.nextSlot++;
-			int result = body.nextSlot++;
-			int index = body.nextSlot++;
-			a.iload(code);
-			a.loadConstant(KIND_CONS);
-			a.if_icmpeq(sequenceValue);
-			a.iload(code);
-			a.loadConstant(KIND_ARRAY);
-			a.if_icmpne(notSequence);
-			a.labelBinding(sequenceValue);
-			a.aload(0);
-			a.invokestatic(sequence());
-			a.astore(elements);
-			a.aload(elements);
-			a.ifnull(reject);
-			MethodRefEntry each = convert(element, functions, sequences, markers);
-			if (target.isArray()) {
-				a.aload(elements);
-				a.arraylength();
-				body.newArray(element);
+		if (sequences) {
+			JavaType element = sequenceElement(target);
+			if (element != null) {
+				body.emitSequenceConvert(target, convert(element, functions, sequences, markers));
 			}
-			else {
-				ClassEntry arrayList = cls("java/util/ArrayList");
-				a.new_(arrayList);
-				a.dup();
-				a.aload(elements);
-				a.arraylength();
-				a.invokespecial(method("java/util/ArrayList", "<init>", "(I)V"));
+			JavaType entry = tableEntry(target);
+			if (entry != null) {
+				body.emitTableConvert(target, convert(entry, functions, sequences, markers));
 			}
-			a.astore(result);
-			a.loadConstant(0);
-			a.istore(index);
-			a.labelBinding(loop);
-			a.iload(index);
-			a.aload(elements);
-			a.arraylength();
-			a.if_icmpge(done);
-			if (target.isArray()) {
-				a.aload(result);
-				a.checkcast(type);
-				a.iload(index);
-				a.aload(elements);
-				a.iload(index);
-				a.aaload();
-				a.invokestatic(each);
-				a.arrayStore(Body.typeKind(element));
-			}
-			else {
-				a.aload(result);
-				a.checkcast(cls("java/util/ArrayList"));
-				a.aload(elements);
-				a.iload(index);
-				a.aaload();
-				a.invokestatic(each);
-				a.invokevirtual(method("java/util/ArrayList", "add", "(Ljava/lang/Object;)Z"));
-				a.pop();
-			}
-			a.iinc(index, 1);
-			a.goto_(loop);
-			a.labelBinding(done);
-			a.aload(result);
-			if (needsCast) {
-				a.checkcast(type);
-			}
-			a.areturn();
-			a.labelBinding(notSequence);
-		}
-		JavaType entry = sequences ? tableEntry(target) : null;
-		if (entry != null) {
-			// A fresh LinkedHashMap of the entries, each key and value converted.
-			MethodCode.Label notTable = a.newLabel();
-			MethodCode.Label loop = a.newLabel();
-			MethodCode.Label done = a.newLabel();
-			int entries = body.nextSlot++;
-			int result = body.nextSlot++;
-			int index = body.nextSlot++;
-			ClassEntry linkedHashMap = cls("java/util/LinkedHashMap");
-			MethodRefEntry each = convert(entry, functions, sequences, markers);
-			a.iload(code);
-			a.loadConstant(KIND_TABLE);
-			a.if_icmpne(notTable);
-			a.aload(0);
-			a.invokestatic(tableEntries());
-			a.astore(entries);
-			a.new_(linkedHashMap);
-			a.dup();
-			a.invokespecial(method("java/util/LinkedHashMap", "<init>", "()V"));
-			a.astore(result);
-			a.loadConstant(0);
-			a.istore(index);
-			a.labelBinding(loop);
-			a.iload(index);
-			a.aload(entries);
-			a.arraylength();
-			a.if_icmpge(done);
-			a.aload(result);
-			a.checkcast(linkedHashMap);
-			a.aload(entries);
-			a.iload(index);
-			a.aaload();
-			a.invokestatic(each);
-			a.aload(entries);
-			a.iload(index);
-			a.loadConstant(1);
-			a.iadd();
-			a.aaload();
-			a.invokestatic(each);
-			a.invokevirtual(method("java/util/LinkedHashMap", "put",
-					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
-			a.pop();
-			a.iinc(index, 2);
-			a.goto_(loop);
-			a.labelBinding(done);
-			a.aload(result);
-			if (needsCast) {
-				a.checkcast(type);
-			}
-			a.areturn();
-			a.labelBinding(notTable);
 		}
 		if (this.views && reference) {
-			// A java:view List: itself where its class fits (its cost said so), else an
-			// array of its items (none for nil).
-			MethodCode.Label notView = a.newLabel();
-			a.iload(code);
-			a.loadConstant(KIND_VIEW);
-			a.if_icmpne(notView);
-			JavaType component = target.componentType();
-			if (component == null || !sequences) {
-				a.aload(0);
-				if (needsCast) {
-					a.checkcast(type);
-				}
-				a.areturn();
-			}
-			else {
-				MethodCode.Label hasItems = a.newLabel();
-				a.aload(0);
-				a.checkcast(cls(JAVA_LIST_VIEW));
-				a.invokevirtual(method(JAVA_LIST_VIEW, "items", "()Ljava/lang/Object;"));
-				a.dup();
-				a.ifnonnull(hasItems);
-				a.pop();
-				a.loadConstant(0);
-				body.newArray(component);
-				a.checkcast(type);
-				a.areturn();
-				a.labelBinding(hasItems);
-				a.invokestatic(convert(target, functions, sequences, markers));
-				a.areturn();
-			}
-			a.labelBinding(notView);
-			if (JavaOverloads.bytesViewCost(target) != JavaOverloads.NO_MATCH) {
-				// A :bytes view: the vector's own octets.
-				MethodCode.Label notBytes = a.newLabel();
-				a.iload(code);
-				a.loadConstant(KIND_BYTES);
-				a.if_icmpne(notBytes);
-				a.aload(0);
-				a.checkcast(cls(JAVA_BYTES_VIEW));
-				a.invokevirtual(method(JAVA_BYTES_VIEW, "bytes", "()[B"));
-				a.areturn();
-				a.labelBinding(notBytes);
-			}
+			body.emitViewConvert(target, sequences ? convert(target, functions, sequences, markers) : null);
 		}
 		if (reference) {
 			a.iload(code);
@@ -4656,18 +4537,6 @@ final class JvmJavaDirectSites {
 		a.invokespecial(method("java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V"));
 		a.athrow();
 		return body.finish(name, desc);
-	}
-
-	// The class a checked conversion casts to for the target: the box for a
-	// primitive (as the oracle's emitUnboxArg casts a primitive target through its
-	// box), the target's own name otherwise. Computed when the helper is built.
-	private static String checkedCastName(String target) {
-		return switch (target) {
-			case "boolean" -> "java.lang.Boolean";
-			case "char" -> "java.lang.Character";
-			case "byte", "short", "int", "long", "float", "double" -> "java.lang.Number";
-			default -> target;
-		};
 	}
 
 	// _jchk$N(Object)T for one type: the checked conversion of any value to this
@@ -4699,172 +4568,21 @@ final class JvmJavaDirectSites {
 		}
 		JavaType element = sequenceElement(target);
 		if (element != null) {
-			MethodCode.Label sequenceValue = a.newLabel();
-			MethodCode.Label notSequence = a.newLabel();
-			MethodCode.Label loop = a.newLabel();
-			MethodCode.Label done = a.newLabel();
-			int elements = body.nextSlot++;
-			int result = body.nextSlot++;
-			int index = body.nextSlot++;
-			a.iload(code);
-			a.loadConstant(KIND_CONS);
-			a.if_icmpeq(sequenceValue);
-			a.iload(code);
-			a.loadConstant(KIND_ARRAY);
-			a.if_icmpne(notSequence);
-			a.labelBinding(sequenceValue);
-			a.aload(0);
-			a.invokestatic(sequence());
-			a.astore(elements);
-			a.aload(elements);
-			a.ifnull(notSequence);
-			MethodRefEntry each = convertChecked(element, markers);
-			if (target.isArray()) {
-				a.aload(elements);
-				a.arraylength();
-				body.newArray(element);
-			}
-			else {
-				ClassEntry arrayList = cls("java/util/ArrayList");
-				a.new_(arrayList);
-				a.dup();
-				a.aload(elements);
-				a.arraylength();
-				a.invokespecial(method("java/util/ArrayList", "<init>", "(I)V"));
-			}
-			a.astore(result);
-			a.loadConstant(0);
-			a.istore(index);
-			a.labelBinding(loop);
-			a.iload(index);
-			a.aload(elements);
-			a.arraylength();
-			a.if_icmpge(done);
-			if (target.isArray()) {
-				a.aload(result);
-				a.checkcast(cls(target));
-				a.iload(index);
-				a.aload(elements);
-				a.iload(index);
-				a.aaload();
-				a.invokestatic(each);
-				a.arrayStore(Body.typeKind(element));
-			}
-			else {
-				a.aload(result);
-				a.checkcast(cls("java/util/ArrayList"));
-				a.aload(elements);
-				a.iload(index);
-				a.aaload();
-				a.invokestatic(each);
-				a.invokevirtual(method("java/util/ArrayList", "add", "(Ljava/lang/Object;)Z"));
-				a.pop();
-			}
-			a.iinc(index, 1);
-			a.goto_(loop);
-			a.labelBinding(done);
-			a.aload(result);
-			a.areturn();
-			a.labelBinding(notSequence);
+			body.emitSequenceConvert(target, convertChecked(element, markers));
 		}
 		JavaType entry = tableEntry(target);
 		if (entry != null) {
-			MethodCode.Label notTable = a.newLabel();
-			MethodCode.Label loop = a.newLabel();
-			MethodCode.Label done = a.newLabel();
-			int entries = body.nextSlot++;
-			int result = body.nextSlot++;
-			int index = body.nextSlot++;
-			ClassEntry linkedHashMap = cls("java/util/LinkedHashMap");
-			MethodRefEntry each = convertChecked(entry, markers);
-			a.iload(code);
-			a.loadConstant(KIND_TABLE);
-			a.if_icmpne(notTable);
-			a.aload(0);
-			a.invokestatic(tableEntries());
-			a.astore(entries);
-			a.new_(linkedHashMap);
-			a.dup();
-			a.invokespecial(method("java/util/LinkedHashMap", "<init>", "()V"));
-			a.astore(result);
-			a.loadConstant(0);
-			a.istore(index);
-			a.labelBinding(loop);
-			a.iload(index);
-			a.aload(entries);
-			a.arraylength();
-			a.if_icmpge(done);
-			a.aload(result);
-			a.checkcast(linkedHashMap);
-			a.aload(entries);
-			a.iload(index);
-			a.aaload();
-			a.invokestatic(each);
-			a.aload(entries);
-			a.iload(index);
-			a.loadConstant(1);
-			a.iadd();
-			a.aaload();
-			a.invokestatic(each);
-			a.invokevirtual(method("java/util/LinkedHashMap", "put",
-					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
-			a.pop();
-			a.iinc(index, 2);
-			a.goto_(loop);
-			a.labelBinding(done);
-			a.aload(result);
-			a.areturn();
-			a.labelBinding(notTable);
+			body.emitTableConvert(target, convertChecked(entry, markers));
 		}
 		if (this.views && reference) {
-			// A java:view List: itself where its class fits, else an array of its
-			// items; a :bytes view the vector's own octets. As the unchecked
-			// conversion passes them.
-			MethodCode.Label notView = a.newLabel();
-			a.iload(code);
-			a.loadConstant(KIND_VIEW);
-			a.if_icmpne(notView);
-			JavaType component = target.componentType();
-			if (component == null) {
-				a.aload(0);
-				a.checkcast(cls(target));
-				a.areturn();
-			}
-			else {
-				MethodCode.Label hasItems = a.newLabel();
-				a.aload(0);
-				a.checkcast(cls(JAVA_LIST_VIEW));
-				a.invokevirtual(method(JAVA_LIST_VIEW, "items", "()Ljava/lang/Object;"));
-				a.dup();
-				a.ifnonnull(hasItems);
-				a.pop();
-				a.loadConstant(0);
-				body.newArray(component);
-				a.checkcast(cls(target));
-				a.areturn();
-				a.labelBinding(hasItems);
-				a.invokestatic(convertChecked(target, markers));
-				a.areturn();
-			}
-			a.labelBinding(notView);
-			if (JavaOverloads.bytesViewCost(target) != JavaOverloads.NO_MATCH) {
-				MethodCode.Label notBytes = a.newLabel();
-				a.iload(code);
-				a.loadConstant(KIND_BYTES);
-				a.if_icmpne(notBytes);
-				a.aload(0);
-				a.checkcast(cls(JAVA_BYTES_VIEW));
-				a.invokevirtual(method(JAVA_BYTES_VIEW, "bytes", "()[B"));
-				a.areturn();
-				a.labelBinding(notBytes);
-			}
+			body.emitViewConvert(target, convertChecked(target, markers));
 		}
 		// A ratio (KIND_NONE) and a host object (KIND_HOST); anything else the refusal
 		// naming its class.
 		MethodCode.Label refuse = a.newLabel();
 		buildCheckedConvertTail(body, target, code, temp, refuse);
 		a.labelBinding(refuse);
-		body.throwCheckedDynamicCCE(checkedCastName(target.name()));
+		body.throwCheckedDynamicCCE(JavaOverloads.checkedCastTargetName(target.name()));
 		return body.finish(name, desc);
 	}
 
@@ -5008,10 +4726,9 @@ final class JvmJavaDirectSites {
 		MethodCode.Label no = a.newLabel();
 		a.aload(0);
 		a.ifnull(no);
-		for (String excluded : new String[] { "java/lang/Long", "java/lang/Double", "java/math/BigInteger",
-				"java/lang/String" }) {
+		for (String excluded : JavaOverloads.COMPILED_SCALAR_CLASSES) {
 			a.aload(0);
-			a.instanceOf(cls(excluded));
+			a.instanceOf(cls(excluded.replace('.', '/')));
 			a.ifne(no);
 		}
 		a.aload(0);

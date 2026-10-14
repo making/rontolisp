@@ -1,19 +1,27 @@
 package am.ik.rontolisp.compiler;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
 /**
- * THE {@code java:} overload rule: the conversion cost of an argument kind to a parameter
- * type ({@link #kindCost}), the selection of the cheapest overload ({@link #select}), and
- * the parameter tags that narrow the candidates ({@link #parseMember}). The interpreter
- * ({@code eval.JavaInterop}) selects through this class at run time and the site resolver
- * ({@link JavaSiteResolver}) at compile time, so a call chooses the same member on every
- * backend. The compiled program's bridge ({@code codegen.jvm.JavaBridgeTemplate}) carries
- * a hand copy -- it must stand alone in the output -- which
- * {@code JavaBridgeTemplateParityTest} pins to this one; change the two together.
+ * THE {@code java:} overload and conversion rule: the per-kind rule table
+ * ({@link KindRule}, {@link #rule}), the conversion cost of an argument kind
+ * ({@link #kindCost}) or a callback answer ({@link #returnedCost}) to a parameter type,
+ * the scalar and checked argument conversions ({@link #convertLong},
+ * {@link #convertCheckedLong}, ...), the selection of the cheapest overload
+ * ({@link #select}, {@link #selectRanked}), and the parameter tags that narrow the
+ * candidates ({@link #parseMember}). The interpreter ({@code eval.JavaInterop}), the site
+ * resolver ({@link JavaSiteResolver}) and the direct-site emitter
+ * ({@code codegen.jvm.JvmJavaDirectSites}) read this class directly; the compiled
+ * program's standalone bridge ({@code codegen.jvm.JavaBridgeTemplate}) reads the
+ * serialized {@link #ruleTable()}, pinned to this one by
+ * {@code JavaBridgeTemplateParityTest}.
  */
 public final class JavaOverloads {
 
@@ -101,6 +109,306 @@ public final class JavaOverloads {
 	private static final String BIG_INTEGER = "java.math.BigInteger";
 
 	/**
+	 * The non-array classes the compiled Lisp representation uses for scalar values (an
+	 * integer's {@code Long}, a float's {@code Double}, a bignum's {@code BigInteger}, a
+	 * string's or symbol's {@code String}): none of them is a wrapped host object
+	 * ({@code JvmJavaDirectSites._jhost}, {@code JavaBridgeTemplate.isJavaObject}).
+	 */
+	public static final List<String> COMPILED_SCALAR_CLASSES = List.of("java.lang.Long", "java.lang.Double",
+			BIG_INTEGER, "java.lang.String");
+
+	/**
+	 * One {@link JavaKind.Lisp}'s row in the resolution and conversion rule table: its
+	 * token, the parameter types it matches at {@link #COST_EXACT}, {@link #COST_WIDEN}
+	 * and {@link #COST_NARROW}, the reference types whose supertypes it matches at
+	 * {@link #COST_BOXED}, the extra return-type targets a callback's answer accepts
+	 * ({@link #returnedCost}), whether a value of it is a {@code java:call} receiver and
+	 * the class it converts to when the kind fixes it ({@link #receiverClassName}), and
+	 * the box class a checked conversion's refusal names ({@link #checkedBoxName}).
+	 */
+	public static final class KindRule {
+
+		private final String token;
+
+		private final @Nullable String exact;
+
+		private final List<String> widen;
+
+		private final List<String> narrow;
+
+		private final List<String> boxes;
+
+		private final Map<String, Integer> returnedExtras;
+
+		private final boolean receiver;
+
+		private final @Nullable String receiverClass;
+
+		private final String checkedBoxName;
+
+		private KindRule(Builder builder) {
+			this.token = builder.token;
+			this.exact = builder.exact;
+			this.widen = List.copyOf(builder.widen);
+			this.narrow = List.copyOf(builder.narrow);
+			this.boxes = List.copyOf(builder.boxes);
+			this.returnedExtras = Collections.unmodifiableMap(new LinkedHashMap<>(builder.returnedExtras));
+			this.receiver = builder.receiver;
+			this.receiverClass = builder.receiverClass;
+			if (builder.checkedBoxName != null) {
+				this.checkedBoxName = builder.checkedBoxName;
+			}
+			else if (!this.boxes.isEmpty()) {
+				this.checkedBoxName = this.boxes.get(0);
+			}
+			else {
+				this.checkedBoxName = "null";
+			}
+		}
+
+		/**
+		 * @return the kind's bridge token ({@code "integer"}, {@code "string/1"}, ...)
+		 */
+		public String token() {
+			return this.token;
+		}
+
+		/**
+		 * @return the parameter type matching at {@link #COST_EXACT}, or {@code null}
+		 */
+		public @Nullable String exact() {
+			return this.exact;
+		}
+
+		/**
+		 * @return the parameter types matching at {@link #COST_WIDEN}
+		 */
+		public List<String> widen() {
+			return this.widen;
+		}
+
+		/**
+		 * @return the parameter types matching at {@link #COST_NARROW}
+		 */
+		public List<String> narrow() {
+			return this.narrow;
+		}
+
+		/**
+		 * @return the reference types whose supertypes match at {@link #COST_BOXED}
+		 */
+		public List<String> boxes() {
+			return this.boxes;
+		}
+
+		/**
+		 * @return the extra return-type targets and costs for {@link #returnedCost}
+		 */
+		public Map<String, Integer> returnedExtras() {
+			return this.returnedExtras;
+		}
+
+		/**
+		 * @return whether a value of this kind is a {@code java:call} receiver
+		 */
+		public boolean receiver() {
+			return this.receiver;
+		}
+
+		/**
+		 * @return the fixed class a receiver of this kind converts to, or {@code null}
+		 */
+		public @Nullable String receiverClass() {
+			return this.receiverClass;
+		}
+
+		/**
+		 * @return the box class a checked conversion's refusal names
+		 */
+		public String checkedBoxName() {
+			return this.checkedBoxName;
+		}
+
+		private static final class Builder {
+
+			private final String token;
+
+			private @Nullable String exact;
+
+			private List<String> widen = List.of();
+
+			private List<String> narrow = List.of();
+
+			private List<String> boxes = List.of();
+
+			private final Map<String, Integer> returnedExtras = new LinkedHashMap<>();
+
+			private boolean receiver;
+
+			private @Nullable String receiverClass;
+
+			private @Nullable String checkedBoxName;
+
+			private Builder(String token) {
+				this.token = token;
+			}
+
+			private Builder exact(String type) {
+				this.exact = type;
+				return this;
+			}
+
+			private Builder widen(String... types) {
+				this.widen = List.of(types);
+				return this;
+			}
+
+			private Builder narrow(String... types) {
+				this.narrow = List.of(types);
+				return this;
+			}
+
+			private Builder boxes(String... types) {
+				this.boxes = List.of(types);
+				return this;
+			}
+
+			private Builder returned(int cost, String... types) {
+				for (String type : types) {
+					this.returnedExtras.put(type, cost);
+				}
+				return this;
+			}
+
+			private Builder receiver(String className) {
+				this.receiver = true;
+				this.receiverClass = className;
+				return this;
+			}
+
+			private Builder variableReceiver() {
+				this.receiver = true;
+				return this;
+			}
+
+			private Builder checkedBox(String className) {
+				this.checkedBoxName = className;
+				return this;
+			}
+
+			private KindRule build() {
+				return new KindRule(this);
+			}
+
+		}
+
+	}
+
+	// THE rule table, indexed by JavaKind.Lisp.ordinal().
+	private static final KindRule[] RULES = buildRules();
+
+	private static KindRule[] buildRules() {
+		KindRule[] rules = new KindRule[JavaKind.Lisp.values().length];
+		rules[JavaKind.Lisp.NIL.ordinal()] = new KindRule.Builder("nil").returned(COST_EXACT, "boolean")
+			.checkedBox("null")
+			.build();
+		rules[JavaKind.Lisp.T.ordinal()] = new KindRule.Builder("t").exact("boolean")
+			.widen("java.lang.Boolean")
+			.boxes("java.lang.Boolean")
+			.receiver("java.lang.Boolean")
+			.build();
+		rules[JavaKind.Lisp.FALSE.ordinal()] = new KindRule.Builder("false").exact("boolean")
+			.widen("java.lang.Boolean")
+			.boxes("java.lang.Boolean")
+			.receiver("java.lang.Boolean")
+			.build();
+		rules[JavaKind.Lisp.INTEGER.ordinal()] = new KindRule.Builder("integer").exact("long")
+			.widen("int", "java.lang.Long")
+			.boxes("java.lang.Long", "java.lang.Integer")
+			.returned(COST_CONVERT, "double", "java.lang.Double", "float", "java.lang.Float", BIG_INTEGER)
+			.returned(COST_NARROW, "short", "java.lang.Short", "byte", "java.lang.Byte")
+			.variableReceiver()
+			.build();
+		rules[JavaKind.Lisp.BIGNUM.ordinal()] = new KindRule.Builder("bignum").exact(BIG_INTEGER)
+			.boxes(BIG_INTEGER)
+			.receiver(BIG_INTEGER)
+			.build();
+		rules[JavaKind.Lisp.FLOAT.ordinal()] = new KindRule.Builder("float").exact("double")
+			.widen("java.lang.Double")
+			.narrow("float", "java.lang.Float")
+			.boxes("java.lang.Double")
+			.returned(COST_NARROW, "float", "java.lang.Float")
+			.receiver("java.lang.Double")
+			.build();
+		rules[JavaKind.Lisp.STRING_1.ordinal()] = new KindRule.Builder("string/1").exact("java.lang.String")
+			.boxes("java.lang.String")
+			.returned(COST_NARROW, "char", "java.lang.Character")
+			.receiver("java.lang.String")
+			.build();
+		rules[JavaKind.Lisp.STRING.ordinal()] = new KindRule.Builder("string").exact("java.lang.String")
+			.boxes("java.lang.String")
+			.receiver("java.lang.String")
+			.build();
+		rules[JavaKind.Lisp.CHAR.ordinal()] = new KindRule.Builder("char").exact("char")
+			.widen("java.lang.Character")
+			.boxes("java.lang.Character")
+			.returned(COST_WIDEN, "int", "java.lang.Integer")
+			.receiver("java.lang.Character")
+			.build();
+		rules[JavaKind.Lisp.SUPPLEMENTARY_CHAR.ordinal()] = new KindRule.Builder("char/supplementary").exact("long")
+			.widen("int", "java.lang.Long")
+			.boxes("java.lang.Long", "java.lang.Integer")
+			.receiver("java.lang.Integer")
+			.build();
+		rules[JavaKind.Lisp.FUNCTION.ordinal()] = new KindRule.Builder("function")
+			.checkedBox(JavaImplementation.FUNCTION_CLASS)
+			.build();
+		return rules;
+	}
+
+	/**
+	 * The rule row for a Lisp kind.
+	 * @param kind the kind
+	 * @return its rule
+	 */
+	public static KindRule rule(JavaKind.Lisp kind) {
+		return RULES[kind.ordinal()];
+	}
+
+	/**
+	 * Serializes the per-kind rule table into the compact line-per-kind format
+	 * {@code codegen.jvm.JavaBridgeTemplate} reads:
+	 * {@code token|exact|widen|narrow|boxes|returnedExtras|receiver}.
+	 * @return the serialized rule table
+	 */
+	public static String ruleTable() {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < RULES.length; i++) {
+			if (i > 0) {
+				sb.append('\n');
+			}
+			KindRule r = RULES[i];
+			sb.append(r.token()).append('|');
+			if (r.exact() != null) {
+				sb.append(r.exact());
+			}
+			sb.append('|').append(String.join(",", r.widen()));
+			sb.append('|').append(String.join(",", r.narrow()));
+			sb.append('|').append(String.join(",", r.boxes())).append('|');
+			boolean first = true;
+			for (Map.Entry<String, Integer> entry : r.returnedExtras().entrySet()) {
+				if (!first) {
+					sb.append(',');
+				}
+				first = false;
+				sb.append(entry.getKey()).append('=').append(entry.getValue());
+			}
+			sb.append('|').append(r.receiver() ? '1' : '0');
+		}
+		return sb.toString();
+	}
+
+	/**
 	 * The conversion cost of a value a {@code java:reify} / {@code java:proxy} function
 	 * answers for the method's return type: what the value converts to however Java takes
 	 * it, as {@code java:} always converted answers (the oracle's proxy class unboxes a
@@ -114,47 +422,10 @@ public final class JavaOverloads {
 	 * @return the cost, or {@link #NO_MATCH}
 	 */
 	public static int returnedCost(JavaKind kind, JavaType target, JavaClassLookup lookup) {
-		if (!(kind instanceof JavaKind.Lisp lisp)) {
-			return kindCost(kind, target, lookup);
-		}
-		String name = target.name();
-		switch (lisp) {
-			case NIL -> {
-				if ("boolean".equals(name)) {
-					return COST_EXACT;
-				}
-			}
-			case INTEGER -> {
-				switch (name) {
-					case "double", "java.lang.Double", "float", "java.lang.Float" -> {
-						return COST_CONVERT;
-					}
-					case "short", "java.lang.Short", "byte", "java.lang.Byte" -> {
-						return COST_NARROW;
-					}
-					case "java.math.BigInteger" -> {
-						return COST_CONVERT;
-					}
-					default -> {
-					}
-				}
-			}
-			case FLOAT -> {
-				if ("float".equals(name) || "java.lang.Float".equals(name)) {
-					return COST_NARROW;
-				}
-			}
-			case STRING_1 -> {
-				if ("char".equals(name) || "java.lang.Character".equals(name)) {
-					return COST_NARROW;
-				}
-			}
-			case CHAR -> {
-				if ("int".equals(name) || "java.lang.Integer".equals(name)) {
-					return COST_WIDEN;
-				}
-			}
-			default -> {
+		if (kind instanceof JavaKind.Lisp lisp) {
+			Integer extra = rule(lisp).returnedExtras().get(target.name());
+			if (extra != null) {
+				return extra;
 			}
 		}
 		return kindCost(kind, target, lookup);
@@ -518,7 +789,7 @@ public final class JavaOverloads {
 	 * @return whether a value of it is called as a Java object
 	 */
 	public static boolean isReceiverKind(JavaKind.Lisp kind) {
-		return kind != JavaKind.Lisp.NIL && kind != JavaKind.Lisp.FUNCTION;
+		return rule(kind).receiver();
 	}
 
 	/**
@@ -535,20 +806,22 @@ public final class JavaOverloads {
 	 * receiver
 	 */
 	public static @Nullable String receiverClassName(JavaKind.Lisp kind) {
-		return switch (kind) {
-			case T, FALSE -> "java.lang.Boolean";
-			case BIGNUM -> BIG_INTEGER;
-			case FLOAT -> "java.lang.Double";
-			case STRING, STRING_1 -> "java.lang.String";
-			case CHAR -> "java.lang.Character";
-			case SUPPLEMENTARY_CHAR -> "java.lang.Integer";
-			case NIL, INTEGER, FUNCTION -> null;
-		};
+		return rule(kind).receiverClass();
+	}
+
+	/**
+	 * The box class a checked conversion's refusal names for a value of {@code kind}.
+	 * @param kind the argument kind
+	 * @return the box class name ({@code "null"} for {@code nil})
+	 */
+	public static String checkedBoxName(JavaKind.Lisp kind) {
+		return rule(kind).checkedBoxName();
 	}
 
 	/**
 	 * The conversion cost of a value of {@code kind} where {@code target} is expected --
-	 * THE cost table. Pure: it reads no value, so selection over kinds needs none.
+	 * THE cost table, read from {@link #rule(JavaKind.Lisp)}. Pure: it reads no value, so
+	 * selection over kinds needs none.
 	 * <p>
 	 * The table is the oracle's reflector's (clj 1.12.6,
 	 * {@code clojure.lang.Reflector#paramArgTypeMatch}, measured 2026-10-13): a fixnum
@@ -570,85 +843,38 @@ public final class JavaOverloads {
 			}
 			return target == host ? COST_EXACT : COST_WIDEN;
 		}
+		JavaKind.Lisp lisp = (JavaKind.Lisp) kind;
 		String name = target.name();
-		return switch ((JavaKind.Lisp) kind) {
-			case NIL -> {
-				// nil carries no type, so any reference target ties; no primitive
-				// takes it, not even boolean (the oracle's compiler unboxes it to a
-				// NullPointerException).
-				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
-			}
-			// Java's false is t's twin: a boolean, a Boolean, or a supertype of Boolean.
-			case T, FALSE -> {
-				if ("boolean".equals(name)) {
-					yield COST_EXACT;
-				}
-				if ("java.lang.Boolean".equals(name)) {
-					yield COST_WIDEN;
-				}
-				yield assignableFrom(target, "java.lang.Boolean", lookup) ? COST_BOXED : NO_MATCH;
-			}
-			case INTEGER, SUPPLEMENTARY_CHAR -> integerCost(target, name, lookup);
-			// A bignum is a BigInteger: that class, or a supertype of it. It converts to
-			// no primitive or box -- none holds it -- and never silently to a double.
-			case BIGNUM -> {
-				if (BIG_INTEGER.equals(name)) {
-					yield COST_EXACT;
-				}
-				yield assignableFrom(target, BIG_INTEGER, lookup) ? COST_BOXED : NO_MATCH;
-			}
-			case FLOAT -> floatCost(target, name, lookup);
-			case STRING, STRING_1 -> {
-				if (assignableFrom(target, "java.lang.String", lookup)) {
-					yield "java.lang.String".equals(name) ? COST_EXACT : COST_BOXED;
-				}
-				// Not even a one-character string narrows to a char: the oracle
-				// refuses it (its reflector matches no char parameter for a String).
-				yield NO_MATCH;
-			}
-			case CHAR -> {
-				if ("char".equals(name) || "java.lang.Character".equals(name)
-						|| assignableFrom(target, "java.lang.Character", lookup)) {
-					yield "char".equals(name) ? COST_EXACT
-							: ("java.lang.Character".equals(name) ? COST_WIDEN : COST_BOXED);
-				}
-				// A character converts to no int: the oracle refuses it (its
-				// reflector matches no int parameter for a Character).
-				yield NO_MATCH;
-			}
+		if (lisp == JavaKind.Lisp.NIL) {
+			// nil carries no type, so any reference target ties; no primitive takes it,
+			// not even boolean (the oracle's compiler unboxes it to a
+			// NullPointerException).
+			return target.isPrimitive() ? NO_MATCH : COST_BOXED;
+		}
+		if (lisp == JavaKind.Lisp.FUNCTION) {
 			// A Lisp callable passed where an interface is expected is auto-wrapped in a
 			// proxy -- a functional interface first, as a Java lambda; where an Object is
 			// expected it is the object a function is
 			// (JavaImplementations.functionObject).
-			case FUNCTION -> OBJECT.equals(name) ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
+			return OBJECT.equals(name) ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
 					: JavaInterfaceMethods.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
-		};
-	}
-
-	// A fixnum (and a supplementary code point, which is one): long exactly, int by
-	// narrowing, a box or supertype of either -- but no floating type (the oracle
-	// refuses a fixnum where a double is expected), no char and no BigInteger.
-	private static int integerCost(JavaType target, String name, JavaClassLookup lookup) {
-		return switch (name) {
-			case "long" -> COST_EXACT;
-			case "int", "java.lang.Long" -> COST_WIDEN;
-			default ->
-				assignableFrom(target, "java.lang.Long", lookup) || assignableFrom(target, "java.lang.Integer", lookup)
-						? COST_BOXED : NO_MATCH;
-		};
-	}
-
-	// A float is a double: that class, or a supertype of it -- and, where no double
-	// takes it, a float, as the oracle's compiler passes a double literal to a float
-	// parameter (its reflector refuses one at run time, an unpinned corner this table
-	// does not model). It converts to no integer, char or boolean.
-	private static int floatCost(JavaType target, String name, JavaClassLookup lookup) {
-		return switch (name) {
-			case "double" -> COST_EXACT;
-			case "java.lang.Double" -> COST_WIDEN;
-			case "float", "java.lang.Float" -> COST_NARROW;
-			default -> assignableFrom(target, "java.lang.Double", lookup) ? COST_BOXED : NO_MATCH;
-		};
+		}
+		KindRule r = rule(lisp);
+		if (name.equals(r.exact())) {
+			return COST_EXACT;
+		}
+		if (r.widen().contains(name)) {
+			return COST_WIDEN;
+		}
+		if (r.narrow().contains(name)) {
+			return COST_NARROW;
+		}
+		for (String box : r.boxes()) {
+			if (assignableFrom(target, box, lookup)) {
+				return COST_BOXED;
+			}
+		}
+		return NO_MATCH;
 	}
 
 	private static boolean assignableFrom(JavaType target, String className, JavaClassLookup lookup) {
@@ -657,6 +883,395 @@ public final class JavaOverloads {
 		}
 		JavaType type = lookup.find(className);
 		return type != null && target.isAssignableFrom(type);
+	}
+
+	// --- shared scalar and checked conversions ---
+
+	/**
+	 * Boxes a fixnum to the narrowest Java integer box that holds it ({@code Integer} or
+	 * {@code Long}), as Common Lisp fixnums and {@code java:call} receivers do.
+	 * @param v the integer value
+	 * @return an {@link Integer} when it fits, else a {@link Long}
+	 */
+	public static Object narrowestBox(long v) {
+		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
+	}
+
+	/**
+	 * Converts a fixnum to a parameter type {@link #kindCost} or {@link #returnedCost}
+	 * accepted.
+	 * @param v the integer value
+	 * @param target the target parameter class
+	 * @return the converted Java value
+	 */
+	public static Object convertLong(long v, Class<?> target) {
+		if (target == int.class || target == Integer.class) {
+			return (int) v;
+		}
+		if (target == long.class || target == Long.class) {
+			return v;
+		}
+		if (target == double.class || target == Double.class) {
+			return (double) v;
+		}
+		if (target == float.class || target == Float.class) {
+			return (float) v;
+		}
+		if (target == short.class || target == Short.class) {
+			return (short) v;
+		}
+		if (target == byte.class || target == Byte.class) {
+			return (byte) v;
+		}
+		if (target == BigInteger.class) {
+			return BigInteger.valueOf(v);
+		}
+		return narrowestBox(v);
+	}
+
+	/**
+	 * Converts a double to a parameter type {@link #kindCost} or {@link #returnedCost}
+	 * accepted.
+	 * @param v the double value
+	 * @param target the target parameter class
+	 * @return the converted Java value
+	 */
+	public static Object convertDouble(double v, Class<?> target) {
+		return target == float.class || target == Float.class ? (Object) (float) v : (Object) v;
+	}
+
+	/**
+	 * Converts a string to a parameter type {@link #kindCost} or {@link #returnedCost}
+	 * accepted.
+	 * @param s the string value
+	 * @param target the target parameter class
+	 * @return the string, or its first {@code char} when a {@code char} or
+	 * {@code Character} is expected
+	 */
+	public static Object convertString(String s, Class<?> target) {
+		return target.isAssignableFrom(String.class) ? s : (Object) s.charAt(0);
+	}
+
+	/**
+	 * Converts a character code point to a parameter type {@link #kindCost} or
+	 * {@link #returnedCost} accepted.
+	 * @param codePoint the character's Unicode code point
+	 * @param target the target parameter class
+	 * @return the {@link Character} for a BMP character where one fits, else the code
+	 * point converted as a fixnum ({@link #convertLong})
+	 */
+	public static Object convertChar(int codePoint, Class<?> target) {
+		return Character.isBmpCodePoint(codePoint)
+				&& (target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
+						? (Object) (char) codePoint : convertLong(codePoint, target);
+	}
+
+	/**
+	 * The class a checked conversion casts to for a parameter type: the box for a
+	 * primitive (as the oracle's {@code emitUnboxArg} casts a primitive target through
+	 * its box), the target's own name otherwise.
+	 * @param target the parameter type name
+	 * @return the target class name in the {@link ClassCastException}
+	 */
+	public static String checkedCastTargetName(String target) {
+		return switch (target) {
+			case "boolean" -> "java.lang.Boolean";
+			case "char" -> "java.lang.Character";
+			case "byte", "short", "int", "long", "float", "double" -> "java.lang.Number";
+			default -> target;
+		};
+	}
+
+	/**
+	 * The unboxing method a checked conversion of {@code nil} to a primitive parameter
+	 * names in its {@link NullPointerException}, or {@code null} when the target is not a
+	 * primitive.
+	 * @param target the parameter type name
+	 * @return the unboxing method descriptor in the oracle's words, or {@code null}
+	 */
+	public static @Nullable String checkedNullMethod(String target) {
+		return switch (target) {
+			case "boolean" -> "java.lang.Boolean.booleanValue()";
+			case "char", "int" -> "java.lang.Character.charValue()";
+			case "byte", "short", "long", "float", "double" -> "java.lang.Number.doubleValue()";
+			default -> null;
+		};
+	}
+
+	/**
+	 * The {@link ClassCastException} of a checked conversion, in the oracle's words
+	 * without its module tail.
+	 * @param from the source class name
+	 * @param to the target class name
+	 * @return the exception
+	 */
+	public static ClassCastException castFailure(String from, String to) {
+		return new ClassCastException("class " + from + " cannot be cast to class " + to);
+	}
+
+	/**
+	 * The {@link NullPointerException} of a checked conversion unboxing {@code nil}, in
+	 * the oracle's words (its compiler's local is named {@code x}).
+	 * @param method the unboxing method ({@link #checkedNullMethod})
+	 * @return the exception
+	 */
+	public static NullPointerException nullUnboxing(String method) {
+		return new NullPointerException("Cannot invoke \"" + method + "\" because \"x\" is null");
+	}
+
+	/**
+	 * The {@link IllegalArgumentException} of a checked conversion past a primitive
+	 * range, in the oracle's words.
+	 * @param name the primitive type name
+	 * @param value the out-of-range value
+	 * @return the exception
+	 */
+	public static IllegalArgumentException outOfRange(String name, Object value) {
+		return new IllegalArgumentException("Value out of range for " + name + ": " + value);
+	}
+
+	/**
+	 * Converts {@code nil} for a resolved site's parameter with the oracle's checked
+	 * casts: {@code null} for a reference, {@link #nullUnboxing} for a primitive.
+	 * @param target the parameter class
+	 * @return {@code null}
+	 */
+	public static @Nullable Object convertCheckedNil(Class<?> target) {
+		String method = checkedNullMethod(target.getName());
+		if (method != null) {
+			throw nullUnboxing(method);
+		}
+		return null;
+	}
+
+	/**
+	 * Converts a boolean ({@code t} or {@code |false|}) for a resolved site's parameter
+	 * with the oracle's checked casts.
+	 * @param boxed {@link Boolean#TRUE} or {@link Boolean#FALSE}
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedBoolean(Boolean boxed, Class<?> target) {
+		if (target == boolean.class) {
+			return boxed.booleanValue();
+		}
+		if (target.isInstance(boxed)) {
+			return boxed;
+		}
+		throw castFailure("java.lang.Boolean", checkedCastTargetName(target.getName()));
+	}
+
+	/**
+	 * Converts a fixnum for a resolved site's parameter with the oracle's checked casts.
+	 * @param v the integer value
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedLong(long v, Class<?> target) {
+		if (target == long.class || target == Long.class) {
+			return v;
+		}
+		if (target == int.class) {
+			return Math.toIntExact(v);
+		}
+		if (target == short.class) {
+			if (v < Short.MIN_VALUE || v > Short.MAX_VALUE) {
+				throw outOfRange("short", v);
+			}
+			return (short) v;
+		}
+		if (target == byte.class) {
+			if (v < Byte.MIN_VALUE || v > Byte.MAX_VALUE) {
+				throw outOfRange("byte", v);
+			}
+			return (byte) v;
+		}
+		if (target == float.class) {
+			return (float) v;
+		}
+		if (target == double.class) {
+			return (double) v;
+		}
+		Long boxed = v;
+		if (!target.isPrimitive() && target.isInstance(boxed)) {
+			return narrowestBox(v);
+		}
+		throw castFailure("java.lang.Long", checkedCastTargetName(target.getName()));
+	}
+
+	/**
+	 * Converts a bignum for a resolved site's parameter with the oracle's checked casts.
+	 * @param v the bignum value
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedBigInteger(BigInteger v, Class<?> target) {
+		if (target.isInstance(v)) {
+			return v;
+		}
+		if (target == double.class) {
+			return v.doubleValue();
+		}
+		if (target == float.class) {
+			double d = v.doubleValue();
+			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
+				throw outOfRange("float", v);
+			}
+			return (float) d;
+		}
+		if (target == long.class) {
+			return convertCheckedBigIntegerLong(v);
+		}
+		if (target == int.class) {
+			return Math.toIntExact(convertCheckedBigIntegerLong(v));
+		}
+		if (target == short.class || target == byte.class) {
+			return convertCheckedLong(convertCheckedBigIntegerLong(v), target);
+		}
+		throw castFailure(BIG_INTEGER, checkedCastTargetName(target.getName()));
+	}
+
+	private static long convertCheckedBigIntegerLong(BigInteger v) {
+		if (v.bitLength() < 64) {
+			return v.longValue();
+		}
+		throw outOfRange("long", v);
+	}
+
+	/**
+	 * Converts a double for a resolved site's parameter with the oracle's checked casts.
+	 * @param v the double value
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedDouble(double v, Class<?> target) {
+		if (target == double.class) {
+			return v;
+		}
+		if (target == float.class) {
+			if (v < -Float.MAX_VALUE || v > Float.MAX_VALUE) {
+				throw outOfRange("float", v);
+			}
+			return (float) v;
+		}
+		if (target == long.class) {
+			return convertCheckedDoubleLong(v);
+		}
+		if (target == int.class) {
+			return Math.toIntExact(convertCheckedDoubleLong(v));
+		}
+		if (target == short.class || target == byte.class) {
+			return convertCheckedLong(convertCheckedDoubleLong(v), target);
+		}
+		Double boxed = v;
+		if (!target.isPrimitive() && target.isInstance(boxed)) {
+			return boxed;
+		}
+		throw castFailure("java.lang.Double", checkedCastTargetName(target.getName()));
+	}
+
+	private static long convertCheckedDoubleLong(double v) {
+		if (v < Long.MIN_VALUE || v > Long.MAX_VALUE) {
+			throw outOfRange("long", v);
+		}
+		return (long) v;
+	}
+
+	/**
+	 * Converts a string for a resolved site's parameter with the oracle's checked casts.
+	 * @param text the string value
+	 * @param target the parameter class
+	 * @return the string
+	 */
+	public static Object convertCheckedString(String text, Class<?> target) {
+		if (target.isInstance(text)) {
+			return text;
+		}
+		throw castFailure("java.lang.String", checkedCastTargetName(target.getName()));
+	}
+
+	/**
+	 * Converts a character code point for a resolved site's parameter with the oracle's
+	 * checked casts.
+	 * @param codePoint the character's Unicode code point
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedChar(int codePoint, Class<?> target) {
+		if (Character.isBmpCodePoint(codePoint)) {
+			Character boxed = (char) codePoint;
+			if (target == char.class || target.isInstance(boxed)) {
+				return boxed;
+			}
+			throw castFailure("java.lang.Character", checkedCastTargetName(target.getName()));
+		}
+		return convertCheckedLong(codePoint, target);
+	}
+
+	/**
+	 * Converts a non-view host object for a resolved site's parameter with the oracle's
+	 * checked casts.
+	 * @param ref the host object
+	 * @param target the parameter class
+	 * @return the converted value
+	 */
+	public static Object convertCheckedHost(Object ref, Class<?> target) {
+		if (target.isInstance(ref)) {
+			return ref;
+		}
+		if (ref instanceof BigInteger big) {
+			return convertCheckedBigInteger(big, numericTarget(target, ref));
+		}
+		if (ref instanceof Long || ref instanceof Integer || ref instanceof Short || ref instanceof Byte) {
+			return convertCheckedLong(((Number) ref).longValue(), numericTarget(target, ref));
+		}
+		if (ref instanceof Number number) {
+			return convertCheckedDouble(number.doubleValue(), numericTarget(target, ref));
+		}
+		if (ref instanceof Boolean boxed && target == boolean.class) {
+			return boxed.booleanValue();
+		}
+		if (ref instanceof Character boxed && target == char.class) {
+			return boxed.charValue();
+		}
+		throw castFailure(ref.getClass().getName(), checkedCastTargetName(target.getName()));
+	}
+
+	private static Class<?> numericTarget(Class<?> target, Object ref) {
+		if (target.isPrimitive() && target != boolean.class && target != char.class && target != void.class) {
+			return target;
+		}
+		throw castFailure(ref.getClass().getName(), checkedCastTargetName(target.getName()));
+	}
+
+	/**
+	 * The message of a {@code java:} site's refusal when a class cannot link because of a
+	 * missing dependency class.
+	 * @param className the site's class name
+	 * @param ex the linkage failure
+	 * @return e.g. {@code Cannot link class C: missing class M}
+	 */
+	public static String unlinkableMessage(String className, NoClassDefFoundError ex) {
+		String detail = ex.getMessage();
+		String missing = detail != null ? detail.replace('/', '.') : String.valueOf(ex);
+		return "Cannot link class " + className + ": missing class " + missing;
+	}
+
+	/**
+	 * The missing class an {@link ExceptionInInitializerError}'s cause chain holds, or
+	 * {@code null}.
+	 * @param ex the initializer failure
+	 * @return the {@link NoClassDefFoundError} in its cause chain, or {@code null}
+	 */
+	public static @Nullable NoClassDefFoundError unlinkableCause(Throwable ex) {
+		Throwable current = ex;
+		while (current != null) {
+			if (current instanceof NoClassDefFoundError missing) {
+				return missing;
+			}
+			current = current.getCause();
+		}
+		return null;
 	}
 
 	/**

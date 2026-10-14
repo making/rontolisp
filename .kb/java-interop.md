@@ -44,10 +44,28 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (but `|false|`), ratios, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and
   specialized vectors", "Java's false and hash tables" below for what is; a `java:handle` stands
   for any value, "Handles and views" below).
-- THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
-  `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
-  `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
-  pinned by `JavaBridgeTemplateParityTest` -- change the two together.
+- THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads`
+  (the per-kind `KindRule` table, `rule`/`ruleTable`, `kindCost`/`returnedCost`,
+  `isReceiverKind`/`receiverClassName`, the scalar and checked conversions, `select`/
+  `selectRanked`, the tags). The interpreter (`eval/JavaInterop`) selects through it
+  at run time over `compiler/ReflectiveJavaClasses` and converts through its
+  `convert*` helpers; the direct-site emitter (`JvmJavaDirectSites`) reads it at
+  compile time and emits bytecode renderers (`_jkind`/`_jcost$N`/`_jconv$N`/`_jrecv`/
+  checked `_jchk$N`, sharing one `Body` helper each for sequences, tables and
+  views); the standalone bridge (`JavaBridgeTemplate`, which must stand alone: no
+  nested classes/records, no rontolisp imports) reads the serialized `ruleTable()`
+  into `KIND_RULES` and renders `kindCost`/`returnedCost`/receiver from it. A new
+  cost/receiver rule lands in `KindRule`/`buildRules` plus the mechanical
+  `RULE_TABLE` copy; a new scalar conversion lands in the `convert*` helpers plus
+  the bridge's hand arms. Both copies are pinned by `JavaBridgeTemplateParityTest`
+  (`theBridgeSpellsTheRepresentationAsTheRuntimeDoes` checks the table string
+  itself, `theBridgeReadsTheSharedRuleTable` every cost, `theBridgeConvertsScalars-
+  AsTheSharedRuleDoes` every scalar conversion, plus the behavioral resolution,
+  receiver, unmarshal and handle corpora). Measured 2026-10-14: a resolved,
+  a bridged and a dispatched sample program compile byte-identical before/after,
+  the bridge `+35 B` (`78,742 -> 78,777`); the interpreter's `LispJavaObject.
+  receiverObject` stays a hand copy (the root package cannot import `compiler`
+  without a package cycle) pinned by the receiver corpus.
 - `accessibleMethod` (all three lookups: `ReflectiveJavaClasses`, the bridge template,
   `JvmClassFileLookup`) re-resolves a public method whose declaring class cannot be called
   through to the same method on an accessible supertype of the RECEIVER class, the walk
