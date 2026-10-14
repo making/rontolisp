@@ -130,7 +130,8 @@ final class ClojureMacroLowering {
 		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
 		ClojureLowerUtil.isTrue(!isReservedHead(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
-		ClojureLowerUtil.isTrue(!name.startsWith(".") && !name.endsWith(".") && name.indexOf('/') < 0,
+		ClojureLowerUtil.isTrue(
+				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,
 				name + " cannot name a macro: it names an interop or qualified form");
 		int at = 2;
 		LispString doc = null;

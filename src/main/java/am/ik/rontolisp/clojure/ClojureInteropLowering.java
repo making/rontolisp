@@ -531,7 +531,7 @@ final class ClojureInteropLowering {
 			}
 			return instanceCall(ctx, ctx.lower(items.get(1)), name.substring(1), items.subList(2, items.size()));
 		}
-		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {
+		if (isConstructionHead(name)) {
 			String base = name.substring(0, name.length() - 1);
 			String type = ctx.typeKeyOf(base);
 			if (type != null) {
@@ -2957,6 +2957,18 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(at, search))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), at), new LispInteger(-1), at));
+	}
+
+	/**
+	 * Whether a call head of this name lowers as a construction: {@code X.} with a
+	 * class-spelling {@code X}, the shape {@code interopCall} builds a host construction
+	 * (or a record/deftype constructor) for. Any other trailing-dot name falls through to
+	 * the macro and var tables, so a program macro of that name (shcloj4's {@code ?.})
+	 * wins at call sites -- and may be defined, since a refused definition would be the
+	 * only thing stopping it.
+	 */
+	static boolean isConstructionHead(String name) {
+		return name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1));
 	}
 
 	/** Whether the spelling can name a class: a dotted name over identifier parts. */

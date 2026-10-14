@@ -3375,6 +3375,15 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   over a macro, function, valued or declared root) validates and notifies like the
   oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
   expander registration ("State", validators and watches).
+- **A `defmacro` name** is refused only when a call site could never reach the
+  macro table: a special form, a reader head, a leading-dot or `/`-qualified name,
+  or a trailing-dot name over a class spelling (a construction head,
+  `ClojureInteropLowering.isConstructionHead`, the same predicate the call site
+  uses). `?.` (shcloj4's `examples.utils`, g09, 2026-10-14) defines, and calls
+  below it expand through the table; `String.` stays refused. Pins: clojure-spec
+  `a-macro-may-take-a-trailing-dot-name-without-a-class`,
+  `ClojureLoweringTest#defmacroAcceptsATrailingDotNameWithNoClassBase` (the
+  still-refused arms ride in `defmacroRefusesCoreFormsAndEnvironments`).
 - **`&form` and `&env`** (2026-10-11; instaparse's `defclone`/`set-global-var!` read
   `(contains? &env :locals)`): in a `defmacro` body (`ClojureLowering.macroBodyDepth`) they
   lower to the specials `%clojure-macro-form` / `%clojure-macro-env` (library defvars, nil).
@@ -6893,11 +6902,12 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 - `run-tests` takes symbols or strings and bakes in the namespaces seen so far, so an
   unknown one is `No namespace: x found`; `run-all-tests` filters by `re-matches`.
 - Deviations: definition order (the oracle's is map order); `thrown?` matches like `catch`
-  ("Catching": measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
-  17 assertions. 0 failures, 0 errors.` on the interpreter and the JVM, as the oracle --
-  its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` take
-  `No matching method java.lang.String.getName`, a refusal naming no class, since the
-  `#^Class` hint is dropped);
+  ("Catching": measured 2026-10-14, shcloj4 `examples.test.interop`: `Ran 6 tests containing
+  17 assertions. 0 failures, 1 errors.` on the interpreter and the JVM -- the
+  `(thrown? ClassCastException (typed-describe-class "foo"))` line, since the `#^Class`
+  hint is dropped and the reflective `No matching method java.lang.String.getName`
+  refusal carries `IllegalArgumentException` (until the Refusals change it named no
+  class, which every catch took, and the suite read `0 failures, 0 errors.`);
   error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL
   condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with

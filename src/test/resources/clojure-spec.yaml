@@ -3929,6 +3929,18 @@ cases:
       (+ 1 2)
       true
       true
+  - name: a-macro-may-take-a-trailing-dot-name-without-a-class
+    # shcloj4's ?. macro (examples/utils.clj): a trailing-dot name with no class
+    # base is no construction at a call site (only X. over a class spelling is),
+    # so the definition lowers and calls below it expand through the macro table.
+    # A construction head (String.) stays refused. Oracle-identical (clj 1.12.6).
+    source: |
+      (defmacro ?. [x form] (list 'str x form))
+      (println (?."a" "b"))
+      (println (= (macroexpand-1 '(?. "a" "b")) '(str "a" "b")))
+    expected: |
+      ab
+      true
   - name: a-macro-body-calls-the-programs-definitions
     # A macro body runs at lower time over the top-level definitions above it, like the
     # oracle's form-by-form load: a private and a multi-arity helper, a def'd table, a

@@ -2991,6 +2991,21 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defmacro mu-short)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("defmacro needs a parameter vector and a body");
+		assertThatThrownBy(() -> Clojure.read("(defmacro String. [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("String. cannot name a macro: it names an interop or qualified form");
+		assertThatThrownBy(() -> Clojure.read("(defmacro .foo [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(".foo cannot name a macro: it names an interop or qualified form");
+	}
+
+	@Test
+	void defmacroAcceptsATrailingDotNameWithNoClassBase() {
+		// shcloj4's ?. macro (examples/utils.clj): ? is no class spelling, so the
+		// name is no construction head and the definition lowers; a call below it
+		// expands through the macro table to the instance call
+		String out = loweredWithMacros("(defmacro ?. [x form] `(. ~x ~form)) (defn qm-dot [s] (?.\"hi\" toString))");
+		assertThat(out).contains("|c%?.%macro|").contains("toString");
 	}
 
 	@Test
