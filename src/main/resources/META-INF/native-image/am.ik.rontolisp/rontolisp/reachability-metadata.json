@@ -103,11 +103,14 @@
     "",
     "The reflection types are the JDK classes the Clojure front end names in its own",
     "code (.kb/clojure-frontend.md, Host classes): ClojureThrowables.PARENTS,",
-    "ClojureInteropLowering.HOSTLESS_RECEIVERS, ClojureValueMethodLowering's host kinds,",
+    "ClojureInteropLowering.HOSTLESS_RECEIVERS, ClojureInteropLowering.HOST_STATIC_CLASSES,",
+    "ClojureValueMethodLowering's host kinds,",
     "ClojureTimeValueLowering's kinds, ClojureIoLowering's API types, Object and",
     "Throwable. A native image without a JDK's class files lowers a host form naming",
     "one of them from its own reflection, as a JVM does; a bare type entry answers",
-    "every member query of it (probe image, GraalVM 25.0.4, 2026-10-12). A class a",
+    "every member query of it (probe image, GraalVM 25.0.4, 2026-10-12).",
+    "HOST_STATIC_CLASSES' invoked members are registered too, so macro-time evaluation",
+    "invokes them (a bare entry answers queries but refuses the call, g08). A class a",
     "program names outside them stays partial without a JDK, and the binary warns it",
     "found none. ClojureHostImageTypesTest pins the list to those constants. Each",
     "entry costs image size the browser playground downloads too, so the list stays",
@@ -136,6 +139,10 @@
     { "type": "java.lang.AutoCloseable" },
     { "type": "java.lang.Boolean" },
     { "type": "java.lang.Character" },
+    {
+      "type": "java.lang.Class",
+      "methods": [{ "name": "forName" }]
+    },
     { "type": "java.lang.ClassCastException" },
     { "type": "java.lang.ClassCircularityError" },
     { "type": "java.lang.ClassFormatError" },
@@ -178,6 +185,10 @@
     { "type": "java.lang.SecurityException" },
     { "type": "java.lang.StackOverflowError" },
     { "type": "java.lang.StringIndexOutOfBoundsException" },
+    {
+      "type": "java.lang.System",
+      "methods": [{ "name": "getProperty" }]
+    },
     { "type": "java.lang.ThreadDeath" },
     { "type": "java.lang.Throwable" },
     { "type": "java.lang.TypeNotPresentException" },
@@ -210,6 +221,7 @@
     { "type": "java.util.concurrent.CompletionException" },
     { "type": "java.util.concurrent.ExecutionException" },
     { "type": "java.util.concurrent.Flow$Subscriber" },
+    { "type": "java.util.regex.Pattern" },
     { "type": "java.util.zip.GZIPInputStream" },
     { "type": "java.util.zip.InflaterInputStream" },
     { "type": "java.util.zip.ZipException" }

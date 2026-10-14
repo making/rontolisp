@@ -4567,6 +4567,32 @@ a ThreadLocal like the old loader) -- and only `ClojureReflectedClasses` touches
   weighed for the web image the playground downloads: the `reflection` section adds
   ~5.6 KB to the checked-in file (99 bare `{"type"}` entries plus the comment paragraph
   describing them); the list stays at what the front end names.
+- g08 (2026-10-14): macro-time evaluation runs on the image's reflection even WITH a
+  JDK found -- the lowering reads class files, but a macro body runs in the
+  interpreter -- so the corpus's whole-program dump failed at the first macro body
+  invoking a host member (`mm-pick`'s `(System/getProperty ...)`: `No such class:
+  java.lang.System`, CI run 38481770107). Enumerated by recording every class name
+  both reflection funnels (`ReflectiveJavaClasses`, `ClojureReflectedClasses`) resolve
+  while the jar dumps the whole corpus, plus every member macro-time evaluation
+  invokes: only `System#getProperty` and `Class#forName` (of a class literal, over
+  `java.util.regex.Pattern`) run; everything else the corpus touches -- `String`,
+  the boxings, `BigInteger`, the `clojure.xml` SAX pair, `java.time.Instant` -- is
+  resolve-only, which `JavaSiteResolver` leaves to run time without failing the
+  program, and no macro body builds a proxy or asks a class outside a lowering.
+  A bare `{"type"}` entry answers the queries but refuses the call
+  (`MissingReflectionRegistrationError` at the first invoke, measured on a probe
+  binary), so the run members are registered too. Registered
+  `ClojureInteropLowering.HOST_STATIC_CLASSES` (`Class`/`forName`,
+  `System`/`getProperty`, bare `Pattern`: the static-call hosts the lowering leaves
+  to the host), 99 -> 102 entries; the no-JDK leg needed nothing new. That unmasked
+  a second divergence in the same leg: a `deftype`'s defined-interface row lists the
+  `definterface` methods in `Map.copyOf` order, whose iteration is unspecified and
+  observed different on the two runtimes (JVM `readChar, unreadChar, toStr,
+  readChars`, the binary the exact reverse). `parseInterface` keeps declaration
+  order now (`Collections.unmodifiableMap`), on every backend. Size, same
+  weighing: +3 entries (+440 B of the checked-in file, 151814 -> 152254 B); the
+  binary byte-identical (124193032 -> 124193032 B, GraalVM 25.0.4, Linux x86-64,
+  2026-10-14).
 - Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
   `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
   program, a no-JDK host-form program), `ClojureHostImageTypesTest` (the registered list

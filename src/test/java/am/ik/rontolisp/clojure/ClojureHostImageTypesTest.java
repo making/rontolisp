@@ -19,11 +19,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The JDK classes a native image without a JDK's class files lowers a Clojure host form
  * from ({@code .kb/clojure-frontend.md}, "Host classes"): every one the front end names
  * in its own code -- the {@code ClojureThrowables.PARENTS} throwables,
- * {@code ClojureInteropLowering.HOSTLESS_RECEIVERS}, {@code ClojureValueMethodLowering}'s
- * host kinds, {@code ClojureTimeValueLowering}'s kinds, {@code ClojureIoLowering}'s API
- * types, {@code Object} and {@code Throwable} -- is registered as a type in
- * {@code reachability-metadata.json}, so the image answers every member query of it as a
- * JVM does. A class a program names outside them stays partial without a JDK.
+ * {@code ClojureInteropLowering.HOSTLESS_RECEIVERS},
+ * {@code ClojureInteropLowering.HOST_STATIC_CLASSES} (whose invoked members are
+ * registered too, so macro-time evaluation runs them),
+ * {@code ClojureValueMethodLowering}'s host kinds, {@code ClojureTimeValueLowering}'s
+ * kinds, {@code ClojureIoLowering}'s API types, {@code Object} and {@code Throwable} --
+ * is registered as a type in {@code reachability-metadata.json}, so the image answers
+ * every member query of it as a JVM does. A class a program names outside them stays
+ * partial without a JDK.
  */
 class ClojureHostImageTypesTest {
 
@@ -39,10 +42,21 @@ class ClojureHostImageTypesTest {
 		assertThat(reflection.isMissingNode()).as("reflection in %s", METADATA).isFalse();
 		List<String> registered = new ArrayList<>();
 		for (JsonNode entry : reflection) {
-			assertThat(entry.size()).as("keys of %s", entry).isEqualTo(1);
 			String type = entry.path("type").asString(null);
 			assertThat(type).as("type of %s", entry).isNotNull();
 			registered.add(type);
+			List<String> members = ClojureInteropLowering.HOST_STATIC_CLASSES.getOrDefault(type, List.of());
+			if (members.isEmpty()) {
+				assertThat(entry.size()).as("keys of %s", entry).isEqualTo(1);
+			}
+			else {
+				assertThat(entry.size()).as("keys of %s", entry).isEqualTo(2);
+				List<String> methods = new ArrayList<>();
+				for (JsonNode method : entry.path("methods")) {
+					methods.add(method.path("name").asString(null));
+				}
+				assertThat(methods).as("methods of %s", entry).containsExactlyElementsOf(members);
+			}
 		}
 		assertThat(registered).as("reflection types in %s", METADATA).isSorted();
 		assertThat(registered).as("reflection types in %s", METADATA).containsExactlyElementsOf(expectedHostTypes());
@@ -53,10 +67,11 @@ class ClojureHostImageTypesTest {
 
 	/**
 	 * The JDK classes the front end's lowering decisions read, on every target: the
-	 * {@code PARENTS} throwables and their parents, the hostless receivers, the value
-	 * methods' host kinds, the time values' kinds, the io values' API types, and
-	 * {@code Object} and {@code Throwable}. The {@code clojure.lang} throwables of
-	 * {@code PARENTS} are no JDK classes, so they stay out: the image holds none of them.
+	 * {@code PARENTS} throwables and their parents, the hostless receivers, the host
+	 * statics macro-time evaluation invokes, the value methods' host kinds, the time
+	 * values' kinds, the io values' API types, and {@code Object} and {@code Throwable}.
+	 * The {@code clojure.lang} throwables of {@code PARENTS} are no JDK classes, so they
+	 * stay out: the image holds none of them.
 	 * @return the binary names, in name order
 	 */
 	private static List<String> expectedHostTypes() {
@@ -66,6 +81,7 @@ class ClojureHostImageTypesTest {
 			expected.add(row.getValue());
 		}
 		expected.addAll(ClojureInteropLowering.HOSTLESS_RECEIVERS);
+		expected.addAll(ClojureInteropLowering.HOST_STATIC_CLASSES.keySet());
 		expected.addAll(ClojureValueMethodLowering.hostKindTypes());
 		expected.addAll(ClojureTimeValueLowering.kindHosts());
 		expected.addAll(ClojureIoLowering.hostApiTypes());

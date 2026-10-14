@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -372,7 +373,11 @@ final class ClojureProtocolLowering {
 		}
 		Map<String, Set<Integer>> frozen = new LinkedHashMap<>();
 		methods.forEach((method, counts) -> frozen.put(method, Set.copyOf(counts)));
-		return new ClojureLowering.DefinedInterface(binary, Map.copyOf(frozen));
+		// Declaration order, not Map.copyOf's: its iteration order is unspecified and
+		// differs between a JVM and a native image, which the binary's dump would
+		// show as a reordered defined-interface row (.kb/clojure-frontend.md,
+		// "Host classes").
+		return new ClojureLowering.DefinedInterface(binary, Collections.unmodifiableMap(frozen));
 	}
 
 	/**

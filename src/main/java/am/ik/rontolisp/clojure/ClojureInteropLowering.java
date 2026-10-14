@@ -2470,6 +2470,23 @@ final class ClojureInteropLowering {
 			"java.lang.Character", "java.lang.Boolean", ClojureThrowables.THROWABLE);
 
 	/**
+	 * The JDK classes of the static calls the lowering leaves to the host, mapped to the
+	 * members of them macro-time evaluation invokes while a program lowers --
+	 * {@code System/getProperty} where the host is ({@link #staticCall}),
+	 * {@code Class/forName} of a class literal ({@link #classValue}), over
+	 * {@code java.util.regex.Pattern} in the corpus, which the entry holds in the image
+	 * for the lookup -- so a macro body calling one runs in the binary as on the jar. The
+	 * flagged overload of {@code Pattern/compile} ({@link #patternStatic}) stays the
+	 * host's the same way. What the image merely resolves it leaves to run time
+	 * ({@code compiler.JavaSiteResolver}, which never fails a program for a class it
+	 * cannot inspect), so a resolved-only class needs no entry. A native image without a
+	 * JDK's class files answers these from its own reflection, so its build registers
+	 * every one ({@code .kb/clojure-frontend.md}, "Host classes").
+	 */
+	static final Map<String, List<String>> HOST_STATIC_CLASSES = Map.of("java.lang.Class", List.of("forName"),
+			"java.lang.System", List.of("getProperty"), "java.util.regex.Pattern", List.of());
+
+	/**
 	 * An instance call's host arm for a receiver of no known class where the host is not
 	 * (wasm): the {@code java:call} -- a call-time error there, which the compile warns
 	 * of -- when a class such a receiver may be an object of has the method at the count,
