@@ -52,6 +52,33 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
+	void clojureSetAndTestNeedTheirRequire() {
+		// g12: set and test are no oracle-boot namespace (ClassNotFoundException
+		// there). With no require the use falls through to the host lookup, which
+		// refuses at run time like an unloaded file namespace -- so lowering
+		// answers the host form, never the direct worker. Required anywhere, the
+		// fully-qualified spelling resolves: a loaded namespace is globally
+		// visible. string and edn stay reachable, like the oracle's boot set.
+		assertThat(lowered("(clojure.set/union #{1} #{2})", Map.of()))
+			.contains("(JAVA:STATIC \"clojure.set\" \"union\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(map clojure.set/union [#{1}])", Map.of()))
+			.contains("(JAVA:FIELD \"clojure.set\" \"union\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(clojure.test/run-tests)", Map.of())).contains("(JAVA:FIELD \"clojure.test\" \"run-tests\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-TEST-RUN-TESTS");
+		assertThatThrownBy(() -> Clojure.read("(def v #'clojure.set/union)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve var: clojure.set/union");
+		// required, the fully-qualified spelling keeps resolving
+		assertThat(
+				lowered("(require '[clojure.set :as s]) (s/union #{1} #{2}) (clojure.set/union #{1} #{3})", Map.of()))
+			.contains("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(require 'clojure.test) (clojure.test/run-tests)", Map.of()))
+			.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS");
+	}
+
+	@Test
 	void clojureEdnIsALoweringReachedWithoutARequire() {
 		assertThat(lowered("(clojure.edn/read-string \"1\")", Map.of()))
 			.contains("(RONTOLISP::%CLOJURE-EDN-READ-STRING-1 \"1\")");

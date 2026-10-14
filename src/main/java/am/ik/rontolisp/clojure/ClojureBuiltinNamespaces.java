@@ -190,6 +190,15 @@ final class ClojureBuiltinNamespaces {
 			"clojure.uuid", "clojure.java.io", "clojure.main");
 
 	/**
+	 * The namespaces the oracle has loaded before the program runs (see
+	 * {@link #isBootLoaded}): the startup ones above plus what `clj -M` pulls in beside
+	 * them.
+	 */
+	private static final Set<String> BOOT_LOADED = Set.of("clojure.walk", "clojure.core.protocols",
+			"clojure.core.server", "clojure.edn", "clojure.instant", "clojure.java.io", "clojure.main",
+			"clojure.spec.alpha", "clojure.spec.gen.alpha", "clojure.string", "clojure.uuid");
+
+	/**
 	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends
 	 * on: the language's own, which are lowerings or built-in files here and never
 	 * project files. Any other {@code clojure.*} namespace (a contrib library such as
@@ -311,6 +320,22 @@ final class ClojureBuiltinNamespaces {
 	 */
 	static Set<String> startup() {
 		return STARTUP;
+	}
+
+	/**
+	 * The namespaces `clj -M` has loaded before the program runs, measured on clj
+	 * 1.12.6.1673 (`.kb/clojure-frontend.md`, "clojure.jar namespaces"): `clojure.walk`
+	 * (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`, `main`,
+	 * `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`). A fully-qualified name reaches
+	 * one with no `require`; any other oracle namespace needs its require first, else the
+	 * use is the oracle's class lookup failure. Our own namespaces (the ring adapter, the
+	 * kernels, `rontolisp.wasm`/`rontolisp.wit`) are always reachable: there is no oracle
+	 * behavior to match.
+	 * @param ns the namespace
+	 * @return whether the oracle has it loaded before the program
+	 */
+	static boolean isBootLoaded(String ns) {
+		return BOOT_LOADED.contains(ns);
 	}
 
 	/**

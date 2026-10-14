@@ -1295,7 +1295,14 @@ final class ClojureNamespaceLowering {
 			return null;
 		}
 		String ns = ctx.ns().aliases.get(head);
-		if (ns == null && isKnownNamespace(head)) {
+		if (ns == null && isKnownNamespace(head) && resolvesWithoutRequire(ctx, head)) {
+			// a fully-qualified name reaches an oracle-boot-loaded namespace
+			// (string, edn), one of our own (the ring adapter, the kernels,
+			// wasm/wit), or one the program required anywhere (a loaded
+			// namespace is globally visible, like the oracle's); any other
+			// known namespace (an unrequired set, test) falls through to the
+			// oracle's class lookup failure, like an unloaded file namespace
+			// (g12)
 			ns = head;
 		}
 		if (ns == null) {
@@ -1308,6 +1315,18 @@ final class ClojureNamespaceLowering {
 			return null;
 		}
 		return new ClojureLowering.VarRef(ns, tail);
+	}
+
+	/**
+	 * Whether a fully-qualified name reaches a known namespace with no alias: an
+	 * oracle-boot-loaded one, one of our own (which have no oracle behavior to match), or
+	 * one the program required anywhere -- a loaded namespace is globally visible, like
+	 * the oracle's, so a require in another namespace (or an earlier top-level datum)
+	 * counts.
+	 */
+	static boolean resolvesWithoutRequire(ClojureLowering ctx, String head) {
+		return ClojureBuiltinNamespaces.isBootLoaded(head) || !ClojureBuiltinNamespaces.isLanguage(head)
+				|| ctx.requiredLibraries.contains(head);
 	}
 
 	/** A class name resolved: dotted as written, imported, or {@code java.lang}. */

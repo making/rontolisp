@@ -25,9 +25,9 @@ in "Deviations". Audit every directly-lowered namespace for the same hole first
 way; `math` already refuses).
 
 Acceptance:
-- the matrix above re-runs green-oracle-identical on the interpreter and the JVM
-  (new `clojure-spec.yaml` case per decided behavior + unit pin on the refusal
-  wording or the leniency).
-- `.kb` updated ("Namespaces and project files" startup passage and/or
-  "Deviations" leniencies).
+- the matrix above re-runs oracle-identical on the interpreter and the JVM.
+  Refusals pin in unit tests (`ClojureLanguageNamespacesTest`, call + value +
+  required-still-resolves), not `clojure-spec.yaml` (a lowering refusal is no
+  program output).
+- `.kb` updated ("Namespaces and project files" startup passage).
 - full suite green (merge `origin/develop` right before the run, one maven run).

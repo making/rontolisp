@@ -2230,7 +2230,15 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   loads one on its first qualified name (`ClojureNamespaceLowering.preload`), but only
   inside a top-level datum (`topLevelDepth`): the definitions need `hoisted` to land
   ahead of the datum, and the pre-scan resolves names outside it. `STARTUP_NAMESPACES`
-  (what `find-ns` finds) includes them.
+  (what `find-ns` finds) includes them. A fully-qualified lowering-namespace name
+  with no alias reaches it only for the oracle's boot set (`string`, `edn`) and our
+  own (`ring.adapter.rontolisp`, the `rontolisp.internal.*` kernels,
+  `rontolisp.wasm`/`rontolisp.wit`); a `set`/`test` name needs its namespace
+  required anywhere in the program (a loaded namespace is globally visible, read
+  off `requiredLibraries`), else the use falls through to the host lookup, which
+  refuses at run time like an unloaded file namespace (g12, 2026-10-14;
+  `ClojureBuiltinNamespaces.isBootLoaded`, consulted by
+  `ClojureNamespaceLowering.resolveQualified`).
 - Any other shipped namespace follows the source path like a dependency: a project file of
   the name wins.
 - `clojure.walk`: `walk` re-attaches the form's metadata itself (`with-meta-of`), since
