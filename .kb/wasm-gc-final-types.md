@@ -12,7 +12,7 @@ declares or permits subtypes.
   Cranelift emits an inline type-id equality (`FuncEnvironment::is_subtype`). On INEQUALITY,
   wasmtime <= 46 falls back to the `is_subtype` host libcall under the engine-global
   `RwLock<TypeRegistryInner>` (`TypeRegistry::is_subtype_slow`), so concurrent serving degrades
-  ~quadratically (46.0.1: 9,016 rps at c=1 -> 566 at c=16; 47.0.3: 10,042 -> 37,996).
+  ~quadratically with the connection count (observed on 46.0.1 and 47.0.3).
   wasmtime 47+ (PR #13572) skips the libcall for a FINAL target, so no emitted check reaches it.
 - Consequence: wasmtime floor for RUNNING a component stays 46, but concurrent load says
   **47+** (http-handler guide, `.github/docker/wasmtime/Dockerfile`). Declaring a supertype

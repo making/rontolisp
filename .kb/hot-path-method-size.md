@@ -9,20 +9,18 @@ cross it: a sequence WE EMIT PER SITE; a LIBRARY'S OWN function; a DISPATCH TABL
 with how much the program loads (the cliff comes from adding a LIBRARY, not editing the method).
 
 ## Interpreter
-`LispEvaluator.evalCons`'s ~200-case `switch (sym.name())` hit 8209 bytecodes (worth 2.7x). Split
+`LispEvaluator.evalCons`'s ~200-case `switch (sym.name())` outgrew the limit. Split
 into `evalCons` + `evalConsRareOperator`, the latter answering a private `UNHANDLED` sentinel for
 operators it does not claim (also the deliberate fall-throughs `read`, the `floor` family with a
-divisor, `reduce`, `sort`). Both halves near 4 KB then; `evalCons` grew back to 7,788 by
-2026-10-04 (the tail-call loop, `.kb/interpreter-tail-calls.md`), 212 bytes under the cliff, and
-the same day the arms no loop body runs moved out: 5,269 (`.kb/interpreter-tail-calls.md`, "The
-operator table is three methods").
+divisor, `reduce`, `sort`). The tail-call loop (`.kb/interpreter-tail-calls.md`) grew `evalCons`
+back toward the cliff, and by 2026-10-04 the arms no loop body runs had moved out of it
+(`.kb/interpreter-tail-calls.md`, "The operator table is three methods").
 
 ## Dispatch tables (`_invoke_<arity>`, `_lookup`)
 - `JvmRuntimeBuilder.buildDispatchMethods` emits one dispatcher per call arity; a variadic
-  function matches every arity at or above its required count, so tables grow fast (cl-postgres:
-  547 cases / ~15 KB on arity 1).
+  function matches every arity at or above its required count, so tables grow fast.
 - `DISPATCH_SEGMENT_BUDGET` and `LOOKUP_SEGMENT_BUDGET` (`JvmEvalRuntimeBuilder`) are **6000**
-  (was 24000, set against the 64 KB class-file limit rather than the cliff); cases are id-sorted
+  (set against the 64 KB class-file limit rather than the cliff); cases are id-sorted
   and split into segments under it -- the change worth the most.
 - Within a segment a **binary search tree** over sorted funcIds (`emitDispatchTree`) replaces the
   linear chain; past one segment `_invoke_<arity>` becomes a router bisecting segment boundaries
@@ -30,27 +28,22 @@ operator table is three methods").
 - The value tails' copy `_vtcd<arity>` exists only beside a one-segment `_invoke_<arity>`, so it
   is under the budget by construction ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - A smaller cliff sits at C2's `FreqInlineSize` (325 bytes): a hot call site inlines a callee
-  only under it, and a small program's dispatcher is often near it (an 8-closure-type program's
-  arity-1 dispatcher: 319 B). The search-tree id and the funcval keep one-byte slots for that
-  reason; with the id one slot further out, 2 bytes at every tree node, that dispatcher was 348
-  B and its leaf calls ran 97 / 114 -> 133 / 137 ms ([jvm-tail-bounce.md](jvm-tail-bounce.md),
-  "the count as an argument").
+  only under it, and a small program's dispatcher is often near it. The search-tree id and the
+  funcval keep one-byte slots for that reason
+  ([jvm-tail-bounce.md](jvm-tail-bounce.md), "the count as an argument").
 - A `tableswitch`/`lookupswitch` is not used: the byte emitters would have had to measure a
   variable-length instruction whose padding depends on its absolute position. Since `MethodCode`
   stores records and the writer lays the code out, that obstacle is gone
   ([jvm-method-size-limits.md](jvm-method-size-limits.md), "Emission on `java.lang.classfile`"); a switch is untried.
 - `_funName` (funcId -> name, behind `#<function NAME>`) uses the same partition, tree and
-  router (`buildFunNameMethods`); it was one linear chain, 23,386 B on clack/ningle (2,138 rows).
-  Measured 2026-09-29 on `examples/net/httpbin-ningle.lisp`: `_funName` 23,386 -> 113 B (router)
-  + 10 segments; `H.class` 3,630,061 -> 3,645,551 B, pool 28,373 -> 28,403, methods 3,740 ->
-  3,750. The tree costs ~20 B a row against the chain's 11; a lookup is logarithmic.
+  router (`buildFunNameMethods`); it was one linear chain. A lookup is logarithmic.
 
 ## The body splitter (`_k$N` tail continuations)
 `JvmBodyOutliner` drives every defun and lambda body from a QUEUE, so the whole TAIL SPINE (its
 own forms plus the body of every trailing `let`/`progn`) is one flat sequence with a split point
 between any two items. Past `CODE_BUDGET` (**6000**) the rest moves into a fresh
 `private static _k$N`; the caller loads the live locals, `invokestatic`s it, and its value IS the
-enclosing method's value. (ironclad `update-sha512-block`: 17,003 -> 6,146 + 6,071 + 4,838.)
+enclosing method's value.
 
 - A split is taken only where every remaining item is in the method's TAIL. A CAPTURED variable
   travels as its `Object[1]` cell; an unboxed local (`.kb/jvm-int-fusion.md`) crosses boxed
@@ -74,7 +67,7 @@ chunker can adopt it.
 - **The two splitters compose**: this cuts a BRANCH and cannot cut a run of statements;
   `JvmBodyOutliner` the reverse. A sequence buried in a branch arm is reachable by neither until
   the arm becomes a method.
-- **The budget is measured, not predicted** (3.4-39 bytecodes per AST node).
+- **The budget is measured, not predicted**.
   `JvmLispCompiler.compile` reports an oversized defun through a `MethodTooLarge` signal and
   re-runs with that function's measured bytes-per-node ratio applied to a 6000-byte target; still
   over comes back at two thirds, down to a **2000-byte floor**. Rides the `GateUnderpredicted`
@@ -83,10 +76,9 @@ chunker can adopt it.
   each attempt is a whole compile -- expansion ~1.5-2.4 s, Pass 1-2 ~3-5 s on mito -- and the
   emitted size is a function of the forms. So the attempt that measures a function over the
   limit tries the next targets on the AST and asks for the first whose cut differs from the one
-  it compiled; none, no retry. mito's `MitoE2eTest` probe (2026-09-25): five attempts -> two,
-  `-o Probe.class` 48 s -> 33 s, output byte-identical. Of its 13 oversized defuns 9 cut to
-  nothing at any target (`pieces=0`); `%condition-report-str` (17.9 KB) cut to the SAME two
-  pieces at every target and stayed at 17.2 KB, which the old loop spent attempts 3-5
+  it compiled; none, no retry. mito's `MitoE2eTest` probe confirmed the retry loop stops once no
+  further cut differs, output byte-identical. `%condition-report-str` cut to the SAME two
+  pieces at every target, which the old loop spent several attempts
   re-learning -- until the flat-`cond` cut below. **Only a DEFUN is
   reported** (a lambda's `_lambda_<funcId>` cannot be pointed back at a form), and
   `lack/util:find-package-or-load` answers `pieces=0` -- no branch to cut, stays marginally over.
@@ -95,10 +87,8 @@ chunker can adopt it.
   `(cond c1 .. ck (t <piece: (cond ck+1 .. cn)>))` -- the longest prefix that fits, the rest a
   piece cut the same way in turn; exact, the no-match nil included, and a clause is never split.
   The generated dispatches (`%condition-report-str`, `%sbr-*`, `%cds-*`, `%slot-value-runtime`,
-  `%typep-compound-runtime`) are this shape. mito's probe (2026-09-25): `%condition-report-str`
-  17.9 KB -> 6.1 KB, `%sbr-30` 8.7 -> 6.3 KB, `%cds-0` 8.7 -> 5.8 KB; methods over 8000 bytes
-  23 -> 20, still two attempts, 33 s. The example corpus: 20 of 231 programs change their
-  `.class` (the clack/postgres/postmodern stacks, `jose-demo`), none their `.wasm`. Pin
+  `%typep-compound-runtime`) are this shape. On the example corpus only the
+  clack/postgres/postmodern stacks and `jose-demo` change their `.class`, none their `.wasm`. Pin
   `JvmLispCompilerTest#aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList`.
 - Two pre-existing backend bugs this shape can hit: a captured `let` variable assigned inline in a
   sibling arm compiles to a raw store (WRONG ANSWER), and a method past 255 local slots emits a
@@ -123,7 +113,7 @@ One method per class, built on first use; the JIT inlines the static call.
 - **Type predicates** (`JvmEmitHelper.emitSharedCall`): `_pAtom`, `_pConsp`, `_pListp`, `_pStringp`
   (~90 bytecodes each), `_pEq`, `_pEql` (~45); a site is four bytes. The GENERATED dispatches
   (`%typep-runtime`, `%error-runtime`, `%sbr-*`, `%mmi-*`, `%slot-value-runtime`) are 40-57-clause
-  `cond`s of these -- all of them (8.5-13.8 KB) went under the cliff at once.
+  `cond`s of these -- all of them went under the cliff at once.
 - **`_ql$N`** (`JvmQuoteCompiler`): a quoted list costs ~15 bytecodes a cell. Past
   `2 * QUOTE_CHUNK_BUDGET` the spine is cut into `QUOTE_CHUNK_BUDGET` (**2000**) estimated-byte
   chunks, each a `(Object)Object` builder taking the tail so far. Construction moves, it is not

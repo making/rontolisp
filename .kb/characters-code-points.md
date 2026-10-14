@@ -85,27 +85,26 @@ and first class, string1's range before string2's. A nil `:end1`/`:end2` is the 
   `type-error`; `:start1 2 :end1 1` -> 2; `:start2 4` -> NIL; `:end1 9` over a `copy-seq`
   string trapped on wasm, out-of-bounds array access); the interpreter's `string=` refused
   with a `simple-error`.
-- Cost (2026-10-06, JVM / P1 / component bytes, 792 programs: every ci-spec case, the examples
-  in `examples.yaml`, size-report, bench-report): 2,098 of 2,324 artifacts byte-identical, among
+- Cost (2026-10-06, over every ci-spec case, the examples
+  in `examples.yaml`, size-report, bench-report): most artifacts are byte-identical, among
   them every program that names no string comparison and every keyword-free `string=`. The
   shared defun cannot tell a keyword-free `string<` from a bounded one, so every program
-  carrying the `string<` family pays (the check, plus `_ckBounds` / `_ck_bounds` where nothing
-  else brought it): `(print (string< "abc" "abd"))` 22,974 -> 24,057 / 7,527 -> 7,612 / 8,714 ->
-  8,799, with a `handler-case` +1,215 / +426 / +433; the ci-spec `string-comparison-family` case
-  +652 JVM / +264 P1 on the check alone. The `stringEquality` wrapper's two `(string x)`
-  coercions add +343..+686 JVM / +178..+404 wasm to a program carrying it (the compiled `eval`'s
-  wrapper table). Differing: JVM 111 (sum +70.1 KB, max +2.2 KB), P1 56 (+27.1 KB, max
-  +1.3 KB, the ningle examples), component 59 (+28.4 KB). Selecting an unchecked `%string-compare`
+  carrying the `string<` family pays the check (plus `_ckBounds` / `_ck_bounds` where nothing
+  else brought it), and a program with a `handler-case` pays it again at the restart. The
+  `stringEquality` wrapper's two `(string x)`
+  coercions add to a program carrying it (the compiled `eval`'s
+  wrapper table); the ningle examples are the largest per-artifact shift. Selecting an unchecked `%string-compare`
   for a program that provably passes no bound was rejected: a function value, an `apply`, a
   run-time `eval` or a wrapper body injected after prelude selection can all pass one, and a
   wrong "provably" is the silent wrong answer this check exists to remove.
-- Speed (2026-10-06, pinned, min of 15 steady-state reps of 400 K calls (P1) / 4 M (JVM), 8
-  characters): keyword-free `string<` +4-7% (P1 261-274 -> 275-293 ms; JVM 385-419 -> 406-435),
-  bounded `string-lessp` P1 209 -> 229 ms; JVM bounded runs are bimodal (JIT) on base and after
-  alike. A guard skipping the check for default bounds won the P1 keyword-free time back but
+- Speed (2026-10-06, pinned, steady-state): the keyword-free `string<` and bounded
+  `string-lessp` calls pay a few percent for the check; JVM bounded runs are bimodal (JIT) on
+  base and after
+  alike. A guard skipping the check for default bounds wins the P1 keyword-free time back but
   measured slower on the JVM's bounded loop, and costs bytes on every program. Bounded `string=`
   over variables (now coerced with `string`): within noise.
-- ANSI `strings` (interpreter, suite `ca06bd9`, 2026-10-06): 435 / 509 before and after, the
+- ANSI `strings` (interpreter, suite `ca06bd9`, 2026-10-06): the same count passes before and
+  after, the
   FAIL/ERROR sets identical name by name.
 - Pinned by `StringComparisonBoundsFixture` (`PROGRAM`: sbcl's answers; `REPORT_PROGRAM`: the
   slots and text) in `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
@@ -116,18 +115,15 @@ The `nstring-*` case conversions take `&key start end` and delegate the window t
 non-destructive sibling (`.kb/subseq-runtime.md`, "Bounded string operators"), taking the
 unbounded fold when the window is the whole string. The interpreter's keyword walk honors the
 FIRST occurrence of a repeated keyword (CLHS 3.4.1.4).
-- Cost of refusing a nil start (measured 2026-10-05, JVM / P1 / component bytes, over every
-  ci-spec case, the examples in `examples.yaml`, size-report and bench-report: 2,408 compiled
-  artifacts): 2,180 are byte-identical; the rest shrink -- a `funcall`ed `#'string=` with bounds
-  14,341 -> 13,944 JVM, 14,050 -> 13,749 P1, 15,266 -> 14,963 component (a program carrying the
-  compiled `eval`'s wrapper table -798 to -935 JVM, -700 to -798 wasm); a `string<` program
-  -137 B JVM, 0 to -22 B wasm -- summed -60.5 KB JVM, -27.5 KB P1, -27.6 KB component. An
-  `nstring-*` program grows: `(print (nstring-upcase (copy-seq "abc")))` 27,390 -> 30,977 JVM
-  (the `&key` parsing the program had no other use for), 22,286 -> 23,079 P1, 23,500 -> 24,289
-  component; with another `&key` defun in the program +1,030 JVM / +837 P1; the ci-spec case
-  using all three +4,908 JVM / +798 P1 / +820 component. Speed: a keyword-free
+- Cost of refusing a nil start (checked 2026-10-05 over every
+  ci-spec case, the examples in `examples.yaml`, size-report and bench-report): most compiled
+  artifacts are byte-identical; the rest shrink, since the checked compare folds away what the
+  unbounded call carried (a program carrying the
+  compiled `eval`'s wrapper table shrinks too). An
+  `nstring-*` program grows: the `&key` parsing is code the program had no other use for,
+  and the growth repeats per additional `&key` defun. Speed: a keyword-free
   `nstring-upcase` loop is within noise on P1 and the JVM; routed through the bounded fold it
-  measured ~1.25x (P1) / ~2x (JVM) slower, which is why the whole-string window skips it.
+  measured slower on both, which is why the whole-string window skips it.
 
 Compile-path consequence: a program calling `string>` never mentions `%string-compare`, so
 `LispPreludeLibrary.process` selects prelude entries **to a fixpoint**. The interpreter resolves
@@ -146,11 +142,11 @@ other side of that line: they DO map as `String` does, in a library helper of th
 - JVM: one shared emitter `JvmStringCaseFold`; `JvmStringUpcaseCompiler` and
   `JvmStringCapitalizeCompiler` are thin mode selectors over it.
 - WASM: `_char_upcase`/`_char_downcase` (`WasmCaseFoldRuntimeBuilder`) binary-search a compressed
-  `(from:u32, to:u32, delta:i32)` range table in static data (~16 KB, 690 upper / 674 lower
+  `(from:u32, to:u32, delta:i32)` range table in static data (690 upper / 674 lower
   ranges at Unicode 15). `_string_upcase`/`_downcase`/`_capitalize`
   (`WasmStringRuntimeBuilder.emitCaseFoldCore`) DECODE each UTF-8 sequence, fold the code point,
   re-encode -- they must never fold bytes. `_string_capitalize` finds word boundaries with
-  `_char_alnum_p` over a `(from, to)` PAIR table (728 ranges / ~5.8 KB at Unicode 16); an ASCII
+  `_char_alnum_p` over a `(from, to)` PAIR table (728 ranges at Unicode 16); an ASCII
   test would answer `"AあB"` where the others answer `"Aあb"`. All three tables are their own
   `WasmTreeShaker.OwnedDataSegment`, so `--optimize` drops each with its helper.
 - **Output-buffer sizing on WASM is derived, not assumed**: a fold can WIDEN a UTF-8 encoding

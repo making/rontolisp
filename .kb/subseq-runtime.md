@@ -12,8 +12,8 @@ The STRING lane answers a MUTABLE CHARACTER VECTOR (`_subseqCv` JVM, `_subseq_st
   `%subseq-core` (what the per-backend `subseq` compilers emit); a general array is copied
   into a fresh `%array-alike` -- by `(%replace-bulk out seq 0 start n)` first (wasm: one
   `array.copy` when both are packed integer vectors of one width, `.kb/sequence-op-runtimes.md`),
-  element-wise when that declines. Without the bulk arm a 64 KiB octet `subseq` cost ~11 M fuel
-  (~1.4 ms native), and it is what every fetched body chunk goes through (`.kb/fetch-http.md`,
+  element-wise when that declines. Without the bulk arm a large octet `subseq` cost millions
+  of fuel units, and it is what every fetched body chunk goes through (`.kb/fetch-http.md`,
   "Throughput"); pin: `WasmLispCompilerIntegrationTest.subseqOfAPackedIntegerVectorIsOneBulkCopy`
   (a wasmtime fuel budget). `subseqRuntimeWrapper()` is the callee; `end` is a
   PARAMETER, nil when omitted, so one call shape serves 2- and 3-arg calls.
@@ -21,8 +21,8 @@ The STRING lane answers a MUTABLE CHARACTER VECTOR (`_subseqCv` JVM, `_subseq_st
   (`JvmLispCompiler` / `WasmLispCompiler`), not `expandTopLevelDefinitions`: most `subseq` sites
   live in wrapper bodies, which do not exist until the backend generates them.
 - Gates -- wasm: any `subseq` call. JVM: that AND `programUsesAnyArrayOp`, because the copy arm
-  names `aref`/`%aset` and would pull ~120 KB of array runtime into a string-only program.
-  `subseq`/`copy-seq`/`replace` raise that gate themselves (~9.5 KB on a minimal program).
+  names `aref`/`%aset` and would pull the whole array runtime into a string-only program.
+  `subseq`/`copy-seq`/`replace` raise that gate themselves.
 - A site routes to the helper only when `%subseq-runtime` really is among the program's functions,
   inlining otherwise -- an under-predicting gate costs sharing, not correctness.
 - `LispMacroExpander.programUsesGeneralArrayOp` is the ONE list of "this program can hold an
@@ -117,12 +117,10 @@ resolve is `JvmSubseqCompiler.emitResolveEnd`), wasm `_subseq` tests its param 2
 `-1`, so a GIVEN `-1` read as omitted: `(subseq s 0 -1)` answered the whole sequence on
 the JVM for every representation and on wasm for a literal string or a list, and
 `write-string :end -1` wrote it all. `Integer.MIN_VALUE` would not have been safe either:
-a bound's index can be any int. Cost: wasm modules with a
-subseq lane -8 B (the per-cell list test is `ref.is_null` instead of an `i32` compare),
-JVM classes -14 B with `_subseqCore`, +5 B with `_subseqCv` alone (`sieve`); programs
-without a lane byte-identical (`hello_world`, `pi_approx`, `dom_reactor`, `string`,
-`list`, `fib`, ... at the default and `size` levels; `--optimize=off` carries the lane:
--5/-14 B JVM, -8 B wasm).
+a bound's index can be any int. Cost: a few bytes either way on the modules with a
+subseq lane, none
+without one (`hello_world`, `pi_approx`, `dom_reactor`, `string`,
+`list`, `fib`, ... at the default and `size` levels; `--optimize=off` carries the lane).
 
 Where each lane checks:
 - **Interpreter**: every representation's arm throws `Environment.subseqBoundsError`, an
@@ -133,7 +131,7 @@ Where each lane checks:
   `(%subseq-end start end (length seq))` (`LispNames.SUBSEQ_END`, compile-path only:
   `JvmSubseqCompiler.compileEnd` / `WasmSubseqCompiler.compileEnd`), before `%array-alike`.
   Not a Lisp `(error "..." ...)`: that lowering (generic `<`/`<=` calls, a concatenation
-  per piece) took the JVM `%subseq-runtime` from 659 to 1,234 bytes of bytecode; the
+  per piece) doubles the JVM `%subseq-runtime`'s bytecode; the
   primitive is int compares and one report block. The vector lane now always reads
   `(length seq)`, which it skipped when `end` was given.
 - **JVM string, both representations**: `_subseqCv`'s two arms test through
@@ -148,10 +146,10 @@ Where each lane checks:
   exception by identity and reads the slots through `_teSlot`, as for a wrong-type operand.
   Without a pad nothing records. Cost of the non-integer change (bound conversion through
   `_subseqIdx`, the report printing the bounds as given, the per-site report blocks folded
-  into `_subseqBad`): bytecode shrinks (a class with the three lanes 774 -> 725 bytes of code),
-  the two methods' metadata does not -- +197 B on zlib's class, +221 at `--optimize=size`,
-  +264 on `sieve` (`_subseqCv` and `_subseqCore` only); a class with a pad that refuses a
-  range +84..108 B (the per-site recording calls and `_subseqRec` are gone). Programs without
+  into `_subseqBad`): the lanes' code shrinks,
+  the two methods' metadata grows a little on the real programs (`_subseqCv` and
+  `_subseqCore` only); a class with a pad that refuses a
+  range shrinks too (the per-site recording calls and `_subseqRec` are gone). Programs without
   a lane byte-identical (`hello_world`, `pi_approx`, `dom_reactor`, `string`, `fib`, `list`,
   `bignum`, `clos`, `hash`, `mandelbrot`, `matmul`, default and `size` levels). A loop of
   string / literal-string / list / vector `subseq`s ran the same before and after (JDK 25,
@@ -161,8 +159,8 @@ Where each lane checks:
   (`JvmEmitHelper.emitSharedCall`); a site is a call. It used to inline the whole walk at
   every site -- a program without arrays reaches it from each `subseq` a lowering
   introduced after the array gate was decided (a `format` directive renders through
-  several), and with the check inline too `format-directive-exponential`'s class grew
-  60,688 -> 65,660 bytes; as a helper it is 32,598. The list arm refuses a negative start
+  several), and with the check inline too the `format-directive-exponential` class grows
+  by half; as a helper it is far smaller. The list arm refuses a negative start
   or start > end before the walk; a list that runs out before `start` or a given `end` is
   found BY the copy walk, and only then is the list counted for the report -- a valid range
   costs no length walk. `%subseq-end` is the same kind of helper, `_subseqEnd`. A program
@@ -184,15 +182,13 @@ Where each lane checks:
   so the expected type's car is `eq` to the program's `'integer`), the instance-less
   `(nil . message)` payload otherwise. Outside EH mode: a bare `unreachable` at the site,
   like every other failure that backend takes when no tag exists to throw on.
-- Cost (2026-10-05, wasmtime 49): an EH module with a pad and one subseq lane +76 B (P1),
-  the fixture programs +39-47 B; an EH module without a pad SHRINKS (the per-site reports
-  became calls): zlib P1 130,289 -> 130,204, component 134,108 -> 134,017, size level
-  100,085 -> 100,000; non-EH modules and `hello_world`, `pi_approx`, `dom_reactor`,
-  `string`, `list` byte-identical at every shaking level (`--optimize=off` carries the
-  unshaken landing: +5 B non-EH, +50 B EH). The non-integer change (the index test at each
-  bound, the landing reading the bounds as given): +18 B on a non-EH module with a lane, +41
-  on the fixture-shaped EH program with a pad, +72 on zlib (EH, no pad) at both levels, +75 on
-  `sort`; P1 and component alike; the same `subseq` loop as the JVM's ran the same (wasmtime,
+- Cost (2026-10-05, wasmtime 49): the landing costs a few bytes on an EH module with a pad;
+  an EH module without a pad SHRINKS (the per-site reports
+  became calls); non-EH modules and `hello_world`, `pi_approx`, `dom_reactor`,
+  `string`, `list` are byte-identical at every shaking level (`--optimize=off` carries the
+  unshaken landing). The non-integer change (the index test at each
+  bound, the landing reading the bounds as given) costs a few more bytes wherever the lane
+  exists, P1 and component alike; the same `subseq` loop as the JVM's ran the same (wasmtime,
   within noise).
 - **The literal pieces MUST be interned before `stringTable.toByteArray()`**: interned
   lazily inside a runtime body builder, the offsets are recorded but the bytes never reach
@@ -204,8 +200,8 @@ Where each lane checks:
 - **So the list and vector reports add NO data entry.** Any new entry -- eager, or lazy at
   the first site -- moves every later address of nearly every EH-mode module: even
   `(print (handler-case (car 1) (error () 2)))` compiles subseq sites (in bodies the shake
-  then removes) with the charvec gate open, so a site-gated piece still shifted it by the
-  pieces' 46 bytes. Instead `WasmStringRuntimeBuilder.emitKindOfLength` CUTS
+  then removes) with the charvec gate open, so even a site-gated piece shifted it. Instead
+  `WasmStringRuntimeBuilder.emitKindOfLength` CUTS
   `" for "` and `" of length "` out of `" for string of length "` (`_str_build` over bytes
   `[0, 7)` and `[11, 24)`: a string's first and last bytes are its frame, and
   `_string_concat` copies only what lies between) and builds the kind word from constants
@@ -248,8 +244,7 @@ signals a `type-error` for all five and its text names no operator either.
   `(subseq s 0 start)` before the window, so `:start 9` on a length-5 string reported
   `invalid bounds 0, 9` on the compiled paths and `9..5` in the interpreter. The window's
   own `(subseq s start end)` is the range as written; the two outer cuts are then in range.
-  Cost: one more local per site -- wasm +4 B (a two-site program: P1 26,721 -> 26,725,
-  component 27,887 -> 27,891), the JVM class a few bytes (25,494 -> 25,508); programs with no
+  Cost: one more local per site, a few bytes of class and module; programs with no
   bounded conversion are byte-identical (`hello_world`, `pi_approx`, `zlib`, a
   `write-string :start` program, on JVM / P1 / component).
 - Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
@@ -271,9 +266,7 @@ signals a `type-error` for all five and its text names no operator either.
   `BoundedStringBoundsFixture` defines a Gray class so its rows exercise the non-instance arm;
   the ci-spec case does only because the corpus program does (a case run alone does not).
 - Programs with no `:start` stay byte-identical (`write-string` / `write-line` plain, `hello`);
-  a `:start` site gets smaller (no `or` around the bound): a literal-bound program JVM 9,889 ->
-  9,799, P1 5,482 -> 5,455, component 6,619 -> 6,592; a `funcall` program JVM 33,266 -> 32,584,
-  P1 40,879 -> 40,129, component 42,117 -> 41,363.
+  a `:start` site gets smaller on every backend (no `or` around the bound).
 - The sequence operators refuse every bad bound with this same `type-error` and text, call
   position and first class, through one check of their own before the walk (`%check-bounds`,
   `.kb/sequence-bounding-keywords.md`, "Every bound is checked once"); so do the string

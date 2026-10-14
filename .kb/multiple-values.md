@@ -123,7 +123,7 @@ well-defined on nil.
 **Invariant (2026-10-07): `read-line` answers `(values line missing-newline-p)` on all four
 backends, through a consumer, a function tail, `#'read-line`, a string / file / `:io` / socket /
 standard-input stream, a parked `unread-char` and a Gray `stream-read-line`; SBCL 2.2.9's answers.**
-Measured before, the same day: SBCL `("ab" NIL)` `("cd" T)` `(:EOF T)`, all four `("ab")` `("cd")`
+Before, the same day: SBCL `("ab" NIL)` `("cd" T)` `(:EOF T)`, all four `("ab")` `("cd")`
 `(:EOF)`.
 - `read-line` (and the component alias `rontolisp::%read-line-raw`) is a syntactic producer. The
   lowering (`lowerReadLine`) binds the arguments in source order, then ONE read,
@@ -195,8 +195,9 @@ unconditional spill would tax the hottest built-ins on every call:
   everywhere. It runs BEFORE Pass 2 on purpose: the backends' own lambda walk sees the body after
   `expandFloorFamilyDivisor` has turned `(floor a b)` into `(floor (/ a b))`, whose remainder is a
   different number. A built-in WRAPPER's tail stays one value (the interpreter's built-in answers
-  one), the floor family's excepted (next section). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
-  4,333 -> 3,693-3,987 ms, medians 3,761 -> 3,759; a program with no producer-tail lambda compiles
+  one), the floor family's excepted (next section). Cost: interpreter closure creation, resolved
+  within noise (2M `lambda` evaluations, 5 alternating pairs); a program with no producer-tail
+  lambda compiles
   to the same size on both backends. A non-tail `return-from`/`go` escape is not scanned;
   `multiple-value-prog1` needs no walk (its expansion ends in `values-list`).
 
@@ -221,12 +222,11 @@ the optional divisor and answer both values, through a `funcall`, an `apply`, a 
   of a float under 2^53, the float itself above 2^52), with CL's zero signs (`(truncate -0.0)` is
   `0`, `-0.0`). It replaced `mod`/`rem` by 1, which dominated the cost.
 - Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; `(mapcar #'floor xs)` over 1,000 floats x
-  3,000, 4 alternating pairs): no multiple-value operator in the program, class +288 B, wasm +9 B,
-  time unchanged (JVM 158-214 -> 167-199 ms, wasm 130-139 -> 135-136). With one, the wrapper
-  publishes: JVM 155-187 -> 247-271 ms, wasm 132-137 -> 167-255 (the `mod` remainder had it at
-  296-379). A consumer over a one-argument `floor` got faster from the `(- x q)` remainder (3M
-  `multiple-value-bind`s: JVM 98-99 -> 76-78 ms, wasm 433-461 -> 254-317, class 12,773 -> 12,127 B,
-  wasm 9,067 -> 8,772 B). A program referencing neither is byte-identical (`fib.lisp`, with and
+  3,000, 4 alternating pairs): with no multiple-value operator in the program the class and wasm
+  grow by the wrapper alone and run times are unchanged. With one, the wrapper publishes and the
+  call pays for it -- and the `mod`-remainder form it replaced paid more still. A consumer over a
+  one-argument `floor` got faster and smaller from the `(- x q)` remainder. A program referencing
+  neither is byte-identical (`fib.lisp`, with and
   without a consumer appended).
 
 ## The other producers as function objects
@@ -256,18 +256,14 @@ variable, a `mapcar` and a function return, on every backend.** Pinned by the
   `(funcall #'find-symbol "CAR")` is `(CAR :INTERNAL)` there, `:INHERITED` in SBCL and the
   interpreter; an unknown name yields a symbol.
 - Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, 5 alternating pairs). The wrapper first
-  published through the lowering's `(gensym)` sentinel: 3M `(funcall g i h)` over `#'gethash` went
-  JVM 161-179 -> 330-349 ms, wasm 155-211 -> 360-382, exactly what 3M bare `(gensym)` cost (JVM
-  212-244, wasm 160-206) -- and each lookup advanced the gensym counter, which the ci-spec corpus
+  published through the lowering's `(gensym)` sentinel, at the cost of a bare `(gensym)` a call --
+  and each lookup advanced the gensym counter, which the ci-spec corpus
   caught (`gensym-and-macroexpand` printed `#:G2` for `#:G1` once an earlier case's
-  `(funcall #'gethash ...)` published). With the constant sentinel: that loop, no multiple-value
-  operator, class 19,614 -> 19,756 B, wasm 9,618 -> 9,813 B, time unchanged (JVM 158-167 ->
-  156-183 ms, wasm 165-193 -> 171-208); with one, class 21,804 -> 22,283 B, wasm 12,111 -> 12,581 B,
-  JVM 159-179 -> 182-196 ms, wasm 156-208 -> 337-380 (every call allocates the published list and
-  the sentinel literal). The call-position consumer got faster and smaller (3M `multiple-value-bind`
-  over `(gethash i h)`: JVM 335-395 -> 170-187 ms, wasm 315-376 -> 302-329, class 12,069 -> 12,035 B,
-  wasm 8,085 -> 7,882 B). Interpreter call-position `gethash` (300k) unchanged within noise (base
-  452-533, new 460-563 ms over three sessions). Byte-identical: `fib` with and without a consumer,
+  `(funcall #'gethash ...)` published). With the constant sentinel: time
+  unchanged with no multiple-value
+  operator in the program; with one, the published call pays for the per-call list and
+  the sentinel literal. The call-position consumer got faster and smaller. Interpreter
+  call-position `gethash` unchanged within noise. Byte-identical: `fib` with and without a consumer,
   a hash-table program without a consumer, `intern`/`find-symbol`, computed `subtypep`,
   `read-from-string` + `array-displacement` programs, on all three compile targets; a program with a
   `gethash` consumer changes by the sentinel only.
@@ -341,13 +337,11 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   value lost).
 - Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; `bench-report/programs/fib.lisp`
   20 x fib 30 = 32M calls, 4 alternating process pairs): a program without a multiple-value
-  operator is byte-identical (13,220 B of class, 5,479 B of wasm). With one appended, class
-  14,106 -> 14,128 B (+22), wasm 7,203 -> 7,331 B (+128); JVM 167-200 -> 178-209 ms (noise),
-  wasm 703-715 -> 419-425 ms -- FASTER, the `let`-temporary tail lands on the unboxed local
-  path the bare `(+ ...)` branch did not. Since the generic helpers' i31 head
-  (.kb/wasm-int-fusion.md, same day) the bare tail runs 432-548 ms and the settled one
-  460-536 ms: no difference left. The mv-heavy probe programs grow 1.2-1.5%
-  (474,800 -> 480,681 B of class, 348,373 -> 353,587 B of wasm).
+  operator is byte-identical. With one appended the settled tail ran FASTER on wasm -- the
+  `let`-temporary tail lands on the unboxed local
+  path the bare `(+ ...)` branch did not -- until the generic helpers' i31 head
+  (.kb/wasm-int-fusion.md, same day) left no difference between the bare tail and the settled
+  one; on the JVM, unchanged within noise. The mv-heavy probe programs grow a little.
 
 ## The interpreter's value-count register
 **Invariant: on the interpreter the channel reflects the LAST value-producing step, exactly --
@@ -380,8 +374,8 @@ sub-form: a `(values ...)` tail reaches the consumer behind any number of return
 `values` whose value went into a variable or an argument never does.
 `unwind-protect` saves the channel around its cleanups and `publishSpill`s it back
 (`runUnwindCleanups`), `handler-case` with `:no-error` `consumeValues` it.
-- Cost (2026-09-19, fib 27 + a 2M-call loop, 5 alternating process pairs): 2,280-2,350 ->
-  2,254-2,344 ms, medians 2,317 -> 2,297, no measurable change. The old argument-boundary
+- Cost (2026-09-19, fib 27 + a 2M-call loop, 5 alternating process pairs): no measurable change.
+  The old argument-boundary
   flag (`beginArguments`/`endArguments`) is gone: it only cleared arguments, and left a
   `let` initform, a `progn` body form and a callback's publish to leak.
 
@@ -415,29 +409,26 @@ cooperative and a suspension happens only at an `await`, which publishes afresh)
   Any other program keeps the plain `getstatic`/`putstatic` of the `_g$` field, byte-identical.
 - Why a box and not the `_g$` static field: every non-owner reads `_mvOwner` on every access,
   and the owner writing a register in the class's own statics invalidated that line under
-  them. Measured 2026-10-06 (export of the pin below, 8 pool threads x 50 calls, best of 25
-  rounds, load 30-60): owner in the static field, 5 of 24 runs at 114-173 ms against 30-50;
-  owner in the box, 0 of 26, max 78. The box costs the owner nothing: one thread 15-21 ms
-  either way.
+  them. In the export of the pin below, eight pool threads (2026-10-06): with the owner in the
+  static field some runs paid for the invalidation, with the box none; the box costs the owner
+  nothing on one thread.
 - Since 2026-10-06 an export's first caller claims (before, a jvm-export class had no owner).
-  Same day, one host thread through a fixed pool, best of 25 rounds, 8 alternating pairs: no
-  owner 21-37 ms -> owner 15-26 ms. Eight threads: no owner 30-106, owner 30-78 (load 30-60;
-  the spread is the machine). An export whose tails write no values (fib) is 34 ms either way.
+  Same day, through a fixed pool, one host thread or eight: claiming costs nothing and pays
+  under contention. An export whose tails write no values (fib) is unchanged either way.
 - Until 2026-10-06 the gate was `usesAsyncSpawn || usesThreads`, which left out every thread a
   host calls in on: an export running 20,000 `multiple-value-bind`s a call, called 50 times on
-  each of 8 Java threads at once, answered 13,041-15,173 of the 8M triples wrong per run.
+  each of 8 Java threads at once, answered a sizable share of the 8M triples wrong per run.
   Pinned by `JvmExportTest#anExportCalledOnSeveralThreadsKeepsEachCallsMultipleValues`. Such a
   program had no `<clinit>` ThreadLocal constants of its own, so the per-thread channel now
-  makes them (`ensureThreadLocalInfra`). Cost there (same day, best of 7 rounds, load 18-31):
-  one host thread 35-54 -> 91-103 ms (no owner, a ThreadLocal per write); 8 threads 158-166 ->
-  40-42 ms (the shared field's cache line, gone). The 91-103 did not reproduce later that day
-  through a fixed pool at load 10-60 (21-37 ms with no owner): the per-write ThreadLocal costs
-  ~1.4x there, not ~2x.
+  makes them (`ensureThreadLocalInfra`). Cost there (same day): with no owner, one host thread
+  pays the per-write ThreadLocal; eight threads run faster than without the channel (the shared
+  field's cache line, gone). Through a fixed pool the per-write ThreadLocal costs less than the
+  pessimistic rate.
 - Cost (2026-09-26, x86-64 Linux, Java 25, 5 alternating process pairs). Interpreter, fib 27 +
-  a 2M-call loop: 2,203-2,454 -> 2,256-2,487 ms, medians 2,352 -> 2,367, noise. JVM, fib 34
+  a 2M-call loop: noise. JVM, fib 34
   (18M calls, each tail clears the channel) in a program with an async-defun and a consumer:
-  74-101 -> 83-103 ms, class 17,055 -> 17,471 B. A `ThreadLocal.set` on EVERY write (no owner
-  fast path) was 151-177 ms, twice the time -- which is why the owner has a fast path.
+  a small time and class cost. A `ThreadLocal.set` on EVERY write (no owner
+  fast path) doubles the time -- which is why the owner has a fast path.
 
 ## The REPL echo is a consumer
 `LispEvaluator.evalValues(form) -> List<LispVal>` is the ONLY multiple-value entry point outside

@@ -96,14 +96,15 @@ as a self tail call does. Landed 2026-10-03 (`.todo/c02`).
   the dispatcher, so its group roots its first function. A rooted method past
   `HugeMethodLimit` (8000) lays the whole group out apart: every jump an epilogue, a frame a
   round as before. The shake drops a rooted method nothing calls.
-- **Why rooted methods** (2026-10-03, a generic function whose method tail-calls the generic,
-  30,000 x 1,000 calls, steady state, Graal): calls 67-89 ms; ONE shared method with a switch
-  at its entry and direct jumps 71-74 ms, but a cycle with two entry heads is irreducible and
+- **Why rooted methods** (2026-10-03, a generic function whose method tail-calls the generic):
+  ONE shared method with a switch
+  at its entry and direct jumps is no faster than plain calls, and a cycle with two entry heads
+  is irreducible --
   Graal refuses its OSR (`Multiple OnStackReplacementNodes generated`), so one long call stays
-  interpreted ([jvm-osr-backedges.md](jvm-osr-backedges.md)); the same method with every jump
-  re-entering the switch (reducible) 171-190 ms (C2 162-250); rooted 67-73 ms. Rooting EVERY
-  member put the whole group into each method a dispatcher names (+0.47-1.40% on 15 example
-  classes, against +0.21-0.39%). When the jumps form a cycle the root does not close
+  interpreted ([jvm-osr-backedges.md](jvm-osr-backedges.md)) -- and every jump
+  re-entering the switch (reducible) is slower still. Rooting the cycle heads is what runs at
+  the plain-call rate; rooting EVERY
+  member instead puts the whole group into each method a dispatcher names. When the jumps form a cycle the root does not close
   (`JvmTailGroup.reducible`), that root's method dispatches instead: `iconst_0; istore m`, a
   switch on `m`, each jump storing its target's index and re-entering the switch.
 - **Bounces**: a member's method may run any member's code, so every member's
@@ -186,28 +187,20 @@ overflowed -- all answer now. The interpreter and wasm answer every one of these
 (`.kb/wasm-tail-calls.md`, "Built-in macro expansions").
 
 **Time**, best of 5 alternating runs, the same programs at depths the old emission
-survived: 10,000 calls of a 10,000-round CL defun loop 447-547 -> 93-100 ms, the `labels`
-twin 1,132-1,617 -> 85-98 ms; 1,000 Clojure `loop`s of 10,000 rounds 263-301 -> 181-202 ms;
-300 `(count (distinct (range 10000)))` 1,013-1,111 -> 1,065-1,137 ms (hashing dominates;
-noise). bench-report: nine programs compile byte-identically, `string` grows 5 B and runs
-845 -> 846 ms (best of 7).
+survived: the tail-called loops run several times faster, the rest within noise.
+bench-report: nine programs compile byte-identically.
 
-**Bytes**: size-report `hello_world`/`pi_approx` identical, `zlib` 183,365 -> 183,370 B;
-the whole `clojure-spec.yaml` program 3,655,421 -> 3,653,061 B, 172 methods jumping back to
-their start.
+**Bytes**: size-report's programs unchanged to within a few bytes; 172 methods of the whole
+`clojure-spec.yaml` program jump back to their start.
 
 **Mutual tail calls** (tail groups, same box, a loaded 64-core host). Depth, 1,000,000
-rounds, `java Prog`: a CL `labels` even/odd pair and Clojure's `letfn` twin overflowed (the
-twin passed 100,000) -> answer; two defuns answered in 1 of 3 runs (C2 inlining one into the
-other) and overflowed under `-Xint` -> answer every time, `-Xint` included. Time, best of
-iterations 3-5 in one process, range over 7 alternating runs: 1,000 x a 10,000-round defun
-pair 6-9 -> 3-4 ms, the `labels` pair 65-78 -> 37-44; 10M shallow `(ev? (mod k 4))` defuns
-19-22 -> 21-24, `labels` 123-143 -> 28-32 (no dispatcher); 10,000 x a generic function over
-1,000 elements 27-28 -> 24-26; 100 x `read` of 2,000 data (the `%rd-*` group) 783-862 ->
-779-898. Bytes: of the examples suite's 116 JVM legs 15 change, every one by a group in
-spliced code, +2,988 to +11,135 B (+0.21% to +0.39%); bench-report and size-report
-byte-identical; the ci-spec program 7,618,685 -> 7,622,142 B, clojure-spec 3,692,871 ->
-3,700,216 B (Clojure's regex matcher: four functions, three rooted).
+rounds, `java Prog`: a CL `labels` even/odd pair and Clojure's `letfn` twin
+answer, and so do two mutually tail-calling defuns, `-Xint` included, where the call-based
+emission answered only in some runs. Time: the `labels` pairs run much faster than the
+call-based emission, defun pairs and the `read` group level. Bytes: of the examples suite's
+JVM legs only the ones with a group in
+spliced code change, and then only marginally; bench-report and size-report
+byte-identical (Clojure's regex matcher: four functions, three rooted).
 
 **Loop exits, binding forms, lambda heads** (2026-10-04, wasmtime 49, the same box). Depth,
 1,000,000 rounds of `(defun f (n) <form>)`, `java Prog` and `java -Xint Prog`: the self call in

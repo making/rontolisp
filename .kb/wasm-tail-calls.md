@@ -123,44 +123,39 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
 ## Measurements (2026-09-19, x86-64 Linux, Xeon E5-2697A v4, wasmtime 47.0.3, node 24.19, Java 25)
 
 **Depth, default stacks, largest passing.** A tail call through a procedure value,
-`(define (g self n) (if (= n 0) 'done (self self (- n 1))))`, before -> after: wasm 2,975
--> 5,000,000 passes (the probe's ceiling), component the same; Common Lisp `(funcall self
-self ..)`, mutual `defun`s, a `labels` self loop and `apply` of a literal: 100,000
-overflowed, 3,000,000 answer. Unchanged: JVM `java Prog` 1,844 (`-Xss16m` 17,677; at
-`-Xss256m` 8,000,000 passes, because after ~10k invocations the JIT's frames are a
-fraction of the interpreter's -- `.kb/interpreter-stack.md`), interpreter 15,497 (the
-16 MiB worker; 5,000,000 -- the probe's ceiling -- since the interpreter's own loop landed
-later the same day, `.kb/interpreter-tail-calls.md`). The JVM figure became 16,201 when
-the compiled `main` moved onto a 16 MiB worker the same day
-([interpreter-stack.md](interpreter-stack.md)), and unbounded through the trampoline of
-2026-10-03 ([jvm-tail-bounce.md](jvm-tail-bounce.md)); the JVM's `labels` self loop and every other self tail call
+`(define (g self n) (if (= n 0) 'done (self self (- n 1))))`, passes to the probe's
+5,000,000 ceiling on wasm and the component where it formerly overflowed a few thousand
+frames in; the Common Lisp shapes `(funcall self
+self ..)`, mutual `defun`s, a `labels` self loop and `apply` of a literal likewise answer
+at depths where they formerly overflowed. The JVM and the interpreter keep their own,
+separately documented budgets (`-Xss` scaling, the 16 MiB worker --
+`.kb/interpreter-stack.md`): the compiled `main` moved onto a 16 MiB worker the same day
+([interpreter-stack.md](interpreter-stack.md)), the JVM tail call is unbounded through the trampoline of
+2026-10-03 ([jvm-tail-bounce.md](jvm-tail-bounce.md)), the JVM's `labels` self loop and every other self tail call
 answer 1,000,000 since the jump of the same day, mutual `defun`s and a `labels` pair since the
-tail groups of the same day ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
-A self call inside a `labels`/`flet` BODY overflowed here at 1,000,000, and so did a
+tail groups of the same day ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)), and the interpreter
+answers the probe's ceiling since its own loop landed the same day
+(`.kb/interpreter-tail-calls.md`).
+A self call inside a `labels`/`flet` BODY overflowed here, and so did a
 Clojure multi-arity `fn` clause's `recur` and a `cond`/`case`/`when` clause's call, until
 the built-in macro arms handed the flag on (2026-10-03, above). One Scheme call through a value is two JVM
 frames, `g` and `_invoke_2`;
-`%scheme-ensure-procedure` returns before the call. V8: a 1,000-deep `labels` loop (2,000
-frames) threw `Maximum call stack size exceeded` under node's WASI before and runs now.
+`%scheme-ensure-procedure` returns before the call. V8: a 1,000-deep `labels` loop threw `Maximum call stack size exceeded` under node's WASI before and runs now.
 
-**Bytes** (baseline jar vs this change, `wasm-tools validate` ok on every module): the
-size-report rows `hello`/`pi` `--optimize`/`size`/`component` byte-identical (no
-dispatcher), the `--optimize=off` rows -146 B; `zlib` -288/-138/-137/-137 (plain, optimize,
-size, component); `dom_reactor` +1/+1 (optimize, size: a moved forwarder's `return`);
-bench-report `list` -99, `sort` -40, `string` -2, `clos` +24 (two once-called
+**Bytes** (`wasm-tools validate` ok on every module): the size-report rows without a
+dispatcher are byte-identical; most other rows shrink slightly or stay equal (`zlib`, the
+`--optimize=off` rows, much of `bench-report` and every `examples/scheme` build);
+`bench-report` `clos` grows a little (two once-called
 error-signalling lambdas whose `return_call` is not trailing, so the inliner's block costs
-more than the move saves -- declined by its own arithmetic), the rest 0;
-`examples/scheme` -67 to -423 B (evaluator -423, streams -359, differentiation -323),
-component builds the same; gzip moves the same direction. Outputs identical on wasm and
+more than the move saves -- declined by its own arithmetic);
+component builds move the same way; gzip moves the same direction. Outputs identical on wasm and
 component for all six Scheme examples.
 
-**Time** (best of 7 alternating runs, output checked): bench-report programs within noise
-(fib 160 -> 160 ms, matmul 900 -> 885, sieve, hash, bignum, mandelbrot, string, evalfib the
-same); a closure chain is FASTER, because the dispatcher's frame is gone while the target
-runs: 10M iterations of a 1,000-deep `labels` loop 200 -> 167 ms (one-parameter: 205 ->
-141), a defun through `(funcall f f ..)` 173 -> 135, a closure through a global 230 -> 170,
-mutual `defun`s 102 -> 91, `(apply f f ..)` (2M) 142 -> 108; the Scheme `(self self ..)`
-loop 200 -> 143 on wasmtime and 158 -> 74 on V8. The same module with every `return_call X`
+**Time** (output checked): bench-report programs within noise;
+a closure chain is FASTER, because the dispatcher's frame is gone while the target
+runs: deep `labels` loops, a defun or closure called through a value or a global, mutual
+`defun`s, `apply` chains and the Scheme `(self self ..)`
+loop on wasmtime and V8 all gain. The same module with every `return_call X`
 rewritten to `call X; return` runs at the baseline's speed, so the gain is the tail call
 itself, not the code around it.
 
@@ -174,21 +169,20 @@ output line beside its time; `.kb/measurement-probes.md` rule 5, trap G.
 
 wasmtime enables the tail-call proposal by default (since 21; 47 verified), V8 since
 Chrome 112 (node 24 verified through `node:wasi`), Firefox 121, Safari 18.2 -- every engine
-that runs the wasm-GC modules the backend already emits. Cranelift's `call_ref` is 30x a
-direct call on this box (7.6 s vs 0.25 s per 100M), so the dispatcher must keep its
+that runs the wasm-GC modules the backend already emits. Cranelift's `call_ref` is many
+times a direct call on this box, so the dispatcher must keep its
 `br_table` of direct calls and never become a `call_ref`.
 
-**2026-10-03, the macro arms and inliner rule (1)** (wasmtime 49, baseline jar vs this
-change, `wasm-tools validate` ok on every module, outputs identical): size-report
-`hello_world`/`pi_approx` byte-identical in all four rows, `zlib` -8/-8/-6 B (optimize,
-size, component; `--optimize=off` 0) but gzip -9 +85/+47/+35 B; bench-report all ten
-byte-identical; `examples/scheme` 0 to -10 B (`streams` -10), `examples/clojure/demo.clj`
-0 B with gzip +5 to +12 B. `return_call`s in the optimized modules: `demo` 195 -> 213,
-`evaluator` 207 -> 217, `zlib` 185 -> 182 (moved bodies). Time: evaluator and demo within
+**2026-10-03, the macro arms and inliner rule (1)** (wasmtime 49, `wasm-tools validate` ok
+on every module, outputs identical): size-report
+`hello_world`/`pi_approx` byte-identical in all four rows, `zlib` and `bench-report`
+unchanged to a few bytes smaller (gzip can grow slightly), the `examples/scheme` builds
+a few bytes smaller, `examples/clojure/demo.clj` unchanged. `return_call`s in the optimized
+modules merely move between equivalent forms (bodies the inliner relocated). Time: evaluator and demo within
 noise. Still a plain call in tail position then: a lambda head `((lambda (k) ..) x)` and a
 `return` out of a counted `dotimes` -- both 300,000 deep on wasm and the component since
-2026-10-04 (`call stack exhausted` at 1,000,000 before), bytes unchanged on bench-report and
-size-report but `zlib` +1 B.
+2026-10-04 (`call stack exhausted` much shallower before), bytes unchanged on bench-report and
+size-report.
 
 ## Tests
 

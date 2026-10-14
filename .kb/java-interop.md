@@ -101,7 +101,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` refused `5` on both; since
   2026-10-03 the fixnum `5` is called as an `Integer`, which has no `add` -- "A Lisp value as a
   `java:call` receiver" below).
-- Measured 2026-09-26 before the rule, `(defun f (x) (java:call x "size"))` compiled: a list /
+- Before the rule (2026-09-26), `(defun f (x) (java:call x "size"))` compiled: a list /
   struct / function / stream / condition was described `#<java [Ljava.lang.Object;>`, a ratio
   `#<java [Ljava.math.BigInteger;>`, a bignum `#<java java.math.BigInteger>`, `1.0e10` as
   `1.0E10`; a vector / string / bit vector / fill-pointer vector answered `size()` (the
@@ -182,7 +182,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `_jseq`'s `emitPackedElements` arms, which `_jkind` reaches as KIND_ARRAY. The direct sites
   test only the shapes the program can hold (`JvmJavaDirectSites.packedVectors` from
   `usesFloatArray` / `usesIntArray`), so a program without packed arrays emits what it did.
-- Measured 2026-09-26 before: every one of these matched no parameter on both backends
+- Before the rule (2026-09-26): every one of these matched no parameter on both backends
   (`No matching method`). Pins: `testsupport/JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_PROGRAM`
   (dispatched, bridged and resolved sites, both backends),
   `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteReadASpecializedVectorAlike` and its
@@ -253,8 +253,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   view handed Java and that array coming back. Compiled, the vector IS the array; the interpreter
   wraps it, so it keeps one `LispIntVector` per array (`JavaInterop.octetVector`, a `WeakHashMap`
   over `WeakReference`s -- the wrapper holds its array, so a strong value would never let the key
-  go -- and `shareOctets` registers a view's vector). Measured 2026-10-10 once the compiled copy
-  was gone, before this: `(NIL NIL NIL)` interpreted, `(T T T)` compiled (`OCTETS_PROGRAM`'s last
+  go -- and `shareOctets` registers a view's vector). Until the compiled copy was removed
+  (2026-10-10): `(NIL NIL NIL)` interpreted, `(T T T)` compiled (`OCTETS_PROGRAM`'s last
   row). A Clojure byte array is a `(:C%BYTES octets)` wrapper made at each crossing, so
   `identical?` stays false on both backends (`.kb/clojure-frontend.md`, "Byte arrays"). A program with a `java:` form ending in it turns
   `usesIntArray` on (`JvmLispCompiler.programAsksJavaForOctets`, implementation forms counted):
@@ -382,11 +382,11 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `throwDescribing` of the refusal), which every `_jconv$N` for `Object` -- a varargs array's,
   a sequence's and a table's elements included -- gets once its `kindCost` row exists, and
   `JvmJavaSites.passesAFunction` predicts `_apply` for an `Object` parameter at both markers.
-  Measured 2026-10-11 against clj 1.12.6 (`(let [f (fn [] 1) l (ArrayList.)] (.add l f)
-  (identical? f (.get l 0)))` true): before, `No matching method java.util.ArrayList.add with 1
-  argument(s)` on the interpreter and the JVM; after, true on both, and a list, a map, a set,
+  Checked 2026-10-11 against clj 1.12.6 (`(let [f (fn [] 1) l (ArrayList.)] (.add l f)
+  (identical? f (.get l 0)))` true), with a list, a map, a set,
   `Optional`, a checked list of `Runnable` and reflection's `Method.invoke` of `run`, `call` and
-  `compare` on it as the oracle. Interpreter: `functionObject` adds the handler's `StandIn` of
+  `compare` on it as the oracle; before, `No matching method java.util.ArrayList.add with 1
+  argument(s)` on the interpreter and the JVM. Interpreter: `functionObject` adds the handler's `StandIn` of
   the function; bridge: `functionObject` makes a `standIn` Proxy (only with the value class
   bound); compiled: the shell
   (`|stands`) implements `RontoJavaValue`, `value()` reading `fns[0]`, factory `of(Object[])`
@@ -473,9 +473,8 @@ program names either operator, `VIEW_RUNTIME_CLASS_FILES` when it names `java:vi
 `JvmLispCompiler.needsJavaValueRuntime` / `needsJavaViewRuntime`; the List-view arms of `_jkind`,
 `_jcost$N` and `_jconv$N` test for that class only then, `JvmJavaDirectSites.views`). Until e89 a
 handle was `eval/JavaHandle` interpreted and a generated `<Program>$Handle` compiled, "member for
-member" -- two copies of `equals`, `hashCode` and `compareTo`. Measured 2026-10-09, a CL program of
-two text-ordered handles: class 18,423 -> 19,525 B, beside it 751 B (`$Handle`) -> 6,409 B (the
-four classes); no `_apply`, no `$JavaCalls`.
+member" -- two copies of `equals`, `hashCode` and `compareTo`. A CL program of
+two text-ordered handles (2026-10-09) ships no `_apply`, no `$JavaCalls`.
 
 - A `java:reify` given `:value` is a `RontoJavaValue` too ("Implementing interfaces"): every rule
   below that reads the interface reads it.
@@ -576,8 +575,8 @@ four classes); no `_apply`, no `$JavaCalls`.
   interop").
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
-Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
-`Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
+Per call the uncached bridge paid `getMethods()`, `select()` and `Class.forName` every time; a
+resolved `Method.invoke` is the cheap part.
 - A KIND is the smallest token every conversion cost is a pure function of: nil, t, `|false|`,
   integer, bignum, float, string of UTF-16 length 1 (never `char`, f90: the oracle refuses one),
   other string, BMP char (never `int`, f90), supplementary char (a fixnum, f90), function value,
@@ -607,15 +606,11 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   character vectors once per call (`renderedAll`) before classifying.
 - A new `marshal` rule is a new kind or a `kindCost` arm; the `remembered*` tests catch a
   kind that conflates two cost rows (integer/float).
-- Measured 2026-09-26, JDK 25, 1M-iteration loop after warm-up, ns/call, before -> after
-  (shared host, best of 2-3 runs):
-  JVM output: Math.max 3438 -> 248, Math.abs 3112 -> 301, StringBuilder.length 2026 -> 148,
-  append(int) 3404 -> 194, ArrayList.size 1231 -> 120, Integer.MAX_VALUE 374 -> 120,
-  new StringBuilder() 577 -> 129. Interpreter: Math.max 4259 -> 1141, Math.abs 3791 -> 799,
-  length 2931 -> 784, append 4664 -> 635, size 1520 -> 606, field 946 -> 593, new 1202 -> 591;
-  the interpreter is now at its own loop floor (`(setq *x* i)` in the same loop: ~700-1000).
-  What remains on the JVM is CHM gets, `String.hashCode` of the per-call name substrings,
-  `Object[]` packing and `Method.invoke`.
+- Resolved-site cost (2026-09-26, JDK 25, 1M-iteration loop after warm-up, shared host,
+  best of 2-3 runs): a JVM call through a resolved site is dominated by CHM gets,
+  `String.hashCode` of the per-call name substrings,
+  `Object[]` packing and `Method.invoke`; the interpreter sits at its own loop floor
+  (`(setq *x* i)` in the same loop).
 - No `bench-report/` program: that suite compares portable ANSI CL across SBCL/ECL/ABCL and
   the wasm backend, none of which has `java:`.
 
@@ -690,11 +685,11 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
     evaluator re-expands; the rewrite has nowhere to live) -- visible only for an upper-bound
     receiver; a name a form AFTER the binding makes special (the compile path's special set is
     program-wide) is still inferred on both.
-- Measured 2026-09-26 (`--warn-java-reflection`, compile path), before -> after let inference +
-  declaim: swing.lisp 13 -> 32 of 53 sites resolved (the 21 left: defun parameters, user-function
-  results, gethash values, a `let` assigned by `setq`); java-interop.lisp 8 of 17 unchanged (its
-  receivers are defvar globals), 12 of 17 with a declaim per global (the 5 left: a global as an
-  ARGUMENT is only an upper bound, and a `java:proxy` argument).
+- With let inference + declaim (2026-09-26, `--warn-java-reflection`, compile path): swing.lisp
+  still leaves defun parameters, user-function
+  results, gethash values and a `let` assigned by `setq`; java-interop.lisp's receivers are
+  defvar globals, and even a declaim per global leaves a global as an
+  ARGUMENT (only an upper bound) and a `java:proxy` argument.
 - Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init, through the
   program's Java class loader -- "The program's Java class path" below; canonical Type per
   Class via ClassValue, so two loaders' lookups agree on every class both see). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
@@ -768,8 +763,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - Interpreter: `JavaInterop.invokeResolved` -> `dispatch`: receiver check, `keepsPromise` per
   argument, `selectRanked` over `kindCost` (a kindless argument: `marshal` cost, never
   remembered), memo per site IDENTITY (`DISPATCHES`, `SiteKey`; same limits as `CHOICES`) --
-  without it a 9-overload site (`String.valueOf`) cost ~1425 ns/call vs ~1165 for the old
-  run-time path; with it both measure ~1200 (2026-09-26, noisy shared host).
+  the memo is what holds a many-overload site (`String.valueOf`) to the resolved path's cost
+  (2026-09-26, noisy shared host).
 - JVM (`JvmJavaDirectSites.SiteBuilder.emitDispatch`): the argument checks (`emitCheck`: the kind
   chain, or null / `_jkind == HOST` + `instanceof` bound under a NoClassDefFoundError handler ->
   `No such class: B`); one `_jcost$N(Object)I` call per distinct (argument, parameter type) into
@@ -804,13 +799,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `--java-static`, generating the `CharSequence` and `Iterable` proxy classes a function would
   need (`JvmJavaSites.passesAFunction` predicts `_apply` from the same rule); a15 measured it
   needing the bridge.
-- Measured 2026-09-26 (JDK 25, default output, `--warn-java-reflection` counts): sites left to
-  run time swing.lisp 21 -> 8, life-gui.lisp 21 -> 8, java-interop.lisp 9 -> 9 (every one left
-  has an unknown receiver). `(defun mx (x y) (java:static "java.lang.Math" "max" x y))` +
-  one call: 88,258 bytes (51,173 class with the eval runtime + 37,085 bridge) -> 8,779 (one
-  class). 1M calls after warm-up, ns/call: `mx` bridge 82-101 -> dispatch ~1 (inlined), a
-  `String.valueOf` site 103-137 -> 82 (allocation-bound). Interpreter `mx` ~1750-2185 before,
-  ~1710-2115 after. Native image: the `--java-static` E2E program with three dispatched sites
+- With `--java-static` (2026-09-26, JDK 25, default output, `--warn-java-reflection` counts):
+  swing.lisp, life-gui.lisp and java-interop.lisp leave only unknown-receiver sites to
+  run time. `(defun mx (x y) (java:static "java.lang.Math" "max" x y))` +
+  one call compiles to one small class instead of the eval runtime plus the bridge. A dispatched
+  `mx` call inlines to the loop floor, a `String.valueOf` site is allocation-bound, and the
+  interpreter is unchanged within noise. Native image: the `--java-static` E2E program with three dispatched sites
   (numbers, t, a list to `char[]`, a vector to `int[]`, a list to `Object[]`) builds with no
   metadata and prints what `java -jar` prints.
 
@@ -855,20 +849,20 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - `--java-static` (`JvmLispCompiler.Builder.javaStatic`, `JvmSourceCompiler`, CLI; JVM outputs
   only): no bridge ever; each site `JvmJavaSites.bridgeReason` names is refused at codegen and the
   attempt fails listing all of them with positions. Native-image of the resulting jar needs no
-  metadata: measured 2026-09-26 (GraalVM 25.0.4), a 17-site program (constructor, instance,
+  metadata: checked 2026-09-26 (GraalVM 25.0.4) on a 17-site program (constructor, instance,
   interface, static, varargs, field, chain, declared receiver, regex split, `LocalDate`, a caught
-  exception) -> 17,792-byte jar, `native-image --no-fallback -jar` in 30 s, 14.7 MB executable,
+  exception) with `native-image --no-fallback -jar`,
   output identical to `java -jar`
   (`ShippedBridgeNativeImageE2eTest#aJavaStaticJarRunsAsANativeImageWithNoConfiguration`, opt-in
   `-Drontolisp.native-image.e2e=true`; the same class keeps the agent-config route for a program
   that still needs the bridge).
-- Measured 2026-09-26 (JDK 25, default output, against the pre-a12 compiler that embedded the
-  bridge as base64): `(print (java:static "java.lang.Math" "max" 3 7))` 101,803 -> 6,839 bytes; a
-  13-site all-resolved program 103,527 -> 14,411; a program that still leaves sites to run time
-  GROWS (127,454 -> 141,811: the bridge plus the site methods). Since a12 the bridge is a
-  37,099-byte `$JavaBridge.class` beside the program instead -- written only when a site needs it.
-  `Math.max` on a declared-int loop variable, 1M calls after warm-up: bridge ~95-220 ns/call,
-  direct 1-2 ns/call (the loop floor: the JIT inlines it).
+- Since a12 (checked 2026-09-26, JDK 25, default output, against the pre-a12 compiler that
+  embedded the bridge as base64) the bridge is a `$JavaBridge.class` beside the program instead --
+  written only when a site needs it -- so a program whose sites all resolve shrinks, while one
+  that still leaves sites to run time
+  GROWS (the bridge plus the site methods). `Math.max` on a declared-int loop variable, 1M calls
+  after warm-up: the direct site is at the loop floor (the JIT inlines it), the bridge pays for
+  its dispatch.
 - Known resolution-status difference: the compile path folds some forms before the resolver sees
   them (`(code-char 128512)` -> a literal), so such a site resolves compiled and not interpreted;
   the member is the same either way.
@@ -957,8 +951,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   a function is never made a proxy (interpreter `marshal(..., proxies=false)`, the bridge's twin,
   the direct sites' returned `_jcost$N` / `_jconv$N`). Decided 2026-09-26 on a measurement: with
   the function arm, a return conversion to an interface needs that interface's proxy class, whose
-  methods' interface returns need theirs -- one `java:reify` of `CharSequence` pulled in 19 proxy
-  classes (the IntStream/Stream/Spliterator family, ~60 KB) and a 169 KB program class. Clojure's
+  methods' interface returns need theirs -- a cascade of generated proxy classes. Clojure's
   reify/proxy do not coerce return values either; an interface return is a
   `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
@@ -1026,14 +1019,14 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `java.lang.reflect.Proxy` accepts the interpreter's object only; a bridge-made object (a form
   left to run time) fails a direct call's `$Implementation` test, which only a false `(java:object
   "I" :exact)` can bring about.
-- Measured 2026-09-26 (JDK 25, `-o P.jar`): `(java:call (java:proxy "java.util.function.Supplier"
-  f) "get")` 12,916-byte jar (29,411-byte class + 238 + 596 generated) vs the bridge path it took
-  before (the same with the interface name in a variable) 40,070 (51,335 + 45,528: the bridge
-  forces the eval runtime). A `Supplier.get` through a typed receiver, 1M calls: generated class
-  9-55 ns/call, bridge Proxy 146-315 ns/call; interpreter ~1.2-2 us either way (its loop floor).
+- Checked 2026-09-26 (JDK 25, `-o P.jar`): a `(java:call (java:proxy "java.util.function.Supplier"
+  f) "get")` program is far smaller than the bridge path the same program took with the interface
+  name in a variable (the bridge forces the eval runtime). A `Supplier.get` through a typed
+  receiver costs a fraction of the bridge Proxy's dispatch; the interpreter is at its loop floor
+  either way.
   Native image with no configuration: a 9-form `--java-static` program (a `PropertyChangeListener`
   the JDK calls back, a comparator `Collections.sort` calls and its default `reversed()`, a
-  `Runnable` on a thread, a `forEach` lambda, a literal proxy, `IntBinaryOperator`) built in 26 s,
+  `Runnable` on a thread, a `forEach` lambda, a literal proxy, `IntBinaryOperator`) builds with
   output identical to `java -jar`
   (`ShippedBridgeNativeImageE2eTest#anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration`).
 
@@ -1169,7 +1162,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   unchanged; anything else is still `error calling C.m: <throwable>`. Clojure's reify
   semantics. The `UnsupportedOperationException` of an abstract method no function implements
   is the object's own Java-level failure: not recorded, wrapped as before.
-- Measured 2026-09-26 before: every one was wrapped -- a `return-from` out of `List.forEach`'s
+- Before the record (2026-09-26): every one was wrapped -- a `return-from` out of `List.forEach`'s
   callback never arrived (`error calling java.util.List.forEach:
   am.ik.rontolisp.eval.BlockReturnSignal`, compiled `java.lang.RuntimeException`), a
   `handler-case` on the condition's own type never matched on the interpreter, a restart
@@ -1195,8 +1188,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - Compiled: `_jsig(Throwable)Throwable` is the handler of every `_jimpl$K` (its whole body)
   and of the bridge's Proxy (`callback` / `signal`, bound in `bind`). Every site's failure
   handler is `ldc text; invokestatic _jfail(Throwable,String)Throwable; athrow` -- one method
-  holds the rule (the inline wrap it replaced took ~20 bytes of code per site method, the call
-  takes ~7), and
+  holds the rule (the inline wrap it replaced duplicated code into every site method), and
   the bridge's `fail` calls it too (bound in `bind`, like `_apply`; missing = a loud bind
   error). The record is `_jsigTl`, a ThreadLocal of `Object[]{throwable, condition, exit entry,
   previous}`, declared and initialized in `<clinit>` only when a callback can exist (a
@@ -1208,7 +1200,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `_condTl` (keyed by the throwable: [error-handling.md](error-handling.md), "The JVM keeps what
   a throwable carries under the throwable") and its own entry off the `_nleTl` exit stack;
   `_jfail` puts both back for the throwable it passes on, and a wrapped failure is a new
-  throwable no condition is recorded for. Measured 2026-09-26 without it: the `Stream.close`
+  throwable no condition is recorded for. Without it (2026-09-26): the `Stream.close`
   relay answered the SECOND handler's condition and lost the first handler's exit
   (`%nlx-catch` reads only the top entry: `Unhandled condition: null`); a condition
   `FutureTask.run` swallowed was read by the next `handler-case` on the thread, for the `get`
@@ -1216,12 +1208,9 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   Java call made from a cleanup while a typed condition was on its way out, whose callback
   raised a PLAIN throwable Java swallowed, took the outer condition with it (`_jsig` took
   whatever the one slot held): the last `CALLBACK_SIGNALS` row.
-- Cost, measured 2026-09-26 (JDK 25): the normal path is unchanged (an exception-table entry):
-  a 200,000-element `Collections.sort` through a `java:reify` comparator takes ~37 ms before and
-  after compiled, a 20,000-element one ~71 ms interpreted. Class bytes before -> after:
-  `(print (java:static "java.lang.Math" "max" 3 7))` 6,916 -> 7,030 (`_jfail`); a direct
-  `forEach` with a lambda 30,135 -> 30,783 (`_jsig`, custody, `_jsigTl`); java-interop.lisp
-  59,289 -> 59,802 and its bridge 47,726 -> 49,151; life-gui.lisp 107,098 -> 107,553.
+- Cost (2026-09-26, JDK 25): the normal path is unchanged (an exception-table entry) and compiled
+  run times are unchanged; the record costs a little class size (`_jfail`; `_jsig`, custody,
+  `_jsigTl`).
 - Pins: `JavaInteropTest` / `JvmJavaInteropCompilerTest#whatACallbackRaisesPassesThroughTheJavaCall`
   over `testsupport/JavaImplementationPrograms.CALLBACK_SIGNALS` (exits, typed and raw
   conditions, a restart, a nested call, a site left to run time, a bridge Proxy,
@@ -1256,8 +1245,8 @@ dispatched or run-time site, the receiver of a run-time `java:call` -- one is th
   Clojure runtime uses (`.kb/clojure-frontend.md`, "Host exceptions"); `java:java-exception-cause`
   reads it the same way. `_jexc` exists only where a condition can be held
   (`routesConditionReports`) and the class is registered.
-- Cost, JVM: a caught failure +1.3 us (200k `handler-case` iterations 0.69 -> 0.93 s; the weak
-  record alone 0.2-0.8 us); a CL `java:` program with a handler-case +0.3-0.5 KB of class.
+- Cost, JVM: a caught failure pays for the weak record's maintenance; a CL `java:` program with a
+  handler-case carries slightly more class.
 - Pins: `JavaInteropTest` / `JvmJavaInteropCompilerTest#aFailedCallSignalsAJavaExceptionCarryingWhatTheMemberThrew`
   over `testsupport/JavaInteropPrograms.HOST_EXCEPTION_PROGRAM`,
   `ClojureProjectNamespacesTest#aClojureExceptionCaughtInCommonLispCarriesItsHostException`; user doc
@@ -1318,7 +1307,7 @@ same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,li
   function-where-`Object`-is-expected refusal (`functionObjectRefusal`) is a PLAIN error
   on the interpreter (thrown past the `fail` wrapping), so a direct site refuses it
   BEFORE its conversion handler (`emitFunctionObjectRefusals`), or `handler-case` sees
-  the wrapped text. Measured 2026-10-13: the pre-check only sees an argument itself,
+  the wrapped text. Found 2026-10-13: the pre-check only sees an argument itself,
   so a function nested in a sequence a resolved site converts element-wise wrapped on
   the JVM (`error calling C.m: java.lang.RuntimeException: java: a function ...`) while
   the interpreter, the bridge and dispatched sites stayed plain; the checked

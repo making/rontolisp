@@ -40,7 +40,8 @@ so all backends get it for free.
 proclaimed special immediately, value parked as a thunk (`Environment.defineLazy`;
 `lookup`/`lookupOrNull` force, `isBound` counts it bound, `define`/`set` discard, non-forcing
 `hasBinding` serves `boundp`/`find-symbol` probes), run only if an expansion READS it.
-`(ql:quickload "uax-15")` to a `.class`: 86.5 s eager vs 3.6 s lazy, byte-identical output.
+`(ql:quickload "uax-15")` to a `.class`: lazy registration is dramatically faster than eager
+and the output is byte-identical.
 Forcing is reached from the macro-body read path AND the `#.` channel
 ([reader-features.md](reader-features.md)), hence its home in `Environment`. A failing value
 expression is reported and leaves the name unbound. The thunk sees the evaluator as of the
@@ -53,8 +54,8 @@ FIRST READ and captures/restores the package of the DEFINITION
 evaluation — the interpreter included.** `LispEvaluator.userMacroExpansions`, an
 `IdentityHashMap` keyed on the call site's cons, bounded by `EXPANSION_MEMO_LIMIT`, same shape
 as the `compilerMacroExpansions`/`loadTimeValues` memos beside it (which only start hitting
-because of it, [compiler-macros.md](compiler-macros.md)). A 177-expansion `(fib 10)` under
-trivia went 17,385 ms -> 115 ms.
+because of it, [compiler-macros.md](compiler-macros.md)). Under a heavy macro-using system
+like trivia the memo turns hundreds of repeated expansions into one per site.
 
 - **Invalidation**: every write to `userMacros` goes through
   `LispEvaluator.putUserMacro`/`removeUserMacro`, which drop the WHOLE memo -- redefinition,

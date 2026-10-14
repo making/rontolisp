@@ -138,8 +138,8 @@ invariant is deliberately broken**, and only because every reference site is rew
 ### Global section
 The shaker walked functions, types and data; a GLOBAL nothing reads used to survive it. The backends
 emit one `(mut (ref null eq)) = null` per top-level Lisp variable whether or not the program has a
-reader, so the runtime's own specials travelled into every module: fifteen globals, 79 bytes, on a
-1.8 KB `--no-wasi` reactor that read none of them.
+reader, so the runtime's own specials travelled into every module, even a small
+`--no-wasi` reactor that read none of them.
 
 - **roots** -- every IMPORTED global (dropping an import changes the host contract, and its index is
   part of it), every EXPORTED global, and every global a SURVIVING function body reads or writes
@@ -148,8 +148,8 @@ reader, so the runtime's own specials travelled into every module: fifteen globa
 - Survivors are renumbered exactly like functions and types, in bodies, in initializers and in the
   export section (`rebuildExportSection` learned the global index space for this).
 - The win is not only the global section: a dead global's initializer may name a concrete type, and
-  that type's whole `rec` group then retires with it. `(print 1)` loses 34 bytes of type section
-  that way -- one global built a struct in its initializer and nothing else named the group. Which
+  that type's whole `rec` group then retires with it (`(print 1)` loses its type section that
+  way -- one global built a struct in its initializer and nothing else named the group). Which
   is why `WasmLispCompilerTest.wasmContainsRecTypeGroup` asks the UNOPTIMIZED module: a shaken
   `(print 1)` carries no `rec` group at all.
 - Pins: `WasmTreeShakerTest.dropsGlobalsNoSurvivorReadsAndRenumbersTheRest`,
@@ -199,7 +199,7 @@ had**.
 - **TRAP: no generated string literal may spell a function name exactly.** `dispatchableFuncIds`
   reads a framed literal equal to a defun's name (or bare member name) as something `intern` could
   hand to `funcall`; shortening a dispatcher's `"No applicable method: X on "` literal to `"X"`
-  cost **+11.5 KB on the hello-clack Worker**, so it keeps the `" on "` separator
+  measurably grows the hello-clack Worker, so it keeps the `" on "` separator
   (`LispMacroExpander.noApplicableMethod`).
 - **A runtime table whose readers the compiler builds is decided by THOSE READERS, not observed**
   (`StringTable.appendReaderOwnedBlob`, `DroppableDataRange.readBy`): the Schubfach tables
@@ -207,10 +207,8 @@ had**.
   operator table (`_type_err`) and the funcId -> name table (`_fun_name`). Each reader registers
   through `StringTable.readBlob` as its body is built; the range is kept while one survives and cut
   when none was registered. They used to be probed on the blob's BASE word, so a live constant equal
-  to the address pinned the blob: on 2026-09-26 a 52-byte string shift put the fdlibm base on
-  chipz's literal `2048` and `zlib` carried ~990 dead bytes (P1 118,253 -> 117,260 and size level
-  90,868 -> 89,875 once decided by readers; `checkpoint-tokenizer` -757; every other example, the
-  Worker family, `hello_world`, `pi_approx`, `dom_reactor` unchanged). **Two obligations**: every
+  to the address pinned the blob: on 2026-09-26 a small string shift put the fdlibm base on
+  chipz's literal `2048` and `zlib` carried dead table bytes on both WASM legs. **Two obligations**: every
   body handed the base registers (for fdlibm,
   `WasmLispCompilerTest#everyFdlibmBodyThatCitesTheTablesIsOneTheShakerCountsAsTheirReader`), and
   `shakeCore` pins each reader against `WasmInliner`, which would otherwise move a small reader
@@ -289,8 +287,8 @@ otherwise, and every lowering passes literals, format pieces, rendered messages 
 concat-adjacent printer holder was the `(string c)` in the compiler-generated
 `%schar-set-runtime` defun -- now a one-element character vector, the shape `expandMakeString`
 lowers to, which the concat normalizer renders (the probe `.todo/338` reverted while the concat
-engine itself still rendered). Measured 2026-09-09: a print-free concat-only module
-16,201 -> 8,710 B (`-46%`); the zlib `--optimize=size` row does NOT move (125,738 -> 125,817 --
+engine itself still rendered). Measured 2026-09-09: a print-free concat-only module halves;
+the zlib `--optimize=size` row does NOT move --
 the printer stays reachable through chipz's own `princ-to-string` uses and the `apply`-pulled
 `eval` runtime, so the `.todo/338` chain premise is stale for that row: the mechanism pays where
 concat was the only printer edge). Pinned by `internalStringConcatCopiesBytes` in
@@ -325,8 +323,7 @@ values have no comparator, and the component wrapper reaches core functions by e
 
 Identical bodies compress well, so on small clack Workers the RAW win comes with a few hundred
 bytes MORE gzip. Pins: `WasmBodyFolderTest`; `-Drontolisp.wasm.debug-func-sizes` labels a folded
-group by its survivor. **The JVM twin is measured, not implemented** (zlib: 48 duplicate methods,
-8,331 B): JVM methods are reachable BY NAME, so the survivor set needs its own soundness argument.
+group by its survivor. **The JVM twin is measured, not implemented**: JVM methods are reachable BY NAME, so the survivor set needs its own soundness argument.
 
 ### The adjacent-instruction peepholes
 `am.ik.wasm.WasmPeephole.rewrite` runs between `WasmCallForwarding.redirect` and
@@ -381,19 +378,9 @@ falls by the same fraction.
 
 The local rules run as one left-to-right pass that collapses the output's tail to a fixpoint, so a
 pair a rewrite creates is taken without a second traversal. Measured 2026-09-13 (`--optimize=size`
-unless the artifact's own flags say otherwise), raw / gzip:
-
-| artifact | before | after | gzip before | gzip after |
-| --- | ---: | ---: | ---: | ---: |
-| hello-clack Worker | 815,348 | 795,062 (-2.5%) | 215,054 | 209,489 (-2.6%) |
-| hello-tiny-routes Worker | 860,937 | 839,368 | 226,882 | 220,880 |
-| hello-ningle Worker | 3,438,910 | 3,373,895 | 703,627 | 684,364 |
-| httpbin Worker | 176,793 | 172,614 | 58,057 | 57,195 |
-| `zlib` | 90,817 | 88,315 (-2.8%) | 30,957 | 30,134 |
-| `pi_approx` | 1,544 | 1,504 | 925 | 910 |
-| `hello_world` | 500 | 487 | 393 | 388 |
-| `pi_approx` (`--no-gc`) | 3,333 | 3,289 | | |
-| `hello` Worker (`--no-gc`) | 507 | 489 | | |
+unless the artifact's own flags say otherwise): a percent or three off the real programs, raw
+and gzip moving together, and the same relative win on the small fixtures and the `--no-gc`
+variants.
 
 Pins: `WasmPeepholeTest` (one hand-assembled body per shape, including the two the loop-tail rule
 must refuse and the box the pass must keep when nobody vouches for the call), and
@@ -418,11 +405,9 @@ never false -- `LispMacroExpander.expandCondClauses` now folds it, and `expandAn
 Anything else is compiled as a value and tested with one `ref.is_null`; the peephole above then
 takes the predicates this compiler does not name (`stringp`, `symbolp`, `%obj-is`, ...), whose
 box it turns back into the `i32.eqz` a chain operand wrote, and the double-negation rule folds
-the pair. Measured 2026-09-13 (after the `&key` helpers, `--optimize=size`, raw / gzip):
-hello-clack Worker 775,987 -> 734,519 (-5.3%) / 206,264 -> 200,909, `zlib` 85,687 -> 81,726
-(-4.6%), httpbin Worker 172,507 -> 161,833 (-6.2%), hello-tiny-routes 814,808 -> 771,400 -- of
-which the peephole rule's own share, over what the compiler leaves, is 9,096 B on the Worker
-and 1,012 on `zlib`; the boxed-and-tested census row is 2,911 -> 951 -> 0 on the Worker. The
+the pair. Measured 2026-09-13 (after the `&key` helpers, `--optimize=size`): the rule's own
+share, over what the compiler leaves, is a few percent on the real Worker and `zlib`, and the
+boxed-and-tested census row goes to zero on the Worker. The
 predicate is shifted by the host-import count like the case-fold owner claims
 (`peepholePureNonNullCalls(importShift)`): the first cut named the emitted index and missed
 every site of the httpbin Worker, whose two `env` imports sit in front. Pinned by
@@ -433,12 +418,11 @@ that runs, the same program on the JVM and the interpreter) and the corpus guard
 `.todo/798` also asked for two rewrites in `WasmCallForwarding` for the bodies the type-test fold
 leaves beside its forwarders -- the identity (`local.get 0; end`, so the `call` is deleted) and the
 constant (`() -> (t)` whose body is one constant, so the `call` becomes that constant). Both were
-built and measured over 13 artifacts: **0 bytes on twelve of them and 153 B on one** (the 3.4 MB
-ningle Worker, 0.005%). The shapes are there -- 7 to 8 functions match in every module -- but they
+built and measured: for practical purposes no artifact changes. The shapes are there -- a
+handful of functions match in every module -- but they
 are already UNREFERENCED when the pass runs, so the shaker was collecting them for free and
 rewriting their call sites rewrites nothing. The population is a fixed set of runtime helpers, so
-it will not grow. The prediction the item carried ("20-30 B on each small module") is what this
-replaces.
+it will not grow.
 
 ### The local renumbering
 
@@ -454,11 +438,10 @@ declaration order), groups each of the hot and the cold set by type so the decla
 stays a few runs (a 130-run alternating vector becomes four), keeps every parameter where it is,
 and asks no liveness. A frame that fits in one byte is left byte-identical. **The number this pass
 is for is raw bytes of the code section**, and it is a permutation, so gzip follows: measured
-2026-09-13 over the condition-mode numbers above, hello-clack Worker 734,519 -> 730,394 raw /
-200,909 -> 197,943 gzip (the regrouped vectors compress better than the bytes they lose),
-hello-tiny-routes 771,400 -> 767,253, httpbin 161,833 -> 161,569, `zlib` 81,726 -> 81,720 (its one
-wide function has no hot set to speak of: 152 -> 146 two-byte immediates), the small modules
-untouched; the Worker's two-byte `local.*` immediates 6,314 -> 2,189. Recycling temporaries in
+2026-09-13 over the condition-mode numbers above, the real programs shed a percent or two of
+raw bytes, gzip following (the regrouped vectors compress better than the bytes they lose);
+the small modules barely move, and the hot modules' two-byte `local.*` immediates drop by
+half or more. Recycling temporaries in
 the emitter (the `Ctx` scratch slot the census proposed, with its chunk-cut trap) would shrink
 FRAMES, not bytes, and was not built. Pins: `WasmLocalOrderTest` (the hot local, the regrouped
 vector, the frame left alone) and `WasmTreeShakerCorpusTest` (must not grow, must validate and
@@ -471,29 +454,28 @@ three shapes, chosen by exact byte count -- a `br_table` over `[0, max]` (one la
 holes naming the default), the same table BIASED to the smallest live id (the id less `min`
 indexes it; a smaller id wraps to a huge unsigned index, which is the default), or a comparison
 chain (`i64.const id; i64.eq; br_if depth` per live id, `br default` after) when the chain is
-under HALF the table. A tie keeps the plainer shape, so a dense ladder is byte-identical: the
-hello-clack Worker's six ladders are 902 live of 903 and did not move. Under `--optimize` a
+under HALF the table. A tie keeps the plainer shape, so a dense ladder is byte-identical. Under
+`--optimize` a
 ladder carries only the callables taken as VALUES (the funcall-dispatch gate below), so a library
-program's ladders are sparse by nature: `zlib`'s arity-0 ladder tabled 419 labels for one
-callable at 418, its arity-3/4/5 ladders 2-4 callables over 239-514 slots, and its two dense
-ones started 133 slots in; the httpbin Worker's five ladders each started at 190. Two rules
+program's ladders are sparse by nature: mostly one or a few callables over hundreds of slots,
+some dense ones excepted. Two rules
 the first cut lacked, each a measurement (`size-measurement.md`):
 
 - **The half rule is the raw/gzip trade.** A chain's bytes are incompressible (a distinct id per
   case) where a table's holes are a run of one byte gzip folds to nothing: with "chain whenever
-  shorter", `zlib`'s two 57/69-of-558 ladders became chains and the module went -2,086 B raw and
-  **+1,168 B gzip**; under the half rule they stay biased tables and both numbers fall.
+  shorter", sparse ladders became chains and the raw win came with a gzip LOSS; under the half
+  rule they stay biased tables and both numbers fall.
 - **The ids are i64 constants, never i32.** The tree shaker keeps a string-blob range that any
   surviving `i32.const` lands in ("String blob: droppable ranges" -- an address is an
   indistinguishable `i32.const`), and funcIds live exactly where the small literals do: spelled as
-  `i32.const`, the chains pinned 770 B of `zlib`'s blob (a 756-byte printer range plus
+  `i32.const`, the chains pin a large slice of `zlib`'s string blob
   `"Infinity"`). An i64 is never an address, so the bias is `i64.extend_i32_u; i64.const min;
   i64.sub; i32.wrap_i64` and a compare `i64.extend_i32_u; i64.const id; i64.eq` -- one byte more
   per compare, and no coupling to the shake.
 
-Measured 2026-09-13 (`--optimize=size`, raw / gzip): `zlib` 81,720 -> 79,005 (-3.3%) / 28,737 ->
-28,692, httpbin Worker 161,569 -> 160,649 / 55,412 -> 55,400, hello-clack and hello-tiny-routes
-byte-identical; `zlib`'s default labels 3,799 -> 989. The paged dispatcher's leaf pages use the
+Measured 2026-09-13 (`--optimize=size`): the real Workers shed a percent or three, raw and
+gzip; the dense programs are byte-identical, and the default-label count of the sparse tables
+collapses. The paged dispatcher's leaf pages use the
 same selector. `wasm-function-body-size.md`'s early-out ("the flat shape is not built when its
 label count alone settles the gate") is now conservative rather than exact -- a sparse ladder past
 the gate would have been a small chain -- and stays, because paging is always correct and the
@@ -510,9 +492,8 @@ back first (the census's "literal compared through its box", 228 sites on the Wo
 is now `pushCode a; pushCode b; i32.eq` -- a literal's code point the `i32.const` it is -- boxed
 once in value position and, through `WasmConditionCompiler`, not at all as a test; the n-ary
 chain keeps its shape for the rare three-operand call. Measured 2026-09-13 over the ladder
-numbers (`--optimize=size`, raw / gzip): hello-clack Worker 730,394 -> 719,754 (-1.5%) / 197,943
--> 194,536, httpbin Worker 160,649 -> 155,838 (-3.0%) / 55,400 -> 53,849, hello-tiny-routes
-767,253 -> 756,000, `zlib` 79,005 -> 78,572; the box-then-unbox census row 228 -> 68 on the
+numbers (`--optimize=size`, raw / gzip): another percent or two off the real Workers on both
+counts; the box-then-unbox census row nearly empties on the
 Worker (what is left is a char-valued runtime call whose result is read back, not a literal).
 Pinned by `WasmLispCompilerIntegrationTest#aCharComparisonPairIsOneCodePointCompare`. Since
 2026-09-27 an EH-mode non-literal operand is `i32.const id; call _chr_code` rather than the
@@ -527,9 +508,9 @@ that is nil or a literal is no arm at all, the test's polarity picks the live on
 is written. Value position is untouched (`(if c a b)` as a function's last form still answers),
 and state-machine mode does not reach it (its `if` routes resumes through its arms). Before, a
 statement `(when c (setq x ...))` was `if (result eqref) ... ref.null eq else ... end; drop`: the
-Worker had 743 such blocks, 44 with a bare nil arm. Measured 2026-09-13 over the char-pair
-numbers (`--optimize=size`, raw / gzip): hello-clack Worker 719,754 -> 716,057 / 194,536 ->
-194,305, hello-tiny-routes 756,000 -> 752,239, httpbin 155,838 -> 154,998, `zlib` 78,572 -> 78,330.
+Worker had hundreds of such blocks, some with a bare nil arm. Measured 2026-09-13 over the
+char-pair numbers (`--optimize=size`, raw / gzip): a further shave on every real program, raw
+and gzip together.
 Pinned by `WasmLispCompilerIntegrationTest#aConditionalInStatementPositionCompilesForEffect`.
 
 ### The single-call-site move
@@ -545,11 +526,11 @@ backend (`WasmLispCompiler` pins the three case-fold owners: their segment claim
 index, so a moved body would take the table with it). A callee holding a `try_table` is declined
 too: moved, its catch edge would carry every caller local live across the call site, which its pad
 does not refresh (`.kb/wasm-landing-pad-refresh.md`). Measured 2026-09-24 over the `ci-spec`
-corpus, the size-report programs and the Worker family, no build moved one, so the rule costs no
-byte. A module with a table or element section is declined wholesale; `ref.func` takes it out
+corpus, the size-report programs and the Worker family: no build has a once-called callee with a
+`try_table`, so the rule costs nothing in practice. A module with a table or element section is declined wholesale; `ref.func` takes it out
 through `WasmCodeModel`, which refuses to decode one.
 
-**The move alone is a LOSS** -- `wasm-opt --inlining` makes `zlib` 15,214 B BIGGER, because handed-
+**The move alone is a LOSS** -- `wasm-opt --inlining` leaves `zlib` BIGGER, because handed-
 over arguments become `local.set`/`local.get` pairs the caller never had and every local index past
 127 costs a second byte. So the pass is the move plus its arithmetic, and all three parts are load-
 bearing:
@@ -582,8 +563,8 @@ bearing:
 1. **A body the duplicate fold was going to reclaim anyway is worth nothing here, and costs the
    caller its whole size.** `WasmBodyFolder` (above) drops all but one of a set of byte-identical
    bodies for free; moving the once-called member removes a body the fold was removing and leaves
-   the caller carrying those bytes for good. Ignoring this, the pass claimed 530 B over 134 moves
-   and DELIVERED +274 -- the first run of it made `zlib` bigger. A candidate whose (canonical type,
+   the caller carrying those bytes for good. Ignoring this, the first run of the pass made
+   `zlib` bigger than it claimed. A candidate whose (canonical type,
    code bytes) pair another defined function repeats is therefore declined. A CALLER never has a
    twin, so only the callee side needs the test: a byte-identical body repeats the same `call`
    immediate, which would make its callee's call site count two.
@@ -591,28 +572,22 @@ bearing:
    move reclaims is the per-function overhead -- a size prefix, the locals-vector byte, the
    terminating `end`, the `call`, a function-section entry: 6 to 12 bytes, never a function of how
    big the body is. So `WasmInliner.MAX_MOVED_BODY` caps the moved code entry at **64 bytes**, and
-   that number is a measurement, not a taste. Over 23 artifacts -- the `size-report` corpus, the
-   Cloudflare Worker family and the `--no-gc` browser reactor of `.todo/804` -- summed against the
-   same build without the pass:
+   that number is a measurement, not a taste. Swept over the `size-report` corpus, the
+   Cloudflare Worker family and the `--no-gc` browser reactor of `.todo/804`, summed against the
+   same build without the pass: the raw win grows as the cap rises, but past 64 bytes the
+   compressed total turns into a LOSS on the artifacts that consume the GC backend most.
 
-   | budget | raw | gzipped | worst gzip row |
-   | --- | ---: | ---: | --- |
-   | 64 bytes (shipped) | **-911** | **-95** | `zlib_optimize` +103 (+0.26%) |
-   | 256 bytes | -4,143 | +3,670 | `zlib_size` +1,018 (+3.3%) |
-   | no budget | -50,722 | +16,064 | `hello-ningle` +3,686 |
-
-   A Worker's platform limit counts COMPRESSED bytes (`size-report/notes/cloudflare-workers.md`),
-   so the uncapped row is not a win on the artifacts that consume the GC backend most. 64 is the
+   A Worker's platform limit counts COMPRESSED bytes (`size-report/notes/cloudflare-workers.md`).
+   64 is the
    knee: the smallest budget at which the host-facing `--no-gc` modules -- the ones this pass
    exists for -- reach their FULL win.
 
 **What it is worth, at that budget** (2026-09-13, `--optimize=size` unless stated): the `.todo/804`
-browser reactor 1,090 -> **1,011 B (-7.2%)**, its code section 360 -> 300 in 17 -> 8 functions --
-one byte off the 299 a hand-written non-GC toolchain emits for the same program, with `.todo/805`
-still to come. `hello`, the `--no-gc` Worker: 532 -> 510 (-4.1% raw, -3.2% gz).
-`hello_world_nogc` 244 -> 232. On the GC backend it is a rounding error by design: `zlib` -87 of
-90,904, the big clack/ningle Workers -24 to -88 of 800 KB. That is the honest correction to
-`.todo/791` item 3's reading of binaryen's 1,985-byte inlining share on `zlib`: binaryen recovers
+browser reactor sheds several percent and most of its dead functions --
+within a byte of what a hand-written non-GC toolchain emits for the same program, with `.todo/805`
+still to come; the small `--no-gc` fixtures shed a few percent each. On the GC backend it is a
+rounding error by design on the library programs. That is the honest correction to
+`.todo/791` item 3's reading of binaryen's inlining share on `zlib`: binaryen recovers
 those bytes by re-encoding locals across the whole function afterwards, which this pass does not
 do and which is not worth its compressed cost. **The prize is the small host-facing module, not
 the library.**
@@ -639,12 +614,12 @@ an index. Three things pay for the one decode:
   `e1; e2; set b; set a` -- whose instructions join the scanned range. A `tee` sinks a COPY, taken
   only when the copy is shorter than the `tee` plus the `get`.
 - **Dead writes.** A local nothing reads: each `tee` is deleted, each `set` becomes a `drop` or --
-  when the walk back finds a pure expression feeding it -- goes with it. `zlib` had 162 such
-  locals, the hello-clack Worker 664.
+  when the walk back finds a pure expression feeding it -- goes with it (hundreds on the real
+  programs).
 - **The frame.** A local nothing touches leaves the declaration, and a `set N; get N` pair the
   deletions (or the inliner) leave adjacent is written as `tee N` on the way out, so the peephole
-  in front does not have to run again. `zlib`'s frames: 2,475 -> 1,510 locals; hello-clack's
-  15,244 -> 10,860, its two-byte `local.*` immediates 3,175 -> 1,807 BEFORE `WasmLocalOrder` sees
+  in front does not have to run again: the real programs' frames shed a third or more of their
+  locals, and with them much of the two-byte `local.*` immediates, BEFORE `WasmLocalOrder` sees
   them.
 
 Bodies are re-sunk to a fixpoint, and a function's own locals are all it renumbers, so every
@@ -661,33 +636,19 @@ answered from one per-round `Layout` (innermost region end per position, the enc
 chain, write positions per local, the next `call`/`global.set`) instead of a scan between each
 write and its read. Before 2026-09-24 a read of a local moved this round always waited, so the
 inliner's cons hand-over chain -- what a backquote template of N elements becomes -- lost one
-link per round: N rounds of a whole-body pass. Measured 2026-09-24, linux-x64, whole
-`-o x.wasm` run of `` (defun g (x) `(,x 0 1 ... )) ``: 4,000 elements 11.7 s -> 2.3 s
-(3,638 rounds -> 2 on the one body, output byte-identical), 8,000 72 s -> 2.5 s, 50,000 did not
-finish in 10 min -> 4.7 s. Over every example and size-report program at both levels the output
-moved by -216 bytes in total (a different but equally long choice of which local keeps a call
-result, in 164 of 366 builds).
+link per round: N rounds of a whole-body pass, quadratic in the template. Measured 2026-09-24,
+linux-x64, whole
+`-o x.wasm` run of `` (defun g (x) `(,x 0 1 ... )) ``: a backquote template compiles in about
+the linear time its length suggests once the chain closes in one round (output byte-identical
+modulo which local keeps a call result in a few builds).
 **The number this pass is for is raw bytes of the code section, and it DELETES bytes**,
 so gzip follows -- and falls faster, because a fresh local per temporary is exactly the
 low-repetition byte a compressor cannot fold.
 
 **Measured 2026-09-14 against `a4239f80d`, `size-report/measure.sh`, both families**
-(`--optimize=size` unless the row says otherwise; raw / gzip where the report records gzip):
-
-| artifact | before | after | |
-| --- | ---: | ---: | --- |
-| `zlib` `--optimize=size` | 78,330 | 76,011 | -3.0% |
-| `zlib` `--optimize` | 102,909 | 100,597 | -2.2% |
-| `pi_approx` | 1,504 | 1,489 | |
-| `hello_world` | 487 | 480 | |
-| `pi_approx_nogc` | 3,289 | 3,279 | |
-| `dom_reactor` `--no-gc` (the `.todo/812` reactor) | 856 | 847 | code 200 -> 191 |
-| hello-clack Worker | 716,057 / 194,305 | 706,036 / 186,368 | -1.4% / -4.1% |
-| hello-ningle Worker | 2,977,818 / 619,011 | 2,932,835 / 577,583 | -1.5% / -6.7% |
-| httpbin Worker | 154,998 / 53,809 | 151,076 / 51,056 | -2.5% / -5.1% |
-| the Worker family, 16 rows | 15,354,384 / 3,788,422 | 15,110,090 / 3,571,238 | **-1.6% / -5.7%** |
-
-Every row is smaller on both axes; the worst gzip row is `hello` at -4 B.
+(`--optimize=size` unless the row says otherwise): every artifact is smaller on raw bytes and
+smaller still on gzip -- a couple of percent on the library programs, more on the Workers,
+whose gzip gains are the largest of all; no row regresses.
 
 **The item's premise was measured the wrong way round.** `.todo/812` counted the single-use
 residue AFTER the whole pipeline -- 723 locals on `zlib`, one on the reactor, "single-digit bytes"
@@ -697,18 +658,20 @@ half worth doing only if the first left a large remainder. Both halves are one w
 decoded body with one legality argument, the copy is the expression of length one, and the split
 was never worth making. What the census could not see was the other two populations the same
 renumbering collects for free, and that the Worker family carries proportionally far more of all
-three than `zlib` does (`residue.sh` on hello-clack: 4,320 single-use locals, 2,174 remain, nearly
+three than `zlib` does (`residue.sh` on hello-clack: thousands of single-use locals remain,
+nearly
 all a `call` result or a block result stored and used once, which no pure-expression rule
-reaches). The post-pipeline residue on `zlib` is now 218: 131 `call` results, 29 block results,
-17 `array.new` of a computed length.
+reaches). The post-pipeline residue on `zlib` is now dominated by `call` and block results and
+computed-length `array.new`s.
 
 **Only the bodies the shake will keep are sunk** (`sink(module, true)`, both backends): a body
 no export or start function reaches through `call` edges (`WasmTreeShaker.reachableBodies`, a
 superset of the shake's own roots, which additionally drop dead host-cell hooks) is copied as it
 is. Output-identical because the sink never adds a call, so nothing it leaves becomes reachable,
-and the shake reads no byte of a body it drops. The backends emit the whole runtime (a 3-line
-program's core is ~240 KB before the shake, ~5.6 KB after), so this was nearly all the pass's
-time: 14% of `WasmLispCompilerIntegrationTest`'s compile CPU (JFR, 2026-09-24). The peepholes and
+and the shake reads no byte of a body it drops. The backends emit the whole runtime before the
+shake cuts it down, so this was nearly all the pass's
+time: a sizable measured share of `WasmLispCompilerIntegrationTest`'s compile CPU (JFR,
+2026-09-24). The peepholes and
 the move in front of it cannot skip the same bodies: the move counts call sites and looks for
 byte-identical twins in EVERY body, dead ones included, so what they leave there reaches its
 decisions.
@@ -811,16 +774,16 @@ not bound how small a module can get and it does not measure what is left to win
 directions have now been walked into:
 
 - The `car`/`cdr` lowering change below took the hello-clack Worker from 916,587 to 815,414
-  bytes, and **binaryen found the SAME 182,697 bytes in the module before and after it**.
+  bytes, and **binaryen found the SAME residue in the module before and after it**.
   The optimizer's reach is a fixed quantity a lowering change walks straight past, so a
   residue is not a ceiling.
-- The `.todo/789` reactor was 1,658 bytes and `-Oz` stopped at 1,495 -- within five bytes
-  of what a hand-written non-GC toolchain emits for the same program. A residue near zero
-  is not "nothing left to win" either: 182 of those bytes were a literal string walked out
+- The `.todo/789` reactor once sat within a few bytes of what `-Oz` could reach --
+  about what a hand-written non-GC toolchain emits for the same program. A residue near zero
+  is not "nothing left to win" either: much of it was a literal string walked out
   of linear memory into a GC array and back, which no optimizer can see as a round trip.
   todo 801 removed it at the emitter (2026-09-13, [[wasm-import]] "A literal `:string`
-  argument does not round-trip"): the same reactor is **1,308 bytes with no optimizer at
-  all**, 187 BELOW the figure `-Oz` had "stopped at". The residue was never the floor.
+  argument does not round-trip"): the same reactor is now SMALLER with no optimizer at
+  all than `-Oz` had "reached". The residue was never the floor.
 
 So the measurements that pay are the pass ranking below, a per-function decomposition of
 one module, and the shape census -- what the backend chose to emit. The residue tables are
@@ -831,72 +794,62 @@ read the other way round, which is how both corrections were found.)
 the core libraries take no external dependency. Two corrections to how the residue was
 first read (`.todo/791`), so the next measurement does not repeat them:
 
-- **Binaryen's writer is not rontolisp's**: the module re-encoded with NO passes grows by
-  1,452 B on `zlib` and 13,080 B on the hello-clack Worker (~0 on the small modules), so a
+- **Binaryen's writer is not rontolisp's**: the module re-encoded with NO passes grows, on the
+  large modules by kilobytes (~0 on the small ones), so a
   pass run alone "grows the module" by that tax before it saves anything, and every number
-  below is `size - optimized + tax`.
+ below must be tax-corrected.
 - **`inlining-optimizing` is not the inliner**: it re-runs the whole default function
   pipeline over every function a call site changed, which is nearly all of them, so alone it
-  ranked first (71-90% of the residue). With inlining skipped (`-Oz
-  --skip-pass=inlining --skip-pass=inlining-optimizing`) the residue is 90% intact on the two
+  dominates the residue. With inlining skipped (`-Oz
+  --skip-pass=inlining --skip-pass=inlining-optimizing`) the residue is largely intact on the
   large modules; only on the small ones is inlining the enabler (of `heap2local`: a boxed
   float built by one function and unboxed by the next).
 
 `--optimize=size`, `--no-wasi`, measured 2026-09-12 on `e0bcf42f0` (before the cons readers
-below):
+below): the `-Oz` residue is a fifth to a third of the module on every artifact measured
+(`zlib`, the hello-clack Worker, `pi_approx`, the `.todo/789` reactor, `webgl-triangle`), and
+inlining's marginal share of it is large only on the small programs.
 
-| Program | size | `-Oz` residue | without inlining | inlining's marginal |
-| --- | ---: | ---: | ---: | ---: |
-| `zlib` (size-report) | 94,069 | 20,237 (21.5%) | 18,252 | 1,985 (10%) |
-| hello-clack Worker | 916,587 | 204,809 (22.3%) | 184,091 | 20,718 (10%) |
-| `pi_approx` | 1,528 | 506 (33%) | 249 | 257 (51%) |
-| the `.todo/789` reactor | 1,658 | 160 (9.7%) | 111 | 49 (31%) |
-| `webgl-triangle` (`--optimize`) | 1,683 | 305 (18%) | 108 | 197 (65%) |
-
-Single passes alone, tax-corrected, `zlib` / Worker: `coalesce-locals` 3,627 / 40,542,
-`simplify-locals-nostructure` 3,761 / 30,927, `merge-similar-functions` 1,662 / 31,236,
-`local-cse` 1,063 / 15,125, `remove-unused-brs` 1,590 / 695, `vacuum` 1,035 / 6,200,
-`precompute-propagate` 827 / 6,662, `optimize-instructions` 440 / 3,700, `rse` 409 / 2,908,
-`code-folding` 189, `dce` 4. **The residue is local plumbing and lowering shapes, not
+Single passes alone, tax-corrected: local plumbing passes (`coalesce-locals`,
+`simplify-locals-nostructure`, `merge-similar-functions`, `local-cse`) dominate on the large
+modules, the control and value passes far behind. **The residue is local plumbing and lowering
+shapes, not
 functions**, and a per-function diff against binaryen's text (the scripts and tables:
 `.todo/artefacts/791-module-level-slack-globals-types-data-hooks/`) names the shapes. A
-census over the flat `wasm-tools print` of the Worker / `zlib`:
+census over the flat `wasm-tools print` of the Worker / `zlib`, most rows since landed as the
+passes above:
 
-| shape | Worker | `zlib` | per site |
-| --- | ---: | ---: | --- |
-| `car`/`cdr`: `local.get; local.set t; local.get t; ref.is_null; if ... end` (every site a fresh temp) | 8,141 | 344 | 17-21 B -> **landed**, `.kb/cons-access-runtime.md` |
-| `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B -> **landed**, "The adjacent-instruction peepholes" |
-| `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local -> **landed**, "The single-use local" (the expression of length one) |
-| `if (result eqref) call err else nil end; ref.is_null` (a predicate boxed into t/nil and tested -- the `call` is `_t_sym`, not an error) | 3,304 | 303 | ~8 B -> **landed**, "A test is compiled as a test" |
-| a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B -> **landed** |
-| `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B -> **landed** |
-| `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
-| the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
-| a char literal built, cast and read back in a `char=` chain (`struct.new $char; ref.cast; struct.get`) | 228 | 14 | ~10 B -> **landed**, "A char comparison pair" |
-| a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B -> **not a shape**: by type the Worker's are 69 closures with a null environment and 50 `(cons x nil)`; 6 (Worker) / 32 (`zlib`) are cells, all the `labels` case that needs the cell first |
-| a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
-| `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B -> **landed**, "Sparse arity ladders" |
+- `car`/`cdr` compiled through a fresh temp and a boxed test per site -> **landed**
+  (`.kb/cons-access-runtime.md`).
+- `local.set N; local.get N` (a `tee`), a copy into a temp, a pure value then `drop`,
+  `local.tee N; drop`, `br 0; end; unreachable; end` -- the peephole shapes, each a byte or
+  three a site -> **landed**, "The adjacent-instruction peepholes" and "The single-use local".
+- `if (result eqref) call err else nil end; ref.is_null` (a predicate boxed into t/nil and
+  tested) -> **landed**, "A test is compiled as a test".
+- a char literal built, cast and read back in a `char=` chain -> **landed**, "A char comparison
+  pair".
+- a two-byte `local.*` immediate (an unrecycled temp index), a `br_table` label naming a sparse
+  ladder's default -> **landed**, "The local renumbering" / "Sparse arity ladders".
+- a boxed variable built empty then `struct.set` -> **not a shape**: by type they are closures
+  with a null environment, `(cons x nil)` and the `labels` case that needs the cell first.
+- the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -> **landed**,
+  `.kb/lambda-lists.md`.
 
-The first row is `.kb/cons-access-runtime.md`; the four marked **landed** first are the peepholes
-("The adjacent-instruction peepholes" above, `.todo/798`); the lowering shapes landed 2026-09-13
-as `.todo/799`, one section each above ("A test is compiled as a test", "The local renumbering",
+The lowering shapes landed 2026-09-13 as `.todo/799`, one section each above ("A test is
+compiled as a test", "The local renumbering",
 "Sparse arity ladders", "A char comparison pair", "A conditional in statement position", and
 `.kb/lambda-lists.md` for the `&key` prologue), and the single-call-site move is landed too
 ("The single-call-site move" above -- where the reading of the `zlib`/Worker inlining share is
-corrected). After the first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue
-182,697 -- the same bytes as before, so the 101 KB was outside binaryen's reach: it does not
-outline). After the peepholes: `zlib` 88,315, Worker 795,062. **After the lowering shapes**
-(`--optimize=size`, raw / gzip): hello-clack Worker 716,057 (-9.9%) / 194,305 (-7.2%), `zlib`
-78,330 (-11.3%) / 28,452, httpbin Worker 154,998 (-10.2%) / 53,809, hello-tiny-routes 752,239
-(-10.4%) / 204,488, `hello_world` and `pi_approx` byte-identical. Three of the census's rows read
+corrected). Cumulatively the census's shapes took another ten-odd percent off the real
+programs, raw and gzip, the small fixtures unchanged. Three of the census's rows read
 their bytes wrong, and each correction is in its section: the "assertion" was the `t` literal, the
-701 "keyword loops" were 116 keyword sites, and the "boxed variable built empty" was closures and
+"keyword loops" were fewer distinct sites than counted, and the "boxed variable built empty" was
+closures and
 conses -- the census names WHERE to look, and the shape is only known once the site is read.
 
 **A residue is a property of the real output, never of a spike**, and a pass ranked by
-running it ALONE says how much binaryen's writer costs as much as what the pass does. The
-"~114 bytes of tidying" this section first estimated came from `-Oz` on a hand-spiked
-1,090-byte module; the corpus said 19-33% of every module.
+running it ALONE says how much binaryen's writer costs as much as what the pass does: the
+corpus, not a hand-spiked module, is what the percentages above are from.
 
 ## The funcall-dispatch gate (what makes `--optimize` reach library code)
 **A function gets an arity-dispatch case only when the program can actually reach it as a function
@@ -1098,15 +1051,13 @@ gets an `unreachable` body the shake drops) and swapped in by `WasmSections.repl
 The rebuild may intern no string (the data section is written; checked). `_fun_name` keeps the
 full set, as on the JVM.
 
-Measured 2026-10-05 (raw / gzip -9n, base 167f74409): bench-report `list` 14,119 -> 12,139
-(-14.0%), `sort` 21,607 -> 20,820 (-3.6%), component and `size` alike, the other eight
-byte-identical; size-report `zlib` 130,239 -> 128,297 (-1.5%) / 42,584 -> 42,387; Workers
-`httpbin` 175,784 -> 168,883 (-3.9%), its component core 170,188 -> 166,745, the clack /
-ningle / tiny-routes / fetcher ones byte-identical. The 145 wasm/component/reactor example
-legs 41,619,240 -> 41,268,898 B (-0.84%, gzip -0.35%): 92 shrink, none grows; most the
-`net/` servers' components (-8.8..-9.2%, `kv-server` 189,093 -> 172,248) and the scheme
-examples (-8.9..-12.2%). ci-spec byte-identical (P1 and component; it uses `eval`); the concatenated scheme-spec
-961,244 -> 956,201 and clojure-spec 6,329,837 -> 6,324,846 (P1; outputs identical). Compile time and bench-report time
+Measured 2026-10-05 (raw / gzip -9n, base 167f74409): the bench-report programs whose closures
+die shrink by several percent (`list` the most), the rest of that family and the clack /
+ningle / tiny-routes / fetcher Workers byte-identical; size-report `zlib` and the `httpbin`
+Worker shed a percent or so each, raw and gzip. Across every example leg the total edges down
+under one percent, no leg growing; the `net/` servers' components and the scheme
+examples shrink the most. ci-spec is byte-identical (it uses `eval`); the concatenated scheme-spec
+and clojure-spec shrink a fraction of a percent (outputs identical). Compile time and bench-report time
 within noise. Pins: `WasmTreeShakerTest#aClosureWhoseEveryCreatorIsShakenTakesItsLadderArmAlong`
 (P1, component, a host import), `#aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue`,
 the four ladder programs in `WasmLispCompilerIntegrationTest#optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`.
@@ -1201,16 +1152,16 @@ dead closures no longer hold `_tramp`. `_funName` keeps `dispatchableFuncIds`; `
 writes every case. `-Drontolisp.debug.dispatchgate=true` prints how many
 dispatchable funcIds no kept body makes.
 
-Measured (default `--optimize`, class bytes, `Prog*.class` summed): bench-report `clos` 28,858 ->
-25,600 (-11.3%), `string` 39,326 -> 36,097 (-8.2%), `sort` 46,318 -> 42,774 (-7.7%) -- all three
-lose every lambda and `_tramp` (`reduce :from-end`'s swapping closures in a wrapper body the
-program never calls) -- `list` 24,729 -> 24,629, the other six identical; size-report `zlib`
-180,079 -> 177,283 (-1.6%), the rest identical; scheme-spec 1,024,708 -> 1,015,305, clojure-spec
-7,347,457 -> 7,333,381; ci-spec 7,450,469 unchanged (its 8 remaining such lambdas are made in
+Measured (default `--optimize`, class bytes, `Prog*.class` summed): the bench-report programs
+whose lambdas die lose them whole (`clos`, `string`, `sort` -- every lambda and `_tramp` gone,
+`reduce :from-end`'s swapping closures in a wrapper body the
+program never calls); the other bench rows and all but one size-report row are identical, the
+exception a percent lighter; the concatenated scheme-spec and clojure-spec shed a fraction of a
+percent; ci-spec is unchanged (its few remaining such lambdas are made in
 UNREACHABLE code of kept methods, which `java.lang.classfile` patches away at the write -- a
-value recorded in dead instructions still counts). The 116 JVM-compiled examples 47,021,166 ->
-46,439,839 B (-1.2%): 84 shrink (median -3.1%), none grows; the HTTP servers most
-(`net/http-handler` 88,883 -> 52,775, -41%) -- the shared `%http-serve-request` async thunk kept
+value recorded in dead instructions still counts). Across the JVM-compiled examples the total
+edges down about one percent, none growing; the HTTP servers shrink the most by far --
+the shared `%http-serve-request` async thunk kept
 the request-environment builder (`%http-make-env`, the percent/UTF-8 decoders) alive on the JVM,
 whose transport never calls it. WASM output byte-identical (P1 and component). bench-report time
 within noise.
@@ -1241,22 +1192,16 @@ a value-only funcId and a call-only one are in the same position. Consequence: `
 <computed>))` naming a function the program also takes as `#'name` now signals undefined-function
 like any forged name (documented in `doc/*/compiling/{jvm,wasm}.md`); `--dynamic` restores it.
 
-Measured 2026-10-05 (base 4e794e73a, `--optimize` default; raw bytes, JVM `Prog*.class` summed).
+Measured 2026-10-05 (base 4e794e73a, `--optimize` default).
 The upper bound the item recorded (dropping the registry's values altogether, unsound) was
-`ch03/activation-functions` 66,609 -> 60,652 B; the sound change takes 67,973 -> 61,723 (-9.2%),
-i.e. essentially the whole bound was value-only rows. The examples' compile legs: JVM 116 legs
-48,040,695 -> 47,949,532 (-0.19%, 84 shrink), P1 75 legs 22,569,919 -> 22,500,024 (-0.31%, 44
-shrink), component 64 legs 16,400,296 -> 16,329,113 (-0.43%, 45 shrink), none grows (six legs,
-five of them components, gain 13-76 B of gzip while shrinking raw); `--no-gc` identical. Largest:
-`llm-from-scratch/gpt/shapes` P1 290,228 -> 255,965 (-11.8%), JVM 285,861 -> 266,324;
-`activation-functions` P1 42,101 -> 37,690 (-10.5%); `ch07/visualize-filter` -5.7..-6.2%;
-`weight-init-activation-histogram` -6.4..-6.6%. bench-report: `string` JVM 36,076 -> 35,381, P1
-21,161 -> 21,136; `clos` / `list` / `sort` JVM -376 / -331 / -222 B; the rest identical.
-size-report `zlib` P1 128,297 -> 128,064, component 132,110 -> 131,877, JVM 177,253 -> 176,904;
-the other rows identical. Workers: `httpbin` 168,883 -> 168,630, its component core 166,745 ->
-166,508, the other twelve identical. ci-spec byte-identical on every leg (it uses `eval`);
-scheme-spec P1 956,201 -> 955,293, JVM 1,013,832 -> 1,011,954; clojure-spec P1 6,324,782 ->
-6,318,803, JVM 7,320,727 -> 7,310,284. Every changed program's run output is identical (timing
+nearly what the sound change takes on `ch03/activation-functions` -- in the nine-percent range --
+i.e. essentially the whole bound was value-only rows. Across the example compile legs on all
+three artifact kinds the totals edge down a fraction of a percent, no leg growing (a few gain a
+little gzip while shrinking raw); `--no-gc` identical. The largest single movers are the
+`llm-from-scratch` and activation-function examples at around ten percent; the HTTP-adjacent
+bench rows and `zlib` shed a little on every backend; Workers and ci-spec are
+byte-identical or a hair smaller (ci-spec uses `eval`). Every changed program's run output is
+identical (timing
 lines aside); bench-report time and compile time within noise.
 
 Pins: `JvmDeadMethodEliminationTest#aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow` (also
@@ -1278,9 +1223,9 @@ The fill binds no label, so no branch crosses a piece boundary. Sound because
 nothing but those pieces references the field: a kept eval runtime boxes through
 `_funcref` (its nullable ref is non-null exactly when the table is emitted).
 
-Measured 2026-10-13 (class bytes, `--optimize` default): `(print 1)` and
-`(print (+ 1 2))` -150 B each, a shaken-defun program -147 B; every program
+Measured 2026-10-13 (class bytes, `--optimize` default): a program whose literal table
+dies sheds a hundred-odd bytes, and every program
 whose table stays is byte-identical (sha256 over keep/drop probes at all three
-levels, including a 300-box segment fill kept and dropped). Pins:
+levels, including a full segment fill kept and dropped). Pins:
 `JvmDeadMethodEliminationTest#dropsUnreferencedFields` (the exact field list,
 plus `_funcref` gone and the class still printing `1`).

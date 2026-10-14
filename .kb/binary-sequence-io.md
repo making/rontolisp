@@ -61,8 +61,7 @@ along: `.kb/character-sequence-io.md`.
   2026-09-26). `dst`/`:start` exist so a caller writes successive offsets of one destination.
   GGUF/safetensors readers MUST chunk.
 - **Deliberately a plain scalar loop, not `jdk.incubator.vector`**: the JVM's `long[]` backing
-  has no `ShortVector.fromArray`/`convertShape(S2I)` path. Measured 1.6-2.6 Gelem/s (before the
-  interpreter's backing became a `short[]`); re-open only if a caller measures itself
+  has no `ShortVector.fromArray`/`convertShape(S2I)` path; re-open only if a caller measures itself
   bandwidth-bound here. Correctness pinned against
   `Float.floatToFloat16`/`float16ToFloat` over all 65536 f16 bit patterns.
 

@@ -114,9 +114,9 @@ passed to `funcall`/`mapcar` is not accelerated when compiled. Same as `vec:`.
   all-positive-term series in DOUBLE at both widths, narrowing only on the store. `exp` is fdlibm
   on every backend (a call into the runtime on wasm), so the digits agree everywhere. **No lane form,
   and the reason is not "no v128 instruction"**: the per-element iteration count is DATA-DEPENDENT.
-  Measured on aarch64/NEON, a lane `exp` (`VectorOperators.EXP`) is 14x SLOWER than the scalar
-  de-boxed loop AND not bit-identical to `StrictMath.exp`, while INTERCEPTION alone buys 132x on the
-  interpreter and 13x on wasm-GC. **Do not spend time on a masked lane form**; if revisited, measure
+  On aarch64/NEON, a lane `exp` (`VectorOperators.EXP`) is several times SLOWER than the scalar
+  de-boxed loop AND not bit-identical to `StrictMath.exp`, while INTERCEPTION alone is the
+  win on the interpreter and wasm-GC alike. **Do not spend time on a masked lane form**; if revisited, measure
   on a machine with 4+ f64 lanes first.
 - `abs` and unary minus USED to be per-backend -- with no double literal among their argument forms
   they took wasm's generic path (`abs` via `_rat_cmp`, leaving `-0.0` alone where `Math.abs` folds it
@@ -411,8 +411,9 @@ the bridge ships beside the class and a class constant only LOADS it (it links a
 `_simdInit` forces linking and initialization with `MethodHandles.lookup().ensureInitialized` inside
 its `LinkageError` catch: a JVM without `--add-modules` fails to LINK the bridge THERE -- before any
 bridge method runs, unlike `--blas`/`--gpu`, whose probe is a method call inside the bridge.
-Measured 2026-09-26: with a bare `ldc` in its place all four `JvmSimdModuleFallbackTest` cases died
-with `NoClassDefFoundError: jdk/incubator/vector/Vector` at the first kernel call. So every accelerated
+With a bare `ldc` in its place, a JVM without `--add-modules` dies
+with `NoClassDefFoundError: jdk/incubator/vector/Vector` at the first kernel call
+(`JvmSimdModuleFallbackTest`). So every accelerated
 call site checks `_simdReady()` BEFORE emitting a call that would resolve a method reference into the
 bridge (`JvmSimdModuleFallbackTest` runs a compiled class in a child JVM with no `--add-modules`).
 The compiled packed array carries an **in-array header** `[rank, dim..., data...]`, `off = 1 + rank`,

@@ -145,19 +145,19 @@ REJECT a complex:
 
 An operator whose own form spells a float literal (`(+ z 1.5)`) is the next section's.
 
-Measured 2026-10-06 (wasmtime 49, linux/amd64): the size-report and bench-report programs
+Checked 2026-10-06 (wasmtime 49, linux/amd64): the size-report and bench-report programs
 are byte-identical at every level, P1 and component. Where no complex can flow (the
 micro programs: a `sqrt` beside a `+`, `=`, `abs`, `sin`, `expt` over parameters) the fold
-leaves the module within 10 B of its old size; where one can,
-`examples/ml/linear-regression.lisp` grew 74,550 -> 80,203 B at the default level (the
+leaves the module at its old size for most purposes; where one can,
+`examples/ml/linear-regression.lisp` grows at the default level (the
 block's `expt`, the `_c_*` twins). Speed where a complex CAN reach the measured function
-(it is handed one once, statically, so the fold keeps every arm): the first shapes cost
-float `+`/`*` +13%, `=` +7%, unary +8%, `expt` +10%; with the float pair answered ahead
+(it is handed one once, statically, so the fold keeps every arm): the naive shapes cost
+float `+`/`*`, `=`, unary and `expt` several percent apiece; with the float pair answered ahead
 of the `_rat_*` arm, the `=` entry's i31 and float pairs, and the unary site's inline
-float read, float `+`/`*` is 15% FASTER than before, `=` 11%, unary 5%. `expt` stays
-+10-15% in that micro program only because the old fold had proved its operand never a
+float read, float `+`/`*`, `=` and unary are FASTER than before. `expt` stays
+slower in that micro program only because the old fold had proved its operand never a
 float and deleted the float branch, which the reachable `_c_*` twins' float answers now
-keep. An n-body whose float arithmetic a complex can reach runs 6% faster.
+keep. An n-body whose float arithmetic a complex can reach runs faster.
 
 ## A complex beside a float literal
 

@@ -107,28 +107,22 @@ unchanged as `private static _main$body(String[])`; the class itself is the `Run
   ([objc.md](objc.md), "AppKit belongs to thread 0"). Until 2026-09-27 it got none and kept the
   program on the calling thread; the macOS GUI check of the change is recorded there.
 
-### The numbers (2026-09-19, linux-x64, Oracle GraalVM 25, before -> after)
+### The launcher's footprint (2026-09-19, linux-x64, Oracle GraalVM 25)
 
-- A tail call through a procedure value, largest passing depth under `java Prog`: Scheme
-  `(define (g self n) (if (= n 0) 'done (self self (- n 1))))` **1,792 -> 16,201-16,207**; the
-  CL `(funcall self self ..)` twin 1,775-1,816 -> 16,138-16,287 (`-Xss16m` before: 16,301).
-  `-Drontolisp.stack=1` 1,855, `=256` passes the probe's 40,000,000 ceiling. The interpreter's
-  worker held 15,497 of the Scheme calls until the loop in `eval` landed later the same day
+- A tail call through a procedure value recurses to the launcher thread's full depth, for the
+  Scheme `(define (g self n) (if (= n 0) 'done (self self (- n 1))))` shape and its CL
+  `(funcall self self ..)` twin alike; `-Drontolisp.stack` scales how far. The interpreter's
+  worker gained the same when the loop in `eval` landed
   (`.todo/912`, [interpreter-tail-calls.md](interpreter-tail-calls.md)): a tail call has no
-  ceiling there now, and its non-tail `depth` reaches 35,726 -- so on a tail call compiled
-  output is the shallower one again, and on a non-tail recursion the two are level.
-- Non-tail `(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n 1)))))`: 30,616 at the default,
-  and under `-Xint` 9,072 at 1 MiB vs 160,309 at 16 MiB. C1 frames are the fattest:
-  `-XX:TieredStopAtLevel=1` holds 2,230 in 1 MiB, the interpreter 9,072 -- which is why
+  ceiling there now -- so on a tail call compiled output is the shallower one again, and on a
+  non-tail recursion the two are level.
+- Non-tail `(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n 1)))))`: C1 frames are the fattest,
+  and the interpreter's are fatter still -- which is why
   `JvmSizedMainTest` pins depth in a child JVM under `-Xint` (one frame size, 4x margin each
   side) instead of pairing a control as the interpreter's test must.
-- Startup (`java -cp . Depth 10`, 100 interleaved runs): median 87.7 -> 88.6 ms, min 73.1 ->
-  74.1 ms -- the extra thread costs about 1 ms, inside the noise. `bench-report` JVM column,
-  best of 5 alternating twice: every benchmark within run-to-run noise.
-- Size, every artifact with a `main`: +819-872 B of class (`(display "hello, world")` .scm
-  1,661 -> 2,533, `(print ..)` 3,924 -> 4,743, `fib` 12,110 -> 12,929, an async program
-  41,692 -> 42,379), +380-480 B of jar. `size-report` measures wasm only, so none of its
-  numbers move.
+- Startup and artifact size: the extra thread costs neither to speak of -- every `bench-report`
+  benchmark within run-to-run noise, every artifact with a `main` a hair of class and jar.
+  `size-report` measures wasm only, so none of its numbers move.
 
 ## An embedder compiles on the same stack
 

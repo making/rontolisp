@@ -65,8 +65,8 @@ ordinary call path and leaves `cffi-libffi` unloadable forever. A returned struc
 - **A registered shape is not a compiled stub of its own -- the granularity is the ABI-LOWERED
   signature**, so one entry serves every descriptor that lowers the same way. Hence enumeration by
   MEMBERS, not by classification. Corollary: an entry costs image size only when it is a NEW
-  lowering -- deepening the jlong tier from arity 6 to 10 was byte-for-byte free, while pushing
-  `jdouble` to 6 and `jfloat` to 3 cost ~450 KB, so that tier stayed put.
+  lowering -- deepening the jlong tier was byte-for-byte free, while pushing
+  `jdouble` and `jfloat` to wider arities was not, so those tiers stayed put.
 - **The grid** in `reachability-metadata.json`: `jlong` arguments at arity 0-10, all
   `jlong`/`jdouble` combinations at 1-4, all three carriers at 1-2, x four return carriers, every
   entry with `captureCallState`; upcalls `jlong` to arity 6 and `jlong`/`jdouble` to 2.

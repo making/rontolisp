@@ -43,10 +43,8 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
   `examples/clojure/demo.clj`; no existing test failed. In-tree: `equalp`'s last arm and
   the two `%remf-tail` walks above.
 - Cost (2026-10-04): programs without `java:` are byte-identical on the JVM and wasm except
-  `equalp`'s method: JVM +13 B of code (+7..18 B per class: `str-demo`, `postmodern-*`,
-  `httpbin-ningle`), wasm -56..64 B. A `java:` program grows by the host arms and `_jhost`
-  (+28..470 B: `java-interop.lisp` +317, `swing.lisp` +210). Speed: 3M x 20 `eql` over
-  symbols and fixnums, best of 10, JVM 201-219 ms before and after, with and without
+  `equalp`'s method; a `java:` program grows by the host arms and `_jhost`. `eql` speed over
+  symbols and fixnums is unchanged on the JVM, with and without
   `java:`; the interpreter within noise.
 - Pins: `JavaInteropPrograms.HOST_IDENTITY_PROGRAM` (`JavaInteropTest` /
   `JvmJavaInteropCompilerTest#eqAndEqlOnHostObjectsAreIdentity`),
@@ -115,7 +113,7 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
   `(= [] nil)`).
 - A `java:` program only: the test is the second of `ClojureArms.Family.HOST`'s, so a program
   naming no `java:` operator sheds the arm and both bodies are what they were.
-- Measured 2026-10-04 (oracle clj 1.12.6): 51 pairs of lists, maps, sets, sorted collections,
+- Checked 2026-10-04 (oracle clj 1.12.6): 51 pairs of lists, maps, sets, sorted collections,
   records, lazy and infinite seqs, nested host lists -- 29 answers wrong before, oracle-identical
   after on the interpreter and the JVM; `List/of`, `subList`,
   `unmodifiableList`, `Map/of`, `ConcurrentHashMap`, `LinkedHashMap`, `TreeMap`, `Set/of`,
@@ -123,13 +121,11 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
 - Cost: programs without `java:` byte-identical (wasm P1, `--optimize=size`, component, JVM
   class: `demo.clj`, a 10x10 `=` matrix over every kind incl. sorted, a `defn` over `=`; all
   four backends print the same). A `java:` program reaching `=` grows by the two functions,
-  `%clojure-host-instance-p` and `%clojure-sorted-lookup`: JVM class 113,241 -> 117,288 and
-  115,397 -> 120,653 B (a first cut through `%clojure-set-count` pulled the seq runtime:
-  +7.6 KB). Speed: JVM `=` loop in a `java:` program, 3M unequal pairs, 1,604 -> 1,645 ms
-  (medians of 5); interpreter, which keeps the arm, 600k unequal pairs straight into
-  `%clojure-equal` 7.1 -> 8.7 s (medians of 5, noisy host; the arm's call alone measured
-  ~7.8, the type tests ahead of `%clojure-lisp-value-p` cut it from ~9.8), a mixed program
-  (`cond` over keywords, `filter`, `frequencies`, `distinct`) 12.4 -> 12.3 s, within noise.
+  `%clojure-host-instance-p` and `%clojure-sorted-lookup` (a first cut through
+  `%clojure-set-count` pulled the seq runtime). Speed: a `=` loop in a `java:` program is
+  unchanged on the JVM; the interpreter, which keeps the arm, pays the call into
+  `%clojure-equal` and the type tests ahead of `%clojure-lisp-value-p` on host-heavy `=`
+  loops, and mixed programs are within noise.
 - Pins: `ClojureInteropTest#aHostCollectionIsEqualToAClojureCollectionOfItsKind`
   (oracle-identical), `ClojureLibraryTest#aProgramNamingNoJavaOperatorComparesWithoutTheHostCollectionArm`.
 
@@ -162,13 +158,11 @@ alone, and it is what the backends already did for bignums and characters.
   [objc.md](objc.md), "--native"). In a module with none of those boxes the fold makes the tail `i32.const 0` and
   `WasmPeephole` removes every call of it (`.kb/optimize-dead-code-elimination.md`).
 
-## Cost (measured 2026-09-19)
+## Cost (2026-09-19)
 
-Programs with no `eq`/`eql` site are byte-identical. WASM, raw bytes vs. before: `calc` -0.70%,
-`huffman` -0.97%, `word-frequency` -0.71%, `sorting` -0.48%, `evaluator` -0.26%, `zlib` +0.07%,
-`contact-book` +0.06%, `maze-rl` +0.07%. JVM jars shrink 33-75 B (one helper instead of two).
+Programs with no `eq`/`eql` site are byte-identical; JVM jars shrink by one helper instead
+of two.
 
-Speed, wasmtime, best of 10, 3M iterations of a 10-element list search: symbol `eq` misses
-unchanged (374 vs 376 ms); fixnum `eql` misses 12-15% faster (223 -> 197; 218 -> 185 in a module
-with floats) from the inline i31 exit; float `eql` misses 5-10% slower (632 -> 664) from the call
+Speed, wasmtime, repeated misses on a 10-element list search: symbol `eq` misses
+unchanged; fixnum `eql` misses faster from the inline i31 exit; float `eql` misses slower from the call
 into `_eql_tail`. JVM unchanged within noise.

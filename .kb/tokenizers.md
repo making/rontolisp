@@ -60,7 +60,7 @@ Three traps a straight reading of the patterns gets wrong:
 ## Unicode tables
 `\p{L}`, `\p{N}`, `\p{M}` only: three delta-encoded range tables (gap from the previous range's
 end, then length), expanded into flat `#(start end ...)` vectors at load and binary-searched.
-659 + 137 + 310 = 1106 ranges, 6.4 KB of source. Unicode 15.0.0 (CPython 3.12 `unicodedata`).
+659 + 137 + 310 = 1106 ranges. Unicode 15.0.0 (CPython 3.12 `unicodedata`).
 A character IS a code point (`.kb/characters-code-points.md`).
 
 ## Deliberately NOT here
@@ -71,8 +71,7 @@ Unicode normalization (fixtures are stored NFC-composed), chat templates, readin
 `qwen35`) plus `sentencepiece`, each carrying the corpus (as CODE-POINT LISTS, so no editor or
 encoding can rewrite a case), the trimmed vocabulary and merges, and **the ids the Python
 `tokenizers` library produced**. **The trim is exact**: every merge the encode SELECTED (in
-original relative rank order) and every string it found -- 16-22 KB instead of 1-4 MB.
-Regenerating needs the model's `tokenizer.json` and the Python `tokenizers` library, neither in
+original relative rank order) and every string it found. Regenerating needs the model's `tokenizer.json` and the Python `tokenizers` library, neither in
 the repo. The SentencePiece fixture is the WHOLE 512-piece vocabulary of
 `examples/llm/tok512.bin`; expectations are run.c's `encode()`.
 

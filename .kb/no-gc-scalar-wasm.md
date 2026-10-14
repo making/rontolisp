@@ -20,8 +20,7 @@ rank-2 `#d`/`#f` literals and `array-dimensions` are compile errors; the rank is
 The **type section carries each distinct signature once** (`TypeTable`, interned in
 emission order). A wasm function type is structural and only ever named by INDEX -- by a
 `func` entry or an import entry -- so folding the duplicates renumbers nothing else. It
-used to be one entry per function, which on a 20-function module meant 24 entries of which
-12 were distinct (129 -> 61 bytes, 2026-09-13). The printing module's `fd_write` signature
+used to be one entry per function. The printing module's `fd_write` signature
 is interned FIRST so it stays type 0, which is what the import entry names.
 
 ## Value model and inference
@@ -62,19 +61,16 @@ body is a bare `while`.
   stack does not match the declared block/function type and the module fails validation.
   The pairs that have to move together are `while`, `terpri`, `progn`, `%block`/`return`
   and both `if` rules.
-- Measured 2026-09-13 on `.todo/artefacts/805-.../bench.lisp`: **953 -> 931 B**
-  (-2.3%) at `--optimize=size`, 1,378 -> 1,350 at `--optimize=off`, with ZERO
-  `i64.const 0` / `drop` pairs left in the module and `InitApp` reaching
+- With these rules a module leaves ZERO `i64.const 0` / `drop` pairs and `InitApp` reaches
   `isPassThroughExport`. `AppendLogMessage` keeps its wrapper and always would have:
   its `:s32` parameter needs the `i64.extend_i32_s` no pass-through can skip. A
-  pure-numeric program pays the same way through `while`: the
-  `(let ((acc 0)) (dotimes ...) acc)` shape is 116 -> 106 B.
+  pure-numeric program is covered the same way through `while`: the
+  `(let ((acc 0)) (dotimes ...) acc)` shape.
 
 ### There is no i32 tier, and there must not be one
-Measured 2026-09-13 and **rejected**; the spike, its script and the demonstration are in
+**Rejected**; the spike, its script and the demonstration are in
 `.todo/artefacts/806-no-gc-internal-void/`. Making INT an `i32` module-wide (every
-`i64.*` opcode its `i32.*` twin, the extend/wrap pairs gone) was worth 1,383 -> 1,310 B on
-the 20-function reactor, and 1,260 with `:s32` pass-through exports -- and it is not
+`i64.*` opcode its `i32.*` twin, the extend/wrap pairs gone) is not
 available at any price: **every boundary value can fit `:s32` while an INTERMEDIATE
 crosses 2^31**, so `(mod (* n n) 1000)` of 65536 answers 0 for 296 and
 `(mod (fact 13) 10000)` answers 3504 for 800. Silently wrong, on exactly the shapes
@@ -82,7 +78,7 @@ crosses 2^31**, so `(mod (* n n) 1000)` of 65536 answers 0 for 296 and
 intermediate, and a range analysis does not rescue it either: it would have to bound every
 integer-valued expression in a body, `(+ a b)` of two `:s32` already needs 33 bits, and
 interval widening gives top at `fib`'s first recursive `+`. It succeeds exactly where the
-tier is worth about two bytes (comparisons, indices) and fails wherever the bytes are.
+tier is nearly free (comparisons, indices) and fails wherever bytes are spent.
 Today's wrap point is 2^63, documented; 2^31 is reached by `13!`. If a narrow tier is ever
 wanted it has to be an explicit user DECLARATION, so the wrap point is the user's stated
 contract the way `:s32` already is at the boundary.
@@ -110,8 +106,7 @@ differing quotient decides, an equal one falls back to the remainder against
 zero), which never overflows at any magnitude, and `K >= 64` leaves `|f| < 1`.
 The scratch triple (bits, mantissa, exponent) is allocated once per function
 (`Fn.exactBits/Mant/Exp`) and the float rides the stack into the helper, so a
-mixed site costs one local, not five -- ten thousand mixed comparisons in one
-function still compile. `min`/`max` decide mixed rounds through the same helper
+mixed site costs one local, not five. `min`/`max` decide mixed rounds through the same helper
 (`compileMixedMinMax`, keeping the left operand on a tie and the second on NaN,
 like the interpreter) but still answer the joined f64 values, so an integer
 winner prints as its correctly-rounded float -- the values provably coincide
@@ -158,8 +153,7 @@ A string is an `i32` pointer to `[len:i32 LE][UTF-8 bytes]`; literals are laid o
 back (NOT aligned) from `STR_DATA_BASE`=8, so addr 0 is always a valid zero-length string
 (the empty string / nil-in-string-context). The `i32.load align=2` that reads a length
 header is a HINT in wasm -- an unaligned address is legal and every engine serves it -- so
-the padding that used to 4-align each block bought nothing and is gone (2026-09-13; 14
-bytes on the `.todo/artefacts/805-.../bench.lisp` reactor, output identical). The
+the padding that used to 4-align each block bought nothing and is gone (2026-09-13). The
 Schubfach tables after the literals DO keep their alignment: those are i64/f64 table reads
 in the float renderer's inner loop.
 
@@ -178,16 +172,11 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
   is sized against the all-headered plan, then `withHeaderFree` re-lays the SAME literal
   order. Dropping headers only lowers addresses, so a sized constant can only shorten.
   Every gate (`printUsed`, `hostArena`, ...) is a property of the bodies, not the layout.
-- `chooseFoldedImports` does not count the four bytes per literal folding now also saves;
+- `chooseFoldedImports` does not count the bytes per literal that folding also saves;
   an import just the wrong side of its comparison stays unfolded. Left alone until a
   measurement asks (the accounting is whole-program: spellings are shared across imports).
-- Measured 2026-09-13 on `.todo/artefacts/810-no-gc-dead-literal-length-headers/reactor.lisp`
-  (eleven folded-only literals): `--optimize=size` 930 -> 886 raw, gzip 650 -> 626, data
-  484 -> 440, code unchanged; `--optimize=off` 1353 -> 1309. Host output identical; that
-  artefact's `probe/` matches the interpreter at both levels, and its no-fold control is
-  byte-identical. With `.todo/811`'s range guard merged the same reactor is 900 -> 856
-  (gzip 613; code 200, data 440): the two compose exactly. A lower `heapBase` can shorten
-  its LEB128 in the global section.
+- The header fold and `.todo/811`'s range guard compose exactly. A lower `heapBase` can
+  shorten its LEB128 in the global section.
 - **A statement `(princ <literal>)` is two constants as well** (`.todo/814`,
   landed 2026-09-14). Printing funnels through `__write_stdout(ptr, len)`, and the
   generic string path computes the pair from the header at run time -- but for a
@@ -207,18 +196,10 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
     site of a headered spelling points past it. A value use keeps the header by
     construction, so the value shape's address is always laid out (its generic
     fallback fails loudly if the two ever disagree).
-  - Measured 2026-09-14 on `.todo/artefacts/814-no-gc-printed-literal-fold/`
-    (`hello.lisp`: one statement princ plus `terpri`; `report.lisp`: nine
-    statement princ sites over seven spellings): `--optimize=size` hello 217 ->
-    206 (code 61 -> 54, data 50 -> 46), report 729 -> 642 (code 468 -> 411, data
-    141 -> 112); `--optimize=off` hello 628 -> 608, report 1003 -> 851.
-    Interpreter and `wasmtime` agree on both at both levels. The win is the code
-    section, not the data header -- the opposite of 810, where the header IS the
-    point -- and the two compose. The value shape measured separately on a
-    3-statement + 4-value probe: statement-only 977 -> 960 off (651 -> 641 size),
-    both shapes 960 -> 920 off (641 -> 609 size), so ~10/~8 bytes per value site;
-    kept, since it always wins (no wrapper tradeoff) and stays sound through the
-    same count comparison.
+  - The win is the code section, not the data header -- the opposite of 810, where the
+    header IS the point -- and the two compose. The value shape is kept on the same
+    terms: it always wins (no wrapper tradeoff) and stays sound through the same count
+    comparison.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
@@ -243,14 +224,9 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
   `byteOffsetUsed` / `charAtUsed`, settled in `planMemory` the way `printUsed` /
   `ftoaUsed` gate their helpers; a `length` over a packed float vector still reads the
   element-count header inline and gates nothing). All three reuse the already-interned
-  `__alloc` / `__streq` shapes, so they cost code bytes but no type entries. Measured
-  2026-09-14 against `2bb74f937` (`--no-gc --no-wasi`, both `--optimize` levels agree):
-  a module that never indexes a string is byte-identical (the 805 `bench.lisp` reactor
-  844 B, the 810 folded-literal reactor 847 B, a `concatenate`-only module 410 B -- all
-  unchanged); a module that does pays per helper family -- `length`-only +69 B,
-  `subseq` (+`length`) +201 B at `--optimize=size` (+194 at `--optimize=off`), `char`-only
-  +272/+274. The per-site call is a `call` where the old lowering was a load, so sites
-  stay the same size or shrink; the helpers carry the loop.
+  `__alloc` / `__streq` shapes, so they cost code bytes but no type entries: a module
+  that never indexes a string is byte-identical, and the per-site call is a `call` where
+  the old lowering was a load, so the helpers carry the loop.
 - **Indexing here is O(n), the one exception to `.kb/string-index-cost.md`.** `length`
   scans the bytes, `char`/`subseq` walk to the index -- there is no cursor on the
   `[len][bytes]` block and no breakpoint table beside it, so a left-to-right scan is
@@ -300,12 +276,10 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
     the CLI rejects `--reentrant` with `--no-gc` (no suspending import to overlap
     on), and without overlap the host's block is live for the whole synchronous
     call either way -- the header write lands before the internal call reads it.
-  - Measured 2026-09-14 on `size-report/programs/dom_reactor/dom_reactor.lisp` at
-    `--no-gc --no-wasi --optimize=size` plus one `:string`-taking export (the
-    `.todo/815` probe, before `847` / after `1,153`): the change takes the probe to
-    **1,053** (`-100`: code `391 -> 297`, the wrapper's copy loop plus
-    `__memcpy` shaken out; type `46 -> 40`; export `141` and global `7`
-    unchanged -- the arena API surface itself is the one-time cost that stays).
+  - On the `.todo/815` probe (`size-report/programs/dom_reactor/dom_reactor.lisp` at
+    `--no-gc --no-wasi --optimize=size` plus one `:string`-taking export) the
+    change shakes the wrapper's copy loop plus `__memcpy` out -- the arena API surface
+    itself is the one-time cost that stays.
     A second and third `:string` parameter still add almost nothing.
 - **`emitRangeChecks`'s guard shape follows the width, not one fixed pattern.** `:s8`,
   `:s16`, `:s32` and `:u32` use the canon-compare shape `WasmExportCompiler.emitNarrowIntResult`
@@ -313,12 +287,12 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   exactly when the value is in range, so `v != canon(v)` traps with ONE compare and no bound
   constant (`I64_EXTEND8_S` / `I64_EXTEND16_S` / `I32_WRAP_I64;I64_EXTEND_S_I32` /
   `I32_WRAP_I64;I64_EXTEND_U_I32`). `:u8` and `:u16` keep the single bound compare
-  (`I64_GT_U` against the max) instead: their bound is a two- or three-byte constant, cheaper
+  (`I64_GT_U` against the max) instead: their bound is a small constant, cheaper
   than the mask the canon form would need. `:u64` keeps the plain `I64_LT_S 0` sign check --
-  only the sign can be wrong. Measured 2026-09-14 against `c972efa5d` (`.todo/811`): canon
-  form is smaller for `:s8`/`:s16`/`:s32`/`:u32` (-10/-12/-15/-2 bytes) and larger for
-  `:u8`/`:u16` (+3/+3), so those two are excluded. `emitTrapIf`'s two-bound-compare shape
-  from before this measurement is gone for every type it used to serve except `:u64`'s
+  only the sign can be wrong. The canon
+  form is the smaller shape for `:s8`/`:s16`/`:s32`/`:u32` and the larger for
+  `:u8`/`:u16`, so those two are excluded. `emitTrapIf`'s two-bound-compare shape
+  is gone for every type it used to serve except `:u64`'s
   single-sided check.
 - **Wrapper auto-reset for scalar returns**: `__ronto_alloc` never frees. When the return
   type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
@@ -357,11 +331,10 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   across the boundary skips the pop (leak, not corruption).
 
 ## Host imports (`rontolisp:wasm-import`)
-The directive is taken here too, and this backend is what a host-driven module WANTS: the
-`.todo/789` measurement reactor -- two host imports (one taking two `:string`s), a fixnum
-recursion, two exports -- is **528 bytes** at `--no-gc --no-wasi --optimize=size` against **1,658** for the
-same source on wasm-GC (measured 2026-09-12, after `790`/`791` landed). Refusing it used to cost
-exactly that 3.1x, on the shape this backend exists for.
+The directive is taken here too, and this backend is what a host-driven module WANTS: a
+`.todo/789`-shaped reactor -- two host imports (one taking two `:string`s), a fixnum
+recursion, two exports -- is a fraction of its wasm-GC size here. Refusing it costs
+that ratio, on the shape this backend exists for.
 
 **Everything above the codegen is shared, nothing is re-derived**: `compiler/WasmImportDirective`
 parses, `WasmImportCompiler.parse`/`hostParamTypes`/`hostResultTypes` settle the host signature,
@@ -448,19 +421,16 @@ the two questions have different answers.
 - **This is the half `800` could not hand over.** The single-call-site move is a BYTE-level
   pass, so the literals it substitutes into a wrapper's address arithmetic arrive after
   emission, where no source-level lowering can see them -- which is why this item read as
-  worth zero for as long as it was scoped to import call sites alone. Measured 2026-09-13
-  on `.todo/artefacts/805-no-gc-literal-import-call-sites/bench.lisp` (four DOM imports
-  behind four forwarders, seven literals crossing out): folding import call sites alone is
-  **0 bytes**, every literal being at a forwarder site; reading through the forwarders is
-  **1,011 -> 953** (-5.7%; 8 functions -> 5, code 300 -> 256, types 47 -> 36) at
-  `--optimize=size` and **1,483 -> 1,378** at `--optimize=off`, with the node host's output
-  identical byte for byte.
+  worth zero for as long as it was scoped to import call sites alone: folding import call
+  sites alone saves nothing, every literal sitting at a forwarder site; reading through the
+  forwarders is where the win is, with the node host's output identical byte for byte
+  (`.todo/artefacts/805-no-gc-literal-import-call-sites/`).
 - **Measured, not assumed.** Each folded site costs the length constant per `:string`
   argument plus the marshalling the wrapper held ONCE (`:bool`'s comparison, a narrow
   integer's range guard, the result boxing); against that stand the wrapper's body and
   function entry and every forwarder's. `chooseFoldedImports` emits both sides and compares
   bytes, so enough sites of a wide enough import decline the fold and the pass cannot grow
-  a module. Two terms are left out, about a byte each and opposite in sign: the wrapper's
+  a module. Two terms are left out: the wrapper's
   type entry (which may be another function's too, so it is not counted as saved) and a
   folded site's scratch local.
 - **Never folded**: a `:string` RESULT (copying the host's bytes into a fresh block through
@@ -479,7 +449,7 @@ which is DROPPED: there is no top-level init body to evaluate a value in and no 
 assign, and without this a user `defpackage` (hence any `rontolisp:wit-import`, whose lowering
 writes one) could not reach this backend at all. The refusal message for anything else names the
 SUBSET, not the other backend: a program is usually one form away from fitting, and "use the
-default GC backend" is an answer that costs ~3x the bytes.
+default GC backend" is a far larger answer.
 `collectCalls` (BFS from export targets, throwing `UnsupportedOperationException` naming the
 op + function for cons/char/symbol/hash/`eval`/I/O/list iteration/global-`setq`/free var,
 yielding reachable defuns in discovery order with stable indices) -> `inferTypes` fixpoint ->
@@ -492,10 +462,8 @@ population-count `logcount` loop in 2026-09; the established shape is a fixed
 `__name-` prefix, the `CHECK_TYPE_VAR` precedent). Reuses `WasmExportCompiler.parse`/`isExportForm`/
 `paramWasmTypes`/`resultWasmTypes` + the `T_*` constants; composes with `--optimize`
 (`WasmTreeShaker` is GC-agnostic, and `WasmPeephole` + `WasmInliner` + `WasmLocalSink` run in front of it here
-exactly as they do on the GC backend -- this is the backend the move pays on, the browser reactor
-of `.todo/804` going 1,090 -> 1,011 B and its code section 360 -> 300 in 17 -> 8 functions:
-`.kb/optimize-dead-code-elimination.md`, "The single-call-site move"; the peepholes take the
-`hello` Worker 507 -> 489 and `pi_approx --no-gc` 3,333 -> 3,289). The type-test fold and the
+exactly as they do on the GC backend -- this is the backend the move pays on
+(`.kb/optimize-dead-code-elimination.md`, "The single-call-site move"). The type-test fold and the
 forwarder redirect are GC-side only; the move subsumes the second here, since a forwarder called
 once is a body with one call site.
 
@@ -515,10 +483,9 @@ string as RUNS, so nothing is allocated — a print must not move the bump heap.
   one both, a lone literal its own). A fragment written only as a region carries no
   `[len]` header -- `"\n"` in every literal-only printing module is that literal --
   while `__ftoa`'s specials and a `princ-to-string` boolean's `T`/`NIL` stay pinned
-  headered (`.todo/816` parts 1-2; measured `hello_world-nogc` 211 -> 166 B at
-  `--optimize=size`).
+  headered (`.todo/816` parts 1-2).
 - `Mem.ftoaUsed` (a typed `rendersFloat` scan) additionally emits `__ftoa`, its five
-  `__schub_*` helpers and the ~755-byte `SchubfachTables` blob after the literals
+  `__schub_*` helpers and the `SchubfachTables` blob after the literals
   (`Mem.schubBase`) — the Schubfach decimal shared with the GC backend
   (`WasmSchubfachRuntimeBuilder`), so float text is byte-identical at EVERY magnitude
   (`.kb/format.md`). NaN/Infinity/-Infinity are static literal headers, `-0.0` by sign bit.
@@ -534,7 +501,7 @@ A third ctor arg wraps the finished module via `NoGcWasmComponentBuilder` — a 
 (a scalar-only program's embedded core module is byte-identical to the non-component output):
 `core module 0 -> core instance 0 -> per-export alias/funcTypeScalars/sync canonLift/export`,
 NO import block, adapter, mem module or `wasi:cli/run`, so `wasmtime run --invoke` works with
-ZERO flags. A 4-export program is ~400 bytes; `:long` maps to VT_S64 (0x78).
+ZERO flags. `:long` maps to VT_S64 (0x78).
 - **`:string` exports** lift through the canonical string ABI (VT_STRING 0x73) over the
   module's OWN exported memory, appended in component mode with a `:string` boundary ONLY: a
   `cabi_realloc` core export; a retptr shim per `:string`-RETURNING export (MAX_FLAT_RESULTS
@@ -594,12 +561,12 @@ ZERO flags. A 4-export program is ~400 bytes; `:long` maps to VT_S64 (0x78).
   every pre-existing output is byte-identical (verified against the previous jar on the
   scalar / string / print / print+string shapes). Print composes: the fixed print shim and the
   generated import shim are two tables the core instantiates against, two fixups.
-  **Measured 2026-09-12** (`--optimize=size`): the `.todo/789` reactor (two `:string` imports)
-  is 1,027 B as a component (530 B core; wit-component's own wrap of the same core, stripped,
-  is 1,041 B) against 2,650 B for the wasm-GC `--component` of the same WIT world -- NOT the
-  ~110 KB `.todo/794` assumed, which is jco's transpiled JS runtime and is paid by both. A
-  scalar-only import costs ~90 B of import block, a string-involving set ~400 B (shim +
-  fixup + wiring). `wasmtime --invoke` cannot host a user import at all (no linker entry): the
+  The `.todo/789` reactor (two `:string` imports)
+  as a component is little more than its core, on the order of wit-component's own wrap of the
+  same core, and far below the wasm-GC `--component` of the same WIT world -- NOT what
+  `.todo/794` assumed, which is jco's transpiled JS runtime and is paid by both. A
+  scalar-only import costs the import block alone, a string-involving set the shim +
+  fixup + wiring. `wasmtime --invoke` cannot host a user import at all (no linker entry): the
   hosts are jco (`--map env=./env.js`; jco 1.33 / node 24 runs it with NO JSPI, where the GC
   component of the same world needs `--experimental-wasm-jspi` for its async `wasi:cli/run`
   lift) and composition (`wac plug` / `wasm-tools compose` with a provider component -- a

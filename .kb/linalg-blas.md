@@ -31,14 +31,14 @@ WASM has no FFM, so `--blas` with a `.wasm` output is a hard error, not a silent
 - Declined, memory-bound: `linalg:sum`, vector-vector `linalg:dot` / `vec:dot`, `axpy`, every element-wise `vec:` kernel, `vec:mean` / `vec:norm`.
 - **`worth(n, m, p)` = `n*m*p >= 64`, `worthGemv` the same number** (`LinalgBlasKernels.MIN_WORK`,
   pinned by `LinalgBlasDeclineTest.theWorkThresholdIsOneNumberOnEveryRuntime`) -- ONE number for the
-  JVM and the native binary. The JVM's 64 is a 30 ns critical-downcall floor. Inside the image the
-  FFM handle costs 6.4 us (gemv) / 7.2 us (gemm) -- SubstrateVM interprets the handle chain,
-  `.kb/gpu.md`, `.todo/727` -- and from 2026-09-07 to 09-10 the image carried its own pair
-  (2^15 / 2^17); since `.todo/729` the image issues the four products through
-  `src/native/java/.../Target_LinalgBlasKernels` (SVM's `@InvokeCFunctionPointer`, ~90 ns with the
-  three operands pinned, `.kb/native-downcalls.md`), and measured against the same binary's `--simd`
-  lane kernel (GB10, OpenBLAS at one thread) gemv ties at 8x8 and 16x16, is 1.5x ahead at 64x64
-  and 2.2x from 256x256; gemm is level at 8x8x8 and ahead from 16x16x16 -- the JVM's crossover.
+  JVM and the native binary. The JVM's 64 is the critical-downcall floor. Inside the image the
+  FFM handle chain is interpreted by SubstrateVM
+  (`.kb/gpu.md`, `.todo/727`) -- and from 2026-09-07 to 09-10 the image carried its own pair of
+  thresholds for that reason; since `.todo/729` the image issues the four products through
+  `src/native/java/.../Target_LinalgBlasKernels` (SVM's `@InvokeCFunctionPointer` with the
+  three operands pinned, `.kb/native-downcalls.md`), and against the same binary's `--simd`
+  lane kernel (GB10, OpenBLAS at one thread) the BLAS path ties at the smallest shapes and
+  pulls ahead as they grow -- the JVM's crossover.
 - The stacked rank-3 product (`linalg::%la-matmul-nd`) is a SEPARATE interception, taken by `--simd` and `--gpu` but not here — see "Unfinished".
 - `Linker.Option.critical(true)` takes heap `MemorySegment`s, so `MemorySegment.ofArray(a).asSlice(off * 8)` costs no copy but reaches no safepoint. **`2*n*m*p <= 2^32` goes critical, above that operands stage in a confined arena**; a gemv is always critical.
 

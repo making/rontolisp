@@ -132,13 +132,11 @@ computed divisor.
   `(aref v (+ i 1))` puts no leaf (and no check) between the reads in front of it. The
   prologue computes an operation index raw (`emitArefRead`) inside the checked region, which
   then opens before the reads, so an overflow bails; an aref in another's index is read first
-  (`emitArefReads`); the fallback computes it generically. Measured 2026-10-07 (scratch
-  kernels copying `flexi-streams:octets-to-string`'s decode and md5's `fill-block-ub8` loop over
-  1 MB, best of 15 rounds per process, load 20-50): steady state unchanged (decode 84-95 ms,
-  fill 42-46 ms either way -- C2 already scalar-replaced the index's box once it inlined the
-  index's own `_fx$N`); the first round, through tier-up, decode median 266 -> 221 ms and
-  fill 279 -> 218 ms (8 processes each); the library calls themselves within noise; a class
-  loading flexi-streams and md5 196,069 -> 194,710 B. The WASM half gains in steady state
+  (`emitArefReads`); the fallback computes it generically. Measured on scratch
+  kernels copying `flexi-streams:octets-to-string`'s decode and md5's `fill-block-ub8` loop
+  (2026-10-07): steady state unchanged -- C2 already scalar-replaced the index's box once it
+  inlined the index's own `_fx$N` -- and the first round, through tier-up, faster; the library
+  calls themselves within noise. The WASM half gains in steady state
   (`.kb/wasm-int-fusion.md`).
 - **Random leaves**: `(random <integer>)` draws with the same formula `_random` uses for a `Long`
   limit, `(long) (ThreadLocalRandom.current().nextDouble() * limit)` (`.kb/random.md`). **The only

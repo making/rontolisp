@@ -129,9 +129,8 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
   `find-symbol`, `do-external-symbols` over cl and `find-all-symbols` yielding a non-nil `NIL`)
   and the literal 1-arg fold (`(find-symbol "T")` -> NIL). Size of the rail: a program that
   never interns is byte-identical (the WASM arm is emitted only under `usesIntern`); a
-  one-`intern` program grows JVM +88 B (the helper method), WASM +156 B / component +160 B
-  (the arm, plus the print path's nil branch the non-null `_intern_sym` had let the shaker
-  drop); a five-`intern` program +55 B JVM / +14 B WASM. ANSI `packages` / `symbols`
+  program that interns pays the helper once on the JVM and the arm once on wasm, most of it
+  the print path's nil branch the non-null `_intern_sym` had let the shaker drop. ANSI `packages` / `symbols`
   (interpreter): 0 fixed, 0 regressed -- `.todo/917` had already fixed every row the suite
   reads.
 - `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike
@@ -171,12 +170,12 @@ base, `max(RT_INTERN_REGION_SIZE, slots * 8)` -- from the compile-time rows, ski
 zeroed rows the shaker cut; a miss pools the token, and at half load a doubled table is carved
 permanently off the heap and rehashed. Every permanent heap advance changes the count, which
 the per-call reset guards (`cabi_post_*`, the serve adapter) depend on. History: the scan cost
-O(table) per call, and the runtime records lived in a fixed 8 KB region, so the 1,025th fresh
-symbol overwrote the heap's first pooled token (out-of-bounds trap on P1 and component).
-Measured 2026-10-04 (jar): a 32,000-row `do-symbols` 8.0 s -> 0.1 s, `apropos-list` 26 s ->
-1.2 s; ci-spec `runtime-package-api` ~4.9 s -> ~2.5 s per WASM leg (-> ~0.8 s once the
-eval mirror stopped recording `%mv-spill`, `.kb/eval-runtime.md`). Size: a module without the real `_intern` is byte-identical; one with it +218 to
-+222 B. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`,
+O(table) per call, and the runtime records lived in a small fixed region, so a fresh
+symbol past the region's capacity overwrote the heap's first pooled token (out-of-bounds trap on P1 and component).
+Measured 2026-10-04 (jar): long package walks and `apropos-list` drop from seconds to a
+fraction; ci-spec `runtime-package-api` halves per WASM leg (and drops further once the
+eval mirror stopped recording `%mv-spill`, `.kb/eval-runtime.md`). Size: a module without the real `_intern` is byte-identical; one with it carries the
+table's few hundred bytes. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`,
 `#runtimeInternCostsTheSameWhereverItsSymbolSits` and
 `#aPackageWalkCostsItsUniverseNotItsSquare`.
 
@@ -408,9 +407,9 @@ side, answering the value -- so only `set` needs the per-backend work.
   not the mirror. A variable NAMED `set` does not count: a `let`
   binding or lambda-list entry of it is walked for its init forms only (`callsSet`). Until
   2026-10-04 one did (the walk took any list headed by `SET` for a call): the "dead `set`
-  site" `.todo/c81` measured in the ningle examples was one. Without it the same `let` + checks + chain is spelled at the site
-  (JVM over `ctx.globals`, wasm over the sorted global names). Before: the chain inline at
-  every site, ~8.8 KB of JVM bytecode a site over ci-spec's ~510 globals. Both force `usesEval` (a `SET`
+  site" `.todo/c81` found in the ningle examples was one. Without it the same `let` + checks + chain is spelled at the site
+  (JVM over `ctx.globals`, wasm over the sorted global names) -- kilobytes of JVM bytecode a
+  site over the corpus's globals. Both force `usesEval` (a `SET`
   spelling; a raw `(setf (symbol-value ...) ...)` spells `SYMBOL_VALUE`, which is
   already in the chain), and `#'set` is a reference-gated wrapper like
   `#'symbol-value`. `--no-gc` refuses by omission, like every other eval-runtime
@@ -423,16 +422,14 @@ side, answering the value -- so only `set` needs the per-backend work.
   eval-created global); the program reads it through `symbol-value`/`eval`. Inside a
   compiled runtime `eval`, `set` is an unknown operator and answers nil, like every
   other inline-only operator (`boundp`, `symbol-value`).
-- Cost (2026-10-04, before -> after): size-report, bench-report: byte-identical on P1,
-  `--optimize=size`, component and JVM. ci-spec program: wasm P1 6,641,349, size 5,474,693,
-  component 6,852,178, all unchanged; JVM 7,303,710 -> 7,309,112 (+5,402 B: each of the
-  ~360 `%global-store-set` arms of a progv program's dynamically-bound specials is a `_dset`
-  call and a branch, ~15 B instead of a 3-byte `putstatic`). examples: byte-identical but
+- Cost (2026-10-04): size-report, bench-report and the ci-spec program: byte-identical on
+  wasm and component; the JVM grows only where a progv program's dynamically-bound specials
+  take the `%global-store-set` arm (a `_dset`
+  call and a branch instead of a bare `putstatic`). Examples: byte-identical but
   for build-info strings, except the six whose libraries bind a variable named `set`
   (the three ningle ones, cloudflare httpbin, roman, minesweeper-core-test): the phantom
-  `set` site is gone, -75 to -98 B wasm, -3 B JVM.
-  4M computed `set`s of a bound special over 300 specials: JVM 4.2-4.7 s, wasm 3.1-3.5 s,
-  before and after alike (the mirror's `_store` walk dominates).
+  `set` site is gone and they shrink a little on wasm. Computed `set`s of a bound special
+  run in the same time before and after (the mirror's `_store` walk dominates).
 - **The mirror is still written inside an active binding** (`%set-mirror` runs first,
   as a callee's `setq` mirrors). No read takes a special's VALUE from it (`symbol-value` and
   `eval` read the variable), and `boundp` of a special declared without a value reads its
@@ -494,13 +491,12 @@ unguarded shipped caller, `format-render-slash.lisp`'s `~/pkg:fn/` resolver, now
   `symbolInPackageDefinition`, so the two cannot drift). Selected by the surface fact
   `callsWithComputedPackageDesignator`; a site the selection cannot see keeps the inline form
   (`ctx.functions::containsKey`, the `%make-array-et` pattern). Why: the guard inline is a
-  computed `find-package` -- the baked table is a quoted constant BUILT AT EACH SITE, ~2.5 KB
-  of JVM code -- plus the package-error, ~3 KB per site in all; the runtime-package path
-  (`usesRuntimePackages`) was ~4 KB per site, and `JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`'s
-  top method (13 sites) crossed 64 KB (67,446 B). With the helper (2026-09-26): 28 B per
-  non-runtime site, 156 B per runtime site. The first site of a small program pays the
-  helper's `string-upcase` (the package-error's keyword) and `intern`: `(find-symbol "CAR"
-  *p*)` alone is 36.8 KB of class (13.4 KB when it answered nil unguarded), the same as a
+  computed `find-package` -- the baked table is a quoted constant BUILT AT EACH SITE,
+  kilobytes of JVM code -- plus the package-error, per site in all; the runtime-package path
+  (`usesRuntimePackages`) cost more still, and `JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`'s
+  many-site top method crossed the 64 KB method limit. With the helper (2026-09-26) a site
+  is one call, on either path. The first site of a small program pays the
+  helper's `string-upcase` (the package-error's keyword) and `intern`, the same as a
   computed `intern` already cost after `.todo/996`. The guard's `find-package` is itself one
   call to `%find-package` now (`.kb/packages.md`, after "Divergence").
 
@@ -596,8 +592,9 @@ symbol-to-function route (the interpreter resolves designators against the live 
   (`Ctx.evalStoreRef != null`) -- every writer forces it, so without it the probe
   could only ever miss -- which keeps a boxing program without `setf`/`fmakunbound`
   at the registry's own size (measured 2026-09-09 on
-  `(defun foo () 1) (print (symbol-function <computed>))` vs its literal twin:
-  +370 B class, +414 B wasm; the forced-`usesEval` shape tried first cost +3.7 KB
+  `(defun foo () 1) (print (symbol-function <computed>))` vs its literal twin: a few
+  hundred bytes either backend, where the forced-`usesEval` shape tried first cost
+  kilobytes of
   class). **Any future lowering that synthesizes a computed `symbol-function` at
   compile-expression time has the same obligation** as the `intern`/`funcall` one
   above: the pre-lowering spelling must count in that scan.
@@ -753,5 +750,5 @@ Tests: `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators`
 and the `macro-function` ci-spec case.
 
 Function-count pins (ci-spec + LispEvaluatorTest + JvmLispCompilerTest x2 +
-WasmLispCompilerIntegrationTest) move with each group: 210 -> 217 (the symbol API), 324 -> 325
-(`fmakunbound`), 391 -> 392 (`symbol-plist`).
+WasmLispCompilerIntegrationTest) move with each group: the symbol API added several, the
+`fmakunbound` and `symbol-plist` groups one each.

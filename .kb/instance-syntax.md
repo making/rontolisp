@@ -94,8 +94,8 @@ knows nothing about `ClosRegistry`, so reading is split in two:
   depends on CL's rule (one arm in each of the three `_equal`s).
 - `equalp` descends slot-wise on top of that: the prelude compares `(%obj-tag a)` with `(%obj-tag b)`
   and hands `(%obj-slots a)`/`(%obj-slots b)` back to `equalp`, so the cons arm recurses. That is WHY
-  `%obj-slots` exists — walking slots through `%class-slot-defs` + runtime-name `slot-value` cost
-  +19 KB of registry dispatch in every `equalp`-using artifact, versus +63 bytes this way.
+  `%obj-slots` exists — walking slots through `%class-slot-defs` + runtime-name `slot-value`
+  would drag registry dispatch into every `equalp`-using artifact; handing the slots back does not.
 
 ## The primitives (`LispNames.OBJ_*`, all in `PackageRegistry.CL_INTERNALS`)
 

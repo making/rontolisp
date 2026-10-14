@@ -63,9 +63,9 @@ the interpreter and the compiled backends disagree. `fboundp` / `macro-function`
 `cl:find-method` resolves (to the bare name) where a non-external name is a `not external`
 package error -- the symbol exists, so a single colon reaches it.
 
-Measured on the ANSI suite (interpreter, 2026-09-13, suite `ca06bd9`): **+187 tests, 0 regressed**
-(13,371 -> 13,558 of 19,482; `symbols` 214 -> 27 failures), the whole of
-`symbols/cl-symbols.lsp`'s `test-if-not-in-cl-package` row and nothing else. The tests that ask
+On the ANSI suite (interpreter, 2026-09-13, suite `ca06bd9`): the whole of
+`symbols/cl-symbols.lsp`'s `test-if-not-in-cl-package` row is fixed, nothing else regressed.
+The tests that ask
 the same question through `(find-symbol x "CL")` -- `functionp.4`, `function.4`,
 `cl-function-symbols.1`, `cl-macro-symbols.1`, the `pprint-dispatch` family -- did not move:
 each is blocked by a missing OPERATOR, which is the distinction this change draws.
@@ -215,10 +215,10 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   standard name: ironclad (`stream`), yason (`null`), iterate (`while`, rontolisp's own `cl`
   extension). A `wit-import :package` is unaffected: it exports the lower-kebab labels
   (`get`), never the reader's `GET`; a hand-written `(:use cl) (:export "READ")` that binds its
-  own `READ` must `:shadow` it, as in CL. Measured on the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
-  / component): byte-identical except the clack / tiny-routes examples (+11-15 B, ironclad's
-  `stream` in the packed package rows), the ningle ones (-14 to -16 B, `stream` and `null`)
-  and `jvm/cffi-sqlite.lisp` (-18 B, `ITERATE:WHILE` -> `WHILE`). Pinned by
+  own `READ` must `:shadow` it, as in CL. On the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
+  / component) the output changes only where a re-export lands in the packed package rows (the
+  clack / tiny-routes / ningle examples, `ironclad`'s `stream` and yason's `null`)
+  and `jvm/cffi-sqlite.lisp` (`ITERATE:WHILE` -> `WHILE`). Pinned by
   `ReExportedStandardNameFixture` (four suites), ci-spec `export-of-an-inherited-standard-name`,
   `PackageResolverTest#{exportOfAStandardNameReExportsTheClSymbol,aDefpackageOverAPackageThatOwnsAStandardNameKeepsItsOwnSymbol,aStandardNameInAPackageWithoutClResolvesThroughItsUseList}`.
 - **The recorded entry must point at the TRUE home, not the used package** (`trueHome`): a used
@@ -313,10 +313,7 @@ names plus every nickname, each also uppercase), read AFTER `resolveProgram`
 `%symbol-in-package` guard and the package-query lowerings included -- calls it
 (`expandRuntimeFindPackage` with `ctx.functions::containsKey`; a site without the helper stays
 inline). Inline, the quoted table was built at EACH site: a quote datum is memoized per identity,
-and every site made a new one. Measured 2026-09-26 (CLI, per additional site): JVM 2,494 -> 42 B,
-WASM ~1,600 -> 15 B; with runtime packages JVM 2,954 -> 55 B, WASM ~2,300 -> 16 B. The mito probe
-(`ql:quickload "mito"` + `table-definition`): JVM 9,670,156 -> 9,600,823 B, component
-7,227,396 -> 7,174,018 B. Pinned by `aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable`
+and every site made a new one. Pinned by `aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable`
 in `JvmLispCompilerTest` and `WasmLispCompilerTest`.
 
 **There is no package introspection, deliberately.** `rontolisp:list-functions`/`list-macros`/
@@ -497,8 +494,7 @@ made table-aware. The model:
   which reach it through `%runtime-package-op` -> `%runtime-member-op` ->
   `%runtime-external-find` -> `%baked-package-find`: each alone compiled to
   `Cannot compile symbol reference: %BAKED-PACKAGES%`. Such a program now pays for
-  the table like any other package operation (measured: `(print (shadow 'foo))`
-  JVM jar 143,343 B vs `(print (make-package "X"))` 141,216 B). A designator naming
+  the table like any other package operation. A designator naming
   no package is a `package-error` `OP: no such package: X` from these three on
   every backend (the interpreter used to signal a plain error). Pinned by
   `LonePackageOperationFixture` (the interpreter / JVM / WASM suites) and the
@@ -519,22 +515,20 @@ made table-aware. The model:
   pushes its rows and keeps the last occurrence of each (`remove-duplicates`' answer) by
   table; `%package-symbols-where` normalizes each distinct row once and keeps the first
   answer by table. They were `remove-duplicates :test #'equal` and a `member` scan of the
-  answer: in the ci-spec corpus (66 packages, 16,245 rows, 2,436 distinct) one walk cost
-  4-25 s on JVM/WASM and `runtime-package-api` was 79-95% of every compiled leg. Pinned by
-  `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` (32,000
-  rows: do-symbols 3.9 s -> 0.1 s, apropos-list 18 s -> 0.7 s) and its WASM twin. Each
-  row's WASM `intern` was a linear scan of the symbol table (4.6 s per walk) until
-  `_intern` became a hash table (`.kb/symbol-runtime-api.md`). The ~0.7 ms per
-  `%package-spelling-normalize` left after that was NOT the package tables (2026-10-05,
+  answer, which made a package walk quadratic in the corpus and dominated the compiled legs.
+  Pinned by
+  `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` and its WASM twin. Each
+  row's WASM `intern` was a linear scan of the symbol table until
+  `_intern` became a hash table (`.kb/symbol-runtime-api.md`). The normalize cost left
+  after that was NOT the package tables (2026-10-05,
   premise of `.todo/d11` overturned): the corpus carries the eval runtime, and every
   `%mv-spill` write inside the walk -- most function returns -- was mirrored into eval's
-  global alist (~450 entries), so every call cost the program's global count
-  (`.kb/eval-runtime.md`, "Global mirroring"; the channels are no longer mirrored). After
-  it, on the whole ci-spec program (41,955 rows, 2,459 distinct): a walk ~0.2 s on WASM,
-  0.1-0.3 s JVM once warm (its first walk runs cold, ~1.6 s), most of it splitting and
-  interning the rows (linear in the universe) and ~24 us per distinct row normalizing
-  it -- ~45 us before `%baked-import-redirect` became one `assoc` (it walked all ~90
-  table rows converting the home with `string` at each).
+  global alist, so every call cost the program's global count
+  (`.kb/eval-runtime.md`, "Global mirroring"; the channels are no longer mirrored). What
+  remains of a walk is splitting and
+  interning the rows (linear in the universe) and one `assoc` per distinct row in
+  `%baked-import-redirect` (it used to walk the whole table converting the home with
+  `string` at each).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends for a name the registry does
@@ -570,19 +564,17 @@ A 2-argument `find-symbol` / `intern` into a read/compile-time package used to B
   a pre-seeded shim's own row (uiop alone re-exports hundreds of names): a computed lookup
   in uiop / bordeaux-threads / closer-common-lisp keeps the shim spelling. The package-walk
   normalizer's own site is exempt (it looks a symbol up in its own home). The status half
-  takes a keyword designator as is (nickname keywords are in the table) -- a second
-  `find-package` there cost a program that consumes multiple values ~1.7 us per call.
+  takes a keyword designator as is (nickname keywords are in the table), sparing a second
+  `find-package` per call in a program that consumes multiple values.
 - **The standard names travel as their own layer, not as row entries** -- next section.
 
 Cost (2026-10-05). A program with no served row is byte-identical (the `examples.yaml`
 sweep: every example and `size-report` program on JVM / P1 / component, except the ones
-below). Served programs pay the table plus ~3 KB of helpers: a one-site toy +6.0 KB JVM /
-+6.8 KB WASM; clack examples +9.8 KB (~1%), tiny-routes +15.5 KB, ningle +25.6 KB (0.7%),
-`ql:quickload "sxql"` +16.6 KB -- the table is most of it (ningle: 16 KB, 3.6 KB of it
-alexandria's exports). Time per call, 1M calls, min of 4: a hit costs what the build did;
-a computed lookup into a package WITHOUT a row, in a program that has rows, +0.3 us JVM
-(0.85 -> 1.16) / +8% WASM; a literal row package with a computed name 0.3 -> 0.4-0.5 us
-JVM, 0.8 -> 1.4-1.7 us WASM. `apropos-list` / `do-symbols` walks unchanged. Pinned by
+below). Served programs pay the table plus the helper defuns, the table the most of it.
+Per call, a hit costs what the build did;
+a computed lookup into a package WITHOUT a row, in a program that has rows, pays an extra
+probe, as does a literal row package with a computed name. `apropos-list` / `do-symbols`
+walks unchanged. Pinned by
 `InheritedFindSymbolFixture` (four suites), ci-spec `find-symbol-of-an-inherited-name`,
 `LispMacroExpanderTest#{injectBakedAccessLeavesAProgramNoRowServesUnchanged,injectBakedAccessServesAComputedLookupInAPackageThatUsesAnother,thePackageWalkNormalizerAloneCarriesNoRows}`.
 
@@ -598,18 +590,16 @@ operator name, which died with `The function MY-PKG:LIST is undefined`. One tabl
 
 - **`%standard-name-p`** (`LispMacroExpander.standardNameDefinition`, a prelude entry and
   injected by `injectBakedAccess` when the prelude did not splice it): the names `cl`
-  exports (`PackageRegistry.standardNames`: `CL_EXTERNALS`, 979 with `while`), sorted and front-coded into one ASCII string (one mark
+  exports (`PackageRegistry.standardNames`: `CL_EXTERNALS`, `while` included), sorted and front-coded into one ASCII string (one mark
   character `(code-char (+ 96 K))` for the K characters shared with the name before, then
-  the rest: 7,427 characters against 13.7 K length-prefixed), decoded into an `equal`
+  the rest), decoded into an `equal`
   hash table on the first call. The global holds the string so it is built once: a
   literal in the body was a fresh string per call on WASM and its index cursor walked
   from the start every time (`.kb/string-index-cost.md`).
 - **A walk instead of a table was measured and rejected (2026-10-05)**: a front-coded
-  walk with a first-character index allocates nothing, but reads ~500 characters per
-  lookup in the big blocks (M, S), ~30 ns each on WASM: ~15 us a lookup, against
-  ~1.1-1.6 us for the table. The table's decode costs once ~5 ms on WASM and ~25 ms on a
-  cold JVM (interpreted bytecode); the walk's code was no smaller either (JVM 1,398 B of
-  bytecode against ~410 B). Its one advantage, needing no hash-table or generic sequence
+  walk with a first-character index allocates nothing, but reads many characters per
+  lookup in the big blocks, where the table's decode is paid once; the walk's code was no
+  smaller either. Its one advantage, needing no hash-table or generic sequence
   runtime, shows only in a toy that has neither (below).
 - **Gate**: `injectBakedAccess`'s site scan (`AccessSites`) sets the standard mode for a
   site whose name can be a standard one (computed, or a constant spelling one -- a string,
@@ -643,32 +633,25 @@ operator name, which died with `The function MY-PKG:LIST is undefined`. One tabl
   (`accessibleEntries`, the `%baked-packages%` universes) missed them: `do-external-symbols`
   over `cl` listed 951 names, `(find-all-symbols "CADDR")` was NIL. Now 979 (978 plus `while`) on every backend,
   checked against SBCL (`CarCdrUniverseFixture`).
-  **Set against enumeration, measured**: the 28 names are packed into the `accessible` row
-  of every package that uses `cl` and into the `externals` row of `cl` itself (+1,840 B on
-  the JVM class, +1,650 B P1, +1,680 B component over the ~640 KB / 556 KB / 563 KB of a
-  program that walks `cl-user`: 0.3%); a program with no package walk, and one with only
+  **Set against enumeration**: the 28 names are packed into the `accessible` row
+  of every package that uses `cl` and into the `externals` row of `cl` itself -- a sliver
+  on top of a program that walks `cl-user`; a program with no package walk, and one with only
   `find-symbol` / `intern`, is byte-identical. The alternative -- tables unchanged, the 28
-  names generated at each walk -- costs ~1.2 KB class / ~0.7 KB WASM for ONE site (a
+  names generated at each walk -- costs more per site (a
   generator over `A`/`D` merged into one `do-symbols` walk), and every site that reads the
   universe (`%do-symbols-list`, `find-all-symbols`, `apropos`, the iterator, the externals
   row, the interpreter) would need it plus the "does this package reach `cl`" test, so the
   saving shrinks to nothing as sites join and the registry would keep two answers. Walk
-  time is unchanged within noise (20 walks of `do-symbols` + `do-external-symbols`: JVM
-  0.43 s, P1 0.15-0.28 s, component 0.16-0.27 s, both jars).
+  time is unchanged.
 
-Cost (2026-10-05, JVM / P1 / component). In an example that already does string work
-(`console/word-frequency.lisp` plus one lookup) +9.2 / +8.8 / +8.8 KB, the table ~7.4 KB
-of it; `console/contact-book.lisp` plus one lookup +12.6 / +14.9 / +14.8 KB. A toy that has
+Cost (2026-10-05, JVM / P1 / component). In an example that already does string work, one
+lookup adds the table and its surrounding helpers; a toy that has
 no hash table and no `concatenate` pays their runtime too: `(find-symbol (string-upcase
-"car") :p)` alone 10.2 -> 40.9 / 6.7 -> 26.1 / 7.9 -> 27.3 KB (23 -> 110 JVM methods),
-`symbol-package` of a read symbol +11.5 / +15.5 / +15.5 KB. The `examples.yaml` +
+"car") :p)` alone, or `symbol-package` of a read symbol, is what pulls the runtime in. The
+`examples.yaml` +
 `size-report` sweep: byte-identical except the clack / tiny-routes / ningle examples
-(+10.6-12.3 KB, ~1% / 0.3%; their `lack` / `uiop` helpers look computed names up in
-computed packages) and `jvm/cffi-sqlite.lisp` (-8 B, the `%symbol-home` name). Time per
-call, 1M calls, min of 3 (JVM / P1): a computed name in a literal package, standard 0.27
--> 0.36 / 1.09 -> 1.11 us, other 0.32 -> 0.44 / 1.21 -> 1.62 us; a computed designator,
-standard 1.08 -> 0.74 / 3.28 -> 2.60 us, other 1.12 -> 1.16 / 3.40 -> 4.06 us;
-`symbol-package` 0.07 -> 0.16 / 0.76 -> 1.34 us. Pinned by
+(their `lack` / `uiop` helpers look computed names up in
+computed packages) and `jvm/cffi-sqlite.lisp` (the `%symbol-home` name). Pinned by
 `StandardNameLookupFixture` (four suites), ci-spec `find-symbol-of-a-computed-standard-name`,
 `LispMacroExpanderTest#{theStandardNameTableAnswersExactlyTheNamesClExports,injectBakedAccessCarriesTheStandardNamesForAComputedNameInAPackageThatUsesCl,aComputedDesignatorWithAComputedNameCarriesTheClUsers,aOneArgumentLookupWhoseStatusIsReadCarriesTheStandardNames,injectBakedAccessLeavesAProgramNoRowServesUnchanged}`.
 
@@ -767,29 +750,26 @@ latent WASM gate gap -- the baked table plus a symbol builder in one program tri
 `fdlibm trig reached without its tables placed` -- fixed in the pre-scan
 (`.kb/transcendentals.md`).
 
-**Measured (2026-09-20, interpreter, suite `ca06bd9`, `ansi-test/measure.sh packages`):
-275 -> 410 of 499 (55.1% -> 82.2%), errors 51 -> 33, fail 173 -> 56, lost forms 12 -> 12.
-By test NAME: 135 fixed, 0 regressed** -- `use-package` 23, `unintern` 18,
-`with-package-iterator` 16, `intern` 16, `shadowing-import` 13, `find-symbol` 13,
-`shadow` 12, `find-all-symbols` 7 (the `t`/`nil` singletons), `defpackage` 6 (the
-package keyword value), `import` 3, `export` 2, `unexport` 2, `do-symbols` 2,
-`do-external-symbols` 1, `do-all-symbols` 1. What is left (89) and why, none of it
-this table: 31 package IDENTITY (`package-name` 11 / `delete-package` 11 /
-`rename-package` 9 -- a deleted package object answering nil, `eq` across a rename;
-unmodellable while a package IS its keyword); 15 `defpackage` clause validation and
-catchable clause errors (`.todo/923`, closed: see below); 12 `import` (10 need the driver's skipped
+**On the interpreter's ANSI suite (`ansi-test/measure.sh packages`, suite `ca06bd9`, 2026-09-20)
+the member table fixes the package-operator rows -- `use-package`, `unintern`,
+`with-package-iterator`, `intern`, `shadowing-import`, `find-symbol`, `shadow`,
+`find-all-symbols` (the `t`/`nil` singletons), `defpackage` (the
+package keyword value), `import`, `export`, `unexport`, `do-symbols`,
+`do-external-symbols`, `do-all-symbols` -- and regresses none. What is left and why, none of it
+this table: package IDENTITY (`package-name` / `delete-package` /
+`rename-package` -- a deleted package object answering nil, `eq` across a rename;
+unmodellable while a package IS its keyword); `defpackage` clause validation and
+catchable clause errors (`.todo/923`, closed: see below); `import` (most need the driver's skipped
 `in-package` -- the tests compare against `cl-test`'s home -- plus `import.5`'s
-uninterned-symbol home and `import.error.4`'s restarts); 7 `def-macro-test` rows
-(`macro-function` arity, `.todo/922`); 6 `in-package` as a function; 6 `%READ-EVAL`
-/ `*universe*` driver artefacts; 4 restarts (`make-package.error`); 4 `go` / special
+uninterned-symbol home and `import.error.4`'s restarts); `def-macro-test` rows
+(`macro-function` arity, `.todo/922`); `in-package` as a function; `%READ-EVAL`
+/ `*universe*` driver artefacts; restarts (`make-package.error`); `go` / special
 declaration scope inside `do-symbols` bodies; `find-symbol.4` (no keyword table),
 `find-symbol.11` (read-time recording, above), `find-all-symbols.error.2` (the optional
 package argument is a documented extension).
 
-**Clause validation measured (2026-09-22, interpreter, suite `ca06bd9`, `measure.sh packages`):
-416 -> 430 of 499 (83.4% -> 86.2%), fail 50 -> 38, errors 33 -> 31, lost forms 12 -> 12. By
-test NAME: 14 fixed (`defpackage.13`-`.26`), 0 regressed.** (The 416 baseline is develop's on
-that day; 410 above is the count at `.todo/917`'s close.) Premise correction: the item's plan put
+**Clause validation (2026-09-22, interpreter, suite `ca06bd9`): the `defpackage.13`-`.26` rows
+are fixed, nothing regressed.** Premise correction: the item's plan put
 the conversion in the nested-`defpackage` seam only, but `signals-error` and
 `handle-non-abort-restart` run the form through `(eval 'FORM)`, which reaches the TOP-LEVEL
 directive path -- the `eval` native had to route a `defpackage` datum to the same seam.

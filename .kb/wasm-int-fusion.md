@@ -61,11 +61,11 @@ its index is part of the tree (below). What is this backend's own:
   i31, as when the index arrived boxed. The fallback computes it generically into a temp (an
   expression leaf's own slot otherwise), then checks in the interpreter's order: the subscript an
   integer (`_idx_chk`, EH mode), the array rank 1 (`_arr_check_rank`), then the bound and the
-  read. The fast path takes only a packed integer vector, rank 1 by construction. Measured 2026-10-07 (wasmtime 49, the JVM file's
-  kernels, best of 15 rounds, 7 processes): decode 696-792 -> 562-699 ms, fill 369-419 ->
-  279-373 ms; `flexi-streams:octets-to-string` 93-99 -> 82-89 ms and `md5sum-sequence` 35-37 ->
-  33-35 ms; the kernel module 24,106 -> 21,618 B, one loading flexi-streams and md5 181,345 ->
-  177,260 B. A `dotimes`
+  read. The fast path takes only a packed integer vector, rank 1 by construction. Measured
+  2026-10-07 (wasmtime 49, the JVM file's kernels): the fused kernels run faster than the
+  scalar ones on decode and fill, and shade the JVM's `flexi-streams:octets-to-string` and
+  `md5sum-sequence`; the kernel module shrinks, as does one that loads flexi-streams and
+  md5. A `dotimes`
   induction variable over a LITERAL bound is a COUNTED `RawLocal` needing no snapshot, guard or
   `_int_new` -- registered at every optimize level, unlike everything else here
   (`.kb/wasm-counted-loops.md`). Each leaf is unboxed ONCE into an i64 scratch local; those
@@ -131,13 +131,13 @@ its index is part of the tree (below). What is this backend's own:
 `_int_new` picks the narrowest tier. Without it an unfused `(+ a b)` over plain boxed
 operands (every recursive function's `(+ (f ...) (f ...))` tail, a `+` of two parameters)
 paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
-- Measured 2026-09-19 (x86-64, wasmtime 47, 20 x fib 30 = 32M calls, alternating runs):
-  bare `(if (< n 2) n (+ (fib ...) (fib ...)))` 683-852 -> 432-548 ms, now level with the
-  let-bound tail (.kb/multiple-values.md "Cost", 419-485 ms) -- the 40% gap between the
+- Measured 2026-09-19 (x86-64, wasmtime 47, repeated `fib` runs, alternating runs):
+  with the head, the bare `(if (< n 2) n (+ (fib ...) (fib ...)))` tail runs as fast as the
+  let-bound tail (.kb/multiple-values.md "Cost") -- the gap between the
   two shapes was this dispatch, not the `if`. A head in `_big_add` alone (hand-patched
-  module) reached only 588-594 ms: the `_rat_add` hop is the other half. `bench-report`
-  `fib` (fib 34) 184-226 -> 134-169 ms; the other nine bench programs within noise.
-- Size: +38..+112 B per module at `default` (fib 5,050 -> 5,160; zlib 106,624 -> 106,726);
+  module) does not close it: the `_rat_add` hop is the other half. The other bench
+  programs are within noise.
+- Size: a few bytes to a hundred-odd per module at `default`;
   `--optimize=size` and a program with no generic `+ - *` (`hello_world`) byte-identical.
   The size level keeps the dispatch-only body so the type-test fold can still reduce
   `_rat_add` to a pure forwarder of `_big_add` in an integer-only module

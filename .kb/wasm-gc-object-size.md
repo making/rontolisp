@@ -27,21 +27,21 @@ The modules and the two drivers are kept in
 
 ## The numbers (2026-09-17, linux-x86-64)
 
-wasmtime 47.0.3 (`5554cc1a6`, copying collector): the largest `n` that fits a 64 MiB
-reservation, and what it says per object. 49.0.0 (2026-09-24): every fits/traps pair identical.
+wasmtime 47.0.3 (`5554cc1a6`, copying collector), the largest `n` that fits a 64 MiB
+reservation, and what it says per object:
 
-| shape | fields | fits | traps | bytes/object |
-| --- | --- | --- | --- | --- |
-| cell `{eqref}` | 4 | 1,040,000 | 1,050,000 | 32 |
-| cell `{eqref, i32}` | 8 | 1,040,000 | 1,050,000 | 32 |
-| cons `{eqref, eqref}` | 8 | 1,040,000 | 1,050,000 | 32 |
-| cons `{eqref, eqref, i32}` | 12 | 1,040,000 | 1,050,000 | 32 |
-| `{eqref, eqref, i32, i32}` | 16 | 1,040,000 | 1,050,000 | 32 |
-| `{eqref, eqref, i32 x4}` | 24 | 690,000 | 700,000 | 48 |
+| shape | fields | bytes/object |
+| --- | --- | --- |
+| cell `{eqref}` | 4 | 32 |
+| cell `{eqref, i32}` | 8 | 32 |
+| cons `{eqref, eqref}` | 8 | 32 |
+| cons `{eqref, eqref, i32}` | 12 | 32 |
+| `{eqref, eqref, i32, i32}` | 16 | 32 |
+| `{eqref, eqref, i32 x4}` | 24 | 48 |
 
 So a wasmtime object is a 16-byte header plus its fields, ROUNDED UP TO 16: a 4-byte
-reference is 4 bytes, and every shape up to 16 bytes of fields is one 32-byte object. The
-128 MiB reservation confirms the reading (2,080,000 two-field conses fit, 2,100,000 trap).
+reference is 4 bytes, and every shape up to 16 bytes of fields is one 32-byte object. A
+doubled reservation confirms the reading.
 **The identity-hash slot costs a cons, a cell and an instance nothing on wasmtime.**
 
 V8 13 (node 24.19, no pointer compression, so a reference is 8 bytes): `used_heap_size`

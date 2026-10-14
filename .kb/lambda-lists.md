@@ -84,8 +84,8 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   `(+ req (length rest))`; on the JVM that was NOT the printer (`_lispToString` is in every
   class already) but `prin1-to-string`'s mutable-result wrap (`_toMutStr`, `_strToCharVec`,
   `_arrayToString`, `_rmGet`, ...), the generic `_length` with the code-point helpers
-  (`_cpidx`, `_scount`, `_cpsimple*`/`_cpwide*`) and a `_fx` adder -- +4.7 KB on a one-defun
-  program. `nthcdr` for two optionals brought `_nthcdr` in too, hence the nested `cdr`s.
+  (`_cpidx`, `_scount`, `_cpsimple*`/`_cpwide*`) and a `_fx` adder, none of it the printer the
+  count needs. `nthcdr` for two optionals brought `_nthcdr` in too, hence the nested `cdr`s.
 - **INLINE, not a helper defun like `%ll-check-keys`.** The first cut prepended a
   `%ll-too-many-args` defun on a program that spells `&optional`; seven JVM tests went red
   with `the function %LL-TOO-MANY-ARGS is undefined`, because `BuiltinFunctionWrappers`
@@ -116,32 +116,12 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   `DIGIT-CHAR`, `GET`, `GENTEMP`, `ENCODE/DECODE-UNIVERSAL-TIME`, ...), 0 regressed, lost
   forms 424 -> 424. The full `./mvnw test` corpus (the vendored quicklisp libraries on every
   backend) had no call that relied on the dropped argument.
-- **Sizes** (bytes, JVM `.class` / Preview 1 / component, default `-o`):
-
-  | program | before | after |
-  |---|---|---|
-  | `(print (+ 1 2))`, hello_world, pi_approx, a `handler-case`, a `mapcar` | | identical |
-  | `(defun f (a &optional (b 2)) ...) (print (f 1))` | 5,177 / 1,193 / 2,357 | 12,414 / 1,193 / 2,357 |
-  | two `&optional` defuns (one with 2 optionals) | 5,458 / 1,218 / 2,383 | 13,029 / 1,249 / 2,414 |
-  | `(a &aux (b 2))` | 4,924 / 1,535 / 2,699 | 4,901 / 1,535 / 2,699 |
-  | `merge-pathnames` (prelude) | 31,310 / 19,388 / 20,634 | 31,979 / 19,502 / 20,748 |
-  | zlib | 159,290 / 106,621 / 110,637 | 159,639 / 106,855 / 110,872 |
-
-  The JVM's +7 KB on a tiny `&optional` program was the Lisp-spelled message (above), not the
-  count's printer. With `%arity-surplus-message` (2026-09-22; own programs, so the numbers
-  differ from the table above; pre-921 = `10ff1ae31~`):
-
-  | program | pre-921 | 921 | now |
-  |---|---|---|---|
-  | hello_world, pi_approx, `(print (+ 1 2))`, a `handler-case`, a `mapcar` | | identical | identical |
-  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 7,708 / 981 / 2,126 | 12,394 / 981 / 2,126 | 8,112 / 981 / 2,126 |
-  | the same without `print` | 7,664 / 194 / 402 | 12,350 / 194 / 402 | 8,068 / 194 / 402 |
-  | two `&optional` defuns (one with 2 optionals) | 8,043 / 1,589 / 2,754 | 13,008 / 1,661 / 2,826 | 8,552 / 1,635 / 2,800 |
-  | `merge-pathnames` | 31,347 / 19,389 / 20,635 | 32,016 / 19,503 / 20,749 | 32,039 / 19,477 / 20,723 |
-  | zlib | 159,304 / 106,621 / 110,637 | 159,653 / 106,855 / 110,872 | 159,651 / 106,810 / 110,827 |
-
-  The remaining ~+400 B on the JVM is `_aritySurplus` (~250 B) plus ~50 B of check and
-  `%error` throw per function.
+- **Sizes** (JVM `.class` / Preview 1 / component, default `-o`): programs without optionals
+  are identical. An `&optional` defun's JVM class grows -- at first by the Lisp-spelled message
+  (above), not the count's printer; `%arity-surplus-message` (2026-09-22, shared with the
+  destructuring check) cut it to the `_aritySurplus` helper plus a check and
+  `%error` throw per function. The Preview and component legs shrink where calls pass
+  optionals; `merge-pathnames` and zlib pay the helper.
 
 ## A surplus element in a destructuring pattern (2026-09-22)
 **Invariant: `destructuring-bind` -- and therefore every `defmacro` lambda list beyond
@@ -161,21 +141,17 @@ signalled too since 2026-09-23 (next section).
   (keyword-free patterns), by `destructuringBindings` for a level whose keyword sits only in a
   sub-pattern, and for the empty pattern. **Not in `destructurePairs`**: `loop`'s destructuring
   shares it and discards a surplus value by definition (CLHS 6.1.1.7).
-- **Blast radius, measured before landing**: the whole ANSI suite (interpreter, suite
-  `ca06bd9`, test NAMES diffed across every chapter) moved 0 tests either way -- its
+- **Blast radius, checked before landing**: the whole ANSI suite (interpreter, suite
+  `ca06bd9`, test NAMES diffed across every chapter) moved no test either way -- its
   `DESTRUCTURING-BIND.ERROR.*` cases are commented out upstream -- apart from the random-input
-  `REMOVE-IF-RANDOM`; 19,513 test names before and after. The full `./mvnw test` corpus (every
+  `REMOVE-IF-RANDOM`. The full `./mvnw test` corpus (every
   spliced library's `defmacro`/`destructuring-bind` on every backend) had no caller relying on a
   dropped element.
-- **Sizes** (bytes, JVM `.class` / Preview 1 / component, default `-o`):
-
-  | program | before | after |
-  |---|---|---|
-  | hello_world, zlib, a `defmacro` with `&optional` (expanded at compile time) | | identical |
-  | `(defun f (l) (destructuring-bind (a b) l (+ a b))) (print (f '(1 2)))` | 7,671 / 2,275 / 3,422 | 8,100 / 2,320 / 3,467 |
-  | the same with `(a &optional (b 2))` | 7,862 / 1,379 / 2,526 | 8,282 / 1,378 / 2,525 |
-
-   The JVM's ~+420 B is `_aritySurplus` (~250 B, shared with every `&optional` defun) plus the check.
+- **Sizes** (JVM `.class` / Preview 1 / component, default `-o`): hello_world, zlib and a
+  `defmacro` with `&optional` expanded at compile time are identical; a `destructuring-bind`
+  over a literal list adds the check -- on the JVM the `_aritySurplus` helper shared with every
+  `&optional` defun plus the check itself, on the Preview and component legs the check's few
+  bytes.
 
 ## A missing element in a destructuring pattern (2026-09-23)
 **Invariant: a required element the destructured list runs out before signals the
@@ -256,12 +232,11 @@ inline `((lambda ...) ...)`.** The interpreter's answers are unchanged.
 - **The marker.** JVM: `_unsupp()` -> the `_unsupplied` field, created on first read by
   the `synchronized` `_unsuppInit()` (`JvmUnsupplied`); `_optArg(cell)` reads an optional
   out of an argument list (`car`, or the marker at the end) branch-free -- inline, each
-  was two stack-map frames per spread case, +3.6 KB on an eval-carrying class. A
+  two stack-map frames per spread case. A
   `<clinit>` field was the first cut: it pinned the field in `(print (+ 1 2))`, whose
   only optionals were shaken out. WASM: the raw-local sentinel global (a `TYPE_CELL` built
   by a constant initializer, `WasmPhysicalArgs`); `%supplied-p` is one `ref.eq`
-  (`WasmConditionCompiler`), and as a value reads the cached `t` global in place (a
-  `_t_sym` call per supplied optional cost `#'<` a fifth of its call).
+  (`WasmConditionCompiler`), and as a value reads the cached `t` global in place.
 - **A supplied-p only tested is the test itself** (`testSuppliedPInPlace`): when every
   occurrence of `sp` after its binding is `(if sp ...)`, the binding goes and each test
   becomes `(%supplied-p __ll_opt_N)`. Any other occurrence -- a value, an assignment, an
@@ -279,27 +254,17 @@ inline `((lambda ...) ...)`.** The interpreter's answers are unchanged.
   `Environment` function for it.
 - `wasm-export` of a variadic defun is refused like `jvm-export`'s (no host signature);
   WIT exports already refuse `&` params.
-- **Measured** (2026-09-26, wasmtime 49, ABBA medians of 5, x86-64): sort 200,000 fixnums
-  x10 through a variable predicate `(a b)` 1.35 -> 1.31 s, `(a &rest r)` 3.78 -> 3.77,
-  `(a b &rest r)` 1.31 -> 1.37, `(a &optional b)` 3.99 -> 1.49, `#'<` 1.39 -> 1.37;
-  `(reduce #'+ data)` over 1,000,000 fixnums x10 14.15 -> 0.24, `#'logior` 0.24 -> 0.24;
-  `(f s 1)` on `(a &optional (b 1))` 10,000,000 times over a 1,000,000-cons live heap
-  4.44 -> 0.22, `(f s)` 0.20 -> 0.22. The JVM showed no difference either side. (The
-  error-handling table's 21.7 s for `(a &rest r)` came from a different program; the
+- **Speed** (2026-09-26, wasmtime 49, ABBA medians of 5, x86-64): on the component, calls
+  through a variable predicate or `apply`/`reduce` are unchanged to far faster -- the
+  `&optional` and rest-list shapes most of all, an optional-taking call over a large live heap
+  with them; the JVM showed no difference either side. (The error-handling table's figure for
+  `(a &rest r)` came from a different program; the
   shape of the loss is the same: a rest list per call, costlier the larger the live heap.)
-- **Sizes** (JVM `.class` / Preview 1 / component):
+- **Sizes** (JVM `.class` / Preview 1 / component): `(print (+ 1 2))`, hello_world and
+  pi_approx identical; the Preview and component legs shrink wherever optionals or rest lists
+  are passed, `reduce` most of all; the eval-carrying program and zlib move a hair.
 
-  | program | before | after |
-  |---|---|---|
-  | `(print (+ 1 2))`, hello_world, pi_approx | | identical |
-  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 10,293 / 981 / 2,126 | 10,184 / 981 / 2,126 |
-  | two optional defuns, optionals passed | 10,833 / 4,556 / 5,724 | 10,726 / 3,553 / 4,721 |
-  | `(print (sort (list 3 1 2) #'<))` | 33,256 / 23,158 / 24,361 | 30,590 / 19,987 / 21,190 |
-  | `(print (reduce #'+ '(1 2 3)))` | 24,634 / 8,812 / 9,945 | 15,577 / 4,589 / 5,731 |
-  | `(print (eval '(+ 1 2)))` | 355,090 / 262,266 / 265,032 | 357,283 / 262,201 / 264,967 |
-  | zlib | 188,659 / 127,495 / 131,568 | 186,480 / 126,194 / 130,267 |
-
-  The one-default call measured 1,330 / 2,477 at first: `(if (ref.eq p marker) 2 p)` was
+  The one-default call was slow at first: `(if (ref.eq p marker) 2 p)` was
   opaque to `WasmRefTypeFolder`, so `b`'s set kept `TYPE_CELL` and `+` its non-fixnum
   arms. The fold now treats the marker global as a singleton object and decides the
   `ref.eq` (`.kb/wasm-ref-type-fold.md`, "Singleton objects"; 2026-09-27), pinned by

@@ -407,7 +407,7 @@ spelled any other way or behind any other conditional.
 - **The module does NOT shrink**: an ASDF-spliced tree is never pruned
   (`.kb/library-defun-pruning.md`) and the fold bakes each `with-open-file` per site, so laziness
   moves work in time, never out of the artifact. Retiring the letter table IS the exception:
-  -19,926 bytes of wasm, -15,671 of JVM class.
+  it is the one piece the artifact sheds.
 - Pinned by `Uax15E2eTest` (all four; leads with the two lines pinning the deferral) and
   `Uax15TablesTest` (every loud guard included).
 
@@ -487,8 +487,7 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - **Native PBKDF2 on the INTERPRETER only** (`eval/IroncladNative` + `eval/Sha2Kernels`):
     `loadSystem` rebinds `IRONCLAD::PBKDF2-DERIVE-KEY` to a Java kernel when the DEFINING system
     finishes (the `LinalgSimd` interception shape, keyed on the definition). Always on and **not
-    a `.kb` divergence** — PBKDF2 is a spec-defined function of its arguments (interpreted
-    17,091 ms vs 9 ms). `Sha2Kernels` is hand-written rather than `MessageDigest` because it is
+    a `.kb` divergence** — PBKDF2 is a spec-defined function of its arguments. `Sha2Kernels` is hand-written rather than `MessageDigest` because it is
     compiled into the native binary AND the browser Web Image. Pinned by `IroncladNativeTest`.
 - **cl-postgres** — `ClPostgresE2eTest`, which runs by DEFAULT (Docker is its only gate).
   `open-database` + `exec-query` complete a real round trip against PostgreSQL 17 under `trust`,
@@ -498,8 +497,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   `client_encoding SQL_ASCII` and desyncs the connection on a non-ASCII parameter. Harness: a
   Testcontainers `postgres:17-alpine` with ONE ROLE PER METHOD so a broken rung cannot fall back.
   **The component leg connects to the container's IP ADDRESS**, because `tcp-connect` takes only
-  IPv4 literals on WASM. Recorded costs (regression = a change to this file): scram connect
-  first/second interpreter 155/68 ms, JVM 214/100, component 140/137.
+  IPv4 literals on WASM. Scram connect cost is the recorded baseline in the e2e (regression
+  = a change to this file).
 - **alexandria 1.0.1** — `AlexandriaE2eTest` (all four); vendored UNMODIFIED. **The exercise IS
   `examples/asdf/alexandria-demo.lisp` verbatim — keep the two in sync.** ci-spec
   `last-with-a-count` / `every-some-over-many-sequences` / `coerce-to-a-computed-result-type` /
@@ -838,8 +837,8 @@ set, and `find-system` really walks `*central-registry*` and runs `parse-defsyst
 decided against it: (1) it is a PORT — upstream refuses on an unknown implementation, `detect-os`
 refuses without `:unix`/`:windows`/`:genera`/`:os-macosx`, and 34 `not-implemented-error` sites
 sit behind 230 implementation reader conditionals (though filling exactly ONE hole, `getcwd`,
-made `probe-file*`/`ensure-pathname`/`sysdef-central-registry-search` work); (2) startup — 2.85 s
-wall / 16.7 s CPU against a 0.40 s floor for `(print 1)`, ~7x the whole current startup, which
+made `probe-file*`/`ensure-pathname`/`sysdef-central-registry-search` work); (2) startup — its
+load costs many times the whole current startup, which
 only "do not load it unless the program needs it" survives; (3) the cyclic-key
 `StackOverflowError` that was OURS has since landed (`.kb/hash-tables.md`), so reasons 1 and 2
 still decide it. Still no `eq` table. Also: the compile paths resolve systems at COMPILE time and
@@ -857,7 +856,7 @@ port guard and `(pushnew :unix *features*)` and make `not-implemented-error` a n
 missing `cl` names as per-package defuns.
 
 ## The `.asd`-as-data boundary is not what stops portableaserve
-**Measured against `portableaserve-20190813-git`: widening the boundary into an evaluator buys
+**Against the `portableaserve-20190813-git` spike: widening the boundary into an evaluator buys
 nothing.** The first refusal is `acl-compat.asd`'s top-level `(defun lisp-system-shortname ...)`
 called from a `(defmethod component-pathname ...)` routing four source files into
 per-implementation subdirectories. Behind that door: dependencies that do not exist here (`puri`,

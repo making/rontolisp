@@ -34,7 +34,7 @@ are awake, whether the clocks are up, and whether anyone waits for the result.
 3. **What the probe holds may be RESIDENT when the workload's is not** -- a probe's operands
    are built once, a workload's intermediates are new every iteration.
 4. **What the probe leaves behind may be the wrong CLOCKS**: a device that idles through a
-   host-side gap drops them. Metal only; CUDA measured flat to within 1% out to a 32 ms gap.
+   host-side gap drops them. Metal only; CUDA's hold.
 
 **Not every threaded number is trap 1, and ratios do not compare across items** -- check the
 denominator before citing a ratio as evidence. **"We did not hit any of these" must be

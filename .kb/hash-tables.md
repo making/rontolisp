@@ -154,13 +154,12 @@ first (observable by `eq`).
   first stored in a seventh slot, which `maphash` reads (`WasmHashTableCompiler`'s walk of
   `_ht_entries`: slot 6 of a seven-slot entry in an `equalp` module, else slot 4).
 
-Measured 2026-10-05 (linux-x86-64): every module of a program with no `equalp` table is
-byte-identical on P1 and the component (bench-report, size-report and 30 examples/probes); a JVM
-class using any hash table is 5 B smaller (the dropped key write). In an `equalp` program WASM pays
-19 B per `gethash` site and 43 B per `puthash` site (a 6-store probe: 20,113 -> 20,359 B), the JVM
-nothing per site (helpers are shared) and +70-90 B per class. 200,000 string keys x 3 rounds of
-store, lookup and `maphash`, medians of 7: no difference above noise on any backend
-(P1 1,665 -> 1,720 ms, component 1,671 -> 1,749 ms, JVM 677 -> 586 ms). Pinned by
+Checked 2026-10-05 (linux-x86-64): every module of a program with no `equalp` table is
+byte-identical on P1 and the component (bench-report, size-report and 30 examples/probes), the
+JVM class shrinks by the dropped key write. In an `equalp` program WASM pays per `gethash`/`puthash`
+site, the JVM
+nothing per site (helpers are shared) and a little per class. Store, lookup and `maphash`
+speed is unchanged within noise on every backend. Pinned by
 `testsupport/HashTableKeyPrograms` (SBCL's output) through
 `LispEvaluatorTest.aHashTableHandsBackTheKeyAsFirstStored` and its JVM/P1/component twins, and ci-spec
 `hash-table-key-as-first-stored`.
@@ -170,7 +169,7 @@ store, lookup and `maphash`, medians of 7: no difference above noise on any back
 key hashable. **Work: `LispEquality.HASH_WORK_CAP` (4096) NODE VISITS across the whole traversal** —
 a depth cap bounds HEIGHT, not SIZE, and paths through a shared graph are exponential in height (an
 `equal` table keyed by a DAG of n shared conses cost 2^n; one `gethash` two links down a
-parent-linked chain did not return in 55 s). 4096 is 32x the at-most `2 * 64` nodes a LINEAR key
+parent-linked chain hung). 4096 is 32x the at-most `2 * 64` nodes a LINEAR key
 can reach. A cap may only ever be by depth/count, never anything order- or address-dependent, or
 `equal` keys would stop hashing equal. The budget is REFILLED at the start of every top-level hash
 and spent across the WHOLE traversal, never handed down per branch.
@@ -208,8 +207,8 @@ rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` func
   hashes, so a scan skips an entry of another hash), doubling past three quarters full, and an
   order array. A removal unlinks the entry and kills its order slot (`END` on the JVM, nil on
   WASM); the order compacts once half its slots are dead, so each `remhash` is O(1) amortised.
-  Unlinking from the order instead -- the JVM's `#order` list until 2026-09-18 -- cost 2.9 s for
-  50,000 removals from a 300,000-entry `eq` table (`.todo/855`). A table nobody copies stays
+  Unlinking from the order instead -- the JVM's `#order` list until 2026-09-18 -- was far
+  slower per removal on a large `eq` table (`.todo/855`). A table nobody copies stays
   flat all its life; the first copy makes it a TRIE ("Copies share structure"), `clrhash` flat
   again.
 - An entry keeps the hash it was placed by, so growing and converting never hash again. The
@@ -244,7 +243,7 @@ rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` func
   `((ref null eq)) -> i32` = `TYPE_RAT_GET`, always emitted. Strings/symbols fold content bytes
   (`h = h*31 + byte`) because `_equal` compares via `_string_eq`, not interned offsets
   (`.kb/json.md`); constant-0 fallback for identity-compared values. The depth global is emitted
-  only for a hash-using program (+31 bytes; other modules stay BYTE-IDENTICAL).
+  only for a hash-using program; other modules stay BYTE-IDENTICAL.
 - An INSTANCE key folds layout + slot hashes (layout TAG / interned layout array identity / layout
   address), so two separately built instances with equal slots find each other in an
   `equal` table (ci-spec `instance-print-syntax-and-identity`) -- and a BACK-REFERENCE
@@ -274,7 +273,7 @@ rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` func
 four backends and shares the table's structure: O(n) the first time a table is copied, O(1)
 after it, and a store into either side O(log n).** The JVM and WASM compiled the prelude loop (a
 `maphash` and a store per entry) until then, so a map grown one `assoc` at a time was O(n^2):
-instaparse's GLL parse table (19,481 nodes) spent 91% of a 36 s grammar load copying.
+instaparse's GLL parse table spent the bulk of its grammar load copying.
 
 - The first copy turns the source into a TRIE: a hash array mapped trie of hash chains (32 ways
   a level on the JVM, 16 on WASM so a bitmap fits an i31) plus the entries in insertion order as
@@ -295,29 +294,23 @@ instaparse's GLL parse table (19,481 nodes) spent 91% of a 36 s grammar load cop
   under it, which this keeps: a Clojure map shared by Ring request threads is read and copied
   by all of them at once (`RontoHashTableTest#threadsCopyingAndReadingOneTableLeaveItUnchanged`).
   WASM runs one thread and replaces the header's record.
-- Common Lisp tables, never copied, stay flat and pay nothing: bench-report `hash` (1.6 M
-  `eql` stores and reads) JVM ~710 -> ~365 ms and WASM ~750 -> ~480 ms (the flat shape
-  replacing the bucket index of lists, and the spread), the interpreter ~4.2 s either way
-  (2026-10-11, interleaved runs, load 2-4).
-- Measured 2026-10-11 (linux-x86-64, load 2-4, one run each), ms:
+- Common Lisp tables, never copied, stay flat and pay nothing: bench-report `hash` (`eql`
+  stores and reads) got roughly twice as fast on the JVM and WASM (the flat shape
+  replacing the bucket index of lists, and the spread), the interpreter unchanged
+ (2026-10-11, interleaved runs).
+- Checked 2026-10-11 (linux-x86-64): repeated `assoc` onto `{}` and `(into {} ...)` dropped
+  from seconds to fractions of one on every backend, the JVM class and WASM Preview 1 most of
+  all.
 
-  | | interpreter | JVM class | WASM Preview 1 |
-  | --- | --- | --- | --- |
-  | 8,000 `assoc`s onto `{}`, before | 1,342 | 2,026 | 5,215 |
-  | after | 120 | 20 | 10 |
-  | `(into {} ...)` of 8,000 pairs, before | 2,055 | 2,941 | 5,375 |
-  | after | 512 | 84 | 18 |
-
-  instaparse 1.5.0's README probe as a JVM class: `instaparse.core` load 34.7 -> 3.7 s, the
-  whole run 37.4 -> 4.7 s (oracle clj 1.12.6: 1.5 / 1.6 s); on the interpreter 52.7 -> 42.9 s /
-  69.7 -> 60.0 s, whose copy was already native and whose remaining cost is interpretation.
+  instaparse 1.5.0's README probe as a JVM class: `instaparse.core` load and the whole run
+  fell to near the clj 1.12.6 oracle's; on the interpreter the gain is smaller, since its copy
+  was already native and its remaining cost is interpretation.
 - WASM: a map grown by tens of thousands of `assoc`s leaves every replaced path for the
-  collector, and wasmtime's copying collector rescans the live heap: 10k / 20k / 40k / 80k /
-  160k entries took 15 / 36 / 458 / 1,106 / 2,463 ms against the JVM's 47 / 42 / 62 / 105 /
-  227 ms. The clojure-spec pin grows 20,000 for that reason.
+  collector, and wasmtime's copying collector rescans the live heap, so large maps cost
+  progressively more than on the JVM. The clojure-spec pin grows 20,000 for that reason.
 - Pins: `testsupport/HashTableCopyPrograms` (the insertion-order walk, a copy's independence, an
   eql and an equalp table's copy, and a table grown to 50,000 keys one copy and one store at a
-  time -- before: interpreter 25 s, JVM 72 s, WASM Preview 1 > 300 s) through
+  time) through
   `LispEvaluatorTest#aHashTableWalksInInsertionOrderAndACopySharesItsStructure`, its JVM twin
   and both WASM twins; `RontoHashTableTest` (a random workload over copies and clears against
   one `LinkedHashMap` each, 200,000 copy-and-store steps under a timeout, eight threads over one
@@ -391,22 +384,13 @@ modules).
   follow-up rather than folding it in), so the blast radius of either change is paid for
   a feature with no measured user. Both keep hashing through `_hash`'s constant-0
   fallback, sharing bucket 0, until something measures otherwise.
-- **Cost, measured 2026-09-17** (`.kb/wasm-gc-object-size.md`): zero heap bytes per object
-  on wasmtime 47 (a cons is a 32-byte object with or without the slot), +8 bytes per cons
-  and per cell on V8 without pointer compression -- the reason for the gate; +2 module
-  bytes per allocation site plus `_ihash` and the global (+202 bytes on the 10,566-byte
-  cons-keyed benchmark).
+- **Cost** (`.kb/wasm-gc-object-size.md`): the slot is free in
+  wasmtime's heap layout but not in V8's without pointer compression -- the reason for the
+  gate; it also costs module bytes at every cons allocation site plus `_ihash` and the global.
 - **Fill + lookup of an `eq` table keyed by n fresh conses, 2026-09-17** (linux-x86-64,
-  64 cores, wasmtime 47.0.3, one run each; ms): before the slot the WASM columns were
-  quadratic -- 8/6, 542/482, **50,909/63,226** on Preview 1 and 9/8, 547/490,
-  **64,330/75,679** on the component -- which is what `.todo/835`'s 62-second write of a
-  50,000-element list was.
-
-  | n | interpreter | JVM | WASM Preview 1 | WASM component |
-  | --- | --- | --- | --- | --- |
-  | 10^3 | 111 / 22 | 2 / 1 | 0 / 0 | 1 / 0 |
-  | 10^4 | 159 / 71 | 9 / 6 | 2 / 1 | 3 / 1 |
-  | 10^5 | 480 / 267 | 54 / 26 | 96 / 18 | 110 / 18 |
+  wasmtime 47.0.3): before the slot the WASM columns were
+  quadratic -- which is what `.todo/835`' minute-long write of a
+  50,000-element list was; with the slot they track the JVM's.
 
 Pinned by `WasmLispCompilerIntegrationTest.compileEqHashTableWithManyAggregateKeysStaysHashed`
 (300,000 identity keys in one table; under bucket 0 that is a chain the runner's 300 s

@@ -133,7 +133,7 @@ what a conforming parser must reject: the 248 XHTML named references (plexus-uti
 default map, `XhtmlEntities`), a DOCTYPE whose entities never resolve, any root element name,
 whitespace before the declaration. Also: no external entity can ever be fetched, no JAXP
 factory lookup or xerces in a native image, nothing for the web profile to substitute.
-Measured 2026-10-08: no POM of a developer `~/.m2` (1552) uses an undeclared entity outside
+In a developer `~/.m2` (checked 2026-10-08) no POM uses an undeclared entity outside
 CDATA, so the table is parity, not a hot path. `PomSchema` checks the whole 4.0.0 tree as
 `MavenXpp3Reader` reads it (its table read off the generated `parse*` methods), either mode:
 both refuse a known field twice, an element in a value, text between a list's items or a
@@ -236,10 +236,10 @@ reports the collection's warnings with that failure; the parity test re-collects
   type such as `bundle`).
 - Oracle modes `resolve` and `classpath` (the latter types requested roots through the
   session's registry, as maven-core types a project's dependencies; re-measuring every
-  existing case after that change altered none). Measured 2026-10-08 against Maven 3.9.16
-  over a developer `~/.m2` (905 release jars, each resolved on its own): identical trees
-  (7,933 lines, 5,836 below a root), identical class paths (6,741 entries), and an identical
-  collect after the scope change (115,348 lines).
+  existing case after that change altered none). Checked 2026-10-08 against Maven 3.9.16
+  over a developer `~/.m2`, each release jar resolved on its own: identical trees,
+  identical class paths, and an
+  identical collect after the scope change.
 
 ## Repositories (`RepositoryAccess`, `MavenSettings`, `UpdatePolicy`, `TrackingFile`)
 - A file in the local repository is used as it is, whoever put it there: no `.sha1` checked,
@@ -357,8 +357,8 @@ reports the collection's warnings with that failure; the parity test re-collects
   / `--encrypt-password` output of 3.9.16. Undecryptable: kept as written (Maven's
   `DefaultSettingsDecrypter` does the same) and the reason joins the 401 message.
 - Profile repositories (`MavenSettings.repositories()`; `MavenResolver.Builder.build` puts them
-  AHEAD of the builder's list, an id the builder also names dropped there). Measured 2026-10-08,
-  Maven 3.9.16 (`mvn -X dependency:resolve`, `file:` repositories, "Repositories (dependencies)"):
+  AHEAD of the builder's list, an id the builder also names dropped there). Checked 2026-10-08
+  against Maven 3.9.16 (`mvn -X dependency:resolve`, `file:` repositories, "Repositories (dependencies)"):
   Maven printed `[profile repositories, project repositories, central]` -- so a profile
   repository is searched BEFORE Central, not after. Each active profile is injected ahead of
   what is there: profiles defined pa, pb, pc give `[pc.., pb.., pa..]` whatever order
@@ -400,16 +400,15 @@ the first line, Maven's output after. `MavenOracleParityTest` replays them over 
 `.../maven/local` (what `mvn install` leaves: `maven-metadata-local.xml` + files; the oracle
 copies the same, so both see them modified today), allowing only the differences its javadoc
 lists. A node from a range prints ` range=<constraint>` after its dependency.
-Measured 2026-10-08, Maven 3.9.16 against Central (the oracle with the HTTP transporter, a
+Checked 2026-10-08, Maven 3.9.16 against Central (the oracle with the HTTP transporter, a
 fresh local repository each side): `resolve`/`classpath` of `org.bouncycastle:bcpkix-jdk18on:1.81`
 (`bcutil-jdk18on:[1.81,1.82)` -> 1.81.1), `org.eclipse.jdt:org.eclipse.jdt.core:3.33.0`,
-`org.eclipse.platform:org.eclipse.core.runtime:3.26.100` (ranges throughout), and
-`collect junit:junit:RELEASE org.slf4j:slf4j-api:LATEST` identical; `collect` of
-`org.eclipse.core.runtime:3.26.100` identical over 5,926 lines. Earlier, 2026-10-08 against Maven
-3.9.16 (resolver 1.9.27), java.version 25.0.4 on Linux amd64, beyond the fixture: all 1549
-release POMs of a developer `~/.m2/repository` gave identical descriptors (119,110 lines:
-6,639 dependencies, 110,922 managed), and one collect rooted at its 911 jars an identical
-114,312-line graph and the same 100 missing-POM warnings (`bcutil-jdk18on` excluded: ranges
+`org.eclipse.platform:org.eclipse.core.runtime:3.26.100` (ranges throughout),
+`collect junit:junit:RELEASE org.slf4j:slf4j-api:LATEST`, and
+`collect` of `org.eclipse.core.runtime:3.26.100` -- all identical. Beyond the fixture, the same
+day: every
+release POM of a developer `~/.m2/repository` gave identical descriptors, and one collect rooted
+at its jars an identical graph and the same missing-POM warnings (`bcutil-jdk18on` excluded: ranges
 were refused then).
 
 ## Tests

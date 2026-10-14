@@ -49,7 +49,7 @@ none). User doc: `doc/*/compiling/warnings.md`. Pinned by `CompileWarningsTest`,
   located form -- the rule `noteFailure` applies to errors. Top-level `progn`s are flattened
   before the backend sees them, so `LispMacroExpander.flattenTopLevel` gives each spliced part the
   wrapper's position when it has none (`inheritWhenCompiling`, compile path only): a user macro
-  expanding to `(progn (defun ...) ...)` is placed at its call. Measured before this: such
+  expanding to `(progn (defun ...) ...)` is placed at its call. Before this, such
   warnings printed with NO position at all.
 - **Only compiled code warns**: a system's `defun` the tree-shaker drops is never compiled, so
   a wrong call inside it says nothing (`.kb/library-defun-pruning.md`).

@@ -87,22 +87,22 @@ widen for is more than two HOT strings at once, and the state to add then is a h
 not a timestamp.
 
 Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
-- `rontolisp:json-parse` over the real Qwen3.5-0.8B `tokenizer.json` -- 12,807,982 bytes,
-  10,769,328 characters, 745,102 above U+00FF and NONE astral, so the document is flat and
-  UTF16-backed -- on the JVM class output: did not finish (still inside `vocab` at 180 s, with
+- `rontolisp:json-parse` over the real Qwen3.5-0.8B `tokenizer.json` -- a flat, astral-free,
+  UTF16-backed document -- on the JVM class output: with the old rule it did not finish
+  (still inside `vocab`, with
   `StringUTF16.codePointCount` under `_cpoff` under `%JSON-SKIP-WS` at every sample, the frames
-  `.todo/690` reported) -> **525 ms**. The text has to arrive as a `java.lang.String` to be the
+  `.todo/690` reported); with this rule it finishes in a fraction of a second. The text has to arrive as a `java.lang.String` to be the
   subject at all: `rontolisp:octets-to-string` produces one, while `uiop:read-file-string` and
   `concatenate` produce a character vector, which reads its element and never probes.
-- One emoji in front of 30,720 digits, scanned whole against the same characters in 481-character
-  pieces: 630 ms / 14 ms -> 9 ms / 5 ms.
+- A wide character in front of many digits, scanned whole against the same characters in
+  pieces: slower by orders of magnitude before, at parity with ASCII after.
 
-**What the 340x is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
+**What the speedup is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
 model. `examples/llm/llm.lisp`'s checkpoint load did NOT get faster: re-measured on the
-shipped tree it is 9.0-9.8 s from GGUF and 8.9-9.1 s from safetensors, the same as before within
+shipped tree it is the same as before within
 noise. That file carried its own byte-level JSON reader **because `json-parse` could not finish**,
-so it never paid the cost and had nothing to recover. Deleting those 180 lines removed a workaround
-at equal speed (425 ms against 447 ms), which is a maintenance win and not a throughput one.
+so it never paid the cost and had nothing to recover. Deleting that workaround kept the same
+speed, which is a maintenance win and not a throughput one.
 
 Four separate things landed here and only the first two are speed for an existing caller:
 
@@ -132,8 +132,8 @@ Whole-string consumers (`string=`, `concatenate`, `write-string`, `_equal`/`_has
 still render once per CALL, which is their own cost and not an index's. **Separate mechanism, fixed
 separately**: ACCUMULATING a file into a string was quadratic in its own right --
 `uiop:read-file-string`'s chunked `concatenate` and the `apply #'concatenate 'string` over
-`read-line` results both re-copied the accumulator per chunk, and neither reached `json-parse` at
-all on a 12.8 MB file. Both are linear now (`.kb/string-accumulate-cost.md`, `.todo/704`); the
+`read-line` results both re-copied the accumulator per chunk, and neither reached `json-parse`
+at all on a large file. Both are linear now (`.kb/string-accumulate-cost.md`, `.todo/704`); the
 sentence above about which producer answers a `java.lang.String` still holds, and is why the
 byte-reader detour stayed.
 
@@ -145,7 +145,8 @@ byte-reader detour stayed.
   breakpoint table, so a random index costs its distance from the string start. A
   left-to-right scan is still linear; a hot loop over a long wide string belongs on a
   backend with the cursor.
-- WASM: **8 bytes per string** plus the bigger helper bodies (`zlib` +262 bytes at either
+- WASM: **8 bytes per string** plus the bigger helper bodies (a real program carries a few
+  hundred extra bytes at either
   `--optimize` level); `subseq`/`replace`/`search`/`position` needed no special-casing.
 - **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).
   The fix if it matters is a stride index on the same struct, NOT walking from zero.

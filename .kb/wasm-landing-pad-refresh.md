@@ -174,18 +174,14 @@ argument lost it and nothing else changed.
 **Unnarrowed, the push and the refresh were most of a large function** (measured
 2026-09-24, wasmtime 49.0.0, 64 cores). The hello-ningle Worker's fast-http
 `parse-request` has its parser helpers inlined and 120 pads, with 1,599 locals in the
-size-report build and 1,848 in the `--optimize` one:
-
-| build | pushed and refreshed | function bytes | module bytes | function, serial Cranelift | `wasmtime compile`, wall |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `worker.lisp --no-wasi --optimize=size` (size-report row), every declared local | 101,636 | 624,468 | 2,749,384 | 30.6 s | 30.3 s |
-| the same, narrowed | 80 | 42,975 | 2,073,313 | 0.41 s | 1.8 s |
-| `check.lisp --optimize` (examples `wasm` leg), every declared local | 119,360 | 749,554 | 3,354,877 | 45.0 s | 52.1 s |
-| the same, narrowed | 80 | 61,011 | 2,578,987 | 0.54 s | 1.9 s |
-
-`wasmtime run` of the check program went from 59.8 s to 2.4 s, nearly all of it compile time,
-which a `--native` build pays too (its shim precompiles with Cranelift). The ci-spec corpus
-module went from 7,594,940 to 6,011,558 bytes. A positional rule (keep a local read after the
+size-report build and 1,848 in the `--optimize` one: pushing and refreshing every declared
+local blew that one function's body, and the module with it, up several fold, and made it
+dominate `wasmtime compile` -- serial Cranelift included -- for both the Worker build
+(`worker.lisp --no-wasi --optimize=size`, the size-report row) and the examples `wasm` leg's
+`check.lisp --optimize`. Narrowed to the 80 locals that are live, the function, the module
+and `wasmtime run` of the check program all collapse to a fraction, nearly all of the
+difference compile time, which a `--native` build pays too (its shim precompiles with
+Cranelift); the ci-spec corpus module shrinks the same way. A positional rule (keep a local read after the
 pad or inside an enclosing loop) does not find the 80: the parser's state loop encloses every
 pad. The count first recorded as live, 156, came from a tool that took wasm-tools' `@N` labels
 -- nesting depths -- for unique names. An independent Python fixed point over the printed

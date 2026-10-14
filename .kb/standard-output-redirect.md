@@ -68,9 +68,9 @@ unbound program compiled every read to the constructor form (the `JvmExprCompile
 `WasmExprCompiler` fallback arm, now reached only by a read the source scan misses) and the
 mirror built a second instance: `(eq *error-output* *error-output*)` was NIL on the JVM and both
 wasm backends, `(eq *error-output* (symbol-value '*error-output*))` NIL even with a binding,
-and Clojure's `(identical? *err* *err*)` false. Measured cost: +19 bytes wasm, +34 bytes
-`.jar` for `(format *error-output* ...)` alone; a program with several reads or a `warn` gets
-smaller on wasm (-52 bytes for three reads plus a `warn`). Interpreter and JVM number
+and Clojure's `(identical? *err* *err*)` false. The mirror costs a few bytes on wasm and
+jar for a single read; a program with several reads or a `warn` comes out
+smaller on wasm. Interpreter and JVM number
 their own stream tables, so both **reserve handles 0/1/2** (`Environment.registerIO` starts at
 `StreamDesignators.FIRST_USER_HANDLE`; the JVM's `_addStream` at 3).
 

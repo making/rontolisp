@@ -258,15 +258,15 @@ needed"). No `linalg:` acceleration seam takes it: `--simd`, `--blas` and `--gpu
   `.todo/artefacts/696-the-narrow-width-element-wise-kernels/README.md`):
   - **The narrowing vectorizes.** A branch-free lane form -- the bias-add and odd-bit carry
     as int lanes, the NaN arm as a second expression, a mask choosing between them, an
-    `I2S` narrowing store -- is **1.4-3.2x** the scalar `narrowBf16Into` at every size on
+    `I2S` narrowing store -- BEATS the scalar `narrowBf16Into` at every size on
     both JITs, and agrees with it on **all 2^32 f32 patterns**. It vectorizes BETTER than
-    the widening does: the scalar narrow is compute-bound at 0.7-1.1 Gelem/s, while the
+    the widening does: the scalar narrow is compute-bound, while the
     widen is already memory-bound at one shift per element.
-  - **The composite is 2.3-2.7x**: widen both operands, add in f32, narrow on store, against
+  - **The composite wins**: widen both operands, add in f32, narrow on store, against
     the wholly scalar loop -- and above 16 M elements it beats the f32 element-wise kernel
     outright, moving half the bytes.
   - The predicted "vector load in front of a scalar store loop" shape IS worthless
-    (0.89-1.07x of plain scalar). The prediction about THAT shape was right; the inference
+    -- no faster than plain scalar. The prediction about THAT shape was right; the inference
     that it was the only available shape was not.
   - **And the f32 intermediate is exactly the defun's answer.** An element-wise kernel must
     equal the DEFUN (which reads doubles, computes in f64 and narrows through
@@ -298,8 +298,7 @@ needed"). No `linalg:` acceleration seam takes it: `--simd`, `--blas` and `--gpu
   wins clearly (the numbers, both JITs, in `.todo/488`'s README). The crossover is a cache
   hierarchy and moves with the box. **Measured on x64 too** (2026-09-08, `.todo/696`;
   Broadwell AVX2, both JITs, table beside the aarch64 one in the same README): the SHAPE holds
-  and the headline reproduces -- 1.63-1.85x at 4096x4096 -- and the cache-resident loss is
-  MILDER, 0.88-0.93x at 1024x1024 against the GB10's 0.72-0.84x, with 288x288 at parity or
+  -- the cache-resident loss is MILDER than the GB10's, with the smallest shapes at parity or
   ahead. So the no-size-gate decision reads the same on both hierarchies and costs less on the
   x64 one; `identical=true` printed at every shape there too. There is no size gate,
   deliberately: the only BIT-IDENTICAL
@@ -325,8 +324,7 @@ needed"). No `linalg:` acceleration seam takes it: `--simd`, `--blas` and `--gpu
   widened f32: a width that converted on the wire could not round-trip. Interpreter
   `PackedBuffer.of` (width 2, `asShortBuffer`), JVM `_readSeqPacked` / `_writeSeqPacked` (the
   `short[]` arm, data offset `1 + 2 * rank` -- the one arm in that method whose offset is not
-  `1 + rank`). Measured 2026-09-05: 2^21 elements round-trip with zero mismatches, 5 ms on the
-  JVM and 10 ms on the interpreter.
+  `1 + rank`). Verified 2026-09-05: 2^21 elements round-trip with zero mismatches.
 - **The bulk `widen-float-bits` / `narrow-float-bits` pair carries a bf16 source and
   destination** (2026-09-08, `.todo/745`; interpreter and JVM, the two backends that have the
   width at all). Four arms, and only two of them convert anything:

@@ -17,7 +17,7 @@ constant chosen when the compiler was written. Layout low to high (`WasmLispComp
   program's own static data.
 - **That failure has no symptom of its own**: nothing traps, some unrelated constant reads back
   wrong, and WHICH one moves with the layout — a one-byte change anywhere moves or hides the
-  damage. On the ci-spec corpus it landed in the `char-downcase` fold table and 335 of 474
+  damage. On the ci-spec corpus it landed in the `char-downcase` fold table and most affected
   cases failed with `char-upcase` still perfect beside it.
 - The fix is structural: the block sits just above the static data, the intern table and heap
   just above the BLOCK, so neither growth direction can reach it at any program size.

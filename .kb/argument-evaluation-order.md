@@ -46,8 +46,8 @@ a CLOS `:accessor`, the prelude's `bit`/`sbit`/`get` -- and the late-bound `#'(s
   paths bind it directly anyway); when every subform is a read, an undefined late-bound
   function is reported ahead of an unbound variable among them.
 
-Measured 2026-10-07: `(setf (eo-u (f "a")) (f "b"))` / a CLOS accessor / `bit` / `get` /
-`defmethod (setf ...)` were SBCL 2.2.9 `ab`, interpreter, JVM, P1 and component `ba`; a value
+On SBCL 2.2.9, the interpreter, JVM, P1 and the component backend alike, `(setf (eo-u (f "a")) (f "b"))` / a CLOS accessor / `bit` / `get` /
+`defmethod (setf ...)` agree; a value
 form assigning the argument variable redirected the write; `(setf (undefined (f "a"))
 (f "b"))` ran neither before signalling. Pinned by `SetfFunctionNameFixture.EVALUATION_ORDER`
 (`aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue` in the three backend suites) and

@@ -122,8 +122,8 @@ destination (argument 1, CL's `map-into` order) and RETURNING it. Reductions hav
 
 Only `--no-gc` leaks: it bump-allocates with NO FREE, reclaiming by popping the arena at an export
 boundary (auto-reset on a scalar return, `__ronto_alloc_mark`/`_reset` for a host), never within a
-call, so `-into` makes the bump high-water equal the live set (12000 accumulations over 65536
-elements: `add-into` peaks at 13.7 MB, `add` at 4.31 GB then traps). Elsewhere it is purely an
+call, so `-into` keeps the bump high-water at the live set, where repeated `add`
+accumulations run the arena out and trap. Elsewhere it is purely an
 allocation-rate optimization. `linalg` arrays behave identically.
 
 - **Aliasing**: element-wise kernels tolerate `out` aliasing `a` and/or `b`, so
@@ -151,8 +151,8 @@ widths (`WasmVecLoops.gcMap2Select`/`simdMap2Select`/`scalarMap2Select`, `U_RELU
 Scalar-vs-array keeps the widen rule -- `gcBroadcastSelectF64` (WITH the save/restore bracket) for
 an f64 scalar, `_v_get`/`_v_set` widened against the FULL double scalar for an f32 one, and
 `buildClip`/`compileSimdClip` comparing widened elements against full-double bounds. vec FUNC_COUNT
-47 -> 55 (CLIP_INTO is the first `TYPE_CALLABLE_BASE + 3` four-param kernel), linalg 30 -> 32,
-`userFuncBase()` 77 -> 87.
+stands at 55 (CLIP_INTO is the first `TYPE_CALLABLE_BASE + 3` four-param kernel), linalg at 32,
+`userFuncBase()` at 87.
 
 ## Element-wise unary ufuncs
 
@@ -340,8 +340,8 @@ apparent blocker -- "`v128.load`/`store` address LINEAR memory" -- is FALSE: GC
 - **Cost**: the GC representation costs ~1.93x on the kernel loop against a linear arena, the cause
   being `array.get`'s BOUNDS CHECK, which no engine hoists (typing the group locals `(ref $v128arr)`
   buys nothing). `_v_set` is ~1.85x an `array.set` -- invisible behind a BOXED loop, not behind a
-  bare element loop: before the linalg interception `linalg:add` went 205 ms -> 230 ms under
-  `--simd`, a 12% PESSIMIZATION, fixed by intercepting the fifteen `linalg:` members; still real for
+  bare element loop: before the linalg interception `--simd` PESSIMIZED `linalg:add`, fixed by
+  intercepting the fifteen `linalg:` members; still real for
   `emap`/`inv`, `.kb/linalg-simd.md`. Composes with `--optimize` (the shaker's `skipSimd` decodes
   0xFD, incl. `v128.const` / `i8x16.shuffle`'s 16 immediate bytes and `replace_lane`'s lane byte) and
   `--component`.
@@ -475,8 +475,8 @@ defect. Such a probe belongs in `VecSimdTest`, where the two answers can both be
   and `internal-time-units-per-second` does NOT exist, so an elapsed-time line must never be checked.
 - `--no-gc` cannot compile `linalg:` at all (`&optional` in `linalg::%la-make`) and rejects
   `vec:matvec` in an example, so any example using either is `[interpreter, jvm, wasm]` only.
-- Interpreter budget for `ExamplesE2eTest`: heat3d 0.0 s .. simd-gemv 4.7 s .. deep-digits 10.1 s ..
-  tiny-llm ~13 s .. mlp 38.4 s. It fails spuriously when the GraalVM JIT prints a "Systemic Graal
+- The interpreter leg dominates `ExamplesE2eTest`'s wall time (mlp the most, heat3d negligible).
+  It fails spuriously when the GraalVM JIT prints a "Systemic Graal
   compilation failure" warning onto the program's stdout -- re-run.
 - **Take every lane-kernel number under BOTH JITs.** Graal (this box's default, CI's and the
   native image's) and C2 (`-XX:-UseJVMCICompiler`, what a stock OpenJDK runs a compiled `.class`
@@ -535,25 +535,13 @@ has to know. Which primitives touch it is not enumerable by eye -- the `widen-fl
 green native run, and was found by an unrelated lane running an example. A subset chosen by
 judgement rebuilds exactly that hole one level up.
 
-**Measured 2026-09-06** (this box, native binary, 479 corpus cases; "fixed" is a five-form
-program, "marginal" is `(corpus - fixed) / 479`):
-
-| leg | fixed | corpus | marginal per case |
-|---|---|---|---|
-| interpret | 16 ms | 7117 ms | 14.8 ms |
-| compile-jvm | 170 ms | 9212 ms | 18.9 ms |
-| run-jvm | 90 ms | 3541 ms | 7.2 ms |
-| compile-wasm | 157 ms | 4254 ms | 8.5 ms |
-| run-wasm | 89 ms | 3624 ms | 7.4 ms |
-| compile-component | 155 ms | 4531 ms | 9.1 ms |
-| run-component | 69 ms | 4320 ms | 8.9 ms |
-
-**The premise that this run is fixed-cost-dominated is WRONG**: 746 ms of fixed cost across the
-four backends against 479 x 74.8 ms = 35.8 s of marginal, i.e. 2% of a pass. So a second pass
+**The measured split of a corpus pass into fixed and per-case cost (2026-09-06, this box, native
+binary) says the fixed-cost-dominated premise is WRONG**: fixed process cost across the
+backends is a small fraction of a pass, the marginal per-case cost dominates. So a second pass
 really does cost a second pass, and the per-case `simd:` flag it rules out is worse than doubling
 rather than better -- the corpus is concatenated into ONE program per backend, so a per-case flag
-means one program per case: 479 x 746 ms ~ 6 minutes of process starts, per pass. Whole suite:
-**65.5 s -> 111.9 s** (2008 -> 4020 tests). Under 2x only because the same change dropped a
+means one program per case and pays a process start per case, per pass. Whole suite: roughly
+doubled when the corpus doubled (2008 -> 4020 tests). Under 2x only because the same change dropped a
 duplicated compile: each WASM leg now inspects the module it is about to run
 (`requireRunnableModule`) instead of compiling a throwaway `guard.wasm` first.
 

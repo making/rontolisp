@@ -10,8 +10,8 @@ program with no unproven site leaves the wide dispatch without a caller for the 
 Same lesson as `.kb/subseq-runtime.md` (direct precedent; read its mechanics first, this file
 records only the deltas), `.kb/seq-conversion-runtime.md`, `.kb/string-write-runtime.md`,
 `.kb/format.md`'s `%fixed-decimal`: a per-site expansion past a few hundred bytes becomes a callee.
-Marginal cost of one more site, wasm-GC `--optimize=size`: `replace` 3,806 -> 21; `map-into`
-1,949 -> 17; `fill` 1,718 -> 15.
+Marginal cost of one more site, wasm-GC `--optimize=size`: a few tens of bytes, for
+`replace`, `map-into` and `fill` alike.
 
 ## The lowering
 Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
@@ -35,7 +35,7 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
   part of the range.
 - **`map-into` gets one helper per SOURCE-SEQUENCE COUNT**, not one taking a list: its loop body is
   a `funcall` of exactly that many arguments, and a list would need `apply` and the spread
-  dispatcher (12 KB). Count read off the call shape (`sequenceOpRuntimeWrappers`), capped at 8
+  dispatcher. Count read off the call shape (`sequenceOpRuntimeWrappers`), capped at 8
   (`MAX_MAP_INTO_SOURCES`).
 - Routing is per site at the compilers' `REPLACE`/`FILL`/`MAP_INTO` cases, on
   `ctx.functions.containsKey(<helper name>)`, so an under-predicting gate costs sharing, never
@@ -50,7 +50,7 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
   the two a site can reach is a compile-time fact the pre-expansion scan cannot see.
 - **The two backends gate differently** (same asymmetry as `%subseq-runtime`): wasm injects on the
   name scan alone, the JVM additionally requires `programUsesAnyArrayOp` (mis-firing the array gate
-  costs ~120 KB). With the JVM gate off, every site keeps its inline lowering.
+  costs a large slice of class). With the JVM gate off, every site keeps its inline lowering.
 - The interpreter never sees this: `replace`/`fill` are native built-ins.
 
 ## The bulk-copy arm

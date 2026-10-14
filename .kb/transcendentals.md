@@ -106,27 +106,25 @@ saturated) and `:get-exponent` answers an integer.
     `--simd`/`--no-gc` kernels (`WasmVecSimdRuntimeBuilder.emitScalarUnaryF64`, a
     call; `WasmLinalgSimdRuntimeBuilder`'s erf).
 
-## Measured (2026-09-17, x86-64 Linux, Java 25.0.4, wasmtime 47.0.3, loaded 64-core box)
+## fdlibm against the inline cores
 
 - Bits: `WasmFdlibmRuntimeBuilderTest` runs every function over 16,225 arguments (random
   bit patterns, the ranges each is used over, values near multiples of pi/2, 1e22-class
   trig arguments, 65 special values paired for the binary functions) and every result
   equals `StrictMath`'s (NaN payloads excepted: an engine may sign a computed NaN
-  either way). The old cores were up to 4e5 ulp off (`log` near 1, trig near a zero,
-  float `expt`) and matched the JVM on 12-45% of arguments; the SICP sample that printed
-  differently on wasm no longer does.
-- `.wasm` size (default = `--optimize` here, bytes): one `exp` site 3,977 -> 4,059 (one
-  function of ~600 B against one inline core); five `exp` sites 6,414 -> 4,239; one
-  `sin` site 4,081 -> 8,016 (the price of the real reduction: `k_sin`, `k_cos`,
-  `rem_pio2`, `krem` and 992 B of tables); the 12 functions once each 24,991 -> 21,347.
-- wasmtime, 3e6 calls in a `dotimes` (best of 3): `exp` 0.296 -> 0.204 s, `sin` 0.365 ->
-  0.209 s, float `expt` 0.549 -> 0.488 s -- fdlibm on raw locals beats the inline cores,
+  either way). The old cores could be far off in ulps (`log` near 1, trig near a zero,
+  float `expt`) and matched the JVM only on a minority of arguments; the SICP sample that
+  printed differently on wasm no longer does.
+- Size: a single `sin` site carries the real reduction (`k_sin`, `k_cos`,
+  `rem_pio2`, `krem` and their tables) and costs more than one inline core, but with the
+  kernels shared across sites the totals shrink.
+- Speed: fdlibm on raw locals beats the inline cores,
   which boxed every intermediate in a GC struct.
-- JVM, the same loops, `Math` -> `StrictMath`: `exp` 0.124 -> 0.146 s (+18%), `sin`
-  0.125 -> 0.157 s (+26%), float `expt` 0.209 -> 0.551 s (+164%: `Math.pow` is a
+- JVM, `Math` instead of `StrictMath`: `exp` and `sin` are slower and float `expt` far
+  slower (`Math.pow` is a
   HotSpot intrinsic, `StrictMath.pow` fdlibm in Java; `y == 2.0`, `0.5` and `+-1` keep
   their fast paths). The interpreter pays the same per call. Squares and roots are
-  unaffected, and no kernel in the repo spends its time in `pow`; the numbers are the
+  unaffected, and no kernel in the repo spends its time in `pow`; the slowdown is the
   cost of the invariant, not a regression to fix.
 
 ## `Math` against `StrictMath` on x86-64 (measured 2026-10-08)

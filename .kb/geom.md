@@ -87,8 +87,8 @@ INVERTED solid** (the integral is `abs`'d), so that winding check is the rendere
 position + normal), fan-triangulated per facet with a Newell normal, computed once into
 `geom::%mesh`; `geom:wireframe` (each edge once, 6 floats a segment) into `geom::%wire`. A rigid
 solid's triangles never change, only its pose does: on a 30-joint chain (60 solids, 13,800
-triangles), transforming every vertex into world space every frame is 380 ms/frame against **9.0 ms**
-for the cached mesh plus one 4x4 matrix per solid. So `geom:mesh` is PUBLIC surface and **a renderer
+triangles), transforming every vertex into world space every frame costs an order of magnitude
+more than the cached mesh plus one 4x4 matrix per solid. So `geom:mesh` is PUBLIC surface and **a renderer
 must touch no triangle during a frame**.
 
 `geom:nscale` is the only vertex mutation and therefore the only place that must invalidate: it drops
@@ -178,10 +178,10 @@ The four readers plus the dispatcher `geom:read-model` answer a `geom:solid` bui
 Four file-scaled members are accelerated on both: `geom:read-obj` (the line walk and number scan,
 packing into the `(n 3)` array), `geom:mesh` (fan triangulation + Newell normal), `geom:wireframe`
 (the edge walk over an open-addressing `long` set instead of an `equal` hash table of conses) and
-`geom::%vertex-extremes` (the posed min/max without materializing the array). On a 155 MB scanned
-hand, read+mesh+wireframe+bounds+extent goes 539,577 ms -> 1,193 ms interpreted and 6,999 ms ->
-1,277 ms compiled, printing identical bounds. NOT accelerated: `read-stl`, `read-ply`, `read-gltf`
-(the ASCII PLY, 7.3 s for 3 MB, is the next one worth doing) and every modelling verb. WASM has no
+`geom::%vertex-extremes` (the posed min/max without materializing the array). On a large scanned
+mesh the kernel path is orders of magnitude faster, interpreted and compiled alike, printing
+identical bounds. NOT accelerated: `read-stl`, `read-ply`, `read-gltf`
+(the ASCII PLY reader, slow on large files, is the next one worth doing) and every modelling verb. WASM has no
 equivalent (no `float[]` to pack into; Preview 1 reads through its own stream layer).
 
 - `eval/GeomKernels` uses `LinalgSimd`'s interception seam verbatim (`.kb/linalg-simd.md`);
@@ -197,8 +197,8 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
   replaceable): `geom::%solid-of-vertices`, `geom::%vertex-extremes` and `geom::%model-extent` -- the
   last the ONE `geom::` internal `scene.lisp` reaches for, the public bounds API being world-space only.
 - **The gate is the CALL SITE, not the splice**: `JvmLispCompiler` scans the ALREADY-PRUNED program
-  for `JvmGeomKernelCompiler.members()` (where it arms: a 12 KB `$GeomBridge.class` beside the
-  class, 2026-09-26). **`--dynamic` is excluded
+  for `JvmGeomKernelCompiler.members()` (where it arms: the `$GeomBridge` class beside the
+  program's, since 2026-09-26). **`--dynamic` is excluded
   outright** -- it skips the pruner, and its point is that a call site honours a run-time redefinition.
 - **All four members arm the bridge.** `geom::%vertex-extremes` used to be accelerated without arming
   anything, because `LibraryDefunPruner` counted a `defclass` header's own name as a function
@@ -237,7 +237,8 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
 - **The base64 path is the one place buffer bytes are assembled by Lisp arithmetic.** The shape to
   use when filling a large string: build into a fill-pointered character array (the one string shape
   `(setf (char))` writes in place everywhere, `adjustable-arrays.md`), then ONE `subseq` on the way
-  out -- 82 ms compiled against 30.5 s on the 138 KB embedded Duck. Both quadratic halves that forced
+  out -- on the embedded Duck corpus, orders of magnitude faster than the assembly it replaced. Both
+  quadratic halves that forced
   it are now CLOSED (`string-index-cost.md`, `string-write-runtime.md`).
 - **A file carries its own units.** The Stanford bunny is 0.2 across (metres), a printable part 200
   (millimetres); `scene:fit`'s camera floor, the projection's frustum and the scroll clamp are all

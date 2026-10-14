@@ -53,9 +53,9 @@
   between the call and the await never printed, and a `handler-case` around the await -- or
   `rontolisp:catch` -- never saw it. Outside EH mode nothing can catch a condition, so the body
   still traps at the call (the one observable difference left: output between call and await).
-  Measured 2026-09-26 on 2f611be61 (EH mode, bytes): the clack/ningle/tiny-routes examples and
-  their Cloudflare workers +74 each, `postgres-web` +122; a toy `(print (ignore-errors (await (job
-  21))))` 5,571 -> 6,749 -- the payload joins the future's value field, so the type-test fold keeps
+  Since 2026-09-26, on the clack/ningle/tiny-routes examples, their Cloudflare workers,
+  `postgres-web` and a toy `(print (ignore-errors (await (job 21))))`, the payload joins the
+  future's value field, so the type-test fold keeps
   the printer's cons arm (`--component`'s rejected future has the same shape). Every other example,
   size-report and bench program is byte-identical at default, `--component` and `--optimize=size`.
   **`--no-gc`** rejects the whole async surface by name, `%stream-new` included.
@@ -92,12 +92,9 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
   the channel and publishes each fulfilled hop's extras.
 - All of it is gated on the spill global: a program with no multiple-value consumer is
   byte-identical on the three compile targets (fib, fib + a consumer, an async program with no
-  consumer). With one (2026-09-26): the combinator ci-spec case + one consumer, class 15,578 ->
-  16,014 B, wasm 13,849 -> 14,015 B, component 21,679 -> 21,806 B. An `await` inside a consumer
+  consumer). With one (2026-09-26), an `await` inside a consumer
   now takes the channel round trip instead of the one-temporary path, which on `--component` is
-  dearer at TOP LEVEL, where every mirrored local is spilled at every suspend site (the matrix
-  program, fourteen such consumers: 31,056 -> 37,965 B). 300,000 async calls + awaits: Preview 1
-  17-21 -> 17-22 ms, component 40-66 -> 42-56 ms, JVM 3,229-4,412 -> 3,203-3,763 ms -- noise.
+  dearer at TOP LEVEL, where every mirrored local is spilled at every suspend site.
 
 ## `--component` (asyncMode)
 - Async bodies compile as ENTRY+RESUME state machines over first-class `TYPE_FUTURE`s
@@ -246,8 +243,8 @@ STRICTLY first and `array.copy`, transcoding only the rest: `_iv_utf8_str`
 (`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`). Until 2026-09-26 the
 interpreter and JVM tried a platform decode first and transcoded in its refusal, through five
 body-sized intermediates (`.kb/fetch-http.md`, "Throughput"); before that the primitive was
-`%octets-to-string-strict` (`nil` on malformed bytes) and a binary body walked the compiled loop:
-~350-700 ns a byte, and on a `--native` output a 256 MiB body exhausted the GC heap. The native
+`%octets-to-string-strict` (`nil` on malformed bytes) and a binary body walked the compiled loop,
+and on a `--native` output a 256 MiB body exhausted the GC heap. The native
 transcodes are pinned against the loop case for case by the three
 `octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8` tests (the loop fed a GENERAL array, which the
 primitive declines) and `LispPreludeLibraryTest`.

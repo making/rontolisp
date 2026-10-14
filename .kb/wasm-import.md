@@ -39,8 +39,8 @@ and the `--no-wasi` stub block; appending shifts nothing and costs nothing on a 
 does not reach the feature. `fd_seek` (2026-09-19, `.todo/876`) was planned as slot sixteen and
 landed as an appended import instead: measured over a nine-module corpus, every module that
 does not call `file-position` -- Preview 1, `--component` and `--no-wasi` alike -- is
-BYTE-IDENTICAL, and the one that does grows 20334 -> 20987 bytes (+653: the two real runtime
-bodies, the import, and the per-`open` flag write). An appended import needs a type entry only
+BYTE-IDENTICAL, and the one that does grows by the two real runtime
+bodies, the import, and the per-`open` flag write. An appended import needs a type entry only
 when no fixed type already has its shape; `fd_seek`'s `(i32, i64, i32, i32) -> i32` is the
 first one that did, so it is emitted right after the `importSlots` block and counted into
 `abiTypeBase` (`--host-random` and `args_get` reuse `TYPE_INTERN` and add nothing).
@@ -125,13 +125,12 @@ a site straight to the host call instead -- one `memory.copy` and no wrapper -- 
   never reserved cannot happen. A site settles its import ordinal the same way, from the
   declarations alone, and `compile` checks that answer against the core import slot list
   rather than trusting it.
-- **Measured 2026-09-13** on the `789` reactor (`--no-wasi --optimize=size`): **1,654 ->
-  1,308 bytes (-21%)**, `_str_build` 69 + `_str_to_mem` 113 + the two import wrappers gone,
-  `_lit_stage` 24 in. For scale, `-Oz` over the OLD module stopped at 1,495
+- **Measured 2026-09-13** on the `789` reactor (`--no-wasi --optimize=size`): the module
+  shrinks by a fifth with `_str_build`, `_str_to_mem` and the two import wrappers gone,
+  `_lit_stage` in. For scale, `-Oz` over the OLD module does not reach the new size
   ([[optimize-dead-code-elimination]], "What an external optimizer still finds"). Where the
   round trip's helpers stay alive for other reasons the lowering costs a few bytes per site
-  and the helper once: `webgl-cube`/`galaxy`/`heat3d` -15 each, `platformer` +8,
-  `battlefront` +9, `robot-arm` +27, `solids` +45 -- under 0.03% on every one of them, and
+  and the helper once, a negligible share of every module, and
   every module that declares no `:string` import is byte-identical. Pins:
   `WasmImportCompilerTest.aLiteralStringArgumentCrossesWithoutTheGcRoundTrip` (the PAIR: the
   same module with the argument BUILT at runtime carries all of it) and
@@ -379,8 +378,9 @@ instruction. Utility exports stay unguarded. Pins:
 preload E2E. The guard is the DEFAULT; `--reentrant` is the opt-in that retires it.
 
 ## `--reentrant` -- overlapped calls on ONE instance
-Measured motivation: 8 concurrent 100 ms round trips took 803 ms serialised and 239 ms as
-instance-per-request; `--reentrant` answers them in ~125 ms on one instance. Target workload: I/O
+The motivation, measured: concurrent round trips through one instance serialised run far
+longer than the same load spread over one instance per request, and `--reentrant` on one
+instance lands between -- close to the per-request shape. Target workload: I/O
 bound AND unable to afford an instance per request. All of it is `reentrant`-gated so every other
 module stays byte-identical (`WasmReentrantCompilerTest`).
 - **Per-task dynamic store** (`codegen.wasm/WasmDynVars`, [[dynamic-special-variables]]): the JVM

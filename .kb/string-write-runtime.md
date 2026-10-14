@@ -35,9 +35,9 @@ The checks name the store (`%schar-set`'s quoted place head; `%check-string` onl
   primitive.
 
 **Why a function**: the rebuild is two `subseq`s, a `string` and two `%string-concat`s, and
-`subseq` lowered to an inline copy LOOP -- ~8 KB of wasm at every site, paid even by an array-only
-program, because nothing in `(setf (aref m i) 0.0)` says `m` is not a string. One wasm-GC site
-8,615 -> 588 bytes; one JVM `(setf (elt s i) v)` site 5,042 -> 293. **The crossover is one site**;
+`subseq` lowered to an inline copy LOOP -- kilobytes of wasm at every site, paid even by an array-only
+program, because nothing in `(setf (aref m i) 0.0)` says `m` is not a string. As a shared
+helper a site costs a small call instead, on the JVM as on wasm. **The crossover is one site**;
 a program with no live site is unchanged (helper injected, then shaken out). What is left in a site
 is `%aset` itself, whose GENERAL arm is a call too (`_arr_set`, `.kb/subseq-runtime.md`); the
 packed arms stay inline on purpose. Same lesson as `.kb/wasm-shared-coercion.md`,
@@ -149,8 +149,8 @@ PROGRAM-WRITTEN `(map 'string ...)` and `(coerce seq 'string)`, `uiop:getenv`, t
   `(or (read-line s) eof)`; the wrap must be compiled from the `read-line` case and land on the
   inner one-argument call only, or a STRING sentinel comes back as a mutable COPY -- visible on the
   WASM backends only (`eq` is object identity there).
-- `%json-pairs` merging through the WRAPPED concatenate re-converted every intermediate (JVM
-  json-stringify 116 -> 245 ms); it uses `%string-concat`, and `%json-stringify` hands its one
+- `%json-pairs` merging through the WRAPPED concatenate re-converted every intermediate, at a
+  measurable cost; it uses `%string-concat`, and `%json-stringify` hands its one
   caller-visible result through `copy-seq`.
 
 ### Boundary chokepoints: render a character vector exactly once
@@ -183,11 +183,11 @@ entry.
 ### What is STILL immutable
 - `reverse` / `remove` / `remove-if` / `remove-if-not` / `remove-duplicates` / `substitute` /
   `substitute-if` / `sort` over a string -- the gate cannot see whether the sequence is a string,
-  so a program reversing a LIST would pay the JVM array runtime (+37-48% of class). **Trigger**: a
+  so a program reversing a LIST would pay the JVM array runtime, a sizable slice of class. **Trigger**: a
   JVM shape where a charvec can exist without the general-array runtime, or a gate that can tell a
   string sequence from a list one.
 - A COMPUTED `format` destination that is nil at run time, and a COMPUTED `(coerce x ty)` naming a
-  string at run time: the wrap would be CORRECT, the GATE costs +2.4-3.3 KB of class in every
+  string at run time: the wrap would be CORRECT, the GATE costs kilobytes of class in every
   program that formats to a stream. `expandComputedCoerce` routes to the unwrapped shared
   `%seq-to-string` -- the one line to change.
 - `symbol-name` / `(string 'sym)` / `gensym` / `make-symbol` names (CLHS leaves mutation undefined;
@@ -204,7 +204,7 @@ Whole-string consumers (`string=`, concatenate, intern, hash, print) render a ch
 CALL -- bounded constant factors, nothing quadratic, because index sites read elements
 (`.kb/string-index-cost.md`) and `subseq`-of-charvec copies the slice. `position`/`find` no longer
 coerce the whole sequence to a list per call (`buildPositionScan`, `.kb/seq-coerce-runtime.md`),
-which is why tokenizer-shaped code got ~35x faster with the flip.
+which is why tokenizer-shaped code got much faster with the flip.
 
 ### Unfinished
 If `%schar-set-runtime` becomes hot (one call per character written in `make-string` fill loops),

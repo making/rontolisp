@@ -93,11 +93,11 @@ the host's buffer. A string INPUT stream's copy is permanent and NOT guarded -- 
 `_charvec_to_str` is inserted after the string operand of every string consumer and at the
 entry of `_equal` / `_hash` / `_print_val` / `_princ_val` / `_str_to_mem` / `_string_concat` /
 `_write_line` / `_write_stream_str` / the `equalp` key fold. One `:string` boundary is enough to
-root the whole group, and the group is **1,961 bytes** in a module that never makes a character
+root the whole group, and the group rides along entire in a module that never makes a character
 vector. `Ctx.charvecPossible` decides whether ANY of those sites is emitted -- all of them or
-none, since one call roots the same six functions (`_charvec_to_str` 517, `_charvec_p` 281, the
-vector walk 398, the UTF-8 encode 533, `_str_from_mem` 87, and a data segment only they
-addressed).
+none, since one call roots the same six functions (`_charvec_to_str`, `_charvec_p`, the
+vector walk, the UTF-8 encode, `_str_from_mem`, and a data segment only they
+address).
 
 **The gate is an ALLOWLIST over the program's operators, and the obvious tighter answer is
 WRONG.** Deriving it from the three CONSTRUCTORS -- a character-element-type `make-array`
@@ -134,13 +134,14 @@ Three things make the allowlist safe rather than lucky:
   vector nor lower to a helper that does.
 
 Measured on the `.todo/789` reactor (two host imports, one taking two `:string`s, `fib`, two
-exports; `--no-wasi --optimize=size`): **4,623 -> 2,725 bytes (-41%)**, code 4,019 -> 2,190 over
-40 -> 34 functions, data 117 -> 94 -- the dead `"TRIVIAL-GARBAGE"` package-designator segment
+exports; `--no-wasi --optimize=size`) and on `examples/browser/webgl-triangle` (10 imports,
+GLSL crossing as `:string` literals): the normalization group's removal shrinks either
+module by over forty percent -- code, functions and data alike -- the dead
+`"TRIVIAL-GARBAGE"` package-designator segment
 was reachable ONLY from the normalization group, so it goes with it and needs no data-section
-shake of its own. `examples/browser/webgl-triangle` (10 imports, GLSL crossing as `:string`
-literals): **4,431 -> 2,487 (-44%)**. A program that does anything else with a string is
-byte-identical: `hello_world` 588, `pi_approx` 4,826 (its `format` opens the gate),
-`webgl-cube` 26,686, `webgl-galaxy` 20,281. Pins:
+shake of its own. A program that does anything else with a string is
+byte-identical (`hello_world`; `pi_approx`, whose `format` opens the gate;
+`webgl-cube`; `webgl-galaxy`). Pins:
 `WasmImportCompilerTest.theCharvecNormalizationIsAbsentFromAModuleThatCannotMakeOne` and
 `.anOperatorThatLowersToAConstructorKeepsTheNormalization` (the pair, not an absolute size), and
 the CONTENT against a Node host in `WasmStringParamBoundaryE2eTest`, whose fill-pointered
@@ -148,12 +149,13 @@ character-vector argument is exactly the case a wrong gate would corrupt.
 
 ## The byte loop stays: `array.new_data` would cost the data section's tree shake
 
-`_str_build` is **68 bytes** in every module (`-Drontolisp.wasm.debug-func-sizes`, measured on
-`hello_world`, `webgl-triangle` and `zlib`), and 66 of them are the
+`_str_build` (`-Drontolisp.wasm.debug-func-sizes`, measured on
+`hello_world`, `webgl-triangle` and `zlib`) is little more than the
 `while (i < len) arr[i] = mem[off + i]` loop. `array.new_data $str_bytes $seg (offset) (size)`
-is one instruction that does exactly that copy; the replacement body is about 25 bytes (no
+is one instruction that does exactly that copy; the replacement body is a handful of
+instructions (no
 locals: `off`, `len`, then `off - dataBase` / `len` / `array.new_data` between the `struct.new`
-operands), so the CEILING of the change is roughly **-40** per module once the `DataCount`
+operands), so the CEILING of the change is a saving of a few tens of bytes per module once the `DataCount`
 section a passive segment needs is paid back. That ceiling is the whole prize, and it is not
 close to the price.
 
@@ -175,30 +177,12 @@ literals `_str_build` builds are exactly the shakeable ones (`StringTable.attrib
 string first interned inside the pass-2 window is a candidate).
 
 Measured 2026-09-13, jar, `--optimize` / `--optimize=size`, by emptying the range list the
-shaker is handed. `uncut` is the whole blob pinned (strings, their intern rows and the
-appended blobs); `strings only` is the optimistic variant where the blobs are somehow left in
-their own cuttable active segments and only the literals are pinned:
-
-| module | raw | uncut | strings only | gzip | uncut gz |
-| --- | --- | --- | --- | --- | --- |
-| `hello_world` | 487 | +2,418 | +1,632 | 388 | +1,520 |
-| `pi_approx` | 1,504 | +2,418 | +1,632 | 910 | +1,556 |
-| `webgl-triangle` | 1,653 | +2,423 | +1,637 | 1,039 | +1,535 |
-| `webgl-galaxy` | 17,531 | +2,500 | +1,714 | 7,866 | +1,640 |
-| `webgl-cube` | 18,001 | +2,509 | +1,723 | 6,687 | +1,686 |
-| `rainbow` | 28,138 | +1,673 | +1,638 | 11,827 | +847 |
-| `webgl-heat3d` | 31,457 | +2,563 | +1,776 | 11,875 | +1,722 |
-| `webgl-platformer` | 68,670 | +2,508 | +1,722 | 22,403 | +1,686 |
-| `zlib` (`=size`) | 78,330 | +2,968 | +2,219 | 28,323 | +1,572 |
-| `zlib` | 102,909 | +2,968 | +2,219 | 36,607 | +1,648 |
-| `webgl-robot-arm` | 169,578 | +1,455 | +1,455 | 56,002 | +635 |
-| `webgl-solids` | 222,795 | +987 | +987 | 77,069 | +259 |
-| `minesweeper` | 262,355 | +120 | +92 | 65,004 | +43 |
-| `webgl-battlefront` | 287,832 | +1,449 | +1,449 | 86,150 | +651 |
-
-So the trade is **-40 bytes of code against +92 to +2,968 bytes of data**, and the mildest
-module in the corpus still loses at twice the ceiling while the typical one loses 40-60x.
-Raw and gzip agree here -- this is a change that ADDS bytes rather than relocating them
+shaker is handed. Pinning the whole blob (strings, their intern rows and the
+appended blobs) costs every module in the corpus far more data than the few code bytes the
+instruction saves; even the optimistic variant, where the blobs are somehow left in
+their own cuttable active segments and only the literals are pinned, costs more -- and
+the mildest module in the corpus still loses at twice the ceiling while the typical one
+loses by a wide multiple. Raw and gzip agree here -- this is a change that ADDS bytes rather than relocating them
 ([[size-measurement]]) -- so naming a different target number does not change the answer.
 The only shape where the passive segment would be free is `--optimize=off`, where nothing is
 shaken and nothing ships.
@@ -224,8 +208,7 @@ bytes. That is the measurement's answer, not a plan.
   the shared `mem.wasm`'s memory section -- active data segments are written BEFORE any function
   runs, so a program whose static data exceeds the default six pages would otherwise trap. Only the
   `(memory (;0;) N)` count changes.
-- Leak pin: ~16KB strings grown in a loop have FLAT peak RSS vs N (50000 -> ~94MB,
-  200000 -> ~91MB).
+- Leak pin: strings grown in a loop have FLAT peak RSS vs the iteration count.
 
 ## Related
 [[string-index-cost]], [[27-wasm-gc-heap-never-grows]], [[read-load-streams]],

@@ -148,12 +148,11 @@ complex-free class is byte-identical and the Long fast path tests nothing new.
   (`HolderArms`): beside a `Double` in the prologue (once one side is known to be a
   `Double`, the other is tested), at the rational path's head and ahead of `_big`'s funnel
   (for `_divx`, the exact path's head), each a delegation to `_cadd`/`_csub`/`_cmul`/
-  `_cdiv`. **The arms must not sit in the helper itself**: measured 2026-10-06 on an n-body
+  `_cdiv`. **The arms must not sit in the helper itself**: on an n-body
   (a `sqrt` gates it, and a complex can reach its float arithmetic through the body
-  vectors), the arms inside `_add` & co. (143 -> 218 bytecodes) DOUBLED its allocation under
-  Graal -- 111 -> 228 young collections with an 8 MB young generation, 160 -> ~450 ms --
-  and arms on the cold paths alone still 164; the split head (74 bytecodes) is back at 110
-  and at the base time. C2, which eliminates none of those boxes, ran both alike. `_neg`
+  vectors), the arms inside `_add` & co. DOUBLED its allocation under
+  Graal, and arms on the cold paths alone still cost; the split heads put it back
+  at the base time. C2, which eliminates none of those boxes, ran both alike. `_neg`
   keeps its arm ahead of `_big`, to `_cneg` -- never `_csub` from zero, which turns a
   `-0.0` part into `+0.0`. `_pow` on each of its three arms ahead of `_dbl`/`_ratnum`, to
   `_cpow`; `_cpowr`, which a site with a variable operand reaches, at its head. `_cdiv`'s
@@ -173,14 +172,10 @@ complex-free class is byte-identical and the Long fast path tests nothing new.
 An operation whose own form spells a float literal (`(+ z 1.5)`, `(exp (* 1.0 z))`) is
 the next section's.
 
-Measured 2026-10-06 (linux/amd64, GraalVM 25): the size-report and bench-report programs
+The size-report and bench-report programs
 compile to the same JVM class and jar bytes (and, for the WASM twin, the same modules at
 every level). A gated program pays for the twins its helpers now reach, which the JVM's
-name-reachability shake keeps whether or not a complex can flow there -- measured with
-the arms still inside the helpers, before the split added its four small heads: `+`
-alone +1.3 KB class / +0.7 KB jar, all four operators +2.8 / +1.0 KB, `exp` or `sin`
-(`_cu1`) +4.7 / +1.5 KB, `expt` (`_cpow`) +5.0 / +1.9 KB;
-`examples/ml/linear-regression.lisp` +3.5 / +1.7 KB. The generic float, ordering, `=`,
+name-reachability shake keeps whether or not a complex can flow there. The generic float, ordering, `=`,
 unary and `expt` loops of such a program ran unchanged within noise.
 
 Pinned by `ComplexThroughAVariableFixture` (`LispEvaluatorTest#complexThroughAVariable`,
@@ -444,19 +439,19 @@ operands' range (`(/ #c(1d200 1d200) #c(1d200 1d200))` is `#C(1.0 0.0)`; the `c^
 denominator answered `#C(NaN NaN)`), and a real divisor is one rounding per part
 (`(log -8d0 2d0)` is SBCL's `#C(3.0 4.532360141827194)`).
 
-Measured against SBCL 2.2.9 (`*read-default-float-format*` `double-float`, linux/amd64),
+Checked against SBCL 2.2.9 (`*read-default-float-format*` `double-float`, linux/amd64),
 2026-10-07, overturning 2026-09-11's "SBCL computes the same form" (Smith's
 `dn = c + d*r`, `>=`, and every operand floated first when any part was a float), which
-had held on the nine rows probed then: 400 random float-real / float-complex quotients
-matched this real-dividend form 400/400 and the old form 265/400; 500 random
-float-complex / float-complex matched `dn = c*(1+r^2)` 500/500 and the old `c + d*r`
-354/500; float dividends over EXACT divisors matched the exact-`r`/`dn` reading 300/300
-(real) and 300/300 (complex), against 204 and 282 for floating first. Signed zeros moved
+had held on the rows probed then: random float-real / float-complex quotients
+match this real-dividend form where the old form drifts, and random
+float-complex / float-complex quotients match `dn = c*(1+r^2)` where the old `c + d*r`
+drifts; float dividends over EXACT divisors take the exact-`r`/`dn` reading
+over floating first. Signed zeros moved
 too: the old form answered `#C(-0.0 0.0)` for `(/ #c(-0.0 -0.0) 1.0)` (SBCL
 `#C(-0.0 -0.0)`) and `#C(1.0 0.0)` for `(/ 1 #c(1.0 0.0))` (SBCL `#C(1.0 -0.0)`). A random
-400-form corpus of `+ - /` folds over every operand shape (exact, ratio, float, signed
-zeros, exact and float complexes) then matched SBCL on every row SBCL does not trap on,
-and all four backends agreed on all 400.
+corpus of `+ - /` folds over every operand shape (exact, ratio, float, signed
+zeros, exact and float complexes) and matched SBCL on every row SBCL does not trap on,
+with all four backends agreeing.
 
 `+` and `-` needed no new form: SBCL counts a real beside a complex as `(r, 0)` with an
 EXACT zero, and contagion makes that the same IEEE sum as a float zero

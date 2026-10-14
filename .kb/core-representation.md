@@ -100,7 +100,7 @@ naming it while nil. A direct call is `LispMacroExpander.expandCallThroughFuncti
 `(funcall #'name args...)`, so `#'name`, a quoted designator, `symbol-function`, `fdefinition`
 and a setf place (`#'%setf-NAME`, reported `(SETF NAME)`) all reach that read, ahead of the
 arguments. A literal `fboundp` reads the global (non-nil -> t), behind the tombstone guard when
-the program calls `fmakunbound`. Measured 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM,
+the program calls `fmakunbound`. Checked 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM,
 P1, component before): `fboundp` NIL even after the definition ran, a call or place before it
 `undefined-function` naming NIL, `#'` / `symbol-function` / `fdefinition` answered NIL, and a
 lexical of the same spelling shadowed the function at a call and at `#'` (`Not a function: 5`).
@@ -130,7 +130,7 @@ which also replaces a tombstone; the program gets the function namespace
 (`writesFunctionNamespace`). Its global stays allocated and unused. `NestedDefunRedefinition`'s
 stand-in for a held name is the same installation, a setf-only forwarder of the name is dropped
 (installed, it would call itself), and the `defvar` refusal no longer applies. Every other
-program compiles as before. Measured 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM, P1,
+program compiles as before. Checked 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM, P1,
 component before): `(funcall (intern "F"))` / `symbol-function` signalled `undefined-function`,
 a computed `fboundp` answered NIL, after `fmakunbound` a call still ran and `fboundp` stayed NIL
 after the next definition, `eval '(f)` was undefined (a trap on wasm), a top-level defun a nested
@@ -159,10 +159,10 @@ Before: the store compiled into a local of the enclosing function (the plain-loc
 `Jvm`/`WasmSetqCompiler`), any other read was refused (`Cannot compile symbol reference`), a
 runtime `boundp` answered NIL; a top-level `psetq`/`psetf`/`multiple-value-setq` was refused on
 the JVM and both WASM, and a `setq` in a `defvar` initform on both WASM (the JVM had a top-level
-free-assignment pass of its own for `setq`/`setf`, now this one). Measured 2026-10-04: examples,
-size-report, bench-report and the ci-spec program (1,927 outputs: P1, `--optimize=size`,
-component, JVM) compile byte-identically, build-info strings aside; ci-spec compile time
-unchanged (~18 s). A literal `boundp` of such a name reads its variable in a program without the
+free-assignment pass of its own for `setq`/`setf`, now this one). Checked 2026-10-04: examples,
+size-report, bench-report and the ci-spec program compile byte-identically on P1,
+`--optimize=size`, the component backend and the JVM, build-info strings aside. A literal
+`boundp` of such a name reads its variable in a program without the
 eval mirror (`.kb/compile-time-boundp.md`, "A probe the fold leaves open"). Pins:
 Such a global, like a top-level `setq` one, is unbound until its first store: a read that can
 run before it signals (`.kb/dynamic-special-variables.md`, "A read of a global before its first

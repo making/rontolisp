@@ -182,14 +182,14 @@ answered a ONE-argument lambda. Fixed -- see the next section.
 A third gap stood in that list until 2026-09-11:
 `remove-duplicates.order.1/2` and `delete-duplicates.order.1/2` want
 `:start`/`:end`/`:test-not` and a COMPUTED `:from-end`, which `expandRemoveDuplicates`
-rejected. Fixed (4 more tests, sequences 2,891 -> 2,895) --
+rejected. Fixed (4 more ANSI tests) --
 `.kb/sequence-bounding-keywords.md`, "the window bounds what is CONSIDERED".
 
 ### `sort`/`stable-sort`/`search`/`reduce` (2026-09-12)
 
-`ansi-test/measure.sh sequences cons` (interpreter, suite `ca06bd9`): sequences 2,950 ->
-2,964 / 3,287 (89.7% -> 90.2%), errors 215 -> 206, fails 122 -> 117; cons unchanged
-(1,630 / 1,879) -- `subst`/`nsubst`/`sublis`/`nsublis` needed no code change, see "Who is
+`ansi-test/measure.sh sequences cons` (interpreter, suite `ca06bd9`): a batch more
+sequences tests pass, errors and fails down; cons unchanged --
+`subst`/`nsubst`/`sublis`/`nsublis` needed no code change, see "Who is
 covered" above. A name-by-name diff: **14 tests fixed, zero regressed** --
 `sort.order.2`, `stable-sort.order.1/2`, `reduce.order.2/3` (5 fails), and
 `search.order.2`/`search-list.16` plus the same `:test-not`-shaped fix reaching
@@ -203,27 +203,20 @@ the `Unknown keyword argument: :X` census fell from 30 to 21, exactly this count
 supplied-p flags. Three is where the set stops because the only UNBOUNDED lowering is
 `(lambda (&rest args) (not (apply f args)))`, and `apply` is a gate, not an operator.**
 
-The gate is real and was re-measured, not assumed: `(print (+ 1 2))` compiles to 3,955 B
-(JVM) / 489 B (WASM); `(print (apply #'+ (list 1 2)))` to 41,041 B / 18,741 B. On the JVM
+The gate is real and was re-measured, not assumed: a program that calls `apply` pays for
+the apply tier (JVM) or the apply runtime (WASM) that a plain `+` program does not. On the JVM
 `apply` forces `usesEval`; on WASM it opens the apply tier (`.kb/eval-runtime.md`).
 
 What the gate does NOT cost is what the old javadoc assumed. Measured on the minimal
 program `(let ((f #'evenp)) (let ((g <lambda>)) (print (funcall g 3))))`, where `#'evenp`
-has already opened the designator gate the way every `complement` call site does:
-
-| lowering of the complement lambda | JVM | WASM |
-|---|---|---|
-| one argument (what it used to emit) | 41,840 | 20,988 |
-| `(&rest args)` + `apply` (CL-conformant) | 42,045 | 29,301 |
-| `(a &rest more)`, arities 1-2 | 42,098 | 23,756 |
-| `&optional` supplied-p, arities 0-3 (**landed**) | 43,115 | 25,026 |
-| `(&rest args)` + `cond`, arities 0-3 | 43,180 | 25,037 |
-
-So on the JVM the conformant `apply` lowering is the SMALLEST of the four candidates
-(+205 B, 0.5%) -- the premise "`apply` drags the whole eval runtime into every compiled
+has already opened the designator gate the way every `complement` call site does, across
+the candidate lowerings of the complement lambda (one argument; `(&rest args)` + `apply`;
+bounded arities; `&optional` supplied-p, arities 0-3, the one landed; `&rest` + `cond`):
+on the JVM the conformant `apply` lowering is the SMALLEST of the candidates -- the
+premise "`apply` drags the whole eval runtime into every compiled
 program that uses it" does not survive contact with a program that spells `complement`,
-because such a program has already paid. WASM is where it holds: +8,313 B (+40%) against
-+4,038 B for the bounded dispatch. Two things decided it for the bounded shape anyway:
+because such a program has already paid. WASM is where the apply tier costs: a wide margin
+over the bounded dispatch. Two things decided it for the bounded shape anyway:
 
 - the wrappers. `BuiltinFunctionWrappers.sequenceScanFamily`/`positionFamily` build the
   first-class `#'remove`/`#'position` `:test` on a complemented `:test-not`, and those
@@ -235,8 +228,7 @@ because such a program has already paid. WASM is where it holds: +8,313 B (+40%)
 
 Both wrapper sites and `KeywordTail.complemented` know their arity is TWO, so all three
 spell it: `LispMacroExpander.twoArgumentComplement`. That is why a program that never
-writes `complement` did not grow with this change (41,840 / 20,988 -> 42,308 / 20,847),
-while one that does pays for the dispatch (41,840 / 20,984 -> 43,572 / 25,027).
+writes `complement` does not grow with the dispatch, while one that does pays for it.
 
 Landing it uncovered one more thing: a nested lambda whose `&optional` carries a default
 (`(defun f (n) (lambda (&optional (x 1 p)) ...))`) was a ClassCastException at compile
@@ -257,8 +249,8 @@ so a program that never spells `complement` is byte-identical.
   array version of the same loop). Verified directly: `needsApplyRuntime` answers
   false on `(print (funcall (complement #'evenp) 3))` and true on its expansion, and
   the compiled class carries `_apply`.
-- **Measured** (same minimal program, raw backend harness): JVM `.class`
-  19,843 -> 25,796 B (+5,953, +30%); WASM 10,007 -> 12,009 B (+2,002, +20%). A
+- **Measured** (same minimal program, raw backend harness): the `.class`
+  grows by roughly a third, the wasm by a fifth. A
   program that never spells `complement` is unchanged (the `#'remove` /
   `#'position` `:test-not` wrappers ride `twoArgumentComplement`, and neither the
   examples, the size-report corpus, the shipped libraries nor the e2e sources spell

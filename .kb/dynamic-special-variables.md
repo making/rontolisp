@@ -129,13 +129,13 @@ worker run one after the other; a fetch settles its future on the HTTP client's 
   (2026-10-06).
 - The ci-spec program keeps the thread-scoped store (it holds `async-defun`s), as does every
   served, threaded or exported program; their emission is the one before.
-- Measured 2026-10-06 (load average 5-17, best of 7 in-process rounds, alternating builds):
-  6.4M calls of a closure built inside a binding of two specials, each call reading both, JVM
-  30-31 -> 6-7 ms (the same program with `setq` save/restore in place of the binding, i.e. no
-  dynamic binding at all: 6-10 ms); a callee's reads 4 -> 3 ms. cl-ppcre, 100,000 scans (two
-  scanners, 50,000 each): JVM 249-278 -> 147-152 ms -- each scan binds `*string*`,
+- Checked 2026-10-06: a closure built inside a binding of two specials now reads them about as
+  cheaply as lexicals do on the JVM -- on par with the same program spelled with `setq`
+  save/restore in place of the binding, i.e. no dynamic binding at all -- and a callee's reads
+  with it. cl-ppcre scanners, whose every scan binds `*string*`,
   `*start-pos*`, `*end-pos*` and friends (a `_dbind` allocated a cell and did a
-  `ThreadLocal.get`/`set`) and its advance closures read them (`_dget`).
+  `ThreadLocal.get`/`set`) and whose advance closures read them (`_dget`), speed up markedly
+  on the JVM.
 
 ## WASM (`WasmLetCompiler`) -- shallow binding over the module global
 
@@ -203,27 +203,28 @@ native `evalProgv`).
     the one shared accessor `%global-access` (below) with a fresh cons as its default, which
     falls to `%symbol-value-raw`. The accessor is cut into segments of
     `NAME_DISPATCH_SEGMENT_ARMS` (128) arms (`segmentedNameDispatch`, shared with progv), each miss
-    tail-calling the next segment (`%global-access-1`, ...). ~22 B of JVM bytecode a read arm, so
+    tail-calling the next segment (`%global-access-1`, ...). A read arm is a few bytecode
+    instructions, so
     a segment is under the 64 KB limit for any special count and under HotSpot's 8,000-byte
     `HugeMethodLimit`, so the JIT compiles it. Injected by both backends after the global set is
     final, when the program, the injected runtime or a condition report can reach a computed site
     (`programUsesComputedSymbolValue`: any `SYMBOL-VALUE` but `(symbol-value 'x)`). A site whose
     program lacks it (a user defun took a name, or a site no scan saw) spells the old inline
     chain: correct, at the old size.
-  - Before: every site, literal or computed, inlined the whole chain -- ~12 KB a site at
-    ci-spec's ~359 specials, so a defun or top-level form with a few sites overflowed 64 KB
+  - Before: every site, literal or computed, inlined the whole chain, so a defun or top-level
+    form with a few sites overflowed 64 KB
     (ci-spec's `top-level-forms-answer-like-defun-bodies` was cut to one site a form;
-    restored to four a form). A method over 8,000 B is never JIT-compiled, so a computed
-    site also ran interpreted: 2M lookups over 300 specials 10.8 s -> 2.1 s on the JVM; wasm
-    unchanged at ~22 s (the `equal` test itself: 1.5 s after `.todo/c81`, below).
-  - Measured 2026-10-04, the ci-spec program as of `HEAD` (before -> after): JVM classes
-    7,846,439 -> 7,538,586 B (-3.9%), wasm 6,881,325 -> 6,749,210 (-1.9%), component
-    7,094,646 -> 6,961,175 (-1.9%); with the restored four-site case the JVM build failed
-    before (`_top$55`, 107,364 B) and is 7,539,091 after. size-report, bench-report: every
+    restored to four a form). A method over the `HugeMethodLimit` is never JIT-compiled, so a
+    computed site also ran interpreted; segmented, such lookups are several times faster on
+    the JVM, and wasm is unchanged (the `equal` test itself dominates there; `.todo/c81`,
+    below).
+  - Checked 2026-10-04, the ci-spec program as of `HEAD`: the shared accessor shrinks the JVM,
+    wasm and component builds; with the restored four-site case the JVM build had failed
+    before on an oversized `_top$N` and builds after. size-report, bench-report: every
     program byte-identical on all three outputs (none uses progv). examples: byte-identical
-    but for build-info strings, except `jvm/cffi-sqlite.lisp` +264 B (2,353,838 ->
-    2,354,102): its one computed site (cffi's `mini-eval`, 3,818 -> 200 B) now pays the
-    shared runtime (3,483 B) and its name-table entries -- a one-site program is the
+    but for build-info strings, except `jvm/cffi-sqlite.lisp`: its one computed site (cffi's
+    `mini-eval`) now pays the
+    shared runtime and its name-table entries -- a one-site program is the
     break-even's losing side. It counts as progv-using only because a code walker quotes
     `PROGV` (`programUsesSymbol` counts quoted data).
 - The name test of every dispatch over the special or global set is the internal
@@ -236,12 +237,11 @@ native `evalProgv`).
 - The shared dispatches are CALL-ONLY: neither backend gives them a `_invoke_N` /
   `_lookup` row (`dispatchableFuncIds`' `callOnly`), even when names resolve at run time. A
   library holding a `set` or `progv` site the shaker later drops (cl-ppcre's, ningle's) would
-  otherwise keep the whole runtime alive through the dispatchers: +12 to +20 KB of wasm on the
-  str / ningle / postgres examples before this rule. Pinned by
+  otherwise keep the whole runtime alive through the dispatchers on the
+  str / ningle / postgres examples. Pinned by
   `JvmLispCompilerTest#theSharedNameDispatchesAreNeverDispatcherTargets`.
-- Before the shared progv runtime, each site spelled both chains inline: ~36 KB of JVM bytecode a
-  site at ci-spec's ~359 specials, 600 specials overflowed one top-level `progv` form
-  (`_top$0`, 72,093 B), and four sites over 300 specials 129,765 B. A 315-special program
+- Before the shared progv runtime, each site spelled both chains inline, and enough specials
+  overflowed one top-level `progv` form past the 64 KB method limit. A 315-special program
   nested 315 `if`s. That is fine
   for the EMISSION (linear, small constants) but the wasm backend used to compile an
   else-chain with one Java frame per level, so it overflowed a 1 MiB compile stack
@@ -255,19 +255,17 @@ native `evalProgv`).
   Pinned by `WasmLispCompilerTest.aDeepElseChainCompilesOnAMegabyteStack` (a thousand
   specials through the INLINE progv and symbol-value dispatches -- user defuns take the
   runtimes' names -- on a 1 MiB thread; fails with `StackOverflow` without the loop).
-- Measured 2026-10-04 (`.todo/c81`, before -> after). ci-spec program: JVM classes 7,539,127 ->
-  7,294,185 B (-3.2%), wasm 6,749,167 -> 6,635,076 (-1.7%), component 6,961,133 -> 6,846,025,
-  `--optimize=size` 5,578,881 -> 5,468,746; largest method 54,767 -> 28,088 B, `tlf-bound`
-  36,341 -> 317 B. `ProgvSetSiteFixture` (300 specials): the four-progv-site top-level form
-  129,765 B (failed) -> compiles, `pvs-four` 741 B, `pvs-set-four` 222 B; wasm module 280,816 ->
-  60,244. Run time over 300 specials, half the names on the last arm: 2M computed
-  `symbol-value` JVM 2.36 -> 1.28 s, wasm 22.5 -> 1.5 s; 1M two-name `progv` JVM 22.9 -> 2.35 s,
-  wasm 54.2 -> 2.9 s; 2M computed `set` JVM 5.2 -> 2.2 s, wasm 2.9 -> 3.2 s (the mirror's
+- Fixed 2026-10-04 (`.todo/c81`). The shared, segmented runtime shrinks the ci-spec program's
+  JVM, wasm and component builds, the largest method with it, and brings the
+  `ProgvSetSiteFixture` top-level form (300 specials, four progv sites) from a build failure
+  to a compiled method. Lookups over 300 specials, half the names on the last arm, speed up
+  several-fold on the JVM and an order of magnitude on wasm; computed `set` improves on the
+  JVM and stays put on wasm (the mirror's
   `_store` walk dominates `set`; the per-arm `ref.test` and the call cost the rest).
   size-report, bench-report: byte-identical on P1, `--optimize=size`, component and JVM.
-  examples: byte-identical but for build-info strings, except `jvm/cffi-sqlite.lisp` JVM
-  2,424,232 -> 2,422,098 and the twelve holding a DEAD `set` site (str-demo, the ningle
-  workers, postgres/postmodern/bbs-api) at +70 to +147 B wasm, +3 B JVM: same strings, a
+  examples: byte-identical but for build-info strings, except `jvm/cffi-sqlite.lisp` and the
+  twelve holding a DEAD `set` site (str-demo, the ningle
+  workers, postgres/postmodern/bbs-api), which move by a few bytes: same strings, a
   different string-table order (the runtime compiles where the shaken site did not).
 - The literal-`boundp` fold refuses progv programs (`CompileTimeBoundp.fold` gate).
 - A symbol past the end of the values is bound to the UNBOUND marker (`%progv-unbound`), and in
@@ -330,20 +328,16 @@ wrote the mirror only, so compiled code kept reading 1.
   those modules stay byte-identical. The compiled mirror (`mirrorGlobal`) still writes every
   store: it is the value of every non-special global and the `boundp` witness of every name
   but a tracked global ("Bound-ness of a special without a value" below).
-- Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
-  `--optimize=size`, component and JVM, except the Cloudflare Worker rows, whose libraries run
-  `eval`: hello-clack 697,130 -> 698,493 (+1,363; gzip 185,160 -> 185,513), tiny-routes +1,518 to
-  +2,993, hello-ningle / httpbin-ningle +16.4 KB (+0.7%; gzip +4.7 KB). examples: byte-identical
-  except the eval / `symbol-value` programs: calc +474 B JVM / +246 wasm, cffi-sqlite +3,269
-  JVM, the clack / tiny-routes / ningle programs +0.8 to +21 KB (ningle's accessor is ~200 arms,
-  9 KB of wasm, plus the names it needs in the string table). ci-spec program: JVM 7,334,695 ->
-  7,336,257, wasm 6,647,482 -> 6,641,111, component 6,857,938 -> 6,851,479, `--optimize=size`
-  5,480,695 -> 5,474,319 (one accessor where `%symbol-value-dynamic` and `%set-global-store` were
-  two chains).
+- Size effect (2026-10-04). size-report, bench-report: byte-identical on P1,
+  `--optimize=size`, component and JVM, except the rows whose libraries run
+  `eval` (the Cloudflare Workers; the ningle ones most, whose accessor is ~200 arms plus the
+  names it needs in the string table) and the eval / `symbol-value` programs among the
+  examples. The ci-spec program pays the accessor too -- one accessor where
+  `%symbol-value-dynamic` and `%set-global-store` were two chains.
 - Run time: an eval'd variable access goes through the accessor before the mirror. As a linear
-  walk that cost 200k `(eval '(setq *ex* (+ *ex* *e99*)))` over 101 specials, the names last in
-  declaration order, JVM 125 -> 370 ms, wasm 43 -> 170 ms (the mirror found both at its head);
-  searched ("Name dispatch"), JVM ~80 ms, wasm ~50 ms.
+  walk with the names last in
+  declaration order that cost more than the mirror read alone; searched ("Name dispatch"), it
+  costs less on both backends.
 
 ## Name dispatch: a search, not a walk (JVM and both WASM, 2026-10-04)
 
@@ -364,18 +358,17 @@ and both compilers recognise it (`compiler/NameDispatch.match`: `if`s testing
   the miss), an `if_icmpge` search over the arms' hashes, leaves of at most 4 arms keeping the
   `equals` test, which separates colliding hashes -- `searchTree` never splits equal keys
   (`*XO*` / `*Y0*` collide; `NameDispatchFixture`). Keying on the hash's low 15 bits makes
-  every pivot a `sipush` (-1.1 KB on the ci-spec program) but ran a random lookup over 300
+  every pivot a `sipush` but ran a random lookup over 300
   names twice as slow under Graal (C2: the same). Arms carry the tail and exit marks like an
   `if`'s.
-- Leaf sizes measured: wasm time flat from 2 to 32 (16 for the fewest pivots at no cost); JVM
-  4 fastest (2: 1.8x slower, 8: +15%).
-- Measured 2026-10-04 (linear -> search). 2M computed `symbol-value` over 300 specials (three
-  segments): JVM 960 -> 165 ms, wasm 1,560 -> 167 ms; 1M two-name `progv` over 300 specials:
-  JVM 3.7 s -> 0.54 s, wasm 5.7 s -> 0.25 s. A wasm accessor arm 43 -> 28 B (the rest is the
-  arm's access). Sizes: every program without a name dispatch byte-identical (size-report,
+- Leaf size, measured: wasm time is flat across the swept leaf widths; the JVM wants a small
+  leaf (wider leaves lose; see the `.todo` record).
+- Checked 2026-10-04 (linear -> search). Computed `symbol-value` and two-name `progv` over
+  300 specials drop from a linear walk to a search, by far the most on the JVM; a wasm
+  accessor arm shrinks to the arm's access alone. Sizes: every program without a name
+  dispatch byte-identical (size-report,
   bench-report, examples, P1 / `--optimize=size` / component / JVM). With one, wasm shrinks
-  and the JVM grows by the pivots: ci-spec program wasm -19.0 KB (gzip +2.0 KB), JVM +4.9 KB
-  (gzip +3.2 KB); hello-ningle Worker -3.0 KB (gzip -0.7 KB), hello-clack -581 B (gzip +1).
+  and the JVM grows by the pivots.
   The gzip rows barely move because an arm's information -- its offset and its global -- is
   the same either way. Pins: `WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare`, the
   `aNameDispatchAnswersEveryNameItsChainDoes` four, `NameDispatchTest`.
@@ -413,9 +406,10 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   an untracked name -- keeps the arm). The gate runs before the runtime is injected, so it reads
   the set off the program (`GlobalVarCollector.collectProbedUnboundBeforeInjection`); the injected runtime
   spells no probe the program does not, and `requireBoundpOffMirror` checks the final set again.
-  Measured 2026-10-04: `(defvar *x*)` probed in a callee of a binding, JVM 10,162 -> 6,577 B,
-  P1 1,124 -> 820, component 2,286 -> 1,975 (the same program reading `*x*` instead: 6,550 / 806 /
-  1,961); `BoundpInBindingFixture.LITERAL_SOURCE` JVM 57,632 -> 20,627, P1 19,845 -> 7,854.
+  Checked 2026-10-04: the gate sheds most of the eval runtime from a program whose only
+  `boundp` is `(defvar *x*)` probed in a callee of a binding or the
+  `BoundpInBindingFixture.LITERAL_SOURCE` shape, landing near the size of the same program
+  that reads `*x*` instead.
   size-report, bench-report, examples and Workers: byte-identical (P1, `--optimize=size`,
   component, JVM; none probes only tracked specials). Pins:
   `aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime` (`JvmLispCompilerTest`,
@@ -427,25 +421,21 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
 - `#'boundp` is a reference-gated wrapper (`BuiltinFunctionWrappers`, beside `#'symbol-value`),
   so `(mapcar #'boundp names)` is a computed probe: the injected body is among the forms
   `boundpProbes` reads, which tracks every valueless special exactly as a computed call does.
-  Measured 2026-10-04: size-report, bench-report and the examples naming neither wrapper are
+  Checked 2026-10-04: size-report, bench-report and the examples naming neither wrapper are
   byte-identical (P1, `--optimize=size`, component, JVM class); a program naming `#'boundp` pays
-  the call's own cost (wasm +8 B, JVM +47 B over the same program with the call spelled out).
+  the call's own cost over the same program with the call spelled out.
   Pins: `BoundpFunctionValueFixture` on `boundpAndFboundpAreFunctionValues` (`LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), ci-spec
   `boundp-and-fboundp-as-function-values`.
 - A read of such a special while unbound signals ("A read of a special without a value"
   below), and so does one inside a `progv` short of values ("A progv short of values" below).
-- Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
-  `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
-  httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
-  locally declared specials, 54 read sites. examples: byte-identical but for build-info strings
-  except the same shape (the ningle, postmodern and bbs-api programs, +1.25 to +1.47 KB wasm,
-  +0.56 to +0.73 KB JVM) and cffi-sqlite JVM -321 B. ci-spec program before its new case: P1
-  +1,847, `--optimize=size` +217, component +214, JVM -221. The idiom alone, `(defvar *x*)`
-  probed in a callee of a binding: wasm 2,183 -> 2,128 B, JVM 10,231 -> 10,088 B. 20M reads of
-  a tracked special: inside a binding unchanged (JVM 47 ms, wasm 93 ms), outside it JVM +3 ms,
-  wasm +5%; 20M `boundp`: JVM 304 -> ~20 ms, wasm 1.3 -> ~0.12 s (a variable read where the
-  mirror probe walked an alist).
+- Size and speed effect (2026-10-04). size-report, bench-report: byte-identical on P1,
+  `--optimize=size`, component and JVM. Workers and examples shift only where lack's /
+  alexandria's computed `boundp` or the postmodern / bbs-api shape track locally declared
+  specials and their read sites; the mirror probe the tracked representation replaces becomes
+  a variable read, so a `boundp` of a tracked special drops from an alist walk to a
+  compare; reads of a tracked special keep their speed inside a binding and pay little
+  outside it.
 
 ## A read of a special without a value (all four backends, 2026-10-07)
 
@@ -477,29 +467,21 @@ unbound state at all, and its read turned the marker into nil.
   message-only payload elsewhere. Outside EH mode the read traps, as `error` does there. A read in
   the binding's own frame skips the test (`Ctx.boundSpecials`); `--reentrant` tests its per-task
   read through a temp.
-- Measured 2026-10-07 (load average 7-22). Premise on SBCL 2.2.9 / interpreter / JVM / P1 /
+- Checked 2026-10-07. Premise on SBCL 2.2.9 / interpreter / JVM / P1 /
   component: `(defvar *dv*)` then `*dv*` and `(symbol-value '*dv*)` caught for `cell-error-name`:
-  `*DV*` / `*DV*` / NIL / NIL / NIL. Shapes, sizes before -> after (default `--optimize`, JVM
-  classes / P1 / component): jzon demo 585,908 / 468,924 / 477,515 -> +103 / +12 / +12; the
-  cl-ppcre E2E exercise 760,038 / 584,425 / 588,974 -> +753 / +1,387 / +1,388; the iterate one
-  1,383,854 / 1,087,173 / 1,094,224 -> +776 / +2,419 / +2,420; the trivia one 1,284,167 / 990,083
-  / 997,290 -> +159 / +506 / +507. A JVM inline test (`dup; getstatic _unbound; if_acmpne; ldc;
-  invokestatic`, 15-16 B a site) cost cl-ppcre +3,109 and iterate +4,101. A wasm shared check
-  (`global.get; i32.const off; call`, without the length) cost cl-ppcre +683, iterate +803,
-  trivia +48. Time, 20M reads of such a special in a loop, inside a binding another function
-  made, ms per round: JVM 8-9 before, 7-9 with `_bound`, 7-9 inline (the JIT inlines `_bound`);
-  wasm EH module 102-111 before, the shared check 133-141, read-then-test with the arm ending in
-  the call 112-123, test-then-read ending in the call 125-138, test-then-read ending in
-  `unreachable` 103-116 -- the shape taken; outside EH mode 109-123 both. A shared check at
-  `--optimize=size` was not taken: 0.6-1.4 KB (0.1-0.15%) on those programs for a second emission
-  and a new function type, and a call per read.
-- Byte identity: size-report (hello_world, pi_approx, zlib at off / default / size / component
-  and JVM; dom_reactor at the three `--no-wasi` levels and JVM) and bench-report (10 programs,
-  default / size / component / JVM): 59 outputs identical. examples: 254 of 269 compiles
-  identical; the 15 others hold a special without a value -- cl-ppcre's local declarations under
+  `*DV*` / `*DV*` / NIL / NIL / NIL. The per-site alternatives were weighed and the shared
+  shapes taken: on the JVM `_bound` (which the JIT inlines, so an inline `dup; getstatic
+  _unbound; if_acmpne; ldc; invokestatic` test buys nothing and costs more per site), and on
+  wasm the test-then-read arm ending in `unreachable` (a shared check without the length, and
+  read-then-test variants, are slower in an EH module; outside EH mode it makes no
+  difference). A shared check at
+  `--optimize=size` was not taken: it costs a second emission
+  and a new function type, and a call per read, for a marginal size change.
+- Byte identity: size-report and bench-report outputs are identical across their levels.
+  examples: all but the ones holding a special without a value -- cl-ppcre's local declarations under
   rove or ningle (roman, minesweeper-core-test, the three Workers checks, httpbin-ningle), jzon's
-  `*writer*` (httpbin-jzon), cffi's (cffi-sqlite) -- +12 to +873 B wasm, +103 to +914 B JVM, and
-  every one that runs prints what it did before. ci-spec: all 675 cases on all four backends.
+  `*writer*` (httpbin-jzon), cffi's (cffi-sqlite) -- compile identically, and
+  every one that runs prints what it did before. ci-spec: all cases on all four backends.
 
 ## A read of a global before its first store (all four backends, 2026-10-07)
 
@@ -530,7 +512,7 @@ and such a read answered NIL.
   `wasm-export`, `jvm-export`, the component import) run nothing; an imported name is a host call.
 - Wasm decides it before `usedLayoutTags` (the `readsUnboundGlobal` gate that bakes
   `unbound-variable`), on the program no pass changes before the globals are collected.
-- Measured 2026-10-07. Premise on SBCL 2.2.9 / interpreter / JVM / P1 / component, `(defun g ()
+- Checked 2026-10-07. Premise on SBCL 2.2.9 / interpreter / JVM / P1 / component, `(defun g ()
   *nb*)` called under a handler before `(setq *nb* 1)`: `*NB*` / `*NB*` / NIL / NIL / NIL; the same
   for a top-level read before the `setq` and for a global only a function assigns. Census of the
   candidate rules over size-report (hello_world, pi_approx, zlib, dom_reactor), bench-report (10)
@@ -574,7 +556,7 @@ every backend bound it to nil, documented as a divergence.
   name it does not hold.
 - Wasm: a read in the frame of a `let` of the special skips the test (`Ctx.boundSpecials`); a
   `progv` inside can bind the marker there, so the expansion compiles with that set empty.
-- Measured 2026-10-07. Premise: the todo program (`(defvar *pa* 1)`, `(progv '(*pa*) '() ...)`
+- Checked 2026-10-07. Premise: the todo program (`(defvar *pa* 1)`, `(progv '(*pa*) '() ...)`
   read through a handler, plus `boundp`) SBCL 2.2.9 `((:UNBOUND *PA*) NIL)` then `1`;
   interpreter, JVM, P1, component `(NIL T)` then `1`. A name no declaration makes special: SBCL
   `(NIL (:UNBOUND NAME))`, every backend `(T NIL)`. Census of the checked set: size-report,
@@ -604,7 +586,7 @@ declared too, and an inner one shadows the declaration.** Every backend answers 
   active; the compilers' closures read the twin. The planned fix ("active binding first, else
   the capture" on every backend, the interpreter's rule) was overturned by measurement: that
   rule is not SBCL's even with a binding active.
-- Measured 2026-10-05 (SBCL 2.2.9 / interpreter / JVM, P1, component), the fixture's probes:
+- Checked 2026-10-05 (SBCL 2.2.9 / interpreter / JVM, P1, component), the fixture's probes:
   a `defvar`'d special captured in its binding and called after it `:TOP` / `:INNER` /
   `:INNER`, inside another binding `:OUTER` / `:OUTER` / `:INNER`; a special parameter
   captured `:TOP` / `:ARG` / `:ARG`; trivia's `assoc` pattern (a handler built in one binding
@@ -629,27 +611,23 @@ declared too, and an inner one shadows the declaration.** Every backend answers 
   declaration names a variable in is returned as the same list. Then every occurrence of a
   name in `collect`'s set is special, so a special binding is the dynamic store's save/set
   alone (JVM/WASM sections above) and a closure reads it like any other code.
-- Measured 2026-10-05 (base `447575529` -> this change), sizes: size-report and bench-report
-  byte-identical on P1, `--optimize=size`, component and JVM but zlib's JVM class (-29 B:
-  chipz binds a special). examples (232 programs x 4 outputs): 649 identical, 178 refused
-  identically by both, 101 smaller, none larger -- the cl-ppcre users (ningle, postgres,
-  postmodern, bbs-api, str-demo) JVM -15.4 to -16.2 KB (-0.4%), wasm -0.5 to -1.0 KB; the clack
-  ones JVM -144 B; the rest JVM -2 to -87 B. The ci-spec program without its new case: P1 +5 B,
-  `--optimize=size` -22, component +5, JVM -2,817. cl-ppcre's E2E exercise: JVM 739,549 ->
-  724,770 (-2.0%), P1 570,081 -> 569,138, `--optimize=size` 418,272 -> 417,378, component
-  574,631 -> 573,688.
-- Time (same day, load average 5-55, best of 7-9 in-process rounds, alternating builds):
-  interpreter unchanged within noise (fib 27, 1M reads of a special, 100k special bindings);
-  a closure built inside a binding and called in it, 6.4M times: wasm 161-186 -> 127-161 ms (no
-  cell to allocate), JVM 8-9 -> 39-74 ms -- its read is now `_dget`, a `ThreadLocal` lookup,
-  where the capture was a field load; a callee's read of the binding JVM 42-48 -> 39-69, wasm
-  95-114 -> 98-147 (noise). cl-ppcre, 3,000 scanner creations: JVM 129-225 -> 142-246 ms, wasm
-  329-362 -> 324-367 (no difference); 100,000 scans: JVM 455-775 -> 549-927 ms, wasm
-  1,674-1,911 -> 1,797-2,356. The JVM scan cost is the `labels` advance function the scanner
-  builds inside its `let*` of `*end-pos*` and friends: its five lambdas went from 0 to 9 `_dget`
-  reads (the whole class has 741 -> 718), a few `ThreadLocal` lookups a step of the scan. A
+- Size effect (2026-10-05): size-report and bench-report
+  byte-identical on P1, `--optimize=size`, component and JVM but zlib's JVM class
+  (chipz binds a special). The examples that use cl-ppcre's locally declared specials
+  (ningle, postgres,
+  postmodern, bbs-api, str-demo) shrink on the JVM and wasm; nothing grows. cl-ppcre's E2E
+  exercise shrinks on the JVM and stays put on the wasm legs.
+- Time (same day): the interpreter is unchanged within noise (fib 27, reads of a special,
+  special bindings);
+  a closure built inside a binding and called in it no longer allocates a cell on wasm, and on
+  the JVM its read is now `_dget`, a `ThreadLocal` lookup,
+  where the capture was a field load -- the one visible cost of the change. cl-ppcre scanner
+  creation and scans are within noise on both backends. The JVM scan cost is the `labels`
+  advance function the scanner
+  builds inside its `let*` of `*end-pos*` and friends: its lambdas now make `ThreadLocal`
+  lookups, a few a step of the scan. A
   program that runs Lisp on one thread now binds shallow and reads a field again ("One thread:
-  when a binding may be shallow" above, with the numbers).
+  when a binding may be shallow" above).
 
 ## Parameters named like a special (all four backends, 2026-10-03)
 
@@ -682,8 +660,8 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
   answer -- the binding used to be dropped on the compile paths). The full set is collected
   right after `injectMvSpillGlobal` (wasm: after the arity bundler), before Pass 1, on the
   program the old site saw, so its order is unchanged. Trap, the first cut: collecting the set
-  BEFORE the desugaring missed those standard variables -- cl-json's progv fallback covered 42
-  instead of 53 specials (class 424,786 -> 410,383 B), ci-spec lost 65 KB. A size "win" that
+  BEFORE the desugaring missed those standard variables -- cl-json's progv fallback covered
+  fewer specials than it must, and the ci-spec program shrank for it. A size "win" that
   was a semantic change.
 - The dynamically-bound collection walks the injected wrappers and helpers beside the program
   (`injectedForms`): their parameters are lowercase or `%`/`__` names that never match a user
@@ -715,11 +693,11 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
   local `(declare (special ...))` that is gone: no declaration names them in those functions, so
   they are lexical parameters again, renamed apart ("Local special declarations" below).
 - Cost: a program without a special parameter compiles byte-identically on the JVM, wasm and
-  the component (ci-spec, its build-info strings aside, clojure-spec, scheme-spec and 13
-  vendored libraries loaded alone), so it runs at the same speed. cl-ppcre: JVM 734,954 ->
-  736,159 B (+0.16%), wasm 559,537 -> 559,455, component 564,059 -> 563,919 (wasm loses a
-  docstring `maybe-split-repetition` used to evaluate for effect); 3,000 scanner creations
-  JVM 1,067-1,089 -> 1,048-1,126 ms, wasm 1,005-1,149 -> 1,000-1,127 ms, i.e. noise, and the
+  the component (ci-spec, its build-info strings aside, clojure-spec, scheme-spec and the
+  vendored libraries loaded alone), so it runs at the same speed. cl-ppcre pays a little on
+  the JVM for the wrapped bindings and loses on wasm a
+  docstring `maybe-split-repetition` used to evaluate for effect; scanner creation and scan
+  times are within noise, and the
   scan path's code is unchanged.
 
 ## The two hand-rolled precedents
@@ -740,18 +718,12 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
 
 ## Cost of the every-exit restore (2026-09-12)
 
-Minimal programs, JVM `.class` / wasm Preview 1 bytes, before -> after (the `.class` is the
-bigger mover because each region adds an exception-table entry, a handler and two stack-map
-frames; wasm adds only the trampoline block, and in EH mode the pad):
-
-| program | JVM | wasm |
-|---|---|---|
-| `(print (+ 1 2))` | 3,948 -> 3,948 | 489 -> 489 |
-| `(defvar *x* 1) (print (let ((*x* 2)) *x*))` | 4,468 -> 4,522 | 11,175 -> 11,175 |
-| the same `let` inside a `dolist` | 4,815 -> 4,847 | 11,383 -> 11,397 |
-| the same `let` under a `handler-case` (EH mode) | 11,011 -> 11,074 | 13,732 -> 13,761 |
-| `(unwind-protect (+ 1 2) (print *x*))`, no special `let` | 4,105 -> 4,105 | 12,375 -> 12,375 |
-| cl-ppcre (`asdf:load-system` + three scans) | 725,206 -> 755,211 (+4.1%) | 693,247 -> 700,485 (+1.0%) |
+Per protected region, the JVM `.class` moves more than the wasm module, because each region
+adds an exception-table entry, a handler and two stack-map
+frames; wasm adds only the trampoline block, and in EH mode the pad. Concretely: a program
+that binds no special is unchanged; a special-binding `let` costs a few bytes on the JVM and
+nothing on wasm, a little more inside a `dolist` or under a `handler-case` (EH mode); an
+`unwind-protect` around a non-special form costs nothing.
 
 A program that binds no special is byte-identical; a wasm program binding one outside EH mode and
 outside any loop block is too. cl-ppcre is the outlier because `(declare (special ...))` is

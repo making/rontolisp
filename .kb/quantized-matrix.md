@@ -108,14 +108,14 @@ must not widen them. No threshold, no other accumulator split: a block is the un
 integer sum does not depend on the fold. Still a STRONGER contract than `#f`'s: the flag
 cannot change a bit, so tests assert equality, and `ci-spec`'s standalone `quantized-matrix`
 case prints the product. **Two shapes were built and rejected first** (2026-09-05, the
-README): one `reduceLanes` per block plus a scalar double chain, latency-bound at 5-6 Gelem/s
+README): one `reduceLanes` per block plus a scalar double chain, latency-bound
 on one thread whatever the shape; and double lanes through `convertShape(I2D)`, which Graal
-25 does not intrinsify -- 0.02 Gelem/s (`.kb/vec.md`, the second JIT cliff). **A third shipped
+25 does not intrinsify (`.kb/vec.md`, the second JIT cliff). **A third shipped
 and was replaced** (2026-09-06, `.todo/706`): 128-bit byte loads widened through part-1
-conversions, the same bits as today's kernel, 0.7x of f32 under C2 because each part-1
+conversions, the same bits as today's kernel, slower than f32 under C2 because each part-1
 conversion is a `slice`; it is kept in `Q8GemvBench` as the probe row, the reduce-per-block
-shape's numbers standing in `.todo/672`'s README. A kernel here must also fit C2's
-`NodeCountInliningCutoff`: two rows a pass ran boxed (0.1x) with no warning. **Trap**: a
+shape's record standing in `.todo/672`'s README. A kernel here must also fit C2's
+`NodeCountInliningCutoff`: two rows a pass ran boxed, far slower, with no warning. **Trap**: a
 NaN activation is `round`'s error on the defun
 and 0 in the kernel -- finite inputs only, as for every `vec:` member.
 - Bit-identity is between OUR defun and OUR kernels. ggml's `Q8_0 x Q8_0` kernel quantizes
@@ -132,9 +132,8 @@ and 0 in the kernel -- finite inputs only, as for every `vec:` member.
   row against a transcription of steps 1-3 (`GpuTest`) and as equal program output under
   every flag combination (`LinalgGpuTest`, `JvmLinalgGpuAccelCompilerTest`); `examples/llm`
   over the Q8_0 GGUF prints the same 256 tokens with the flag on and off. A `#d` vector,
-  rank 1 and Metal decline to the rung below, never signal. What it buys: 13.9 ms a forward
-  against 16.7 at bf16 on the GB10 (1.20x), the device streaming the 34-byte blocks at 190
-  GB/s.
+  rank 1 and Metal decline to the rung below, never signal. What it buys: a faster forward
+  than the bf16 rung, the device streaming the 34-byte blocks.
 - Interpreter chain: `VecSimd` answers a `LispQuantizedMatrix` in `matvec`/`matvec-into`
   BEFORE `array(...)`, declining any pairing without a kernel (rank 1, mixed destination
   width, a short x) to the defun; every other member hands a quantized argument to the
@@ -180,21 +179,17 @@ four wrappers on the reference for the same reason.
   defun's bits, above); every other pairing and Metal decline silently.
   `rontolisp:jvm-export`: not a boundary type.
 
-## What it costs (2026-09-06, GB10, `.todo/706-.../README.md`)
-One thread, 4096x4096, against the shipped f32 GEMV, two passes of the harness: **Graal
-1.42-1.57x** (12.6-12.9 Gelem/s; bf16 1.31-1.45x), **C2 1.72-1.91x** (14.6-14.8 Gelem/s;
-bf16 1.76-2.00x). Instruction-bound, not bandwidth-bound, on both JITs: the Vector API has
-no int8 dot-product instruction, so a block is a widen-multiply-widen chain of ~25
-instructions plus a ~10-instruction scalar scale chain where ggml's NEON kernel spends two
-`SDOT`s and a scale; Graal runs it at ~9 cycles a block (6.5 the integer part, 3.5 the
-scale, measured apart) and C2 slightly faster. 5632x2048 Graal 1.31-1.45x / C2 1.38-1.68x;
-the cache-resident shapes lose on both (1024x1024 0.67-0.78x, 288x288 0.42-0.6x). The
-quarter-size bytes pay where bandwidth is the limit: `--parallel` (20 threads) 2.2-3.3x f32
-under Graal (91-120 Gelem/s, past the f32 arm's ~40 Gelem/s memory wall) and 1.6-2.5x under
-C2 -- a direction, not a rate; that column moves 0.5x between passes (`.todo/702`). Until
-2026-09-06 the C2 column read 0.70-0.77x, slower than f32 on a stock OpenJDK: the kernel's
-part-1 conversions were each a `slice` under C2 (`.todo/706`; the 2026-09-05 record, with
-the item's 2.00x premise corrected, is `.todo/672-.../README.md`). No size gate, for
+## What it costs
+One thread, against the shipped f32 GEMV: faster on the large shapes on both JITs, slower on
+the cache-resident ones. Instruction-bound, not bandwidth-bound: the Vector API has
+no int8 dot-product instruction, so a block is a widen-multiply-widen chain plus a scalar
+scale chain where ggml's NEON kernel spends two
+`SDOT`s and a scale. The
+quarter-size bytes pay where bandwidth is the limit: `--parallel` is the configuration that
+wins clearly over f32 -- a direction, not a rate. Until
+2026-09-06 the C2 column read slower than f32 on a stock OpenJDK: the kernel's
+part-1 conversions were each a `slice` under C2 (`.todo/706`; the earlier record, with
+the item's premise corrected, is `.todo/672-.../README.md`). No size gate, for
 `.todo/488`'s reason. Relative error against f64: Q8_0 7.5e-3 .. 7.8e-3, bf16 1.6e-3, f32
 2e-7.
 

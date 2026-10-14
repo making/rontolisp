@@ -24,8 +24,8 @@ is row-major and `read-sequence` fills a packed float array in one transfer
 
 **`file-position` seeks binary file streams on every backend** (`.kb/read-load-streams.md`,
 "file-position is REAL"), so `checkpoint:skip-bytes` seeks past an unwanted tensor
-when the stream tells its position and walks otherwise. Measured 2026-09-23:
-skipping 256 MB is 1 ms seeking against 1,931 ms walked (interpreter). `file-length`
+when the stream tells its position and walks otherwise -- on the interpreter, seeking past a
+large body beats walking it by orders of magnitude. `file-length`
 is real. Data is therefore still walked front to back in ascending offset order --
 the seek only skips the read-through, never the order.
 

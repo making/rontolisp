@@ -151,236 +151,156 @@ continuation through a defun, a two-state closure table, a closure applying itse
 applying the closure that calls it, Clojure's `(@f (dec m))` (through `%clojure-call`'s
 `apply`), Scheme's lambdas and `apply`: `StackOverflowError` -> answers.
 
-**The gate, measured first.** Before it, the pre-pass's conservative predicate (any head the
+**The gate.** Before it, the pre-pass's conservative predicate (any head the
 registry lacks "may bounce") made every compile trampolined -- the wrapper catalog's
 `+`/`min`/`append` bodies end in `DO`, a non-registry head -- so every class with a
 dispatcher site carried `_tramp`, which kept every arity's dispatcher and the dead closures
 they name: bench-report `bignum`, `list`, `mandelbrot`, `matmul`, `sieve` and the size-report
-`zlib` carried it with no bounce at all. `_unw` sites cost 3 B each and nothing measurable in
-time (bench-report with the trampoline forced off, best of 5: equal within noise). Sizes before
--> after (both the gate and the precise predicate): `bignum` 22,270 -> 16,857 B (-24%),
-`mandelbrot` 21,820 -> 16,484 (-24%), `sieve` 34,010 -> 28,701 (-16%), `matmul` 35,955 ->
-30,621 (-15%), `list` 28,320 -> 24,781 (-12%), `zlib` 183,370 -> 182,136 (`_unw` sites 605 ->
-94); `clos`/`sort`/`string` +78..+90 B (their live `_invoke_2` names the dead swapping lambdas,
-whose tails now bounce); `fib`, `hash`, `hello_world`, `pi_approx` identical. The corpora:
-`_unw` sites ci-spec 18,913 -> 1,400, scheme-spec 3,906 -> 369, clojure-spec 6,862 -> 1,190;
-ci-spec 7,675,613 -> 7,626,213 B, scheme-spec 1,040,872 -> 1,029,926, clojure-spec 3,911,324 ->
-3,946,792 (+0.9%: code 14 KB smaller, but the top level then packs into fewer `_top$N` chunks
-whose frames carry every earlier form's locals, `.todo/137`). The class write (shake, gate
-scan, placement) of ci-spec: 1,471-1,516 -> 1,463-1,520 ms.
+`zlib` carried it with no bounce at all. The precise predicate frees those programs of the
+trampoline and shrinks the classes whose dead dispatchers it removed; the live `_invoke_2` of
+`clos`/`sort`/`string` names dead swapping lambdas, whose tails now bounce. An `_unw` site is
+one shared-helper call, nothing measurable in time (bench-report with the trampoline forced
+off: equal within noise).
 
 **Time.** bench-report, the spec corpora and a cl-ppcre scan loop: unchanged within noise.
-A bounce costs what the dispatcher call it replaces could inline away: 10M calls through two
-forwarding closures 3 -> 171-209 ms, through a `compose`d closure 137-160 -> 211-224 ms (the
-first is C2's figure for that shape: Graal's escape analysis removes the bounce of two
-forwarding closures made in the calling function, 3-4 ms either way). A defun's bounce was
+A bounce costs what the dispatcher call it replaces could inline away: a chain of forwarding
+closures or through a `compose`d closure pays it in full, unless Graal's escape analysis
+removes the bounce of forwarding closures made in the calling function. A defun's bounce was
 already that price -- the cost the limit below takes off the shallow path. Clojure (develop
 after `.todo/c00`, whose call sites funcall a real function): `reduce` with a two-argument
 `fn`, 2M calls of a local two-argument `fn`, `map` over 2M elements -- unchanged within noise;
-before `.todo/c00` `map`'s per-element lambda handed `%clojure-call`'s apply bounce on,
-170-183 -> 192-203 ms.
+before `.todo/c00` `map`'s per-element lambda handed `%clojure-call`'s apply bounce on and
+paid for it.
 
-## Measurements: real calls while shallow
+## Real calls while shallow
 
-Same box (64 threads, shared with other builds), Oracle GraalVM 25.0.4: `java Prog` (the Graal
-JIT) and `java -XX:-UseJVMCICompiler Prog` (C2); best of 7 alternating runs, each the best of
-5 in-process rounds; ms for 10M calls unless noted, every value tail bouncing -> the limit.
-
-| shape | Graal | C2 |
-| --- | --- | --- |
-| two forwarding closures made in the calling function | 3 -> 0 | 173 -> 151 |
-| the same through globals (opaque, one closure type) | 53 -> 99 | 179 -> 138 |
-| a `compose`d closure | 124 -> 3 | 209 -> 151 |
-| an argument-swapping adapter | 4 -> 3 | 123 -> 41 |
-| a defun `(funcall f x)` / an `(apply f args)` forwarder | 3 -> 3 / 14 -> 16 | 32 -> 34 / 32 -> 34 |
-| `reduce :from-end` with a lambda, 1,000 elements x 10,000 | 60 -> 58 | 167 -> 131 |
-| 1 / 3 / 5 forwarders through globals | 32 / 127 / 243 -> 58 / 140 / 261 | 134 / 252 / 387 -> 94 / 229 / 338 |
-| 8 closure types per site: forwarder, two forwarders, composition, adapter, defun | 160 / 230 / 231 / 285 / 142 -> 138 / 169 / 175 / 185 / 101 | 231 / 322 / 312 / 313 / 160 -> 186 / 246 / 256 / 247 / 135 |
-| a tree evaluator dispatching every node through a handler closure, depth 10 / 40 | 227 / 240 -> 210 / 219 | 243 / 229 -> 185 / 197 |
-| 3M-hop chains: a closure through its variable, a pair, a continuation; 10 CPS sums of 100,000 | 36 / 26 / 25; 24 -> 37 / 26 / 28; 25 | 31 / 34 / 27; 27 -> 30 / 31 / 29; 26 |
-| 3M hops of 8 instances of one state lambda | 32 or 75 (bimodal) -> 85 | 121 -> 67 |
-| 8 different state lambdas: 3M hops / 300,000 chains of 10 | 44 / 29 -> 53 / 48 | 62 / 76 -> 65 / 69 |
+Same box (64 threads, shared with other builds), Oracle GraalVM 25.0.4, Graal (`java Prog`) and
+C2 (`java -XX:-UseJVMCICompiler Prog`), every value tail bouncing -> the limit: a real call
+through the shared dispatcher beat the bounce in most shapes, on both JITs -- the forwarding
+closures, adapters and defun forwarders aside, which the bounce already served or which Graal's
+escape analysis removes.
 
 Where it loses, on Graal only: Graal scalar-replaces a bounce whose array its inlined `_tramp`
 loop consumes when one closure type dominates the trampoline's profile, while the real call
 went through the shared dispatcher at every hop -- so a chain through globals of one closure
 type, a few hops through megamorphic dispatch, and a deep state machine whose `_tramp` profile
-also holds the 64 real calls each chain starts with run slower (the state machine alone in its
-program measures 46 both ways; beside the CPS sums 31 -> 87). No limit recovers them (16 / 4 /
-2: one forwarder 55-62, chains of 10 50-62, against 29-36); at 0, every value tail bouncing,
-they measure as every bounce did (the state machine 35, 31). The cause was first read as the
+also holds the 64 real calls each chain starts with run slower (alone in its program the state
+machine measures alike either way). No limit recovers them; at 0, every value tail bouncing,
+they measure as every bounce did. The cause was first read as the
 dispatcher not inlined past one recursion level; the 2026-10-06 traces overturned that for
 Graal (below): it inlines the dispatcher recursively, each level with every target the
 dispatcher's one profile holds. The one-type chain has run faster than its bounce since.
 
-Rejected, measured on a prototype the same way:
+Rejected, on a prototype measured the same way:
 - A `ThreadLocal<int[]>` count, so every thread makes real calls: worse than this count in
-  every shape and worse than the bounce in the one-type ones -- C2 defun 33 -> 69, `apply`
-  forwarder 35 -> 67, two forwarders a defun made 167 -> 182; Graal globals 53 -> 144; 8
-  types per site, two forwarders, Graal 233 -> 214 and C2 340 -> 284 against 166 and 242
-  for this count.
-- Without the trampoline holding the count: Graal CPS sums 25 -> 52-66, a pair 25 -> 70, a
-  continuation 24 -> 34-52.
-- A smaller limit: nesting past it runs slower than every value tail bouncing (Graal tree depth
-  40 at limit 16: 301 against 248; at 64: 231), chains of 3 and 5 too (limit 2: 218 / 321
-  against 146 / 252 at 64); the 8-type gains are the same at every limit from 2.
+  every shape and worse than the bounce in the one-type ones.
+- Without the trampoline holding the count: every chain shape slower.
+- A smaller limit: nesting past it runs slower than every value tail bouncing; the 8-type
+  gains are the same at every limit from 2.
 - The real call in a method of its own (`_vtc<n>` the check and the bounce, `_vtcCall<n>` the
-  counted call), to keep it out of the trampoline's compiled loop: the state machine 87 -> 83
-  where it loses, chains of 10 48 -> 57, of 3 141 -> 173 -- worse, for a method more per arity.
+  counted call), to keep it out of the trampoline's compiled loop: worse, for a method more per
+  arity.
 
 Bytes: bench-report's ten programs byte-identical (`.class` and both wasm: none keeps a value
-tail); size-report `hello_world`, `pi_approx`, `dom_reactor` identical, `zlib` 177,226 ->
-177,625 B (three value tails: their sites shrink 156 B, the helpers cost 555 B); the corpora as
-one program ci-spec 7,481,492 -> 7,479,662, scheme-spec 1,015,212 -> 1,014,291, clojure-spec
-7,333,406 -> 7,327,324; the 116 JVM-compiled examples 46,998,990 -> 46,994,319: 42
-identical, 8 smaller by up to 4,264 B (the cl-ppcre and ningle programs, many value tails),
-66 larger by 79-562 B -- `_vtc<n>`, `_vtcClaim`, the two fields and `_tramp`'s hold, ~250-450 B
-once per class, in a class with one to three value tails. WASM output byte-identical.
+tail); size-report's legs unchanged but the one with value tails, whose call sites shrink and
+whose helpers cost; the corpora as one program level; of the JVM-compiled examples the
+many-value-tail ones shrink and the rest pay, once per class, for `_vtc<n>`, `_vtcClaim`, the
+two fields and `_tramp`'s hold. WASM output byte-identical.
 
-Time on whole programs, unchanged within noise: the corpora (best of 3) ci-spec 24.43 ->
-24.29 s, scheme-spec 4.29 -> 4.09, clojure-spec 2.83 -> 2.79; a cl-ppcre scan loop (three
-scanners, 50,000 rounds) Graal 1,078 -> 1,071 ms, C2 1,198 -> 1,255; Clojure `comp`,
-`partial`, `map`/`filter`/`reduce` loops.
+Time on whole programs, unchanged within noise: the corpora, a cl-ppcre scan loop; Clojure
+`comp`, `partial`, `map`/`filter`/`reduce` loops.
 
-## Measurements: the value tails' own dispatcher (2026-10-06)
+## The value tails' own dispatcher (2026-10-06)
 
-Same box, each round started at a 1-minute load under 16 (3-5 measured); best of 5 alternating
-runs (the 8-types program 11), each the best of 5 in-process rounds; ms for 10M calls unless
-noted. Columns: every value tail bouncing (`value-tail-limit=0`) / real calls through the
-shared `_invoke_<n>` (before) / through `_vtcd<n>` (now).
+Same box; the comparison's columns: every value tail bouncing (`value-tail-limit=0`) / real
+calls through the shared `_invoke_<n>` (before) / through `_vtcd<n>` (now). The own dispatcher
+puts a one-hop value tail back at bounce-free cost on both JITs -- the one-type forwarder
+inlines whole, its bounce the slower by far on Graal -- and serves the chain shapes at the
+shared dispatcher's rate or better.
 
-| shape | Graal | C2 |
-| --- | --- | --- |
-| one forwarder through a global, alone in its program | 30 / 58 / 4 | 128 / 82 / 71 |
-| two forwarders through globals | 38 / 78 / 72 | 206 / 132 / 117 |
-| chains of 3 / 5 through globals, each alone | 125 / 165 / 141; 241 / 268 / 244 | 266 / 208 / 196; 388 / 352 / 294 |
-| chains of 1 / 3 / 5 in one program | 32 / 62 / 4; 120 / 137 / 148; 239 / 231 / 258 | 125 / 83 / 75; 247 / 203 / 185; 380 / 386 / 281 |
-| two forwarders made in the caller / made by a defun | 141 / 0 / 0; 3 / 0 / 0 | 191 / 145 / 43; 183 / 86 / 46 |
-| a `compose`d closure | 142 / 3 / 0 | 217 / 155 / 130 |
-| an argument-swapping adapter; a defun `(funcall f x)`; an `apply` forwarder | 3 / 3 / 3; 3 / 3 / 3; 14 / 15 / 15 | 128 / 41 / 40; 33 / 33 / 34; 33 / 33 / 33 |
-| `reduce :from-end` with a lambda, 1,000 elements x 10,000 | 96 / 57 / 57 | 183 / 135 / 131 |
-| 8 closure types per site: `apply-to` defun, composition, adapter, forwarder, two forwarders | 166 / 96 / 93; 218 / 174 / 197; 288 / 176 / 146; 157 / 137 / 113; 231 / 160 / 153 | 169 / 131 / 132; 270 / 219 / 244; 313 / 242 / 228; 226 / 163 / 170; 304 / 226 / 192 |
-| a tree evaluator, depth 10 / 40 | 239 / 212 / 206; 258 / 216 / 215 | 249 / 203 / 206; 231 / 203 / 202 |
-| 8 state lambdas: 3M hops; 300,000 chains of 10 | 43 / 45 / 41; 33 / 47 / 53 | 61 / 62 / 62; 65 / 65 / 67 |
-| 3M hops of 8 instances of one state lambda, beside 10 CPS sums of 100,000 | 35 / 83 / 86 | 118 / 119 / 117 |
-| the same alone in its program (bimodal: medians 84 / 82 / 86 and 65 / 61 / 62) | 58 / 55 / 83 | 60 / 56 / 58 |
-| 3M-hop chains: a closure through its variable, a pair, a continuation; 10 CPS sums | 49 / 48 / 52; 25 / 26 / 25; 25 / 24 / 25; 24 / 24 / 24 | 74 / 37 / 69 (bimodal); 30 / 28 / 28; 26 / 26 / 26; 23 / 25 / 26 |
-| the cl-ppcre scan loop above | - / 1,016 / 1,002 | - / 1,202 / 1,196 |
-
-The one-type forwarder now inlines whole on both JITs, its bounce 7x slower on Graal. What a
-chain of several hops still pays is the count and the copy's one profile, which every hop of
-the chain shares. The count: a prototype with none (unbounded, a measurement only) runs chains
-of 3 / 5 in Graal 147 -> 85 / 241 -> 168, C2 199 -> 136 / 315 -> 246, two forwarders Graal
-73 -> 64, C2 124 -> 85 -- 20-42% of a hop (`.todo/d52`, an argument since: "the count as an
+What a chain of several hops still pays is the count and the copy's one profile, which every
+hop of the chain shares. The count: a prototype with none (unbounded, a measurement only) runs
+the chains faster by a fraction of a hop (`.todo/d52`, an argument since: "the count as an
 argument" below); with the owner check or the exception handler left out instead, nothing
-moves (Graal chain of 3: 143 -> 141 / 145).
-The shared profile: the megamorphic composition and the 8-state chains of 10 lose 13% on
-Graal, 11% / 3% on C2, while on Graal the adapter and the forwarder of the composition's
-program win 17-18%.
+moves. The shared profile: the megamorphic composition and the 8-state chains
+of 10 lose on it, while on Graal the adapter and the forwarder of the composition's
+program win.
 
 The traces behind it (one forwarder through a global): `-Djdk.graal.TraceInlining=true`
 shows `_invoke_1` inlined into itself seven levels deep, each level with both lambdas' cases
 -- the branch profile is the method's, so the forwarder's call and the leaf's are not told
 apart -- and stops at the eighth; through `_vtcd1` the run loop inlines `_invoke_1` with the
 forwarder alone and `_vtcd1` with the leaf alone. C2's `-XX:+PrintInlining` refuses the second
-recursion level of a 106-byte `_invoke_2` ("recursive inlining is too deep",
+recursion level of a small `_invoke_2` ("recursive inlining is too deep",
 `MaxRecursiveInlineLevel=1`). So neither JIT stops for the dispatcher's shape or size: the
 plan's other item -- a `tableswitch` over the funcIds, smaller segments, "a shape the JIT
 inlines one more level" -- was not built.
 
-The 8-instance state machine beside the CPS sums (31 -> 87 when the limit came) is no property
-of the bounce: alone in its program every variant is bimodal (the row above), and under
-`-XX:+UseParallelGC` the bounce, the shared and the own dispatcher all measure 46-47.
+The 8-instance state machine beside the CPS sums is no property
+of the bounce: alone in its program every variant is bimodal, and under
+`-XX:+UseParallelGC` the bounce, the shared and the own dispatcher all measure alike.
 
-Rejected, measured on a prototype the same way:
+Rejected, on a prototype measured the same way:
 - An allocation-free bounce on the owner thread (the designator and the arguments in
   owner-confined statics, a shared marker as the answer): under G1, the default, slower
-  wherever a chain bounces -- 8 state lambdas, 3M hops, Graal 47 -> 125, C2 67 -> 149; the
-  state machine beside the CPS sums Graal 80 -> 119, C2 126 -> 137. A static field lives in
+  wherever a chain bounces. A static field lives in
   the class mirror, an old-generation object, so every store of a young argument into it
-  takes G1's cross-region post-write barrier; under `-XX:+UseParallelGC` the same statics are
-  5-10% faster than the array (Graal 45 -> 41, 47 -> 42; C2 67 -> 65, 73 -> 68). A young
+  takes G1's cross-region post-write barrier; under `-XX:+UseParallelGC` the same statics beat
+  the array. A young
   array is what G1 makes cheap, and Graal often removes it.
-- The trampoline re-entering the copy too: the 8-instance state machine beside 300 arity-2
-  lambdas 53 -> 84 on Graal, the rest equal.
-- A copy for a routed arity too: with 400 arity-1 lambdas, one forwarder and a chain of 3 gain
-  (Graal 74 -> 57 / 183 -> 140, C2 110 -> 81 / 226 -> 227), but the copy doubles the largest
-  dispatchers -- the 116 JVM-compiled examples 46,705,620 -> 47,741,956 B (+2.2%; the ningle
-  and clack stacks +3.9-4.9%), ci-spec's class 7,632,202 -> 8,074,526 (+5.8%) -- and the
+- The trampoline re-entering the copy too: the 8-instance state machine beside many arity-2
+  lambdas slower on Graal, the rest equal.
+- A copy for a routed arity too: the chain shapes gain, but the copy doubles the largest
+  dispatchers -- a real slice of the JVM-compiled examples' and ci-spec's classes -- and the
   cl-ppcre loop, the closure-heavy real program measured, moves under neither.
 
-Bytes: bench-report's ten programs identical (`.class` and both wasm); size-report `zlib`
-178,156 -> 179,416 (three value tails), the rest identical; the corpora as one program
-identical (every arity their value tails use is routed: ci-spec 7,644,257 B, scheme-spec
-998,355, clojure-spec 7,309,978); the 116 JVM-compiled examples 46,705,620 -> 46,766,125
-(+0.13%): 52 identical, 64 larger by 147-5,274 B (`net/httpbin-jzon` +0.92%), each copy at
-most one segment; the cl-ppcre loop's class 692,679 -> 696,354. WASM output identical.
+Bytes: bench-report's ten programs identical (`.class` and both wasm); the corpora as one
+program identical (every arity their value tails use is routed); of the JVM-compiled examples
+those with a copy pay a hair, each copy at
+most one segment. WASM output identical.
 
-## Measurements: the count as an argument (2026-10-06, `.todo/d52`)
+## The count as an argument (2026-10-06, `.todo/d52`)
 
-Same box and method (rounds started under a 1-minute load of 10, most at 3-8); best / median
-of 5 alternating runs (7-9 where noted), each the best of 5 in-process rounds; ms for 10M
-calls unless noted. Columns: the count in a static field (before) -> the depth argument.
+Same box and method. Columns: the count in a static field (before) -> the depth argument.
 
-**The premise, measured first** (prototypes, Graal / C2, a chain of 3 through globals): count
-151 / 204, none at all (unbounded) 87 / 142, the depth checked in `_vtc<n>` 126-140 (one run
-89) / 156, the depth checked in the copy's entry 87-97 / 151; a chain of 5 Graal 253 -> 176 /
-190 / 191, C2 328 -> 245 / 223 / 246. Checked in `_vtc<n>`, the method is no longer six
+**The premise** (prototypes, Graal / C2, a chain of 3 through globals): the count in a static
+field costs a noticeable slice of a hop, none at all (unbounded, a measurement only) is the
+fastest, the depth checked in `_vtc<n>` sits between, and the depth checked in the copy's
+entry matches the unbounded prototype. Checked in `_vtc<n>`, the method is no longer six
 instructions: `-Djdk.graal.TraceInlining=true` shows the cost-benefit phase weighing it at
 every hop like the copy, and the chain's last hop stays a call ("the reason for not inlining
 is unspecified"); as a forwarder Graal inlines it while it parses the caller.
 
-| shape | Graal | C2 |
-| --- | --- | --- |
-| one forwarder through a global, alone | 4 / 5 -> 3 / 4 (7 runs) | 77 / 80 -> 46 / 53 |
-| two forwarders through globals | 77 / 80 -> 62 / 68 | 129 / 132 -> 87 / 98 |
-| chains of 3 / 5 through globals, each alone | 150 / 155 -> 84 / 92; 211 / 265 -> 190 / 221 (7 runs) | 200 / 208 -> 160 / 164; 325 / 385 -> 263 / 286 |
-| chains of 1 / 3 / 5 in one program | 5 / 5 -> 4 / 4; 154 / 169 -> 121 / 128; 283 / 328 -> 212 / 221 | 81 / 92 -> 45 / 56; 219 / 237 -> 148 / 183; 324 / 346 -> 245 / 371 |
-| a chain of 1 / 3 with 400 arity-1 lambdas (routed) | 68 / 77 -> 52 / 63; 155 / 193 -> 137 / 143 | 88 / 100 -> 72 / 75; 232 / 243 -> 169 / 187 |
-| two forwarders made in the caller / made by a defun | 0 -> 0; 0 -> 0 | 42 / 44 -> 77 / 78; 49 / 50 -> 76 / 78 |
-| a `compose`d closure | 0 -> 0 | 157 / 173 -> 133 / 139 |
-| an adapter; a defun `(funcall f x)`; an `apply` forwarder | 4 -> 3; 4 -> 0; 16 / 17 -> 15 / 15 | 43 / 45 -> 37 / 39; 34 / 38 -> 30 / 32; 32 / 33 -> 29 / 33 |
-| `reduce :from-end` with a lambda, 1,000 elements x 10,000 | 61 / 69 -> 62 / 69 | 139 / 161 -> 118 / 201 (bimodal) |
-| 8 closure types per site: `apply-to`, composition, adapter, forwarder, two forwarders, leaf | 97 / 102 -> 85 / 91; 206 / 223 -> 192 / 201; 155 / 158 -> 147 / 154; 131 / 135 -> 81 / 86; 182 / 188 -> 157 / 162; 35 / 40 -> 37 / 58 (bimodal) | 135 / 149 -> 114 / 122; 257 / 267 -> 234 / 250; 231 / 249 -> 195 / 198; 183 / 211 -> 140 / 167; 211 / 236 -> 175 / 192; 102 / 109 -> 100 / 111 |
-| a tree evaluator, depth 20 / 40 / 80 / 160 in one program | 232 / 236 -> 223 / 226; 235 / 240 -> 221 / 224; 333 / 337 -> 221 / 225; 318 / 331 -> 222 / 230 | 266 / 279 -> 181 / 235; 191 / 205 -> 163 / 189; 248 / 288 -> 196 / 206; 277 / 281 -> 190 / 208 |
-| 8 state lambdas: 3M hops; 300,000 chains of 10 | 49 / 56 -> 46 / 77 (bimodal); 54 / 57 -> 59 / 60 | 63 / 70 -> 76 / 85; 74 / 77 -> 68 / 73 (9 runs) |
-| 3M hops of 8 instances of one state lambda, beside 10 CPS sums; the sums | 80 / 86 -> 35 / 76 (bimodal); 25 / 27 -> 24 / 26 | 129 / 135 -> 120 / 126; 27 / 28 -> 27 / 28 |
-| the same state machine alone (bimodal) | 45 / 53 -> 55 / 57 | 60 / 66 -> 61 / 61 |
-| 3M-hop chains: a closure through its variable, a pair, a continuation | 49 / 50 -> 45 / 51; 25 / 26 -> 24 / 25; 25 / 26 -> 24 / 25 | 41 / 78 -> 38 / 118 (bimodal, 9 runs); 31 / 33 -> 35 / 37; 28 / 29 -> 27 / 28 |
-| the cl-ppcre scan loop: best of 5 rounds; of 20; 200,000 scans a round | 804 / 906 -> 853 / 901; 776 / 801 -> 735 / 778; 3,112 / 3,584 -> 3,163 / 3,642 | 985 / 1,152 -> 979 / 1,042 |
-| bench-report's ten programs (no value tail) | equal within noise | equal within noise |
-
-What it loses, all on C2. Two forwarders made in the function that calls them: C2's escape
+Across the shapes the depth argument never loses to the count but for one, on C2 only: two
+forwarders made in the function that calls them. There C2's escape
 analysis sees every closure, and its `AggressiveUnboxing` misfires once no store is left in
-the chain -- under `-XX:-AggressiveUnboxing` the count runs 38 / 42 and the depth 31 / 33,
-under `-XX:-EliminateAutoBox` both 42-43, the unbounded prototype without a count 78 / 87
-like the depth, and the depth with one `putstatic` of it per hop 33 / 34. A store a hop is
-the cost this change removes, so none is added. The 3M-hop state machine of 8 lambdas
-(+20%) and the pair (+12%) run on the trampoline past the limit; the closure through its own
-variable is bimodal on both (28-45 or 105-122 ms a run), the depth landing on the slow mode
+the chain -- under `-XX:-AggressiveUnboxing` the depth beats the count, under
+`-XX:-EliminateAutoBox` the two measure alike, the unbounded prototype without a count lands
+where the depth does, and the depth with one `putstatic` of it per hop recovers the loss. A
+store a hop is
+the cost this change removes, so none is added. The state machine of 8 lambdas
+and the pair that run on the trampoline past the limit pay for it; the closure through its own
+variable is bimodal on both, the depth landing on the slow mode
 more often.
 
 The recursion depth the bound per ordinary call costs, 16 MiB worker, the largest n a
-non-tail recursion through a defun survives (cold start, binary search to 1%): with no value
-tail -- each level calls a closure through the dispatcher -- 113,275-114,252 -> 102,536; with
-one value tail a level 68,365 -> 46,398; with a chain of three a level 68,365 -> 26,627. The
+non-tail recursion through a defun survives (cold start, binary search to 1%): the
 static count bounded the whole stack, so its chains bounced from the 65th value tail on and a
-level kept the trampoline's frames; the depth keeps a level's chain as real calls.
+level kept the trampoline's frames; the depth keeps a level's chain as real calls, and the
+surviving depth shrinks the more value tails a level carries.
 
 Rejected, measured the same way:
-- Every lambda taking the depth, read or not: the no-value-tail recursion 93,261 (C1 frames
-  only, `-XX:TieredStopAtLevel=1`: 114,252 -> 93,749; interpreted 49,327 -> 47,130); Graal's
-  tree evaluator at depth 40 266 / 274, against 214 / 235 when only a lambda that reads it
-  takes it (the count: 223 / 241) -- the `:add` handler's first `ev` call left out of the
-  inlining; and every closure's case in the dispatchers a byte larger.
+- Every lambda taking the depth, read or not: the no-value-tail recursion survives less of it,
+  Graal's tree evaluator loses the `:add` handler's first `ev` call from the
+  inlining, and every closure's case in the dispatchers a byte larger.
 - The dispatcher's id and funcval after the depth's slot: an arity-1 `_invoke_1` loads the id
-  with a two-byte `iload` at every node of its search tree, the 8-type program's 318 B -> 347
-  B, past C2's `FreqInlineSize` (325): its leaf calls 97 / 114 -> 133 / 137. With the id in
-  the first free slot and the funcval cast over its parameter, 322 B; the copy, delegating
-  everything but a function value to the shared dispatcher, 310 B (the count's: 319 / 319).
-- The bounce array built in the copy instead of `_vtcb<n>`: no different (Graal tree depth 40
-  274 / 279 against 269 / 278, chain of 3 95 / 98 against 93 / 98).
-- A catch-all handler around `_vtc<n>`'s call, for C2's two forwarders: 69 / 80, no
+  with a two-byte `iload` at every node of its search tree, past C2's `FreqInlineSize`
+  (325), and its leaf calls pay for it. With the id in
+  the first free slot and the funcval cast over its parameter, the dispatcher stays inlinable;
+  so does the copy, delegating
+  everything but a function value to the shared dispatcher.
+- The bounce array built in the copy instead of `_vtcb<n>`: no different.
+- A catch-all handler around `_vtc<n>`'s call, for C2's two forwarders: no
   different.
 
 ## Tests

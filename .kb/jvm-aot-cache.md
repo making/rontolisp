@@ -21,7 +21,7 @@ profile half buys all of it.
   cache** (child JVM inherits `JAVA_TOOL_OPTIONS` without `--add-modules
   jdk.internal.vm.ci`; every load reports `Mismatched values for property
   jdk.module.addmods`). Use the two-step `AOTMode=record` -> `AOTMode=create` flow.
-- **The training run must be the real workload**; measured threshold, a run shorter than
+- **The training run must be the real workload**; a run shorter than
   ~32-60 ms of work buys later runs nothing. No cheap representative training run exists.
 - ~10.8 MB per program, and a cache is one program's. **Keyed to the jar's path AND
   timestamp** — rebuilding invalidates it; failure is safe but loud (three

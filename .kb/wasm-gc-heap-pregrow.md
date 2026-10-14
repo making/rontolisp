@@ -27,13 +27,13 @@ on measurement alone.
   `crates/wasmtime/src/runtime/store/gc.rs`). The heap never shrinks, so one large
   transient allocation permanently buys headroom; the array is garbage before user code
   runs, so RSS is unchanged.
-- Not one constant: the live set follows what the program LOADS. 16 MiB covers
-  cl-postgres alone, not `rove` on top; on cl-postgres + rove (3.3 MB of emitted defuns)
-  26.5 MiB still collects and 32 MiB does not, so factor 16 gives a ~2x margin.
+- Not one constant: the live set follows what the program LOADS. The floor covers
+  cl-postgres alone, not `rove` on top; the factor's 16 leaves roughly a 2x margin over
+  the live set of cl-postgres + rove.
 - The emitted bytes stopped counting dead landing-pad refreshes on 2026-09-24
-  (`.kb/wasm-landing-pad-refresh.md`, "Cost"). cl-postgres + rove hardly moved (module
-  4,714,328 -> 4,678,214 B, still 64 MiB); the ningle Worker's `check.lisp --optimize`, whose
-  largest function was 92% refresh runs, went from 64 to 32 MiB and runs green.
+  (`.kb/wasm-landing-pad-refresh.md`, "Cost"). cl-postgres + rove stays at the ceiling; the
+  ningle Worker's `check.lisp --optimize`, whose largest function was mostly refresh runs,
+  dropped a quantization step and runs green.
 
 ## The size is drawn from a lottery, and on 2026-09-11 it lost
 Measured 2026-09-11/12 (linux-x86-64, 64 cores, wasmtime 47.0.3 `5554cc1a6`). The
@@ -50,76 +50,64 @@ crates/wasmtime/src/runtime/vm/gc/enabled/copying.rs:540
 
 It is **the heap SIZE, not the program**, that decides. Same corpus, same compiler, only
 the pre-grow constant varied (a temporary system-property override on
-`gcHeapPregrowBytes`):
+`gcHeapPregrowBytes`): no pre-grow, the quantized values, and sizes just below and above
+the formula's answer all run green, while a narrow band at the value the formula produced
+dies with the semi-space BUG and another a few tens of KB higher panics with
+`invalid VMGcKind: 0b0` -- a ZEROED object header, i.e. the collector walked into
+never-written memory.
 
-| pre-grow bytes | verdict |
-| --- | --- |
-| 0 / 16 (no pre-grow at all) | green |
-| 16 Mi / 32 Mi / 64 Mi (the quantized values) | green |
-| 65,193,616 / 65,228,384 (−64 KiB / −30 KiB) | green |
-| 65,259,152 (**what the formula produced**) | semi-space BUG |
-| 65,300,000 | `panicked ... invalid VMGcKind: 0b0` — a ZEROED object header, i.e. the collector walked into never-written memory |
-| 65,324,688 / 65,400,000 (+64 KiB / +140 KiB) | green |
-
-The band is a few tens of KB wide and it MOVES WITH THE PROGRAM: 65,300,000 panics on the
-whole corpus and is green on the corpus minus one case. Conversely 65,259,152 kills the
+The band is a few tens of KB wide and it MOVES WITH THE PROGRAM: the panic size fails on the
+whole corpus and is green on the corpus minus one case. Conversely the formula's value kills the
 corpus minus that case too — so the case contents are irrelevant, and a **prefix bisect of
 `ci-spec.yaml` cases is a trap**: it appears to name a culprit case (the 508th,
 `gguf-cross-backend`) when all that case did was change the emitted byte count, hence the
 size. Do not bisect the corpus for this symptom; sweep the size.
 
 Holding the module fixed and sweeping the engine's own `-O gc-heap-initial-size` instead
-gives a razor-sharp threshold — 65,536 / 98,304 / 131,072 all die, 139,264 and everything
-above is green. **8 KiB of engine heap is the whole margin**, on a 62 MiB heap. Under
+gives a razor-sharp threshold a few tens of KB wide.
+**8 KiB of engine heap is the whole margin.** Under
 `-C collector=drc` (non-moving) the failing module is green, so it is the copying
 collector specifically, and the message says wasmtime does not think this state is
 reachable: it is an upstream bug that our heap sizing reaches, the way the 2026-08-16
 `cast failure` turned out to belong to Cranelift.
 
 What was NOT established: which object the collector fails to place, and why a few KB of
-semi-space decides it. The black-box evidence (the survivor set overflowing by < 8 KiB of
-a 62 MiB space) says the ~62 MiB pre-grow array itself is among the survivors of the
+semi-space decides it. The black-box evidence (the survivor set overflowing by a few KB of
+the pre-grown space) says the pre-grow array itself is among the survivors of the
 collection that fails, though a small program with the same pre-grow demonstrably
-collects it (300k retained conses under a 64 MiB pre-grow never grows the heap, peak RSS
-110 MB). A minimal `.wat` for an upstream report is still missing; `wasm-tools shrink`
-with "trips the semi-space BUG" as the predicate is the tool, at ~30 s per green
-iteration.
+collects it (retained conses under a full-size pre-grow never grow the heap). A minimal `.wat` for an upstream report is still missing; `wasm-tools shrink`
+with "trips the semi-space BUG" as the predicate is the tool.
 
 **Still there on wasmtime 49.0.0** (2026-09-24). The failing module is reproducible
 without any override: `a34942ace~` (the parent of the quantization commit) compiles its own
-`ci-spec` corpus `--simd` to an 8,986,117-byte module whose pre-grow is 65,259,152; the
-`i32.const` is the only `41 <4-byte sleb> fb 07` in the start function (offset 19,161), so
+`ci-spec` corpus `--simd` with the formula's pre-grow value; the
+`i32.const` is the only `41 <4-byte sleb> fb 07` in the start function, so
 other sizes are a 4-byte patch, not a recompile. Run from a directory holding the
-`CorpusFixtures` tree, `--dir . --dir /tmp`:
+`CorpusFixtures` tree, `--dir . --dir /tmp`: the same sweep as above repeats with the same
+verdicts on 49.0.0 as on 47.0.3 (only the `copying.rs` line differs), the
+`invalid VMGcKind` panic and the semi-space BUG trap sitting at the
+opposite sizes; both are the same defect.
 
-| pre-grow bytes | 47.0.3 | 49.0.0 |
-| --- | --- | --- |
-| 65,193,616 / 65,228,384 / 65,324,688 | green | green |
-| 65,259,152 | `invalid VMGcKind: 0b0` panic, line 921 | same |
-| 65,300,000 | semi-space BUG trap, line 921 | same (`copying.rs:534`) |
-
-`-C collector=drc` is green at both failing sizes on 49. The two symptoms sit at the
-opposite sizes from the 2026-09-11 table above; both are the same defect. Today's corpus, by
-contrast, has NO band in 64.0-66.5 MB at 8 KiB steps on 47.0.3 (306 sizes, all green), so
+`-C collector=drc` is green at both failing sizes on 49. Today's corpus, by
+contrast, shows no such band on 47.0.3, so
 a current module is no reproducer -- use the old commit.
 
 Two things follow for anyone changing the size:
 
 - **The corpus does not need the pre-grow at all.** Full `ci-spec` corpus, `--simd`, on
-  this box: 21.1 s with no pre-grow, 20.8 s at 64 MiB — the run is dominated by
-  wasmtime's cold compile of a 9 MB module, not by collection. The knob's justification
+  this box runs in the same time with and without it -- the run is dominated by
+  wasmtime's cold compile of the corpus module, not by collection. The knob's justification
   is still only the cl-postgres + rove measurement above; nothing in the CI corpus
   defends it.
 - **Nothing in `./mvnw test` covers this.** `CiSpecE2eTest` runs ZERO tests without
   `-Drontolisp.binary`, so the leg lives only in the native-image CI job, which is where
-  this was found (run 34643541970, `ubuntu-24.04-arm`, 3814 tests, 1 failure — the other
-  native jobs cancelled as fail-fast peers). The guard against a repeat is
+  this was found. The guard against a repeat is
   `WasmGcHeapPregrowTest.pregrowSizeIsAlwaysAPowerOfTwo`: the size can no longer move
   because somebody added a corpus case, only because somebody edited the rule.
 
 ## Sibling knob: the LINEAR memory's declared minimum
 `WasmLispCompiler.memoryMinPages`. Rule: **static data plus a heap at least as large as
-it** (`HEAP_HEADROOM_MIN_PAGES` = 3 floor). The old fixed ~192 KB exhausted mid-load on
+it** (`HEAP_HEADROOM_MIN_PAGES` = 3 floor). The old fixed reserve exhausted mid-load on
 cl-unicode, trapping `out of bounds memory access` with an unnamed backtrace. Both
 emission sites take it — the Preview 1 / `--no-wasi` memory section and the component's
 `mem` import minimum (which drives `WasmComponentBuilder.memModuleFor`). The bump sites
@@ -140,9 +128,9 @@ went back to being about pause time.
 ## Why serve is different
 `_start` runs **once per INSTANCE**, and a served component is instantiated many times
 (`wasmtime serve --max-instance-reuse-count`, 128 default; Spin inherits it, wasmCloud
-`wash dev` uses 1 — `.kb/tcp-sockets.md`). Growth costs ~**1.5 ms per MiB** on wasmtime
+`wash dev` uses 1 — `.kb/tcp-sockets.md`). Growth costs real latency per MiB on wasmtime
 47, so in serve mode the pre-grow is request latency. 1 MiB is the compromise: optimal at
-the reuse count every real host uses (+30% native / +27% clack over 16 MiB), ~2% mean
-throughput on a never-retired instance; dropping it entirely is worse except at reuse=1.
+the reuse count every real host uses, cheap on a never-retired instance; dropping it
+entirely is worse except at reuse=1.
 wasmCloud pools the heap mapping, so the reuse=1 column bounds the SHAPE of the cost, not
 its size — measure the host.

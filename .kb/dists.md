@@ -62,7 +62,7 @@ consumer searching several repositories tells "not here" from a failure), `Check
 `Archives` (tar.gz incl. GNU `L` and PAX `path`; zip; `safeResolve`), `AtomicInstall`
 (`installDirectory` via `.staging-*` + rename, `writeFile`). Layer messages name no
 caller; DistClient prefixes `ql:quickload:` (`quickloadStep`).
-- **Verification: size + `file-md5`, never the `sha1` column.** Measured 2026-10-08: on
+- **Verification: size + `file-md5`, never the `sha1` column.** Checked 2026-10-08: on
   Quicklisp (alexandria, split-sequence) and Ultralisp (4 releases) the archive's size
   and MD5 match the index; the archive's SHA-1 never does. Quicklisp's `content-sha1` is
   the SHA-1 of every regular file's bytes concatenated in sorted path order; Ultralisp's

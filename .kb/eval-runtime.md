@@ -39,11 +39,12 @@ stubs to hold fixed function indices, JVM needs none.
   funcall/apply target counts only beside a symbol constant spelling one of the names**
   (`BuiltinFunctionWrappers.spellsSymbolConstant`: quoted data at any depth, or `#'`): the registry
   answers only names the program loads as values. Counting every computed target put the eval
-  runtime into every higher-order function -- `(defun app (f x) (funcall f x))`: 49,177 -> 9,719 B
+  runtime into every higher-order function -- even `(defun app (f x) (funcall f x))`
   -- and into every program carrying `%stream-target`, whose synonym arm funcalls a closure.
   **Trap: inject those bodies unconditionally and the class calls an undeclared `_apply`**; the
   post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`) then
-  forces the group on eval-free programs -- 4 KB -> 34 KB once one top-level global made the
+  forces the group on eval-free programs -- a far larger mirror than they need, once one
+  top-level global makes the
   mirror real, when the group was still `GROUP_EVAL`. `GateUnderpredicted` stays as a backstop;
   the ARRAY gate had the same problem. Pinned by `JvmLispCompilerTest.
   aComputedFuncallTargetCarriesNoApplyOrEvalRuntime`,
@@ -93,12 +94,9 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   required parameter, so `(<)` reports `< expects at least 1 argument, got 0` through the same
   `_arityChk`/`_arity_chk` the registry's spread dispatcher always used, naming the operator from
   the wrapper's own arity metadata -- no separate shape or funcId tracking needed.
-  `SELF_COUNTED_OPERATORS` is now just `eval`, which no wrapper backs. Size (same method as
-  elsewhere in this file, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
-  360,144 -> 359,528 JVM (-616 B), 263,650 -> 263,306 wasm (-344 B); a program without `eval` is
-  unchanged. (These raw numbers differ from the 317,887/247,064 pair recorded above under "Size"
-  because of unrelated changes landed between 2026-09-26 and 2026-09-27; only the delta from this
-  change is the point here.)
+  `SELF_COUNTED_OPERATORS` is now just `eval`, which no wrapper backs. The change shrinks an
+  eval-using program slightly on the JVM and wasm; a program without `eval` is
+  unchanged.
 - **`apply` is a catalog wrapper** (`BuiltinFunctionWrappers.applyWrapper`, `(f a &rest r)`), so
   `eval` reaches it through the registry like any name and the report says `APPLY expects at least
   2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list
@@ -114,24 +112,22 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   `funcall` and inside `eval`); pinned by ci-spec `builtin-function-values-take-their-keywords`.
   - `find` family: a keyword-less call is the plain scan; a keyword call hands the keywords to the
     `position` wrapper of its kind and answers `(elt seq i)` -- one copy of the general keyword
-    scan instead of three (inlined, each cost a JVM program naming `#'find` 12 KB).
+    scan instead of three inlined arms in every program naming `#'find`.
   - `sort`: `(sort seq (if kw (lambda (x y) (funcall pred (funcall k x) (funcall k y))) pred))` --
     one sort site, and the shared merge sort is stable ([sort.md](sort.md)), so it answers the
-    permutation of the call position's `stable-sort` decoration without inlining that expansion
-    (+19 KB). The interpreter's `#'sort` routes a keyword call to its `stable-sort`.
+    permutation of the call position's `stable-sort` decoration without inlining that expansion.
+    The interpreter's `#'sort` routes a keyword call to its `stable-sort`.
   - `make-list`: `(make-list n :initial-element (getf kw :initial-element))`.
   - A trap found on the way: `expandSortWithKey` expanded `stable-sort` with arrays assumed, so the
-    wrapper's keyword arm opened the JVM array runtime in EVERY program (`(print (+ 1 2))` 6,024 ->
-    9,736 bytes); it takes the backend's array gate now.
-  - Size (same method as below): `(print (eval '(+ 1 2)))` 323,818 -> 329,076 JVM, 250,901 ->
-    255,334 wasm; `(print (funcall #'sort (list 3 1 2) #'<))` 32,718 -> 34,220 / 23,148 -> 23,433;
-    `(print (funcall #'find 2 '(1 2 3)))` 14,567 -> 27,680 / 3,267 -> 3,271 (the `position`
-    wrapper now travels with it); the `apply` properness check ([error-handling.md](error-handling.md))
-    adds 565 / 454 to a `&rest`-forwarding `(apply #'list x r)` under `handler-case`.
-    `(print (+ 1 2))` unchanged (6,024 / 348).
-- **Size** (2026-09-26, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
-  317,887 -> 319,303 JVM, 247,064 -> 247,775 wasm; the same under `handler-case` 449,779 ->
-  451,309 / 375,740 -> 376,831. A program without `eval` is unchanged.
+    wrapper's keyword arm opened the JVM array runtime in EVERY program; it takes the backend's
+    array gate now.
+  - Cost (same method as below): the keyword arms add to an eval-using program, the `position`
+    wrapper now travels with a `#'find` value, and the `apply` properness check
+    ([error-handling.md](error-handling.md))
+    adds to a `&rest`-forwarding `(apply #'list x r)` under `handler-case`.
+    `(print (+ 1 2))` is unchanged.
+- **Size** (2026-09-26): the `eval` arms add a little to an eval-using program, more under
+  `handler-case`. A program without `eval` is unchanged.
 - **The inline operators** (2026-09-26). An `_eval` arm handles only the call shape it is written
   for and hands any other to the generic application, whose registered wrapper reports the count
   naming the operator: `funcall` with no argument, `+ - * /` with none (`(+)` is 0 through the
@@ -193,16 +189,15 @@ asked by both `mirrorsGlobal`s): `%mv-spill` and the `%handler-clusters%` /
 `%restart-clusters%` stacks. No eval'd form reads them (the runtime has no `values` /
 `handler-bind` / `restart-case`; it calls compiled code, which reads the globals), and
 `%mv-spill` is written by nearly every function return (`.kb/multiple-values.md`), so since
-b78 every call of an eval-using program walked the whole alist. Measured 2026-10-05 on the
-ci-spec program (~450 mirrored globals): 5,301 `%mv-spill` and 1,017 handler-stack mirror
-sites; `_env_lookup` was 68% of the P1 leg's samples. Program run time P1 6.6 -> 2.4 s,
-component 7.1 -> 2.5 s, JVM 21.2 -> 19.1 s; a package walk there ~1.5 s -> ~0.2 s (WASM).
-Size: an eval-using program shrinks (ci-spec program JVM -73 KB, P1 / component -89 KB;
-the ningle Workers -27 KB JVM / -43 to -48 KB wasm; 126 of 841 example outputs, none
-grew); everything else in size-report, bench-report and examples is byte-identical (P1,
+b78 every call of an eval-using program walked the whole alist, and on the ci-spec program
+`_env_lookup` dominated the P1 leg's samples. Fixed 2026-10-05: the package walk no longer
+scales with the mirrored globals, eval-using programs run several times faster on P1 and the
+component and somewhat faster on the JVM.
+Size: an eval-using program shrinks and no example output
+grew; everything else in size-report, bench-report and examples is byte-identical (P1,
 `--optimize=size`, component, JVM). Pinned by
 `aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees` (`EvalMirrorFixture`: the same walk
-before and after 4,000 `set` globals; before the fix 30 ms -> 9.6 s JVM, 104 ms -> 5.6 s WASM)
+cost however many `set` globals, before the fix and after)
 in `JvmLispCompilerTest` (`compileAndRun...`), `WasmLispCompilerIntegrationTest` (P1 and
 component) and `LispEvaluatorTest`. A user global assigned in a loop still pays the walk.
 

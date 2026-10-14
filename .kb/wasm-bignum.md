@@ -86,7 +86,7 @@ users.
   so the fold retires `_rat_new`, the `_big_*` cross products and the limb division behind the gcd
   from a module that never makes a ratio but does arithmetic on values it cannot type -- every
   Scheme and Clojure program, and CL code over list elements. Without it those modules grew by the
-  limb tier (`(prn 1)` in Clojure 9,706 -> 11,047 B); with it they shrank (9,436 B).
+  limb tier; with it they shrank.
 - **`_rat_to_f64`** (`FUNC_RAT_TO_F64`) is `_as_f64`'s ratio arm, the reader's packed-literal
   coercion and the `--simd` unbox: `LispRatio.ratioToDouble`'s bits. Components within 2^53 are
   one f64 division of exact operands. Past that, e = floor(log2 |x|) from `_big_intlen` (decided
@@ -96,41 +96,39 @@ users.
   half to even itself.
 - **`_big_to_f64` is correctly rounded too**: the 64 bits from a limb integer's top bit down, the
   rest OR-ed into bit 0, `f64.convert_i64_u`, times 2^(L-64); past 2^1024 infinity. The top-down
-  per-limb accumulation it replaced rounded once per limb: 208 of 4,500 random limb integers
-  (ties and near ties weighted) printed an ulp off the interpreter's double, 0 now.
-- Measured 2026-10-03, interpreter vs WASM-GC, 0 mismatches: 11,100 printed results of random
-  ratio construction, arithmetic, rounding and comparison (components up to 300 bits); 7,500
-  ratio-to-double conversions aimed at the subnormal and overflow edges; 4,000 exact halfway
-  ties; 4,500 limb integers to double (also equal to Python's `float`). The i32 runtime missed
+  per-limb accumulation it replaced rounded once per limb and could print an ulp off the
+  interpreter's double on random limb integers (ties and near ties weighted).
+- Checked 2026-10-03, interpreter vs WASM-GC, 0 mismatches, over random ratio
+  construction, arithmetic, rounding and comparison (components up to 300 bits); ratio-to-double
+  conversions aimed at the subnormal and overflow edges; exact halfway
+  ties; limb integers to double (also equal to Python's `float`). The i32 runtime missed
   nearly every line of the first three. Generators and the runner:
   `.todo/artefacts/b98-wasm-ratio-components-past-i32-answer-wrong-numbers/`.
-- Size (`--optimize=default`, Preview 1, before -> after; the component and `--optimize=size`
-  move the same way): a program that cannot make a ratio is byte-identical (`hello_world` 480,
-  `pi_approx` 1,543, an integer `fib` 2,494, a float helper 3,405). The `bench-report` programs,
-  whose footer's two-integer `round` can make one, got smaller -- `fib`/`bignum` -278, `sieve`
-  -306, `clos`/`list`/`hash`/`sort`/`string` -593..-783, Scheme `collatz`/`queens` -743/-403 --
+- Size (`--optimize=default`, Preview 1; the component and `--optimize=size`
+  move the same way): a program that cannot make a ratio is byte-identical. The `bench-report` programs,
+  whose footer's two-integer `round` can make one, got smaller
   from the guard and the shorter bodies (`_rat_div` and the rounding family hand off to
-  `_rat_new` and `_big_fdiv`); `mandelbrot`/`matmul` +86/+123 (a ratio can meet a float there, so
-  `_rat_to_f64` comes aboard). What costs is real ratio work: float of a computed ratio +1,529
+  `_rat_new` and `_big_fdiv`); `mandelbrot`/`matmul` grew (a ratio can meet a float there, so
+  `_rat_to_f64` comes aboard). What costs is real ratio work: float of a computed ratio
   (`_rat_to_f64` with `_big_ash`/`_big_intlen`/`_limb_shl`/`_limb_shr`), a ratio read at run time
-  and added +8,106 (21,654 -> 29,760, the limb tier behind the gcd), and a float over integers
-  that can overflow +168 (the rounded `_big_to_f64`). `(/ a b)` alone went 2,685 -> 1,155: the
+  and added (the limb tier behind the gcd), and a float over integers
+  that can overflow (the rounded `_big_to_f64`). `(/ a b)` alone shrinks: the
   fold proves the i31 head answers it and drops the `_big_*` steps.
-- Speed, a 2M-iteration loop adding two fixnum ratios and comparing the sum (wasmtime 49, a loaded
-  machine): 486-593 ms -> 577-685 ms at the default level (the cross products are `_big_mul` calls
-  now), 822-995 -> 1,292-1,413 ms at `--optimize=size`, which has no `_rat_new` head.
+- Speed, a loop adding two fixnum ratios and comparing the sum (wasmtime 49, a loaded
+  machine): slower at the default level (the cross products are `_big_mul` calls
+  now), slower still at `--optimize=size`, which has no `_rat_new` head.
 
 ## Limb division (2026-10-03)
 
-`_limb_divrem_mag` was a bit-at-a-time loop, O(bits(u) * limbs(v)): 248 us for a 1,059-bit by
-997-bit quotient, which every wide `_rat_to_f64` divides (the runtime reader's `1e-300` took 150 us).
-Algorithm D is one quotient LIMB per step: 5.5 us there; a 2,000-step `gcd` of a 634-bit and a
-562-bit integer 9.0 s -> 0.35 s (Euclid's quotients are short, the bit loop still walked every
-dividend bit); `gen_ops.py` seed 3 1.86 -> 0.21 s. Cost: the body is 759 B against 373, so a
-module that can divide limb integers grows by 386 B at every level (`bench-report` programs, whose
-footer rounds two integers, +386; zlib +386; `hello_world`, an integer `fib`: 0). Inlining the
-normalization shifts instead of calling `_limb_shl`/`_limb_shr`/`_limb_copy` saved 120 B in a module
-that had none of them. Verified against the interpreter: 18,000 truncate/floor/ceiling/round/mod/
+`_limb_divrem_mag` was a bit-at-a-time loop, O(bits(u) * limbs(v)), dominating every wide
+`_rat_to_f64` division (the runtime reader's `1e-300` among them).
+Algorithm D is one quotient LIMB per step; a long `gcd` of two wide integers sped up by an
+order of magnitude and more (Euclid's quotients are short, the bit loop still walked every
+dividend bit). Cost: the body roughly doubles, so a
+module that can divide limb integers grows at every level (`bench-report` programs, whose
+footer rounds two integers; `hello_world`, an integer `fib`: 0). Inlining the
+normalization shifts instead of calling `_limb_shl`/`_limb_shr`/`_limb_copy` saves what it can in a module
+that has none of them. Verified against the interpreter: truncate/floor/ceiling/round/mod/
 rem/gcd lines over operands of 1-40 limbs biased to 0/1/0x7fffffff/0x80000000/0xffffffff limbs and
 near multiples (0 differences), the b98 sweeps (0), and the add-back branch made `unreachable`
 traps on the first vector of `limbDivisionTakesItsCorrectionAndAddBackSteps`.
@@ -140,20 +138,19 @@ traps on the first vector of `limbDivisionTakesItsCorrectionAndAddBackSteps`.
 `WasmReadRuntimeBuilder.emitTryFloat` reads the double nearest the token, as `parseDouble` does.
 It used to accumulate the digits in f64 and scale by a power built through `* 10.0`, rounding at
 every step: `0.30000000000000004` read `0.3000000000000001`, `4.9e-324` read `0.0`,
-`1.7976931348623158e308` `Infinity`; 2,022 of 3,000 random and halfway tokens differed. Now the
+`1.7976931348623158e308` `Infinity`. Now the
 digits accumulate in an i64 below 10^17 and through `_big_grow` past it; k = exponent - fractional
 digits (the exponent clamps at 10^8). A mantissa within 2^53 with |k| <= 22 is one f64 multiply or
 divide of exact doubles; otherwise `%decimal-double`'s bit-length guard answers infinity/zero, the
-power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us for 10^300), and
+power of ten is built by squaring (`_big_mul`; one `* 10` per digit does not scale to 10^300), and
 `_rat_to_f64` converts `mant * 10^k` or the UNREDUCED ratio `mant / 10^-k` (it needs no gcd).
 - 0 differences from the interpreter over the 3,000 tokens on Preview 1 (default and size), the
   component and the JVM.
-- Speed per `read-from-string`, wasmtime, before -> after: `3.14159` and `6.02214076e23` unchanged
-  (0.55 / 0.9 us); 17 digits (`0.30000000000000004`) 1.15 -> 2.2 us; extreme exponents (`1e-300`,
-  `2.2250738585072014e-308`, `1.7976931348623157e308`) 0.75-2 -> 5.5-7.5 us -- 120-150 us with the
+- Speed per `read-from-string`, wasmtime: `3.14159` and `6.02214076e23` are unchanged; 17-digit
+  tokens (`0.30000000000000004`) and extreme exponents (`1e-300`,
+  `2.2250738585072014e-308`, `1.7976931348623157e308`) cost more -- far more with the
   bit-loop division.
-- Size: a module that reads +748 B (`(print (read-from-string "1.5"))` 29,578 -> 30,326; 362 the
-  classifier, 386 the division it now reaches).
+- Size: a module that reads grows by the classifier and the division it now reaches.
 - `5.` (digits and a final `.`) is the decimal integer on all four backends, at any magnitude, in
   `emitTryInteger` before the float classifier is reached (`.kb/read-load-streams.md`).
 
@@ -180,7 +177,7 @@ power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us f
   through `_rat_cmp_bits`. Costs only what it fixes: a comparison-only module
   with no float beside an exact number is byte-identical (pure-int and
   pure-double modules measured identical; a mixed one carries `_int_new` +
-  `_big_ash` + `_big_mul`, ~+1.5-1.9 KB). Pinned by
+  `_big_ash` + `_big_mul`). Pinned by
   `WasmLispCompilerIntegrationTest#floatExactComparisonNearTie` (literal,
   let-carried, branch-consumed, min/max both orders) plus a 4,412-case
   interpreter-vs-WASM-GC differential sweep with 0 mismatches. ci-spec
@@ -196,15 +193,14 @@ power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us f
   raw `f64` against the literal, else `_rat_cmp_bits`; a speed trade, so not under
   `--optimize=size`. The condition path (`tryCompileConditionI32`) no longer declines a
   double-literal form: it emits the same float paths raw instead of boxing `t`/nil. Measured
-  (P1, 20M calls of `(defun f (x) (if TEST 0 (truncate x)))` over `(* i 0.5)`, best of 5, load
-  ~15, bare `truncate` 565 / 561 ms), before -> after: `(> x 9.2e18)` 871 -> 640;
-  `(> x *global*)` 851 -> 758; `(/= x x)` 1163 -> 684; `(> x 1073741823)` 2621 -> 709;
-  `(> x 2147483647)` 3335 -> 825 ms. Not made: the same guard for TWO unproven operands
-  (`(> x *global*)`, ~5 ns over the literal site): it would add ~30 B and a failed `ref.test`
+  on `(defun f (x) (if TEST 0 (truncate x)))` compare forms, the guard made every literal,
+  global and self-comparison case faster, by far the most against a literal integer.
+  Not made: the same guard for TWO unproven operands
+  (`(> x *global*)`): it would add code and a failed `ref.test`
   to every generic comparison, most of which meet integers. Pinned by
   `FloatComparisonOperandFixture` (`LispEvaluatorTest#floatComparisonOperand` and its JVM and
-  WASM twins, every optimize level and the component); a ~21,000-comparison sweep (43 values
-  across every tier and boundary, pairwise and against nine literal sites, value and test
+  WASM twins, every optimize level and the component); a comparison sweep (values
+  across every tier and boundary, pairwise and against literal sites, value and test
   position) printed identically on all four backends, `--optimize=size` and the old jar.
 - `isqrt` (`WasmIsqrtCompiler`) takes f64 for an i31 (or float) operand and an exact Newton
   iteration over `_big_intlen`/`_big_ash`/`_big_divrem`/`_big_add`/`_big_cmp` for the two wide

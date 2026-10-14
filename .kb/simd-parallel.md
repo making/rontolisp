@@ -40,11 +40,12 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
 
 ## Shape, decided by measurement
 - **Who splits decides everything**: the caller halves the range, hands out right halves, computes
-  the left-most leaf itself and SPINS for the rest -- `pool.invoke` from outside is 0.15-0.9x.
+  the left-most leaf itself and SPINS for the rest -- `pool.invoke` from outside runs at a
+  fraction of the speed at best.
 - Workers SPIN (`Thread.onSpinWait` on an epoch) and park only after `SPIN_NANOS` = 1 ms idle;
   rows are claimed in grain-sized leaves off one `AtomicInteger` by caller and workers alike. A
-  parking `ForkJoinPool` paid the unpark chain every dispatch (0.5-0.9x) because a decode loop
-  runs ~50-200 us of boxed Lisp between GEMVs.
+  parking `ForkJoinPool` paid the unpark chain every dispatch because a decode loop
+  runs tens of microseconds of boxed Lisp between GEMVs.
 - Dispatch floor ~3 us -> threshold **2^15 multiply-adds** (`PARALLEL_MIN_WORK` /
   `SimdParallel.MIN_WORK`) and at least two rows; **grain 2^13 MACs per leaf, at most 4 leaves per
   thread**. One threshold for both widths.
@@ -55,25 +56,25 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
 - **The yield matters as much as the spin**: `Thread.yield()` every 64 spins (19 pure spinners on
   a 20-core box crowd out the caller, the JIT and the GC). It belongs to the WORKERS' idle spin
   only -- the same rule in the caller's wait for the last leaf measured worse (below).
-- Expected 1.7-5.6x per GEMV, ~1.8x whole-program on a decode loop. **"Ceiling is memory
+- Expected a multiple of the serial rate per GEMV. **"Ceiling is memory
   bandwidth" holds only once the matrix is unambiguously larger than cache** -- a
   `.todo/702` size sweep on GB10 (2026-09-06) found the f32 parallel arm's rate is a hump,
-  not a flat ceiling: 13 Gelem/s at 256x256 (below even the serial rate -- too few leaves
-  for the thread count, a machinery effect), 48-69 Gelem/s at 1024-2048x1024-2048
-  (cache-resident, well above the ~42 Gelem/s `.todo/488` had called "this box's
-  ceiling"), and back down to 41-44 only at 4096x4096 (67 MB, certainly out of cache).
-  The 41-42 `.todo/488` measured at both 1024x1024 and 4096x4096 was two points on that
+  not a flat ceiling: BELOW even the serial rate at small shapes (too few leaves
+  for the thread count, a machinery effect), well above the rate `.todo/488` had called "this box's
+  ceiling" while cache-resident, and back down only once the matrix is certainly out of cache.
+  The single ceiling `.todo/488` had read at both a cache-resident and an out-of-cache shape
+  was two points on that
   hump landing near each other, not one bandwidth ceiling binding both -- see
   `.todo/artefacts/702-the-parallel-cap-is-the-machinery-or-memory-one-run-decides/README.md` for
-  the full sweep and the leaf/grain arithmetic behind the 256x256 undershoot. **The hump
+  the full sweep and the leaf/grain arithmetic behind the small-shape undershoot. **The hump
   also has a TROUGH in the middle of it, and it is thread-count-dependent, not
-  shape-alone**: `.todo/702` measured its 25-28 Gelem/s dip at 3072x3072 under
+  shape-alone**: `.todo/702` measured its dip just past the cache-resident band under
   `RONTOLISP_THREADS=20` (this box's default at the time); `.todo/713`'s finer sweep
-  (2026-09-06, same box) found a broad 2560-3456 trough -- not a spike at 3072 -- that
-  tracks the matrix's TOTAL BYTE SIZE (~26-50 MB, confirmed non-square, both dimensions
+  (2026-09-06, same box) found a broad trough there -- not a spike at one shape -- that
+  tracks the matrix's TOTAL BYTE SIZE (confirmed non-square, both dimensions
   independently) rather than either dimension or a leaf-count quantization, deepens from
-  threads=12 up through 20 and is essentially absent at 8-10, and is **invisible at this
-  box's CURRENT default** (`.todo/697` halved the default to 10 the same day, after
+  mid thread counts up and is essentially absent at low counts, and is **invisible at this
+  box's CURRENT default** (`.todo/697` halved the default the same day, after
   `.todo/702`'s own measurement) -- see
   `.todo/artefacts/713-the-3072x3072-parallel-gemv-dip-todo-702-left-open/README.md`.
   Two consequences the checkpoint lanes carried out of this: **a parallel GEMV rate is a
@@ -86,7 +87,7 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
   the recurrent state Qwen3.5 streams.
 - **`--gpu --simd --parallel` is slower than either alone on llm** -- correct and pinned,
   documented as not a win. The interpreter gains nothing on llm either.
-- GEMM: the row split buys 5.6-7.6x, but a tuned threaded BLAS still wins 1.3-3.8x, so `--blas`
+- GEMM: the row split buys a large multiple, but a tuned threaded BLAS still beats it, so `--blas`
   stays the answer where a library exists. `--blas` differs in the last digits; parallel does not.
 
 ## The default is HALF the processors, and the caller may not help a straggler
@@ -95,19 +96,18 @@ threads = 64, GraalVM 25.0.4, JVM class output of `examples/llm`, Qwen3-0.6B BF1
 f32, `-t 0 -n 64`, no other rontolisp lane on the box).
 
 - **A pool as wide as the machine is slower than half of it even when nothing else runs**:
-  8.70 tok/s at 64 threads, 9.45 at 32, 9.55 at 16, 7.58 at 8, 5.50 at 4, 2.27 at 1 -- the
-  curve is flat from 16 to 32 and BENDS DOWN at 64. Under `ParallelContentionBench`
-  (1024x1024 f32 GEMV in a decode-shaped loop, a 100 us gap between calls) 16 threads beat
-  64 in every cell, idle or with 16 or 48 busy cores beside it: 0.027-0.032 ms/call against
-  0.041-0.087. GB10's README row says the same from the other direction (`RONTOLISP_THREADS=10`
-  beat the 20 default on a 20-core box). So the default is half, and `RONTOLISP_THREADS`
+  throughput is flat from half width to just under full and BENDS DOWN at full width. Under
+  `ParallelContentionBench`
+  (a GEMV in a decode-shaped loop, a wide idle gap between calls) half width beat
+  full width in every cell, idle or with busy cores beside it. GB10's README row says the
+  same from the other direction (a reduced `RONTOLISP_THREADS`
+  beat the full default on a smaller-core box). So the default is half, and `RONTOLISP_THREADS`
   still overrides it.
-- **What the full-machine default cost was a TAIL, not a mean.** The reported collapse
-  (0.62 tok/s at 64 threads against 9.88 at 32) reproduced ONCE: two copies of the decode
-  loop started five seconds apart, 64 threads each, printed 0.57 and 3.38 tok/s. It did
-  NOT reproduce with 6, 16 or 64 pure-CPU spinner threads beside a single run (8.68 / 8.23
-  / 7.00), nor with a maven build beside it (8.76), nor on three later repeats of the pair
-  (8.60/8.44, 8.04/8.51 -- and 8.75/9.43 at the new default). Do not expect a bad number on
+- **What the full-machine default cost was a TAIL, not a mean.** The reported collapse at
+  full width reproduced ONCE: two copies of the decode
+  loop started five seconds apart. It did
+  NOT reproduce with pure-CPU spinner threads beside a single run, nor with a maven build
+  beside it, nor on three later repeats of the pair. Do not expect a bad number on
   demand: the mechanism is a worker descheduled while it holds a leaf, which needs the box
   genuinely oversubscribed, and one run in four saw it.
 - **Rejected, measured: the caller helping the straggler.** Two shapes were built and
@@ -115,15 +115,15 @@ f32, `-t 0 -n 64`, no other rontolisp lane on the box).
   (1) per-leaf done flags (`AtomicIntegerArray`) so the caller can RE-RUN a leaf a
   descheduled worker still holds -- legal, since a leaf is a deterministic write of rows no
   leaf reads, so running it twice writes the same bits -- with the rescue budget set to the
-  call's own serial cost. 0.041 -> 0.061 ms/call at 64 threads idle whether the budget was
-  20 us or 262 us, so the cost is the per-leaf flag traffic (64 cores writing 128 flags over
-  8 cache lines, and the caller reading all of them), not the rescue. Keeping a shared
+  call's own serial cost. It is slower at full width idle regardless of the budget, so the
+  cost is the per-leaf flag traffic (every core writing its flag and the caller reading all
+  of them), not the rescue. Keeping a shared
   countdown for the fast path does not help: exactly-once accounting needs the same per-leaf
   write either way, and returning before a straggler has stopped writing is not an option --
   it would let a stale leaf land in the NEXT call's `matvec-into` destination.
   (2) `Thread.yield()` every 64 spins in the caller's wait (the workers' own rule, on the
-  theory that the caller occupies the CPU the straggler needs). No consistent gain and one
-  0.220 ms/call cell against 0.066 -- once the caller yields on a full box it waits to be
+  theory that the caller occupies the CPU the straggler needs). No consistent gain, and the
+  worst cell was several times the best -- once the caller yields on a full box it waits to be
   rescheduled among everything else. **The bench is `eval/ParallelContentionBench`; re-run it
   before trying a third shape.**
 

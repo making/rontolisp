@@ -134,7 +134,8 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   slot read the message instead of its value -- ci-spec `find-class-metaobject-substrate` printed
   its condition report in place of a `T` once `.todo/919`'s corpus case shifted the slot layout
   (2026-09-22). Pinned by `JvmLispCompilerTest#anErrorCaughtInTheSameMethodLeavesTheSpilledArgumentsAlone`;
-  the fix moved 26 of 375 measured JVM artifacts (slot indices, at most +183 bytes of `max_locals`).
+  the fix shifted slot indices in a minority of the corpus's JVM artifacts (a little
+  `max_locals` each).
 - `makeTypeTest` takes a `ClosRegistry` and has a class branch (descendant-tag membership, `equal`
   on the car -- WASM content-safe). `with-slots` is read-only; assignment does NOT write back.
 
@@ -224,13 +225,13 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   never dies -- so the te record lost its `exception` slot (`_teSlot(e, 0)` answers the record).
 - Byte-identical without the channel (`ConditionChannel.used`) and, for `_teTl`, without a landing
   pad (`examples/jvm/java-interop.lisp`, `examples/jvm/life-gui.lisp`,
-  `examples/console/calc.lisp`: every output file). A landing is 8 bytes shorter, a no-match rethrow 3, a throw site 10 (13 where it
-  normalized a character vector); the fixed part is `_tlMap` / `_condTake` / `_condPut` and ~23
-  pool entries. Class bytes before -> after (2026-09-26, against develop at `797c28fec`): the
-  ci-spec pin's first case as a program of its own 36,138 -> 36,706; `(ignore-errors (f 1))`
-  11,139 -> 11,794; an async body's typed error 51,424 -> 52,011; a restart-mode program 45,991 ->
-  46,415; `examples/console/error-handling.lisp` 64,343 -> 64,881; `examples/net/httpbin.lisp`
-  185,469 -> 185,966; `examples/net/hello-clack.lisp` (205 throw sites) 950,310 -> 948,474.
+  `examples/console/calc.lisp`: every output file). The channel costs each landing, no-match
+  rethrow and throw site a few bytes (more where the site
+  normalizes a character vector); the fixed part is `_tlMap` / `_condTake` / `_condPut` and a
+  handful of pool entries. Checked 2026-09-26 against develop at `797c28fec`: exception-using
+  programs (the ci-spec pin's cases, `ignore-errors`, async typed errors, restart mode,
+  `examples/console/error-handling.lisp`, `examples/net/httpbin.lisp`) pay slightly, while the
+  throw-heavy `examples/net/hello-clack.lisp` shrinks.
 - Whether the `handler-bind` handlers ran is part of the record too (`_condRan`), since
   2026-09-27: "Whether the handlers ran rides the flight" below.
 - The throwable a `java:` member threw is recorded the same way, but in one weak map for the
@@ -336,7 +337,7 @@ split, matching SBCL.
   nearest ancestor's along the SLOT-LAYOUT parent chain, else -- when it carries
   `format-control`/`format-arguments` -- CLHS's `simple-condition` report. Groups are keyed by report
   owner / slot-index pair, NOT one clause per class: cl-postgres registers 100+ condition classes and
-  a per-class dispatch is the same 90 KB-in-one-method trap
+  a per-class dispatch is the same one-giant-method trap
   ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
 - **`%format-condition` renders through `%fmt-render`** ([format.md](format.md)). A control that is a
   FUNCTION is called on the stream through FIXED-ARITY `funcall`s for 0-3 arguments: `apply` would
@@ -385,7 +386,8 @@ every narrowing is IMPOSSIBILITY-based.
   which undoubles the `~~`: the one directive such a control can hold, so declined and rendered
   artifacts print the same text. Only an explicit `:format-control` initarg with another directive
   (surface keyword check plus the baked `:initform`/`:default-initargs` cons check inside generated
-  constructors' `%obj-new`) forces the renderer back. On zlib that is **-61 KB**.
+  constructors' `%obj-new`) forces the renderer back -- on zlib, the renderer stays out of the
+  artifact entirely.
 - **A tag built by a LATER lowering is taken from its site's presence.** The read family's
   `end-of-file` (`expandReadEofSignal`, expression expansion) and a failed open's /
   `%file-error`'s `file-error` (`lowerFileError`, body compilation, behind a pad only) are
@@ -474,9 +476,8 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   `%error-runtime` helper of a lambda-`:report` class renders through; the seeded `UNBOUND-SLOT` is
   one, so every `(error <computed> initargs...)` program is in EH mode. Until 2026-09-27 the scan
   missed it and such a program with no catching form of its own printed `Unhandled condition: ` and
-  nothing else. Cost, P1 / component / `--optimize=size`, bytes: `(defun f (ty) (error ty :code 42))`
-  112,679 -> 125,773 / 114,300 -> 129,489 / 90,232 -> 101,321 -- what the same program with a
-  `handler-case` already paid (129,109). A program with a catching form is byte-identical).
+  nothing else. The computed-typed-error EH gate costs what the same program with a
+  `handler-case` already paid; a program with a catching form is byte-identical.
 - **What the pre-scan cannot see costs a second attempt, never a wrong report**: a cross-lambda
   `return-from` is lowered by `CrossLambdaExitLowering` after the expansion (it must run after, or a
   GENERATED dispatcher's `return-from` would go unlowered), and reaches `ehMode` through
@@ -484,11 +485,10 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   (`UncaughtReportUnforeseen`, the `FunctionTooLarge` retry's shape) and the next one runs with the
   pre-scan forced on, so the invariant is **EH mode implies `reportsUncaught`**, whatever produced
   the trigger. Until 2026-09-28 such a program kept the narrow gate and its pad printed
-  `Unhandled condition: ` and nothing else, a plain `(error "boom ~a" x)` included. Cost, P1 /
-  component, bytes (a cross-lambda `mapc` exit plus an uncaught signal): plain `error` 8,252 ->
-  9,651 / 9,582 -> 11,014; a report-less typed one 10,754 -> 21,461 / 12,129 -> 22,925;
-  `simple-error` with format arguments 9,178 -> 106,722 / 10,559 -> 110,222 (the renderer "hi 5"
-  needs); the same exit with no signal 8,235 -> 8,199. Compile time: the expansion runs twice for
+  `Unhandled condition: ` and nothing else, a plain `(error "boom ~a" x)` included. The forced
+  second attempt costs the EH gate on a cross-lambda exit plus an uncaught signal -- dearest
+  where the report needs the format renderer -- and nothing where no signal remains; the
+  expansion runs twice for
   those programs only.
 - **`%no-applicable-method` signals VALUES, not prose**: `(error 'no-applicable-method-error
   :%nam-operation tail :%nam-datum-class (%class-designator arg))` against a class seeded ON DEMAND
@@ -496,8 +496,8 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   make a user slot ambiguous). Injection moved BEFORE the report-renderer injection (its tag must be
   in `conditionNarrowing`'s set) and AFTER the routing answer (a dispatcher alone must not flip
   routing on). Deliberate narrowing: a `(simple-error ...)` clause no longer matches it.
-- zlib `--optimize=size`: P1 127,026 -> 117,118 (-7.8%), component 131,677 -> 121,723, output
-  byte-identical. **The remaining floor is a floor**: zlib still carries the value printers (~4.6 KB)
+- zlib `--optimize=size`: P1 and component shrink, output
+  byte-identical. **The remaining floor is a floor**: zlib still carries the value printers
   because the entry edge is `%SEQ-TO-STRING`, reachable through `%FILL-RUNTIME`/`%REPLACE-RUNTIME`,
   whose element conversion IS princ semantics. **Trigger: a program family carrying the printers ONLY
   through `%seq-to-string`/`%schar-set-runtime` and where those bytes matter.**
@@ -576,7 +576,7 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   (the frame pass) drops a line-0 entry, and the code after it then reported the site before
   (`UncaughtReportParityTest#aComputedConditionTypeReportsTheInitargsTheCallPassed`). (A function's methods
   used to open on a BASE site naming it, for the dynamic rule's outward search; the lexical one
-  needs none, 4 bytes a method.)
+  needs none.)
 - **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
   `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
   binary name); `run()` keeps the trace as it then is in the error payload, a fourth element
@@ -597,9 +597,9 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   survive the write: `JvmClassSplitter` plays each entry into the `CodeBuilder` at the
   instruction it starts at, so it rides that instruction when a relaxed branch or a narrowed
   `ldc` moves it, whichever class the method lands in (`LineNumberTableTest`).
-- **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
-  plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
-  1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
+- **Cost, checked 2026-09-26**: a little artifact per class (`_where` and its constants) and
+  a few bytes per located line; a fused tree that needs its own method pays for its marker.
+  Nothing at run time until a condition
   escapes.
 - **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
@@ -673,10 +673,9 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   JVM -- and listed unpassed slots (`:A #<%UNBOUND%>`) otherwise
   (`ComputedConditionTypeReportFixture`). A class that INHERITS a report builds no fallback at all
   (`inheritsConditionReport`): it always renders, and the fallback was dead code on every backend.
-  Measured 2026-09-26 on e6e49385b (EH mode, bytes): zlib `--optimize=size` 89,623 -> 89,734 (+111),
-  `--optimize` 117,008 -> 117,119, component 93,712 -> 93,819; `postgres-hello --component
-  --optimize` 2,708,177 -> 2,700,709 (-7,468, the dead fallbacks), `postgres-crud` 2,783,155 ->
-  2,776,452; a toy `(error 'c)` 22,547 -> 25,917 -- the `~s` of the initarg list brings the
+  Checked 2026-09-26 on e6e49385b (EH mode): the fallback costs zlib and the component a
+  trifle, the dead fallbacks fall out of the postgres artifacts, and a toy typed `(error 'c)`
+  grows -- the `~s` of the initarg list brings the
   printer.
 - The `(error c)` text named the class through `prin1` of its `%class-` tag, which escapes since
   symbols print with `|...|`: `Condition of type -C| was signalled.` on the interpreter and the JVM
@@ -709,15 +708,12 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   in a program that can make a symbol at run time (`read`) keeps every built-in dispatchable by
   name, whatever narrowed EH mode is on for. The first version of this narrowing kept the arm in
   plain EH mode (`SignalMessages.RENDERED`) to hold `--report-locations` byte-identical to a build
-  without the option; the user approved dropping that condition for this change and its size
-  effect is recorded here instead. `(print (read))` plus `(ignore-errors nil)`,
-  `--optimize=size`: 245,858 -> 47,570 B (`without the catching form`: 39,027 B, unaffected either
-  way). Under `ENTRY_REPORT` (`--report-locations=line`, no catching form) nothing moves --
-  42,326 B before and after -- since that arm was already dropped there. `zlib` (chipz, EH mode via
-  `catch`/`throw`, no option): `--optimize=size` 89,499 -> 89,326 B (-173, -0.19%), `--optimize`
-  116,920 -> 116,513 (-407), `--optimize=off` 462,894 -> 462,464 (-430), `--component --optimize=size`
-  93,557 -> 93,382 (-175); gzip -9 `--optimize=size` 29,971 -> 29,924. `hello_world`/`pi_approx`
-  `--optimize=size` (no catching form, not in EH mode) unchanged: 480 / 1,489 B. Measured on this
+  without the option; the user approved dropping that condition for this change. The dropped arm
+  cuts a `(read)`-using program's artifact to a fraction, most of all where the dispatch gate
+  would otherwise hold every built-in; under `ENTRY_REPORT` nothing moves, since that arm was
+  already dropped there. `zlib` (chipz, EH mode via
+  `catch`/`throw`, no option) shrinks a trifle at every level; `hello_world`/`pi_approx`
+  `--optimize=size` (no catching form, not in EH mode) are unchanged. Checked on this
   worktree's HEAD (`ea5e69304` + the change), wasmtime 49.0.0, Linux.
 - **A frame** = a defun, lambda, top-level chunk or `--component` resume whose OWN code (outside
   the lambdas it builds) has a form read from a file. It wraps its body in `block` +
@@ -757,16 +753,17 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   the shaker drops them with the frame. The name is the program's spelling
   (`UncaughtReport.functionName`, the mapping every backend uses: a method body names its generic).
   A first version kept a quoted name TABLE: every defun's
-  name stayed after its function was shaken -- zlib +4,489 B instead of +3,856. Files are the one
+  name stayed after its function was shaken, at a size cost -- which is why files are the one
   table (quoted list, sealed when the entry's render compiles; the prescan of the program is what
   makes it complete, since every Pass 2 rewrite inherits an existing cons's position).
 - **The line**: an i31 in an eqref local (mirrored by a resume's spill array, so it survives a
   suspension), set on entry to a located form when it holds another value and restored after it
   (static tracking in `Frame.curLine`; the function's tail form restores nothing). Starts NULL, not
   at the definition line: a frame that entered no located form leaves the location to its callers,
-  as the interpreter does. Printed by `_uncaught_digits` (i31 -> string via `_str_fresh`): the
-  general printer (`%princ-to-string`) pulled 20 KB into a module that never prints
-  (`examples/net/http-handler.lisp` 2,171 -> 23,868 B; now 2,769).
+  as the interpreter does. Printed by `_uncaught_digits` (i31 -> string via `_str_fresh`), NOT
+  the
+  general printer (`%princ-to-string`), which would pull the printer into a module that never
+  prints (it did, in `examples/net/http-handler.lisp`, before the dedicated path landed).
 - **Tail calls**: a `return_call` leaves the try_table. Inside a frame a direct one stays one only
   into another frame (`tailCallOp`); one through a function value tests the callee at run time
   (`emitValueCall` -> `_uc_frame_p`, a test over the frames' funcId ranges or a `br_table` when
@@ -784,8 +781,8 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
 - **Preview 1 async**: an EH-mode module settles a FAILED future when the body signals, and the
   await rethrows its payload ([async-await.md](async-await.md)), so the hop names the await's line
   as on every other backend.
-- **Measured 2026-09-26** (macOS arm64, wasmtime 49): the 35 single-file programs of
-  `UncaughtReportParityTest`, `RontoLispCliStreamsTest` and this suite, plus 39 aimed at the shapes
+- **Checked 2026-09-26** (macOS arm64, wasmtime 49): every single-file program of
+  `UncaughtReportParityTest`, `RontoLispCliStreamsTest` and this suite, plus more aimed at the shapes
   above (multi-file and cross-file inlining among them), each with `(print (ignore-errors nil))`
   appended -- every location line matches the interpreter's on Preview 1 and `--component`. What
   still differs is not a location: a raw trap (a typed loop's out-of-range `aref`) prints no report
@@ -793,51 +790,28 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   a different condition on each backend (`.todo/994`); and `~a` of a handler's condition prints its
   slots on the JVM and wasm-GC (`.todo/995`).
 
-Cost in EH mode, measured 2026-09-26 on 2f611be61 plus `.todo/991`'s change (wasmtime 49.0.0,
-node 24, macOS arm64); the change itself cost zlib `--optimize=size` +351 B `function` / +358 B
-`line`, `--optimize` +351 / +666 (the fused fallbacks' marks), the 101 functions +116 (a `throw`
-in each landing where `unreachable` was), the one-function programs +14-15:
+Cost in EH mode, checked 2026-09-26 on 2f611be61 plus `.todo/991`'s change (wasmtime 49.0.0,
+node 24, macOS arm64). `--report-locations` grows an EH module by single-digit percentages at
+`function` and about twice that at `line` (zlib; the fused fallbacks' marks; a `throw` in each
+landing where `unreachable` was); toy programs pay a few dozen bytes per frame.
 
-| module | flags | off | `function` | `line` |
-| --- | --- | --- | --- | --- |
-| hello_world + `(ignore-errors nil)` | `--optimize=size` | 1,214 | 1,361 | 1,386 |
-| pi_approx + `(ignore-errors nil)` | `--optimize=size` | 2,293 | 2,439 | 2,512 |
-| zlib (chipz, 51 frames) | `--optimize` | 116,920 | 122,115 (+4.4%) | 128,129 (+9.6%) |
-| zlib | `--optimize=size` | 89,499 | 94,685 (+5.8%) | 100,626 (+12.4%) |
-| zlib | `--component --optimize=size` | 93,557 | 98,717 | 104,665 |
-| zlib | `--optimize=off` | 462,894 | 468,828 | 476,221 |
-| 1 three-line function | `--optimize=size` | 7,426 | 8,057 | 8,107 |
-| 101 three-line functions | `--optimize=size` | 14,092 | 18,754 | 20,765 |
-
-zlib's `line` column was 93,774 (+6.6%) when first measured the same day: the growth came in with
-upstream commits before 2f611be61 (that commit alone gives 100,268), not from this table's change.
-
-Outside EH mode (`ENTRY_REPORT`), measured 2026-09-26 on da01b1a51 (wasmtime 49.0.0).
-"forced" is plain EH mode forced by the option (`RENDERED`), the first shape tried:
-
-| module | flags | off | forced (`line`) | `function` | `line` |
-| --- | --- | --- | --- | --- | --- |
-| hello_world | `--optimize=size` | 480 | 660 | 649 | 660 |
-| hello_world | `--component --optimize=size` | 1,635 | 2,000 | 1,989 | 2,000 |
-| pi_approx | `--optimize=size` | 1,489 | 1,779 | 1,740 | 1,779 |
-| pi_approx | `--optimize` | 2,410 | 2,697 | 2,658 | 2,697 |
-| `(parse-integer (read-line))` in a defun | `--optimize=size` | 6,350 | 12,583 | 12,566 | 12,583 |
-| a typed condition, inherited `:report` | `--optimize=size` | 2,898 | 26,829 | 20,216 | 20,232 |
-| a typed condition, inherited `:report` | `--component --optimize=size` | 3,882 | 30,733 | 24,056 | 24,072 |
-| `(print (read))` | `--optimize=size` | 34,981 | 245,561 | 42,396 | 42,404 |
-| `(print (read))` | `--optimize` | 35,920 | 300,416 | 43,324 | 43,332 |
+Outside EH mode (`ENTRY_REPORT`), checked 2026-09-26 on da01b1a51 (wasmtime 49.0.0).
+"forced" is plain EH mode forced by the option (`RENDERED`), the first shape tried. Forcing
+plain EH mode costs several times the option's own machinery on a `(read)`-using or
+typed-condition program, and a few hundred bytes on the toys; the final `line` shape lands at
+the same cost as `function`.
 
 - The rest is what a report needs: the throw path and the pad (~170 B on hello_world, where
   nothing can throw), and each signal's message -- `parse-integer`'s names its string, so the
-  string printer comes in (+6.2 KB). The typed toy's `off` is a folded trap.
+  string printer comes in. The typed toy's `off` is a folded trap.
 
-- Fixed: ~140 B (the note and digit helpers, the render). Per frame: ~39 B raw / ~9.5 B gzip under
-  `function` (the try_table wrapper is 12, the note call ~20, the name ~5 of data); `line` adds
-  ~6.5 B per line change (3-line bodies: +20 B). gzip, zlib `--optimize=size`: 29,146 -> 30,416 ->
-  31,221.
-- Run time (bench-report programs + `(ignore-errors nil)`, best of 5 -- the EH mode the option now
-  turns on by itself for these programs): **V8 within noise** (every
-  program +-4%); **wasmtime: fib +220%**, matmul +13-15%, mandelbrot +8-13%, the rest 0-7%. The
+- Fixed cost: the note and digit helpers and the render. Per frame: a few tens of bytes raw
+  under
+  `function` (the try_table wrapper, the note call, the name's data); `line` adds a few bytes
+  per line change.
+- Run time (bench-report programs + `(ignore-errors nil)` -- the EH mode the option now
+  turns on by itself for these programs): **V8 within noise**; **on wasmtime the tiny
+  recursive benchmark pays the most**, the others less. The
   cost is the try_table around calls in Cranelift (`function`, which sets no line, pays the same),
   so a tiny recursive function pays the most. **Re-evaluate if** wasmtime's exception lowering
   stops spilling across calls inside a try_table -- or if the option is ever meant to stay on in
@@ -857,7 +831,7 @@ Outside EH mode (`ENTRY_REPORT`), measured 2026-09-26 on da01b1a51 (wasmtime 49.
   reference (`referencesFunctionValue`), forwarding the datum only.
 - **A NON-literal `(error TYPE args...)` datum WITH initargs dispatches on the COMPILED backends
   too** (jzon's `%raise`, cl-postgres' `(error (get-error-type code) :code ...)`). NOT inlined at the
-  call site -- at 165 registered classes the per-class expansion reached 90 KB in one method, past
+  call site -- at scale the per-class expansion overflowed one method, past
   the JVM's 64 KB limit. The site lowers to `(%error-runtime datum (list args...))` and
   `expandTopLevelDefinitions` injects one construction helper defun per registered CONDITION class
   (`%ERROR-RT-n`, the same `expandTypedSignal` a literal call gets, over `getf` reads with each
@@ -982,21 +956,13 @@ its 52,000 tripwire with it, 51,891 without -- the eight rows over four `define-
   Weighed and dropped: saving the mark around a handling `handler-case` misses the declined and the
   abandoned cases; several marks need a bound and outlive a served request; a per-instance flag
   changes every condition layout, and a re-signalled instance is a new flight.
-- **Cost, measured 2026-09-27 against develop at `20a17362c`** (wasmtime 49.0.0). Outside restart
+- **Cost, checked 2026-09-27 against develop at `20a17362c`** (wasmtime 49.0.0). Outside restart
   mode byte-identical (`(ignore-errors (f 1))`, `examples/console/error-handling.lisp`,
   `examples/console/calc.lisp`, `examples/net/httpbin.lisp`; JVM, Preview 1 default and
-  `--optimize=size`, component). Restart mode, bytes before -> after:
-
-  | program | JVM class | wasm P1 | P1 `--optimize=size` | component |
-  |---|---|---|---|---|
-  | `handler-bind` over `(ignore-errors (error "x"))` | 41,499 -> 41,634 | 16,420 -> 16,390 | 22,958 -> 22,872 | 17,899 -> 17,869 |
-  | a `restart-case` a handler invokes | 41,440 -> 41,563 | 27,528 -> 27,441 | 24,902 -> 24,816 | 29,067 -> 28,980 |
-  | the ci-spec pin as a program of its own | 104,177 -> 104,466 | 56,011 -> 55,836 | 49,765 -> 49,591 | 59,738 -> 59,563 |
-  | `examples/net/hello-clack.lisp` | 953,749 -> 953,801 | 767,972 -> 768,890 | 602,635 -> 603,553 | 888,479 -> 889,458 |
-
-  JVM: `_condRan` (21 B of code) and `_condOf` (40 B) once, ~10 B per restart-mode `handler-case`
-  landing; a throw site keeps its size. wasm-GC: the global and the pad's `eq` go, a hooked throw
-  site grows by the wrapper cons (~5 B; hello-clack has some 180). Two traps met on the way: the
+  `--optimize=size`, component). In restart mode the JVM pays `_condRan`/`_condOf` once and a
+  few bytes per restart-mode `handler-case`
+  landing; a throw site keeps its size. wasm-GC sheds the global and the pad's `eq`, and a hooked
+  throw site grows by the wrapper cons (hello-clack has some 180 such sites). Two traps met on the way: the
   message rode the wrapper's CAR first, a string where the type-test fold
   ([wasm-ref-type-fold.md](wasm-ref-type-fold.md)) had proved no cons car holds one, and the string
   and sequence runtime it prunes came back (+1,066 B on the first row); the JVM landing first
@@ -1030,7 +996,7 @@ plus a call to / `#'` reference of a restart-runtime function). The scan matches
 OPERATOR POSITION of evaluated forms only: it recurses into sub-forms, never into spine cells, skips
 `quote`d data, ignores keyword heads. **The old spine-walking scan read ANY occurrence as an
 operator, so chipz's bzip2 decoder, whose `tagbody` has a tag named `CONTINUE`, put every program
-that loads chipz into restart mode** (~7 KB on the zlib row). A binding pair or clause head spelling
+that loads chipz into restart mode**, a size penalty on the zlib row. A binding pair or clause head spelling
 a restart name still over-approximates to true (the safe direction).
 
 It must be computed before `expandTopLevelDefinitions` (which re-runs it to inject the runtime defuns
@@ -1110,16 +1076,14 @@ message at the catching end** -- except for the failures the backends report as 
   slot index is baked here. **The synthesis is ONE method per class, `_hcSynth`
   (`(Throwable)Object`, `JvmHandlerCaseCompiler.conditionSynthesizer`, memo
   `ConditionChannel.conditionSynthesizer`)**: every landing and the `_hbGuard` pad call it when
-  `_condTake` answers null; the clause dispatch stays inline. Measured 2026-09-27, default
-  `--optimize`: `(defun g (x) (ignore-errors (f x)))` `G` 945 -> 513 B code, StackMapTable 211 ->
-  155 B; `(defun h (x) (handler-case (f x) (type-error () :t)))` `H` 667 -> 235 B, 211 -> 155 B;
-  `_hcSynth` 442 B, `_hbGuard` 518 -> 82 B. The ci-spec corpus class (`--optimize=off`) 7,820,580
-  -> 7,608,664 B (code 4,640,417 -> 4,495,219, StackMapTable 1,940,580 -> 1,874,069, methods 6,143
-  -> 6,139 -- fewer body-outliner continuations); `examples/net/hello-clack.lisp` 958,556 ->
-  956,748 B. **The constant pool barely moves** (corpus 51,957 -> 51,945): a landing adds no pool
+  `_condTake` answers null; the clause dispatch stays inline. Checked 2026-09-27, default
+  `--optimize`: the shared synthesizer roughly halves the code and StackMapTable a
+  `ignore-errors` / `handler-case` landing needs, and shrinks the ci-spec corpus class and
+  `examples/net/hello-clack.lisp` by a method-set's worth (fewer body-outliner continuations
+  among them). **The constant pool barely moves**: a landing adds no pool
   entry of its own -- every constant it names is already interned class-wide. What fills the
-  corpus pool: 10,057 `String`s, ~6,100 self `Methodref`s (each with its own `NameAndType` and
-  name), and 2,755 `_qd$N` quoted-datum fields (three entries each).
+  corpus pool: the `String`s, the self `Methodref`s (each with its own `NameAndType` and
+  name), and the `_qd$N` quoted-datum fields (three entries each).
 - **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it.
 - **Undefined functions keep the call-time stub contract**: a call to a name with no definition
   compiles to `The function X is undefined` at call time plus a compile-time warning, matching the
@@ -1274,12 +1238,12 @@ operator it serves:
   `JvmComplexCompiler.complexOp` hand a wrappable helper (`JvmNumericRuntimeBuilder.wrappedDesc`)
   back as a per-(helper, operator) WRAPPER, built on first use: the same invocation under a catch-any
   entry whose handler throws `_opTypeErr(e, "OP", "TYPE")`, which renames an unnamed report and
-  passes anything else through. Zero cost on the normal path (measured: no difference on a boxed
+  passes anything else through. No cost on the normal path (no difference on a boxed
   generic-arithmetic loop). Under a landing pad the thread-local `_teTl` maps each such exception to
   its `{datum, type}`, read by `_teSlot`, which is how the pad's `type-error` arm fills the slots --
   a `RuntimeException` has nowhere to carry an object and a compiled program ships no exception
-  class ("The JVM keeps what a throwable carries under the throwable"). Size: +0.8 KB on a
-  four-defun class, +2.8 KB on a 116 KB one.
+  class ("The JVM keeps what a throwable carries under the throwable"). Size: the thread-local
+  map costs a little per class, more on a large one.
 - **wasm-GC, EH mode** (`WasmOperandTypes`): a call to a helper that can reject an operand, compiled
   inside a named form (`WasmOperandTypes.emitCall`, converted at every call site of the arithmetic
   compilers and `castFloatGetF64`), stores the operator's id in the operator register (a
@@ -1290,8 +1254,8 @@ operator it serves:
   call-position rewrites, the `+ - * / = < > <= >=` family and the operators a lowering introduces
   (`WasmOperandTypes.LOWERED_TO`); an operator missing there reports unnamed. Boxing, the fused raw
   i64 helpers and fdlibm take no register (`mayReject`), and a call to a landing is not followed by
-  the clear (a landing never returns and clears the register itself). Size: +2.3% on a 109 KB EH
-  module; a non-EH module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
+  the clear (a landing never returns and clears the register itself). Size: a couple of percent
+  on a large EH module; a non-EH module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
 - **wasm-GC, one landing body**: `_type_err_int`/`_num`/`_real`/`_list` are 8-byte stubs handing
   their kind to the shared `_type_err(culprit, kind)` (`buildSharedLandingBody`, `TYPE_STR_TO_MEM`),
   which renders every report, so a module reaching several landings carries the rendering once; its
@@ -1310,8 +1274,9 @@ operator it serves:
   reports identically. **The type symbols are interned as their own names before any body compiles**
   (`Texts.typeNames`): a symbol's identity is its string-table entry, so `(eq (type-error-expected-type
   e) 'number)` holds only because the landing and the program's literal share it -- a view into the
-  suffix text would print right and fail `eq`. Size: +106-116 B on zlib with a `handler-case`
-  around its body (P1/component, default and `--optimize=size`, measured 2026-09-26); zlib as
+  suffix text would print right and fail `eq`. Size: a program whose pad can land on the typed
+  error carries the baked layout (checked 2026-09-26 on zlib with a `handler-case`
+  around its body, P1/component, default and `--optimize=size`); zlib as
   shipped has no pad and is byte-identical. A side effect: `NotFunctionReport`'s `type-error` for
   `(funcall 5)` is typed under any pad now, since it rides the same baked layout.
 - **The operator is the innermost FORM being compiled**, so a lowering that re-emits an operator's
@@ -1370,13 +1335,10 @@ by `ehAnUncaughtDivisionByZeroReportsBeforeTrapping`.
   `DIVISION_OPERATORS` name spelled), the `(nil . message)` payload elsewhere.
 - **The gate is `divZeroLanding`**: EH mode AND an operator that can divide by zero spelled (or any
   name resolvable at run time). Without it the four helpers keep their old bytes and traps, so a
-  non-EH module and an EH module that never divides are byte-identical. Measured 2026-10-04
-  (P1 / component, default and `--optimize=size`): `size-report` hello/pi and the nine non-EH
-  `bench-report` programs byte-identical; an EH module spelling a division it never reaches
-  (`(handler-case (car 1) ...)`: the printer spells one) -2 B, the 16-byte address gap the cut
-  message leaves; zlib (EH, no pad) +29 / +49 B, `--optimize=size` +26 / +46 B; `string.lisp`
-  +58 / +51 B; a pad around `(/ 1 *z*)` (class baked) +88..+93 B on 23 KB; `unwind-protect` around a
-  `floor` +49 / +51 B.
+  non-EH module and an EH module that never divides are byte-identical. Checked 2026-10-04
+  (P1 / component, default and `--optimize=size`): `size-report` hello/pi and the non-EH
+  `bench-report` programs byte-identical; an EH module pays only where a division is spelled --
+  the helper address gap where none is baked, the class and message where a pad can land on it.
 - **A float rounded by an exact zero** (decided 2026-10-04): a FINITE float dividend over an exact
   zero divisor in the two-argument rounding family (`(floor 7.5 0)`, `ceiling`/`truncate`/`round`,
   `ffloor` and twins) signals `division-by-zero`, like an integer or ratio dividend; it used to be
@@ -1386,7 +1348,7 @@ by `ehAnUncaughtDivisionByZeroReportsBeforeTrapping`.
   `(floor infinity 0)` too, measured), so the dividend's check comes first on every backend.
 
 ### Per operator: where a zero signals and where IEEE answers (decided 2026-10-05)
-Measured 2026-10-05 with SBCL 2.2.9 default (float traps on) and traps masked
+The oracle run, 2026-10-05: SBCL 2.2.9 default (float traps on) and traps masked
 (`sb-int:with-float-traps-masked`), ECL 21.2.1, ABCL 1.9.0, Clojure 1.12.6 and Gauche 0.9.15:
 
 | Form | SBCL default | SBCL masked | ECL | ABCL | Clojure | Gauche | rontolisp now |
@@ -1437,16 +1399,15 @@ Outside EH mode the wasm remainder TRAPS (`unreachable`) where it answered NaN; 
 and only where `mod`/`rem`/`evenp`/`oddp` is spelled (`REMAINDER_OPERATORS`), so a module whose
 remainder helper is shaken keeps every other address.
 
-Size, measured 2026-10-05 (before -> after): `size-report` (all 18 rows) and `bench-report` P1 /
-`--optimize=size` / component byte-identical except `--optimize=off` hello/pi/dom -16 B and
-`matmul --optimize=size` -8 B (non-EH `_rat_rem`/`_rat_mod`: a NaN constant became `unreachable`);
-zlib `--optimize=off` +87 B, the others identical. An EH program taking a float `mod` +246 B P1 /
-+252 B component on 10 KB (the message, the classification, `_div_zero` becoming reachable). JVM:
-every class keeping `_fdiv` +32 B (fib 15,075 -> 15,107; jar +10..+16 B, matmul/sort +35/+37 B);
-a program using float `mod` without other division (ConstantPool gains the two messages and
-exception classes) +133 B jar. Performance: bench-report mandelbrot/matmul/sort/bignum/fib/sieve
-unchanged within noise on JVM and P1; a loop of 200M float `mod`+`rem` on the JVM ~+7%
-(1.60 -> 1.73 s; the one NaN compare per call), P1 unchanged.
+Size, checked 2026-10-05: `size-report` and `bench-report` P1 /
+`--optimize=size` / component byte-identical but for a NaN constant becoming `unreachable` in the
+non-EH remainder helpers; the other artifacts move by bytes. An EH program taking a float `mod`
+carries the message, the classification and the reachable `_div_zero`. On the JVM every class
+keeping `_fdiv` pays an instruction, and a program using float `mod` without other division
+gains the two messages and
+exception classes in its constant pool. Performance: the bench-report numeric programs are
+unchanged within noise on JVM and P1; a tight float `mod`+`rem` loop on the JVM pays the one
+NaN compare per call, P1 nothing.
 
 ### A zero base on the complex `expt` path (decided 2026-10-06)
 `exp(w*log z)` multiplies `log 0 = -inf` into NaN parts, so until 2026-10-06 EVERY zero base on the
@@ -1485,12 +1446,12 @@ undefined.
 
 Pinned by `ZeroBaseComplexPowerFixture` (`LispEvaluatorTest`/`JvmLispCompilerTest`/
 `WasmLispCompilerIntegrationTest#zeroBaseToAComplexPower`, P1 and component) and `ci-spec.yaml`'s
-`a-zero-base-to-a-complex-power`. Size, measured 2026-10-06: the four `size-report` programs and the
-ten `bench-report` ones byte-identical as P1 `--optimize=off` / default / `--optimize=size`,
-component, JVM class and jar. The wasm arm is inline at each complex `expt` site: +159 B per site (a site was
-~380 B; a constant zero is `i32.const`+`f64.convert_i32_s`, 3 B where `f64.const` is 9). JVM: a class
-keeping the complex group +144 B, jar +73 B (the arm, less a duplicated `atan2` call `_cpow` used to
-make). A 2M-iteration nonzero-base complex `expt` loop unchanged within noise on the interpreter,
+`a-zero-base-to-a-complex-power`. Size, checked 2026-10-06: the `size-report` and
+`bench-report` programs byte-identical as P1 `--optimize=off` / default / `--optimize=size`,
+component, JVM class and jar. The wasm arm is inline at each complex `expt` site (a constant
+zero is `i32.const`+`f64.convert_i32_s`, cheaper than an `f64.const`). JVM: a class
+keeping the complex group carries the arm, less a duplicated `atan2` call `_cpow` used to
+make. A long nonzero-base complex `expt` loop is unchanged within noise on the interpreter,
 JVM and P1.
 
 ## A left `ash` that cannot be built signals a simple-error
@@ -1502,7 +1463,7 @@ answers the sign past the value's width.** Pinned by `AshCountFixture`
 (`LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#...aRunawayAshCountSignalsASimpleError`,
 P1 and component) and `ci-spec.yaml`'s `a-runaway-ash-count-signals-a-simple-error`.
 
-Measured 2026-10-07 (count from a variable, under `handler-case`):
+The SBCL comparison, count from a variable, under `handler-case`:
 
 | Call | SBCL 2.2.9 | interpreter | JVM | P1, component |
 | --- | --- | --- | --- | --- |
@@ -1532,9 +1493,8 @@ then refuses -- 256 MB at the edge), wasm-GC a count past 2^25 (`_big_ash`'s all
   The arms ship wherever a generic `ash` call keeps them (the type-test fold prunes them from a
   fused site's fallback), so their bytes count: the saturation is arithmetic, `(sign | 1) << 32`,
   because an `if` over two `i64.const +-2^62` left `WasmLispCompilerTest`'s
-  `theSizeLevelShrinksTheModuleAndTheDefaultLevelIsTheBareFlag` program 3,520 B at `--optimize=size`
-  against 3,514 B at the default level (2026-10-07; 3,433 / 3,499 before the arms, 3,502 / 3,514
-  after).
+  `theSizeLevelShrinksTheModuleAndTheDefaultLevelIsTheBareFlag` program larger at
+  `--optimize=size` than at the default level (2026-10-07).
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of
@@ -1709,8 +1669,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `_type_err_list` under the operator's id in EH mode (`emitListTypeError`) and a trap outside it
   (it traps there rather than answering nil); the `nthcdr` walk's step is the checked cons read
   itself, `br_on_cast_fail` with `emitListTypeError` as its miss, one type test per step
-  ([cons-access-runtime.md](cons-access-runtime.md); 1M steps x100, wasmtime 49: 141 ms with a
-  `ref.test` in front of the cast, 129 now, 131 unchecked), and keeps its trapping cast outside EH
+  ([cons-access-runtime.md](cons-access-runtime.md); one checked type test per step, as fast as
+  the unchecked walk), and keeps its trapping cast outside EH
   mode. The operator table adds `ENDP`
   for a program that spells `dolist`, `NTHCDR` and `CAR` for one that spells `nth`/`second`..
   (`WasmOperandTypes.LOWERED_TO`), and is placed in key order (it iterated `Map.of`s, whose
@@ -1799,7 +1759,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   calls do (they signalled "expects a cons cell").
 - **JVM**: `car`/`cdr` compile to `_car`/`_cdr` (`JvmOperandTypeRuntime`), whole readers that name
   themselves (`_opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)`) -- one call per site where the
-  inline null test and cast were; `zlib` -4.5 KB, a one-defun class +227 B (the two methods). The
+  inline null test and cast were, and shrinks zlib; a one-defun class carries the two methods. The
   subscripts of `aref`/`%aset`/`nthcdr` go through `_ckIdx` (a `Long` or `BigInteger`), `numerator`/
   `denominator` through `_ckRat`, both via the operator's wrapper; `%aset`'s store helpers and the
   `complex` constructor are invoked under the wrapper too. `_opTypeErr`'s funnel-typed arm reads the
@@ -1810,11 +1770,9 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   head), an instance (`String[]` head; tested only when `mayUseInstances`) and an async value
   (`Object[3]` + marker; only with the async runtime). Until 2026-09-26 they tested `instanceof
   Object[]` alone: `(car an-instance)` answered its layout, `rplacd` overwrote its first slot, and
-  `(car c)` in a `handler-bind` handler returned. Cost, measured 2026-09-26 (JDK 25, 10 interleaved
-  runs pinned to 4 cores on a loaded host, best/median ms): 1M-element `car`+`cdr` walk x40
-  156/189 -> 161/190; `endp`+`cdr` walk 182/242 -> 150/187; `dolist` 159/191 -> 161/188; `mapcar`
-  over 10k x2000 131/150 -> 132/150; bench-report `list` 463/513 -> 463/484. A `mapcar` class
-  +165 B. Pins: `JvmLispCompilerTest.consAccessorsRejectEveryObjectArrayThatIsNoCons`, ci-spec
+  `(car c)` in a `handler-bind` handler returned. Checked 2026-09-26 (JDK 25, interleaved
+  runs on a loaded host): the shape tests leave the cons walks' speed where it was, within
+  noise on every shape tried. Pins: `JvmLispCompilerTest.consAccessorsRejectEveryObjectArrayThatIsNoCons`, ci-spec
   `cons-accessors-reject-object-arrays-that-are-no-cons` and `failing-handler-bind-handler-report`.
 - **wasm-GC, EH mode only** (`WasmEmitHelper.checksConsFields`; outside it every cast still traps and
   a non-EH module is byte-identical): an inline `car`/`cdr` site is ONE type test over the operand
@@ -1828,42 +1786,43 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   the limit through `_as_f64` (a ratio passes and meets `_int_val`'s unnamed, true, `INTEGER`);
   `denominator`'s `_rat_den` lands a non-rational in `_type_err_int` itself (since 2026-10-03; it
   answered 1 for anything before, and the site checked through `_int_val`).
-- **Cost, measured 2026-09-26** (wasmtime 47): P1 `zlib` 114,383 -> 115,984 (+1.4%), size level
-  87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
-  (+28%), while the site tested the type twice (`ref.test`, `ref.cast`). With the one
-  `br_on_cast_fail` (same day, wasmtime 49) that loop is 113 -> 92 ms against 84 unchecked, and
-  most list walks are at or under the unchecked time (the table:
+- **Cost, checked 2026-09-26** (wasmtime 47): the checked `_car`/`_cdr` cost zlib about a
+  percent on P1 and less at the size level, and a tight `car`/`cdr` loop in an EH module ran
+  slower while the site tested the type twice (`ref.test`, `ref.cast`). With the one
+  `br_on_cast_fail` (same day, wasmtime 49) such a loop is as fast as, and most list walks at or
+  under, the unchecked time (the table:
   [cons-access-runtime.md](cons-access-runtime.md)). The `aref` loop and the JVM are unchanged.
-- **Cost of the list walks, measured 2026-09-26**: `zlib` P1 115,984 -> 116,300 (+0.27%), size level
-  88,735 -> 89,051, JVM classes 163,399 -> 163,693; `hello_world`, `pi_approx`, `dom_reactor`
+- **Cost of the list walks, checked 2026-09-26**: zlib and the JVM classes pay a trifle;
+  `hello_world`, `pi_approx`, `dom_reactor`
   unchanged. No loop gains a test.
-- **Cost of the list consumers, measured 2026-09-26**: `zlib` P1 116,527 -> 116,892 (+0.31%), size
-  level 89,272 -> 89,623, JVM class 164,202 -> 164,583; `hello_world`, `pi_approx`, `dom_reactor`
-  unchanged. A 1M-element `loop`/`dolist`+`rplacd`/`length` mix in an EH module 0.34 -> 0.36 s
+- **Cost of the list consumers, checked 2026-09-26**: the same trifle on zlib and the JVM;
+  `hello_world`, `pi_approx`, `dom_reactor`
+  unchanged. A `loop`/`dolist`+`rplacd`/`length` mix in an EH module runs a little slower
   (the `rplacd` site's `ref.test` in front of its cast: not the one-test `br_on_cast_fail` of a
   `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
-- **Cost of the string accesses, measured 2026-09-26** (wasmtime 49): `zlib` code +201 B and
-  strings +52 B; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
-  byte-identical, JVM class 164,583 -> 164,736. Its P1 total read 117,008 -> 118,253 only because
-  the 52-byte shift put the fdlibm table's then-probed base word on chipz's literal `2048`, pinning
-  ~990 dead bytes; with the table decided by its readers it is 117,260
-  (`.kb/optimize-dead-code-elimination.md`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
-  580 ms (the register write around `_str_char_ref` and its quote-frame test).
-- **Cost of the rest, measured 2026-09-26** (on the tree before the string accesses): `zlib` P1 117,008 -> 116,675, size level 89,623 ->
-  89,254, JVM class 164,583 -> 161,636 (`reverse`'s `do` replaces a `reduce` over a lambda);
+- **Cost of the string accesses, checked 2026-09-26** (wasmtime 49): zlib pays bytes of code and
+  string data; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
+  byte-identical, the JVM class a trifle. Its P1 total moved at one point only because
+  the shift put the fdlibm table's then-probed base word on chipz's literal `2048`, pinning dead
+  bytes; with the table decided by its readers that went away
+  (`.kb/optimize-dead-code-elimination.md`). A long `char` loop: JVM unchanged (noise), EH wasm a
+  touch slower (the register write around `_str_char_ref` and its quote-frame test).
+- **Cost of the rest, checked 2026-09-26** (on the tree before the string accesses): `reverse`'s
+  `do` replacing a `reduce` over a lambda SHRINKS zlib and the JVM class;
   `hello_world`, `pi_approx` unchanged. The price is paid by a TINY EH module: one whose only
-  checked site is a `length` or an `append` (`(handler-case (length *x*) ...)`, 1,573 -> 6,127 B)
+  checked site is a `length` or an `append` (`(handler-case (length *x*) ...)`)
   now keeps the landing and its tables, because the dotted-tail test at the walk's end is one the
-  whole-module type facts cannot prove away; `examples/console/error-handling.lisp` 35,901 -> 35,641.
-- **Cost of the string stores and `row-major-aref`, measured 2026-09-26** (wasmtime 49, on the
-  tree after `.todo/985` and `990`): `zlib` P1 116,920 -> 117,028 (code +67 B, the landing's
-  `CHARACTER` arm +16; data +41 B, the `CHARACTER` suffix and the new row); size level 89,499 ->
-  89,051 (code -488 B: `WasmRefTypeFolder` proves `%schar-set-runtime`'s value a character, so its
-  packed-integer arm folds to a trap and one body folds away); JVM class 172,368 -> 173,351
-  (+983 B: the `_ckIdx`/store wrappers and chipz's `row-major-aref`/`fill`/`replace` sites).
-  `hello_world`, `pi_approx`, `dom_reactor` byte-identical; a non-EH module too. A 20M-iteration
-  `row-major-aref` read+store loop: EH wasm 0.91 -> 1.08 s, what the same `aref` loop already
-  paid (0.99 s); JVM unchanged (1.67 -> 1.65 s at 300M).
+  whole-module type facts cannot prove away; `examples/console/error-handling.lisp` shrinks a
+  trifle.
+- **Cost of the string stores and `row-major-aref`, checked 2026-09-26** (wasmtime 49, on the
+  tree after `.todo/985` and `990`): zlib pays for the landing's
+  `CHARACTER` arm and its data row; at the size level `WasmRefTypeFolder` proves
+  `%schar-set-runtime`'s value a character, so its
+  packed-integer arm folds to a trap and one body folds away; the JVM class grows by the
+  `_ckIdx`/store wrappers and chipz's `row-major-aref`/`fill`/`replace` sites.
+  `hello_world`, `pi_approx`, `dom_reactor` byte-identical; a non-EH module too. A long
+  `row-major-aref` read+store loop: EH wasm costs what the same `aref` loop already
+  did; JVM unchanged.
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
   `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator`,
   `list-consumers-beyond-the-first-set-name-the-operator`, `string-accesses-name-the-operator` and
@@ -1955,11 +1914,12 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
   landing) per non-literal operand -- the size of the `ref.cast; struct.get` it replaces; outside EH
   the cast still traps, byte-identical. The case-insensitive prelude defuns check with
   `(%check-character c 'char-lessp)`.
-- Measured 2026-09-27: hello-clack Worker (`--no-wasi --optimize=size`) 676,784 -> 676,722;
-  `zlib` P1 127,239 -> 127,234, size 97,055 -> 97,049, component 100,972 -> 101,035; JVM `zlib`
-  class 188,039 -> 187,699; `hello_world`, `pi_approx` and a non-EH module comparing characters
-  byte-identical. 40M comparisons with one non-literal operand in EH mode: wasmtime 1.49 -> 1.55 s,
-  JVM 0.31 -> 0.30 s. An inline `ref.test` check instead cost +4,428 B on the Worker (228 sites).
+- Checked 2026-09-27: the shared checked-compare shape leaves the artifacts where they were
+  (the Worker and zlib a trifle either way); `hello_world`, `pi_approx` and a non-EH module
+  comparing characters
+  byte-identical. Comparisons with a non-literal operand in EH mode run at the same speed on
+  the JVM and a touch slower on wasmtime. An inline `ref.test` check at every site was the
+  alternative not taken (the Worker spells hundreds of such sites).
 - The other character built-ins check the same way: "A character built-in checks its argument".
 - Pinned by `ci-spec.yaml`'s `one-argument-calls-check-their-argument` and the
   `oneArgumentCallsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
@@ -1972,7 +1932,7 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
 `OP: The value 1 is not of type CHARACTER` as a catchable `type-error`, byte-identical on all four
 backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer in 2..36 is the type-error of
 `(INTEGER 2 36)`, named `DIGIT-CHAR-P` (below).**
-Before (measured 2026-09-27): a simple-error `CHAR-CODE expects a character, got: 1` interpreted
+Before (checked 2026-09-27): a simple-error `CHAR-CODE expects a character, got: 1` interpreted
 (named after the helper a prelude defun or lowering called: `upper-case-p` said `CHAR-DOWNCASE`),
 the datum-less `ClassCastException` report on the JVM (`CHAR=` for the case predicates) and a trap
 on wasm.
@@ -2020,15 +1980,12 @@ on wasm.
   compile natively: code point vs. its fold. A non-literal radix goes through `_ckRadix` /
   `emitRadixCheck`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
   `graphic-char-p`, `standard-char-p`) check first with `%check-character`.
-- Measured 2026-09-28: hello-clack Worker (`--no-wasi --optimize=size`) 680,279 -> 680,498 (code
-  +139: string addresses and the operator ids after the three new rows crossing a LEB boundary,
-  less 1-2 bytes per character site; data +80, the rows); `zlib` P1 129,718 -> 130,172 (code +4; data +450, of which
-  the rows are ~80 and the rest strings the tree-shaker now keeps because an unrelated `i32.const`
-  lands in their shifted range), size 99,533 -> 99,987, component 133,727 -> 133,809; JVM `zlib`
-  class 188,098 unchanged, `examples/net/hello-clack.lisp` class 948,278 -> 949,038 (the `_ckChr`
-  wrappers); `hello_world`, `pi_approx` byte-identical. 40M `char-code`/`upper-case-p`/
-  `char-downcase` in EH mode: wasmtime 4.23 -> 4.20 s, JVM 0.33 -> 0.34 s.
-- `char-int` (measured 2026-09-28: undefined on every backend) is now the same code point
+- Checked 2026-09-28: the checked character built-ins cost the Worker and zlib a little code
+  and data (the rows, plus string addresses and operator ids shifted across a LEB boundary);
+  the JVM `zlib` class is unchanged, `examples/net/hello-clack.lisp` grows by the `_ckChr`
+  wrappers; `hello_world`, `pi_approx` byte-identical. Long `char-code`/`upper-case-p`/
+  `char-downcase` loops in EH mode run at the same speed on both backends.
+- `char-int` (checked 2026-09-28: undefined on every backend) is now the same code point
   `char-code` answers on all four, joining this table's twelve rows -- CL leaves it no
   implementation-defined attribute beyond the code point to differ on.
 - Pinned by `ci-spec.yaml`'s `character-built-ins-check-their-argument` and the
@@ -2067,15 +2024,15 @@ datum-less cast failure on the JVM and a trap on wasm.
   operator table reports unnamed, which is why the sites name what the program SPELLS and
   `WasmOperandTypes.LOWERED_TO` covers the rewrites (`sort` -> `stable-sort`, `gethash` ->
   `(setf gethash)`, the shape readers -> `array-dimensions`).
-- **`%check-sequence` is a call, not a test at the site**: its test is a whole `vectorp`, 225
-  instructions of wasm, and zlib held 13 of them (+4.9 KB). A compiled site calls the injected
+- **`%check-sequence` is a call, not a test at the site**: its test is a whole `vectorp` -- a
+  big inline body, and zlib held several. A compiled site calls the injected
   `%check-sequence-runtime (x token)` (`LispMacroExpander.checkSequenceRuntimeWrapper`, gated by
   `programUsesSequenceCheck`, spelled inline by `checkSequenceInline` when absent) with the
   operator as the backend's own token: the reported name as an UNSPELLED string on the JVM
   (`JvmCharCompiler.compileCheckSequence`; a quoted symbol there kept the named function's `#'`
-  wrapper alive -- +16 KB on a sequence-heavy class), the table row as an i31 on wasm; the helper's
+  wrapper alive in a sequence-heavy class), the table row as an i31 on wasm; the helper's
   `%operand-type-error x op` reads it at run time. A literal sequence argument is not wrapped
-  (`isLiteralSequence`): wrapping `#(...)` hid it from the folds that read it (+52 B a site).
+  (`isLiteralSequence`): wrapping `#(...)` hid it from the folds that read it.
 - **Where the checks sit**: `seqResultDispatchForm`'s non-string non-vector arm (listp, else the
   signal), `buildPositionScan`'s length arm, `deleteOrSubstituteDispatch`, `seqAsListForm` (a list
   passes inline, anything else `(coerce (%check-sequence ...) 'list)`), the conversion trio's
@@ -2108,12 +2065,12 @@ datum-less cast failure on the JVM and a trap on wasm.
   (`WasmHashTableCompiler.emitTableCheck`: `headerSlot`, `clrhash`, the count, the constant
   answerers). The landing selects `SEQUENCE`/`ARRAY`/`HASH-TABLE` only when the table names an
   operator of that family.
-- **Cost, measured 2026-09-27** (wasmtime 49, JDK 25): zlib P1 126,472 -> 127,760 (+1.0%), size
-  level 95,900 -> 96,965, component 130,546 -> 131,742, JVM class 187,046 -> 187,948 -- the shared
-  check helper 451 B, the EH `_arr_check_rank` +71 B, +1 B per `aref` site; `hello_world`,
-  `pi_approx`, `dom_reactor` byte-identical. A program using thirteen sequence operators without a
-  handler: wasm 26,857 -> 28,723, JVM 51,246 -> 53,043. The shaker corpus class's constant pool
-  stood at 51,893 of its 52,000 tripwire after this item's ci-spec rows
+- **Cost, checked 2026-09-27** (wasmtime 49, JDK 25): about a percent on zlib across P1, size
+  and component, and a trifle on the JVM class -- the shared check helper, the EH
+  `_arr_check_rank`, a byte per `aref` site; `hello_world`,
+  `pi_approx`, `dom_reactor` byte-identical. A handler-free program using many sequence
+  operators pays the shared helper once plus a check per site. The shaker corpus class's constant pool
+  neared its tripwire after this item's ci-spec rows
   (`JvmDeadMethodEliminationCorpusTest`), which is why the ci-spec case holds one row per mechanism.
 - **The array-shape accessors** (2026-09-27, `.todo/a57`; they reported unnamed interpreted, a
   datum-less cast failure on the JVM -- `array-element-type`, `adjustable-array-p` and
@@ -2171,30 +2128,30 @@ datum-less cast failure on the JVM and a trap on wasm.
   `WasmOperandTypes.buildFillPointerCheckBody`) answers the header of a cell whose header car is
   the dims array (a hash table shares the cell box) and whose meta car is an i31 -- that test
   FIRST, so the hot path makes one call; `_arr_check_rank` only on the refusal path (as the first
-  version called it up front, an EH push/pop loop cost +15%) -- and lands through
+  version called it up front, an EH push/pop loop paid for it) -- and lands through
   `_type_err_of(culprit, type)` (`FUNC_TYPE_ERR_OF`, `buildCompoundLandingBody`), a landing for any
   compound type the caller builds: `OP: ` from the register's row, then the value and the type
   printed by `_prin1_to_str`, the type object in `expected-type`. Its symbols are interned with
   the other operand texts (`Texts.compoundNames`); the second reader of the operator table blob.
   `%set-fill-pointer` builds `(INTEGER 0 cap)` at its site; the empty pop throws the text as a
-  message payload (`WasmErrorCompiler.emitThrowPayload`). Cost, measured 2026-09-28 (wasmtime 49,
+  message payload (`WasmErrorCompiler.emitThrowPayload`). Cost, checked 2026-09-28 (wasmtime 49,
   JDK 25): `hello_world`, `pi_approx`, `dom_reactor` byte-identical on wasm and the JVM, zlib P1
-  130,172 -> 130,105, size level 99,987 -> 99,920, component 133,809 -> 133,815 (data-segment
-  layout: zlib reaches no fill-pointer site), JVM class byte-identical; a push/pop program 14,487
-  -> 14,867 wasm, 24,385 -> 24,660 class. A `vector-push-extend`/`vector-pop` loop (200k x40, 4
-  pinned cores, 5-6 interleaved runs): wasm EH 843-990 ms before, 829-865 after; JVM 716-781 before,
-  728-777 after -- noise. Pinned by `FillPointerVectorFixture` through
+  the artifacts move only by data-segment
+  layout where zlib reaches no fill-pointer site, and the JVM class is byte-identical; a
+  push/pop program carries the `_fp_hdr` machinery. A `vector-push-extend`/`vector-pop` loop runs at
+  the same speed on wasm EH and the JVM -- noise. Pinned by `FillPointerVectorFixture` through
   `fillPointerSurfaceRefusesAVectorWithoutOne` (`LispEvaluatorTest`,
   `WasmLispCompilerIntegrationTest`) and `compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne`
   (`JvmLispCompilerTest`), and `ci-spec.yaml`'s `fill-pointer-surface-refuses-a-vector-without-one`.
-- **Cost, measured 2026-09-27** (wasmtime 49, JDK 25; zlib spells none of the operators, so this is
+- **Cost, checked 2026-09-27** (wasmtime 49, JDK 25; zlib spells none of the operators, so this is
   the internal uses -- the `class-of`/`typep` expansions' `array-element-type`, the library's
-  `vector-push-extend` -- and the string-frame tests): zlib P1 129,608 -> 129,704, unoptimized
-  540,298 -> 541,334, size level 99,423 -> 99,519, component 103,403 -> 103,528, JVM class 187,753
-  -> 188,109; `hello_world`, `pi_approx`, `dom_reactor` byte-identical on wasm, and `hello_world`,
-  `pi_approx` on the JVM. A `vector-push-extend`/`vector-pop` loop (200k x20, JDK 25, 8 interleaved
-  runs on 4 pinned cores): 391-467 ms before, 355-425 after -- noise; its class +524 B (`_ckArr`
-  and the wrappers). Corpus class constant pool 43,845 of 52,000 (`JvmDeadMethodEliminationCorpusTest`).
+  `vector-push-extend` -- and the string-frame tests): a trifle on zlib across P1, unoptimized,
+  size and component, and on the JVM class; `hello_world`, `pi_approx`, `dom_reactor` byte-identical
+  on wasm, and `hello_world`,
+  `pi_approx` on the JVM. A `vector-push-extend`/`vector-pop` loop runs at the same speed
+  (within noise); its class grows by `_ckArr`
+  and the wrappers. The corpus class constant pool stays under its tripwire
+  (`JvmDeadMethodEliminationCorpusTest`).
 - Pinned by `WrongTypeArgumentFixture` through `sequenceAndAccessorOperatorsNameTheirWrongTypeArgument`
   (`LispEvaluatorTest`, `WasmLispCompilerIntegrationTest`) and
   `compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument` (`JvmLispCompilerTest`), and
@@ -2252,18 +2209,15 @@ on wasm-GC even in EH mode.
   checked (`_idx_bound`), where no engine check reaches. **A rank-1 access outside EH mode keeps the
   engine's own trap and its module byte for byte**, except that a displaced view's out-of-range
   read still reaches through to its target there.
-- **Cost, measured 2026-09-26** (wasmtime 49, JDK 25): zlib P1 124,519 -> 127,370 B (+2.3%), size
-  level 95,803 -> 96,729, component 128,550 -> 131,399 -- EH mode (chipz's `unwind-protect`) and
-  every access checked; `hello_world`, `pi_approx`, `dom_reactor` and a non-EH rank-1 array program
-  byte-identical. JVM class: zlib 185,749 -> 186,421, pi_approx 14,495 -> 14,576 (the
-  compound arm of `_opTypeErr` every wrapped program carries). Run time: chipz inflating 20 KB x300 in an EH
-  module 782 -> 829 ms (+6%); EH micro loops over 1000 elements, 400M accesses: `u8` read 425 -> 503
-  ms, `u8` write 985 -> 1172, a declared `double-float` read+write loop 5.1 -> 6.6 s, a general
-  vector 962 -> 1137, a rank-2 packed read 293 -> 368. JVM (4G accesses): typed `double-float` loop
-  2624 -> 2654 ms, packed `u8` 2704 -> 2730, general vector read 1148 -> 1131, write 1111 -> 1215,
-  rank-2 packed 1142 -> 1127. **A hand-written compare in the typed loop cost it 27%**, and
-  `Objects.checkIndex` there 1.7%; the same intrinsic in the BOXED `_ckBound` made a general-vector
-  store 4x slower (the extra inline depth), so the boxed check stays a compare.
+- **Cost, checked 2026-09-26** (wasmtime 49, JDK 25): an EH module with every access checked
+  pays a few percent of artifact on zlib and a little JVM class (the
+  compound arm of `_opTypeErr` every wrapped program carries); `hello_world`, `pi_approx`,
+  `dom_reactor` and a non-EH rank-1 array program
+  byte-identical. Run time: the checks cost low double-digit percents on the wasm EH micro
+  loops and single-digit percents on the JVM's; chipz's EH inflate pays a few percent. **A
+  hand-written compare in the typed loop costs it far more than the intrinsic**, and
+  the intrinsic in the BOXED `_ckBound` slows a general-vector
+  store for the extra inline depth, so the boxed check stays a compare.
 - Pinned by `ci-spec.yaml`'s `out-of-range-subscripts-are-type-errors-naming-their-bound` and the
   `standalone:` `uncaught-out-of-range-subscript-report`, and the
   `outOfRangeSubscriptsAreTypeErrorsNamingTheirBound` triple (`LispEvaluatorTest`,
@@ -2394,11 +2348,11 @@ instead of `INTEGER`, and `(setf (aref m (f) 0 0) (g))` never called `f` or `g` 
   - **The walk counts DOWN** from the target, as `_nthcdr` does (cells passed = target -
     remaining; a negative or wide index is target -1, which only moves away from 0), and checks
     the found cell's consness once after the loop. Counting UP with an i31 counter compared
-    against the target cost a 100M-iteration `(elt list (mod i 10))` loop +22% on the JVM and
-    +23% on wasm; counting down, +10% (757 -> 834 ms) and +7% (2167 -> 2312 ms) over the old
-    `(car (nthcdr ...))` (2026-09-28, JDK 25, wasmtime 49, pinned core). Size: `(print 42)`
-    byte-identical on both; one `elt` site +81 B wasm, +63 B class; with a `handler-case`
-    (the compound `_oob` arm travels) +145 B wasm, +377 B class.
+    against the target made a long `(elt list (mod i 10))` loop markedly slower on the JVM and
+    wasm; counting down costs less than the old
+    `(car (nthcdr ...))` (checked 2026-09-28, JDK 25, wasmtime 49, pinned core). Size: `(print 42)`
+    byte-identical on both; an `elt` site pays for the check, more with a `handler-case`
+    (the compound `_oob` arm travels).
   - Pinned by `eltOfAListOutsideItIsATypeErrorNamingItsLength` (`LispEvaluatorTest`,
     `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`) and two lines of `ci-spec.yaml`'s
     `out-of-range-subscripts-are-type-errors-naming-their-bound`.
@@ -2423,25 +2377,24 @@ instead of `INTEGER`, and `(setf (aref m (f) 0 0) (g))` never called `f` or `g` 
     cursor `nil` (the remaining slots store back their own value, valid for any element type), one
     with cells left over leaves it a cons; all three reach ONE `error` after the loop. The rank-1
     fill thereby lost its `length` pre-walk. The store is spelled once over a three-way read: a
-    store per branch cost a 1000x1000 list fill 921 ms against 611 on wasm.
+    store per branch made a large list fill markedly slower on wasm.
   - **A run-time `:element-type` fills ONCE** (`lowerRuntimeElementTypeMakeArray` ->
     `initialContentsFill`): the dispatch arms allocate and one fill follows, where every arm used
     to carry its own copy. The check took `#'adjust-array`'s wrapper -- that shape, eight arms --
-    past HotSpot's 8000-bytecode limit (`JvmLibraryMethodSizeTest`: `ADJUST-ARRAY`=8491 over
-    ironclad); hoisted, a lone `#'adjust-array` program's method went 5,205 -> 3,223 bytecodes,
-    its class 50,860 -> 46,567 B and its P1 module 35,832 -> 30,953. The character arm keeps its
+    past HotSpot's 8000-bytecode limit (`JvmLibraryMethodSizeTest`: `ADJUST-ARRAY` over
+    ironclad); hoisted, a lone `#'adjust-array` program's method, class and P1 module all
+    shrink. The character arm keeps its
     own string-copy spelling where `lowerCharacterInitialContentsMakeArray` serves it (rank 1, no
     other keyword). The literal dims form, not the arm's variable, picks the fill's shape, so a
     run-time designator over a literal `'(2 2)` now fills (every compiled backend failed it; the
     JVM's degraded float representation there is `.todo/a70`).
-  - **Cost, measured 2026-09-28** (JDK 25, wasmtime 49; 20 fills of a 1000x1000 list and of a
-    1M-element list, inside a `defun`): wasm rank-1 684 -> 554 ms, rank-2 647 -> 655; JVM rank-1
-    ~215 -> ~155, rank-2 flat within noise. Size of one `defun` holding one site: rank-1 class
-    21,558 -> 24,674 B (of it ~1.4 KB the `_lispToDisplayString` trio the `~D` arguments pull in,
-    shared with any formatted `error`), P1 7,252 -> 6,421; rank-2 class 22,752 -> 26,830, P1
-    7,395 -> 7,711; character rank-1 +397 B class, +43 B P1. The same loops written as ONE
-    top-level form, every site inlined into it, measured +40% on the JVM; inside a `defun` the
-    difference vanished -- measure a JVM fill inside a function.
+  - **Cost, checked 2026-09-28** (JDK 25, wasmtime 49; large list fills, inside a `defun`): the
+    checked fills run at the unchecked speed, within noise on wasm and the JVM. Size: a `defun`
+    holding one site carries the check and the report text (the `_lispToDisplayString` trio the
+    `~D` arguments need is
+    shared with any formatted `error`). The same fills written as ONE
+    top-level form, every site inlined into it, run markedly slower on the JVM; inside a `defun`
+    the difference vanished -- measure a JVM fill inside a function.
   - Pinned by `compileAndRunMakeArrayInitialContentsChecksItsShape` (`JvmLispCompilerTest`) and
     `makeArrayInitialContentsChecksItsShape` (`WasmLispCompilerIntegrationTest`, P1 and component).
   - **A dims form whose RANK is only known at run time** (closed 2026-09-28, `.todo/a69`) took the
@@ -2460,12 +2413,11 @@ instead of `INTEGER`, and `(setf (aref m (f) 0 0) (g))` never called `f` or `g` 
     report). An empty dims value stores the contents as the one element. The character lowering
     branches on the run-time rank the same way: rank 1 copies into a string, any other allocates
     the character array and takes that fill (a literal rank-0 dims now declines it too).
-  - **Cost, measured 2026-09-28** (same setup as above, second run in-process): a variable-dims
-    rank-1 fill of a 1M list, JVM 242 -> 212 ms, wasm 690 -> 630; a variable-dims 1000x1000 fill
-    (failed before) JVM 154, wasm 562, against 190 / 506 for the literal `'(1000 1000)`. Size of a
-    `defun` holding one variable-dims site: class 25,198 -> 28,046 B (method 640 -> 1,156
-    bytecodes, plus the shared `_sub` helper), P1 7,381 -> 8,856; `(funcall #'adjust-array ...)`
-    class 45,464 -> 48,298, P1 30,397 -> 31,634. `(print 42)`, a literal-dims site and a
+  - **Cost, checked 2026-09-28** (same setup as above, second run in-process): a variable-dims
+    fill runs at the literal-dims speed, on the JVM and wasm, where the rank >= 2 path before
+    failed outright. Size: a
+    `defun` holding one variable-dims site carries the walk and the shared `_sub` helper, and a
+    `#'adjust-array` program the check. `(print 42)`, a literal-dims site and a
     `(length s)` dims site are byte-identical.
   - Pinned by `compileAndRunMakeArrayInitialContentsFillsARunTimeRank` (`JvmLispCompilerTest`)
     and `makeArrayInitialContentsFillsARunTimeRank` (`WasmLispCompilerIntegrationTest`, P1 and
@@ -2488,8 +2440,8 @@ SBCL reports it; expected type the list), a dotted dimension list's tail `MAKE-A
 type LIST`, on all four backends (wasm-GC: in EH mode).** LIMIT is the backend's own
 (`ClConstants.arraySizeLimit`: 2147483639 interpreter/JVM, 1073741823 wasm), so the text differs in
 that number only; SBCL 2.2.9 spells the type `(MOD 4611686018427387901)` (`(OR LIST (MOD ...))` for
-a non-list argument), the same set. Closed 2026-10-07 (`.todo/e00`). Measured before, the argument
-through a variable under `handler-case`: `(make-array (expt 2 100))` was a `simple-error`
+a non-list argument), the same set. Closed 2026-10-07 (`.todo/e00`). Before, the argument
+through a variable under `handler-case`: `(make-array (expt 2 100))` was a `simple-error
 interpreted, `#0ANIL` (a rank-0 array: a non-`Long` parsed as an empty list) on the JVM and both
 wasm backends; a float or symbol dimension the same rank-0 array compiled; `(make-array (expt 2
 40))` answered `(0)` interpreted (an `int` cast) and claimed `(1099511627776)` on the JVM;
@@ -2525,10 +2477,10 @@ overflow) and trapped on wasm; `(make-array -1)` was `make-array: -1` / an unnam
   on the JVM, `_idx_in` under the register on wasm (a trap outside EH mode), the integer re-boxed --
   and skips it for a literal in `[0, 1073741823)`. Call order is CL's: length, then
   `:initial-element`, then the check; the expansion binds the length first (`__ml_n`) unless either
-  form is a literal or quoted datum. Closed 2026-10-07 (`.todo/e01`). Measured before, the length
+  form is a literal or quoted datum. Closed 2026-10-07 (`.todo/e01`). Before, with the length
   through a variable under `handler-case`: `(make-list (expt 2 100))` was an unnamed
-  `... is not of type INTEGER` interpreted, ran out of heap on the JVM (`-Xmx512m`, under 20 s) and
-  gave no answer in 20 s on P1 / component; `-1` answered nil on all four; `2.5` and a symbol were
+  `... is not of type INTEGER` interpreted, ran out of heap on the JVM (`-Xmx512m`) and
+  gave no answer on P1 / component; `-1` answered nil on all four; `2.5` and a symbol were
   the unnamed `INTEGER` error interpreted, while compiled `2.5` answered a 3-element list and a
   symbol was `<=`'s `REAL` type-error; `:initial-element`'s form ran before the length's compiled.
   SBCL 2.2.9 reports `(UNSIGNED-BYTE 58)` for all of these. Pinned by `ci-spec.yaml`'s
@@ -2730,8 +2682,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     set is the catalog defuns that are DISPATCHABLE or the callee of a guarded literal `apply`
     (`Ctx.arityNamedCallees`, forwarded by `WasmAsyncEmit.freshCtx` with `namesArityOperators`):
     wasm injects every wrapper and shakes most, so naming them all kept every operator's piece in
-    every module. The first cut inlined the selection into each dispatcher and cost the eval
-    module below +36 KB -- one copy per dispatcher arity.
+    every module. The first cut inlined the selection into each dispatcher -- one copy per
+    dispatcher arity, a heavy eval module.
   - The EXPECTATION half followed on 2026-09-27: a built-in's function value reports by its call
     shape too ("A built-in's function VALUE with a wrong count", below).
 - **A report the function DECLARES** (2026-10-10). **Invariant: a function whose body opens with
@@ -2751,7 +2703,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     lambda's report comes from its body (`buildArityMethods`, `renderSpreadCase`). Past nine bits
     of operator index (a Clojure program names every dispatchable fn) `_arityErr`'s indices move
     to a second char-per-funcId table (`compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords`);
-    an entry that would push the joined names past 60,000 modified-UTF-8 bytes is not registered
+    an entry whose joined names would not fit a constant-pool entry is not registered
     and its callee reports as `Function`, rather than the class failing to build.
   - wasm-GC: `ArityReport.declaredFuncIds` (defuns and lambdas, dispatchable or guarded) rides
     the same funcId shape; `_arity_message`'s case for one answers `prefix + got + suffix` and
@@ -2772,8 +2724,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   - Before: every call-position lowering indexed the argument list by the count it expected, so
     compiled `(car x 2)` answered the car and `(nth x)` failed the COMPILE with `Index 2 out of
     bounds`; the interpreter answered `(minusp 1 2)` => NIL and `(array-rank v 2)` => 1, and said
-    `Index 1 out of bounds for length 1` for `(1+)`. Measured over all 329 catalog names x counts
-    0..6 on the interpreter: most reported, many said the raw index text, some answered.
+    `Index 1 out of bounds for length 1` for `(1+)`. A census over the catalog names x counts
+    on the interpreter: most reported, many said the raw index text, some answered.
   - The count is judged ONCE, where each backend decides a form is a built-in call, never per
     lowering: `compiler/BuiltinCallArity.wrongCountSignal` lowers the call to `(progn args...
     (%program-error "msg"))` -- the existing static-rejection signal, which is what gives the
@@ -2782,9 +2734,9 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     wrongCountCall`, in `builtinMacroExpansion` (memoized per site), the `error` / `cerror` /
     `warn` / `signal` / `make-instance` arms, and once in front of the rare-operator tables on the
     fall-through path. A HashMap probe per fall-through call; A/B over a call-heavy interpreted
-    benchmark (fib 27 + a list walk, 8 interleaved runs each on a loaded host) put the medians
-    within noise of each other (3,208 / 3,095 / 3,080 ms: before / with / without the
-    fall-through probe).
+    benchmark puts the medians
+    within noise of each other with and without the
+    fall-through probe.
   - NOT the front end (`CompileFrontend.expand`): built-in macros are still unexpanded there, so
     a walker would have to know that `(let ((nth 5)) ...)`'s binding or a `case` key list is no
     call. The backends' own dispatch already knows. A syntactic scan of the repo's Lisp sources
@@ -2862,14 +2814,13 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     rest list, and `(funcall #'< 1)` / `(funcall #'logand)` answer `T` / `-1` as the
     interpreter does; their `STANDARD_WIDER` rows are gone. Before, the comparisons and the
     bitwise trio kept `(a b &rest r)` (the one-argument call a wrong count) and the folds
-    `(&rest r)`, which consed per call: on wasmtime (49.0) that cost grows with the live heap
-    -- sorting 200,000 fixnums ten times through a `(a &rest r)` predicate took 21.7 s against
-    1.5 s for `(a b &rest r)`. Measured again with this change (ABBA medians, wasmtime 49):
-    `(reduce #'+ data)` over a million fixnums x10 14.15 -> 0.24 s, sort through `#'<` 1.39 ->
-    1.37 s, through a user `(a &optional b)` 3.99 -> 1.49 s. Each fold inlines its operator
-    twice; the first cut (supplied-p arms and a `reduce` over the rest list, three copies) put
-    +10.9 KB on the eval-carrying `(print (eval '(+ 1 2)))` class, this shape +2.2 KB
-    (355,090 -> 357,283; Preview 1 262,266 -> 262,201).
+    `(&rest r)`, which consed per call -- on wasmtime that cost grows with the live heap, and
+    sorting through a `(a &rest r)` predicate was many times slower than through
+    `(a b &rest r)`. With this change (ABBA medians, wasmtime 49) a big `reduce` and the sort
+    predicates run at their two-argument speed, and a sort
+    through a user `(a &optional b)` pays only its parameter. Each fold inlines its operator
+    twice; the first cut (supplied-p arms and a `reduce` over the rest list, three copies) was
+    far larger on the eval-carrying class than this shape.
   - **A wrapper whose body calls a prelude helper** (2026-09-27): `#'make-broadcast-stream`
     takes its components (`(&rest c)` -> `%make-broadcast-stream`, the Gray class) and
     `#'write-to-string` its keywords (`(a &rest kw)` -> `%write-to-string-keyed`, which binds the
@@ -2884,13 +2835,12 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     [pretty-printer.md](pretty-printer.md).
   - `#'read-from-string` is a third helper wrapper (`(s &rest r)` -> `%read-from-string-full`),
     selected the same way ([read-load-streams.md](read-load-streams.md)).
-  - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
-    255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
-    registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,
-    a runtime element type, is ~8 KB -- one fill instead of eight since 2026-09-28, "`make-array
-    :initial-contents` whose shape does not match"), the case conversions ~3.5 KB, the fourteen comparisons
-    ~5 KB. `(print (sort (list 3 1 2) #'<))` 33,039 -> 33,256 / 23,156 -> 23,158. A program that
-    takes none of them as a value is unchanged (`(print (+ 1 2))` 6,024 / 348).
+  - Size (JVM `.class` / wasm Preview 1): an eval-using program grows -- the eval
+    registry carries every wrapper; of it `adjust-array` is the largest (its `:initial-contents` fill,
+    a runtime element type -- one fill instead of eight since 2026-09-28, "`make-array
+    :initial-contents` whose shape does not match"), then the case conversions and the fourteen
+    comparisons; a sort-taking program carries the sort wrapper. A program that
+    takes none of them as a value is unchanged.
 - **A DIRECT call of a native built-in outside the catalog** (2026-09-26). **Invariant: a built-in
   the interpreter implements natively that has no `BuiltinFunctionWrappers` entry (`boundp`,
   `export`, `get-universal-time`, `rontolisp:tcp-connect`, `rontolisp:tls-connect`, ...) is judged
@@ -2903,8 +2853,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   `LispEvaluatorTest.everyNativeBuiltinReportsAWrongDirectCountWithItsCallShape`,
   `JvmLispCompilerTest.compileAndRunADirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime` and
   its wasm twin.
-  - Measured before (2026-09-26, all 389 non-catalog cl / `rontolisp:` / native names x counts
-    0..5, compiled through the CLI and run): of 83 public native names 81 diverged. Most failed the
+  - A census before the fix (2026-09-26, every non-catalog cl / `rontolisp:` / native name x count,
+    compiled through the CLI and run): of the public native names all but two diverged. Most failed the
     COMPILE (`ARRAYP expects 1 argument: (ARRAYP)`, `close expects 1 argument, got 2`, `fetch
     expects 1 or 2 arguments`); `export`/`import`/`unexport`/`use-package`/`unuse-package` with 3
     arguments answered `T`, `make-random-state` with 2 `NIL`, `rontolisp:version` with 1 the
@@ -2960,28 +2910,28 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   trio (`...BuiltinFunctionValueReportsAWrongCountWithItsCallShape`), the methoded lines of
   `MethodedBuiltinTailFixture` and `LispEvaluatorTest.everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape`
   (every catalog and native name, every rejected count up to one past the shape).
-  - Measured before on the interpreter (all 798 rejected (name, count) pairs, `(funcall 'op
-    nil...)`): 187 said something else -- the Java body's own range (`1 to 2`, `2 or 3`), a
+  - A census before the fix, on the interpreter (every rejected (name, count) pair, `(funcall 'op
+    nil...)`): most of a third said something else -- the Java body's own range (`1 to 2`, `2 or 3`), a
     description (`ADJUST-ARRAY expects an array and new dimensions`), `Index 0 out of bounds`
     (`(funcall 'mapcar)`), a `type-error`, a condition that was no `program-error`
-    (`rontolisp:quantize`) -- and three ANSWERED: `(funcall 'constantp nil nil nil)` and
-    `(funcall 'subtypep nil nil nil nil)` => `T`, `(funcall 'file-position)` => `NIL`. Compiled,
+    (`rontolisp:quantize`) -- and a few ANSWERED (`constantp`, `subtypep`, `file-position`).
+    Compiled,
     the missing half already reported the shape (the dispatchers name the operator, above); the
     surplus past a wrapper's `&optional` said `Function expects at most N`.
   - **Interpreter**: `LispEvaluator.apply` turns whatever a `LispFunction`'s body raises into
     `BuiltinCallArity.wrongCountMessage(name, count)`'s report when the count is one the shape
     rules out (`wrongCountOr`) -- on the way OUT only. Judging before the body ran (one `HashMap`
-    probe per built-in application) cost +2.6% on a built-in-heavy interpreted loop (4 ABAB pairs:
-    medians 4,479 -> 4,594 ms); on the way out it is within noise (4,533 / 4,506). What that
+    probe per built-in application) cost on a built-in-heavy interpreted loop; on the way out it
+    is within noise. What that
     cannot see is a body that ANSWERS a ruled-out count: the three that did (`constantp`,
     `subtypep`, the Gray `file-position` layer) check it first (`Environment.requireCallShape`),
     and the sweep test fails on the next one.
   - **Compiled**: the wrapper's `&optional` surplus check names the operator
-    ([lambda-lists.md](lambda-lists.md), "The operator is the function's name"). Sizes (JVM
-    `.class` / wasm Preview 1): `(print (eval '(+ 1 2)))` 359,740 -> 359,886 / 263,492 unchanged,
-    under `handler-case` 493,004 -> 493,150 / 412,519 -> 413,351 (the operator concatenated in
-    front of the shared ` expects at most N arguments, got ` piece; a whole opening per operator
-    was +2,046), a one-`&optional`-defun program 6,868 -> 6,919 / 1,191 unchanged,
+    ([lambda-lists.md](lambda-lists.md), "The operator is the function's name"). Size (JVM
+    `.class` / wasm Preview 1): the operator is concatenated in
+    front of the shared ` expects at most N arguments, got ` piece (a whole opening per operator
+    was the alternative, and heavier); an eval-using program pays for it under `handler-case`,
+    a one-`&optional`-defun program a little on the JVM,
     `(print (+ 1 2))` unchanged.
   - Not covered: `rontolisp:await` has no function value in the interpreter.
 - **Every count a shape ADMITS reaches the operator** (2026-09-28). **Invariant: a direct call
@@ -2994,7 +2944,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   a nil that must be a literal -- `open`'s direction, a keyword -- is dropped and the rest
   recompiled; only a COUNT refusal fails it; `tls-listen-pem` is out, it reads its certificate
   files at compile time).
-  - Measured before: the interpreter refused `(peek-char nil s nil :eof nil)`; every backend
+  - Before the fix: the interpreter refused `(peek-char nil s nil :eof nil)`; every backend
     refused `(find-symbol n p x)`, which the `&rest` wrapper's shape admitted; the compile paths
     failed the compile for `(read-char s nil :eof nil)`, `(read-line s nil :eof nil)`,
     `(subtypep a b env)` and `(list*)`, and compiled `peek-char`'s and `read-char-no-hang`'s last
@@ -3028,56 +2978,31 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   registers it by name (`JvmArityOperators.namedShape`), and wasm gives it an id one past the
   largest named funcId that only `_arity_message` reads (`ArityReport.unbackedOperators`;
   `names(id)` stays false for it, so no dispatcher can name a real callee by that id).
-- **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1 bytes):
+- **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1): a program with no
+  indirect call is byte-identical on both backends. The JVM pays on ANY
+  handler-case (the sixth classification arm) and on any program with a dispatcher
+  (`_arityMsg` + `_arityErr` + the funcId table); wasm pays nothing without a landing pad, a
+  trifle when its dispatchers are all shaken away, and a few hundred bytes when the arms are
+  live.
 
-  | program | JVM before | after | wasm before | after |
-  |---|---|---|---|---|
-  | `(print (+ 1 2))` | 3,949 | 3,949 | 489 | 489 |
-  | `(print (handler-case (car 1) (error (c) :e)))` | 10,508 | 10,681 | 13,709 | 13,715 |
-  | `(print (mapcar (lambda (x) (* x x)) '(1 2 3)))` | 6,935 | 7,613 | 16,446 | 16,446 |
-  | a `defun` + a wrong-arity `funcall` under `handler-case` | 19,964 | 20,879 | 19,650 | 19,840 |
-
-  A program with no indirect call is byte-identical on both backends. The JVM pays +173 B on ANY
-  handler-case (the sixth classification arm) and +678 B on any program with a dispatcher
-  (`_arityMsg` + `_arityErr` + the funcId table); wasm pays nothing without a landing pad, +6 B when
-  its dispatchers are all shaken away, and +190 B when the arms are live.
-
-  The `apply` half on top of that (2026-09-12, same method, the four rows above unchanged by it):
-
-  | program | JVM before | after | wasm before | after |
-  |---|---|---|---|---|
-  | a `defun` + a wrong-arity LITERAL `apply` under `handler-case` | 47,513 | 48,075 | 13,528 | 13,780 |
-  | the same through a function VALUE (`(let ((h #'f)) (apply h '(1 2)))`) | 47,624 | 48,185 | 32,120 | 32,851 |
-  | a `defun` + a RIGHT-arity literal `apply`, no `handler-case` | 7,093 | 7,522 | 11,206 | 11,206 |
-  | the real cl-ppcre exercise (`asdf:load-system`) | 767,584 | 769,410 | 713,188 | 713,188 |
-  | the same exercise under `handler-case` | 774,886 | 776,712 | 719,698 | 722,198 |
-
-  The JVM pays +429 B for `_arityMsg` + `_arityChk` on any program with a guarded site, then ~6 B
-  per site; wasm pays nothing at all without a landing pad -- the cl-ppcre module is byte-identical
-  there, `establishesLandingPad` being false for it -- and ~2.5 KB (+0.35%) on the same corpus with
-  one. The plan this landed from feared +28 KB on wasm from 14 B in every spread case pushing a 2,000-callable
-  program past `DISPATCH_PAGE_BUDGET_BYTES` ([wasm-function-body-size.md](wasm-function-body-size.md));
-  the shared function made it 7 B and the measurement is an order of magnitude under that.
+  The `apply` half on top of that (2026-09-12, same method): the JVM pays for `_arityMsg` +
+  `_arityChk` on any program with a guarded site, then a few bytes
+  per site; wasm pays nothing at all without a landing pad -- the cl-ppcre module is
+  byte-identical there, `establishesLandingPad` being false for it -- and well under one
+  percent on the same corpus with
+  one. The plan this landed from feared a dispatch-page-busting per-case cost
+  ([wasm-function-body-size.md](wasm-function-body-size.md));
+  the shared function made it bytes, an order of magnitude under that.
 
   Naming the operator on top of that (2026-09-26, same method, programs compiled with
-  `--class-name P`; the programs catch with `(program-error (c) (princ-to-string c))`):
-
-  | program | JVM before | after | wasm before | after |
-  |---|---|---|---|---|
-  | `(print (+ 1 2))` | 6,024 | 6,024 | 348 | 348 |
-  | `(print (handler-case (car 1) (error (c) :e)))` | 14,502 | 14,513 | 5,203 | 5,203 |
-  | `(print (mapcar (lambda (x) (* x x)) '(1 2 3)))` | 11,623 | 11,775 | 6,175 | 6,175 |
-  | a `defun` + a wrong-arity `funcall` of it under `handler-case` | 38,875 | 39,014 | 22,623 | 22,823 |
-  | a wrong-arity `funcall` of `#'cons` under `handler-case` | 32,813 | 32,958 | 21,310 | 21,510 |
-  | the same as a LITERAL `(apply #'cons '(1))` | 31,983 | 32,125 | 19,404 | 19,552 |
-  | the same through a VALUE (`(let ((h #'cons)) (apply h '(1 2 3)))`) | 43,768 | 43,938 | 29,758 | 29,975 |
-  | `(eval '(funcall ...))` of it -- eval makes EVERY wrapper dispatchable | 443,796 | 448,858 | 366,576 | 375,084 |
-
-  Even a program that names no built-in itself has some dispatchable (the runtime's own
-  `#'identity` / `#'eql` defaults), so a module with a report pays ~150 B on the JVM (the exception
-  class constant, the names and the decode) and ~200 B on wasm (`_arity_message` plus a handful of
-  names). The eval row is the price of naming ~250 operators: their names (JVM one joined string,
-  wasm one piece each) and one selector case apiece, +1.1% / +2.3%.
+  `--class-name P`; the programs catch with `(program-error (c) (princ-to-string c)))`:
+  even a program that names no built-in itself has some dispatchable (the runtime's own
+  `#'identity` / `#'eql` defaults), so a module with a report pays a little on the JVM (the
+  exception
+  class constant, the names and the decode) and on wasm (`_arity_message` plus a handful of
+  names). An eval-using program pays the price of naming every operator: their names (JVM one
+  joined string,
+  wasm one piece each) and one selector case apiece -- percent-level on both.
 
 ## Applying a value that names no function
 **Invariant: applying a non-designator (`(funcall 3 1)`, a Scheme `(h 1)` over a number) signals a
@@ -3129,19 +3054,12 @@ standalone `uncaught-non-function-report`, `LispEvaluatorTest`
   `(h 1)` over a number therefore reports `The object is not applicable: 3`, not
   the `Not a function: 3` a CL `(funcall 3 1)` reports -- same backends, different
   front ends, each in its own terms.
-- Cost (2026-09-17, a 20M-iteration `funcall` loop, 12-16 alternating runs, load 6-16): JVM
-  monomorphic 23-38 -> 0-1 ms (the loop now folds entirely), polymorphic 109-114 vs 99-131 ms; wasm
-  P1 EH mode mono 259 vs 262 ms, poly 766 vs 783; component poly 753 vs 804 against an A/A run of
-  the SAME binary at 810 vs 850 -- inside the noise. A first cut that tested the closure AFTER the
-  symbol test (three checks) measured +13% mono and was dropped. Sizes (JVM `.class` / wasm P1):
-
-  | program | JVM before | after | wasm before | after |
-  |---|---|---|---|---|
-  | `(print (+ 1 2))` | 3,948 | 3,948 | 348 | 348 |
-  | `(print (handler-case (car 1) (error (c) :e)))` | 11,444 | 11,483 | 952 | 952 |
-  | `(print (mapcar (lambda (x) (* x x)) '(1 2 3)))` | 8,292 | 8,601 | 6,022 | 6,022 |
-  | a `defun` + a `funcall` through a value under `handler-case` | 52,954 | 53,270 | 10,916 | 11,077 |
-  | the same with `type-error` / `undefined-function` clauses | 52,394 | 52,710 | 10,743 | 10,954 |
+- Cost (2026-09-17, long `funcall` loops, alternating runs): the JVM's monomorphic loop now
+  folds entirely, and the polymorphic and wasm legs are inside the run-to-run noise. A first cut
+  that tested the closure AFTER the
+  symbol test (three checks) measured slower and was dropped. Size (JVM `.class` / wasm P1): a
+  program with no indirect call is byte-identical; a `funcall`-through-a-value program pays the
+  dispatch prologue on both, a little more with `type-error` / `undefined-function` clauses.
 
 ## Out of scope (still)
 The interactive debugger (`break`, `*debugger-hook*`, rendering a restart's `:report` or running its

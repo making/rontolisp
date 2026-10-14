@@ -58,8 +58,7 @@ resolves through the compilers' function-designator normalization).
   Pinned by `SequenceBoundsFixture.NIL_START_PROGRAM` and ci-spec
   `sequence-operators-refuse-a-nil-start`; the same rule for `write-line` / `write-string` on a
   Gray instance is `.kb/gray-streams.md`, "Bounds on `write-line` / `write-string`". The wrappers' `getfKwDefault` is shorter than the
-  older `getfKwOr`: a program carrying the compiled `eval`'s wrapper table -5.8 KB JVM /
-  -2.9 KB wasm (2026-10-05).
+  older `getfKwOr` (2026-10-05).
 
 ## Every bound is checked once, before the walk
 
@@ -100,8 +99,8 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   bound, over its arguments bound in the site's own order (`boundSiteArgument`), each spelled
   pair after its sequence's `%check-sequence` -- never inside the shared helpers, so an unbounded
   site keeps its bytes. The first-class wrappers forward `(getf kw :start 0)` and always check.
-- `lo` is the start as given now. Measured 2026-10-05 (P1, pinned, min of 15): `(count 2 l
-  :start s)` over a 1,000-element list 232 ms with `lo = s` vs 241 ms with `(max s 0)` -- the
+- `lo` is the start as given now. Measured 2026-10-05 (P1, pinned): a `count :start` loop
+  runs as fast with `lo = s` as with `(max s 0)` -- the
   earlier "+7% without `max`" does not survive once only an index can reach the guard.
 - `position`/`find` deviate from SBCL on a LIST only: its list walk is lazy (`(position 2 (list
   1 2 3) :end 9)` answers 1 and `:start 9` nil, a vector refuses both) and its compiled
@@ -120,27 +119,24 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   `(mismatch s s :start1 -1)` over two strings trapped on both wasm legs (out-of-bounds array
   access). Clojure's `index-of` / `.indexOf` lowerings passed a Java `fromIndex` straight
   through; they clamp it now (`.kb/clojure-frontend.md`).
-- Guarded vs always checked (2026-10-06, the two candidates): speed, pinned, min of 15
-  steady-state reps, one loop shape per program (JVM 2M calls; P1 200K), base / always /
-  guarded -- keyword-free `search` (3 chars in 10) JVM 79-82 / 78-85 / 79-82 ms, P1
-  453-454 / 463 / 434-448; bounded `search :start2 1 :end2 9` JVM 137-176 / 155-176 /
-  146-166, P1 532 / 544-547 / 536-537; keyword-free `mismatch` (8 chars) JVM 57-62 / 71-76
-  / 59-61, P1 434-435 / 435-440 / 419-431. Under C2
-  (`-XX:-UseJVMCICompiler`) always-checked was flat alone but +20-45% in a program mixing
+- Guarded vs always checked (2026-10-06, the two candidates): speed, pinned, steady-state
+  reps, one loop shape per program -- keyword-free and bounded `search`, keyword-free
+  `mismatch`, on the JVM and P1. Always-checked costs the keyword-free JVM `mismatch` a
+  sizable slowdown and is flat to slower on the other shapes; the guard costs nothing
+  measurable anywhere. Under C2
+  (`-XX:-UseJVMCICompiler`) always-checked was flat alone but slower in a program mixing
   the three shapes. A guard on `(eql start1 0)` instead of a supplied-p measured slower than
-  either (JVM bounded 196-246, `mismatch` 75-79). Graal runs of the mixed-shape program are
-  bimodal on base too (fast ~80 ms / slow ~270 ms for the first loop): base 7/12 fast,
-  always-checked 2/12, guarded 3/8 vs base 5/8 in a second batch -- a lottery, not a
-  ranking. Bytes (JVM / P1 / component, 793 programs: every ci-spec case, the
-  `examples.yaml` examples, size-report, bench-report): 2,271 of 2,327 artifacts
-  byte-identical either way, the 56 that differ all calling `search`/`mismatch`. Always
-  checked: JVM sum -122 B (-151..+803), P1 -1,051 (-190..+544), component -1,031 (the
-  dropped `integerp`/`>=` cursor guards pay for the check on wasm). Guarded: JVM +4,751
-  (0..+1,046), P1 -109 (-128..+554), component -89. A one-site program
-  `(print (search "b" (copy-seq "abc")))`: base 31,462 / 7,966 / 9,146, always 31,702 /
-  7,967 / 9,147, guarded 31,945 / 7,977 / 9,157; with a `handler-case` 39,249 / 17,716 /
-  18,950 -> 39,732 / 17,797 / 19,034 guarded. The guard won: ~240 B JVM per program buys
-  the keyword-free JVM `mismatch` back (+20% checked always).
+  either. Graal runs of the mixed-shape program are
+  bimodal on base too -- a lottery, not a
+  ranking. Bytes (JVM / P1 / component, every ci-spec case, the
+  `examples.yaml` examples, size-report, bench-report): the overwhelming majority of
+  artifacts
+  byte-identical either way, the differing ones all calling `search`/`mismatch`. Always
+  checked nets negative on all three backends (the
+  dropped `integerp`/`>=` cursor guards pay for the check on wasm); guarded nets a small
+  positive on the JVM, about nil on wasm and the component. The guard won: its small JVM
+  cost per program buys
+  the keyword-free JVM `mismatch` back (always-checked slowed it by a fifth).
 - `parse-integer`: `expandParseInteger` (call position on every backend, and the compile
   paths' first-class wrapper, which forwards both bounds) emits `(%check-bounds __pi_s
   __pi_start __pi_endraw)` when `:start` or `:end` is spelled, after every argument has run
@@ -157,19 +153,17 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   fill-pointer string's `:end 4` read past the fill pointer (`1234`); the first-class
   interpreter `:end nil` a `type-error`. Its first-class Java walk also indexed UTF-16 units
   and skipped `Character.isWhitespace`; it walks code points over the expansion's five
-  whitespace characters now. Cost (JVM / P1 / component bytes, 795 programs: every ci-spec
-  case, the `examples.yaml` examples, size-report, bench-report): 2,253 of 2,333 artifacts
-  byte-identical; the 80 that differ call `parse-integer` with a bound themselves, through a
-  library (`tokenizers.lisp`, `objc.lisp`) or through the first-class wrapper (+24 JVM / +10
-  wasm on a program carrying the compiled `eval`'s wrapper table). JVM 30, sum +6,200 B (max
-  +2,238, the new ci-spec case); P1 25, +1,855 (max +456); component 25, +1,865. One site
-  `(print (parse-integer (copy-seq "x12") :start 1))`: 28,619 / 8,356 / 9,505 -> 29,196 /
-  8,444 / 9,593; with a `handler-case` +582 / +190 / +193. Speed (pinned, min/median of 15,
-  `(parse-integer s :start st)` over 12 characters): JVM 4 M calls 185-199/208-216 ->
-  189-191/214-218 ms, P1 400 K 512-520/522-531 -> 510-511/519-520, component 516-518/527-530
-  -> 511-516/523-528, interpreter 100 K 2,381-2,400 -> 2,423-2,446. ANSI `numbers`
-  (interpreter, suite `ca06bd9`): 1,273 -> 1,274 / 1,444 (`PARSE-INTEGER.ORDER.1`, the
-  evaluation order above), zero regressed; `strings` unchanged. Pinned by
+  whitespace characters now. Cost (2026-10-05, every ci-spec
+  case, the `examples.yaml` examples, size-report, bench-report): the overwhelming
+  majority of artifacts
+  byte-identical; the differing ones call `parse-integer` with a bound themselves, through a
+  library (`tokenizers.lisp`, `objc.lisp`) or through the first-class wrapper, and pay the
+  check's few bytes a site (JVM the most, the new ci-spec case its max; wasm and the
+  component less). A check with a `handler-case` around it adds the condition machinery's
+  usual slice. Speed (pinned, `(parse-integer s :start st)`: within noise on every
+  backend. ANSI `numbers`
+  (interpreter, suite `ca06bd9`): the evaluation-order fix above is the one changed
+  result, zero regressed; `strings` unchanged. Pinned by
   `ParseIntegerBoundsFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   `parse-integer-refuses-a-bad-bound`; `.REPORT_PROGRAM`; `.ORDER_PROGRAM`) in the three
   backend suites, the shape by
@@ -187,28 +181,27 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   a list and picks the kind). With the report inside, Graal OSR-compiled a hot first call before
   `_ckBounds` had a profile, inlined it whole with `_subseqBad`'s string building, ran out of
   budget and left the loop's own helpers (`_car`, `_cdr`, `_pEql`, `_fx$3`) as calls: a first
-  `(count 2 l :start s)` loop ran ~3x slower (2.8-3.2 s vs 0.91-0.95 s); a branch the caller's
-  own profile shows untaken keeps the report out, 607-654 ms vs base 584-648 (pinned). The site
+  `(count 2 l :start s)` loop ran several times slower than with the report out of line; a
+  branch the caller's
+  own profile shows untaken keeps the report out (pinned). The site
   re-reads its arguments (the lowerings hand variables and literals) rather than spilling them:
-  spilled, each site added a full stack-map frame, +4.7 KB on a class carrying the wrapper
-  table; re-read, +1.2 KB.
-- Cost (2026-10-05, JVM / P1 / component bytes, 782 programs: every ci-spec case, the non-GUI
-  examples, size-report, bench-report): 1,931 of 2,282 artifacts byte-identical (`hello`,
-  `pi_approx`, `dom_reactor`, every bench-report program); 351 differ, all spelling a bound
-  themselves or through a library or a first-class wrapper body -- 19 JVM classes in
-  constant-pool ORDER only (a wrapper's check emitted, then shaken), same size. JVM: 138, sum
-  +110 KB, max +3.2 KB (a 3.8 MB ningle class), +1.2 KB typical of the wrapper table. P1: 103,
-  sum -38 KB, -4.0 KB..+1.1 KB; component 110, sum -36 KB (the dedup scan's inner search lost
-  its dead vector arm; `max` left). zlib +1.2 KB / +1.1 KB / +1.1 KB. A one-site program
-  (`(count 2 l :start s)`): +961 / +132 / +132; with a `handler-case` +1,105 / +455 / +460. No
-  condition machinery is pulled in (`read-sequence`'s Lisp check cost +19-28 KB,
+  spilled, each site added a full stack-map frame, a large slice on a class carrying the wrapper
+  table; re-read, a small one.
+- Cost (2026-10-05, every ci-spec case, the non-GUI
+  examples, size-report, bench-report): most artifacts byte-identical (`hello`,
+  `pi_approx`, `dom_reactor`, every bench-report program); the differing ones all spell a bound
+  themselves or through a library or a first-class wrapper body -- some JVM classes in
+  constant-pool ORDER only (a wrapper's check emitted, then shaken), same size. The check
+  costs a few bytes a site where it lands, a typical slice on a class carrying the wrapper
+  table; on wasm and the component the corpus sum NEGATIVE (the dedup scan's inner search lost
+  its dead vector arm; `max` left). No
+  condition machinery is pulled in (`read-sequence`'s Lisp check costs far more,
   `.kb/read-load-streams.md`).
-- Speed (2026-10-05, pinned, min / median of 15 steady-state reps): within noise on both
-  backends -- list `count :start` JVM 88/90 -> 89/91 ms, P1 228/246 -> 220/242; vector `count
-  :start :end` 185/206 -> 185/194, 1,139/1,195 -> 1,092/1,227; string `position :start` 54/56 ->
-  54/56, 2,208/2,353 -> 2,004/2,249; list `remove :start` 50/54 -> 51/53, 99/108 -> 100/114.
-- ANSI (interpreter, suite `ca06bd9`, 2026-10-05): sequences 3,062 -> 3,065 / 3,287
-  (`ARRAY-FILL-9`, `ARRAY-FIXNUM-FILL-9`, `ARRAY-UNSIGNED-BYTE8-FILL-9`: `:end -1`), zero
+- Speed (2026-10-05, pinned): within noise on both
+  backends, across `count`/`position`/`remove` with `:start`/`:end` over list, vector and
+  string.
+- ANSI (interpreter, suite `ca06bd9`, 2026-10-05): sequences gains the `:end -1`
+  `ARRAY-*-FILL-9` results, zero
   regressed; strings, cons, arrays, iteration unchanged name by name.
 - Pinned by `SequenceBoundsFixture.BAD_BOUND_PROGRAM` (sbcl's answers; ci-spec
   `sequence-operators-refuse-a-bad-bound`) and `.BOUND_REPORT_PROGRAM` (the slots and text), in
@@ -285,11 +278,11 @@ bound check comes first, so that order is not pinned.
 
 ## What it moved, and what it did not (ANSI `sequences`, interpreter, 2026-09-11)
 
-`ansi-test/measure.sh sequences`: **2,204 / 3,287 -> 2,861 / 3,287 pass** (67.1% -> 87.0%),
-errors 934 -> 265, and a name-by-name diff of the FAIL/ERROR sets shows 657 tests fixed and
+`ansi-test/measure.sh sequences`: the pass count jumps from roughly two thirds of the
+suite to the high eighties, and a name-by-name diff of the FAIL/ERROR sets shows hundreds of tests fixed and
 **zero tests that passed before failing after**. The census of `X expects keyword arguments`
-rows was an upper bound of 578 plus 67 `COUNT-IF expects 2 arguments` rows; the realized gain
-landed between them, because a test can fail for a second reason once the first is gone.
+rows was an upper bound; the realized gain
+landed between it and the full count, because a test can fail for a second reason once the first is gone.
 
 Two families of newly-REACHED failures this exposed, both out of scope here:
 
@@ -324,7 +317,7 @@ extra needed. `delete`/`-if`/`-if-not` over a vector is unaffected: it removes e
 the result can never be the argument's own storage.
 
 **Measured 2026-09-12** (`ansi-test/measure.sh sequences`, suite `ca06bd9`, interpreter):
-2,937 -> 2,950 / 3,287 (89.4% -> 89.7%), errors 221 -> 215, fails 129 -> 122. A name-by-name
+a handful more pass, fewer errors and fails. A name-by-name
 diff of the FAIL/ERROR sets: **13 tests fixed, zero regressed** -- the census in the note
 above named only the 9 `*-VECTOR.3/.32/.33` rows; the STRING twins
 (`NSUBSTITUTE-STRING.32/.33/.34`, `NSUBSTITUTE-IF-STRING.32/.33/.34`) were ERRORing for the
@@ -402,12 +395,11 @@ registry. `.todo/774`'s trap -- a wrapper body injected on a REFERENCE dragging 
 runtime in, invisible to `needsApplyRuntime` -- does NOT fire here: the dedup expansion is
 `do`/`position`/`cons`, and the `:test-not` normalization spells
 `LispMacroExpander.twoArgumentComplement` rather than `complement`, so no `apply` reaches
-the injected body (on the JVM that gate alone would show as ~41 KB, four times the
+the injected body (on the JVM that gate alone would dominate the
 measured delta).
 
 **Measured 2026-09-11** (`ansi-test/measure.sh sequences cons`, suite `ca06bd9`,
-interpreter): sequences 2,891 -> 2,895 / 3,287 (88.0% -> 88.1%), cons unchanged at
-1,082 / 1,879. A name-by-name diff of the FAIL/ERROR sets: **4 tests fixed**
+interpreter): sequences ticks up, cons unchanged. A name-by-name diff of the FAIL/ERROR sets: **4 tests fixed**
 (`remove-duplicates.order.1/2`, `delete-duplicates.order.1/2`), **zero that passed before
 failing after**. The census of `X expects keyword arguments` rows had no plain (non-order)
 duplicates test behind it -- what is left in that file is `*.error.10` (an unbound

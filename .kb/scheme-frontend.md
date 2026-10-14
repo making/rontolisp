@@ -46,7 +46,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `\|foo bar\|`, `\|\|`, `\|#t\|` | an identifier of that spelling, mangled like any other (`\|#f\|` -> `s%#f`) | "Vertical-line identifiers and the infinities" below; the reader's booleans are compared by IDENTITY, so `\|#t\|` is no boolean |
 | `+inf.0` `-inf.0` `+nan.0` `-nan.0` | a flonum literal | every backend already emits a non-finite double constant and prints it |
 | `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
-| the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. Cost (2026-09-17): +93 B class / +26 B wasm per program (`hello`), nothing measurable on a 100M-iteration `when` loop. A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
+| the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. A small per-program cost (2026-09-17). A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
 | `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `exit` throws its code to `rontolisp::%scheme-exit-tag`; every file top-level form runs inside a `catch` for it that ends the process through `%scheme-exit` with the caught code ("`exit` runs ..." below). `emergency-exit` calls `%scheme-exit` directly: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`); `exit` runs the outstanding `dynamic-wind` afters on its way out, only `emergency-exit` ends the process where the call stands |
 | `(if c a b)` | `(if (eq c false) b a)`; a predicate fuses: `(if (pair? x) ..)` -> `(if (consp x) ..)`, `and`/`or`/`not` compose | `SchemeBuiltins.Result`: `pred` (T/NIL) and `or-false` (value or NIL: `memq`, `assq`, `member`) fuse in a test and convert anywhere else -- `(if raw t false)` / `(or raw false)` |
 | top-level `(define x v)` | top-level `(setq x v)` | NEVER `defvar`: that makes the name special and a `let` of it leaks into callees (2 instead of 1) |
@@ -107,12 +107,13 @@ Found writing the reference, each checked against Gauche 0.9.15 and pinned by th
   in a program that makes no flonum, and wasm's type-test fold
   (`.kb/wasm-ref-type-fold.md`) can then no longer drop the flonum arms of the
   arithmetic and the printer. `%scheme-inexact-like` adds `(- x x)` of the inexact
-  argument instead. Measured on `(display (quotient 17 5))`: 8,599 B of wasm before,
-  34,537 with `float`, 25,490 without. The rest is the named refusal:
-  `%scheme-error-message`'s string stream (a helper calling `(error "text")` alone
-  cost +189 B). A program that already has it pays nearly nothing -- one with a
-  `lambda` passed to `map`, `filter odd?` and a recursive `quotient`: 33,026 -> 33,657 B
-  of wasm, 87,992 -> 90,697 B of class. A 3M-iteration `quotient`/`odd?`/`gcd` loop runs
+  argument instead. Measured on `(display (quotient 17 5))`: floating the exact value in
+  a helper costs the flonum constructor and a large slice of the printer on wasm; the
+  inexact-like trick keeps most of that out. The rest is the named refusal:
+  `%scheme-error-message`'s string stream. A program that already has it pays nearly
+  nothing -- one with a
+  `lambda` passed to `map`, `filter odd?` and a recursive `quotient` grows only
+  marginally on wasm and class. A `quotient`/`odd?`/`gcd` loop runs
   in the same time on the JVM and wasm (single runs, within noise).
 - `SicpCorpusE2eTest` over the pinned corpus after the change: 5,262 legs, 0 failures,
   17 skipped, the manifest unchanged (no sample calls `reduce`, `fold-left` or
@@ -173,16 +174,11 @@ could not tell apart.
   file's afters (the compile path inlines the load, so the afters run there). Both
   skipped everything before.
 
-Cost (2026-09-18, x86-64 Linux, Java 25; `hello.scm` is `(display "hello, world")`
-compiled `-o Hello.class --class-name Hello` / `-o hello.wasm`, the exit program the
-pin test's): a program spelling neither `exit` nor `eval` is byte-identical before and
-after (1,665 B of class / 510 B of wasm both times). The exit program goes from 52,074
-to 53,162 B of class (+1,088) and 1,778 to 6,205 B of wasm (+4,427): the tag and its
-landing pads are fixed, one catch region per wrapped form scales it. Control, Common
-Lisp `(catch t (unwind-protect (throw t x) ...))` against the same without the
-catch/throw: 5,256 vs 4,137 B of class (+1,119), 2,912 vs 840 B of wasm (+2,072) -- the
-machinery costs what it costs on every backend, the wrapper only decides how many
-regions carry it.
+Cost (2026-09-18): a program spelling neither `exit` nor `eval` is byte-identical before and
+after. A program that exits pays for the tag and its
+landing pads -- fixed -- plus one catch region per wrapped form. The same machinery in
+hand-written Common Lisp `(catch t (unwind-protect (throw t x) ...))` costs what it costs
+on every backend; the wrapper only decides how many regions carry it.
 
 ## Internal record types (`define-record-type` in a body; 2026-09-19, `.todo/884`)
 
@@ -230,14 +226,13 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   ((_ v) (point-x v))))` used beside an internal `point-x` still calls the global one.
 - **JVM**: `[` is illegal in a JVM method name; `JvmLispCompiler.mangleMethodName` maps
   it (and `;`) since this change (`.kb/core-representation.md`).
-- **Cost** (x86-64 Linux, Java 25, wasmtime 47): every program that spells no internal
+- **Cost**: every program that spells no internal
   record compiles byte-identical before and after -- `hello.scm`, the six
-  `examples/scheme/*.scm`, the 70 concatenable `scheme-spec.yaml` cases as one program
-  (885,270 B of class, 1,970,462 B of wasm, 1,976,252 B of component), and two Common
+  `examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` cases as one program,
+  and two Common
   Lisp programs (`size-report/programs/hello_world`, `pi_approx`), on `.class`, wasm
-  and the component. A record written in a body against the same record at the top
-  level: 75,883 vs 75,752 B of class (+131, the longer names), 12,372 B of wasm and
-  13,840 B of component both.
+  and the component. A record written in a body costs a little more than the same
+  record at the top level (the longer names); wasm and the component are unchanged.
 - Pinned by `SchemeLoweringTest` (`anInternalRecordType...`,
   `internalRecordTypesOfTheSameNameAreDistinctTypes`,
   `aMacroUseBesideAnInternalRecordTypeKeepsItsNamesLocal`), `SchemeSessionTest.
@@ -274,7 +269,7 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   symbol the grammar lines (a `QUOTE` or a vector literal) or can intern any name
   (`intern`/`make-symbol`, or a library function reaching one -- `string->symbol`, `read`).
   The writer walks the spelling as a character LIST, never a string: building one with
-  `%scheme-symbol->string` cost +13 KB of class and +4 KB of wasm more.
+  `%scheme-symbol->string` costs the string machinery on top.
 - **Composed internal names escape their parts** (`SchemeNames.component`: ` `, `)`, `]`,
   `|` -> `|s` `|p` `|b` `||`): `(define-library (|a b|) ..)` and `(a b)` were both
   `s%%(a b)`. A name without those characters is unchanged.
@@ -284,23 +279,20 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   `%scheme-flonum-floor` & co. now, answering a flonum of magnitude >= 2^52 (the
   infinities) and a NaN as itself. `exact` of an infinity or a NaN is refused with a
   constant message (`%scheme-exact-flonum`; the irritant formatting of
-  `%scheme-error-message` cost +25 KB of wasm for a lone `(exact 2.5)`); before, the
+  `%scheme-error-message` is most of the refusal's cost on wasm); before, the
   interpreter and the JVM signalled and wasm trapped on `unreachable`. Common Lisp's own
   `floor` family now signals there ([[linalg-simd]], "mod / rem and the floor family").
 - **Left as found**: `(eqv? +nan.0 +nan.0)` is `#t` on every backend (Common Lisp's `eql`
   of one bit pattern; R7RS leaves it unspecified, Gauche `#f`). `(eq? x x)` of a flonum
   variable is `#f` on the interpreter and the JVM, `#t` on wasm -- a Common Lisp split,
   `.todo/887`.
-- **Cost** (x86-64 Linux, Java 25, class / wasm / component, before -> after):
-  byte-identical -- `hello.scm`, the six `examples/scheme/*.scm`, `(display "...")` string
+- **Cost**: programs spelling none of the new names --
+  `hello.scm`, the six `examples/scheme/*.scm`, `(display "...")` string
   programs, `(scheme char)` programs, an `eval` program, `size-report/programs/hello_world`
-  and `pi_approx`. Changed, each using the feature: `(display (floor 2.5))` 76,250 -> 76,617
-  / 21,508 -> 21,569; `(display (string->number "12"))` 85,337 -> 87,487 / 30,543 ->
-  32,726; `(display (exact 2.5))` 74,241 -> 74,839 / 8,353 -> 9,835;
-  `(write (string->symbol "a b"))` 96,440 -> 109,422 / 25,803 -> 29,957;
-  `(write (read))` 175,552 -> 188,675 / 118,975 -> 123,748; the 67 concatenable
-  `scheme-spec.yaml` cases of before as one program 884,103 -> 896,686 / 1,936,768 ->
-  1,943,180. `(write '|a b|)`: 86,750 / 15,328.
+  and `pi_approx` -- are byte-identical. A program using one of the features grows by the
+  names and bodies it pulls in (`floor`, `string->number`, `exact`, the symbol-escape
+  writer, `read`), most of all one that writes a read datum, which tows the reader's
+  error machinery; `(write '|a b|)` is a bare identifier's worth.
 - Pinned by `SchemeReaderTest`, `SchemeNamesTest`, `SchemeLoweringTest.
   aVerticalLineIdentifierLowersLikeAnyOtherAndIsNeverABoolean`, `SchemeLibraryTest`,
   `SchemeLibrariesTest.aLibraryNamePartWithASpaceKeepsItsNamesApart`, and the
@@ -344,12 +336,12 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   `exact` procedure (which refuses an infinity, `.kb` "Vertical-line identifiers and the
   infinities" above) -- the infnan check runs before exactness is ever applied and
   answers as itself either way.
-- **Cost** (x86-64 Linux, Java 25, class / wasm, before -> after): byte-identical for a
+- **Cost**: byte-identical for a
   program that calls no prefix -- the six `examples/scheme/*.scm` on both backends
   measured directly (`collatz.scm`, `queens.scm`) and by construction for every other
   program (the new helpers are unreachable, dropped like any other,
-  `.kb/library-defun-pruning.md`). Changed, using the feature: `(display (string->number "#x10"))` 56,625 ->
-  65,116 B of class, 32,685 -> 36,630 B of wasm.
+  `.kb/library-defun-pruning.md`). A program using the prefix pulls the prefix
+  parser's helpers on both backends.
 - Pinned by `SchemeReaderTest.radixAndExactnessPrefixesCombine`,
   `.anExactnessPrefixOnAnInfinityOrANanIsANoOp`, `.aRepeatedOrUnrecognizedPrefixIsAReadError`,
   and the `string-to-number-radix-and-exactness-prefixes` case of `scheme-spec.yaml` (all
@@ -410,8 +402,8 @@ narrows to exactly what it names. `r5rs` (`scheme-report-environment`) rides the
 no-import default, as do R5RS's `exact->inexact` and `inexact->exact` (tagged `base`
 until 2026-09-18, so `(import (scheme base))` exposed them): `(scheme r5rs)` would promise
 the whole of R5RS, so it stays refused by name (`.todo/829`
-measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
-mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
+measured the change moving a slice of the SICP sample corpus to exit 0 in file
+mode, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
 has the harness). A user `define` of any of these still wins, exactly like `square`:
 `SchemeDefinitionLowering.declareGlobals` overwrites the global scope entry for any name the file
 defines regardless of what library put there first -- under `--scheme-standard
@@ -503,12 +495,12 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
   `+nan.0` print, and read since `.todo/886`.
 - `-0.0` is read with `Double.parseDouble` (`BigDecimal.doubleValue()` dropped the sign),
   and `string->number` negates after converting.
-- Cost (2026-09-17): `(display (list 1 'a "s"))` went from 58,745 to 72,993 B of `.class`
-  (generic fixnum-fusion helpers for the digit arithmetic, `princ-to-string`); the `.wasm`
-  grew 14 B, because the type-test fold drops the float arm of a program that makes no
+- Cost (2026-09-17): `(display (list 1 'a "s"))` grows on the JVM by the generic
+  fixnum-fusion helpers for the digit arithmetic and `princ-to-string`; the `.wasm`
+  barely moves, because the type-test fold drops the float arm of a program that makes no
   float. `(display 42)` is unchanged.
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
-  1,307 -> 1,314 samples exiting 0, no regression; no sample still fails on an inexact
+  gains samples exiting 0, no regression; no sample still fails on an inexact
   name.
 
 ## `(scheme complex)` (2026-10-02, `.todo/b67`)
@@ -554,8 +546,8 @@ is complex-aware unconditionally on both backends). The JVM `+ - * / =` object p
 - **Cost** (2026-10-02, darwin/aarch64, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
   a program spelling none of the touched names is byte-identical before and after --
   `hello.scm` (`(display "hello, world")`) and a factorial/`expt` program on both backends.
-  A numeric program calling `sqrt` SHRANK, 53,944 -> 48,226 B of class and 37,600 ->
-  23,586 B of wasm (the `%scheme-no-complex` refusal and its `%scheme-error-message`
+  A numeric program calling `sqrt` SHRANK on both backends (the `%scheme-no-complex`
+  refusal and its `%scheme-error-message`
   string-stream dropped out of its splice), same output.
 - Pinned by the `complex-numbers-read-print-the-tower-and-the-transcendentals` case of
   `scheme-spec.yaml` (all four backends), `SchemeReaderTest`'s `#c` cases,
@@ -604,23 +596,20 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   `ẞ` (`ß`) and of `ı` (`i`, though its `char-foldcase` keeps `ı`); `#!fold-case` folds
   ASCII only there; `string-downcase` of `"1Σ"` is `"1ς"` there. The
   `char-library-follows-unicode` case of `scheme-spec.yaml` pins our side.
-- **Testing cost**: the interpreter sweeps every code point in about 200 s per property
-  (the full sweep was run once, 2026-09-19, and matched the JDK everywhere except
-  `digit-value` on merged runs, fixed then), so `SchemeCharactersTest` asks at the 7,000
-  code points where an answer can go wrong -- the first 1,024 and both sides of every
-  range bound and every departing mapping -- in about 10 s.
-- **Speed** (2026-09-19, x86-64 Linux, Java 25): a million `char-alphabetic?` calls on
-  non-ASCII characters take 0.34 s on the JVM and 0.92 s on wasm (a control loop with
-  `char<?` in their place, 0.16 / 0.08 s). Reading the four characters of each bound
-  straight from the string instead cost 24.5 s on wasm, and a generic `floor` for the
-  midpoint instead of `ash` 1.84 s on the JVM.
+- **Testing cost**: a full interpreter sweep of every code point per property takes
+  minutes (the full sweep was run once, 2026-09-19, and matched the JDK everywhere except
+  `digit-value` on merged runs, fixed then), so `SchemeCharactersTest` asks at the
+  code points where an answer can go wrong -- the first slice and both sides of every
+  range bound and every departing mapping -- which runs in seconds.
+- **Speed** (2026-09-19, x86-64 Linux, Java 25): `char-alphabetic?` on
+  non-ASCII characters is table-lookup fast on the JVM and wasm, but only with the bound
+  characters addressed by `ash`-style midpoints -- reading each bound
+  straight from the string, or a generic `floor` for the midpoint, is far slower.
 - **Size** (same date; `-o P.class` / `-o p.wasm`): a program using no `(scheme char)`
-  name is byte-identical -- `hello` 1,661 / 510 B, a string program 80,935 / 18,333 B, an
-  `eval` program 127,708 / 82,101 B. A program calling `read` grows from 162,078 to
-  173,478 B of class and 99,724 to 117,507 B of wasm: the reader's `#!fold-case` now
-  folds through `%scheme-string-foldcase`. Alone, `char-upcase` costs 73,966 / 7,069 B,
-  `string-upcase` 98,569 / 41,042 B, and `char-alphabetic?` + `string-ci=?` +
-  `string-downcase` together 117,906 / 64,339 B.
+  name is byte-identical. A program calling `read` grows on both backends: the reader's
+  `#!fold-case` now
+  folds through `%scheme-string-foldcase`. The case-mapping and class predicates each
+  tow their Unicode tables.
 - No SICP sample spells a `(scheme char)` name (`sicp.zip` above, grep 2026-09-19), so the
   no-import default growing by 22 names moves nothing in the corpus manifest.
 
@@ -649,7 +638,7 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
 - The printer writes `#<promise>`; its predicate is what every printing program keeps of
   the record (`.kb/library-defun-pruning.md`, the name exception).
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
-  1,314 -> 1,342 samples exiting 0, REPL mode 1,591 unchanged, no regression. Every sample
+  gains stream samples exiting 0, REPL mode unchanged, no regression. Every sample
   that uses a stream or promise name and now exits 0 on the interpreter prints the same on
   the JVM and wasm, except two `fragment`s whose delayed thunk names a global no file
   defines (a compile error there, `.todo/828`). The remaining stream failures are samples
@@ -679,8 +668,8 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   `-XX:ActiveProcessorCount=1`, and with a `display` inside the critical section: the
   book's `the-mutex` spins through its self tail call, which lowers to a loop.
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
-  1,342 -> 1,347 exiting 0 (the five `parallel-execute` samples), no other exit or stdout
-  change; all 19 `variant=concurrent` samples exit 0 on the interpreter, the JVM and wasm.
+  gains the `parallel-execute` samples exiting 0, no other exit or stdout
+  change; every `variant=concurrent` sample exits 0 on the interpreter, the JVM and wasm.
 
 ## `eval` (`(scheme eval)`, `(scheme repl)`, the MIT and R5RS environment names)
 
@@ -715,11 +704,10 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   `scheme.lisp`'s forms by `SchemeLibrary.forms`, so the table is spelled once); the
   interpreter's copy holds every entry. **A compiled program's holds only the names it
   SPELLS** (a symbol anywhere, quoted data included, or a substring of a string literal
-  -- `SchemeLibrary.process`): the whole table reaches every helper there is, 291 KB of
-  class / 235 KB of wasm for `(display (eval '(+ 1 2) (interaction-environment)))`
-  against 132 KB / 80 KB cut to what is spelled, and 80 KB / 7 KB with no `eval` at all
-  (the rest is the name registry, the evaluator and the printer its messages use;
-  2026-09-17). The same line the compiled CL `eval`'s registry draws.
+  -- `SchemeLibrary.process`): the whole table tows every helper there is into a program
+  that evals, a program that names only what it spells carries much less, and one with no
+  `eval` at all keeps only the name registry, the evaluator and the printer its messages
+  use (2026-09-17). The same line the compiled CL `eval`'s registry draws.
 - **Environments are frames `(alist . loop)`**: `set!` mutates a cell, an internal
   `define` pushes onto the innermost frame, which every closure over it shares. A named
   `let`, a `define`d procedure and a `letrec` lambda whose name is only ever CALLED in
@@ -729,9 +717,9 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   over `outer` and continues in `%scheme-eval`'s own `do` loop -- a jump in tail
   position, the same value a call gives anywhere else, so no tail-position analysis is
   needed. 100,000 iterations of a named let, of a self-calling `define` and of a `do` run
-  on all four backends; before the loop frames a named let of 1,000 exhausted wasm's
-  stack (2026-09-17). The interpreter runs this evaluator as interpreted Lisp: ~200 us an
-  iteration (100,000 took 20 s, 2026-09-24), which is why `doc/*/scheme/eval.md` loops
+  on all four backends; before the loop frames a shallow named let exhausted wasm's
+  stack (2026-09-17). The interpreter runs this evaluator as interpreted Lisp, an
+  interpretation cost per iteration (measured 2026-09-24), which is why `doc/*/scheme/eval.md` loops
   10,000 -- still past the ~10,000-deep non-tail recursion that overflows the CLI's 16 MiB. A closure made in an iteration keeps its iteration's frame. Stated
   deviation, the session's too: an old closure of a name `set!` later keeps jumping to
   itself. Every other call recurses (`ev?`/`od?`).
@@ -746,8 +734,8 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   `%mv-spill` channel became exact (`.kb/multiple-values.md`) it answers every value there
   too, the same as the interpreter and the same as `(apply values ...)` or `values`
   through a variable. Pinned by the `multiple-values` case of `scheme-spec.yaml`.
-- Corpus (2026-09-17, `run.py`): file mode 1,347 and REPL mode 1,347 samples exiting 0
-  before and after, no exit or stdout change; the one `eval` sample
+- Corpus (2026-09-17, `run.py`): file mode and REPL mode unchanged, no exit or stdout
+  change; the one `eval` sample
   (`chapter4/section4/subsection4/14_execute.scm`, the query system's `lisp-value`) is a
   fragment that only defines `execute`.
 - Pinned by the three `eval-...` cases of `scheme-spec.yaml` (all four backends),
@@ -912,7 +900,7 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
 - **Every signal is TYPED.** Raising a caught condition again goes into a fresh
   `%scheme-raise` around it, never `(error c)`: a computed designator bails
   `conditionNarrowing` and bakes the run-time error dispatch plus every condition class in
-  (+60 KB class / +73 KB wasm measured on a CL probe).
+  (measured on a CL probe, a sizable slice of both backends' output).
 - **Stated deviations** (doc pages): a guard's clauses run after the body is left and a
   clause-less fall-through raises again from the guard, so an outer handler cannot resume a
   body's `raise-continuable` (Gauche answers 11 where this is a secondary error, the
@@ -923,17 +911,17 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
 - The guard lowering spells its re-raise and helpers as `(raw ..)` (`CORE_RAW`), so a user
   `define` of `raise` does not capture it. `SchemeExpander` scopes the guard variable to
   the clauses.
-- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
-  program spelling none of these names is byte-identical (`hello.scm` 1,661 / 510 B,
-  `(display (list 1 'a "s"))` 74,022 / 11,481 B, `(twice add1 5)` 79,678 / 24,993 B -- the
+- Cost (2026-09-18, x86-64 Linux, Java 25): a
+  program spelling none of these names is byte-identical (`hello.scm`, a `display` of a
+  literal list, a `twice` call -- the
   pruner keys the conditions, `.kb/library-defun-pruning.md`). An uncaught-`error` program
-  `(define (f x) (if (< x 0) (error "negative:" x) x)) (display (f 3))` went from
-  78,423 / 22,616 to 100,023 / 41,757 B: the condition classes and their report lambdas (on
+  `(define (f x) (if (< x 0) (error "negative:" x) x)) (display (f 3))` grows on both
+  backends: the condition classes and their report lambdas (on
   wasm the old string message was dropped outside EH mode; a report is live code).
-  `(display (guard (e (#t (list 'caught e))) (raise 'boom)))` is 104,738 / 46,989 B and the
-  `with-exception-handler` + `raise-continuable` probe 105,449 / 46,888 B. The first cut --
-  `handler-bind` for the handler, `(error c)` for the re-raise -- measured 168,349 /
-  127,194 B and 161,939 / 120,811 B for the same two.
+  A `guard` program and a `with-exception-handler` + `raise-continuable` probe grow
+  comparably. The first cut --
+  `handler-bind` for the handler, `(error c)` for the re-raise -- measured larger on both
+  backends for the same two programs.
 - Corpus (2026-09-18): no SICP sample spells a new name; `SicpCorpusE2eTest` after the
   change of `error` 5,262 legs, 0 failures, 17 skipped, the manifest unchanged.
 - Pinned by the `guard-...`, `with-exception-handler-...`, `read-raises-a-read-error`
@@ -964,21 +952,18 @@ a property of `scheme.lisp` alone; the interpreter loads that lazily, on the fir
   were); the converter runs on the initial value and never on the restore (R7RS 4.2.6).
 - `(p v)` is refused by name (`a parameter object takes no argument: 5`); Gauche sets.
   Both refusals are `(error "~A" (%scheme-error-message ..))` like
-  `%scheme-ensure-procedure`: a `%scheme-signal-error` condition cost +20 KB class /
-  +17 KB wasm more on the probe below.
+  `%scheme-ensure-procedure`, towing the same message machinery on both backends.
 - `%scheme-parallel-execute` hands the alist to each thread through `make-thread`'s
   bindings, so a thread starts with the caller's values, as the sequential wasm run does.
   A `parallel-execute` program therefore keeps the `defvar` even when it makes no parameter.
 - `eval` refuses `parameterize` by name (its keyword list); `make-parameter` reaches it
   through the generated table. `SchemeExpander` walks both halves of a binding as
   expressions and the body as a `<body>`.
-- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
-  program spelling neither name is byte-identical before and after (`hello.scm` 1,661 /
-  510 B, `(display (list 1 'a "s"))` 74,022 / 11,481, `(twice add1 5)` 79,678 / 24,993,
-  the guard probe 104,738 / 46,989). `(define p (make-parameter 10)) (display
-  (parameterize ((p 1)) (p)))` is 82,688 / 26,714 B -- `(p)` is a variable call, so the
-  right control is `twice` (the ensure-procedure message machinery): ~3.0 KB class /
-  1.7 KB wasm for the parameter machinery itself.
+- Cost (2026-09-18, x86-64 Linux, Java 25): a
+  program spelling neither name is byte-identical before and after (`hello.scm`, a
+  `display` of a literal list, a `twice` call, the guard probe). `(define p (make-parameter 10)) (display
+  (parameterize ((p 1)) (p)))` grows by the parameter machinery over the `twice` control
+  (the ensure-procedure message machinery), on both backends.
 - Pinned by the two `parameterize-...` cases and the two parameter `standalone:` cases of
   `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output except the thread
   line and the refusals), `SchemeLoweringTest.parameterizeIsTheParametersAndValuesInOrderAndABodyThunk`.
@@ -1015,15 +1000,15 @@ formal**, then lowered like any lambda -- nothing new reaches a backend:
 - Library `case-lambda`, merged into the no-import default; `(import (scheme base))` does
   not see it (under `r7rs` a file must import it). `eval` refuses it by name (its keyword
   list already held it).
-- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
-  program not spelling it is byte-identical before and after (`hello.scm` 1,666 / 510 B,
-  `(display (list 1 'a "s"))` 74,026 / 11,481, `twice` 79,687 / 24,993). `(define area
-  (case-lambda ((w) (* w w)) ((w h) (* w h))))` with two calls is 79,014 / 23,571 B
-  against 74,195 / 8,985 for the same with a dotted rest formal: the arity refusal pulls
+- Cost (2026-09-18, x86-64 Linux, Java 25): a
+  program not spelling it is byte-identical before and after (`hello.scm`, a `display` of
+  a literal list, `twice`). A `case-lambda` with two calls costs more than the same
+  procedure with a dotted rest formal: the arity refusal pulls
   `%scheme-error-message`'s string-stream machinery, as the `twice` probe's
-  ensure-procedure does. Time, 20M calls of a two-clause `case-lambda` against a plain
-  two-argument `defun` (single runs, incl. startup): JVM 0.20 vs 0.13 s, wasm 1.09 vs
-  0.26 s -- the rest list, `length` and `nth` per call. Hence the static pick below.
+  ensure-procedure does. In time, repeated calls of a two-clause `case-lambda` run
+  slower than a plain
+  two-argument `defun` on the JVM and far slower on wasm -- the rest list, `length` and
+  `nth` per call. Hence the static pick below.
 - None of the SICP samples spells `case-lambda` (`sicp.zip` above), so the corpus
   classification (`providedNames`) is unmoved.
 
@@ -1055,14 +1040,15 @@ dispatching `defun f`:
   clause graph has a cycle through two clauses or more. `cl-pp 100000` in the spec case.
 - Not split: a `case-lambda` bound by an internal `define`, `letrec` or `let` (variables
   and `funcall`, as before), and a session's (no `GlobalFunction` there).
-- Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; 20M calls `(area (remainder i 7)
-  3)` of a two-clause `case-lambda`, three runs each incl. startup): JVM 0.23 -> 0.16-0.17 s,
-  wasm 0.84-0.91 -> 0.36-0.44 s; the plain two-argument `defun` is 0.15-0.17 / 0.33-0.40 s.
-  Artifact 79,770 -> 77,450 B class, 24,833 -> 13,607 B wasm: nothing references the
+- Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; repeated calls of a two-clause
+  `case-lambda`): with the static pick the dispatch runs close to the plain two-argument
+  `defun`'s time on the JVM and near it on wasm, where the dynamic dispatch ran far
+  slower.
+  The artifact shrinks on both backends: nothing references the
   dispatch once every call is direct, so the tree shaker drops it and the arity refusal's
-  string-stream machinery with it. Byte-identical: the 87 `scheme-spec.yaml` cases not
-  spelling `case-lambda` and `examples/scheme/*.scm`, both backends; the 4 that spell it
-  change (the no-matching-clause standalone +1 B wasm / +105 B class, the dispatch staying).
+  string-stream machinery with it. Byte-identical: the `scheme-spec.yaml` cases not
+  spelling `case-lambda` and `examples/scheme/*.scm`, both backends; the ones that spell
+  it change (the no-matching-clause standalone keeps the dispatch).
 - Pinned by `case-lambda-takes-the-first-clause-...`, `a-library-exports-a-case-lambda-...`
   and the two `case-lambda` standalone cases of `scheme-spec.yaml` (all four backends,
   Gauche 0.9.15 `-r7` output but the message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...`
@@ -1102,16 +1088,16 @@ already send it.
   as `#(...)`.
 - `write-shared` labels a shared bytevector (`(#0=#u8(1 2) #0#)`, as Gauche): it stays a
   printer node.
-- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+- Cost (2026-09-18, x86-64 Linux, Java 25):
   every probe that cannot make a bytevector is byte-identical before and after --
-  `hello` 1,666 / 510 B, `(display (list 1 'a "s"))` 74,026 / 11,481, a `write` of a list
-  with a vector plus `equal?` 77,578 / 18,300, `eval` 127,288 / 81,996, the `guard` /
-  `with-exception-handler` / error probes. `vector?` alone SHRINKS, 74,682 / 13,737 to
-  74,670 / 13,704. `(write (read))` grows 154,937 / 94,222 to 161,652 / 99,557: it can
+  `hello`, a `display` of a literal list, a `write` of a list
+  with a vector plus `equal?`, `eval`, the `guard` /
+  `with-exception-handler` / error probes. `vector?` alone shrinks slightly. `(write (read))`
+  grows on both backends: it can
   read `#u8(`, so it gets the pack's `_iv*` dispatch and the printer arm. A bytevector
-  program (`bytevector`, `bytevector-u8-set!`, `-ref`, `-length`, `write`) is 88,790 /
-  28,829 against 78,298 / 17,462 for the same with a vector: the pack, the refusal's
-  message machinery and the printer arm.
+  program (`bytevector`, `bytevector-u8-set!`, `-ref`, `-length`, `write`) costs the
+  pack, the refusal's
+  message machinery and the printer arm over the same program with a vector.
 - Binary ports over bytevectors: "Ports" below.
 - Pinned by the `bytevectors` case (Gauche 0.9.15 `-r7` output), the `#u8(` lines of the
   read, fold-case and strict-R7RS cases and the two `bytevector...-non-byte` standalone
@@ -1164,8 +1150,8 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   two reads of `scheme.lisp`, so a new port helper needs no list edit). The interpreter
   always reads with it. **Trap**: a `#-` definition exists only in the variant a program
   gets, so `LibraryDefunPruner`'s bundled-name sets read `SchemeLibrary.everyVariantForms()`;
-  with `forms()` alone the no-port reader's four `defvar`s were not known as library
-  definitions and stayed as roots (+580 B class in every printing program).
+  with `forms()` alone the no-port reader's `defvar`s were not known as library
+  definitions and stayed as roots in every printing program.
 - **Binary ports are over bytevectors and files.** The standard ports are textual, so
   `read-u8`/`write-u8`/`read-bytevector`... with no port argument are refused by name
   (Gauche reads/writes the byte). A port is textual or binary, never both (Gauche's are
@@ -1178,16 +1164,16 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   table value is its parameter object.
 - File ports: "File ports" below. Not here: the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
   spells any port name).
-- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
-  every program spelling no port name is byte-identical before and after -- `hello`
-  1,661 / 510 B, `(display (list 1 'a "s"))` 74,022 / 11,481, `twice` 79,678 / 24,993,
-  `(write (read))` 161,644 / 99,557, a `read-line`/`read-char`/`peek-char` program
-  90,266 / 25,303, the `guard`, `make-parameter`, bytevector and `eval` probes.
-  `(define p (open-output-string)) (write (list 1 "a") p) (display (get-output-string
-  p))` is 83,446 / 25,752; `parameterize` of `current-output-port` plus `(read
-  (open-input-string ..))` 171,238 / 104,272; a bytevector-port round trip 96,851 /
-  38,824. Time, a `read-char` loop over 2,000,000 characters of stdin with and without a
-  port name elsewhere in the program: JVM 0.19 / 0.19 s, wasm 1.09 / 0.91 s (single runs
+- Cost (2026-09-18, x86-64 Linux, Java 25):
+  every program spelling no port name is byte-identical before and after -- `hello`,
+  a `display` of a literal list, `twice`,
+  `(write (read))`, a `read-line`/`read-char`/`peek-char` program, the `guard`,
+  `make-parameter`, bytevector and `eval` probes.
+  A string-port round trip, `parameterize` of `current-output-port` plus `(read
+  (open-input-string ..))`, and a bytevector-port round trip each pay the port record and
+  their helpers on both backends. A `read-char` loop over stdin runs at the same speed
+  with and without a
+  port name elsewhere in the program on the JVM, slightly slower on wasm (single runs
   incl. startup) -- the current-port lookup per character.
 - Pinned by the seven port cases and `the-current-input-port-mixes-with-string-ports`
   of `scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` output but the stated
@@ -1250,15 +1236,15 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   path would never test the preopen resolution, and two runs of the corpus at once (two
   worktrees) must not share a file; the driver's wasm legs pass `--dir /tmp`. A wasm
   program run without a preopen covering the path gets the file error (errno path).
-- Cost (2026-09-19, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+- Cost (2026-09-19, x86-64 Linux, Java 25):
   every program spelling no `(scheme file)` name is byte-identical before and after --
-  `hello` 1,666 / 510 B, `(display (list 1 'a "s"))` 74,026 / 11,549, the string-port
-  probe 83,882 / 25,913, the bytevector-port probe 98,075 / 39,604, a `parameterize` +
-  `read` + `close-port` + `call-with-port` probe 186,878 / 124,918, `(write (read))`
-  175,526 / 118,935, `eval` 128,025 / 82,618, a `file-error?` probe 106,447 / 47,759.
-  `(write (file-exists? "/tmp"))` 76,240 / 12,927 (the printer); `with-output-to-file` +
-  `display` 116,440 / 52,235; a `call-with-output-file` / `call-with-input-file` round
-  trip 128,454 / 58,277; a binary round trip 115,834 / 51,186.
+  `hello`, a `display` of a literal list, the string-port
+  probe, the bytevector-port probe, a `parameterize` +
+  `read` + `close-port` + `call-with-port` probe, `(write (read))`,
+  `eval`, a `file-error?` probe.
+  `with-output-to-file` + `display` and the `call-with-output-file` /
+  `call-with-input-file` and binary round trips pay the file-port machinery on both
+  backends (`(write (file-exists? ...))` only the printer).
 - Pinned by the `file-ports-write-then-read`, `with-output-to-file-restores-the-current-port`,
   `binary-file-ports` and `a-failed-open-is-a-file-error` cases of `scheme-spec.yaml`
   (all four backends; Gauche 0.9.15 `-r7` output but the deviations their comments state),
@@ -1342,11 +1328,10 @@ variable is read live (the library's `set!` shows). No backend learns anything.
 
 Measured (2026-09-19, x86-64 Linux, Java 25): every program that spells neither
 (`hello`, the seven `examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and
-its 20 standalone cases) compiles to byte-identical `.class` and `.wasm` before and after
-(56 of 56 artifacts). The `libraries-in-the-program-file-...` spec program (two libraries,
-a record, an instantiation flag) against the same program written inline: 82,143 vs
-81,755 B of class (+388), 26,555 vs 26,508 B of wasm (+47) -- the flag and the longer
-symbol names; a library procedure is a direct call, so no run-time cost per call.
+its standalone cases) compiles to byte-identical `.class` and `.wasm` before and after.
+A library written as its own file costs only its
+instantiation flag and longer symbol names over the same program written inline -- a
+library procedure is a direct call, so no run-time cost per call.
 Oracle: Gauche 0.9.15 (`gosh -r7 -I.`) prints the same for both spec cases.
 
 Pinned by `SchemeLibrariesTest` (the emitted forms, the errors, a session), the two
@@ -1458,16 +1443,15 @@ features (`gauche`, `srfi-N`, `posix`, ...); a program testing those takes its `
   `%scheme-library-p`, no user library (eval has none). The arm is behind the reader
   feature `rontolisp-scheme-cond-expand`, selected by `SchemeLibrary.process` only for a
   program that SPELLS `cond-expand` (a symbol, quoted data included, or inside a string)
-  -- the line the procedure table draws -- because it costs +2,455 B class / +1,900 B
-  wasm on every `eval` program (measured on a two-line `eval` program). Any other `eval`
+  -- the line the procedure table draws -- because the arm's machinery would otherwise
+  ride along on every `eval` program (measured on a two-line `eval` program). Any other `eval`
   keeps its bytes and still answers "Not supported inside eval" for a constructed one.
 
 Measured (2026-09-19, x86-64 Linux, Java 25): every program that spells no `cond-expand`
 compiles to byte-identical `.class` and `.wasm` before and after -- `hello`, the seven
 `examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and its standalone
-cases, each under every standard it lists (74 of 74 artifacts; before the `eval` arm was
-gated, the ten artifacts of the five `eval` programs among them grew by about that
-figure). A program with a
+cases, each under every standard it lists (before the `eval` arm was
+gated, the `eval` programs among them grew by the arm's figure). A program with a
 `cond-expand` compiles to exactly the bytes of the program spelling the clause it takes
 (checked on the `(define (third x) (cond-expand ...))` reference example).
 
@@ -1487,9 +1471,10 @@ names outlive each buffer; everything else is per buffer.
   `defun`: no pre-scan can see the forms still to be typed. Its own recursive calls are
   `funcall`s too, not the trampoline. The interpreter's `evalCons` applies
   `(funcall closure ...)` itself instead of through the `funcall` built-in (keeping its
-  handler-bind seam): that built-in was two Java frames per Lisp call, 14 against a
-  `defun`'s 13 (12 now), and a non-tail `count` in a session overflowed between 7,000 and 7,500
-  against a file's 9,000-9,500 (default `--stack`, 2026-09-17). After it both pass 9,000;
+  handler-bind seam): that built-in was an extra Java frame per Lisp call, and a non-tail
+  `count` in a session overflowed noticeably
+  shallower than in a file (default `--stack`, 2026-09-17). After it both pass the same
+  depth;
   JIT state moves either edge by a few hundred. Since `.todo/912` (2026-09-19) that
   application is a tail call of `evalCons`'s loop: a session's `(self self ..)` runs in
   constant stack like a file's, and a non-tail call costs two Java frames
@@ -1549,14 +1534,14 @@ names outlive each buffer; everything else is per buffer.
   that names no function"). Pinned by `RontoLispCliStreamsTest.theSchemeReplReportsANonProcedureAsAFileDoes`
   and the `standalone:` cases of `scheme-spec.yaml` (all four backends).
 - **Cost** (2026-09-18, x86-64 Linux, Java 25): a program with no indirect call is
-  byte-identical (`hello.scm`: 1,665 B of class / 510 B of wasm before and after).
-  `(display (twice add1 5))` (two variable calls) goes from 75,135 to 79,717 B of
-  class (+4,582) and 13,660 to 25,027 B of wasm (+11,367): the first pull of
+  byte-identical (`hello.scm`, before and after).
+  `(display (twice add1 5))` (two variable calls) grows on both backends, wasm the more:
+  the first pull of
   `%scheme-error-message`'s `with-output-to-string` string-stream machinery (a
   program already using Scheme `error` or `eval` pays only the ensure defun and its
-  call sites). Time: a 2M-iteration Scheme variable-call loop 0.127 vs 0.134 s on
-  the JVM (real, incl. startup, single runs -- in the noise, as the backend check
-  of [error-handling.md](error-handling.md) was); 20M iterations 0.150 s after.
+  call sites). Time: a variable-call loop is as fast as before on
+  the JVM (real, single runs -- in the noise, as the backend check
+  of [error-handling.md](error-handling.md) was).
   The marking alternative (backend classes reserved symbols as non-functions) was
   not taken: it would still need the Scheme printer at the signal point to name
   `#f` as `#f` rather than `|#f|`, i.e. a backend that learns Scheme printing, for
@@ -1620,14 +1605,14 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   fails it until listed). Pinned end to end by scheme-spec `multiple-values`.
 - Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47) against the list carrier the
   `(values ..)` leaves used before (`(setq R (multiple-value-list form))`, `(values-list R)`):
-  30M calls of a 4-iteration loop exiting through a call every time, JVM 350-400 / 330-365 /
-  360-450 ms (plain / list / block, noise), wasm 1.27-1.46 / 1.61-1.78 / 1.31-1.46 s,
-  interpreter (300K calls) 5.7-6.2 / 6.3-6.8 / 6.1-6.4 s; a 300M-iteration integer loop
+  a loop exiting through a call every time runs at the same time as the direct carrier on
+  the JVM and as fast as or faster than the list carrier on wasm and the interpreter; an
+  integer loop
   exiting through a call, no difference on any backend (the typed loops survive the
   `block`). The `return-from` is a jump on both compiled backends and a stackless
-  `BlockReturnSignal` on the interpreter; the list carrier would also pull `values-list`
-  into the wasm (+3.9 KB). Blast radius: 65 of 1,586 SICP corpus files and 1 of 6
-  `examples/scheme` (`evaluator.scm`, +262 B of class, +8 B of wasm) change; every
+  `BlockReturnSignal` on the interpreter; the list carrier would also tow `values-list`
+  into the wasm. Blast radius: a slice of the SICP corpus and one
+  `examples/scheme` file (`evaluator.scm`) change; every
   changed leaf is a user procedure call, `funcall` or `apply`. The rest lower byte-identically.
 
 ## Tail-call groups (`SchemeGroupLowering.declareGroups`; 2026-09-19, `.todo/897`)
@@ -1668,32 +1653,31 @@ outside such a cycle changes: a program with none lowers byte-identically.
   `defun` stands at the first member's `define`; the others emit only their entry.
 - **Where the time went (measured before the shape was fixed).** `(eql W 1)` in the
   dispatch is a generic call on the JVM: the metacircular evaluator (`evalfib`: the
-  `examples/scheme/evaluator.scm` evaluator running `(fib 27)`) ran 29-36% slower until
+  `examples/scheme/evaluator.scm` evaluator running `(fib 27)`) ran
+  tens of percent slower until
   it became `(= W 1)`. The members as an `if` chain under `TOP` (no `(go END)`) ran it
-  15-17% slower on the JVM; a stub per member setting `W` cost wasm a dispatch round per
-  jump. Final shape against the plain defuns (2026-09-19, x86-64 Linux, GraalVM 25.0.4,
-  wasmtime 47, a loaded 64-core box, best of 5-7 alternating runs):
+  slower still on the JVM; a stub per member setting `W` cost wasm a dispatch round per
+  jump. The final shape (2026-09-19, x86-64 Linux, GraalVM 25.0.4,
+  wasmtime 47, a loaded 64-core box) costs the metacircular evaluator a little over the
+  plain defuns on the compiled backends and the interpreter, and a trivial body entered
+  in a tight loop is the worst case there.
 
-  | program | JVM | wasm | component | interpreter |
-  |---|---|---|---|---|
-  | `evalfib` | 1043 -> 1088 ms | 1937 -> 2017 | 1956 -> 2006 | (`fib 24`) 31.1-33.9 -> 36.5-38.7 s |
-  | 10M shallow `(ev? (remainder k 4))` | 242 -> 228 | 271 -> 389 | 286 -> 334 | 37.8 -> 73.8 s |
-
-  The shallow row is the worst case -- a trivial body entered 10M times: on wasm it is
+  The shallow worst case -- a trivial body entered in a tight loop: on wasm it is
   the tagbody's dispatch loop entering a function that had none (a hand-written group of
   the same two bodies measured the same); on the interpreter every `go` inside a form is
-  a thrown `GoSignal` (a `go`-step costs 1.75x a call-step there, the same price every
-  self loop already pays), which is also the evaluator's +16% there. `.todo/901` is the
+  a thrown `GoSignal` (a `go`-step costs a multiple of a call-step there, the same price every
+  self loop already pays), which is also the evaluator's slowdown there. `.todo/901` is the
   interpreter half: memoizing the label table per `tagbody` form alone bought nothing
   measurable, so it was not kept.
   **Since `.todo/901` (2026-09-19) a `go` in a tagbody statement's tail is not thrown**
   (`.kb/do-return-block.md`), which is every jump these groups and loops emit. Interpreter,
-  same programs, one loaded 64-core box, alternating runs, whole process: 10M shallow
-  77.1-90.6 -> 43.4-44.2 s; `evalfib` (`fib 24`) 39.7-42.2 -> 32.4-35.1 s -- back at the
-  plain defuns' 37.8 s and 31.1-33.9 s above, measured on a quieter box.
-- **Depth, default stacks** (before -> after): `ev?`/`od?` JVM 3,516 / wasm and component
-  10,780 / interpreter 10,230 -> 1,000,000 on all four; `evalloop` (the evaluator running
-  a 1,000,000-iteration interpreted loop) overflowed on all four, now answers `done`.
+  same programs, one loaded 64-core box, alternating runs, whole process: both the tight
+  shallow loop and `evalfib` come back to about the
+  plain defuns' times, measured on a quieter box.
+- **Depth, default stacks**: `ev?`/`od?` and the group members run to the probe's
+  1,000,000 on all four backends where they formerly overflowed at a few thousand to ten
+  thousand frames; `evalloop` (the evaluator running
+  a very long interpreted loop) overflowed on all four, now answers `done`.
 - **Blast radius**: of 1,586 SICP corpus files and the six `examples/scheme`, 20 SICP
   files (the chapter-4.4 query system, the chapter-5.5.7 compile-and-go) and
   `evaluator.scm` change; each prints the same on all four backends before and after.
@@ -1715,9 +1699,9 @@ outside such a cycle changes: a program with none lowers byte-identically.
   designator, arg...}`, the method's result. Every caller of a compiled function's result
   checks for the array and, on the shape, drives the call it names in ITS OWN frame -- the
   shared `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes
-  back (`JvmTailBounce`). The check is one `invokestatic _unw` per call site (a 34-byte
-  helper that hands a bounce to `_tramp`); spelled out inline it cost ~22 bytes a site and
-  took the ci-spec corpus's largest top-level form to 68,454 B, past the 64 KB method limit
+  back (`JvmTailBounce`). The check is one `invokestatic _unw` per call site (a small
+  helper that hands a bounce to `_tramp`); spelled out inline it costs far more a site and
+  can push the ci-spec corpus's largest top-level form past the 64 KB method limit
   (2026-10-03, CI red at `ec836db36`). One frame per tail chain plus the dispatcher's; the
   state machine below runs 1,000,000 deep. A call the Lisp-2 rewrite lowers to a fresh
   funcall cons (a Common Lisp variable head) keeps a real frame -- the mark cannot survive
@@ -1725,19 +1709,18 @@ outside such a cycle changes: a program with none lowers byte-identically.
   hop until `.todo/c08` the same day; both bounce now (an `apply` with its argument list
   unspread), and the mechanism is [jvm-tail-bounce.md](jvm-tail-bounce.md)'s.
 - **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
-  non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
-  47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
-  JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms (20x), interpreter 122 vs
-  7.6 s (16x). Not acceptable as a general mechanism on any backend, and on wasm
+  non-tail call site drives them) measured, against plain calls: markedly slower on the
+  JVM and wasm and slower by a wide multiple on the interpreter, shallow calls
+  included. Not acceptable as a general mechanism on any backend, and on wasm
   `return_call` made it moot. The JVM has no counterpart (`.todo/899` measured its
   options: a Scheme call through a value is two JVM frames, `g` and `_invoke_2`; a larger
-  stack for compiled output's `main` raises the ceiling 1,844 -> 17,677 at 16 MiB and is a
+  stack for compiled output's `main` raises the ceiling by an order of magnitude at
+  16 MiB and is a
   Common Lisp-wide change of every emitted `main` -- landed the same day as the sized-main
   launcher, `.todo/911`, `.kb/interpreter-stack.md`). The interpreter's loop
   in `eval`, the non-trampoline shape, landed 2026-09-19 (`.todo/912`,
   `.kb/interpreter-tail-calls.md`): a tail call through a value is proper there too, and
-  the loop is faster than the recursion it replaced (`fib 32` 4.72-5.26 -> 4.49-4.68 s,
-  `evalfib` on `(fib 24)` 32.6-38.6 -> 25.2-26.3 s). The same reader in miniature
+  the loop is faster than the recursion it replaced. The same reader in miniature
   landed on the JVM emitter 2026-10-03 (`.todo/b69`, above): a trampoline ONLY on the
   value-tail edges, so every proved-direct call keeps its `invokestatic` and a class
   whose tails are all direct compiles byte-identically to the pre-trampoline emitter
@@ -1769,29 +1752,27 @@ gets a `lambda` entering it:
   variable's entry `lambda` -- no escape rule is needed, since nothing but the jumps inside
   `G` ever bypasses the variable. A jump to a member whose `define` has not run yet runs it
   anyway; R7RS calls reading that variable before its definition an error.
-- **Measured before building (the todo's premise)**: 0 of the 1,586 SICP corpus files and 0
-  of the six `examples/scheme` have such a cycle (a static scan of tail positions over
-  every body and `letrec`, `.todo/artefacts/828-sicp-sample-corpus-harness/internal_tail_cycles.py`; 252 bodies define local procedures, 82 of them tail-call a
+- **Measured before building (the todo's premise)**: no SICP corpus file and
+  no `examples/scheme` file has such a cycle (a static scan of tail positions over
+  every body and `letrec`, `.todo/artefacts/828-sicp-sample-corpus-harness/internal_tail_cycles.py`; bodies define local procedures and some tail-call a
   sibling, none back). Built anyway: R7RS requires proper tail calls, and a local state
   machine is a normal Scheme shape. Blast radius: all 1,592 files compile to
   byte-identical `.class` and `.wasm` before and after (the probe restores the counter).
 - **Depth** (`(parity 1000000)` over internal `ev?`/`od?`): overflowed on all four
   backends before (the depths of a procedure value, below); `#t` on all four now.
 - **Time** (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, a loaded 64-core box, best
-  of 5 alternating runs; before -> after): 10M `(parity (remainder k 4))`, JVM 475 -> 249
-  ms, wasm 799 -> 678, component 777 -> 678; 300K `(parity 100)`, JVM 324 -> 176, wasm
-  651 -> 250, component 646 -> 253. Faster, unlike the top-level groups: the calls it
-  replaces were `funcall`s through `%scheme-ensure-procedure`, not direct `defun` calls.
-  Interpreter (best of 3): 300K shallow 4.1 -> 5.8 s, 30K `(parity 100)` 5.5 -> 9.6 s --
-  every jump was a thrown `GoSignal` there. After `.todo/901` (same day, no throw for a
-  tail `go`; before -> after, same box): 300K shallow 5.35-5.72 -> 3.98-4.56 s, 30K
-  `(parity 100)` 8.81-10.40 -> 4.94-5.89 s, i.e. the plain procedures' cost again.
+  of 5 alternating runs): on the compiled backends internal groups run FASTER than the
+  closures they
+  replace, unlike the top-level groups: the calls they
+  replace were `funcall`s through `%scheme-ensure-procedure`, not direct `defun` calls.
+  On the interpreter every jump was first a thrown `GoSignal` and cost time. After
+  `.todo/901` (same day, no throw for a
+  tail `go`; same box) the interpreter is back at
+  the plain procedures' cost.
 - **Size**: `G` takes one argument more than the widest member, and on both compiled
   backends the first indirect call of an ARITY pulls every dispatchable function of that
-  arity (`_invoke_N`, `.kb/core-representation.md`). The shallow program grew 50,117 ->
-  56,756 B of class and 26,185 -> 28,840 B of wasm, where nothing else called through a
-  value with two arguments; with such a call already present (`(f a b)` once) 56,681 ->
-  56,931 / 28,494 -> 28,929.
+  arity (`_invoke_N`, `.kb/core-representation.md`) -- the group's cost over plain local
+  procedures, less where such a call is already present.
 
 Pinned by `SchemeLoweringTest.internalProceduresWhoseTailCallsFormACycleAreOneGroupLambdaEachMemberCallsIt`,
 `#internalProceduresWithNoTailCycleLowerAsBeforeAndNumberNothing` and the
@@ -1829,90 +1810,72 @@ Pinned by `SchemeLoweringTest.internalProceduresWhoseTailCallsFormACycleAreOneGr
   the message went to stdout and the report named the exception class. Any other lazily
   loaded library that starts rebinding a special needs the same entry.
 - The front end changes no Common Lisp program's output: the whole `ci-spec.yaml` corpus
-  (7.3 MB of `.class`, `.wasm` and component) compiled with the jar before and after
-  differs in 3 bytes, the build timestamp (2026-09-17).
+  compiled with the jar before and after
+  differs only in the build timestamp (2026-09-17).
 - Found through this corpus, fixed in the backends, not worked around here: parallel `let`
   (`.kb/parallel-let.md`) and `(+)`/`(*)` with no arguments.
 
 ## Measurements (2026-09-17, wasmtime 47, x86-64 Linux, Java 25)
 
-**`#f` representation** -- 100,000,000 `if` tests, wasm / JVM seconds, artifact bytes:
+**`#f` representation.** An inline quoted `|#f|` costs a lookup per `if` test on wasm; a
+global holding the symbol (chosen) costs nothing over a native NIL test on either backend
+and adds no artifact to speak of. A global holding a `defstruct` singleton buys
+unforgeability the name escaping already gives, for extra bytes on both backends and
+quoted data that would have to be built at run time -- not taken.
 
-| `#f` is | wasm | JVM | `.wasm` | `.class` |
-|---|---|---|---|---|
-| an inline `'\|#f\|` | 4.56 | 0.27 | 3225 | 9573 |
-| a global holding the symbol (chosen) | 1.48 | 0.28 | 3248 | 9635 |
-| a global holding a `defstruct` singleton | 1.32 | 0.27 | 3672 | 10363 |
-| (reference: NIL, a native test) | 1.48 | 0.24 | 3094 | 9180 |
-
-A quoted symbol costs a lookup per evaluation on wasm; the global costs nothing over a
-native NIL test. The singleton buys unforgeability the name escaping already gives, for
-+424 / +728 bytes and quoted data that would have to be built at run time.
-
-**Loop shape** -- 300,000,000 iterations of a two-variable loop, wasm / JVM seconds:
-
-| shape | wasm | JVM |
-|---|---|---|
-| in place, `psetq` (chosen) | 1.97 | 0.80 |
-| per-iteration `let` from carriers (only under a closure) | 2.41 | 0.73 |
-| variables pre-bound to nil, copied in at the label | 8.31 | -- |
-| (reference: CL `do`) | 1.64 | 0.83 |
-
-The nil-initialized shape loses the integer typing of the loop variables: 4x.
+**Loop shape.** In-place `psetq` carriers (chosen) match the CL `do` reference on wasm and
+the JVM; the per-iteration `let` from carriers is kept only under a closure; variables
+pre-bound to nil and copied in at the label lose the integer typing of the loop variables
+and are far slower on wasm.
 
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
-(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
-compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`) -- unbounded
-(1,000,000, the probe here) since the value-tail trampoline of 2026-10-03 -- wasm and
-component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
-(`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497 before the loop in `eval` and
-5,000,000 after (`.kb/interpreter-tail-calls.md`). Top-level `ev?`/`od?` was JVM 3,516
-/ wasm 10,780 / interpreter 10,230 before the tail-call groups and is unbounded now, and
-so is an internal or `letrec` pair.
+(self self (- n 1))))`, is unbounded (the probe here: 1,000,000) on the JVM since the
+value-tail trampoline of 2026-10-03, with the compiled `main` on a 16 MiB worker
+(`.kb/interpreter-stack.md`); wasm and the component pass the probe's ceiling since
+`return_call` (`.kb/wasm-tail-calls.md`), the interpreter since the loop in `eval`
+(`.kb/interpreter-tail-calls.md`); each overflowed at a few to ten thousand frames
+before, scaling with `-Xss` on the JVM. Top-level `ev?`/`od?` overflowed before the
+tail-call groups and is unbounded now, and so is an internal or `letrec` pair.
 
-**Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
-string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
-The generic printer (`%scheme-print`) costs 43.1 KB of class and 8.4 KB of wasm
+**Size.** `display` of a string, character or integer LITERAL lowers to `write-string` /
+`write-char` / `princ`, so a hello-world program is barely more than the runtime. The
+generic printer (`%scheme-print`) is a sizable slice of class and wasm
 (`(define x (list 1 2)) (display x)`, 2026-09-19). It writes a symbol's spelling character by
-character instead of building it: with `(coerce list 'string)` in that path the same program
-was 70.2 KB / 17.5 KB.
+character instead of building it: a `(coerce list 'string)` in that path towed the
+string machinery on top.
 
-**Where the JVM bytes went (2026-09-19, `.todo/894`).** The printer measured 74,048 B of class
-against 8,505 B of wasm, and the old per-piece reading (`aref` 14 KB, a `do` loop 9 KB, `char`
-7 KB, `write-char` 6 KB) was marginal cost inside that program, not the pieces': alone, each is
-6.8 / 7.3 / 8.2 / 2.4 KB over an empty program, the shared generic-arithmetic and prin1 helpers
-counted once. 31 KB of the 74 was the JVM eval runtime (`_eval`, `_invoke_v`, `_store`, the
+**Where the JVM bytes went (2026-09-19, `.todo/894`).** The printer dominated its program's
+class output while its wasm stayed small, and the old per-piece readings were marginal
+cost inside that program, not the pieces': alone, each costs a few KB over an empty
+program, the shared generic-arithmetic and prin1 helpers
+counted once. The larger share was the JVM eval runtime (`_eval`, `_invoke_v`, `_store`, the
 registered wrapper lambdas), switched on by the funcall in `%stream-target` -- a prelude entry
 rooted because DEAD `scheme.lisp` helpers spell `with-output-to-string` / `*error-output*`
 (`.kb/library-defun-pruning.md`, synthesized-call entries). Both halves are fixed at their
 source: the entry is rooted by live forms only, and on the JVM a computed funcall no longer
-forces the runtime and an apply gets the apply tier (`.kb/eval-runtime.md`). Class bytes
-before -> after, outputs identical: `(display x)` 74,048 -> 43,141; `examples/scheme`
-collatz 101,066 -> 71,056, queens 90,597 -> 67,381, differentiation 112,884 -> 96,530,
-huffman 113,542 -> 97,093, streams 99,692 -> 83,814, evaluator 121,905 -> 106,169. Wasm moved
-only for the printer (-100 B, the resolver); a no-printer program (`hello.scm`) and
-`size-report/programs/hello_world` / `pi_approx` are byte-identical. What is left of the 43 KB
-is the printer's own defuns (`%scheme-print-flonum` alone 3.4 KB of code) and the runtime
+forces the runtime and an apply gets the apply tier (`.kb/eval-runtime.md`). Class output
+shrinks accordingly, outputs identical (`(display x)` and every `examples/scheme` program);
+wasm moves only for the printer (the resolver); a no-printer program (`hello.scm`) and
+`size-report/programs/hello_world` / `pi_approx` are byte-identical. What is left is
+the printer's own defuns (`%scheme-print-flonum` the largest) and the runtime
 `princ` renderers its fallback arm reaches.
 
 **Cycles in `write`/`display`** (R7RS: must terminate; label what a cycle closes on,
-`#0=(1 2 . #0#)`). `(define x (list 1 2)) (display x)`, class / wasm bytes, and writing a
-50,000-element list of `(i #(i "s"))` ten times, JVM / wasm seconds:
+`#0=(1 2 . #0#)`). Measured on `(define x (list 1 2)) (display x)` and on writing a
+50,000-element list of `(i #(i "s"))` ten times: an eq hash table of seen nodes costs a
+large slice of extra code on wasm and is slow in absolute terms on a big write, while the
+chosen shape -- tree walk first, a list of seen nodes only when the walk cannot finish --
+adds little code over no check and prints a large shared structure at about the no-check
+speed, on the JVM and wasm alike.
 
-| printer | class | wasm | 50k x10 |
-|---|---|---|---|
-| no cycle check (before) | 58,786 | 3,914 | 6.99 / 10.41 |
-| eq hash table of seen nodes | 66,322 | 20,014 | -- (one 50k write: 0.40 / 62.3) |
-| tree walk first, list of seen nodes only when it cannot finish (chosen) | 65,534 | 8,468 | 7.49 / 11.10 |
-
-An eq hash table costs wasm 16 KB (4.3 KB of it only for VECTOR keys) and, since wasm has
+An eq hash table, since wasm has
 no identity hash, puts every aggregate key in one bucket: quadratic. The chosen shape
 walks the datum as the tree `write` prints -- never more work than the printing -- and
 calls it cycle-free when the walk ends. It gives up on a cdr chain meeting itself
 (Brent) or car/element nesting past 1,000, where any cycle through a car must end up;
 only then `%scheme-mark-cycles` runs, over an alist: quadratic, but only for a cyclic or
-over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ power power)`.
+over-deep datum. Brent's step prefers `(+ power power)` over `(* power 2)` for code size.
 
 **`write-shared` labels every shared node, not only cycles** (2026-09-18,
 `.todo/840`): `%scheme-write-shared` counts occurrences in one depth-first walk
@@ -1923,12 +1886,9 @@ node once -- and reuses the `(entries . next-number)` label shape, with an entry
 takes a label, as R7RS's own example does: `(write-shared (list x x))` is
 `(#0=(1 2) #0#)`, nested sharing `(#0=(#1=("s") #1#) #0#)`, a shared vector
 `(#0=#(1 2) #0#)`. `write` and `display` are untouched. A program calling only
-`display` compiles byte-identical before and after (80,121 B of class / 11,636 B of
-wasm for `(display (list 1 'a "s"))`, `-o Disp.class --class-name Disp` /
-`-o disp.wasm`, both times -- the pruner drops the three new helpers with the
-`write-shared` template that alone references them); a program that writes shared
-structure SHRINKS, 80,177 to 78,376 B of class and 9,230 to 8,018 B of wasm for
-`(define x (list 1 2)) (write-shared (list x x))` (the counting walk is smaller than
+`display` compiles byte-identical before and after -- the pruner drops the three new helpers with the
+`write-shared` template that alone references them; a program that writes shared
+structure SHRINKS on both backends (the counting walk is smaller than
 the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)

@@ -26,31 +26,20 @@ level alone, never by the program:
   landing, `WasmEmitHelper.emitListTypeError`). A size-level site is unchanged.
 - **Why `br_on_cast_fail`.** The first checked site (`local.get x; ref.test $cons; if (result
   eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end`) tested the type
-  twice on the cons path. Measured 2026-09-26, wasmtime 49, median of 9, an EH module, each loop
-  over a 1M-element list (ms; "unchecked" = the non-EH inline shape forced into the same module):
-
-  | loop | two tests | unchecked | `br_on_cast_fail` |
-  | --- | --- | --- | --- |
-  | `(+ s (car l))`, `(setq l (cdr l))` x40 | 113 | 84 | 92 |
-  | the same, `-C inlining=y` | 91 | 71 | 64 |
-  | `(setq n (+ n 1))`, `cdr` x40 | 59 | 55 | 52 |
-  | `dolist` sum x40 | 113 | 92 | 95 |
-  | `(car (cdr l))`, `cddr` x40 | 92 | 75 | 61 |
-  | `last`-style `(null (cdr l))` walk x100 | 160 | 143 | 110 |
-  | `(null (cdr (cdr l)))` walk x100 | 234 | 184 | 164 |
+  twice on the cons path. Benchmarked 2026-09-26 on wasmtime 49 over list-walking loops in an
+  EH module ("unchecked" = the non-EH inline shape forced into the same module): the checked
+  `br_on_cast_fail` shape tracks the unchecked one, and wins once Cranelift inlines.
 
   The check's machine code is no longer than the unchecked null test plus cast; what is left
-  of the first row is Cranelift's register allocation around the generic `+`, whose i64
+  is Cranelift's register allocation around the generic `+`, whose i64
   overflow helper is a real call on the hot path -- inlined (`-C inlining=y`), the checked
-  loop is the fastest of the three. **A miss arm that never returns buys nothing measurable**:
+  loop is the fastest of the three. **A miss arm that never returns buys nothing**:
   `br_on_null` to an inline nil and `call _car; unreachable` for the rest keeps the call's
   live values out of stack slots in a call-free loop (the micro-benchmark's machine code equals
-  the unchecked one), but a Lisp loop has calls anyway -- 87-92 ms on the first row, `dolist`
-  worse -- for 8 bytes a site and one more opcode for every pass to model; not taken.
-  `br_on_cast` (branch on success) measured the same (92 ms) and needs an `eqref -> (ref $cons)`
+  the unchecked one), but a Lisp loop has calls anyway, and the variant
+  costs bytes at every site plus one more opcode for every pass to model; not taken.
+  `br_on_cast` (branch on success) measured the same and needs an `eqref -> (ref $cons)`
   block type the module does not declare.
-  `zlib` P1: `--optimize` 116,527 -> 116,652 (gzip 38,923 -> 38,350), `off` 462,468 -> 458,614
-  (no temps), `size` unchanged at 89,272.
 - **What the passes must model.** `am.ik.wasm` decodes `br_on_cast`/`br_on_cast_fail`
   (`WasmCodeModel.CastBranch`, `Instr.isCastBranch`, label in `Instr.a`) and treats it as a
   `br_if` wherever branches are followed: `WasmSections.scanGc` records its two heap types (the
@@ -72,29 +61,26 @@ level alone, never by the program:
 - `WasmCarCompiler`/`WasmCdrCompiler`/`WasmApplyCompiler` go through
   `WasmEmitHelper.compileConsField`/`emitConsField`; the spread dispatcher's per-parameter
   walk (`WasmRuntimeBuilder.emitNullSafeCell`) takes the same switch as `sharedConsReaders`,
-  threaded through `buildDispatch` from `WasmLispCompiler.optimize`. `_dispatch_spread` on
-  the hello-clack Worker: 86,004 -> 46,926 B.
+  threaded through `buildDispatch` from `WasmLispCompiler.optimize`.
 - **Why `size` only.** A call per `car` is a speed trade, and `default` makes none
-  (`.kb/optimize-dead-code-elimination.md`, "What `SIZE` declines"): measured 2026-09-12 on
-  a 16M-`car`/`cdr` list-traversal loop (wasmtime 47, best of five), the shared reader at
-  the default level costs +1.4% (1.45 -> 1.47 s) and would have gained 2.4 KB on `zlib`
-  (2.1%) and 49 KB on the hello-clack Worker (5.0%).
+  (`.kb/optimize-dead-code-elimination.md`, "What `SIZE` declines"): on
+  a `car`/`cdr` list-traversal loop the shared reader at
+  the default level costs time, and at the size level it shrinks cons-using programs
+  (`zlib`, the hello-clack Worker) for nothing at the other levels.
 - Temps are still a fresh local per computed operand (`Ctx.allocTemp` never recycles). The
   BYTES that cost -- a two-byte index for every local from 128 up -- are recovered by the
   local renumbering (`.kb/optimize-dead-code-elimination.md`, "The local renumbering"), which
   made a scratch slot unnecessary for size; the frames stay wide.
 
-## Measured 2026-09-12 (before -> after)
+## The size level's effect (2026-09-12)
 
-| Program | `--optimize=size` | `--optimize` |
-| --- | --- | --- |
-| `zlib` `--no-wasi` (size-report) | 94,069 -> **90,874** (-3.4%; gzip 31,869 -> 30,861) | 117,558 -> 116,605 (-0.8%) |
-| hello-clack Worker `--no-wasi` | 916,587 -> **815,414** (-11.0%; gzip 227,415 -> 215,040) | 1,003,618 -> 990,451 (-1.3%) |
-| `hello_world`, `pi_approx`, the `.todo/789` reactor, `webgl-triangle` | unchanged (no cons access) | unchanged |
+`--optimize=size` shrinks the cons-using programs (`zlib --no-wasi`, the hello-clack
+Worker) through the shared reader, `--optimize` barely; the programs with no cons access
+(`hello_world`, `pi_approx`, the `.todo/789` reactor, `webgl-triangle`) are unchanged.
 
-The `--optimize` column is the temp-free plain-local read alone. What the size level
-gains beyond an external optimizer: `wasm-opt -Oz` finds the same 182,697 B on the Worker
-before and after, i.e. the 101 KB is outside its reach (it does not outline).
+The `--optimize` column effect is the temp-free plain-local read alone. What the size level
+gains beyond an external optimizer: `wasm-opt -Oz` finds the same result on the Worker
+before and after, i.e. the gain is outside its reach (it does not outline).
 
 ## Tests
 

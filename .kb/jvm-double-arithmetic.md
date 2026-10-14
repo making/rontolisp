@@ -20,10 +20,9 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   step used to sit here and rounded exact quotients to 16 decimal digits first
   (`1/8388608` answered `1.192092895507812e-7`, not `2^-23`); the ANSI
   `RATIONAL.1`/`RATIONALIZE.1`/`RATIONALIZE.3`/`/.12` round trips plus `*.12` pin the
-  fix on every backend. The method costs ~300 bytes in each numeric program (the
-  8,000-byte budget in
+  fix on every backend. The method rides in each numeric program, within the budget
   `JvmLispCompilerTest#aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime`
-  went to 8,400 for it, 8,295 actual); a may-produce-a-ratio gate would buy that back
+  guards; a may-produce-a-ratio gate would spare it
   but needs the complex gate's recompile net to stay sound (a missed source is a
   `NoSuchMethodError`, not a wrong answer), which is disproportionate -- the budget
   still catches what it was built for.
@@ -65,7 +64,7 @@ path allocated and immediately unwrapped, never a different computation. Sibling
 ## The exact prefix
 CL's n-ary `+ - * /` is a left fold of the two-argument step, and a step floats only once one
 of ITS operands is a float, so the arguments ahead of the first float fold exactly:
-`(+ 1/10 1/5 0.0)` is `0.3`. Measured 2026-10-07, SBCL 2.2.9 (`*read-default-float-format*`
+`(+ 1/10 1/5 0.0)` is `0.3`. Checked 2026-10-07 against SBCL 2.2.9 (`*read-default-float-format*`
 `double-float`, operands literal or through `notinline` identity calls): `0.3` for the `+`,
 `-`, `*`, `/` rows, `9.007199254740994e15` for `(+ 9007199254740993 1 0.0)`,
 division-by-zero for `(/ 1/2 0 1.0)`. Before that day the interpreter (`hasDouble`, one double
@@ -103,7 +102,7 @@ through calls pairwise (fusion took them).
 `(- x)`, `(/ x)`, `abs`, `signum`, `random` and `expt` (base or power) convert their operand
 only where `isDefinitelyDouble` proves it (`FloatFold.exactPrefix` answers the operand count
 for a lone unproven operand); a float literal anywhere else in it (`(abs (if c 1.5 -2))`) no
-longer makes an exact value a float. Measured 2026-10-07, SBCL 2.2.9 = interpreter: `2`, `-2`,
+longer makes an exact value a float. SBCL 2.2.9 = interpreter (2026-10-07): `2`, `-2`,
 `1/4`, `-1`, `8`, `(integerp (random ...))` T; before that day the JVM answered `2.0 -2.0 0.25
 -1.0 8.0 NIL`, P1 and the component `2.0 -2.0 0.25 -1 8 NIL` (WASM's `signum`/`expt` never
 routed on the literal), and `(/ (if c 2.0 0))` was Infinity, not division-by-zero.

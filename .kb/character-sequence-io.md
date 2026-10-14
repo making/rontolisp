@@ -72,7 +72,7 @@ last rule is Java's, not the Unicode recommended practice (which narrows `ED`'s 
 `FileReader` and the Clojure oracle's `slurp`/`reader` answer it. `octets-to-string` keeps its
 own lenient rule (`.kb/characters-code-points.md`).
 
-Measured 2026-10-08/09, the bytes `41 E9 42 FF`: interpreter and JVM `(65 65533 66 65533)`,
+Checked 2026-10-08/09, the bytes `41 E9 42 FF`: interpreter and JVM `(65 65533 66 65533)`,
 both WASM legs `(65 37055)` (the lead byte took whatever followed it, unchecked). The item's
 premise that the interpreter already answered Java's rule was half true:
 `runtime/RontoCharFileReader` (the interpreter's `open`, and the JVM's in a program naming
@@ -96,25 +96,18 @@ and JVM) took continuation bytes unchecked like wasm. Both now decode by the rul
   malformed streams can lose one byte there).
 
 ## The numbers
-Measured 2026-09-12 (JDK 25, wasmtime 47, Linux x64) on a 2,668,890-character UTF-8 file
-(2,836,915 bytes -- the first 2.67M characters of a Qwen3.5 `tokenizer.json`), before -> after:
+Checked 2026-09-12 (JDK 25, wasmtime 47, Linux x64) on a large UTF-8 file: the block-decoding
+rewrite took the character read from microseconds per character to tens of nanoseconds on the
+interpreter and wasm-GC, and the JVM arm improved by a smaller factor, and
+**`uiop:read-file-string` is at parity with the byte detour on all three** -- the
+`--component` leg shares the Preview 1 read path. What is left in `read-file-string` above the
+raw read is the `with-output-to-string` accumulate it is built out of, and on the interpreter
+that is most of the remaining time.
 
-| | interpreter | JVM class | wasm-GC |
-|---|---|---|---|
-| `read-sequence` into a 4,096-character buffer, chunks discarded | 3,141 -> **86** ms | 322 -> **104** ms | 3,283 -> **62** ms |
-| `uiop:read-file-string` | 3,695 -> **366** ms | 605 -> **322** ms | 3,698 -> **349** ms |
-| the same file read as BYTES + `rontolisp:octets-to-string` | 317 -> 307 ms | 324 -> 321 ms | 160 -> 150 ms |
-
-So the character read is now 26 ns per character on the interpreter (was 1.2 us), 39 ns on the
-JVM (was 121 ns) and 23 ns on wasm-GC (was 1.2 us), and **`uiop:read-file-string` is at parity
-with the byte detour on all three** -- the `--component` leg, not in the table, measured 453 ms
-after and shares the Preview 1 read path. What is left in `read-file-string` above the raw read
-is the `with-output-to-string` accumulate it is built out of (~260 ms of the interpreter's 366).
-
-**The JVM's premise was different and is worth remembering**: its character arm was never a
-microsecond per character -- a `BufferedReader.read()` plus a boxed store is 121 ns -- so the
-gap there was 1.9x, not 23x, and most of what remained after the fix is the accumulate. The
-same block arm still paid for itself 3x on that leg.
+**The JVM's premise was different and is worth remembering**: its character arm was never
+microseconds per character -- a `BufferedReader.read()` plus a boxed store is
+hundreds of nanoseconds -- so the gap there was small to begin with, and most of what remains
+after the fix is the accumulate. The block arm still paid for itself on that leg.
 
 **The remaining accumulate does not shrink further at the Lisp level**: `.todo/786` tried
 replacing the `with-output-to-string` accumulate with a `make-string` buffer that doubles,
@@ -142,8 +135,8 @@ characters as bytes and as characters off one file and bound the second by the f
 self-calibrating ratio, so no machine-dependent millisecond budget is written down. The
 wasm pin runs the timed pair three times and pools the attempts -- cheapest string leg
 against the most generous byte leg, bound formula unchanged (2026-09-24, after the plain
-any-attempt-passes retry of `.todo/822` still failed once on CI with 786 ms against a
-734 ms bound): contention only ever ADDS to a leg's time, so the min string leg is that
+any-attempt-passes retry of `.todo/822` still failed once on CI near the bound's edge):
+contention only ever ADDS to a leg's time, so the min string leg is that
 leg's true cost and the max byte leg is the loosest honest denominator, while a
 per-character `fd_read` regression raises every attempt by ~1000x and its min still
 misses the bound by three orders of magnitude.

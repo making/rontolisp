@@ -53,20 +53,20 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
   evaluated only for a non-instance), JVM `JvmObjCompiler.emitChecked` (the instance guard; the
   failure form on its reject arm), wasm-GC `WasmInstanceCompiler.emitChecked` (ONE
   `br_on_cast_fail`, the failure form on its miss). **Not `(if (%obj-p obj) ...)` in the
-  expansion**: that was the first cut and cost a second type test per access -- 200M iterations of
-  two stores and a read under wasmtime 0.88 s -> 1.57 s; the operand form runs 0.89 s. The JVM JIT
+  expansion**: that was the first cut and cost a second type test per access, which the operand
+  form avoids. The JVM JIT
   did not care either way.
 - **The store checks after the value** (`let`-bound unless the object is a symbol and the value an
   atom), CL's order: `(incf (point-x "s"))` reports the READ, `POINT-X`.
 - **`%struct-type-error` is one generated defun** (`structTypeErrorDefun`, injected when referenced;
   the interpreter defines it on first resolution). The report is rendered at the signal
   (`formatMessagePieces`) into a VARIABLE whose text control is the `:format-control`, never stored
-  as a control with arguments: a runtime control drags the format renderer in (zlib +59 KB). The
+  as a control with arguments: a runtime control drags the format renderer in. The
   variable is what makes the unrouted message the text itself ([error-handling.md](error-handling.md),
   `signalsItsTextControl`): with the text control of the rendered EXPRESSION, a compiled program
   routing no report printed `The value "a~~b"` -- the control, every `~` doubled -- where the
   interpreter printed `"a~b"` (standalone `uncaught-struct-accessor-report-prints-the-datum-as-written`).
-  Cost of the variable: +4/+7 B per JVM class, +2 B per wasm module carrying the defun; no
+  The variable costs a few bytes per class or module carrying the defun; no
   program lost the renderer, since the defun is injected after the routing answer. The operator travels as a string (a
   store builds `(SETF ...)` from the reader's), the type as `%unspelled-quote`. The owner a place
   needs is `ClosRegistry.structOfAccessor`, registered only by a checked expansion.
@@ -78,10 +78,9 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
   after the accessor exists (the predicate regeneration below), so `(point-x <another struct>)`
   still reads a slot. Deliberate; revisit with a per-accessor tag test the predicate refresh also
   rebuilds.
-- Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): zlib 89,252 -> 95,803 B (+7.3%; gzip
-  29,776 -> 31,250), `--optimize` 117,000 -> 124,519 -- ~35 B per checked site (133 in zlib: the
-  failure call's two literals and the blocks) plus the operator strings. A module already carrying
-  the printer pays little (a toy with `ignore-errors`: +88 B). Outside EH mode: 0.
+- Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): every checked site pays
+  the failure call's two literals and the blocks, plus the operator strings. A module already carrying
+  the printer pays little. Outside EH mode: nothing.
 
 ## `:include` (single inheritance)
 Parent slots (in ITS layout order) are PREPENDED, so an inherited slot keeps one index in every
@@ -160,7 +159,7 @@ the form runs, the compilers' undefined-function warning at compile time -- all 
 SBCL. Two keep the expansion-time refusal `setf does not support place: X`: a name the `cl`
 package answers (`PackageRegistry.isClMemberName`; no program may define `(setf length)`, so
 it is a place rontolisp lacks), and every unknown place on `--no-gc` (`expandScalarSetf`: no
-function values there). Measured 2026-10-07: `(setf (zz-t 3) 5)` of an undefined `zz-t` was SBCL
+function values there). Checked 2026-10-07: `(setf (zz-t 3) 5)` of an undefined `zz-t` was SBCL
 2.2.9 `(SETF ZZ-T)` at run time; interpreter, JVM, P1 and component refused at expansion.
 Pinned by `SetfFunctionNameFixture.UNKNOWN_PLACE`
 (`aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns` in the three backend suites) and
@@ -181,7 +180,7 @@ slot (its own option, an `:include` override's, or the parent's -- `ClosRegistry
 registers `READ_ONLY_SLOT_MARKER` (`0`): a reader, no writer, and its place falls through to the
 late-bound call above, so `(setf (ro o) v)` signals `undefined-function` `(SETF RO)` as in SBCL. A
 `:type vector` struct already emitted its `%setf-` writer per slot; a read-only one now skips it.
-Measured 2026-10-07: `(fboundp '(setf zz-s-b))` / `#'(setf zz-s-b)` were SBCL T / a function,
+Checked 2026-10-07: `(fboundp '(setf zz-s-b))` / `#'(setf zz-s-b)` were SBCL T / a function,
 interpreter, JVM, P1 and component NIL / `The function (SETF ZZ-S-B) is undefined` (wasm outside
 EH mode: a trap); `(setf (ro o) v)` stored on all four. Pinned by
 `SetfFunctionNameFixture.STRUCT_WRITER` (`aDefstructSlotAccessorHasASetfFunction` in the three

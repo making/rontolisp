@@ -149,7 +149,7 @@ it -- its fallback is the built-in write-line, so a handle or string stream is u
 **A spelled `:start` / `:end` on a Gray instance is checked ONCE, before the method runs, and
 the method then sees integers.** SBCL signals a `type-error` for every bad bound whatever the
 stream -- a nil, negative or non-integer `:start`, a bound past the length, a start past the
-end -- and passes `(stream string start end)` with `end` never nil. Measured on the previous
+end -- and passes `(stream string start end)` with `end` never nil. On the previous
 code, all four backends alike: a bound reached the method unchecked (a nil `:start` read as
 omitted, a negative or 9-past-5 one went through), and a bounded `write-string` to an instance
 on the compile paths bypassed the dispatch and wrote to standard output.
@@ -183,16 +183,14 @@ on the compile paths bypassed the dispatch and wrote to standard output.
   on a `rontolisp:` protocol generic loads gray.lisp first on the interpreter
   (`ensureGrayProtocolDeclared`), as the compile paths splice it for any program naming one,
   so the method is judged against the declared lambda list, never one it established.
-- Cost (2026-10-06, 748 / 740 / 744 JVM / P1 / component artifacts of every ci-spec case,
+- Cost (2026-10-06, every ci-spec case,
   size-report, bench-report and the non-GUI examples, compiled by the base and the new jar):
   all byte-identical (bar the build timestamp) except the programs carrying the Gray protocol
-  -- 14 examples and three ci cases -- which SHRINK, JVM -0.6..-2.4 KB, P1 -0.1..-0.6 KB (the
+  -- 14 examples and three ci cases -- which SHRINK (the
   unbounded write-line helper lost its `&optional`/`start-p` shape); the one program
-  spelling a bounded Gray write (the pinning case) grows +0.87 KB P1 / +0.86 KB component and
-  shrinks 0.5 KB on the JVM.
-  Speed (min of 12, 300,000 iterations of an unbounded and a bounded write-line plus an
-  unbounded write-string to a counting instance): JVM 15-25 ms before and after (noise), P1
-  155 -> 195 ms -- the bounded call pays the bounds check (~130 ns).
+  spelling a bounded Gray write (the pinning case) shifts by a few KB either way.
+  Speed: the bounded call pays the bounds check, visible only on the P1 leg; the JVM is
+  within noise.
 - Pinned by `SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM` (sbcl's answers) in
   `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` (P1 and
   component) and ci-spec `gray-stream-bounds-are-checked`. The ci-spec case is part of the
@@ -542,9 +540,8 @@ non-broadcast instance the same answer the built-in gives one);
 test the tag inline.
 
 - A zero-component `(make-broadcast-stream)` program now carries the Gray
-  broadcast entry: JVM `.class` 5,896 -> 12,717 B (+6.8 KB); with a write,
-  9,816 -> 42,135 B (the protocol's first-use cost, at parity with a
-  one-component broadcast at 42,179 B). Anything else is byte-identical.
+  broadcast entry -- the protocol's first-use cost, at parity with a
+  one-component broadcast. Anything else is byte-identical.
 - `#'make-broadcast-stream` is the same Gray broadcast stream (2026-09-27): the catalog
   wrapper is `(&rest c) (%make-broadcast-stream c)` on every backend (the interpreter's Java
   sink built-in is gone). The prelude selects the entry on any mention of the name, `#'`

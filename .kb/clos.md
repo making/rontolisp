@@ -253,7 +253,7 @@ dies with "No applicable method: CLOSE on INTEGER".
   `read-from-string`, `values`, ...). Now a stash of a `ShadowedBuiltins.loweredBuiltinFunctions()`
   name adds it to `methodedExpandedBuiltins`, and `evalCons` sends such a call straight to the
   binding ahead of every table (one identity test per call while the set is the initial empty
-  one; fib 26 x12, steady state 178-198 -> 175-212 ms, noise at load 13). A methoded syntactic
+  one). A methoded syntactic
   producer (`LispMacroExpander.isSyntacticMultipleValueProducerName`) also gets its dispatcher
   bound under `%<name>--dispatch`, and the defun body, lambda tail, `handler-case` protected
   form and the six consumer arms are renamed onto it (`ShadowedBuiltins.renameCallSites`, the
@@ -266,8 +266,7 @@ dies with "No applicable method: CLOSE on INTEGER".
   defun's own `(block name ...)` cons, or the `(progn settled)` wrapper a lambda tail's memo entry
   shares between its closures), and a producer's first method, once its alias is bound, re-lowers
   each in place from the raw form. Zero call-time cost for a defun; a producer-tail lambda pays
-  one `progn` step (3M `funcall`s of `(lambda (k) (gethash k h))`, 5 alternating pairs: 7,508-7,667
-  -> 7,626-7,823 ms, medians 7,597 -> 7,639). Pinned by
+  one `progn` step. Pinned by
   `ShadowedBuiltinsTest.everyLoweredNameDispatchesAUserMethodOnTheInterpreter` (every name, four
   call shapes), `everyLoweredNameDispatchesFromAFunctionDefinedBeforeTheMethod` (defun, method body,
   closure, `labels`, all defined first) and `MethodedBuiltinFixture` on the interpreter, JVM and
@@ -355,7 +354,7 @@ Three congruence rules:
 **The trio, `print-object` and `make-load-form` are function values with no method in the
 program** (`isCallableSystemGenericName`): the interpreter synthesizes the generic in
 `resolveFunction`, the compile path in `expandTopLevelDefinitions` for any program that NAMES one
-(which also takes it off the no-CLOS fast path). Measured 2026-10-07 before that: `#'initialize-instance`
+(which also takes it off the no-CLOS fast path). Before 2026-10-07, `#'initialize-instance`
 in a program with no CLOS definition refused on the JVM, P1 and the component (`Cannot compile:
 INITIALIZE-INSTANCE as a function value`), and the interpreter had no `make-load-form`.
 **The init defaults apply to instances only** (`whenInstance`: `(%obj-p x)`, else the
@@ -378,22 +377,22 @@ true)` lowers an unknown class to a runtime `error` instead of failing the compi
   class) is deliberately not emitted, since the only plainly-registered classes are the seeded
   ones whose names are `cl` symbols. **Trigger**: a plainly-registered class whose name is not.
 - **The COMPILE paths must not inline that dispatch**: its size is proportional to the
-  registered-class count, and at cl-postgres scale (165 layouts, ~68 KB of AST per site) three
+  registered-class count, and at cl-postgres scale (165 layouts) three
   sites overflowed the JVM's signed-16-bit branch offsets (the since-removed `StackMapAugmenter`:
   `Index -31123 out of bounds`). `expandTypep(cons, registry, false)` emits `(%typep-runtime value spec)` and
   `expandTopLevelDefinitions` injects the defun plus the `%typep-tag-table%` data table —
   quoted data mapping each type name's spellings to the tags it accepts, emitted as CHUNKED
   top-level forms (a defvar plus `(setq .. (append 'chunk ..))` continuations, 48 entries
-  each). Same for `%subtypep-runtime` (`%subtypep-ancestor-table%`; the inline shape had
-  reached 59 KB) and for a computed `error` condition-type datum WITH initargs
+  each). Same for `%subtypep-runtime` (`%subtypep-ancestor-table%`; the inline shape
+  overflowed the same offsets) and for a computed `error` condition-type datum WITH initargs
   (`(%error-runtime datum (list args...))` over per-condition `%ERROR-RT-n` helpers — the old
-  inline reached 90 KB, past the 64 KB hard limit).
+  inline shape overflowed the 64 KB hard limit).
 - `expandClassSlotDefs` lowers `%class-slot-defs` to the SHARED `%class-slot-defs-runtime`
   defun with `%class-slot-defs-table%` — one entry per registered LAYOUT (classes AND structs,
   since `ClosRegistry.slotDefs` is the one resolver). Designators: instance tag, plain name,
   class metaobject. Answers `((slot-name declared-type) ...)`, a struct's types all `T` —
   which is what lets json.lisp's `%json-out-instance` treat a struct like a CLOS instance. The
-  old per-site inline cond hit the JVM 65535-byte ceiling (70178 bytes). Chunked by cons-node
+  old per-site inline cond hit the JVM 65535-byte ceiling. Chunked by cons-node
   budget (`nodeBudgetedTableForms`).
 - A non-literal slot name falls to `expandRuntimeSlotValue` (a NAME dispatch over every slot
   name any layout declares; same-index names share one `member` arm, differing ones get an
@@ -449,7 +448,7 @@ initforms, supplied initargs stored, the instance is the value.
 - Every read goes through ONE out-of-line helper `(%slot-read value instance 'NAME)`, with
   `(%slot-bound-p value)` for `slot-boundp` (`slotUnboundDefuns`, emitted when
   `needsSlotUnboundHelper`). **They are calls, not inlined `%obj-is` + `if`, for a size
-  reason**: an inline instance-of test is ~60 bytes of JVM bytecode and one per accessor ran
+  reason**: an inline instance-of test per accessor ran
   the ci-spec corpus past the 64 KB method limit
   ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
 - In a GENERATED accessor body the `'NAME` rides in `%unspelled-quote` (`checkedSlotRead`), so
@@ -640,9 +639,9 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   resolve", not `class-precedence-list` (which `.todo/715` §4 rules out).
   `built-in-class` is a NAME here, not a metaclass: `(class-of (find-class 'array))` is
   `standard-class`, and `(typep x 'built-in-class)` keeps its deliberate empty test.
-- **Measured 2026-09-11** (suite `ca06bd9`, interpreter, `arrays` + `objects` +
-  `types-and-classes`): adding the names moved `arrays` 650 -> 690 passing (errors 619 ->
-  575) and `types-and-classes` 280 -> 281, **+41 tests**, with `objects` unchanged. Only
+- **Checked 2026-09-11** (suite `ca06bd9`, interpreter, `arrays` + `objects` +
+  `types-and-classes`): adding the names fixes 40 `arrays` cases and one
+  `types-and-classes` case, **+41 tests**, with `objects` unchanged. Only
   8 `there is no class named` lines survive, for `broadcast-stream` (7) and
   `standard-generic-function` (1). `.todo/744` priced the row at **156** by counting every
   TEST-level `ERROR` line naming `array`/`vector`/`bit-vector`/..., which over-counts: the

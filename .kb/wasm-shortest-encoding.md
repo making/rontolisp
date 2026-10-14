@@ -4,7 +4,7 @@ Invariant: for every core module and component (Preview 1 and `--component`, `--
 not, `--no-gc` too), `wasm-tools parse (wasm-tools print M)` returns `M` byte for byte. The round
 trip IS the specification and the pinning test: `WasmTreeShakerCorpusTest.roundTripIsAFixpoint`
 over the 321-case `ci-spec.yaml` corpus in both WASI modes at `NONE` and `DEFAULT`; needs
-`wasm-tools` on `PATH`, skips without it. Padding validates and runs; the slack was 2.4%-5.7%.
+`wasm-tools` on `PATH`, skips without it. Padding validates and runs.
 
 ## Rules
 1. **Nullable reference to an ABSTRACT heap type is one byte.** `WasmWriter.writeRefType` is the

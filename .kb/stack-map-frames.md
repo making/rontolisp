@@ -38,10 +38,10 @@ backedge query.
 - NOT loud: `aaload` on a non-array (an over-lossy merge) makes the generator push TOP instead of
   throwing, which surfaces as a `VerifyError` at class load. The tests load every class they
   compile, so the regression net is class loading. `ClassFile.verify` at compile time would
-  restore it and is NOT adopted (measured 2026-09-29 on the default-level ci-spec class): 711-755
-  ms against 441-494 ms for the frames themselves, and over the class-loader-free resolver above
-  it reports 1,678 false errors (`RuntimeException` not assignable to `Throwable`: its
-  assignability needs the real hierarchy), 0 over the class-loading default.
+  restore it and is NOT adopted (measured 2026-09-29 on the default-level ci-spec class): it
+ costs markedly more than writing the frames themselves, and over the class-loader-free resolver above
+  it reports false errors (`RuntimeException` not assignable to `Throwable`: its
+  assignability needs the real hierarchy), none over the class-loading default.
 - javac-compiled embedded template classes ([template-class-embedding.md](template-class-embedding.md))
   carry their own frames and are never touched.
 - `osrHostileBackedges` reads the written `StackMapTable` back: a branch or switch whose target
@@ -55,33 +55,22 @@ Version 61 unlocks not yet used: `invokedynamic` (v51+) for the `_invoke_N` line
 dispatch (nothing models `tableswitch` either); interface-static `invokestatic` (v52+), for which the
 assembler side is ready (`INVOKESTATIC` on a `ConstantPool.addInterfaceMethodref` tag-11 constant).
 
-## Measured 2026-09-29 (JDK 25.0.4)
+## The API rewrite, measured 2026-09-29 (JDK 25.0.4)
 
-Replacing `StackMapAugmenter` (1,456 lines, a hand-written verifier dataflow) with the API, as a
-post-pass. Pass alone, same frame-free v50 input (a shipped class with its table stripped), mean
-of 20 after 10 warm-up runs:
+Replacing `StackMapAugmenter` (a hand-written verifier dataflow) with the API, as a
+post-pass, is faster on every input measured (a shipped frame-stripped v50 class, example
+programs, the whole ci-spec corpus, at both optimize levels, warm-cached timings) and emits
+a slightly smaller class from the same input. Whole CLI compile of the ci-spec corpus
+(`-o C.class`) speeds up accordingly at both levels, with the same output modulo the
+expected difference.
 
-| input | `--optimize` | old bytes | new bytes | old ms | new ms |
-|---|---|---|---|---|---|
-| 10-line fib/hash/defstruct/handler-case/sort sample | default | 59,580 | 57,915 | 4.07 | 2.85 |
-| same | off | 339,168 | 333,927 | 31.9 | 14.6 |
-| `examples/console/contact-book.lisp` | default | 31,558 | 30,752 | 6.79 | 5.08 |
-| same | off | 452,975 | 449,579 | 73.1 | 24.3 |
-| `examples/console/error-handling.lisp` | default | 61,378 | 60,097 | 5.67 | 2.97 |
-| same | off | 315,274 | 311,100 | 35.7 | 13.4 |
-| ci-spec corpus | default | 7,698,237 | 7,662,328 | 1,300-2,200 | 608 |
-| same | off | 7,704,285 | 7,668,308 | 1,307 | 500 |
-
-Whole CLI compile of the ci-spec corpus (`-o C.class`, 3 runs): default 20.1-21.3 s -> 15.4-16.5
-s, off 17.7-21.9 s -> 14.9-15.8 s; output 7,723,482 -> 7,668,296 B (default).
-
-Image cost of `java.lang.classfile`: `-Pweb` playground `rontoplayground.js.wasm` 27,718,994 ->
-28,640,483 B (+3.3%), a JVM compile in it still verifies and runs; `-Pnative` CLI binary
-96,143,624 -> 97,192,200 B (+1.1%), `-o X.class` from it verifies and runs.
+The `java.lang.classfile` dependency costs the images a little: the `-Pweb` playground
+wasm and the `-Pnative` CLI binary each grow by a few percent, and a JVM compile through
+either still verifies and runs.
 
 Folding the post-pass into the write (the shake and the frames in the one `ClassFile.build` per
-class, no written bytes parsed again) took the corpus write phase from 2,785-2,924 ms to
-1,632-1,639 ms in a cold CLI run (2026-09-29, [jvm-method-size-limits.md](jvm-method-size-limits.md)).
+class, no written bytes parsed again) nearly halves the corpus write phase in a cold CLI
+run (2026-09-29, [jvm-method-size-limits.md](jvm-method-size-limits.md)).
 
 ## The readers on the API (2026-09-29)
 
@@ -98,7 +87,8 @@ emission onto CodeBuilder makes moot").
   did not care. `ClassFileInfo` lowers the version in a copy, so a `--java-classpath` jar built
   for a newer Java still resolves (`JvmClassPathTest.aClassFileNewerThanTheRunningJdkReadsItsDeclaredShape`).
 
-`ClassFileInfo` over 3,000 `ct.sym` signature files: 9.6-11.6 ms, hand reader and API alike.
+`ClassFileInfo` over the JDK's `ct.sym` signature files parses in the same time as the hand
+reader did.
 
 ## The `wide` prefix
 

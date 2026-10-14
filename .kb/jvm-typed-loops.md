@@ -77,10 +77,9 @@ store, as `_fvAset*` must (`.kb/gpu.md`). Two things make the hoist the same con
 inside a typed loop can put an array back on the device (the subset has no calls), and reporting
 every materialize before any written keeps a loop whose two array variables are ONE object at run
 time correct. The cost of the hoist is that a loop of zero trips drops a device copy it did not
-need to -- speed only, and the next two sights re-upload it. Measured on GB10 (2026-09-06,
-`.todo/723`, Qwen3.5-0.8B from the BF16 GGUF at `-w bf16`, JVM class output): the per-store guard
-was **half of the whole `--gpu --simd` decode step** -- 51 ms a forward against 25 with the hoist,
-and stories15M 449 tok/s against 555. A loop with no array and no assigned free variable is left alone
+need to -- speed only, and the next two sights re-upload it. On GB10 (2026-09-06,
+`.todo/723`, Qwen3.5-0.8B from the BF16 GGUF at `-w bf16`, JVM class output) the per-store guard
+was **half of the whole `--gpu --simd` decode step**; the hoist gave the difference back. A loop with no array and no assigned free variable is left alone
 (byte-identical). Typed locals are `allocTemp` pairs (long/double take two slots) released at the
 join; a loop pushing `nextLocal` past 250 stays boxed (one-byte slot operands), and
 the frame pass (`StackMapFrames`) merges the slot kinds to TOP at the join.
@@ -108,7 +107,7 @@ expected output and re-added when 722 closes. It was hand-checked identical on a
 
 - **An array of the loop must be `float[]` or `double[]`, so ONE bfloat16 operand keeps the whole
   loop boxed** -- and under `--gpu` the boxed path then pays a residency guard per ELEMENT. This is
-  how the depthwise convolution of `examples/llm` came to cost 8.5 ms of a 45 ms forward: its
+  how the depthwise convolution of `examples/llm` came to cost a noticeable slice of a forward: its
   kernel is F32 in the checkpoint and was being narrowed to the `-w bf16` weight width for no
   reason, which `.todo/723` fixed at the reader rather than here (a read-only bf16 array variant is
   a third array kind, and nothing measured wants one yet).

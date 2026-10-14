@@ -13,12 +13,10 @@ mechanisms -- the index was fixed first (`.todo/690`) and the accumulate was wha
 program hit before it ever reached an index (`.todo/704`).
 
 ## The two shapes and what each used to cost
-Measured 2026-09-06 (JDK 25, wasmtime 47) on a 2,668,890-character file, before -> after:
-
-| shape | interpreter | JVM class | wasm-GC |
-|---|---|---|---|
-| `uiop:read-file-string` | 6,439 -> 3,498 ms | 18,164 -> **537** ms | (n/a) -> 3,426 ms |
-| `read-line` loop + `(apply #'concatenate 'string lines)` | 404 -> 357 ms | 54,197 -> **357** ms | (n/a) -> 3,602 ms |
+Measured 2026-09-06 (JDK 25, wasmtime 47) on a multi-megabyte character file: the
+re-copying accumulate made both read-a-file-as-a-string shapes slower by orders of
+magnitude on the JVM and wasm, and the fix brings both to a fraction of their old time on
+every backend.
 
 - **`uiop:read-file-string`** (`src/main/resources/am/ik/rontolisp/eval/uiop-stream.lisp`)
   read 4,096 characters at a time into `(setq acc (concatenate 'string acc chunk))`. Each
@@ -75,15 +73,10 @@ is a fresh list either way and the outer `(append ... nil)` the left fold needed
 It was not even most of it. What remained after this file's fix was the CHARACTER
 `read-sequence`, which decoded and stored one code point per host read -- about 1.2 us per
 character on the interpreter and wasm -- and that is fixed too
-(`.kb/character-sequence-io.md`, `.todo/721`). On the same 2,668,890-character file,
-before that second fix -> after (2026-09-12):
+(`.kb/character-sequence-io.md`, `.todo/721`). After that second fix (2026-09-12), on the
+same file:
 
-| | interpreter | JVM class | wasm-GC |
-|---|---|---|---|
-| `read-file-bytes` + `rontolisp:octets-to-string` | 249 -> 307 ms | 267 -> 321 ms | 144 -> 150 ms |
-| `uiop:read-file-string` | 3,694 -> **366** ms | 539 -> **322** ms | 3,351 -> **349** ms |
-
-**`uiop:read-file-string` is now at parity with reading the file as bytes and decoding
+**`uiop:read-file-string` is at parity with reading the file as bytes and decoding
 once**, so the byte-reader detour in `examples/llm/llm.lisp` and
 `examples/llm/checkpoint-tokenizer.lisp` is no longer a cost REQUIREMENT -- it is kept for
 what it also buys: one decode of one contiguous byte array, and an immutable
@@ -91,7 +84,7 @@ what it also buys: one decode of one contiguous byte array, and an immutable
 over (`.kb/string-index-cost.md`). `.todo/704` asked whether they could drop it; the answer
 is "they may now, and it would be a wash".
 
-Of `read-file-string`'s remaining 366 ms on the interpreter, about 260 ms is the
+Of what is left of `read-file-string`'s interpreter time, the larger share is the
 `with-output-to-string` accumulate THIS file is about -- it is linear, but it is now the
 larger half of reading a file into a string on every backend.
 
@@ -101,12 +94,7 @@ character-touches (store into the read buffer, copy into the stream, render into
 result) to two, by replacing `with-output-to-string` with one `make-string` buffer that
 DOUBLES on demand (`read-sequence buf in :start len`, answered as `(subseq buf 0 len)`).
 Measured 2026-09-12 (JDK 25, wasmtime 47, Linux x64), both alternatives against the SAME
-2,668,890-character file, steady state (5 reads in one process, mean of the last two):
-
-| shape | interpreter | JVM class | wasm preview 1 |
-|---|---|---|---|
-| `with-output-to-string`, 4,096-char chunk (current) | 72 ms | 217 ms | 246 ms |
-| doubling `make-string` + `replace` + `subseq` | 106 ms (+47%) | 340 ms (+57%, GC-noisy) | 336 ms (+37%) |
+file, steady state (repeated reads in one process):
 
 **The doubling buffer LOSES on every backend measured**, not by a small margin. The reason
 is `make-string`: `expandMakeString` lowers it to `(make-array n :element-type 'character
@@ -115,19 +103,19 @@ for FILLING its whole capacity, not just what the caller goes on to write. A dou
 buffer therefore fills its buffer TWICE across its lifetime (once as spaces at allocation,
 once with `replace` copying the real data over the first half) plus the growth copy itself
 -- three to four touches, not two, and the growth capacities sum to roughly 2x the final
-size on top of that. Isolated: a bare loop that doubles a `make-string` buffer ten times to
-4,194,304 characters (no I/O at all) costs 56 ms steady-state on the interpreter alone --
-comparable to the ENTIRE baseline `read-file-string` (72 ms) for the same file. `replace`
+size on top of that. Isolated: a bare loop that doubles a `make-string` buffer to
+megabytes (no I/O at all) costs the interpreter alone about as much as the ENTIRE baseline
+`read-file-string` for a real file. `replace`
 and `subseq` are not the problem (they copy only real data); the unconditional
 `:initial-element` fill is.
 
 A second alternative -- keep `with-output-to-string` but grow the READ chunk from 4,096 to
-65,536 characters, cutting the call count from 652 to 41 -- helps the interpreter on THIS
-file (72 -> 52 ms, -28%) and is noise-level on the JVM and wasm (within run-to-run
+65,536 characters, cutting the call count by an order of magnitude -- helps the interpreter
+on THIS file and is noise-level on the JVM and wasm (within run-to-run
 variance). But `make-string`'s fill cost is paid on EVERY call regardless of the file's
-real size, so a bigger fixed chunk is a tax on the common case instead: 1,000 reads of a
-5-byte file, steady state, interpreter: 137 ms at a 4,096-char chunk, **511 ms (3.7x) at a
-65,536-char chunk**. Sizing the chunk from the file is not portable either -- `file-length`
+real size, so a bigger fixed chunk is a tax on the common case instead: many reads of a
+tiny file, steady state on the interpreter, run several times slower at the large chunk.
+Sizing the chunk from the file is not portable either -- `file-length`
 answers nil on both WASM backends (the comment already on `read-file-string`).
 
 **Conclusion: `uiop:read-file-string` keeps its current shape.** Neither alternative is a
@@ -148,20 +136,19 @@ item's scope.
   over a 4,500-character file it writes itself, for correctness across the 4,096-character
   read boundary.
   **Why the ratio is not over FILES**, which is what the invariant exists for: when this
-  was written `read-sequence` cost about 1.2 us per character on the interpreter, so the
-  accumulate did not dominate below roughly 1.2M characters and a file big enough to
-  separate the two implementations cost tens of seconds per backend leg. Measured at
-  786,432 characters, one file against 16 files of 48 KB: the old code's ratio was 12.5x on
-  the JVM but only 1.53x on the interpreter and 3.8x on wasm -- undetectable under any
+  was written the interpreter's character `read-sequence` was slow enough that the
+  accumulate did not dominate below a large file, and a file big enough to
+  separate the two implementations cost tens of seconds per backend leg -- a file-sized
+  ratio was undetectable under any
   bound that is not itself a flake. The two mechanisms `read-file-string` is MADE of are
   timed instead, at a size every backend finishes in milliseconds. **That premise moved on
-  2026-09-12**: the character read is 23-39 ns per character now
+  2026-09-12**: the character read is fast per character now
   (`.kb/character-sequence-io.md`), so a file-sized ratio would separate cleanly today --
   re-open this if the in-memory pins ever prove too indirect.
 - `JvmLispCompilerTest#compileANaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes`
-  (6,933 ms under the fold, 39 ms sized once) and
+  and
   `WasmLispCompilerIntegrationTest#aNaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes`
-  (19,037 ms -> 23 ms) -- the per-backend cost pins, where a timing verdict cannot take the
+  -- the per-backend cost pins, where a timing verdict cannot take the
   shared corpus down with it.
 - Correctness of the rewritten wrapper arms rides the existing
   `#compileAndRunConcatenateAsFunctionValue` /

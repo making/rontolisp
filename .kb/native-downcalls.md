@@ -2,8 +2,8 @@
 
 **Invariant.** Inside the native image an FFM downcall handle is INTERPRETED -- SubstrateVM's
 `Target_java_lang_invoke_LambdaForm.forceInterpretation()` returns `true`, so a handle that did not
-exist at build time is walked Name by Name with every argument boxed, ~1.7 us a call plus ~0.4 us
-per argument (`.kb/gpu.md`, "An FFM downcall inside a native image costs"; `.todo/727`). The same
+exist at build time is walked Name by Name with every argument boxed
+(`.kb/gpu.md`, "An FFM downcall inside a native image costs"; `.todo/727`). The same
 address invoked through an `@InvokeCFunctionPointer` interface method, compiled at build time and
 handed the pointer at run time, costs what the JVM's call costs. **A hot downcall the binary issues
 is re-issued through that route by a `@TargetClass` substitution in `src/native/java`, compiled
@@ -41,59 +41,31 @@ only under `-Pnative`; the FFM binding stays what `java -jar` and every compiled
 
 ## What took the route: `--blas` (2026-09-10, `.todo/729`)
 
-`Target_LinalgBlasKernels` substitutes `gemm`, `gemmF`, `gemv`, `gemvF`. Measured on GB10
-(aarch64, GraalVM 25.0.4, OpenBLAS at one thread), probes and outputs in
-`.todo/artefacts/729-the-native-binarys-downcalls-through-svms-own-aot-route/`:
-
-| per-call floor, ns (callee returns at once) | FFM handle in the image | `@InvokeCFunctionPointer` | JVM |
-| --- | --- | --- | --- |
-| `cuCtxSetCurrent` (1 argument) | 2100-2117 | 11.4 | 9.4 |
-| `cuMemcpyHtoD_v2` (3) | 2944-2952 | 16.4 | 15.4 |
-| `cuLaunchKernel` (11) | 6168-6175 | 16.1 | 17.1 |
-| `cblas_dgemv` (12, three pins) | 6445-6462 | 88.5-89.0 (82.5 without the transition) | 7.7 critical |
-| `cblas_dgemm` (14, three pins) | 7257-7269 | 91.5 | 6.9 critical |
-
-A real 64x64 `dgemv`: 7.0 us through the handle, 0.5 through the pointer. The three
-`PinnedObject`s are ~25 ns each and are the whole gap to the JVM's critical call.
-
-`vec:matvec` and `linalg:dot` in the binary, us per call, `--simd` lane kernel against
-`--blas --simd` (`crossover.lisp`, `WHAT=mv` / `WHAT=dot`), the "before" row on the binary built
-at `9f5019125` the same morning:
-
-| `vec:matvec` n x n by n | 8 | 16 | 32 | 64 | 128 | 192 | 256 | 384 | 512 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| lane kernel | 0.70 | 0.73 | 0.94 | 1.72 | 4.92 | 10.1 | 17.4 | 39.1 | 68.2 |
-| library, before (declined below 2^17) | 0.79 | 0.76 | 0.96 | 1.82 | 5.08 | 10.5 | 18.0 | 27.3 | 40.7 |
-| library, after | 0.83 | 0.77 | 0.81 | 1.13 | 2.87 | 5.35 | 8.85 | 17.0 | 31.5 |
-
-| `linalg:dot` n x n by n x n | 2 | 4 | 8 | 16 | 24 | 32 | 64 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| lane kernel | 0.70 | 0.65 | 0.95 | 2.97 | 8.43 | 18.8 | 142 |
-| library, after | 0.72 | 0.73 | 0.78 | 0.96 | 1.52 | 2.29 | 10.5 |
-
-Under 20% behind at the smallest shapes the threshold admits (8x8 gemv, 4x4x4 gemm -- the
-interpreter's own ~0.6 us per call is most of both columns there), level at 16x16 / 8x8x8, 1.5x
-ahead at 64x64, 3x at 16x16x16, 8x at 32x32x32 -- the JVM's crossover (library 0.33-0.67 us
-against a 0.5-1.4 us lane kernel from 16x16 up; before, the binary was level at 24x24x24 and 2x
-BEHIND at 128x128). So `LinalgBlasKernels.MIN_WORK` is ONE number (64) again; the native pair
+`Target_LinalgBlasKernels` substitutes `gemm`, `gemmF`, `gemv`, `gemvF`. The route was taken
+because through the FFM handle every call is interpreted while through
+`@InvokeCFunctionPointer` it costs what the JVM's does, and at the shapes the work threshold
+admits the library route is level or ahead of the `--simd` lane kernel
+(`crossover.lisp`, `WHAT=mv` / `WHAT=dot`; probes in
+`.todo/artefacts/729-the-native-binarys-downcalls-through-svms-own-aot-route/`). The three
+`PinnedObject`s are the whole gap to the JVM's critical call. So
+`LinalgBlasKernels.MIN_WORK` is ONE number (64) on every runtime; the native pair
 2^15 / 2^17 that existed from 2026-09-07 is gone, and
 `LinalgBlasDeclineTest.theWorkThresholdIsOneNumberOnEveryRuntime` pins it. `check.lisp` (the
 artefacts) runs the four products at both widths and sizes 3-300 with exact-integer operands:
 plain, `--simd`, `--blas`, `--blas --simd` print identical bytes on the binary.
 
-## What did not: `--gpu` and objc, measured and refused
+## What did not: `--gpu` and objc, refused
 
-The CUDA route is real at the call (11-16 ns above) and was NOT widened, on these numbers:
+The CUDA route is real at the call and was NOT widened:
 
-- A `--gpu` member with its result read back is 63 us in the binary against 30 on the JVM, of
-  which the 5.65 driver calls' interpretation is ~19 us (`.todo/727`, section 6) -- what the route
-  would recover -- and the other ~30 us is the AOT interpreter's own Lisp. The device thresholds
-  hold in the binary as they are (`Gpu.POOLED_MIN_WORK` sits at 2.4x the lane kernel there).
+- A `--gpu` member's cost in the binary is mostly the AOT interpreter's own Lisp, not the driver
+  calls' interpretation (`.todo/727`, section 6) -- the latter is what the route would recover.
+  The device thresholds hold in the binary as they are (`Gpu.POOLED_MIN_WORK` sits where it does
+  against the lane kernel there).
 - On the model the device arm is for (Qwen3.5-0.8B, BF16 GGUF, `examples/llm/llm.lisp -w bf16`),
-  the binary's forward is the INTERPRETER's: **0.12 tok/s under `--gpu --simd`** (`-m chat -t 0
-  -n 48`, 8.3 s a forward; the chat prompt alone 156 s, and 510 s under `--simd`, after the 45 s
-  load) where the JVM class output is 25 ms. A decode forward's ~1300 driver calls are ~5 ms of
-  interpretation -- 0.06% of that forward. The .kb rule that "compiling the program to a class is the way around that cost"
+  the binary's forward is the INTERPRETER's under `--gpu --simd`, where the JVM class output
+  compiles the program to a class. A decode forward's many driver calls are a negligible share of
+  it. The .kb rule that "compiling the program to a class is the way around that cost"
   (`doc/en/guides/gpu-acceleration.md`) is the answer, not a faster driver call.
 - The cost side is ~30 entry points in `CudaDriver` (~20 distinct shapes) plus their address
   plumbing in `am.ik.gpu` (a nested record there joins `JvmGpuRuntimeBuilder.GPU_CLASSES`),

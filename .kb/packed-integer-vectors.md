@@ -54,9 +54,8 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
 - **An octet is one byte on every backend** since 2026-09-26; the JVM still spends 8 bytes an
   element at widths 16/32 (the `int[]` a `(unsigned-byte 32)` pack would take is the character
   box). Until then interpreter and JVM spent 8 bytes an element at every width (the width was a
-  discriminator, not a packing scheme), and a 256 MiB body read with `read-all` peaked at
-  6.2 GB of live heap on the interpreter and 3.4 GB on the JVM, the octets in `long[]`s two
-  thirds of each ([fetch-http.md](fetch-http.md), "Throughput").
+  discriminator, not a packing scheme), which is what a large `read-all` showed in live heap
+  ([fetch-http.md](fetch-http.md), "Throughput").
 
 ## Two hand-written width lists (audited 2026-09-05, `.todo/683`)
 The float umbrella's exhaustive-switch net has no analogue here: `LispIntVector` is NOT

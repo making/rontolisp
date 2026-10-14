@@ -100,8 +100,8 @@ lines of [error-handling.md](error-handling.md)); no message ever gets a prefix,
   bytes in the native image and under compact headers; a weak identity table costs ~56
   bytes an entry plus a synchronized probe. The subclass costs +8 bytes per LIST read and
   a type test, which is what lets `evalCons` track the innermost located form on every
-  loop step (`located`/`locatedIn` locals). fib 27 / 300k-element list build / 50k caught
-  errors: within noise of the build before it.
+  loop step (`located`/`locatedIn` locals). Interpreter and compiled fib, list-build and
+  caught-error loops: within noise of the build before it.
 - **Lifetime = the cons's**, so a served request's run-time `load` leaves nothing behind
   (the reason the compile table is thread-local).
 - **Keeping it through rewrites**: `LispCons.rebuilt`/`rebuiltList` rebuild a located

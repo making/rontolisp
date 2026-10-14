@@ -29,10 +29,10 @@ optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispM
   (`new BigInteger(limit.bitLength(), ThreadLocalRandom.current())`), wasm `_rand_big`
   (`WasmRandomCompiler.buildRandBigBody`, `FUNC_RAND_BIG`; `_limb_cmp` then `_limb_new`). The site
   tests `ref.test TYPE_BIGINT` only once the limit is known to be no float, and the site's one
-  draw has seeded the generator before `_rand_big` steps it. Measured 2026-10-07 before
-  (`.todo/e00`): the interpreter scaled a double up by the limit (53 random bits; for `(1+ (expt
-  10 30))` no odd draw in 64), the JVM's `(long)` of the same saturated at `Long.MAX_VALUE`, and
-  wasm trapped in `_int_val`'s limb arm. `_random` now opens with a `Long` arm (no `_dbl`
+  draw has seeded the generator before `_rand_big` steps it. Before, the interpreter scaled a
+  double up by the limit (half a mantissa of random bits), the JVM's `(long)` of the same
+  saturated at `Long.MAX_VALUE`, and
+  wasm trapped in `_int_val`'s limb arm; `_random` now opens with a `Long` arm (no `_dbl`
   dispatch, the same formula), then the `BigInteger` one, then the old path for the rest.
 - Trap: a fused site draws exactly ONCE, in the prologue before any guard, and the fallback only
   READS it -- a drawing fallback re-emits twice for a substituted parameter used twice, so

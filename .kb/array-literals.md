@@ -147,8 +147,8 @@ type and zero fill.**
   operation is not a guard**: the next width added must be refused where the REPRESENTATION is
   chosen, which both spellings pass through, not where one of them is written.
 - **The dispatch is a PRELUDE HELPER, not an inline expansion**: wasm emits `make-array`
-  entirely inline and seven arms cost ~1.3 KB per site (array-operations +32.6% inline vs
-  +0.50% via the helper). A program with no runtime designator is unchanged.
+  through the helper rather than expanding all seven arms at every site. A program with no
+  runtime designator is unchanged.
 - **Two helpers, split on `:fill-pointer` / `:adjustable`**: `%make-array-et (dims et init
   given)` and `%make-array-et-fp` (also `fp`, `adj`). Not one helper with two more
   parameters: those keywords are exactly what makes every arm degrade to the general
@@ -164,13 +164,13 @@ type and zero fill.**
   which the lowering wraps the designator in — otherwise `et` bound to `'octet` reaches the
   `t` arm while the interpreter packs. **That table carries ONLY the aliases naming one of
   the specialized codes** — it asks `ArrayElementTypes.codeOf`, so it needs no count: a
-  general resolver cost array-operations +10.1% raw wasm (alexandria registers 43 aliases at
-  ~220 bytes each). This bullet said "six" while the code was correct, the exact INVERSE of
+  general resolver over every alias alexandria registers was the shape not taken. This
+  bullet said "six" while the code was correct, the exact INVERSE of
   the four transcriptions above, where correct prose sat beside stale code. **The count in
   prose was wrong in both directions independently, in one file, in one afternoon: the prose
   is the unreliable half whichever way it drifts. Count against the class.**
 - **`typep` had the same hole, closed on a DIFFERENT narrowing** — only the aliases the
-  PROGRAM SPELLS can reach a runtime `typep` (+1.9%); the make-array narrowing does not carry
+  PROGRAM SPELLS can reach a runtime `typep`; the make-array narrowing does not carry
   over. Full story: `.kb/declarations-type-checks.md`.
 
 ## An UNKNOWN `:element-type` upgrades to `t`, and `make-array` does NOT signal
@@ -223,15 +223,12 @@ shape shares them. **The i31 shorthand stays INLINE, on purpose** — `emitParse
 spells `(make-array n)` as `ref.test i31` + `array.new`; only the list arm calls. In EH mode
 the shorthand adds one unsigned compare against the array size limit and hands an i31 outside
 it to `_arr_dims`, which checks every dimension (`.kb/error-handling.md`, "A make-array
-dimension"); outside EH mode the site is unchanged. Per-site
-raw wasm at `--optimize=size`, before -> after: general 247 -> 78; with
-`:fill-pointer`+`:adjustable` 340 -> 84; packed `double-float` 222 -> 53; packed
-`(unsigned-byte 8)` 242 -> 73. Program savings 0.4-3.1%.
+dimension"); outside EH mode the site is unchanged.
 
 **NOT done**: a whole-allocation `$_array_make` mirroring the JVM's `_arrayMake`. What is
-left inline is 50-80 bytes a site (remaining ceiling under 1.5 KB even on `httpbin-clack`)
-against a callee that would branch on `:fill-pointer`/`:adjustable`/rank at RUN time where
-the site knows all three at compile time; a Lisp-level helper costs 20-30% on a tight
+left inline would move behind a callee that branches on
+`:fill-pointer`/`:adjustable`/rank at RUN time where
+the site knows all three at compile time; a Lisp-level helper taxes a tight
 allocation loop. Wasm-specific: `WasmArrayCompiler.compileMake` emits inline at every site,
 where the JVM's is an `invokestatic` on a body emitted once.
 

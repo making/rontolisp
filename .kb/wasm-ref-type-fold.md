@@ -58,8 +58,9 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   its function misses the set's later growth. The least fixpoint of a monotone analysis does
   not depend on the order it is reached in, and each function's last walk saw the final sets
   (else it would be dirty again), so `targeted` and the rewrite are unchanged. Measured
-  2026-09-24, analysis walks: a 3-line program's core 252 -> 93, the `ci-spec` corpus core
-  32,507 -> 18,349 (most functions there read the cons fields, whose sets keep growing).
+  2026-09-24, analysis walks: `targeted` walks a small fraction of the functions the
+  whole-module walk touches, and on the `ci-spec` corpus most functions read the cons
+  fields, whose sets keep growing.
 - **Bottom is dead code, not false.** A test on a value NO source produces marks the rest
   of the block unreachable. Folding it to 0 was the first version's bug: it selected the
   `else` arm of `_rat_add`'s "both exact integers" guard, counted the rational path's
@@ -147,34 +148,25 @@ Catch labels are relative to the try_table's ENCLOSING context, not its own labe
   speed-for-size trade -- it is smaller AND faster -- and in a module that never makes a
   string it stops `_t_sym`/`_str_build` being the only string machinery aboard.
 
-## Measured 2026-09-12 (`--optimize=size`, `--no-wasi`; before -> after)
+## Measured 2026-09-12 (`--optimize=size`, `--no-wasi`)
 
-| Program | before | after | default level |
-| --- | ---: | ---: | ---: |
-| `.todo/790` `fib` + `:s32` export | 2,281 | **1,297** | 2,411 -> 1,537 |
-| `.todo/789` reactor (two `:string` imports + `fib`) | 2,725 | **1,820** | 2,925 -> 2,060 |
-| `pi_approx` (size-report) | 4,826 | **1,635** | -- -> 2,522 |
-| `zlib` / chipz gunzip (size-report) | 125,738 | **94,167** | -- -> 117,618 |
-| `hello_world` | 588 | 590 | 590 |
+The fold shrinks a module by roughly a third to a quarter at `--optimize=size` and by less
+at the default level -- most where dead string machinery (`_t_sym`/`_str_build`) or whole
+dead limbs drop out -- while `hello_world`, which uses every live path anyway, is
+unchanged.
 
-What `fib` still carries, and must: the limb tier (`_limb_new`/`_addsub`/`_cmp`/`_of`/`_get`,
-~540 B) behind `_big_add`/`_big_sub`/`_big_cmp`, because `(+ (fib ...) (fib ...))` can
+What `fib` still carries, and must: the limb tier (`_limb_new`/`_addsub`/`_cmp`/`_of`/`_get`)
+behind `_big_add`/`_big_sub`/`_big_cmp`, because `(+ (fib ...) (fib ...))` can
 overflow i64 and the language promotes rather than wraps (`.kb/wasm-bignum.md`); `_int_new`
 /`_int_val`; the wrapper's exact lane. The item's 639-byte spike was an i31-only `+` that
 wrapped -- a measurement of the price of exactness, not a target. The fold decides
 representation questions, never range ones.
 
-## Measured 2026-09-27 (singleton objects; default level, Preview 1 / component; before -> after)
+## Measured 2026-09-27 (singleton objects; default level, Preview 1 / component)
 
-| Program | Preview 1 | component |
-| --- | ---: | ---: |
-| `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 1,330 -> **981** | 2,477 -> 2,126 |
-| the same, `(f 1 3)` | 1,044 -> 981 | 2,197 -> 2,126 |
-| `pi_approx` (size-report) | 2,410 -> **1,543** | 3,565 -> 2,698 |
-| `(dotimes (i n) (setq s (+ s i)))` in a defun | 3,083 -> 2,662 | 4,230 -> 3,807 |
-| `(print (reduce #'+ '(1 2 3)))` | 4,697 -> 4,604 | 5,839 -> 5,746 |
-| `zlib` (size-report) | 127,867 -> 127,239 | 131,784 -> 131,156 |
-| `hello_world`, `(print (eval '(+ 1 2)))` | unchanged | unchanged |
+Singleton-object folding shrinks a module the most where a physical `&optional` prologue
+or an unboxed loop counter can never take its boxed path; big real programs shrink only
+marginally, and `hello_world` / `(print (eval '(+ 1 2)))` are unchanged.
 
 The first two are the physical optional's prologue; `pi_approx` and the `dotimes` loop are
 the raw-local sentinel -- `_ub_read` and the boxing arm of each `shadow == sentinel` test go

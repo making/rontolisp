@@ -12,7 +12,7 @@ Precedent: [[subseq-runtime]] (its mechanics first; this file is the deltas),
 - Two `LispMacroExpander` builders reach a conversion: `seqResultDispatchForm` (`reverse`,
   `remove`/`substitute`/`remove-duplicates` families, the `sort`/`stable-sort` string wrap) and
   `seqAsListForm` (`position`/`find`, `count`, `every`/`some`/`notany`/`notevery`, `reduce`'s
-  keyword forms). Inlined, a conversion is 8-10 KB of wasm-GC PER SITE.
+  keyword forms). Inlined, a conversion is KB-scale wasm-GC PER SITE.
 - `LispMacroExpander.seqConversionWrappers()` answers the three definitions, bodies verbatim
   from `coerceToListBody(x, true)` / `coerceToStringBody(x, true)` / `coerceToVectorBody(x)`.
   **Trap: none may contain a literal `coerce` form** -- that re-enters the routing forever.
@@ -28,8 +28,8 @@ Precedent: [[subseq-runtime]] (its mechanics first; this file is the deltas),
   additionally on `programUsesAnyArrayOp` since the vector arms name `aref`/`%aset`/`make-array`.
 - The interpreter never routes -- `LispEvaluator`'s `coerce` case calls the one-argument
   `expandCoerce`; its own half is [[seq-coerce-runtime]] (Java, for SPEED).
-- A site keeps its own scan loop with `:test`/`:key` inlined; marginal cost 66-852 bytes,
-  whole modules dropped 9-51%.
+- A site keeps its own scan loop with `:test`/`:key` inlined at a small marginal cost;
+  whole modules shrink by a double-digit percentage.
 - Unfinished: `%seq-to-list` still walks `map`'s `nth`-based index loop (quadratic on long
   lists). Fix inside the helper or with a `listp` fast path at the SITE, never by re-inlining.
 

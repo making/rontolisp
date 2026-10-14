@@ -64,12 +64,10 @@ bodies are the emitters' `MethodCode` records, with their line tables), and
 
 ## A program past one class's pool is split
 **Invariant: a program whose kept members fit one class file is one class; one that does not is
-its class plus `Name$Part1`, `Name$Part2`, ..., each with a pool of its own.** Measured by mito's
-`MitoE2eTest` probe (mito-core + migration + dbd-postgres): **83,456** entries unshaken
-(2026-09-24: Utf8 33,089, String 18,775, NameAndType 14,322, Methodref 9,217, Fieldref 5,129 --
-3,747 of them `QuotePool` fields -- Long 1,283). It crossed at `af1c467fe` (2026-08-28, the
-bignum pool tipped it); one array field per pool would have saved ~11.4k and still been ~6.5k
-over, and the program keeps growing -- hence a split, not a diet. The quoted datums are one table
+its class plus `Name$Part1`, `Name$Part2`, ..., each with a pool of its own.** mito's
+`MitoE2eTest` probe (mito-core + migration + dbd-postgres) outgrew one class's pool at
+`af1c467fe` (2026-08-28, the
+bignum pool tipped it), and the program keeps growing -- hence a split, not a diet. The quoted datums are one table
 since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-measured,
 3 x 3,747 = ~11.2k entries out of the probe's pool; the split stays the answer for the rest.
 
@@ -87,11 +85,8 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
   changes.
 - **Where they go**: parts join `runtimeClassFiles()` (`path/Name$PartN.class`), which every
   output shape already writes beside the class (`.kb/jvm-export.md`, "What travels").
-- **Measured 2026-09-29** (mito probe, default `--optimize`, the writer below): `Probe.class`
-  9,192,449 B, 61,401 entries, 8,452 methods; `Probe$Part1.class` 2,826,457 B, 29,838 entries,
-  488 methods -- the same placement the byte writer made, 2,269 code bytes fewer (ldc_w written
-  as ldc). 2026-09-25 it was 57,820 + 35,760 entries and 12,640 + 1,393 methods, before the
-  quoted-datum table and the later shakes.
+- **Placement parity** (mito probe, default `--optimize`, the writer below): the record writer
+  places entries as the byte writer did, writing `ldc` where the byte writer wrote `ldc_w`.
 - **Still bounded**: all fields stay in the class, so fields plus the kept methods must fit one
   pool (`the class's fixed part ... needs N`); one method's own references must fit one pool
   (`_funName`'s name table grows with the program, 2 entries per nameable function, but is cut
@@ -137,11 +132,9 @@ bytes-per-node, `DISPATCH_SEGMENT_BUDGET`, `debug-method-sizes` -- because `Code
 it exists only inside the `ClassFile.build` callback of the class the method lands in, which the
 split decides after every body is emitted, and the API re-runs a handler to relax a branch, which
 emission's side effects would not survive. So a body is BUFFERED and the budgets measure the
-buffer. Measured 2026-09-29, the buffer against the written `CodeAttribute` length per kept
-method, forms as emitted: mito probe 8,940 methods -- 8,844 equal, 96 shorter, none longer; corpus
-6,214 -- 6,213 equal, 1 shorter. With the writer's shortest forms: mito 8,777 shorter (up to 862 B,
-6,166,021 -> 5,910,137 in all), corpus 5,892 shorter (up to 2,384); the methods over 8,000 bytes
-are the same COUNT either way (20 mito, 62 corpus).
+buffer. The buffer was checked against the written `CodeAttribute` length per kept
+method, forms as emitted: never longer, and with the writer's shortest forms often shorter; the methods over 8,000 bytes
+are the same COUNT either way.
 
 **Written -- `CodeReplay`.** It plays every body's records into the class's `CodeBuilder`:
 branch targets and handler ranges become labels, a master entry is re-minted in the class's pool
@@ -158,29 +151,16 @@ EVERY forward branch long, and the jose suite's `JSON::DECODE-JSON-ARRAY` (7,038
 past reach) came out 82,541 B -- past the limit -- where the fixpoint wrote 59,751; on the
 records' written sizes, 57,909 B, one `goto_w` (`JoseTestSuiteE2eTest` pins it).
 
-**Why, in numbers** (2026-09-29, JDK 25.0.4, cold CLI `-o X.class`, default `--optimize`; the
+**Why** (2026-09-29, JDK 25.0.4): the
 byte writer -- `toBytes`, then the shaker's parse+write, then the frame pass's parse+write, or the
-split's writer then frames per class -- against one `ClassFile.build` per class):
-
-| program | write phase | whole compile | output |
-|---|---|---|---|
-| ci-spec corpus | 2,785-2,924 ms -> 1,632-1,639 ms | 16.4-17.1 s -> 14.7-15.3 s | 7,687,515 -> 7,687,513 B |
-| mito probe (split) | 2,029-2,094 ms -> 1,666-1,829 ms | 32.7-35.6 s -> 33.3-33.7 s | 9,193,297 + 2,827,878 -> 9,192,449 + 2,826,457 B |
-| jose test suite | -- | -- | 5,146,274 -> 5,125,198 B |
-
-The write phase is timed from the class complete as data to the bytes (gate check, shake,
-placement, write); the old one parsed the class three times. The outputs above predate the
-shortest forms, which took the corpus class to 7,498,301 B (code 4,545,371 -> 4,357,115, -4.1%)
-and the mito probe to 9,008,889 + 2,755,146 B, the program's output unchanged; the corpus compile
-then reached 14.7-15.4 s with a write phase of 1,448-1,531 ms once the records carried the
-written measure (2026-09-29). Each stage landed byte-identical over 4,857 programs extracted from
+split's writer then frames per class -- handled each class three times over where one
+`ClassFile.build` per class writes it once. Each stage landed byte-identical over 4,857 programs extracted from
 the JVM-side tests plus the CLI compiles of the corpus (three levels, `--dynamic`), the mito probe
 with `$Part1`, the jose suite and 28 example compiles -- the build timestamp in the version
 strings the only difference, and two deliberate form changes without one (`iconst_m1` for
-`bipush -1`, `aload 0` for `aload_0`) measured alone. The move retired `BranchRelaxer`,
+`bipush -1`, `aload 0` for `aload_0`) checked alone. The move retired `BranchRelaxer`,
 `ByteCodeWriter` and its section DSL, `JvmClassShaker`, `ClassDefinition.toBytes`, the splitter's
-byte writer and the pool's own storage: `am.ik.jvm` main source 4,993 -> 4,280 lines, 433 of them
-the byte decoder, and `MethodCode` added 931 over it (5,265). Per-slice history and the
+byte writer and the pool's own storage. Per-slice history and the
 conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
 
 **The two designs that depended on byte positions, and why they survive:**
@@ -212,8 +192,9 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   of 48. Per-arm branches inside a dispatch chain are LOCAL, so 24 KB leaves slack for both
   limits.
   A check repeated at every call site belongs in a shared helper, not inline: the
-  trampoline's bounce unwrap inline (~22 B/site) took the corpus's largest form past the
-  headroom (2026-10-03); as `invokestatic _unw` it is 3 B ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
+  trampoline's bounce unwrap, inline, took the corpus's largest form past the
+  headroom (2026-10-03); as `invokestatic _unw` it is a single call
+  ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - One top-level form past the cap has had nowhere to go since chunking only splits
   between forms -- until 2026-10-13, when the hiccup 2.0.0 probe's `(h/html ...)`
   literal (one variant per `*html-mode*` x `*escape-strings?*`, 8 compiled bodies)
@@ -226,10 +207,10 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   nothing but the form's own `let`s, calibrated to `TOP_OUTLINE_TARGET_BYTES`
   (24,000, the chunk-budget parity) down to a `TOP_OUTLINE_FLOOR_BYTES` (8,000)
   floor. The cut runs after the exit lowering, so a form with a lexical exit
-  (`go`, `return-from`, `return`) stays whole and keeps the loud report. Measured
-  2026-10-13: a top-level `(print (case ...))` of 8 x 800 branches, `_top$0`
-  70,914 -> 18,028 B with 8 branch methods, oracle-identical; the hiccup probe's
-  big literal, 1,131,133 -> 79 pieces, JVM content-identical to `clj`
+  (`go`, `return-from`, `return`) stays whole and keeps the loud report. Checked
+  2026-10-13 on a top-level `(print (case ...))` of 8 x 800 branches -- its branches
+  became methods, the output oracle-identical -- and on the hiccup probe's
+  big literal, JVM content-identical to `clj`
   (the `#object` hash the oracle prints a `RawString` with, rontolisp does not).
   The top level runs once, so only the hard cap is enforced there, never the
   8000-bytecode cliff (`JvmLibraryMethodSizeTest` still allows `_top$N` over it).
@@ -243,7 +224,7 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   recurses per element, so a chunk holds at most 20,000 characters AND 1,000 elements.
 - A package-qualified symbol read at run time is `eq` to the literal the compiler resolved, so a
   range table's VALUES can be text too.
-- Cost: the READER travels into the program (+390 KB class, ~2,450 pool entries) — worth it for
+- Cost: the READER travels into the program — worth it for
   megabytes, not a small table (`Uax15Tables` scans short chunks on FIRST READ, `.kb/asdf.md`).
   `--optimize` chunking helps the METHOD limit but makes the pool WORSE.
 

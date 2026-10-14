@@ -76,7 +76,7 @@ calling `formatMessagePieces` itself for the literal. (d) carries the renderer f
 missing: `(error "~d arg~:p" n)` in a program with no `handler-case` compiled to a call of the
 undefined `%fmt-render` (`JvmLispCompilerTest.anUncaughtErrorWhoseLiteralControlOnlyTheRendererCanLowerReportsItsMessage`,
 `WasmLispCompilerIntegrationTest.warnWithALiteralControlOnlyTheRendererCanLowerRendersIt`). A program with no way in carries
-none of the renderer (~114 KB of wasm, NOT tree-shakeable -- every arm is reachable from
+none of the renderer (NOT tree-shakeable -- every arm is reachable from
 `%fmt-render`). The interpreter cannot inject top-level defuns, so
 `LispEvaluator.ensureFormatRendererLoaded` evaluates the same forms on the first resolution of a
 `%FMT-` name.
@@ -195,7 +195,8 @@ lowercase exponent marker. Authority: `am.ik.rontolisp.FloatText` (`doubleText` 
 - **Single-float width**: scalars are all `double-float`, but a packed `#f(...)` element prints at
   its **f32** width (`FloatText.singleText`, `_f32_dec` on wasm, a transient `Float`/`TYPE_F32BOX`
   box on the JVM/GC print path) so `#f(0.1)` round-trips; `aref` still answers the widened double.
-- ~2.7 KB of code plus the table; a program whose only prints are literals folds them to static
+- The shortest renderers cost a small body plus the table; a program whose only prints are
+  literals folds them to static
   text (`WasmLiteralPrint`) and carries none of it. Not touched: `~F`/`~$`/`~E` keep their
   fixed-decimal renderers (a REQUESTED digit count), and `read`/`parse` stay on the
   eisel-lemire/parseDouble side.

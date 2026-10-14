@@ -24,9 +24,8 @@ conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-
   other than an exactly-one-argument position (`(funcall #'f x)`, `(mapcar #'f l)` and siblings
   over one list, `(map 'list #'f s)` -- `LispPreludeLibrary.mayPassMoreThanOneArgument`), and the
   wrapper takes the keyed shape exactly where it is spliced (`BuiltinFunctionWrappers
-  .HELPER_WRAPPERS`). Cost (JVM `.class` / wasm P1): `(let ((f #'write-to-string)) (print
-  (funcall f 1)))` 10,294 -> 52,284 / 5,559 -> 32,187; `(mapcar #'write-to-string ...)` and every
-  program without the designator byte-identical.
+  .HELPER_WRAPPERS`); `(mapcar #'write-to-string ...)` and every
+  program without the designator are byte-identical.
 - `pprint`: fresh line, `write` with `:escape t :pretty t`, no values.
 - `copy-pprint-dispatch` / `set-pprint-dispatch` / `pprint-dispatch`: real entries, `typep`
   matching, priority order. A table is a one-element LIST so `set-pprint-dispatch` can `rplaca` one
@@ -53,7 +52,7 @@ to an unrouted one. Covers `princ` `prin1` `print` `princ-to-string` `prin1-to-s
 - It also flips for every `write` user (prelude `write` binds all fifteen variables): the compilers
   scan the SPLICED program, so `LispPreludeLibrary.process`'s selection fixpoint asks
   `referencedBySurfaceForm` for `%print-cased` over each PULLED entry's forms too — the only entry
-  that does. Large `.wasm` growth then (Unicode case fold ~9 KB alone).
+  that does. Large `.wasm` growth then (the Unicode case-fold tables alone).
 - Sits UNDER the `print-object` route (one `expandPrintObjectHook` seam rewrites both).
 - Pure-builtin fold stands down for `princ-to-string`/`prin1-to-string`/`%princ-piece`/
   `%prin1-piece`: `nil`/`t` are SYMBOLS (`.kb/pure-builtin-fold.md`).

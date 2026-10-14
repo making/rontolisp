@@ -18,8 +18,8 @@ repetition the compressor was living on, at a cost proportional to its size.
 
 Measured twice, independently, before anyone was looking for it:
 
-- The single-call-site body mover: at an unlimited budget, **-50,722 raw and +16,064
-  gzip** over 23 artifacts. `MAX_MOVED_BODY = 64` is where the small host-facing modules
+- The single-call-site body mover: at an unlimited budget, a large raw win over the
+  artifact set came with a gzip LOSS. `MAX_MOVED_BODY = 64` is where the small host-facing modules
   still collect and the compressed rows stop losing. Details, per-artifact worst rows and
   why 64: [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md),
   "Relocating bytes costs REPETITION".
@@ -43,10 +43,10 @@ what the other rows are paying for: [`size-report/notes/wasm-flags.md`](../size-
 ## A residue is neither a ceiling nor a measure of what is left
 
 What an external optimizer still finds over the shaken output tells you where to look and
-nothing else. A lowering change walks straight past it (the `car`/`cdr` change moved the
-hello-clack Worker 101 KB while binaryen kept finding the same 182,697 bytes); and a
-residue near zero does not mean nothing is left (a module five bytes from what a
-hand-written non-GC toolchain emits still carried 182 bytes of a string walked out of
+nothing else. A lowering change walks straight past it (the `car`/`cdr` change shrank the
+hello-clack Worker greatly while binaryen kept finding much the same residue); and a
+residue near zero does not mean nothing is left (a module within bytes of what a
+hand-written non-GC toolchain emits still carried a leftover string walked out of
 linear memory and back). [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md),
 "What an external optimizer still finds".
 

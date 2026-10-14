@@ -120,12 +120,10 @@ qualification, not the constant, tells them apart.
   the jump tokens are integer objects private to the activation, compared by identity.
   - Why: a thrown `go` unwinds every Java frame between it and the `tagbody` (`evalCons` ->
     `evalIf` -> `eval` -> `evalLet` ...), and the JIT only turns that into a jump when all of
-    them inline, which the recursive evaluator rarely allows. Measured (same day, loaded
-    64-core box, whole-process wall clock incl. ~0.55 s start-up, before -> after): a Scheme
-    named-`let` count-down, 300 x 3,000 steps, 2.65-3.07 -> 1.81-1.88 s, against 2.27-2.55 s
-    for the same steps as non-tail calls -- a loop step now costs less than a call step; the
-    CL `tagbody` count-down in `steps.lisp` (2 x 300 x 3,000 each way) 4.42-4.54 -> 3.59-3.90
-    s. The Scheme tail-call groups: `.kb/scheme-frontend.md`.
+    them inline, which the recursive evaluator rarely allows. With the change, a Scheme
+    named-`let` count-down and the CL `tagbody` count-down in `steps.lisp` run faster
+    whole-process than the same steps taken as non-tail calls -- a loop step now costs less
+    than a call step. The Scheme tail-call groups: `.kb/scheme-frontend.md`.
   - It began as a separate walk over `if`/`progn`/`let`/`let*`/`when`/`unless`/`cond`
     and folded into `evalCons` when that became a loop (`.todo/912`, the same day): a
     tagbody statement is a tail context whose continuation is a jump, so the loop covers

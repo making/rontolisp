@@ -65,7 +65,7 @@ arguments), the raw arguments, a mode.
 ### What `objc.lisp` decides
 - A PLAN per (lookup class, method name) caches the parsed encoding, SEL, mode and ARC family flags
   (`objc::%lookup-plan`; the lookup class is `object_getClass` of the receiver, so a class receiver
-  finds class methods through its metaclass). An uncached family check cost 15 us a send.
+  finds class methods through its metaclass) -- an uncached family check would parse per send.
 - The encoding parser maps to the FLI descriptors (`objc::%fli-type`); a block (`@?`) or function
   pointer (`^?`) is re-spelled `^v` before `%send` so every host parser takes it.
 - An integer argument past 2^63 travels as its two's complement (`objc::%bits64`: a wasm `:s64`
@@ -106,7 +106,7 @@ arguments), the raw arguments, a mode.
 - A new call site of `%send` / `%send-super` / `%call-function` must go through `%checked`, or a
   raise reads as nil and its reference leaks.
 - `%checked` runs only on a nil answer and the slot flag is a required parameter: checking every
-  answer with an `&optional` flag cost 1.5-3 us a send.
+  answer with an `&optional` flag would test per send.
 - `fboundp` loads no library: `(fboundp 'objc:invoke)` answers nil in a fresh interpreter until an
   `objc:` name was resolved (true of `appkit:` and `linalg:` too).
 - Mutable state lives in the handle, never a struct slot: `equal` / `equalp` hash tables hash an
@@ -211,8 +211,8 @@ the stack) and frees on every exit.
 - **Not `ffi:`'s pointer**: `ffi` is interpreter/JVM only (a Java `LispForeignPointer`), `fli` must
   run on `--native`; one value would need a wasm-GC representation of a Java value. The bridge is
   the integer (`fli:pointer-address`).
-- Cost: ~3 us for a `(setf fli:dereference)` interpreted, ~0.05 us compiled
-  ("Measurements"); what is left interpreted is the evaluator's own per-form cost.
+- Interpreted, what a `(setf fli:dereference)` costs beyond the access itself is the evaluator's
+  own per-form work.
 
 ## Bytes: `objc:data`, `objc:bytes`
 `objc:data` answers an **`NSMutableData`** (one value serves `bytes` for a `^v` parameter and
@@ -379,7 +379,7 @@ thread decides where it can run (measured in the block with `pthread_main_np`):
   `examples.yaml` checks it (no `--native` leg there). A chunk larger than the buffer's
   `frameCapacity` fails with status -1 and `NSError` -50, not a short render.
 - **Live** (`startAndReturnError:`): the engine's real-time I/O thread, never thread 0. `--native`
-  refuses the value-answering block there (187 refusals in 2 s), so the example skips live on
+  refuses the value-answering block there, so the example skips live on
   `:rontolisp-native`. Interpreter / JVM: **the block must send nothing** -- a send hops to thread 0
   while thread 0 sits in `-[AVAudioEngine stop]` waiting for the render thread: deadlock (jstack:
   thread 0 in `sendRaw` of `stop`, the I/O thread in `MainThread.sync`). So the samples go through
@@ -514,7 +514,7 @@ name.
   (read beside the main file; a compiled program carries a copy, "The JVM backend"): the runtime's
   own C functions, every shape `appkit.lisp` / `metal.lisp` / `scene.lisp`, `objc.lisp` and the
   documented examples send, the 60 most common shapes of a census over 29 core AppKit/Foundation
-  classes (13,065 methods, 90.6% reached), plus `NSTimer`'s `scheduledTimerWithTimeInterval:...`. A
+  classes, plus `NSTimer`'s `scheduledTimerWithTimeInterval:...`. A
   selector outside it signals with the exact entry to add; the JVM registers nothing, so `java -jar`
   is where a program discovers what it sends. **A new selector in `appkit.lisp`, `metal.lisp`,
   `scene.lisp`, `objc.lisp`, the `examples/macos` programs the test names, or the docs is a row in
@@ -541,8 +541,8 @@ name.
   32-bit argument's upper register half is garbage on arm64), so a grid over widths, floats and
   structs has no useful bound.
 - Every send through the table is INTERPRETED by SubstrateVM's method-handle interpreter (a handle
-  created at run time has no AOT code): ~1.7 us a call plus ~0.4 us per argument on top of
-  `invokeWithArguments`' boxing ([gpu.md](gpu.md), "An FFM downcall inside a native image costs";
+  created at run time has no AOT code): the call and every argument are walked boxed, on top of
+  `invokeWithArguments`' own boxing ([gpu.md](gpu.md), "An FFM downcall inside a native image costs";
   measured on Linux/aarch64, not macOS). The AOT route ([native-downcalls.md](native-downcalls.md))
   is not applied: it is one `@InvokeCFunctionPointer` method per SHAPE, and the send table is a
   generic per-selector shape set no macOS box in reach can measure.
@@ -608,13 +608,13 @@ small send of its own, `Api::msg`, for `pump` and the application start.
 - **`sleep` is the event loop.** Every `sleep` of such a program compiles to `objc::%sleep`
   (`WasmExprCompiler`, keyed on the spliced defun `LispNames.OBJC_SLEEP_INTERNAL`) -> `p_pump`:
   `nextEventMatchingMask:` + `sendEvent:` once the application started, else `CFRunLoopRunInMode`.
-  `appkit:wait`'s 50 ms poll keeps a window live at ~0% CPU; a blocking stdin read freezes it.
+  `appkit:wait`'s 50 ms poll keeps a window live; a blocking stdin read freezes it.
 - **A fetch's wait turns the event loop too** (network runner, [fetch-http.md](fetch-http.md),
   "--native"): once the application started, the wait for a reply's head or next body chunk runs
   `pump` in 20 ms turns (`objc::pump_until`, called from `http::wait`), and a callback meanwhile
   re-enters through the call's `Caller`. Before that it blocks on its condition variable. Verified
   2026-09-26 (M4 Max): a window with a 50 ms relabelling timer posting mouse down/up pairs on its
-  button, awaiting a reply held 2 s, got 40 relabels and 4 clicks at 0.16 s CPU.
+  button keeps relabelling and clicking while a reply is awaited.
 - **`-[NSApplication run]` is never started** (it never returns; the thread is the module's).
   `appkit::%app`'s `performSelectorOnMainThread:withObject:waitUntilDone:` of `run` to an
   `NSApplication` is answered by marking the application started (and
@@ -710,40 +710,21 @@ browser build carries no FFM. `cli` reaches the hand-over through `ObjcInterop`,
 `MetalDriver` is the same runtime through a hand-written shape table and could ride on
 `am.ik.objc`; it does not yet.
 
-## Measurements
-- **Per send** (macOS 26 arm64 / M4 Max, 20,000 sends after 2,000 warm-up; length / self /
-  rangeOfString:), 2026-09-28: `java -jar` 23.0 / 30.8 / 31.2 us; JVM class 8.2 / 7.9 / 13.1;
-  native binary 45.2 / 52.0 / 77.0; `--native` 1.10 / 0.85 / 1.95. Compiled, the Lisp layer is lost
-  in the hop; interpreted, `objc.lisp` costs 12-23 us a send, on `--native` about 1 us.
-  The deleted per-backend Java bridge measured 10.5 / 7.8 / 9.4 us (`java -jar`) and
-  0.45 / 0.25 / 0.70 (`--native`); the single Lisp layer was chosen anyway: no per-frame loop in the
-  tree is near those numbers, and the per-frame paths that would be (`metal:uniform`,
-  `metal:upload`) copy straight into foreign memory.
-- **The catching frame** (2026-09-29, `java -cp target/classes`, same method): before 22.7-23.5 /
-  22.6-23.5 / 27.6-28.7 us, after 23.4-24.4 / 22.8-23.7 / 28.1-29.7, the same with
-  `-Drontolisp.objc.catch=0` -- the frame costs nothing measurable; the ~0.5 us is `objc.lisp`'s.
-- **`audio.lisp` live** (2026-09-29, macOS 26, M4 Max): the deadline is ~22.7 us a sample at
-  44.1 kHz; frames rendered in 2 s (88,200 due; the engine takes a moment to start pulling):
-
-  | target | one `(setf fli:dereference)` of a `:float` | frames |
-  |---|---|---|
-  | `java -jar` | 35 us -> 3.1 | 30,106-42,807 -> 87,495 (x3) |
-  | native binary | 35 us -> 4.2 | 23,050-28,695 -> 87,495 (x3) |
-  | JVM class | 0.195 us -> 0.051 | 88,436 / 87,965 |
-  | `--native` | 1.39 us -> 0.34 | (live refused: a value-answering block off thread 0) |
-
-  Method: 1,000,000 writes at `(logand i 1023)` after 200,000 warm-up, `get-internal-real-time`.
-  Before, `%element` re-derived the size (`fli:size-of` -> `%fli-layout` -> `%parse-type`, ~15
-  us; `%parse-type "f"` alone ~8.5 us, 6.7 of it one interpreted `find` over `"rnNoORVA"`) and
-  `%store` parsed again. Now the pointer carries its element ("FLI"), the interpreter's keyword
-  helpers are Java ([lambda-lists.md](lambda-lists.md)): 35 -> 3.5 us, and two per-call costs
-  went ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)): -> 3.1. What remains
-  (JFR) is the evaluator's per-form work -- environments, dispatch, `setf` re-expanded per
-  evaluation (~0.45 us). Measured and not taken: a `%peek` / `%poke` by kind code instead of
-  encoding -- the primitive is ~0.1 us of the write interpreted (0.24 on the native binary), not
-  worth three hosts' primitive layers.
-- **Runner stub** (`cargo build --profile release-runner -p rlrun`, 2026-09-29): 1,849,072 B; the
-  primitive layer's `p_*` imports cost 115,904 of it.
+## Measured decisions
+- **Per send**, the single Lisp layer was chosen over the deleted per-backend Java bridge: no
+  per-frame loop in the tree is near a send's cost, and the per-frame paths that would be
+  (`metal:uniform`, `metal:upload`) copy straight into foreign memory. Compiled, the Lisp layer is
+  lost in the hop; interpreted, `objc.lisp` is a real share of a send.
+- **The catching frame** costs nothing measurable; what a send costs is `objc.lisp`'s.
+- **`audio.lisp` live**: the deadline is ~22.7 us a sample at 44.1 kHz. Before, `%element`
+  re-derived the size (`fli:size-of` -> `%fli-layout` -> `%parse-type`) and `%store` parsed
+  again. Now the pointer carries its element ("FLI"), the interpreter's keyword helpers are Java
+  ([lambda-lists.md](lambda-lists.md)), and two per-call costs went
+  ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)): every interpreted and compiled
+  target renders the frames the engine asks for in real time (`--native` refuses live: a
+  value-answering block off thread 0). What remains is the evaluator's per-form work --
+  environments, dispatch, `setf` re-expanded per evaluation. Measured and not taken: a `%peek` /
+  `%poke` by kind code instead of encoding -- not worth three hosts' primitive layers.
 
 ## Tests
 Corpora (each against its `.expected`, interpreter / JVM class / `--native` byte for byte, printing
@@ -809,6 +790,6 @@ methods use registered shapes so the native binary can run them.
   Objective-C exception inside a call still ends the process.
 - `--native`: a macos-x86_64 runner has no Objective-C host (`call.rs` is Apple's AArch64
   convention, and there is no release stub).
-- An interpreted render block writes sample by sample: `(setf fli:dereference)` is ~3 us
-  (~4 on the native binary) of a 22.7 us budget ("Measurements"); a one-call copy of a Lisp
-  array (~0.01 us a float) has no public spelling yet.
+- An interpreted render block writes sample by sample: each `(setf fli:dereference)` spends a
+  real share of the 22.7 us budget ("Measured decisions"); a one-call copy of a Lisp
+  array has no public spelling yet.

@@ -306,8 +306,9 @@ An interface func `create-shader` binds `create-shader`; `resource bucket`'s met
   name NOTHING could reach: the guide's own package-less example failed on every backend at once
   (undefined function on the interpreter, a call-time error stub on wasm-GC, `unsupported operation`
   under `--no-gc`), and it silently dropped gl.lisp's whole error path -- `ui.fail` plus the two
-  info-log imports feeding it -- out of all eight checked-in browser demos, which is what measuring
-  this cost: the fix makes each demo ~290 bytes bigger and its shader failures visible again. Pins:
+  info-log imports feeding it -- out of all eight checked-in browser demos, which is what
+  the fix restores: each demo carries the error path again and its shader failures are
+  visible. Pins:
   `WitImportDirectiveTest.{bindsTheNamesInTheCurrentPackageWithoutThePackageOption,aPackageLessBindingIsNamedWhatACallSiteReadsTo}`,
   `WitImportInlinerTest.aPackageLessImportIsTheHandWrittenImportBlockToo`,
   `LispEvaluatorTest.aPackageLessWitImportBindsNamesTheProgramCanCall`,

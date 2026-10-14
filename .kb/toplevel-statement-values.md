@@ -52,12 +52,8 @@ literal or a `(declare ...)`, the backend emits nothing for it.
   an async resume).
 - `documentation` is nil on every backend (`LispMacroExpander.expandDocumentation`), so no
   backend needs a docstring kept.
-- Measured 2026-10-04, `-o X.class` over `examples/`, `size-report/programs/`,
-  `bench-report/programs/` (231 programs that compile): raw 95,472,210 -> 94,955,847 B
-  (-516,363, -0.54%), gzip -9 23,026,927 -> 22,818,104 (-208,823, -0.91%); 0 grew, 113
-  unchanged. `examples/clojure/demo.clj` 131,498 -> 119,976 (-8.8%, the spliced
-  `clojure.lisp` docstrings); largest absolute: `examples/db/postmodern-crud.lisp` -50,697.
-  A changed docstring no longer changes the class.
+- A changed docstring no longer changes the class (checked 2026-10-04 by `-o X.class` over
+  `examples/`, `size-report/programs/` and `bench-report/programs/`, 231 programs that compile).
 
 ## User-visible corollary: a run's EXIT CODE
 The last top-level form's value is dropped on every backend, so `(rove:run-suite *package*)` at

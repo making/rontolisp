@@ -18,8 +18,8 @@ the runner stub a native executable is made of (`.kb/native-output.md`).
 `MavenBuildE2eTest` shells out to the Maven running it (`${maven.home}`) on its local repository
 (`${settings.localRepository}`), and its offline jar fixture declares the
 `maven-{resources,compiler,surefire,jar}-plugin.version` the module's pom pins -- all passed by
-the module's surefire configuration. Measured 2026-10-07: runner image `ubuntu-24.04`
-20261004.327 moved `/usr/bin/mvn` 3.9.16 -> 3.10.0, and the test, then taking `mvn` from PATH
+the module's surefire configuration. On 2026-10-07 the runner image `ubuntu-24.04`
+20261004.327 moved `/usr/bin/mvn` to 3.10.0, and the test, then taking `mvn` from PATH
 and each plugin's newest version in the local repository, picked `maven-jar-plugin` 3.5.1 -- a
 jar without its dependencies, left by an online fixture build that only computed its lifecycle
 -- so the offline `package` failed. The pinned versions are the ones the module's own `install`
@@ -39,7 +39,7 @@ empty scratch repository seeded by `./mvnw install -DskipTests`: the old test fa
 ## The deploy job
 
 `ci.yaml` `deploy:` publishes on `./mvnw`, as every other job builds: the runner's `/usr/bin/mvn`
-moves with the image. Measured 2026-10-08: on 3.10.0 every snapshot publish got HTTP 401 with
+moves with the image. Found on 2026-10-08: on 3.10.0 every snapshot publish got HTTP 401 with
 unchanged credentials. 3.10 binds a server's credentials to the origins declared for its id
 (`maven.repository.credentialScope`, default `origin`), and the id `central` always has the
 built-in Maven Central repository's origin `https://repo.maven.apache.org`, so credentials under

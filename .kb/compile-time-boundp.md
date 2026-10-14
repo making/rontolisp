@@ -57,10 +57,9 @@ unbound.
   scan knew `setq`/`setf` only: a `psetq`/`psetf`/`multiple-value-setq` in a function body was
   missed and a later probe folded to NIL, where SBCL and the interpreter answer T. A top-level
   one now binds the name for later probes as a `setq` does.
-- Measured 2026-10-04: `(defun pp () (psetq *pa* 1 *pb* 2)) (pp) (print (list (boundp '*pa*)
+- Checked 2026-10-04: `(defun pp () (psetq *pa* 1 *pb* 2)) (pp) (print (list (boundp '*pa*)
   *pa*))` plus the `multiple-value-setq` twin printed `(NIL 1)` / `(NIL 3)` on the JVM and both
-  WASM, now `(T 1)` / `(T 3)` as SBCL (JVM 11,795 -> 12,026, P1 4,658 -> 6,279, component
-  5,823 -> 7,446: the variable the answer needs). examples, size-report, bench-report: byte-identical
+  WASM, now `(T 1)` / `(T 3)` as SBCL. examples, size-report, bench-report: byte-identical
   (P1 and JVM; size-report and bench-report also `--optimize=size` and component); ci-spec
   program P1 identical but for the build-info string. Pins: `CompileTimeBoundpTest`,
   `ProbedUnboundGlobalFixture` (`psetq`, `multiple-value-setq`, `psetf` in a body).
@@ -88,13 +87,13 @@ variable starts as the UNBOUND marker, a store overwrites it, a read of it signa
   bound special keeps `_dget`/`_dbound`. Excluded from `JvmRawGlobals` (the raw shadow would
   hand out the marker). Wasm: `Ctx.unboundGlobals`, the same sentinel, read and probe as for
   a special.
-- Measured 2026-10-04 (before -> after, `--class-name P` / P1 / component bytes).
-  `(defun s () (setq *z* 1)) (s) (print (boundp '*z*))`: JVM 47,211 -> 6,192, P1 2,364 ->
-  1,821, component 3,535 -> 2,979 (reading `(if *z* t nil)` instead: 6,294 / 1,807 / 2,965).
-  `ProbedUnboundGlobalFixture`: JVM 51,752 -> 17,190, P1 15,777 -> 10,649. examples,
+- Checked 2026-10-04. For `(defun s () (setq *z* 1)) (s) (print (boundp '*z*))`, the probe
+  no longer drags the value machinery into the class, on the JVM, P1 or the component
+  backend (reading `(if *z* t nil)` instead costs the same shape either way); the same holds
+  for `ProbedUnboundGlobalFixture`. examples,
   size-report, bench-report and the ci-spec program: byte-identical (P1, `--optimize=size`,
-  component, JVM; 1,938 outputs), as are the d01 fixtures. 200M reads of a tracked global in
-  a loop: JVM unchanged (~0.26 s), wasm 1.18 -> 1.26 s.
+  component, JVM), as are the d01 fixtures, and reads of a tracked global in
+  a loop keep their speed.
 - Pins: `ProbedUnboundGlobalFixture` on
   `aLiteralBoundpOfAGlobalWithoutAValueAnswersTheStoresMadeSoFar` (`LispEvaluatorTest`,
   `JvmLispCompilerTest` with the no-eval-runtime check, `WasmLispCompilerIntegrationTest` P1 +

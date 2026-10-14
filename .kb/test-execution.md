@@ -16,9 +16,10 @@
   is that no two legs share a file, a table or a process-global: a compiled `main` run in
   process goes through `ThreadStdio`; the `ql:quickload` cache every `ClPostgresE2eTest`
   leg fills is safe because installs are atomic (`.kb/dists.md`). Measured alone
-  2026-09-24 (64 cores): `ClPostgresE2eTest` 292 s -> 57 s (cold cache 58 s),
-  `SchemeSpecE2eTest` 176 s -> 77 s (its four corpus runs also start at once; the
-  interpreter's is the floor), `UnclosedOutputFileE2eTest` 15 s -> 5 s.
+  2026-09-24 (64 cores), the concurrency cuts each of `ClPostgresE2eTest`,
+  `SchemeSpecE2eTest` (its four corpus runs also start at once; the
+  interpreter's is the floor) and `UnclosedOutputFileE2eTest` to a small fraction of its
+  sequential wall time.
   Everything else -- including all of `am.ik.gpu` /
   `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
   costs MINUTES that way on a Mac and carries a `@Timeout` so that a run which is merely
@@ -27,7 +28,7 @@
 - Inside ONE method, independent evaluations (own evaluator, own streams) run at once
   through `testsupport/Concurrently`, one thread per core at most: `LinalgGpuDeclineTest`,
   `SimdParallelTest`, `QuantizedMatrixTest`. Measured 2026-09-24 on the 64-core box, alone:
-  281 -> 31 s, 16 -> 4 s, 16 -> 6 s.
+  the speedup over sequential is large in all three.
 - **Trap: `[rontolisp] JUnit parallelism = N` at the start of a run is NOT evidence of
   parallel test execution.** It is `CoreCountParallelismStrategy` printing the value it
   derived for `junit.jupiter.execution.parallel.config.custom.class`, which governs
@@ -36,11 +37,9 @@
   FREE cores (processors minus the 1-minute load average, eight per fork, floor 2; the
   `size-test-forks` execution prints it, `-Drontolisp.test.forkCount=N` pins it).
   `CoreCountParallelismStrategy` subtracts the load the same way. Measured 2026-09-24 on
-  the 64-thread / 32-core box: before the heavy classes went concurrent, 2 forks took
-  20m51s and 32 forks 9m00s; after, the test phase took 408 s at 29 forks, 372 s at 16,
-  268 s at 8, 332 s at 4 (4 started under load 32). More forks lose once the classes are
-  concurrent: the box is saturated and each fork pays its own JIT warm-up (CPU 156 min at
-  8 forks against 201 at 29). A fork is a separate JVM PROCESS,
+  the 64-thread / 32-core box: before the heavy classes went concurrent more forks meant
+  proportionally less wall time; after, more forks lose -- the box is saturated and each
+  fork pays its own JIT warm-up. A fork is a separate JVM PROCESS,
   so nothing in one process's heap (a weakly-keyed cache, a static counter,
   `am.ik.gpu.DeviceResidency`'s live set) is visible across forks; surefire guarantees neither
   which fork nor what order.
@@ -86,30 +85,20 @@ that constructs a subtype is the same bug**; a hang in a concurrent class is a `
 away from its cause.
 
 Measured 2026-09-24 on this box (64 cores, parallelism 16), each class alone, surefire's
-suite time, sequential -> concurrent (range of four concurrent runs, all green):
-
-| class | tests | sequential | concurrent |
-|---|---|---|---|
-| `JvmLispCompilerTest` | 1354 | 282 s | 28-30 s |
-| `JvmLinalgSimdAccelCompilerTest` | 37 | 171 s | 44-47 s |
-| `JvmSimdAccelCompilerTest` | 40 | 62 s | 20-22 s |
-| `JvmLinalgGpuAccelCompilerTest` (no device) | 44 | 54 s | 14-16 s |
-| `JvmSimdParallelCompilerTest` | 9 | 26 s | 8-10 s |
-| `JvmBFloat16ArrayTest` | 30 | 24 s | 8 s |
-| `JvmQuantizedMatrixTest` | 10 | 24 s | 14-15 s |
+suite time: every class above runs markedly faster concurrent than sequential, and all
+concurrent runs were green.
 
 ## What `WasmLispCompilerIntegrationTest` spends its CPU on
 
 Its ~3,100 `WasmLispCompiler.compile` calls, not wasmtime: measured 2026-09-24 with a
-per-thread CPU probe around `compile`, 713-728 CPU-s of the class's ~1,650 (user+sys), and a
-JFR profile put ~40% of that in `shakeCore`'s passes over the pre-shake module (which carries
-the whole runtime: ~240 KB for a 3-line program, ~5.6 KB after the shake). After the
+per-thread CPU probe around `compile`, the compiles dominate the class's CPU, and a
+JFR profile put the largest single share in `shakeCore`'s passes over the pre-shake module (which carries
+the whole runtime). After the
 compile-CPU series (dead-body skipping in the sink and the fold, the JIT-sized operator
 dispatch, the worklist fold, the scope memos -- `.kb/wasm-ref-type-fold.md`,
-`.kb/optimize-dead-code-elimination.md`, `.kb/adding-primitives.md`): **427 CPU-s** of
-compile, the class 1,320-1,390 -> ~1,025 CPU-s and 54-61 s -> 40-42 s of its own elapsed
-time on the same machine. **A hot method past 8,000 bytes of bytecode runs interpreted**
-(`HugeMethodTest`); that alone was 12% of a WASM compile.
+`.kb/optimize-dead-code-elimination.md`, `.kb/adding-primitives.md`): compile's CPU share
+and the class's elapsed time are far smaller on the same machine. **A hot method past 8,000 bytes of bytecode runs interpreted**
+(`HugeMethodTest`); that alone was a sizable share of a WASM compile.
 
 ## Two builds on one machine: every shared constant collides
 
@@ -197,33 +186,31 @@ process that is impossible, so the program goes in a SUBPROCESS with `ProcessBui
 second inheriting the first's scratch files, the verifier check is a real JVM launch rather
 than a `URLClassLoader`, and there is nothing to clean up: the class asserts the project root
 gained nothing, and `CorpusFixtures` no longer carries a remove-what-is-new pair for anyone to
-reach for. Cost, measured on this box: unchanged, 64 s against 69 s in process.
+reach for. Cost on this box: unchanged.
 
 ## Concurrent methods (2026-09-24)
 
 The slowest classes were each one long method, so neither fork could overlap their work.
-Measured alone on this box (64 cores, shared with other builds), before -> after:
+What changed, measured alone on this box (64 cores, shared with other builds):
 
-| Class | Before | After | What changed |
-|---|---|---|---|
-| `WasmTreeShakerCorpusTest` | 91-100 s | 30 s | a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..3) and every `wasm-tools` check is its own child process |
-| `JvmDeadMethodEliminationCorpusTest` + `JvmOsrBackedgeCorpusTest` | 69-73 s + 37-39 s | 40 s | merged: the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory) |
-| `DocExamplesTest` | 75 s | 34 s | `scheme/eval.md` looped 100,000 times inside Scheme `eval` on the interpreter, 20 s per language (`scheme-spec.yaml` pins the 100,000 on all four backends); plus `PackageRegistry` below |
-| `cli/RontoLispCliTest` | 15-17 s | 6 s + 5 s | concurrent; the 30 methods that capture `System.err`/`System.out` moved to `cli/RontoLispCliStreamsTest`, which stays sequential |
-| `WasmLispCompilerTest` | 26-29 s | 9 s | concurrent (in-memory compiles only) |
-| `PackageCycleTest` | 12-14 s | 1.2 s | a regex compiled and run per same-package neighbour per class (quadratic) replaced by one word set per class |
-| `cli/CompileIndependenceTest` | 24-29 s | 25 s | the prelude fix below; its phases stay as designed |
+- `WasmTreeShakerCorpusTest`: a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..3) and every `wasm-tools` check is its own child process
+- `JvmDeadMethodEliminationCorpusTest` + `JvmOsrBackedgeCorpusTest`: merged -- the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory)
+- `DocExamplesTest`: `scheme/eval.md` looped 100,000 times inside Scheme `eval` on the interpreter (`scheme-spec.yaml` pins the 100,000 on all four backends); plus `PackageRegistry` below
+- `cli/RontoLispCliTest`: concurrent; the 30 methods that capture `System.err`/`System.out` moved to `cli/RontoLispCliStreamsTest`, which stays sequential
+- `WasmLispCompilerTest`: concurrent (in-memory compiles only)
+- `PackageCycleTest`: a regex compiled and run per same-package neighbour per class (quadratic) replaced by one word set per class
+- `cli/CompileIndependenceTest`: the prelude fix below; its phases stay as designed
 
-Product fixes found on the way (each measured by JFR on the corpus compile or the test):
-`ClosRegistry.printObjectTags` memoized (10-14% of a corpus compile, recomputed per print
-site); `LispMacroExpander.injectMvSpillGlobal` answers its ~40 "does the program name X"
-questions from one symbol census (~5%); `LispPreludeLibrary.process` does the same across its
-selection fixpoint (64% of the front end of an ASDF program; the corpus front end went from
-~2 s to ~0.7 s warm); `PackageRegistry` builds the built-in packages once and hands each
-registry copy-on-write member tables (`LispPackage.MemberTable`; 12% of `DocExamplesTest`).
+Product fixes found on the way (each profiled by JFR on the corpus compile or the test):
+`ClosRegistry.printObjectTags` memoized (it was recomputed per print
+site); `LispMacroExpander.injectMvSpillGlobal` answers its many "does the program name X"
+questions from one symbol census; `LispPreludeLibrary.process` does the same across its
+selection fixpoint; `PackageRegistry` builds the built-in packages once and hands each
+registry copy-on-write member tables (`LispPackage.MemberTable`).
 
-Not changed, measured: `WasmRefTypeFolder.fold` is ~55% of a DEFAULT-level corpus WASM
-compile (3-4 s): 8 round-robin rounds over ~4,700 functions to its fixpoint. A worklist is
+Not changed, profiled: `WasmRefTypeFolder.fold` takes the largest single share of a
+DEFAULT-level corpus WASM compile's passes: round-robin rounds over the corpus's functions
+to its fixpoint. A worklist is
 the fix; the final full rewrite walk already re-verifies the fixpoint, so an incomplete
 dependency index would cost rounds, not answers.
 
@@ -235,9 +222,9 @@ Traps met doing it:
   the process stream belongs in a sequential class of its own.
 - **`@Isolated` on a `@Nested` class serializes the WHOLE enclosing class**, not just the nested
   one: JUnit moves the global read-write lock to the top-level class and forces its
-  descendants to `SAME_THREAD`. Measured: 119 methods, 23.5 s wall = the sum of the methods.
+  descendants to `SAME_THREAD`. Measured: the wall time becomes the sum of the methods.
   Class-level `READ` locks with method-level `READ_WRITE` on `System.err` convoyed nearly as
-  badly (20 s). A separate top-level class costs nothing: classes run one at a time per fork.
+  badly. A separate top-level class costs nothing: classes run one at a time per fork.
 - **A `@TempDir` FIELD under `@TestInstance(PER_CLASS)` is re-injected and deleted per method.**
   Concurrent methods share the field, so one method's cleanup deletes the directory another is
   running in (seen as `NoSuchFileException` on a file the test had just created). Take it as a
@@ -282,10 +269,9 @@ alone. The stack had not changed -- with parallel execution enabled every test, 
 or not, runs on a ForkJoin worker of the default size -- but once the class ran its methods
 concurrently the wide program could meet the recursing pass before the JIT had compiled it,
 and an interpreted frame is several times a compiled one. Measured on a fresh JVM, a thread
-of the given size compiling that program through `JvmLispCompiler`: 256 KiB overflows in
-`PackageResolver.referencesRuntimePackageMutation` (~920 frames), 512 KiB in
-`UiopLibrary.collectSymbols` (~1,020), 1 MiB in `CompileTimeBoundp.scan` (~1,020), 2 MiB
-passes. Every one of them recursed on the cdr, so the depth was the LIST's LENGTH, not the
+of the given size compiling that program through `JvmLispCompiler`: the overflow point moved
+across `PackageResolver.referencesRuntimePackageMutation`, `UiopLibrary.collectSymbols` and
+`CompileTimeBoundp.scan` as the stack grew, and a multiple of the default passes. Every one of them recursed on the cdr, so the depth was the LIST's LENGTH, not the
 program's nesting. Since 2026-09-24 those walks loop down the spine and an embedder compiles
 on the CLI's stack ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING");
 `WideListStackTest` compiles 50,000-element lists on 1 MiB.
@@ -358,14 +344,14 @@ Three pins, in the order a lane reaches them:
 
 Measured 2026-09-06 (this box, native binary):
 
-- stories260K, 40 greedy tokens, scalar interpreter: **39 s**. That, plus llm.lisp's
+- the real-checkpoint decode over stories260K on the scalar interpreter is far too slow for
+  an always-run lane. That, plus llm.lisp's
   engine and a 1 MB checkpoint the ci-spec driver has no way to stage, is why the
   always-run lane carries synthetic models instead of the real one.
-- the two synthetic cases: **4.3 s** of the scalar interpreter leg, under a second on each
-  other leg; the whole `CiSpecE2eTest` 111.9 s / 4020 tests -> **113.7 s / 4076**.
+- the two synthetic cases are cheap on every leg.
 - all eight legs agree on every id, every word and every printed margin; at 1e-6
-  resolution one of the ten margins differs by ONE unit between legs, against a smallest
-  margin of 0.091 -- so the printed thousandth has ~1000x headroom and the argmax ~91000x.
+  resolution one of the ten margins differs by ONE unit between legs -- so the printed
+  thousandth and the argmax both have ample headroom.
 
 **What none of them covers**: no published checkpoint's decode is pinned anywhere CI can
 run -- TinyLlama, SmolLM2, Qwen3-0.6B and Qwen3.5-0.8B are gigabytes and outside the repo

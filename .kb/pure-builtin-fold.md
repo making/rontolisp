@@ -44,7 +44,7 @@ Preview 1 and `--component`) and ci-spec `pure-builtin-literal-fold`.
   FRESH-STRING producers fold to `(%str-fresh "...")` (below). The rendered types are
   `WasmLiteralPrint`'s: string, integer, ratio, float, character, `nil`, `t`.
 - The packed literal table: `coerce` and `make-array`, ONLY into an `(unsigned-byte 8|16|32)`
-  vector — ~11.8 bytes of wasm per element at run time where the packed vector is 4.
+  vector — a fraction of the run-time cost of leaving the elements boxed.
 
 Justification is per GROUP; the deviation (case-insensitive operators being OUT) carries its own
 sentence.
@@ -64,23 +64,20 @@ LITERAL argument directly: WASM calls `_big_fdiv` over the two known components 
 to `(floor 7 2)`, `WasmTreeShakerTest.aRatioLiteralRoundsWithoutTheGenericConversion`), the JVM
 calls the rational rounding helper with no type dispatch around it.
 
-Size, measured 2026-10-05 (`--optimize=default`, P1 / component / JVM `.jar`, before -> after):
+Size:
 - Unaffected: every `size-report/` and `bench-report/` program byte-identical on all three
   (none has literal ratio arithmetic).
-- `(print (/ 1 3))` 1,155 -> 350 / 2,302 -> 1,504 / 5,211 -> 3,777; `(+ 1/2 1/3)` 3,992 -> 350;
-  `(rational 0.1)` 3,887 -> 381; `(expt 2 -10)` 4,184 -> 353; `(< (/ 1 3) 1/2)` 3,053 -> 494;
-  `(princ-to-string (/ 1 3))` 7,515 -> 1,352. A folded ratio feeding a computed value still
-  shrinks on WASM (`(float (/ 1 3))` 6,872 -> 6,688; a `defparameter` of one 4,150 -> 3,975).
-- `(floor (/ 7 2))`: 3,911 -> 3,966 P1 and 6,114 -> 6,131 jar WITHOUT the IntConv branches;
-  3,911 -> 3,911 and 6,114 -> 4,217 with them.
+- A program whose work is a folded ratio shrinks to a fraction of its unfolded size on all
+  three backends (`(print (/ 1 3))`, `(+ 1/2 1/3)`, `(rational 0.1)`, `(expt 2 -10)` and
+  the like). A folded ratio feeding a computed value still
+  shrinks on WASM.
+- `(floor (/ 7 2))` grows slightly WITHOUT the `IntConv` branches and shrinks with them --
+  which is why both take the ratio literal (above).
 - The cost left: on the JVM a ratio literal is a `BigInteger[2]` over two pooled static fields,
-  ~34 B more than the `(/ 7 2)` call when the division runtime is kept anyway -- a folded ratio
-  bound to a variable and consumed by something that does not fold: `(multiple-value-list
-  (floor (/ 7 2)))` +42 B jar (-71 B P1), ci-spec `slice-c-rationalize` +54 B, `rounding-or-
-  decoding-an-infinity-or-a-nan-signals` +22 B. Not worth a second literal representation.
-- ci-spec corpus as one program: P1 6,662,675 -> 6,660,886, component 6,874,191 -> 6,872,342,
-  jar 1,498,496 -> 1,498,350. Per case: `fused-integer-expression-trees` -3,131 B P1,
-  `rational-exact-value` -956 / -680 jar, `rationals-common-lisp-ratios` -880 / -1,014.
+  a little more than the `(/ 7 2)` call when the division runtime is kept anyway -- a folded ratio
+  bound to a variable and consumed by something that does not fold. Not worth a second literal
+  representation.
+- The ci-spec corpus as one program barely moves; the ratio cases shrink.
 
 The literal rows of `rationals-common-lisp-ratios`, `ratio-mod-rem` and `rational-exact-value`
 now print folded constants. The RUNTIME ratio paths stay covered by `FoldDifferential`'s control
@@ -96,8 +93,8 @@ integration points: `literalValue` reads through it so nested folds still reduce
 `MutableStringProducers` counts `%str-fresh` as a producer; `WasmLiteralPrint.rendered` reads the
 TEXT out of it so the print side stays static.
 
-Removing the four entries would pay the WHOLE runtime the fold keeps out (~9.5 KB of Unicode
-case-fold tables) where fold+copy pays ~0.9 KB. `%str-fresh` is also the general Lisp-level name
+Removing the four entries would pay the WHOLE runtime the fold keeps out (the Unicode
+case-fold tables) where fold+copy pays a sliver. `%str-fresh` is also the general Lisp-level name
 for the mutable-result wrap. **Trigger**: if a backend ever compiles `%str-fresh` as the bare
 literal, the forgery returns. Pins:
 `PureBuiltinFolderTest.aFreshStringProducerFoldsToAStrFreshConstantAndNotASharedLiteral`, the

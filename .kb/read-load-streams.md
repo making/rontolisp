@@ -45,8 +45,8 @@ nesting `#|...|#`.
 - Explicit `+`: dropped when a digit, or `.` and a digit, follows (`+5`, `+.5`, `+.5e1`); JVM `_classify` keeps
   the upcased original in a local, WASM `_read_expr` a STRIP flag, so a token the number attempts then
   refuse (`+5x`, `+.5x`, `+1+`) is the symbol WITH its sign. The source lexer (`readNumber("+")`) does the same.
-  Reader cost of the dot case and the sign restore: +132 B JVM / +60 B P1 / +60 B component on a program that
-  reads one list; a program without a runtime reader is byte-identical.
+  The dot case and the sign restore cost bytes only in a program with a runtime reader; a
+  program without one is byte-identical.
   Pinned by ci-spec `runtime-read-explicit-plus-numbers`, `explicit-plus-number-shaped-symbols`.
 - `read-from-string` reads the FIRST datum only. The compiled readers always did; the interpreter parses the
   whole text first and, only when that signals, cuts it at `LispLexer.datumEnd` and reads the head, so
@@ -135,9 +135,8 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   `spillEscapingMvProducers` over a producer form it does not itself recognize, so a
   recognized producer at the end of the `(let ...)`/`(progn ...)` the consumer was handed
   publishes -- and one whose value is DISCARDED (a loop step, a `let` initform) does not.
-  Measured: publishing on EVERY call was +219/-62 on the ANSI suite, the 62 being the
-  discarded calls' indices surfacing as an enclosing form's second value; tail-only was
-  +213/0 (`.todo/715`).
+  Publishing on EVERY call leaks the discarded calls' indices as an enclosing form's
+  second value, hence tail-only (`.todo/715`).
 - The producer is recognized at ONE argument only. A call passing more is the next section's
   prelude defun, whose own tail answers both values; `settleTail` lets such a call pass
   (`isReadFromStringWithArguments`), since by name `read-from-string` is a single-valued cl
@@ -218,9 +217,8 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
   terminator, or any under `:preserve-whitespace`), so no pushed-back character outlives the
   stream. It counts characters, so on WASM it is right for non-ASCII text where the one-argument
   `%read-from-string-end` counts bytes. A drain is O(rest of the string) in Lisp -- the
-  successive-forms idiom `(read-from-string text nil eof :start pos)` goes quadratic -- measured
-  with it as the only count, 20K calls over 1,008 characters: JVM 370-484 ms, P1 1,631-1,667,
-  interpreter (2K calls) 1,679-1,790; with `file-position` 265-317 / 792-808 / 95-129.
+  successive-forms idiom `(read-from-string text nil eof :start pos)` goes quadratic --
+  which is why the `file-position` answer exists.
 - The bound check is the window's `subseq` (`.kb/sequence-bounding-keywords.md`).
 - Selection (`LispPreludeLibrary.referencedBySurfaceForm`): a `read-from-string` call with more
   than one argument anywhere, or a designator that may be called with more than one
@@ -230,25 +228,19 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
   publishing function applies the defun when given more than the string.
 - Its `#+`/`#-` is `read`'s: the scanner resolves the guard on every backend, while the
   one-argument call resolves it on the interpreter only.
-- Before (measured on all four backends): every argument after the string was ignored (the read
+- Before: every argument after the string was ignored (the read
   started at 0, a bad bound read the whole string), and `#'read-from-string` given them was a
-  `program-error` on the compiled paths. ANSI `reader` (interpreter, suite `ca06bd9`): 369 ->
-  389 / 575, every `READ-FROM-STRING.*` test passing (fourteen value tests and six error tests
-  were failing, not the six once counted), zero regressed.
-- Cost (2026-10-06, JVM / P1 / component bytes, 796 programs: every ci-spec case, the
-  `examples.yaml` examples, size-report, bench-report): 2,311 of 2,336 artifacts byte-identical.
-  Differ: the new ci-spec case; `multiple-value-builtins-function-object`, which keeps
-  `#'read-from-string` in a variable and so splices the defun and the full wrapper, +57,037 /
-  +63,627 / +64,823; six programs that walk the package tables, +24/25 B (the internal name),
-  and `cffi-sqlite`'s JVM class +25. Measured before the `--no-wasi` drain fallback joined the
-  defun, which adds its loop to a program that splices it (not re-measured). What a program
-  spelling a call pays is `read`'s machinery (the scanner, string streams, the
-  `end-of-file`/`reader-error` classes, the pushback cell): `(print
-  (read-from-string (copy-seq "a b") nil nil))` 97,462 / 58,821 / 62,870 against the one-argument
-  call's 60,175 / 32,837 / 34,074 and a `read` over a string stream's 105,999 / 70,556 / 74,542.
-  Speed (pinned, 7 steady-state reps, ms; one-argument / `nil nil` / `nil nil :start 1` over
-  `"(a b c) d"`): JVM 200K calls 46-47 / 377-417 / 174-197, P1 98-112 / 755-779 / 429-437,
-  component 99-110 / 757-771 / 426-431, interpreter 20K 39-77 / 952-1,068 / 541-673 -- the
+  `program-error` on the compiled paths. Since, every `READ-FROM-STRING.*` test of the ANSI
+  `reader` suite (interpreter, suite `ca06bd9`) passes -- the value tests and the error tests
+  that were failing, not the six once counted -- and none regressed.
+- Cost: a program that spells no multi-argument `read-from-string` is byte-identical, save
+  the new ci-spec case, programs that keep `#'read-from-string` in a variable (they splice
+  the defun and the full wrapper), a small constant added to the programs that walk the
+  package tables (the internal name), and the usual build-timestamp artifacts; measured
+  before the `--no-wasi` drain fallback joined the defun, which adds its loop to a program
+  that splices it (not re-measured). What a program spelling a call pays is `read`'s
+  machinery (the scanner, string streams, the `end-of-file`/`reader-error` classes, the
+  pushback cell), and the full call is slower than the one-argument read -- the
   scanner walks in Lisp what the one-argument read does natively.
 
 Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
@@ -263,7 +255,7 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
 - **A line ends at LF alone; one CR just before the LF (or the end of input) is dropped** -- on all four
   backends, so a lone `\r\n` line reads `""`, not `"\r"`, and a CR no LF follows stays in the line
   (`a CR b LF c` reads `("a<CR>b" "c")`). SBCL agrees on the lone CR and keeps the one before the LF/EOF; the
-  drop is this project's CRLF convention (HTTP over a socket). Measured 2026-10-09: the interpreter and JVM
+  drop is this project's CRLF convention (HTTP over a socket). Until 2026-10-09 the interpreter and JVM
   read through `BufferedReader.readLine`, whose `\r` terminator answered `("a" "b" "c")`; the WASM `_read_line`
   (`pos--` on `0x0D`) was already this rule. Interpreter: `TerminatedLine.read`/`readText` (stdin and
   every `BufferedReader` stream), `RontoCharFileReader`, `RontoStringInputStream`, `RontoIoFileStream`,
@@ -311,10 +303,7 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   `%file-error` itself is the `%program-error` split (`lowerFileError`): a typed
   `%error-cond` over a `%obj-new` behind a landing pad, plain `%error` otherwise -- so the
   whole-program scans cannot see the construction and take `LispMacroExpander.FILE_ERROR_SITES`'
-  presence for the tag (`conditionNarrowing`, `WasmLispCompiler.usedLayoutTags`). Cost
-  (2026-09-19, `--optimize=size`): `with-open-file` + `read-line` without a handler +39 B P1
-  / +37 B component / +213 B JVM class; inside `handler-case` +172..+243 B WASM, +370..+501 B
-  JVM.
+  presence for the tag (`conditionNarrowing`, `WasmLispCompiler.usedLayoutTags`).
 - **A `load` that cannot open its file signals a `file-error` on every backend** (2026-10-07),
   carrying the designator as given and reporting `LOAD: cannot open file <namestring>`. Compiled:
   `LispMacroExpander.expandLoadFileErrorSignal`, the `open` shape -- `_load` answers nil on a
@@ -354,7 +343,7 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   `readlink-at`, the serve bridge errno 76). The `bufused` cell must be 4-aligned (wasmtime:
   `Pointer not aligned to 4`). A `..` pops only an already-resolved part; a relative path stays
   relative (no cwd on wasm); a missing part reads as no link and is kept. `truename` probes the
-  RESOLVED spelling. Measured on wasmtime 49 (2026-10-09): `path_readlink` answers a relative
+  RESOLVED spelling. On wasmtime 49 (checked 2026-10-09), `path_readlink` answers a relative
   target even when it climbs out of the preopen, refuses an ABSOLUTE target with errno 63, so
   such a link stays as spelled and is not there on both wasm backends (the one cross-backend
   difference). **Every WASM `path_open` passes `symlink_follow`** (`emitDirFdAndPath`, the
@@ -440,7 +429,7 @@ Pinned by ci-spec `stream-operators-clear-input-and-friends`.
 
 A file output stream the program never closes keeps what it wrote, however the program ends
 (last form, `uiop:quit` / Scheme `exit` / `emergency-exit`, uncaught condition) -- C's `exit`
-and Gauche behave so. **SBCL does not** (measured 2026-09-19: an unclosed `open` + `write-line`
+and Gauche behave so. **SBCL does not** (2026-09-19: an unclosed `open` + `write-line`
 leaves an EMPTY file under `--script`, `--non-interactive`, `sb-ext:exit` and an unhandled
 `error` alike); ANSI leaves it unspecified, and cross-backend identity decided, since wasm writes
 through `fd_write` and cannot lose it.
@@ -455,12 +444,11 @@ through `fd_write` and cannot lose it.
   (`JvmExitCompiler`) and by the uncaught-condition handler before the rethrow
   (`JvmUncaughtHandler`), reached through `Ctx.flushStreams`. **Gated on the unexpanded program
   naming `open` or `with-open-file`** (the Scheme file ports splice Lisp that names `open`);
-  `with-open-file` must be in the gate because a quit in its body skips the close. Measured
-  2026-09-19 (default / `--optimize=off`): hello and `uiop:quit` keep their exact bytes, as
-  does a Scheme `display` program; `open` + `uiop:quit` 9,686 -> 9,874 / 372,771 -> 372,959,
-  `with-open-file` 8,411 -> 8,609 / 372,108 -> 372,293; a Scheme STRING-port program
-  54,231 -> 54,454 (its spliced port helpers name `open` for the file arms -- the gate
-  over-approximates, and a stray flush costs nothing else). Wasm outputs unchanged.
+  `with-open-file` must be in the gate because a quit in its body skips the close. The gate
+  leaves a program naming neither byte-identical (hello, `uiop:quit`, a Scheme `display`
+  program, every wasm output); a Scheme STRING-port program's spliced port helpers name
+  `open` for the file arms, so the gate over-approximates there -- a stray flush costs
+  nothing else.
 
 Pinned by `UnclosedOutputFileE2eTest` (all four backends; reads the file after the process
 ends, since the spec corpora compare stdout only).
@@ -525,7 +513,7 @@ through it — `_open`, `_probe_file`, `_list_directory`, `_load`, `_make_direct
   appears to work with no `--dir` because `CompileTimePathnameFolder` bundles the file's COMPILE-TIME
   contents into the artifact as a `with-input-from-string` (`.kb/asdf.md`). Every pin BUILDS the path
   at run time.
-- Cost: `IMPORT_FUNC_COUNT` 9 -> 11 and `FUNC_START` with it, so every emitted function index shifted
+- The two new imports raise `IMPORT_FUNC_COUNT` and `FUNC_START` with them, so every emitted function index shifted
   (`fd_readdir` precedent, `.kb/directory-listing.md`). No new type entries — `fd_prestat_get` reuses
   `TYPE_INTERN`, `fd_prestat_dir_name` `TYPE_RD_MEMEQ`. In step: `--no-wasi` gets two more EBADF trap
   stubs; `adapter.wat` exports both over `wasi:filesystem@0.3.0`; `adapter-http-server-p1.wat`
@@ -566,8 +554,8 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
 - **A WASM string OUTPUT stream costs linear memory NOTHING per write.** Every append asks
   `_ostream_room(rec, n)` (`FUNC_OSTREAM_ROOM`, reusing `TYPE_RAT_NEW`) and `array.copy`s in; the
   buffer DOUBLES, so k bytes one at a time copies O(k) total. The buffer holds the frame quote `"` at
-  index 0, content at `[1, 1+len)`. The old chunk list cost **15 bytes of linear memory per
-  CHARACTER**, reclaimed only at `__ronto_alloc_reset`. Three traps if you move the layout: **the
+  index 0, content at `[1, 1+len)`. The old chunk-list design cost linear memory PER
+  CHARACTER, reclaimed only at `__ronto_alloc_reset`. Three traps if you move the layout: **the
   table is the GC ROOT** a linear-memory record cannot be (a `TYPE_HASH_BUCKETS` in the module's LAST
   global); **`_close` recycles the SLOT, not the record** (a free list threaded through the table's
   own entries, head `OSTREAM_FREE_ADDR` as slot index + 1 — the 12 bytes are NOT recycled, since an
@@ -595,7 +583,7 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   compiled backends' `file-position` gate (otherwise WASM compiles the query to the nil constant
   and the JVM lacks `_filePosition`), and `UnreadCharLibrary`, which expands an indexed form
   ITSELF so the query is rewritten onto `%unread-file-position` (and splices that defun).
-  Before (measured 2026-10-06): the store counted what a `read-char` drain still found, and on the
+  Before (2026-10-06): the store counted what a `read-char` drain still found, and on the
   compile paths the drain read past a parked character -- `"123  "`, three reads, then `(unread-char
   (read-char s) s)`: SBCL and the interpreter 3, JVM / P1 / component 4. Pinned by
   `StringStreamPrograms.INDEX_PUSHBACK_PROGRAM` in the three backend suites.
@@ -608,9 +596,9 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   "Write-through: measured, not built" below.
   `:element-type` is evaluated when it is not a literal and otherwise dropped. A malformed spec is a
   CALL-time stub (`callTimeUnsupportedStub`), never an expansion-time throw, so a dead branch
-  compiles. A spec without the new options expands byte for byte as before. Measured, ANSI `streams`
-  (interpreter, suite `ca06bd9`): 447 -> 462 of 758 pass, errors 205 -> 186, lost forms 55 -> 55, no
-  test regressed. **The premise that these refusals were LOST top-level forms was stale**: since the
+  compiles. A spec without the new options expands byte for byte as before. In the ANSI
+  `streams` suite (interpreter, suite `ca06bd9`) the change fixed tests and regressed none.
+  **The premise that these refusals were LOST top-level forms was stale**: since the
   driver charges a raw exception inside a `deftest` to that test, all 19 were already counted
   ERRORS, so turning them into stubs moved nothing. Seven `WITH-INPUT-FROM-STRING` tests still fail
   on the lite `output-stream-p` (every stream answers t for both directions) -- fixed since, next
@@ -638,27 +626,24 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   `(handle . bits)`, that every literal open leaf registers into
   (`%file-stream-direction-register` around the leaf's stream value, `OpenModes.direction`) and
   every close forgets (`forgettingClose` with both registries' forgetters, element types first).
-  **Three gates, each measured**: the inline test only in a program that NAMES a predicate
+  **Three gates, each decided on size**: the inline test only in a program that NAMES a predicate
   (`Ctx.asksStreamDirection`, which `WasmAsyncEmit.freshCtx` must carry -- inherited by
   construction since; until 2026-10-04 it was not copied, so on both wasm backends a TOP-LEVEL predicate fell back to `streamp` and answered t for
-  either direction; ci-spec `error-output-identity-and-top-level-stream-direction`) -- the dead `#'input-stream-p` wrapper every WASM module compiles
-  and drops interned the kind keywords and moved every later string of every string-stream
-  program by up to 8 bytes (`drain-by-hand` 5,972 -> 5,979 wasm) until the gate; gating the two
-  WRAPPERS instead (`REFERENCE_GATED_FUNCTIONS`) also moved them, by -2 / -4 bytes (zlib), so it
-  was not taken. The record only where the program can also open a file. A classifier DEFUN
-  instead of the inline test cost +6.2 KB JVM / +0.9 KB wasm for one `output-stream-p` of a
-  string stream (a first defun's function machinery on the JVM), a HASH-TABLE record +14.7 KB and
-  a second class file (`RontoHashTable` travels); the inline test is +654 B JVM / +7 B P1 / +8 B
-  component, the record on top of it (one `output-stream-p` of a file stream) +5,389 / +1,787 /
-  +1,805 B. **The record's three names are `rontolisp::` internals** (the `%octets-join`
+  either direction; ci-spec `error-output-identity-and-top-level-stream-direction`) -- without the
+  gate the dead `#'input-stream-p` wrapper every WASM module compiles and drops interned the
+  kind keywords and shifted every later string of every string-stream program; gating the two
+  WRAPPERS instead (`REFERENCE_GATED_FUNCTIONS`) shifted them too, so it was not taken. The
+  record only where the program can also open a file. A classifier DEFUN instead of the inline
+  test and a HASH-TABLE record (a second class file, `RontoHashTable` travels) were measured
+  and declined; the inline test plus the record is the accepted shape. **The record's three
+  names are `rontolisp::` internals** (the `%octets-join`
   shape: a prelude key without the package, a defined symbol with it), NOT `CL_INTERNALS`
   entries: `CL_SYMBOLS` is baked into every program that asks the runtime package API, and
-  listing them there grew each such program by 92 bytes (`runtime-package-api`,
-  `uiop-package-surgery`, the cffi-sqlite example). Identity, measured over 819 programs (every
-  ci-spec case and every non-GUI example, JVM / Preview 1 / component, against develop at
-  `241ced1`): 803 byte-identical; the 16 that differ all name a direction predicate,
-  `file-position` or a composite constructor (13 ci-spec cases, the httpbin-jzon example --
-  jzon asks `input-stream-p`), except two that print `rontolisp:version`'s build timestamp.
+  listing them there grows each such program (`runtime-package-api`,
+  `uiop-package-surgery`, the cffi-sqlite example). Identity over the ci-spec and example
+  corpus: a program naming none of a direction predicate,
+  `file-position` or a composite constructor is byte-identical, save programs that print
+  `rontolisp:version`'s build timestamp.
   The composite constructors now check their components' direction
   (`make-two-way-stream`, `make-echo-stream`, `make-concatenated-stream` signal `type-error`):
   with the lite answer every stream was an input stream, so ANSI `MAKE-TWO-WAY-STREAM.ERROR.5`
@@ -678,7 +663,7 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   the interpreter's string input stream IS `runtime.RontoStringInputStream`, a `BufferedReader`
   subclass working on the string itself so its cursor is the logical position; the JVM builds
   that class for EVERY string input stream (so `listen` answers uniformly -- see below),
-  and it then TRAVELS (+2.9 KB, a second class file) -- the `_filePosition` arms are
+  and it then TRAVELS (a second class file) -- the `_filePosition` arms are
   `JvmStringStreamPositions`, ahead of the file arms (an output
   stream's position is the `StringWriter`'s code-point count, no class needed); both WASM
   backends answer in `_file_position` / `_file_position_set`'s string arm
@@ -694,29 +679,25 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   (`FilePositionAbi` null), and nothing is injected; a CLOSED string input stream still answers
   on both WASM backends (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
   `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6`.
-- **`:index` drained until 2026-10-06** (2026-09-22 measurement, kept as history). Hand-written
-  equivalents of the two lowerings, bytes JVM / Preview 1 / component: drain 38,085 / 5,972 /
-  9,496, position 42,579 (2 files) / 4,618 / 8,226 -- the JVM grew +4.5 KB and gained the
-  travelling class (plus the `_filePosition` machinery) where WASM saved 1.3 KB, and `--no-wasi`
-  had no position at all. "Both answer the same index" was wrong once `unread-char` parks a
+- **`:index` drained until 2026-10-06.** The first cut drained the stream instead of keeping a
+  position. "Both answer the same index" was wrong once `unread-char` parks a
   character: the drain, synthesized after `UnreadCharLibrary`, read past it on the compile paths.
   The position replaced it (bullet above); the JVM class travels with every string input stream
-  since 2026-09-23 anyway. Not re-measured.
+  since 2026-09-23 anyway.
 - **Write-through: measured, not built** (2026-09-22). A fill-pointer string that sees the output
   as it is written needs a stream kind of its own on every backend (a JVM `Writer` over the
   Lisp vector representation that travels, a WASM record kind every string-output write path
-  branches on). Its benefit, counted: ZERO ANSI tests in the whole suite depend on it (the only
+  branches on). Its benefit: no ANSI test in the whole suite depends on it (the only
   string-argument tests, `WITH-OUTPUT-TO-STRING.3 .5 .6 .10`, read the string after the form and
   pass; `.4` / `.9` are `:nil-vectors-are-strings` notes), and no program in the corpus
   (examples, size-report, the library trees under `src/test/resources`) reads the string before
   the body exits -- cl-who's `with-html-output-to-string` passes its string through and reads it
   after. Also still sbcl-divergent for the same reason: `file-position` of that stream starts at
   0, where sbcl starts at the fill pointer. **Trigger**: a caller that reads the string mid-body.
-- ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22 (`.todo/929`): 599 -> 619 of 797
-  (75.2% -> 77.7%), 20 fixed, 0 regressed: `WITH-INPUT-FROM-STRING.9 .11-.16`,
+- ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22 (`.todo/929`), fixed with none
+  regressed: `WITH-INPUT-FROM-STRING.9 .11-.16`,
   `MAKE-STRING-INPUT-STREAM.1 .2`, `MAKE-STRING-OUTPUT-STREAM.1-.3 .5-.7`,
-  `MAKE-SYNONYM-STREAM.1 .3`, `PEEK-CHAR.18 .19`, `MAKE-BROADCAST-STREAM.6`. The 599 is today's
-  baseline, not the 582 recorded above: the code moved in between.
+  `MAKE-SYNONYM-STREAM.1 .3`, `PEEK-CHAR.18 .19`, `MAKE-BROADCAST-STREAM.6`.
   Pinned by `LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection` /
   `#filePositionOfAStringStreamQueriesAndSeeks` /
   `#compositeStreamConstructorsRefuseAComponentOfTheWrongDirection`, their JVM twins,
@@ -745,12 +726,12 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   everywhere. An echo stream echoes only what is READ: its `stream-peek-char` looks at
   the input component without writing (the default read-plus-unread would move the
   output position).
-- **Sizes** (same harness): a JVM string-input program without `listen` grows +19 B
-  (the positioned construction); with `listen` +65 B (the `_listen` arm). WASM string
-  `listen` costs what `file-position` does (both branch the record): +1.6 KB on a
-  minimal program. Anything else is byte-identical.
+- **Sizes**: a JVM string-input program pays for the positioned construction, and the
+  `_listen` arm on top where `listen` is named. WASM string
+  `listen` costs what `file-position` does (both branch the record). Anything else is
+  byte-identical.
 - **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed): `LISTEN.1/.3/.6`
-  and `PEEK-CHAR.17` FAIL -> PASS, 0 regressed.
+  and `PEEK-CHAR.17` FAIL -> PASS, none regressed.
 - Pinned by `LispEvaluatorTest#listenAtTheEndOfAStringStreamAnswersNil` /
   `#echoStreamPeekDoesNotEcho`,
   `JvmLispCompilerTest#listenAtTheEndOfAStringStreamAnswersNil` /
@@ -831,10 +812,9 @@ mean `read-byte` on a text-opened stream "works" there while interpreter/JVM sig
   and a narrowed octet buffer read from an `(unsigned-byte 16)` stream answered its raw octets
   `(1 0)` on the three compile paths where the interpreter answers `(1 2)`
   (`JvmLispCompilerTest#compileAndRunANarrowedSiteKeepsTheWideGuard`, its WASM twin).
-  Measured 2026-09-09: a byte-only read loop 6,744 -> 5,735 B (`-1,009`), the zlib
-  `--optimize=size` row 125,738 -> 125,081 (`-657`, the `FUNC_READ_CHAR` the todo estimated at
-  649). The same two on 2026-09-22 (the code has moved since): 7,126 B, unchanged by the stream
-  rule below; zlib `--optimize=size` 80,863 -> 80,962 (`+99`).
+  The narrowing shrinks a byte-only read loop and the zlib `--optimize=size` row
+  (measured 2026-09-09); after the stream rule below (2026-09-22) the two are
+  roughly neutral.
 - The `_eval` interpreters know none of this, nor `require`/`provide` (a file read by the runtime
   `load` of compiled output must not contain them — `.kb/load-inliner.md`). The `CiSpecE2eTest`
   driver passes `--dir . --dir /tmp` to both wasmtime invocations.
@@ -867,28 +847,24 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
   using the Gray protocol reaches EVERY site: they test the resolved target for an instance but
   hand the built-in the stream as given (handing it the handle made the ci-spec corpus red on the
   JVM, `JvmLispCompilerTest#compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers`).
-  Inlined per site the kind test cost ~400 B
-  of wasm and ~1 KB of JVM bytecode a site (gguf +3.0 KB, geom +4.0 KB wasm); out of line
-  +1.4 / +1.5 KB.
+  Inlined per site, the kind test costs every site its own copy of the test; out of line it is
+  one shared defun.
 - **A standard stream keeps the buffer rule.** It is bivalent (sbcl answers characters for a
   general vector from `*standard-input*` and bytes for an octet vector); keeping the buffer rule
   there left every stdin/stdout program's behaviour, and its bytes, where they were.
 - **A FILE stream keeps the buffer rule -- measured, not chosen.** Telling a character file from a
   binary one needs the element-type registry (next section), which is spliced only for a program
   that asks `stream-element-type` or opens a wide stream. The first cut spliced it for every
-  program naming `read-sequence`/`write-sequence` and `open`: a binary loader with a parameter
-  buffer grew +3.2 KB wasm / +4.5 KB JVM (registry +1.7 / +3.6 KB, the rest the inline test), the
-  gguf corpus case +7.0 KB, geom +9.5 KB -- for ZERO ANSI tests (every failing test in the chapter
-  reads a string stream). The cheaper shape -- a distinct kind keyword for a binary file stream,
+  program naming `read-sequence`/`write-sequence` and `open`, a sizable per-program cost -- for
+  no ANSI test (every failing test in the chapter reads a string stream). The cheaper shape -- a
+  distinct kind keyword for a binary file stream,
   read by `%character-stream-p` -- was measured 2026-09-23 (`.todo/931`) and likewise declined:
   the kind rides in the value so a COMPUTED `:element-type` open can set it (the dispatch is
   already onto literal leaves; a computed-options probe emitted both kinds, one per leaf), but
-  every program opening a binary file still changes bytes (two binary leaves: +7 B JVM / +4 B
-  P1, the longer keyword alone), every `read-sequence`/`write-sequence` program naming a stream
-  value changes (`%character-stream-p`'s third arm: +33 B JVM / +18 B P1), and every
-  `typep 'file-stream` / direction-predicate site over a file stream changes (second kind arm:
-  +510 B JVM / +47 B P1, the direction arm duplicating the assoc read) -- corpus-wide byte
-  churn, again for zero ANSI tests. The interpreter (signals `READ-BYTE expects a binary input
+  every program opening a binary file, every `read-sequence`/`write-sequence` program naming a
+  stream value, and every `typep 'file-stream` / direction-predicate site over a file stream
+  still changes bytes -- corpus-wide churn, again for no ANSI test. The interpreter (signals
+  `READ-BYTE expects a binary input
   stream`) and the WASM bulk octet path underneath would need their own arms on top.
   **Trigger**: an ANSI test, or any corpus program, reading a general vector or a list from a
   character FILE stream.
@@ -909,20 +885,17 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
   `FILE_ERROR_SITES` situation. The hold-side gate needs nothing: the check constructs only
   to throw.
 
-Cost and identity (2026-09-22, JVM / Preview 1 / component bytes, default optimize, over 778
-programs: every ci-spec case, every non-GUI example, the size-report corpus): 1,965 artifacts
-byte-identical, 224 differ -- 166 SMALLER (the wrapper change, up to -4.1 KB JVM on a program
-carrying the builtin wrapper table), 58 larger, all naming `read-sequence`/`write-sequence`; the
-largest `read-sequence-and-write-sequence-round-trip` +8.6 / +3.7 / +3.7 KB (untyped buffers that
-no longer narrow), the packed-buffer case +5.3 / +2.6 / +2.6 KB, gguf +3.2 / +1.4 / +1.4 KB, zlib
-+480 / +117 / +117 B. The Gray dispatcher change on top: of the 10 corpus programs that use the
-Gray protocol, one (`http-buffered-body-stream`) changes, at the same size.
+Cost and identity (2026-09-22): every corpus program not naming `read-sequence`/`write-sequence`
+is byte-identical, the wrapper change making most touched programs smaller; the programs that
+grow are the ones naming the operators (untyped buffers that no longer narrow). The Gray
+dispatcher change on top touches one corpus program that uses the Gray protocol
+(`http-buffered-body-stream`), at the same size.
 
-ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the keyword tail (above) 789 -> 797
-tests counted, lost forms 24 -> 16, 530 -> 545 passing (15 fixed: `READ-`/`WRITE-SEQUENCE.STRING.8-.12`,
-`.ERROR.4 .5 .11 .12`, `WRITE-SEQUENCE.BV.6`); then the stream rule 545 -> 582 (68.4% -> 73.0%),
-37 fixed, 0 regressed: `READ-SEQUENCE.LIST.1-.5 .7`, `.VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.6 .8`,
-`WRITE-SEQUENCE.LIST.1-.5 .7`, `.SIMPLE-VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.5 .7`.
+ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the keyword tail (above) fixed
+`READ-`/`WRITE-SEQUENCE.STRING.8-.12`,
+`.ERROR.4 .5 .11 .12`, `WRITE-SEQUENCE.BV.6`; then the stream rule fixed
+`READ-SEQUENCE.LIST.1-.5 .7`, `.VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.6 .8`,
+`WRITE-SEQUENCE.LIST.1-.5 .7`, `.SIMPLE-VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.5 .7`, none regressed.
 `READ-SEQUENCE.ERROR.7` (a dotted-list buffer must signal `type-error`) moved from error to fail.
 
 Pinned by `LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries`,
@@ -936,17 +909,13 @@ twins of the first, `SequenceBoundsFixture`, and ci-spec
 `read-and-write-sequence-signal-type-error-for-a-bad-sequence-or-bound` -- the shapes
 `READ-SEQUENCE.ERROR.7 .8 .10` and `WRITE-SEQUENCE.ERROR.3-.10` failed on.
 
-Cost of the argument check (2026-09-23, JVM / Preview 1 / component bytes, default optimize
-unless noted; base = the same tree with the check stashed): the cost is almost entirely a FIXED
+Cost of the argument check: it is almost entirely a FIXED
 per-program one -- the `type-error` signal machinery plus the defun and its callees -- into
-programs that never otherwise create a condition. A one-site micro program: +28.4 / +19.3 KB;
-the ci-spec round-trip shape +24.7 / +19.0 / +19.2 KB, the packed shape +25.9 / +20.2 / +20.4 KB,
-the character-buffer shape +28.0 / +19.0 / +19.2 KB; `hello` unchanged. The same program with a
-pre-existing `type-error` signal elsewhere pays only the defun: +3.6 / +1.3 KB, and each further
-site ~+0.1 KB. Real programs already carry the machinery: `checkpoint-tokenizer` +478 B JVM /
-+335 B P1 (`--optimize`), `llm` -804 B P1 (tree-shake noise), `zlib` +4.9 KB JVM / +3.1 KB P1.
-No narrower gate exists without losing the guarantee -- any call can receive a bad sequence or
-bound at runtime -- so the numbers above are the accepted shape, not a problem to fix.
+programs that never otherwise create a condition. A program with a
+pre-existing `type-error` signal elsewhere pays only the defun, and each further site almost
+nothing. Real programs already carry the machinery. No narrower gate exists without losing the
+guarantee -- any call can receive a bad sequence or bound at runtime -- so this is the accepted
+shape, not a problem to fix.
 
 Two follow-ups the full suite caught on 2026-09-23 (the check as first written broke five
 suites: the direct-compile `binaryStandardStreamDesignators` on JVM and Preview 1, and the three
@@ -992,10 +961,9 @@ validator so the two cannot disagree on the rule or the text).
   to a socket rides the lowering and stops at `terpri`, which has no socket arm on
   any backend (interpreter: `not an output stream`; JVM: `Socket cannot be cast to
   Writer`; `.todo/940`).
-- **Sizes** (JVM `.class`, same harness as the lambda-list tables): a plain
-  `(write-line ...)` call is byte-identical; a two-argument `funcall` goes 6,325 ->
-  23,150 B -- the variadic-wrapper price, at parity with `#'write-string` (22,511 B
-  on the same shape).
+- **Sizes** (JVM `.class`): a plain
+  `(write-line ...)` call is byte-identical; a two-argument `funcall` pays the
+  variadic-wrapper price, at parity with `#'write-string` on the same shape.
 - **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed before/after):
   `WRITE-LINE.ERROR.2/.3/.4` FAIL -> PASS; `WRITE-LINE.4-.10` still FAIL but print
   the right bytes now -- they fail on the `#.(concatenate ...)` expectation form,
@@ -1022,7 +990,7 @@ little-endian octets, two's complement when the type admits negatives; `stream-e
 answers the widened type; `file-length` / `file-position` count elements. One classification,
 `macro/StreamElementType` (over `macro/IntegerTypeRange`), read by all four backends.
 
-**Measured against sbcl 2026-09-22, and it overturned the plan's premise.** The todo assumed sbcl
+**Checked against sbcl 2026-09-22, and it overturned the plan's premise.** The todo assumed sbcl
 PACKS a sub-octet type (N <= 8 several per octet) and biases `(integer lo hi)`. It does neither:
 a type needing b bits takes 1 / 2 / 4 / 8 octets for b <= 8 / 16 / 32 / 64 and `ceil(b/8)` beyond
 (`(unsigned-byte 100)` -> 13 octets, answered as `(unsigned-byte 104)`); `(unsigned-byte 1)` and
@@ -1076,9 +1044,7 @@ is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; 
   uiop wrapper and `#'open` behind the helpers. `uiop:with-temporary-file` opens through a computed
   element type, so a wide literal there is refused at call time too. Measured 2026-09-23
   (`.todo/926`): forcing the wide helpers + the registry into computed-`:element-type`
-  programs costs +17.0K JVM / +14.4K Preview 1 on the `computed-stream-options` corpus program
-  (which passes only `'character` and `(unsigned-byte 8)` down) and +9.3K / +6.8K on an
-  `(apply #'open ...)` wrapper -- and that is WITHOUT the runtime twin of
+  programs costs every such program a large fixed size step -- and that is on top of the runtime twin of
   `macro/StreamElementType.of` the lowering would also splice (the `covering` interval logic
   over every integer spelling, plus the per-site binary-or-not dispatch growth). Four ANSI
   tests want it (`FILE-POSITION.7` `.8`, `OPEN.65`, `MAKE-TWO-WAY-STREAM.13`); no corpus caller
@@ -1088,17 +1054,14 @@ is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; 
   spec), so `bit` / `(unsigned-byte 3)` / `(integer 0 200)` compile to the class the octet always
   did (`JvmLispCompilerTest#theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8`).
 
-Cost and identity (2026-09-22, bytes JVM / Preview 1 / component, default optimize): every program
-without a wide literal and without the `stream-element-type` + `open` pair is byte-identical --
-measured over the 94 ci-spec cases and 33 examples that name a stream/byte/subtypep operator and
-the size-report corpus, 357 artifacts. A two-line ub8 write + read 38,994 / 19,735 / 25,360; the
-same at `(unsigned-byte 16)` 47,613 / 27,709 / 33,353 (+8.6K / +8.0K / +8.0K, the helpers); a
-`stream-element-type` of an ub8 file stream 9,128 / 5,556 / 10,516 -> 12,871 / 9,455 / 14,455 (the
-registry).
+Cost and identity (2026-09-22): every program
+without a wide literal and without the `stream-element-type` + `open` pair is byte-identical;
+a wide `(unsigned-byte 16)` stream pays the helpers, and a `stream-element-type` of a wide
+file stream pays the registry, on top of the octet base.
 
 ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the call-time `with-open-file` refusal
-(commit 1) 758 -> 789 tests counted, lost forms 55 -> 24, passes 447 unchanged; then 447 -> 530 of
-789 (56.7% -> 67.2%), 83 fixed, 0 regressed -- `OPEN.4 .29-.58 .61 .62`, `OPEN.OUTPUT.5-.19`,
+(commit 1) fixed nothing and lost fewer forms; then the element types fixed, none regressed --
+`OPEN.4 .29-.58 .61 .62`, `OPEN.OUTPUT.5-.19`,
 `OPEN.IO.5-.19`, `OPEN.PROBE.25-.27 .29-.36`, `FILE-LENGTH.2-.5`, `READ-BYTE.3 .4`,
 `STREAM-ELEMENT-TYPE.2-.4` (the integer-interval `subtypep` rule in
 [declarations-type-checks.md](declarations-type-checks.md) is what their `(subtypep etype
@@ -1245,7 +1208,8 @@ paths (`.todo/212`).
   (`_rename_file` over the FIFTEENTH preview1 import, `path_rename` -- the one new
   six-`i32` type, `TYPE_PATH_RENAME` -- called by `WasmRenameFileCompiler`; both paths
   stage and resolve against the preopen table on their own).
-- **Import surface**: `IMPORT_FUNC_COUNT` went 12 -> 15 and `FUNC_START` with it, so
+- **Import surface**: `IMPORT_FUNC_COUNT` grew by the three filesystem imports, `FUNC_START`
+  with it, so
   every emitted WASM function index shifted (the `fd_readdir` precedent). In step:
   `--no-wasi` defines three more errno stubs (same type indexes as the imports);
   `adapter.wat` implements all three over `wasi:filesystem@0.3.0`
@@ -1276,7 +1240,7 @@ Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`/`#fileLengthOverEve
 Binary, character and bidirectional alike: the query answers the offset and the set moves
 it, so a caller can seek and read the sought bytes rather than walk front to back. A
 binary stream counts in elements (next-but-one section), a character stream in BYTES --
-sbcl's answer, measured 2026-09-22: a character advances it by its UTF-8 length, a line
+sbcl's answer, pinned 2026-09-22: a character advances it by its UTF-8 length, a line
 `read-line` returned ends after its terminator (both bytes of a CRLF, although the line
 itself drops the CR), a character `peek-char` looked at or `unread-char` pushed back is
 not consumed yet, and an `:if-exists :append` stream starts at the end of the file (a
@@ -1354,55 +1318,42 @@ writes and the Preview 1 reservation were removed. The adapter's `path_open` sti
 its (now unread) slot; that is left alone because touching `adapter.wat` means
 regenerating the adapter blobs for no behavioral change.
 
-**Size, measured 2026-09-22** (bytes JVM / Preview 1 / component, default optimize).
+**Size (2026-09-22).**
 Every program that does not name `file-position` is byte-identical on all three targets --
 over every ci-spec case, every example in `examples/examples.yaml` and the size-report
-corpus, 707 programs and 2,121 artifacts: 2,092 identical, 6 differing only in the jar's
-embedded build timestamp (two cases that print `lisp-implementation-version`), and 23 from
-the 9 programs whose COMPILED program names `file-position` -- the 8 ci-spec cases that
-call it and `examples/net/httpbin-jzon.lisp`, through jzon's own call (+8.2 KB JVM, the
-classes; -510 / +38 B WASM). The WASM side of those moved by the removed flag writes,
-mostly down (`wide-and-narrow-stream-element-types` -638 / -429 B). The cost therefore
-falls only on a program that names `file-position`: a character write + read with two `file-position` calls 15,832 / 13,067 /
-18,681 -> 24,067 / 13,073 / 18,717 -- the JVM's +8,235 is the two travelling classes
-(4,788 + 3,267 bytes, the output goes from one class file to three) plus 180 bytes of
-`_open` / `_filePosition` arms; a binary-only one 40,870 / 20,236 / 25,957 -> 40,932 /
-20,231 / 25,937 (the JVM's `:append` start, and the flag writes the WASM backends no longer
+corpus, save the jar's
+embedded build timestamp (cases that print `lisp-implementation-version`). The cost
+falls only on a program that names `file-position`: a character stream pulls in the two
+travelling classes (the output goes from one class file to three) plus the
+`_open` / `_filePosition` arms; a binary-only one pays little (the JVM's `:append` start,
+and the flag writes the WASM backends no longer
 make). That is why the JVM gate is two facts rather than one: a program whose every `open`
 spells a literal binary `:element-type` keeps its single class file.
 
-**Follow-up: can the two classes cost less? (`.todo/938`, measured 2026-09-23 -- the finding
-is the deliverable, no change forced.)** Re-measured on current code (bytes JVM / Preview 1 /
-component, default optimize, output file count beside the bytes): a character write + read
-with two `file-position` calls 24,442 B in 3 files (`Prog` 16,387 + `RontoCharFileReader`
-4,788 + `RontoCharFileWriter` 3,267 -- the class sizes are unchanged) / 13,602 / 19,246; a
-program whose only `file-position` reference is inside a spliced library (`uiop/os:parse-
-file-location-info` on a binary file, plus a character `open` elsewhere -- the httpbin-jzon
-shape, no network needed) 61,628 B in 3 files / 32,244 / 38,483, reproducing the complaint;
-a binary-only `file-position` program 41,100 B in 1 file; `hello` 4,750 / 480 / 1,635 in 1
-file. The gate scans post-splice, so a library-internal reference ships the classes -- and
+**Follow-up: can the two classes cost less? (`.todo/938`, 2026-09-23 -- the finding
+is the deliverable, no change forced.)** The gate scans post-splice, so a library-internal reference ships the classes -- and
 that is load-bearing, not conservatism: the library call takes its stream from ITS caller,
 so a user passing a character file stream in gets the real byte offset only through them.
 Excluding library references would silently break that caller. The two sharper gates do not
 pay either: per-call-site stream dataflow (which `file-position` calls can actually receive
 a character FILE stream, as opposed to binary / string / standard / socket ones) is an
-analysis the compiler does not have, for at most 8 KB on a handful of programs; folding the
+analysis the compiler does not have; folding the
 two classes into one is impossible without rewriting every dispatch site that takes them
 with no arm today (one extends `BufferedReader`, the other `BufferedWriter`); emitting the
-offset tracking as `Prog` methods duplicates ~8 KB of hand-rolled UTF-8/position logic in
+offset tracking as `Prog` methods duplicates hand-rolled UTF-8/position logic in
 generated bytecode while the classes stay in the jar for the interpreter anyway -- net
-saving ~0. The ceiling of the one sound cut left (ship reader/writer by open direction) is
-one class, 3.3-4.8 KB, on one-directional programs only. Verdict: the cost cannot be cut
-without losing the byte-offset answer or taking on disproportionate machinery; the numbers
-above stand as the accepted shape.
+saving about none. The ceiling of the one sound cut left (ship reader/writer by open direction) is
+one class, on one-directional programs only. Verdict: the cost cannot be cut
+without losing the byte-offset answer or taking on disproportionate machinery; this stands
+as the accepted shape.
 
 **Worth it -- decided on both halves, not output only.** The ANSI value is one test
 (`FILE-POSITION.5`, output side; `.1`-`.4` need a `file-position.txt` the suite does not
 ship), but the output half alone would have left the four backends DISAGREEING on the input
 side of the same stream, the cost is paid only by programs that name the operator, and the
 input half costs nothing extra on WASM and one class on the JVM. ANSI `streams`
-(interpreter, suite `ca06bd9`), 2026-09-22: 599 -> 600 of 797, fixed `FILE-POSITION.5`,
-regressed none; `files` and `reader` unchanged (402 / 662 both ways).
+(interpreter, suite `ca06bd9`), 2026-09-22: fixed `FILE-POSITION.5`,
+none regressed; `files` and `reader` unchanged.
 
 Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks` /
 `#characterFileStreamPositionIsTheByteOffset`,
@@ -1426,7 +1377,7 @@ bare compiler refuses `unread-char` as "not supported as a function value".
 the file DIFFERENTLY: `:io` reads and writes one file through one cursor, `:overwrite`
 writes from 0 without truncating. Both are the same stream (an `:overwrite` open is an
 `:io` one whose read half goes unused), and `file-position` on it -- query, set, `:start`,
-`:end` -- is real whatever its element type. Measured against sbcl 2026-09-20: a fresh `:io`
+`:end` -- is real whatever its element type. Checked against sbcl 2026-09-20: a fresh `:io`
 open answers position 0, element type `CHARACTER`, `input-stream-p` and `output-stream-p`
 both `t`; `write-sequence "wxyz"` over `abcdefghij` under `:overwrite` leaves `wxyzefghij`;
 a character's position advances by its UTF-8 length (`file-position` after one 3-byte
@@ -1442,7 +1393,7 @@ character is 3).
   `_readChar`/`_peekChar`, `_readByte`, `_writeByte`, `_listen`, `_filePosition`, and one
   `IO_BIT|OVERWRITE_BIT` test at the head of `_open`'s mode chain). End of file is
   `ready()`, never a null line: the class cannot spell `@Nullable`. The JVM backend calls
-  the class and it TRAVELS (`JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES`, 3,592 bytes).
+  the class and it TRAVELS (`JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES`).
 - **Preview 1** opens ONE descriptor: `WasmOpenCompiler.wasmMode` 0 read / 1 write / 2
   append / 3 overwrite (neither `O_CREAT` nor `O_TRUNC`) / 4-6 the same three for `:io`,
   which adds `FD_READ` to the write rights (102). Reads and writes share the fd cursor and
@@ -1475,26 +1426,18 @@ character is 3).
 travelling class and the WASM `_open` body key on `LispMacroExpander.opensBidirectionally`:
 a LITERAL `:direction :io` / `:if-exists :overwrite` on an `open` / `with-open-file`. The
 first cut also accepted a COMPUTED `:io` / `:overwrite`, which made every computed spec and
-`#'open` open bidirectionally-maybe. Measured 2026-09-22 (bytes, JVM / Preview 1 /
-component, `-o` default optimize):
-
-| program | before | computed accepted | literal-only (landed) |
-|---|---|---|---|
-| literal `with-open-file` write + read | 14,267 / 12,627 / 17,979 | 14,267 / 12,627 / 18,237 | 14,267 / 12,627 / 18,237 |
-| options passed as arguments | 18,334 / 15,381 / 20,794 | 23,579 (2 files) / 16,696 / 22,388 | 18,334 / 15,381 / 21,052 |
-| `uiop:with-output-file` + `read-file-string` | 45,793 / 31,940 / 37,379 | 50,416 (2 files) / 32,582 / 38,287 | 45,793 / 31,940 / 37,637 |
-| binary `file-position` | 11,155 / 6,134 / 10,886 | -- | 11,155 / 6,134 / 11,144 |
+`#'open` open bidirectionally-maybe -- measured 2026-09-22 and declined:
 
 The dispatch grows from six literal leaves to fourteen and every uiop file wrapper would
 carry the class; nothing observed passes `:io` or `:overwrite` as a computed value. So a
-computed one is refused at call time, like any other unsupported value. The +258 bytes on
+computed one is refused at call time, like any other unsupported value. The small size step
+on
 every component program that writes a file is the adapter's write path -- the price of
 positioned writes, not of the gate. **Trigger**: a real caller that computes `:io` /
 `:overwrite` -- widen the two `unlessValueIn` sets and the gate together.
 
-ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: 423 -> 447 of 758 (55.8% ->
-59.0%), fixed `OPEN.IO.1 .2 .4 .20 .22-.29 .28A .31-.35`, `OPEN.OUTPUT.24`,
-`OPEN.ERROR.3 .9 .11 .13 .14`; regressed none. Still failing and NOT this mode's: `OPEN.IO.5
+ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: fixed `OPEN.IO.1 .2 .4 .20 .22-.29 .28A .31-.35`, `OPEN.OUTPUT.24`,
+`OPEN.ERROR.3 .9 .11 .13 .14`; none regressed. Still failing and NOT this mode's: `OPEN.IO.5
 -.19` except 13 (element types beyond `(unsigned-byte 8)`, and `OPEN.IO.13`'s
 `stream-element-type` answering `CHARACTER` for a binary stream -- `.todo/919`), `.3` (logical
 pathnames), `.21` / `.30` (`:notes`), `OPEN.66` (a stream as the filespec).

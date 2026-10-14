@@ -18,7 +18,7 @@ thing, including the shapes the fast arm declines.** A COST invariant.
 - `position`/`find` and their `-if` variants do not coerce at all:
   `buildPositionScan` walks a LIST through its cons cursor and scans a
   VECTOR/STRING by index against a length bound -- no allocation, early exit on a
-  hit. Trade: SITE BYTES (a wasm `position` site ~1,449 vs 591), budgeted by
+  hit. Trade: SITE BYTES, budgeted by
   `WasmLispCompilerTest.\
 aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions`.
 - A non-sequence -- a rank-2 array included -- is the operator's `SEQUENCE`
@@ -125,7 +125,7 @@ unchanged. Served only where identical answers are provable:
   `preludeDefinitions` by `LispEvaluator.loadPreludeDefinition` (the single load
   site both callers use). Without it the fast shapes would silently ignore a
   LATER redefinition.
-- Nothing added to the compile paths: `search` is 15 bytes a site, the `defun`
+- Nothing added to the compile paths: `search` costs a call site, the `defun`
   being a shared callee (`.kb/sequence-op-runtimes.md`). A native `Environment`
   built-in was rejected: the prelude loads only when the name is unresolved, so
   that is a REPLACEMENT, not a fast path, and a second keyword implementation.

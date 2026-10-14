@@ -24,8 +24,7 @@ listener's host may be `nil` (every interface) on both -- the JVM cannot tell it
 handle naming no open entry of the operator's kind (a non-handle, a closed socket, a file stream, a
 listener where a connection is needed) is `OP expects a {listener|socket or listener|connected socket}
 handle`, a `simple-error` with no datum. JVM: the socket runtime's `_sockEntry`/`_sockStr`/`_sockPort`/
-`_sockMs` (`%tls-listen-p12`'s report says `TLS-LISTEN-PEM`, the operator the inliner rewrote). Measured
-before (2026-10-11): the JVM leaked `ClassCastException`s and NPEs (`_streams` is null in a program with
+`_sockMs` (`%tls-listen-p12`'s report says `TLS-LISTEN-PEM`, the operator the inliner rewrote). Before 2026-10-11 the JVM leaked `ClassCastException`s and NPEs (`_streams` is null in a program with
 no file stream) where the interpreter signalled.
 
 ## Host failures (interpreter and JVM, one text)
@@ -35,7 +34,7 @@ A host exception (an `IOException`; for TLS also a `GeneralSecurityException`) i
 or `OP: MSG` (`tcp-accept`, `tcp-set-timeout`, `read-line`, `read-char`, `read-byte`, `write-line`,
 `write-string`, `write-byte`); MSG is the JDK's. The interpreter wraps in `SocketSupport`; the JVM in a
 handler `emitHostFailure` appends to each socket helper (`_sockReadByte`/`_sockWriteByte` carry the byte
-operators' arm, so `_readByte`/`_writeByte` call them). Measured before (2026-10-11): the JVM answered the bare
+operators' arm, so `_readByte`/`_writeByte` call them). Before 2026-10-11 the JVM answered the bare
 `Connection refused` / `Address already in use`. The handler frame records the caught exception as an `Object`:
 `checkcast Throwable` before using it. Pinned by `HandleOperandFixture.HOST_FAILURE_PROGRAM`. Still unwrapped on
 the JVM: nothing known; an unknown host's text (`no-such-host.invalid`) is DNS-dependent and unpinned.
