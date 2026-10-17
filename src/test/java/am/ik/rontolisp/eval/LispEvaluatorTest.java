@@ -115,38 +115,8 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalInteger() {
-		assertThat(eval("(+ 1 2)")).isEqualTo(new LispInteger(3));
-	}
-
-	@Test
-	void evalSubtraction() {
-		assertThat(eval("(- 10 3)")).isEqualTo(new LispInteger(7));
-	}
-
-	@Test
-	void evalMultiplication() {
-		assertThat(eval("(* 3 4)")).isEqualTo(new LispInteger(12));
-	}
-
-	@Test
-	void evalDivision() {
-		assertThat(eval("(/ 10 3)")).isEqualTo(new LispRatio(BigInteger.TEN, BigInteger.valueOf(3)));
-	}
-
-	@Test
 	void evalExactDivision() {
 		assertThat(eval("(/ 10 2)")).isEqualTo(new LispInteger(5));
-	}
-
-	@Test
-	void evalDivisionReturnsRatio() {
-		assertThat(eval("(/ 1 2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
-	}
-
-	@Test
-	void evalDivisionByFloat() {
-		assertThat(eval("(/ 1 2.0)")).isEqualTo(new LispDouble(0.5));
 	}
 
 	@Test
@@ -181,11 +151,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void ratioLiteral() {
-		assertThat(eval("1/3")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(3)));
-	}
-
-	@Test
 	void ratioLiteralNormalizes() {
 		assertThat(eval("2/4")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
 		assertThat(eval("4/2")).isEqualTo(new LispInteger(2));
@@ -203,16 +168,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void ratioAddition() {
-		assertThat(eval("(+ 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.valueOf(5), BigInteger.valueOf(6)));
-	}
-
-	@Test
-	void ratioAdditionDemotesToInteger() {
-		assertThat(eval("(+ 1/2 1/2)")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
 	void ratioMixedWithInteger() {
 		assertThat(eval("(+ 1 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(3), BigInteger.TWO));
 		assertThat(eval("(* 2/3 3)")).isEqualTo(new LispInteger(2));
@@ -227,11 +182,6 @@ class LispEvaluatorTest {
 	void ratioSubtraction() {
 		assertThat(eval("(- 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(6)));
 		assertThat(eval("(- 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.TWO));
-	}
-
-	@Test
-	void ratioDivision() {
-		assertThat(eval("(/ 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.valueOf(3), BigInteger.TWO));
 	}
 
 	@Test
@@ -415,11 +365,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalMod() {
-		assertThat(eval("(mod 10 3)")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
 	void evalModTakesSignOfDivisor() {
 		assertThat(eval("(mod -13 4)")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mod 13 -4)")).isEqualTo(new LispInteger(-3));
@@ -498,16 +443,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalIfTrue() {
-		assertThat(eval("(if t 1 2)")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
-	void evalIfFalse() {
-		assertThat(eval("(if nil 1 2)")).isEqualTo(new LispInteger(2));
-	}
-
-	@Test
 	void evalIfNoElse() {
 		assertThat(eval("(if nil 1)")).isSameAs(LispNil.INSTANCE);
 	}
@@ -516,11 +451,6 @@ class LispEvaluatorTest {
 	void evalQuote() {
 		LispVal result = eval("(quote (1 2 3))");
 		assertThat(result.print()).isEqualTo("(1 2 3)");
-	}
-
-	@Test
-	void evalLet() {
-		assertThat(eval("(let ((x 10) (y 20)) (+ x y))")).isEqualTo(new LispInteger(30));
 	}
 
 	@Test
@@ -625,11 +555,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalLambda() {
-		assertThat(eval("((lambda (x) (* x x)) 5)")).isEqualTo(new LispInteger(25));
-	}
-
-	@Test
 	void evalDefvarDefinesGlobal() {
 		assertThat(evalMulti("(defvar *x* 42) *x*")).isEqualTo(new LispInteger(42));
 	}
@@ -643,16 +568,6 @@ class LispEvaluatorTest {
 	void evalDefvarIsIdempotent() {
 		// The second defvar must not overwrite the already-bound variable.
 		assertThat(evalMulti("(defvar *x* 1) (defvar *x* 2) *x*")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
-	void evalProgn() {
-		assertThat(eval("(progn 1 2 3)")).isEqualTo(new LispInteger(3));
-	}
-
-	@Test
-	void evalSetq() {
-		assertThat(eval("(progn (setq x 10) x)")).isEqualTo(new LispInteger(10));
 	}
 
 	@Test
@@ -1084,13 +999,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalErrorOutputIsAnOpenStreamThatSurvivesAClose() {
-		assertThat(eval("(open-stream-p *error-output*)")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(eval("(close *error-output*)")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(eval("(open-stream-p *error-output*)")).isEqualTo(LispTrue.INSTANCE);
-	}
-
-	@Test
 	void evalErrorOutputIsOneStreamValue() {
 		assertThat(eval("""
 				(list (eq *error-output* *error-output*)
@@ -1174,14 +1082,6 @@ class LispEvaluatorTest {
 		// (find-package :keyword) answers the keyword-package designator; intern must
 		// accept it like the literal :keyword (s-sql's from-sql-name).
 		assertThat(eval("(intern \"ZAP\" (find-package :keyword))")).isEqualTo(new LispSymbol(":ZAP"));
-	}
-
-	@Test
-	void evalWithArenaIsAPlainProgn() {
-		// rontolisp:with-arena names a reclamation boundary for --no-gc; the interpreter
-		// heap is garbage-collected, so it is observationally a progn.
-		assertThat(eval("(rontolisp:with-arena () 1 2 (+ 1 2))")).isEqualTo(new LispInteger(3));
-		assertThat(eval("(rontolisp:with-arena ())")).isEqualTo(LispNil.INSTANCE);
 	}
 
 	@Test
@@ -1347,11 +1247,6 @@ class LispEvaluatorTest {
 				        (write-string "hello" s :start 1 :end 3)
 				        (slot-value s 'acc)
 				        *wl-seen*))""").print()).isEqualTo("(\"hello\" \"hello\" \"el\nel\" T)");
-	}
-
-	@Test
-	void evalWriteToString() {
-		assertThat(eval("(write-to-string '(a \"b\" 3))")).isEqualTo(new LispString("(A \"b\" 3)"));
 	}
 
 	@Test
@@ -2625,26 +2520,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalListCarCdr() {
-		assertThat(eval("(car (list 1 2 3))")).isEqualTo(new LispInteger(1));
-		assertThat(eval("(car (cdr (list 1 2 3)))")).isEqualTo(new LispInteger(2));
-	}
-
-	@Test
-	void evalCarCdrOfNil() {
-		assertThat(eval("(car nil)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(cdr nil)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(car '())")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(cdr '())")).isEqualTo(LispNil.INSTANCE);
-	}
-
-	@Test
-	void evalCons() {
-		assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
-		assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));
-	}
-
-	@Test
 	void evalHigherOrderFunction() {
 		assertThat(evalMulti(
 				"(defun apply-twice (f x) (funcall f (funcall f x))) (defun square (x) (* x x)) (apply-twice #'square 3)"))
@@ -2760,36 +2635,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalDoubleLiteral() {
-		assertThat(eval("3.14")).isEqualTo(new LispDouble(3.14));
-	}
-
-	@Test
-	void evalDoubleAddition() {
-		assertThat(eval("(+ 1.5 2.5)")).isEqualTo(new LispDouble(4.0));
-	}
-
-	@Test
-	void evalDoubleMixedAddition() {
-		assertThat(eval("(+ 1 1.5)")).isEqualTo(new LispDouble(2.5));
-	}
-
-	@Test
-	void evalDoubleSubtraction() {
-		assertThat(eval("(- 3.5 1.5)")).isEqualTo(new LispDouble(2.0));
-	}
-
-	@Test
-	void evalDoubleMultiplication() {
-		assertThat(eval("(* 2.0 3.0)")).isEqualTo(new LispDouble(6.0));
-	}
-
-	@Test
-	void evalDoubleDivision() {
-		assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
-	}
-
-	@Test
 	void evalDoubleMod() {
 		assertThat(eval("(mod 5.5 2.0)")).isEqualTo(new LispDouble(1.5));
 	}
@@ -2816,16 +2661,6 @@ class LispEvaluatorTest {
 		// 4-level compositions
 		assertThat(eval("(cadddr '(1 2 3 4))")).isEqualTo(new LispInteger(4));
 		assertThat(eval("(caddar '((1 2 3) 4))")).isEqualTo(new LispInteger(3));
-	}
-
-	@Test
-	void evalOnePlus() {
-		assertThat(eval("(1+ 5)")).isEqualTo(new LispInteger(6));
-	}
-
-	@Test
-	void evalOneMinus() {
-		assertThat(eval("(1- 5)")).isEqualTo(new LispInteger(4));
 	}
 
 	@Test
@@ -3698,21 +3533,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalTranscendental() {
-		assertThat(eval("(sin 0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(cos 0)")).isEqualTo(new LispDouble(1.0));
-		assertThat(eval("(tan 0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(exp 0)")).isEqualTo(new LispDouble(1.0));
-		assertThat(eval("(log 1)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(atan 0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(asin 0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(acos 1)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(sinh 0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(cosh 0)")).isEqualTo(new LispDouble(1.0));
-		assertThat(eval("(tanh 0)")).isEqualTo(new LispDouble(0.0));
-	}
-
-	@Test
 	void evalCis() {
 		assertThat(eval("(cis 0d0)").print()).isEqualTo("#C(1.0 0.0)");
 		assertThat(eval("(cis 1d0)").print()).isEqualTo("#C(0.5403023058681398 0.8414709848078965)");
@@ -3992,21 +3812,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalProg1() {
-		// returns the value of the first form
-		assertThat(eval("(prog1 1 2 3)")).isEqualTo(new LispInteger(1));
-		// a single form behaves like the identity
-		assertThat(eval("(prog1 99)")).isEqualTo(new LispInteger(99));
-		// the first form is saved before the body runs
-		assertThat(eval("(let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x))))")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
-	void evalFirst() {
-		assertThat(eval("(first '(1 2 3))")).isEqualTo(new LispInteger(1));
-	}
-
-	@Test
 	void evalNth() {
 		assertThat(eval("(nth 0 '(1 2 3))")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(nth 1 '(1 2 3))")).isEqualTo(new LispInteger(2));
@@ -4019,26 +3824,6 @@ class LispEvaluatorTest {
 		assertThat(eval("(nthcdr 1 '(1 2 3))")).isEqualTo(eval("'(2 3)"));
 		assertThat(eval("(nthcdr 2 '(1 2 3))")).isEqualTo(eval("'(3)"));
 		assertThat(eval("(nthcdr 3 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
-	}
-
-	@Test
-	void evalSecond() {
-		assertThat(eval("(second '(1 2 3))")).isEqualTo(new LispInteger(2));
-	}
-
-	@Test
-	void evalCaseSingleKey() {
-		assertThat(eval("(case 2 (1 'one) (2 'two) (3 'three))")).isEqualTo(new LispSymbol("TWO"));
-	}
-
-	@Test
-	void evalCaseKeyList() {
-		assertThat(eval("(case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big))")).isEqualTo(new LispSymbol("SMALL"));
-	}
-
-	@Test
-	void evalCaseOtherwise() {
-		assertThat(eval("(case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big))")).isEqualTo(new LispSymbol("BIG"));
 	}
 
 	@Test
@@ -4069,16 +3854,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalThird() {
-		assertThat(eval("(third '(1 2 3))")).isEqualTo(new LispInteger(3));
-	}
-
-	@Test
-	void evalFourth() {
-		assertThat(eval("(fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
-	}
-
-	@Test
 	void evalFifth() {
 		assertThat(eval("(fifth '(1 2 3 4 5))")).isEqualTo(new LispInteger(5));
 	}
@@ -4101,11 +3876,6 @@ class LispEvaluatorTest {
 	@Test
 	void evalNinth() {
 		assertThat(eval("(ninth '(1 2 3 4 5 6 7 8 9))")).isEqualTo(new LispInteger(9));
-	}
-
-	@Test
-	void evalTenth() {
-		assertThat(eval("(tenth '(1 2 3 4 5 6 7 8 9 10))")).isEqualTo(new LispInteger(10));
 	}
 
 	@Test
@@ -4391,11 +4161,6 @@ class LispEvaluatorTest {
 	// keyword tests
 
 	@Test
-	void evalKeywordSelfEvaluating() {
-		assertThat(eval(":foo")).isEqualTo(new LispSymbol(":FOO"));
-	}
-
-	@Test
 	void evalKeywordEq() {
 		assertThat(eval("(eq :foo :foo)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(eq :foo :bar)")).isSameAs(LispNil.INSTANCE);
@@ -4409,16 +4174,6 @@ class LispEvaluatorTest {
 	@Test
 	void evalKeywordInList() {
 		assertThat(eval("(car (list :foo :bar))")).isEqualTo(new LispSymbol(":FOO"));
-	}
-
-	@Test
-	void evalReduceWithBuiltinPlus() {
-		assertThat(eval("(reduce #'+ '(1 2 3 4 5) :initial-value 0)")).isEqualTo(new LispInteger(15));
-	}
-
-	@Test
-	void evalReduceWithBuiltinMul() {
-		assertThat(eval("(reduce #'* '(1 2 3 4 5) :initial-value 1)")).isEqualTo(new LispInteger(120));
 	}
 
 	@Test
@@ -4441,25 +4196,8 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalReduceLeftFoldSubtraction() {
-		// ((((1-2)-3)-4)) = -8
-		assertThat(eval("(reduce #'- '(1 2 3 4))")).isEqualTo(new LispInteger(-8));
-	}
-
-	@Test
-	void evalReduceFromEndSubtraction() {
-		// (1-(2-(3-4))) = -2
-		assertThat(eval("(reduce #'- '(1 2 3 4) :from-end t)")).isEqualTo(new LispInteger(-2));
-	}
-
-	@Test
 	void evalReduceFromEndConsWithInitialValue() {
 		assertThat(eval("(reduce #'cons '(1 2 3) :from-end t :initial-value nil)").print()).isEqualTo("(1 2 3)");
-	}
-
-	@Test
-	void evalReduceKey() {
-		assertThat(eval("(reduce #'+ '((1) (2) (3)) :key #'car)")).isEqualTo(new LispInteger(6));
 	}
 
 	@Test
@@ -4486,30 +4224,8 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalLetStar() {
-		assertThat(eval("(let* ((x 2) (y (* x 3))) (+ x y))")).isEqualTo(new LispInteger(8));
-	}
-
-	@Test
 	void evalDolist() {
 		assertThat(evalMulti("(setq s 0) (dolist (e '(1 2 3 4)) (setq s (+ s e))) s")).isEqualTo(new LispInteger(10));
-	}
-
-	@Test
-	void evalDolistResultForm() {
-		assertThat(eval("(dolist (e '(1 2) 99))")).isEqualTo(new LispInteger(99));
-	}
-
-	@Test
-	void evalDo() {
-		// Sum 0..4 using a stepped counter and an accumulator mutated in the body.
-		assertThat(eval("(do ((i 0 (+ i 1)) (s 0)) ((= i 5) s) (setq s (+ s i)))")).isEqualTo(new LispInteger(10));
-	}
-
-	@Test
-	void evalDoParallelStep() {
-		// Parallel step: a <- b, b <- a+b computes Fibonacci (fib 10 = 55).
-		assertThat(eval("(do ((i 0 (+ i 1)) (a 0 b) (b 1 (+ a b))) ((= i 10) a))")).isEqualTo(new LispInteger(55));
 	}
 
 	@Test
@@ -4521,16 +4237,6 @@ class LispEvaluatorTest {
 	void evalReturnFromDolist() {
 		// return exits the dolist immediately, skipping the t result form.
 		assertThat(eval("(dolist (m '(2 3 5) t) (if (= m 3) (return)))")).isSameAs(LispNil.INSTANCE);
-	}
-
-	@Test
-	void evalReturnWithValue() {
-		assertThat(eval("(dotimes (i 5 -1) (if (evenp i) (return i)))")).isEqualTo(new LispInteger(0));
-	}
-
-	@Test
-	void evalReturnFromDo() {
-		assertThat(eval("(do ((i 0 (+ i 1))) ((> i 100) -1) (if (= i 4) (return i)))")).isEqualTo(new LispInteger(4));
 	}
 
 	@Test
@@ -4935,12 +4641,6 @@ class LispEvaluatorTest {
 	@Test
 	void evalIncfPlace() {
 		assertThat(evalMulti("(setq l (list 1 2 3)) (incf (cadr l)) l").print()).isEqualTo("(1 3 3)");
-	}
-
-	@Test
-	void evalLength() {
-		assertThat(eval("(length '(1 2 3 4 5))")).isEqualTo(new LispInteger(5));
-		assertThat(eval("(length nil)")).isEqualTo(new LispInteger(0));
 	}
 
 	@Test
@@ -10203,11 +9903,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFuncallWithBuiltinPlus() {
-		assertThat(eval("(funcall #'+ 3 4)")).isEqualTo(new LispInteger(7));
-	}
-
-	@Test
 	void evalMapWithBuiltin1Plus() {
 		assertThat(eval("(mapcar #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
 	}
@@ -11206,11 +10901,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFuncallWithSymbolDesignator() {
-		assertThat(eval("(funcall 'car '(7 8))")).isEqualTo(new LispInteger(7));
-	}
-
-	@Test
 	void evalFunctionOfSpecialOperatorThrows() {
 		assertThatThrownBy(() -> eval("#'defun")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("The function DEFUN is undefined");
@@ -11242,11 +10932,6 @@ class LispEvaluatorTest {
 	@Test
 	void evalEvalSelfEvaluating() {
 		assertThat(eval("(eval 42)")).isEqualTo(new LispInteger(42));
-	}
-
-	@Test
-	void evalEvalQuotedExpression() {
-		assertThat(eval("(eval '(+ 1 2))")).isEqualTo(new LispInteger(3));
 	}
 
 	@Test
@@ -11342,12 +11027,6 @@ class LispEvaluatorTest {
 				(fact 32)
 				""");
 		assertThat(result).isEqualTo(new LispBigInteger(new BigInteger("263130836933693530167218012160000000")));
-	}
-
-	@Test
-	void bigIntegerAdditionOverflow() {
-		assertThat(eval("(+ 9223372036854775807 1)"))
-			.isEqualTo(new LispBigInteger(new BigInteger("9223372036854775808")));
 	}
 
 	@Test
@@ -15159,16 +14838,6 @@ class LispEvaluatorTest {
 		assertThat(eval("(char-downcase (code-char 1040))")).isEqualTo(new LispChar(1072));
 	}
 
-	// String indexing (length / char / subseq) walks BY CODE POINT; a supplementary
-	// code point is one indexed character.
-	@Test
-	void evalStringIndexingByCodePoint() {
-		assertThat(eval("(length \"😀\")")).isEqualTo(new LispInteger(1));
-		assertThat(eval("(length \"aé😀b\")")).isEqualTo(new LispInteger(4));
-		assertThat(eval("(char-code (char \"aé😀b\" 2))")).isEqualTo(new LispInteger(0x1F600));
-		assertThat(eval("(subseq \"aé😀b\" 1 3)")).isEqualTo(new am.ik.rontolisp.LispString("é😀"));
-	}
-
 	// read-char over a supplementary code point reads it as one CHARACTER (a full
 	// code point), not as its high UTF-16 surrogate: BufferedReader.read() delivers
 	// two code units, the runtime combines them via mark(1)/reset() on the low half.
@@ -15216,17 +14885,6 @@ class LispEvaluatorTest {
 		assertThat(eval("(char< #\\a #\\b #\\c)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(char<= #\\a #\\a #\\b)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(char< #\\b #\\a)")).isEqualTo(LispNil.INSTANCE);
-	}
-
-	@Test
-	void evalCharPredicates() {
-		assertThat(eval("(characterp #\\a)")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(eval("(characterp 5)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(alpha-char-p #\\x)")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(eval("(alpha-char-p #\\5)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(digit-char-p #\\7)")).isEqualTo(new LispInteger(7));
-		assertThat(eval("(digit-char-p #\\f 16)")).isEqualTo(new LispInteger(15));
-		assertThat(eval("(digit-char-p #\\9 8)")).isEqualTo(LispNil.INSTANCE);
 	}
 
 	@Test
@@ -16061,13 +15719,6 @@ class LispEvaluatorTest {
 				(defstruct %lit-pt x y)
 				(let ((f (lambda () #S(%lit-pt :x 1 :y 2)))) (eq (funcall f) (funcall f)))
 				""")).isEqualTo(LispTrue.INSTANCE);
-	}
-
-	@Test
-	void lengthOfVectorReturnsElementCount() {
-		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
-		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));
-		assertThat(eval("(length #())")).isEqualTo(new LispInteger(0));
 	}
 
 	@Test

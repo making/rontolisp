@@ -359,3 +359,15 @@ by design. Qwen3.5-0.8B's greedy answer is written down in `examples/llm/README.
 is findable by someone who thinks to look and is strictly weaker than detectable. A
 synthetic Gated DeltaNet fixture is the closest the repo gets, and it pins the
 recurrence's SHAPE, not a trained model's weights.
+
+## A single-backend test the corpus already pins
+
+`ci-spec.yaml` runs every case on all four backends (x `--simd`) in CI's native job, so a
+`JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` / `LispEvaluatorTest` method whose
+whole program sits inside one case's `source` and whose expected output inside its `expected`
+pins nothing the corpus does not. 2026-10-17: 373 such methods deleted (a stdout-equality
+assertion through the plain, prelude, read, Gray or EH helper; a value assertion only where
+the case holds `(print <form>)`). Kept: methods a `.kb` file names, a case with
+`expectedByBackend`, any other assertion. The cost is the local loop: `./mvnw test` skips
+`CiSpecE2eTest`, so a regression there surfaces in CI or in the native E2E run
+(`.kb/running-backends.md`). Add a case to the corpus rather than a per-backend method.
