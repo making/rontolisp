@@ -379,3 +379,11 @@ a compiled backend resolves a `defun` across the whole program, and the first at
 pairs, collisions included) broke EARLIER cases on every leg (`Function expects 1 argument,
 got 0`). Left in Java: pairs defining a name another case defines, pairs whose name an
 existing case already has, and output depending on global counters (`gensym`).
+
+A third pass moved 318 more cases (211 JVM-only, 143 WASM-only or twin methods through the
+plain, prelude, read, Gray, EH, expanded and vec helpers) on the same rules. Also left in Java:
+methods a `.kb` file or a source comment names, programs a WASM target cannot build or run
+(threads, TCP, TLS servers, `getenv`, `(set nil 1)`), and two whose output changed only
+inside the whole corpus (`subseq` of a bf16 array printing `#(...)` on the interpreter and
+JVM, a trailing `fresh-line` after `write-line ""` on JVM). A YAML `expected` that ends in a
+blank line needs `|+`; plain `|` drops it.

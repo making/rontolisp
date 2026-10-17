@@ -25,6 +25,9 @@ Rules:
   every backend together with its pinning test. "Verified" means run on all four
   (`.kb/running-backends.md`).
 - New built-in, macro or special form: `.kb/adding-primitives.md`.
+- Prefer a `src/test/resources/ci-spec.yaml` case over a per-backend test method. Trade-off:
+  `./mvnw test` skips `CiSpecE2eTest`, so a case runs only in CI's native job or a local native
+  E2E run (`.kb/test-execution.md`, `.kb/running-backends.md`).
 - One maven run per worktree, no `src/` edits during it, never detach a run and end the turn.
 - `git merge origin/develop` once, right before the final test run.
 - `.todo` numbers come from `.todo/claim-number.sh`.

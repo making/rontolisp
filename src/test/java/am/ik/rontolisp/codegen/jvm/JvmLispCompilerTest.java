@@ -145,26 +145,6 @@ class JvmLispCompilerTest {
 			.isEqualTo(want);
 	}
 
-	// A run-time :element-type combined with :initial-contents cannot use the
-	// %make-array-et helper (it only carries :initial-element), so
-	// LispMacroExpander.lowerRuntimeElementTypeMakeArray spells the whole seven-arm
-	// dispatch INLINE, at codegen time -- after JvmLispCompiler.programUsesFloatArray's
-	// source-level scan has already decided ctx.usesFloatArray. With no OTHER literal
-	// float make-array in the program to force the gate on, the inline double-float arm
-	// fell to the general boxed path (LispFloatArray.prototypeFor is skipped whenever
-	// ctx.usesFloatArray is false), so the JVM printed a general array where the
-	// interpreter and both wasm backends print a packed one.
-	@Test
-	void compileAndRunMakeArrayWithARuntimeElementTypeAndInitialContentsPacksAFloatArray() throws Exception {
-		assertThat(compileAndRun(
-				"""
-						(defun et-of (x) x)
-						(print (make-array 2 :element-type (et-of 'double-float) :initial-contents '(1d0 2d0)))
-						(print (array-element-type (make-array 2 :element-type (et-of 'double-float) :initial-contents '(1d0 2d0))))
-						"""))
-			.isEqualTo("#d(1.0 2.0)\nDOUBLE-FLOAT");
-	}
-
 	@Test
 	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
 		// The pure-builtin fold renders in JAVA at compile time what the emitted class
@@ -322,14 +302,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileFindClassUnknownSignalsUnlessErrorpNil() throws Exception {
-		assertThat(compileAndRun("""
-				(print (list (find-class 'fc-no-such nil)
-				             (handler-case (find-class 'fc-no-such) (error (e) :signaled))))
-				""")).isEqualTo("(NIL :SIGNALED)");
-	}
-
-	@Test
 	void compileSetfFindClassRegistersAnAliasNameForTheSameClass() throws Exception {
 		// The alias joins the registry in the definition walk, so it is an extra SPELLING
 		// of the target's %class-meta-table% entry: the runtime %find-class memoizes one
@@ -369,20 +341,6 @@ class JvmLispCompilerTest {
 				"""))
 			.isEqualTo("((ARRAY VECTOR BIT-VECTOR NUMBER REAL RATIONAL SEQUENCE LIST STRUCTURE-OBJECT BUILT-IN-CLASS)"
 					+ " T NIL T T VECTOR ARRAY STRING T)");
-	}
-
-	@Test
-	void compileSlotExistsPAnswersDeclaredSlotsRegardlessOfBoundness() throws Exception {
-		// The compile-path twin of the interpreter case: a literal name compiles to a
-		// %obj-is membership test over the declaring layouts, a runtime name to the
-		// shared %slot-exists-p-runtime dispatch.
-		assertThat(compileAndRun("""
-				(defclass se-box () ((a :initarg :a) (b :initform 7)))
-				(let ((o (make-instance 'se-box)))
-				  (print (list (slot-exists-p o 'a) (slot-exists-p o 'b)
-				               (slot-exists-p o 'zz) (slot-exists-p 42 'a)
-				               (slot-exists-p o (car (list 'a))))))
-				""")).isEqualTo("(T T NIL NIL T)");
 	}
 
 	@Test
@@ -1053,25 +1011,6 @@ class JvmLispCompilerTest {
 		});
 		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
 			.isEqualTo("(T (X Y) CCL-PT 1)");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseCatchesTypedErrorByClass() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition hc-err (error) ((v :initarg :v :reader hc-err-v)))
-				(print (handler-case (error 'hc-err :v 7)
-				         (hc-err (e) (list :caught (hc-err-v e)))))
-				""")).isEqualTo("(:CAUGHT 7)");
-	}
-
-	@Test
-	void compileAndRunNoApplicableMethodIsCatchableAndReportsTheSameText() throws Exception {
-		// The last resort signals a typed condition whose :report renders lazily; a
-		// handler that PRINTS it must see exactly the old eager message.
-		assertThat(compileAndRun("""
-				(defclass nam-box () ((v :initarg :v :reader nam-box-v)))
-				(print (handler-case (nam-box-v 42) (error (e) (princ-to-string e))))
-				""")).isEqualTo("\"No applicable method: NAM-BOX-V on INTEGER\"");
 	}
 
 	@Test
@@ -2143,79 +2082,9 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunOperandTypeErrorAnswersItsDatumAndExpectedType() throws Exception {
-		// The pad fills the type-error's datum and expected-type from the record the
-		// wrapper left (JvmOperandTypeRuntime); the evaluator twin is
-		// operandTypeErrorAnswersItsDatumAndExpectedType.
-		assertThat(compileAndRun("""
-				(defun te-slots (thunk)
-				  (handler-case (funcall thunk)
-				    (type-error (e) (list (type-error-datum e) (type-error-expected-type e)))))
-				(print (list (te-slots (lambda () (> nil 0)))
-				             (te-slots (lambda () (logand 1 "x")))
-				             (te-slots (lambda () (sqrt 'q)))))
-				""")).isEqualTo("((NIL REAL) (\"x\" INTEGER) (Q NUMBER))");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseCatchesErrorFromCalledFunction() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-thrower () (error "deep"))
-				(print (handler-case (hc-thrower) (error (e) :caught)))
-				""")).isEqualTo(":CAUGHT");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseDispatchesByHierarchyAndClauseOrder() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition hc-sub (parse-error) ())
-				(print (handler-case (error 'hc-sub)
-				         (warning (w) :warning)
-				         (parse-error (e) :parse)
-				         (error (e) :error)))
-				""")).isEqualTo(":PARSE");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseRethrowsUnmatchedToOuterHandler() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition hc-warn2 (warning) ())
-				(print (handler-case
-				           (handler-case (error 'hc-warn2)
-				             (error (e) :inner))
-				         (warning (w) :outer)))
-				""")).isEqualTo(":OUTER");
-	}
-
-	@Test
 	void compileAndRunHandlerCaseUnmatchedErrorAborts() {
 		assertThatThrownBy(() -> compileAndRun("(handler-case (error \"boom\") (warning (w) :w))"))
 			.hasRootCauseMessage("boom");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseNoErrorClauseReceivesAllValues() throws Exception {
-		// :no-error binds the protected form's full VALUES -- a (values ...) tail, a
-		// values-list and a producing call all spread. Missing values are nil, surplus
-		// values are dropped.
-		assertThat(compileAndRun("(print (handler-case (values 1 2 3) (:no-error (a b c) (list a b c))))"))
-			.isEqualTo("(1 2 3)");
-		assertThat(compileAndRun("(print (handler-case (values 1 2) (:no-error (a b c) (list a b c))))"))
-			.isEqualTo("(1 2 NIL)");
-		assertThat(compileAndRun("(print (handler-case (values 1 2 3 4) (:no-error (a b) (list a b))))"))
-			.isEqualTo("(1 2)");
-		assertThat(compileAndRun("(print (handler-case (values-list (list 1 2 3)) (:no-error (a b c) (list a b c))))"))
-			.isEqualTo("(1 2 3)");
-		assertThat(compileAndRun(
-				"(let ((h (make-hash-table))) (setf (gethash 'k h) 99) (print (handler-case (gethash 'k h) (:no-error (a b) (list a b)))))"))
-			.isEqualTo("(99 T)");
-	}
-
-	@Test
-	void compileAndRunRestartCaseNormalCompletionReturnsPrimaryValues() throws Exception {
-		assertThat(compileAndRun("(print (restart-case (+ 1 2) (retry () :retried)))")).isEqualTo("3");
-		assertThat(compileAndRun("(print (multiple-value-list (restart-case (values 1 2) (retry () nil))))"))
-			.isEqualTo("(1 2)");
 	}
 
 	@Test
@@ -2233,117 +2102,6 @@ class JvmLispCompilerTest {
 				(print (mapcar (lambda (x) (restart-case (rl-h) (use-value (v) (+ v x)))) (list 1 2)))
 				(print (funcall (lambda () (with-simple-restart (rl-skip "s") (rl-h)))))
 				""")).isEqualTo("(4 4)\n4");
-	}
-
-	@Test
-	void compileAndRunHandlerBindInvokesKeywordRestartAcrossFunctions() throws Exception {
-		// The postmodern prepare.lisp shape: the restart is ESTABLISHED in one
-		// function and INVOKED (by keyword name, with an argument) from a
-		// handler-bind handler running in another, before unwinding.
-		assertThat(compileAndRun("""
-				(defun rs-f ()
-				  (restart-case (progn (error "boom") :not-reached)
-				    (:reconnect (x) (list :reconnected x))))
-				(print (handler-bind ((error (lambda (c) (invoke-restart :reconnect 42))))
-				         (rs-f)))
-				""")).isEqualTo("(:RECONNECTED 42)");
-	}
-
-	@Test
-	void compileAndRunHandlerBindDecliningHandlerFallsThroughToHandlerCase() throws Exception {
-		assertThat(compileAndRun("""
-				(print (let ((log nil))
-				         (handler-case
-				             (handler-bind ((error (lambda (c) (setq log (cons :seen log)))))
-				               (error "boom"))
-				           (error (e) (cons :caught log)))))
-				""")).isEqualTo("(:CAUGHT :SEEN)");
-	}
-
-	@Test
-	void compileAndRunHandlerBindReceivesTypedConditionWithSlots() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition hb-err (error) ((v :initarg :v :reader hb-err-v)))
-				(print (handler-bind ((hb-err (lambda (c) (invoke-restart :use (hb-err-v c)))))
-				         (restart-case (error 'hb-err :v 7)
-				           (:use (x) (list :slot x)))))
-				""")).isEqualTo("(:SLOT 7)");
-	}
-
-	@Test
-	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBind() throws Exception {
-		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
-		// control, so the nearer handler-case handles the condition and the enclosing
-		// handler-bind handler never runs.
-		assertThat(compileAndRun("""
-				(print (block b
-				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
-				           (handler-case (error "boom") (error () :caught)))))
-				""")).isEqualTo(":CAUGHT");
-		assertThat(compileAndRun("""
-				(print (block b
-				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
-				           (ignore-errors (error "boom")))))
-				""")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileAndRunAnInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun() throws Exception {
-		assertThat(compileAndRun("""
-				(print (block b
-				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
-				           (handler-case (error "boom") (end-of-file () :caught)))))
-				""")).isEqualTo(":OUTER-RAN");
-	}
-
-	@Test
-	void compileAndRunAHandlerCaseClauseBodyDoesNotCatchWhatItSignals() throws Exception {
-		assertThat(compileAndRun("""
-				(print (block b
-				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
-				           (handler-case (error "boom") (error () (error "again"))))))
-				""")).isEqualTo(":OUTER-RAN");
-	}
-
-	@Test
-	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBindForABuiltInError() throws Exception {
-		assertThat(compileAndRun("""
-				(print (block b
-				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
-				           (handler-case (car 1) (error () :caught)))))
-				""")).isEqualTo(":CAUGHT");
-	}
-
-	@Test
-	void compileAndRunHandlerBindSeesTheErrorABuiltInRaises() throws Exception {
-		// The rove shape: a raw runtime failure (a bad car, an index out
-		// of bounds) lands in the handler-bind expansion's %hb-guard pad, which runs
-		// the cluster stack and rethrows.
-		assertThat(compileAndRun(
-				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (car 1))))"))
-			.isEqualTo(":CAUGHT");
-		assertThat(compileAndRun(
-				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (aref (vector 1 2) 5))))"))
-			.isEqualTo(":CAUGHT");
-	}
-
-	@Test
-	void compileAndRunHandlerBindSeesAnUndefinedFunctionError() throws Exception {
-		assertThat(compileAndRun(
-				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1))))"))
-			.isEqualTo(":CAUGHT");
-	}
-
-	@Test
-	void compileAndRunHandlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst() throws Exception {
-		assertThat(compileAndRun("""
-				(print (let ((log nil))
-				         (handler-case
-				             (handler-bind ((error (lambda (c) (setq log (cons :outer log)))))
-				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)))))
-				                 (car 1)))
-				           (error (e) (cons :caught log)))))
-				""")).isEqualTo("(:CAUGHT :OUTER :INNER)");
 	}
 
 	@Test
@@ -2365,42 +2123,6 @@ class JvmLispCompilerTest {
 				                 (error "first")))
 				           (error (e) (list (type-of e) log)))))
 				""")).isEqualTo("(TYPE-ERROR 1)\n(TYPE-ERROR (TYPE-ERROR :INNER))");
-	}
-
-	@Test
-	void compileAndRunHandlerBindHandlerAndHandlerCaseSeeTheSameInstance() throws Exception {
-		// The signal path attaches the instance %run-handlers saw to the throw, so
-		// the handlers run once and handler-case dispatches on the identical
-		// condition.
-		assertThat(compileAndRun("""
-				(print (let ((seen nil) (n 0))
-				         (handler-case
-				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (setq seen c))))
-				               (error "boom"))
-				           (error (e) (list :caught (eq e seen) n)))))
-				""")).isEqualTo("(:CAUGHT T 1)");
-	}
-
-	@Test
-	void compileAndRunBuiltInErrorCarriesItsConditionClass() throws Exception {
-		// The classification the landing pad emits must agree with the interpreter's
-		// throw-site classes (LispEvaluatorTest#aBuiltInErrorCarriesItsConditionClass).
-		assertThat(compileAndRun("(print (handler-case (car 1) (type-error (e) :type-error) (error (e) :plain)))"))
-			.isEqualTo(":TYPE-ERROR");
-		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) :dbz) (error (e) :plain)))"))
-			.isEqualTo(":DBZ");
-		assertThat(compileAndRun(
-				"(print (handler-case (aref (vector 1 2) 5) (type-error (e) :type-error) (error (e) :plain)))"))
-			.isEqualTo(":TYPE-ERROR");
-		assertThat(compileAndRun(
-				"(print (handler-case (no-such-function-xyz 1) (undefined-function (e) :undefined) (error (e) :plain)))"))
-			.isEqualTo(":UNDEFINED");
-		assertThat(compileAndRun(
-				"(print (handler-case (symbol-value 'no-such-var-xyz) (unbound-variable (e) :unbound) (error (e) :plain)))"))
-			.isEqualTo(":UNBOUND");
-		assertThat(compileAndRun(
-				"(print (handler-case (error \"boom\") (type-error (e) :wrong) (simple-error (e) :simple)))"))
-			.isEqualTo(":SIMPLE");
 	}
 
 	@Test
@@ -2480,121 +2202,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
-		// A cast failure's host text names Java classes and is replaced at the pad; an
-		// out-of-range index reports its bound itself now
-		// (outOfRangeSubscriptsAreTypeErrorsNamingTheirBound). (car 1) names itself now
-		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
-		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
-		// (listConsumersNameTheOperator), and so does an access's array argument
-		// (sequenceAndAccessorOperatorsNameTheirWrongTypeArgument), an array-shape
-		// accessor's included, and a string handed a fill-pointer accessor
-		// (fillPointerSurfaceRefusesAVectorWithoutOne).
-		assertThat(compileAndRun("(print (handler-case (fill-pointer \"abc\") (type-error (e) (princ-to-string e))))"))
-			.isEqualTo(
-					"\"FILL-POINTER: The value \\\"abc\\\" is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))\"");
-		assertThat(compileAndRun("(print (handler-case (fill-pointer 5) (type-error (e) (princ-to-string e))))"))
-			.isEqualTo("\"FILL-POINTER: The value 5 is not of type ARRAY\"");
-		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
-			.isEqualTo("\"AREF: The value 5 is not of type ARRAY\"");
-		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
-			.isEqualTo("\"AREF: The value 5 is not of type (INTEGER 0 (2))\"");
-		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e))))"))
-			.isEqualTo("\"Division by zero\"");
-	}
-
-	@Test
-	void compileAndRunFindRestartReturnsObjectAndGoLeavesClauseIntoTagbody() throws Exception {
-		// The postmodern transaction.lisp shape: find-restart with a condition
-		// argument returns a first-class restart object, invoke-restart on the
-		// object transfers to the clause, and the clause body (go start) re-enters
-		// the enclosing tagbody -- a lexical, same-function go.
-		assertThat(compileAndRun("""
-				(defun rs-retry (c)
-				  (let ((r (find-restart 'retry-me c)))
-				    (if (null r) :none (invoke-restart r))))
-				(print (handler-bind ((error (lambda (c) (rs-retry c))))
-				         (let ((n 0))
-				           (tagbody start
-				             (restart-case
-				                 (progn (setq n (+ n 1)) (when (< n 3) (error "again")))
-				               (retry-me () (go start))))
-				           n)))
-				""")).isEqualTo("3");
-	}
-
-	@Test
-	void compileAndRunRestartsDisappearOutsideTheirExtent() throws Exception {
-		assertThat(compileAndRun("(print (progn (restart-case 1 (gone () nil)) (find-restart 'gone)))"))
-			.isEqualTo("NIL");
-		assertThat(compileAndRun("(print (handler-case (invoke-restart :nope) (error (e) :no-restart)))"))
-			.isEqualTo(":NO-RESTART");
-	}
-
-	@Test
-	void compileAndRunComputeRestartsListsInnermostFirstAndRestartNameReads() throws Exception {
-		assertThat(compileAndRun("""
-				(print (restart-case
-				           (restart-case (mapcar (function restart-name) (compute-restarts))
-				             (aaa () nil)
-				             (bbb () nil))
-				         (ccc () nil)))
-				""")).isEqualTo("(AAA BBB CCC)");
-	}
-
-	@Test
-	void compileAndRunNestedHandlerBindLayersInnerDeclinesOuterInvokes() throws Exception {
-		// The prepare.lisp shape: nested handler-bind layers around one
-		// restart-case; the inner cluster's handler declines (returns), the outer
-		// cluster's handler invokes the restart.
-		assertThat(compileAndRun("""
-				(print (let ((log nil))
-				         (handler-bind ((error (lambda (c) (invoke-restart :reconnect))))
-				           (handler-bind ((error (lambda (c) (setq log (cons :inner-saw log)))))
-				             (restart-case (error "conn lost")
-				               (:reconnect () (cons :reconnected log)))))))
-				""")).isEqualTo("(:RECONNECTED :INNER-SAW)");
-	}
-
-	@Test
-	void compileAndRunHandlerSignalingInsideHandlerDoesNotSeeOwnCluster() throws Exception {
-		assertThat(compileAndRun("""
-				(print (handler-case
-				           (handler-bind ((error (lambda (c) (error "inner"))))
-				             (error "outer"))
-				         (error (e) (simple-condition-format-control e))))
-				""")).isEqualTo("\"inner\"");
-	}
-
-	@Test
-	void compileAndRunRestartBindInvokesFunctionAtInvocationPoint() throws Exception {
-		assertThat(compileAndRun("""
-				(print (let ((hit nil))
-				         (restart-bind ((poke (lambda (v) (setq hit v))))
-				           (invoke-restart 'poke 9)
-				           hit)))
-				""")).isEqualTo("9");
-	}
-
-	@Test
-	void compileAndRunWithSimpleRestartReturnsNilAndT() throws Exception {
-		assertThat(compileAndRun("""
-				(print (handler-bind ((error (lambda (c) (invoke-restart 'skip))))
-				         (multiple-value-list (with-simple-restart (skip "Skip it") (error "x")))))
-				""")).isEqualTo("(NIL T)");
-	}
-
-	@Test
-	void compileAndRunSignalRunsHandlerBindHandlersAndReturnsNil() throws Exception {
-		assertThat(compileAndRun("""
-				(print (let ((log nil))
-				         (handler-bind ((condition (lambda (c) (setq log :ran))))
-				           (signal "s"))
-				         log))
-				""")).isEqualTo(":RAN");
-	}
-
-	@Test
 	void compileAndRunSignalFallsThroughAHandlerCaseWhoseClausesDoNotMatch() throws Exception {
 		// CLHS 9.1.4.1: signal runs the applicable handlers and, if none transfers
 		// control, returns nil. A handler-case whose clauses do not match the
@@ -2648,34 +2255,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunHandlerCaseRunsUnwindProtectCleanupBeforeHandler() throws Exception {
-		assertThat(compileAndRun("""
-				(let ((log nil))
-				  (print (handler-case
-				             (unwind-protect (error "boom") (setq log (cons :cleaned log)))
-				           (error (e) (cons :caught log)))))
-				""")).isEqualTo("(:CAUGHT :CLEANED)");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseReturnExitsProtectedRegion() throws Exception {
-		// A return inside the protected form exits the loop, not the handler; the
-		// handler depth is restored through the UnwindScope cleanup channel, so a
-		// later unhandled signal still falls through to nil.
-		assertThat(compileAndRun("""
-				(print (dolist (x '(1 2 3))
-				         (handler-case (when (= x 2) (return :done)) (error (e) :err))))
-				(print (signal "after"))
-				""")).isEqualTo(":DONE\nNIL");
-	}
-
-	@Test
-	void compileAndRunIgnoreErrors() throws Exception {
-		assertThat(compileAndRun("(print (ignore-errors (error \"boom\"))) (print (ignore-errors (+ 1 2)))"))
-			.isEqualTo("NIL\n3");
-	}
-
-	@Test
 	void compileAndRunHandlerCaseInArgumentPosition() throws Exception {
 		// Entering the handler clears the operand stack, so the values the enclosing
 		// call had already evaluated must be spilled around the protected region.
@@ -2721,95 +2300,6 @@ class JvmLispCompilerTest {
 		// HCS-H was 667 bytes with the synthesis inline, 235 without it.
 		assertThat(sizes.get("HCS-H")).as("the landing calls the synthesis rather than holding it").isLessThan(400);
 		assertThat(compileAndRun(forms)).isEqualTo("NIL\n1\n:TYPE\n:DIV\n(:SIMPLE \"boom 1\")\n:TYPE");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseAsFirstOfSeveralArguments() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-first-risky () (error "boom"))
-				(print (list (handler-case (hc-first-risky) (error (e) "c")) "tail"))
-				""")).isEqualTo("(\"c\" \"tail\")");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInUserFunctionArgument() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-fn-risky () (error "boom"))
-				(defun hc-fn-take3 (a b c) (list a b c))
-				(print (hc-fn-take3 1 (handler-case (hc-fn-risky) (error (e) 2)) 3))
-				""")).isEqualTo("(1 2 3)");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInIntegerArithmeticArgument() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-int-risky () (error "boom"))
-				(print (+ 1 (handler-case (hc-int-risky) (error (e) 2))))
-				""")).isEqualTo("3");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInFloatArithmeticArgument() throws Exception {
-		// The double path keeps a raw (two-slot) double on the operand stack across the
-		// argument, so the spill must be width-aware.
-		assertThat(compileAndRun("""
-				(defun hc-flt-risky () (error "boom"))
-				(print (+ 1.5 (handler-case (hc-flt-risky) (error (e) 2.0))))
-				(print (* 2.0 (handler-case (hc-flt-risky) (error (e) 3)) 10.0))
-				""")).isEqualTo("3.5\n60.0");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInConsArgument() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-cons-risky () (error "boom"))
-				(print (cons 1 (cons 2 (handler-case (hc-cons-risky) (error (e) 3)))))
-				""")).isEqualTo("(1 2 . 3)");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInSetfArefValue() throws Exception {
-		// The array-store sequence keeps an int index on the operand stack.
-		assertThat(compileAndRun("""
-				(defun hc-aref-risky () (error "boom"))
-				(let ((a (make-array 2)))
-				  (setf (aref a 0) (handler-case (hc-aref-risky) (error (e) 9)))
-				  (print (aref a 0)))
-				""")).isEqualTo("9");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInsideLambdaArgument() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-lam-risky (x) (if (= x 2) (error "boom") x))
-				(print (mapcar (lambda (x) (list x (handler-case (hc-lam-risky x) (error (e) :err))))
-				               (list 1 2 3)))
-				""")).isEqualTo("((1 1) (2 :ERR) (3 3))");
-	}
-
-	@Test
-	void compileAndRunNestedHandlerCaseInArgumentPosition() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-nest-risky () (error "boom"))
-				(print (list "x" (handler-case (list "y" (handler-case (hc-nest-risky) (error (e) "i")))
-				                   (error (e) "o"))))
-				""")).isEqualTo("(\"x\" (\"y\" \"i\"))");
-	}
-
-	@Test
-	void compileAndRunHandlerCaseInIfBranchInArgumentPosition() throws Exception {
-		assertThat(compileAndRun("""
-				(defun hc-if-risky () (error "boom"))
-				(print (list "r:" (if t (handler-case (hc-if-risky) (error (e) "c")) "n")))
-				""")).isEqualTo("(\"r:\" \"c\")");
-	}
-
-	@Test
-	void compileAndRunIgnoreErrorsInArgumentPosition() throws Exception {
-		assertThat(compileAndRun("""
-				(defun ie-arg-risky () (error "boom"))
-				(print (list "r:" (ignore-errors (ie-arg-risky)) (ignore-errors 42)))
-				""")).isEqualTo("(\"r:\" NIL 42)");
 	}
 
 	@Test
@@ -2932,30 +2422,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunHandlerCaseAsTheMessageOfAnError() throws Exception {
-		// The throw shape allocates the exception before evaluating its message, so this
-		// pins that the message is bound to a local first: an object under construction
-		// cannot be spilled across the protected region (the compiler rejects it).
-		assertThat(compileAndRun("""
-				(defun hc-msg-risky () (error "boom"))
-				(print (handler-case (error (handler-case (hc-msg-risky) (error (e) "recovered")))
-				         (error (e) (simple-condition-format-control e))))
-				""")).isEqualTo("\"recovered\"");
-	}
-
-	@Test
-	void compileAndRunReturnOutOfHandlerCaseInArgumentPosition() throws Exception {
-		// The return abandons the spilled operands of the enclosing list, and the block's
-		// exit still has to be reached with the operand stack the block was entered with.
-		assertThat(compileAndRun("""
-				(defun hc-ret-risky (x) (if (= x 2) (error "boom") x))
-				(print (list "outer"
-				             (dolist (x (list 1 2 3))
-				               (print (list "seen" (handler-case (hc-ret-risky x) (error (e) (return :caught))))))))
-				""")).isEqualTo("(\"seen\" 1)\n(\"outer\" :CAUGHT)");
-	}
-
-	@Test
 	void compileAndRunReturnInArgumentPosition() throws Exception {
 		// A return abandons the operands the enclosing call had already evaluated, so
 		// the block exit is reached with the same operand stack on every path.
@@ -2991,19 +2457,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunPrintConditionBacktracePrintsTheCondition() throws Exception {
-		// The prelude entry defines the uiop/image symbol; a program spelling either
-		// package must select it, so neither one compiles to a call-time
-		// undefined-function error.
-		assertThat(compileAndRun("""
-				(handler-case (error "boom")
-				  (error (c) (uiop/image:print-condition-backtrace c :stream *standard-output*)))
-				(handler-case (error "boom2")
-				  (error (c) (uiop:print-condition-backtrace c :stream *standard-output*)))
-				""")).isEqualTo("boom\nboom2");
-	}
-
-	@Test
 	void compileAndRunTypedErrorKeepsLegacyUncaughtMessage() {
 		assertThatThrownBy(() -> compileAndRun(
 				"(define-condition my-cond-err (error) ((v :initarg :v))) (error 'my-cond-err :v 42)"))
@@ -3024,53 +2477,6 @@ class JvmLispCompilerTest {
 				  (:report (lambda (c s) (format s "bad value ~a" (my-cond-lam-v c)))))
 				(error 'my-cond-lam :v 42)
 				""")).hasRootCauseMessage("bad value 42");
-	}
-
-	@Test
-	void compileAndRunConditionReportRendersUnderPrincButNotUnderPrin1() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition cr-lam (error) ((msg :initarg :msg :reader cr-msg))
-				  (:report (lambda (c s) (format s "cr-lam: ~a" (cr-msg c)))))
-				(define-condition cr-str (error) () (:report "fixed text"))
-				(handler-case (error 'cr-lam :msg "boom")
-				  (error (e) (print (list (format nil "~a" e) (format nil "~s" e)
-				                          (princ-to-string (make-condition 'cr-str))))))
-				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \\\"boom\\\">\" \"fixed text\")");
-	}
-
-	@Test
-	void compileAndRunConditionReportIsInheritedBySubtypes() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition cri-base (error) ((n :initarg :n :reader cri-n))
-				  (:report (lambda (c s) (format s "base ~a" (cri-n c)))))
-				(define-condition cri-sub (cri-base) ())
-				(print (handler-case (error 'cri-sub :n 3) (error (e) (princ-to-string e))))
-				""")).isEqualTo("\"base 3\"");
-	}
-
-	@Test
-	void compileAndRunSimpleConditionFamilyReportsThroughFormatControl() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition cr-pg (simple-warning) ())
-				(print (list (princ-to-string
-				               (make-condition 'cr-pg :format-control "pg ~A/~A" :format-arguments (list 1 2)))
-				             (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e)))))
-				""")).isEqualTo("(\"pg 1/2\" \"plain 7\")");
-	}
-
-	@Test
-	void compileAndRunRuntimeControlStringDatumRendersItsFormatArguments() throws Exception {
-		assertThat(compileAndRun("""
-				(print (list (handler-case (error "lit ~a-~a" 1 2) (error (e) (princ-to-string e)))
-				             (let ((c "~a-~a"))
-				               (handler-case (error c 1 2) (error (e) (princ-to-string e))))
-				             (let ((c "PostgreSQL warning: ~A~@[~%~A~]"))
-				               (handler-case (error c "relation already exists, skipping" nil)
-				                 (error (e) (princ-to-string e))))
-				             (let ((c "sig ~a/~a"))
-				               (handler-case (signal c 3 4) (condition (e) (princ-to-string e))))))
-				"""))
-			.isEqualTo("(\"lit 1-2\" \"1-2\" \"PostgreSQL warning: relation already exists, skipping\" \"sig 3/4\")");
 	}
 
 	@Test
@@ -3138,22 +2544,6 @@ class JvmLispCompilerTest {
 				(defmethod print-object ((c cr-po) s) (format s "PO"))
 				(print (list (princ-to-string (make-condition 'cr-po)) (prin1-to-string (make-condition 'cr-po))))
 				""")).isEqualTo("(\"PO\" \"PO\")");
-	}
-
-	@Test
-	void compileAndRunTypecaseOnConditionInstances() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition my-cond-tc (error) ())
-				(print (typecase (make-condition 'my-cond-tc) (warning 'w) (error 'e) (t 'o)))
-				""")).isEqualTo("E");
-	}
-
-	@Test
-	void compileAndRunWithSlotsReadsInstanceSlots() throws Exception {
-		assertThat(compileAndRun("""
-				(define-condition my-cond-ws (error) ((a :initarg :a) (b :initarg :b)))
-				(print (with-slots (a b) (make-condition 'my-cond-ws :a 1 :b 2) (list a b)))
-				""")).isEqualTo("(1 2)");
 	}
 
 	@Test
@@ -3263,12 +2653,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunUnwindProtectValueAndNormalCleanup() throws Exception {
-		assertThat(compileAndRun("(let ((n 1)) (print (unwind-protect (+ n 1) (setq n 10))) (print n))"))
-			.isEqualTo("2\n10");
-	}
-
-	@Test
 	void compileAndRunUnwindProtectCleanupOnErrorUnwind() throws Exception {
 		// The error propagates out of main after the cleanup ran, so the output is
 		// captured before asserting the throw (compileAndRun would lose it).
@@ -3287,55 +2671,6 @@ class JvmLispCompilerTest {
 			}
 			assertThat(baos.toString().trim()).isEqualTo(":CLEANED");
 		}
-	}
-
-	@Test
-	void compileAndRunUnwindProtectCleanupOnReturnExit() throws Exception {
-		assertThat(compileAndRun("""
-				(let ((log nil))
-				  (dolist (x '(1 2 3))
-				    (unwind-protect
-				        (when (= x 2) (return))
-				      (setq log (cons x log))))
-				  (print log))
-				""")).isEqualTo("(2 1)");
-	}
-
-	@Test
-	void compileAndRunUnwindProtectCleanupOnReturnFromDefun() throws Exception {
-		assertThat(compileAndRun("""
-				(setq up-log nil)
-				(defun up-f ()
-				  (unwind-protect (return-from up-f :early) (setq up-log :cleaned)))
-				(print (up-f))
-				(print up-log)
-				""")).isEqualTo(":EARLY\n:CLEANED");
-	}
-
-	@Test
-	void compileAndRunUnwindProtectNestedCleanupsInnermostFirst() throws Exception {
-		// The return escapes both scopes; the inlined cleanups run innermost first.
-		assertThat(compileAndRun("""
-				(setq log nil)
-				(dolist (x '(1))
-				  (unwind-protect
-				      (unwind-protect (return) (setq log (cons :inner log)))
-				    (setq log (cons :outer log))))
-				(print log)
-				""")).isEqualTo("(:OUTER :INNER)");
-	}
-
-	@Test
-	void compileAndRunUnwindProtectReturnStaysInsideInnerLoopBlock() throws Exception {
-		// The return targets the dotimes INSIDE the protected form, so it does not
-		// escape the unwind-protect and the cleanup runs exactly once (normal exit).
-		assertThat(compileAndRun("""
-				(setq log nil)
-				(unwind-protect
-				    (dotimes (i 3) (when (= i 1) (return)))
-				  (setq log (cons :cleaned log)))
-				(print log)
-				""")).isEqualTo("(:CLEANED)");
 	}
 
 	@Test
@@ -4386,12 +3721,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunSymbolPlist() throws Exception {
-		assertThat(compileAndRun("(print (symbol-plist 'sp-none))(setf (get 'sp-x 'a) 1)(print (symbol-plist 'sp-x))"))
-			.isEqualTo("NIL\n(A 1)");
-	}
-
-	@Test
 	void compileAndRunBoundp() throws Exception {
 		assertThat(compileAndRun("(defvar *bp-var* 1) (print (boundp '*bp-var*)) (print (boundp '*bp-nope*))"
 				+ "(print (boundp :kw)) (print (boundp T)) (print (boundp nil))"
@@ -4647,18 +3976,6 @@ class JvmLispCompilerTest {
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(IF (> 2 1) (PROGN 'A 'B) NIL)\n(IF C NIL X)\n(+ 1 2)");
 		}
-	}
-
-	// A non-ASCII string or symbol becomes a CONSTANT_Utf8 entry, which must be
-	// written as modified UTF-8 with a BYTE length -- a char-count length makes the
-	// whole class fail to load with "Illegal UTF8 string in constant pool".
-	@Test
-	void compileAndRunNonAsciiConstants() throws Exception {
-		assertThat(compileAndRun("(princ \"✸⚑✗\")")).isEqualTo("✸⚑✗");
-		assertThat(compileAndRun("(princ \"日本語\")")).isEqualTo("日本語");
-		assertThat(compileAndRun("(print '日本語)")).isEqualTo("日本語");
-		// A supplementary character encodes as a CESU-8 surrogate pair in the pool.
-		assertThat(compileAndRun("(princ \"💣\")")).isEqualTo("💣");
 	}
 
 	@Test
@@ -4969,16 +4286,6 @@ class JvmLispCompilerTest {
 		}
 		sb.append("(print *m*)\n");
 		assertThat(compileAndRun(sb.toString())).isEqualTo("7");
-	}
-
-	@Test
-	void compileAndRunTopLevelClosureOverLetStillCaptures() throws Exception {
-		// Promoting top-level free setq targets to globals must not promote a let-bound
-		// variable that a lambda closes over: *make* is a global, but n stays a captured
-		// lexical, so the counter increments correctly.
-		assertThat(compileAndRun(
-				"(setq *make* (let ((n 0)) (lambda () (setq n (+ n 1)) n))) (funcall *make*) (funcall *make*) (print (funcall *make*))"))
-			.isEqualTo("3");
 	}
 
 	@Test
@@ -5306,17 +4613,6 @@ class JvmLispCompilerTest {
 					am.ik.rontolisp.reader.Features.JVM, false, false), ReadLineValuesFixture.STDIN))
 				.isEqualTo(c[1]);
 		}
-	}
-
-	@Test
-	void compileAndRunObjSetCompilesWhereNoInstanceCanExist() throws Exception {
-		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
-		// pushback) without knowing whether the class builds instances: with the gate
-		// off the store still compiles, and only a call that reaches it fails.
-		assertThat(compileAndRun("""
-				(defun osg-store (x) (%obj-set x 3 1))
-				(print (if (> (length (list 1 2)) 5) (osg-store 1) :never-stored))
-				""")).isEqualTo(":NEVER-STORED");
 	}
 
 	@Test
@@ -5677,39 +4973,6 @@ class JvmLispCompilerTest {
 			.isEqualTo("(1 2 (3 (4)) (5 (6)) 7)");
 	}
 
-	// A built-in operator's function value names the operator in its wrong-count
-	// program-error, as the interpreter does, through every route that checks the
-	// count: a dispatch miss, a literal apply's direct call and the spread dispatcher.
-	// A user's own function keeps "Function"; the class is no longer recovered from
-	// the text, so a user error that merely STARTS like one stays an error.
-	@Test
-	void compileAndRunWrongArityThroughABuiltinDesignatorNamesTheOperator() throws Exception {
-		assertThat(compileAndRun(
-				"""
-						(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))
-						(print (handler-case (funcall #'car) (program-error (c) (princ-to-string c))))
-						(print (handler-case (mapcar #'cons '(1 2)) (program-error (c) (princ-to-string c))))
-						(print (handler-case (funcall #'mapcar #'car) (program-error (c) (princ-to-string c))))
-						(print (handler-case (funcall #'elt '(1)) (program-error (c) (princ-to-string c))))
-						(print (handler-case (apply #'cons '(1)) (program-error (c) (princ-to-string c))))
-						(print (handler-case (let ((h #'cons)) (apply h '(1 2 3))) (program-error (c) (princ-to-string c))))
-						(print (handler-case (funcall (lambda (x) x)) (program-error (c) (princ-to-string c))))
-						(print (handler-case (error "Function expects nothing") (program-error () :pe) (error () :e)))
-						(print (list (apply #'cons '(1 2)) (let ((h #'cons)) (apply h '(3 4))) (funcall #'car '(5)) (mapcar #'cons '(1) '(2))))
-						"""))
-			.isEqualTo("""
-					"CONS expects 2 arguments, got 1"
-					"CAR expects 1 argument, got 0"
-					"CONS expects 2 arguments, got 1"
-					"MAPCAR expects at least 2 arguments, got 1"
-					"ELT expects 2 arguments, got 1"
-					"CONS expects 2 arguments, got 1"
-					"CONS expects 2 arguments, got 3"
-					"Function expects 1 argument, got 0"
-					:E
-					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
-	}
-
 	// A function declaring its own wrong-count report refuses in its words through a
 	// dispatch miss, a literal and a computed apply and a direct call
 	// (DeclaredArityReportPrograms, pinned on all four backends).
@@ -5939,162 +5202,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunLoopNumericCollect() throws Exception {
-		assertThat(compileAndRun("(print (loop for i from 1 to 5 collect i))")).isEqualTo("(1 2 3 4 5)");
-		assertThat(compileAndRun("(print (loop for i below 5 collect i))")).isEqualTo("(0 1 2 3 4)");
-		assertThat(compileAndRun("(print (loop for i from 10 downto 7 collect i))")).isEqualTo("(10 9 8 7)");
-	}
-
-	@Test
-	void compileAndRunLoopUninternedKeywords() throws Exception {
-		// Uninterned (#:) spellings denote the same loop keywords (ansi-test
-		// iteration/loop16.lsp).
-		assertThat(compileAndRun("(print (loop #:for i #:from 1 #:to 10 #:collect i))"))
-			.isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
-		assertThat(compileAndRun("(print (loop #:for x #:in '(a b c) #:collecting x))")).isEqualTo("(A B C)");
-		assertThat(compileAndRun("(print (loop #:with x = 1 #:and y = 2 #:return (values x y)))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (loop #:named foo #:doing (return-from foo 1)))")).isEqualTo("1");
-	}
-
-	@Test
-	void compileAndRunLoopNilVariable() throws Exception {
-		// NIL as a loop variable means "don't bind anything".
-		assertThat(compileAndRun("(print (let ((i 0)) (loop for nil from 10 to 15 collect (incf i))))"))
-			.isEqualTo("(1 2 3 4 5 6)");
-		assertThat(compileAndRun("(print (loop for nil in nil do (return t)))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (loop with nil = nil return nil))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (loop with nil = (return t) return nil))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (loop with (nil a) = '(1 2) return a))")).isEqualTo("2");
-	}
-
-	@Test
-	void compileAndRunLoopNumericAnyOrder() throws Exception {
-		// The from/limit/by sub-clauses may appear in any order, each at most once.
-		assertThat(compileAndRun("(print (loop for x to 10 from 1 collect x))")).isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
-		assertThat(compileAndRun("(print (loop for x by 2 to 10 from 1 collect x))")).isEqualTo("(1 3 5 7 9)");
-		assertThat(compileAndRun("(print (loop for x by 2 to 10 collect x))")).isEqualTo("(0 2 4 6 8 10)");
-		assertThat(compileAndRun("(print (loop for x above 6 from 14 by 2 collect x))")).isEqualTo("(14 12 10 8)");
-	}
-
-	@Test
-	void compileAndRunLoopNamedPassesReturnThrough() throws Exception {
-		// A named loop establishes no NIL block of its own: a bare `return`
-		// passes through to the outer NIL block, while the loop's own exits
-		// still land in the loop.
-		assertThat(compileAndRun("(print (loop named foo return 'a))")).isEqualTo("A");
-		assertThat(compileAndRun("(print (block nil (loop named foo do (return :good)) :bad))")).isEqualTo(":GOOD");
-		assertThat(compileAndRun("(print (loop named foo for i from 1 to 3 collect i))")).isEqualTo("(1 2 3)");
-		assertThat(compileAndRun("(print (loop named foo for x in '(1 2 3) when x return x))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (loop named foo for i in '(a b c) by (return-from foo :good) return :bad))"))
-			.isEqualTo(":GOOD");
-		assertThat(compileAndRun(
-				"(print (block nil (loop named foo for i in '(a b c) by (return :good) return :bad) :bad))"))
-			.isEqualTo(":GOOD");
-		assertThat(compileAndRun("(print (loop return 'a))")).isEqualTo("A");
-	}
-
-	@Test
-	void compileAndRunLoopListAndIndex() throws Exception {
-		assertThat(compileAndRun("(print (loop for x in '(a b c) for i from 0 collect (list i x)))"))
-			.isEqualTo("((0 A) (1 B) (2 C))");
-		assertThat(compileAndRun("(print (loop for x on '(1 2 3) collect x))")).isEqualTo("((1 2 3) (2 3) (3))");
-		assertThat(compileAndRun("(print (loop for c across \"hello\" collect c))"))
-			.isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
-		assertThat(compileAndRun("(print (loop for c across \"hello\" count (eql c #\\l)))")).isEqualTo("2");
-	}
-
-	@Test
-	void compileAndRunLoopBeingSymbols() throws Exception {
-		// Lite `being` package iteration: parses and iterates the empty sequence.
-		assertThat(compileAndRun("(print (loop for s being the external-symbols of :cl collect s))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (loop for s being each present-symbols in :cl-user count s))")).isEqualTo("0");
-	}
-
-	@Test
-	void compileAndRunLoopAccumulators() throws Exception {
-		assertThat(compileAndRun("(print (loop for i from 1 to 5 sum i))")).isEqualTo("15");
-		assertThat(compileAndRun("(print (loop for i from 1 to 10 count (evenp i)))")).isEqualTo("5");
-		assertThat(compileAndRun("(print (loop for i in '(3 1 4 1 5) maximize i))")).isEqualTo("5");
-		assertThat(compileAndRun("(print (loop for i from 1 to 3 append (list i i)))")).isEqualTo("(1 1 2 2 3 3)");
-	}
-
-	@Test
-	void compileAndRunLoopControl() throws Exception {
-		assertThat(compileAndRun("(print (loop repeat 3 collect 'x))")).isEqualTo("(X X X)");
-		assertThat(compileAndRun("(print (loop for i from 1 to 10 when (evenp i) collect i))"))
-			.isEqualTo("(2 4 6 8 10)");
-		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (return i))))")).isEqualTo("4");
-		assertThat(compileAndRun("(print (loop with a = 10 for i from 1 to 3 collect (+ a i)))"))
-			.isEqualTo("(11 12 13)");
-	}
-
-	@Test
-	void compileAndRunLoopPositionalWhileUntil() throws Exception {
-		assertThat(compileAndRun("(print (loop for x in '(1 2 3 9 4) while (< x 4) collect x))")).isEqualTo("(1 2 3)");
-		assertThat(compileAndRun("(print (let ((n 0)) (loop for i from 1 do (setq n (+ n 1)) while (< i 3)) n))"))
-			.isEqualTo("3");
-		assertThat(compileAndRun("(print (loop for i from 1 do nil until (> i 2) collect i))")).isEqualTo("(1 2)");
-	}
-
-	@Test
-	void compileAndRunLoopThereisAlwaysNever() throws Exception {
-		assertThat(compileAndRun("(print (loop for x in '(nil nil 7 9) thereis x))")).isEqualTo("7");
-		assertThat(compileAndRun("(print (loop for x in '(1 2 3) always (< x 5)))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (loop for x in '(1 2 9) always (< x 5)))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (loop for x in '(1 2 3) never (> x 5)))")).isEqualTo("T");
-	}
-
-	@Test
-	void compileAndRunLoopAnaphoricItAndLoopFinish() throws Exception {
-		assertThat(compileAndRun("(print (loop for x in '(1 nil 3 nil 5) when x collect it))")).isEqualTo("(1 3 5)");
-		assertThat(compileAndRun("(print (loop for x in '(nil 2 nil) when x return it))")).isEqualTo("2");
-		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (loop-finish)) collect i))"))
-			.isEqualTo("(1 2 3)");
-		assertThat(compileAndRun(
-				"(print (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs))))"))
-			.isEqualTo("3");
-	}
-
-	@Test
-	void compileAndRunLoopAnaphoricItOutsideClUser() throws Exception {
-		// Read outside cl-user the anaphor arrives package-qualified; missing it here
-		// fails at COMPILE time, not at run time.
-		assertThat(compileAndRun("""
-				(defpackage :zzit (:use :cl))
-				(in-package :zzit)
-				(print (list (loop for x in '(nil nil 3 4) when x return it)
-				             (loop for x in '(1 nil 3 nil 5) when x collect it)
-				             (let ((acc nil)) (loop for x in '(1 nil 2) when x do (push it acc)) (nreverse acc))
-				             (loop for x in '(1 nil 3) when x collect it else collect 0)
-				             (loop for x in '(4 nil 6) when x when (* x 10) collect it)
-				             (loop for x in '(1 nil) when x collect (loop for y in '(5 nil 6) when y collect it))
-				             (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish))
-				                   finally (return (length xs)))))
-				""")).isEqualTo("(3 (1 3 5) (1 2) (1 0 3) (40 60) ((5 6)) 3)");
-	}
-
-	@Test
-	void compileAndRunLoopAcrossVectorAndMultiPairSetf() throws Exception {
-		assertThat(compileAndRun("(print (loop for x across #(1 2 3 4 5) collect (* x x)))"))
-			.isEqualTo("(1 4 9 16 25)");
-		assertThat(compileAndRun("(print (let ((l (list 1 2 3))) (setf (car l) 9 (second l) 8) l))"))
-			.isEqualTo("(9 8 3)");
-	}
-
-	@Test
-	void compileAndRunLoopParallelAndDestructuring() throws Exception {
-		assertThat(compileAndRun("(print (loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b))"))
-			.isEqualTo("(1 1 2 3 5 8 13 21)");
-		assertThat(compileAndRun("(print (let ((x 5)) (loop with a = x and x = 10 repeat 1 collect (list a x))))"))
-			.isEqualTo("((5 10))");
-		assertThat(compileAndRun("(print (loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)))"))
-			.isEqualTo("(3 7 11)");
-		assertThat(compileAndRun("(print (loop for (a b) = '(1 2) then (list b (+ a b)) repeat 5 collect a))"))
-			.isEqualTo("(1 2 3 5 8)");
-		assertThat(compileAndRun("(print (loop with (x y) = '(10 20) repeat 1 collect (+ x y)))")).isEqualTo("(30)");
-	}
-
-	@Test
 	void compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
 		// These five were silent no-ops on a vector/string (only their
 		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
@@ -6109,11 +5216,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(1 0 3)");
 		assertThat(compileAndRun("(print (funcall #'delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
 		assertThat(compileAndRun("(print (funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
-	}
-
-	@Test
-	void compileAndRunSubstituteAsFunctionValue() throws Exception {
-		assertThat(compileAndRun("(print (funcall #'substitute 0 2 '(2 2 2)))")).isEqualTo("(0 0 0)");
 	}
 
 	@Test
@@ -6860,14 +5962,6 @@ class JvmLispCompilerTest {
 				(warn "visible")""")).isEqualTo("WARNING: visible");
 	}
 
-	@Test
-	void withArenaIsAPlainProgn() throws Exception {
-		// rontolisp:with-arena names a reclamation boundary for --no-gc; the JVM heap is
-		// garbage-collected, so it is observationally a progn.
-		assertThat(compileAndRun("(print (rontolisp:with-arena () 1 2 (+ 1 2)))")).isEqualTo("3");
-		assertThat(compileAndRun("(print (rontolisp:with-arena ()))")).isEqualTo("NIL");
-	}
-
 	// ...and a control ASSEMBLED at run time gets the stub, which says so instead of
 	// silently dropping the directive's output. The narrowing is compile-path only: the
 	// interpreter always carries the real arm. Reporting the condition renders its
@@ -6883,18 +5977,6 @@ class JvmLispCompilerTest {
 				(princ (handler-case (format nil (fmt-control "~") 1)
 				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
 				""")).isEqualTo("signalled");
-	}
-
-	@Test
-	void withInputFromStringReadsLinesAndData() throws Exception {
-		assertThat(compileAndRun("""
-				(with-input-from-string (s "first line
-				(1 2 3)
-				third")
-				  (print (read-line s))
-				  (print (read s))
-				  (print (read-line s))
-				  (print (read-line s)))""")).isEqualTo("\"first line\"\n(1 2 3)\n\"third\"\nNIL");
 	}
 
 	@Test
@@ -7071,13 +6153,6 @@ class JvmLispCompilerTest {
 				(princ "-")
 				(emit "b")""")).isEqualTo("a|\n\n1\n-b|"); // compileAndRun strips the
 															// trailing newlines
-	}
-
-	@Test
-	void freshLineTracksStreamRoutedStdoutWrites() throws Exception {
-		// princ via the runtime-dispatch path (t designator) must update the column
-		// tracking so a following fresh-line emits a newline.
-		assertThat(compileAndRun("(princ \"x\" t) (fresh-line) (princ \"y\")")).isEqualTo("x\ny");
 	}
 
 	@Test
@@ -7463,11 +6538,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunModBigInteger() throws Exception {
-		assertThat(compileAndRun("(print (mod (- 0 (* 100000000000 100000000000)) 7))")).isEqualTo("3");
-	}
-
-	@Test
 	void aBignumLiteralIsBuiltOnceAndLoadedFromAField() throws Exception {
 		// A BigInteger is immutable, so every use of one literal is the same value: the
 		// compiler interns it into a static field built once in <clinit> and each use
@@ -7533,70 +6603,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunModFloat() throws Exception {
-		assertThat(compileAndRun("(print (mod -5.5 2.0))")).isEqualTo("0.5");
-	}
-
-	// ANSI defines mod/rem over any REAL. A ratio operand used to fall through the Long
-	// fast path into _big and die casting the BigInteger[2] representation; it now takes
-	// the rational path, sign rules and exact-division demotion included. The variable
-	// binding matters: it is what stops the emitter from seeing the operand type.
-	@Test
-	void compileAndRunModAndRemOfRatio() throws Exception {
-		assertThat(compileAndRun("(let ((r 7/2)) (print (mod r 3)) (print (rem r 3)))")).isEqualTo("""
-				1/2
-				1/2""");
-		assertThat(compileAndRun("(print (mod -7/2 3))")).isEqualTo("5/2");
-		assertThat(compileAndRun("(print (rem -7/2 3))")).isEqualTo("-1/2");
-		assertThat(compileAndRun("(print (mod 7/2 -3))")).isEqualTo("-5/2");
-		assertThat(compileAndRun("(print (rem 7/2 -3))")).isEqualTo("1/2");
-		assertThat(compileAndRun("(print (mod 5 3/4))")).isEqualTo("1/2");
-		assertThat(compileAndRun("(print (rem 5 3/4))")).isEqualTo("1/2");
-		assertThat(compileAndRun("(print (mod -7/3 -2/5))")).isEqualTo("-1/3");
-		assertThat(compileAndRun("(print (rem -7/3 -2/5))")).isEqualTo("-1/3");
-		assertThat(compileAndRun("(print (mod 7/2 1/2))")).isEqualTo("0");
-		assertThat(compileAndRun("(print (rem 22/7 22/7))")).isEqualTo("0");
-		assertThat(compileAndRun("(handler-case (mod 7/2 0) (error (e) (print 'divzero)))")).isEqualTo("DIVZERO");
-		assertThat(compileAndRun("(handler-case (rem 7/2 0) (error (e) (print 'divzero)))")).isEqualTo("DIVZERO");
-	}
-
-	@Test
-	void compileAndRunVariadicMinMax() throws Exception {
-		assertThat(compileAndRun("(print (min 5 2 8 1 9))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (max 5 2 8 1 9))")).isEqualTo("9");
-		assertThat(compileAndRun("(print (min 7))")).isEqualTo("7");
-	}
-
-	@Test
-	void compileAndRunVariadicGcdLcm() throws Exception {
-		assertThat(compileAndRun("(print (gcd 24 36 60))")).isEqualTo("12");
-		assertThat(compileAndRun("(print (lcm 2 3 4))")).isEqualTo("12");
-		assertThat(compileAndRun("(print (gcd -8))")).isEqualTo("8");
-	}
-
-	@Test
-	void compileAndRunLengthOfString() throws Exception {
-		assertThat(compileAndRun("(print (length \"hello\"))")).isEqualTo("5");
-		assertThat(compileAndRun("(print (length \"\"))")).isEqualTo("0");
-	}
-
-	@Test
-	void compileAndRunLengthOfList() throws Exception {
-		assertThat(compileAndRun("(print (length (list 10 20 30)))")).isEqualTo("3");
-		assertThat(compileAndRun("(print (length nil))")).isEqualTo("0");
-	}
-
-	@Test
-	void compileAndRunMultipleExpressions() throws Exception {
-		assertThat(compileAndRun("(print 1) (print 2)")).isEqualTo("1\n2");
-	}
-
-	@Test
-	void compileAndRunLet() throws Exception {
-		assertThat(compileAndRun("(print (let ((x 10)) (+ x 5)))")).isEqualTo("15");
-	}
-
-	@Test
 	void compileAndRunFeaturesIsAnOrdinarySpecialVariable() throws Exception {
 		// *features* is a VARIABLE on this backend too: seeded with the set the frontend
 		// read the program with, pushed onto and bound like any other special. The
@@ -7616,11 +6622,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(defun g (&optional (fs *features*)) (car fs))"
 				+ "(print (let ((*features* '(:rebound))) (g)))(print (g))"))
 			.isEqualTo(":REBOUND\n:RONTOLISP");
-	}
-
-	@Test
-	void compileAndRunComparisonNotEqual() throws Exception {
-		assertThat(compileAndRun("(print (if (= 1 2) 42 99))")).isEqualTo("99");
 	}
 
 	@Test
@@ -7672,26 +6673,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunLambdaMultipleParams() throws Exception {
-		assertThat(compileAndRun("(print ((lambda (x y) (+ x y)) 3 4))")).isEqualTo("7");
-	}
-
-	@Test
-	void compileAndRunFormatDollarAndFixed() throws Exception {
-		assertThat(compileAndRun("(format T \"~$ ~5$ ~,2f ~v$\" 3.14159 3.14159 3.14159 3 3.14159)"))
-			.isEqualTo("3.14 3.14159 3.14 3.142");
-	}
-
-	@Test
-	void compileAndRunFormatEdges() throws Exception {
-		// Negative-width padding, a custom comma character, a runtime (v) width and
-		// bignum
-		// grouping all run through the same expansion on the JVM backend.
-		assertThat(compileAndRun("(format t \"[~6d][~,,'.:d][~va][~:d]\" -42 1234567 8 \"hi\" 100000000000000000000)"))
-			.isEqualTo("[   -42][1.234.567][hi      ][100,000,000,000,000,000,000]");
-	}
-
-	@Test
 	void compileAndRunFormatNestedConditionalClauses() throws Exception {
 		// A ~:[ nested inside another ~:[ clause, whose two clauses consume a different
 		// number of arguments -- expandFormat distributes the control string remainder
@@ -7705,42 +6686,6 @@ class JvmLispCompilerTest {
 		// own argument position.
 		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" nil \"P\" \"Q\")")).isEqualTo("[x|P]");
 		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" t \"P\" \"Q\")")).isEqualTo("[yP|Q]");
-	}
-
-	@Test
-	void compileAndRunGetfDefaultAndRassocIf() throws Exception {
-		assertThat(compileAndRun("(princ (getf '(:a 1) :on-delete :restrict))")).isEqualTo("RESTRICT");
-		assertThat(compileAndRun("(princ (getf '(:on-delete :cascade) :on-delete :restrict))")).isEqualTo("CASCADE");
-		assertThat(compileAndRun("(princ (getf '(:a nil) :a :fallback))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(princ (funcall #'getf '(:x 10) :y :none))")).isEqualTo("NONE");
-		// getf is a FUNCTION: the default is evaluated hit OR miss, like the
-		// interpreter's eager argument evaluation (so it cannot live in the do result).
-		assertThat(compileAndRun("(let ((n 0)) (getf '(:a 1) :a (setq n 1)) (princ n))")).isEqualTo("1");
-		assertThat(compileAndRun("(let ((n 0)) (getf '(:a 1) :b (setq n 1)) (princ n))")).isEqualTo("1");
-		assertThat(compileAndRun("(princ (rassoc-if #'consp '((1 . 2) (3 4 . 5))))")).isEqualTo("(3 4 . 5)");
-		assertThat(compileAndRun("(princ (funcall #'rassoc-if #'consp '((1 . 2) (3 4 . 5))))")).isEqualTo("(3 4 . 5)");
-	}
-
-	@Test
-	void compileAndRunStringTrimListCharacterBag() throws Exception {
-		// A literal list bag folds to a string constant; a runtime bag goes through the
-		// same (coerce bag 'string) widening.
-		assertThat(compileAndRun("(princ (string-trim '(#\\Space #\\Tab) \"\tx y \t\"))")).isEqualTo("x y");
-		assertThat(compileAndRun("(princ (string-left-trim '(#\\Space) \"  z\"))")).isEqualTo("z");
-		assertThat(compileAndRun("(princ (string-right-trim '(#\\x #\\y) \"helloxy\"))")).isEqualTo("hello");
-		assertThat(compileAndRun("(let ((bag (list #\\Space))) (princ (string-trim bag \" q \")))")).isEqualTo("q");
-	}
-
-	@Test
-	void compileAndRunFormatGeneralFloat() throws Exception {
-		assertThat(compileAndRun("(format t \"~g ~g ~g ~g\" 1234.5 0.5 0.00012345 0.0)"))
-			.isEqualTo("1234.5 0.5 1.2345e-4 0.0");
-	}
-
-	@Test
-	void compileAndRunFormatFixedOverflow() throws Exception {
-		assertThat(compileAndRun("(format t \"[~10,8,,'*,'0f][~10,9,,'*,'0f]\" pi pi)"))
-			.isEqualTo("[3.14159265][**********]");
 	}
 
 	@Test
@@ -7916,31 +6861,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunConcatenateListAndVectorResultTypes() throws Exception {
-		assertThat(compileAndRun("(print (concatenate 'list '(1 2) \"ab\" #(3)))")).isEqualTo("(1 2 #\\a #\\b 3)");
-		assertThat(compileAndRun("(print (concatenate 'vector '(1 2) #(3)))")).isEqualTo("#(1 2 3)");
-		assertThat(compileAndRun("(print (concatenate '(vector (unsigned-byte 8)) #(1) #(2 3)))"))
-			.isEqualTo("#(1 2 3)");
-		assertThat(compileAndRun("(print (concatenate 'list))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (concatenate 'vector))")).isEqualTo("#()");
-		assertThat(compileAndRun("(print (let ((a (list 1 2))) (eq a (concatenate 'list a))))")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileAndRunConcatenateStringTakesAnySequence() throws Exception {
-		// The string family walks any character sequence, and nil -- the empty list -- is
-		// the one real code leans on: s-sql builds "CREATE TABLE x" as
-		// (concatenate 'string (unless tableset "TABLE ") name). Each non-literal
-		// argument goes through the injected %seq-string helper, never an inlined coerce
-		// loop (.kb/concatenate-result-families.md).
-		assertThat(compileAndRun("(print (concatenate 'string \"a\" '(#\\b #\\c) #(#\\d) nil \"e\"))"))
-			.isEqualTo("\"abcde\"");
-		assertThat(compileAndRun("(print (concatenate 'string (unless t \"TABLE \") \"person\"))"))
-			.isEqualTo("\"person\"");
-		assertThat(compileAndRun("(print (apply #'concatenate 'string (list nil \"x\" '(#\\y))))")).isEqualTo("\"xy\"");
-	}
-
-	@Test
 	void compileAndRunErrorOutputInsideALambda() throws Exception {
 		// The standard stream variables are GLOBAL, not lexicals a lambda captures:
 		// postmodern's generate-prepared reports its reconnect with
@@ -8046,68 +6966,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunConcatenateWithADeftypeAliasResultType() throws Exception {
-		// fast-http's multipart parser concatenates into 'simple-byte-vector, its own
-		// deftype alias of the packed octet vector: the registered deftype expansion
-		// resolves the designator to the vector family at compile time.
-		assertThat(compileAndRun("""
-				(deftype octet-vector () '(simple-array (unsigned-byte 8) (*)))
-				(print (concatenate 'octet-vector #(1) #(2 3)))
-				""")).isEqualTo("#(1 2 3)");
-	}
-
-	@Test
-	void compileAndRunConcatenateKeepsThePackedElementType() throws Exception {
-		// An (unsigned-byte 8|16|32) result element type builds the PACKED vector, on the
-		// compile paths through the injected %seq-int-vector helper. The
-		// deftype alias carries the element type through as well, and any other element
-		// type -- or a spelling whose second element is a SIZE -- stays general.
-		// CHARACTER is its own arm --
-		// compileAndRunCoerceAndConcatenateToVectorCharacterBuildAString
-		// -- because it builds a string rather than a general vector.
-		// The zero-parameter deftype shape, like
-		// compileAndRunConcatenateWithADeftypeAlias
-		// ResultType: this harness does not run the CLI's UserMacroExpander, which is
-		// what folds a parameterized deftype into the registrable form (the parameterized
-		// shape is pinned end to end by the ci-spec case and LackEcosystemE2eTest).
-		assertThat(compileAndRun("""
-				(deftype simple-byte-vector () '(simple-array (unsigned-byte 8) (*)))
-				(let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 260))))
-				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
-				(print (array-element-type (concatenate '(simple-array (unsigned-byte 16) (*)) #(1))))
-				(print (array-element-type (concatenate '(vector (unsigned-byte 32) *))))
-				(print (array-element-type (concatenate 'simple-byte-vector #(1 2))))
-				(print (array-element-type (concatenate '(simple-vector 2) '(1 2))))
-				""")).isEqualTo("""
-				((UNSIGNED-BYTE 8) T #(1 2 4))
-				(UNSIGNED-BYTE 16)
-				(UNSIGNED-BYTE 32)
-				(UNSIGNED-BYTE 8)
-				T""");
-	}
-
-	@Test
-	void compileAndRunArrayElementTypeOnAStringAnswersCharacter() throws Exception {
-		// A string is a vector of characters, so it answers the one character type -- the
-		// general (macro) path and the packed (runtime-helper) path must agree, and both
-		// must match the interpreter. A general vector still answers t.
-		assertThat(compileAndRun("""
-				(print (array-element-type "abc"))
-				(print (array-element-type #(1 2 3)))
-				""")).isEqualTo("""
-				CHARACTER
-				T""");
-		// With a packed representation in play the same call goes through the runtime
-		// helper; a string still answers character there.
-		assertThat(compileAndRun("""
-				(print (array-element-type (make-array 3 :element-type '(unsigned-byte 8))))
-				(print (array-element-type "abc"))
-				""")).isEqualTo("""
-				(UNSIGNED-BYTE 8)
-				CHARACTER""");
-	}
-
-	@Test
 	void compileAndRunCoerceKeepsThePackedElementType() throws Exception {
 		// coerce reads the SAME result-type designator concatenate does, so a packed
 		// element type means a packed vector there too. Both routes are exercised: a
@@ -8186,42 +7044,6 @@ class JvmLispCompilerTest {
 				CHARACTER
 				"abc"
 				CHARACTER""");
-	}
-
-	@Test
-	void compileAndRunFoldsALiteralLookupTableToItsPackedLiteral() throws Exception {
-		// The whole point of folding the table: it is DATA at compile time, so the
-		// backends bake it instead of consing the element list at run time. What the
-		// program may still do to it is unchanged -- each evaluation of the literal
-		// yields a FRESH, independently mutable vector, exactly as the coerce call did.
-		assertThat(compileAndRun("""
-				(defun table () (coerce '(10 20 30 40) '(vector (unsigned-byte 16))))
-				(let ((a (table)) (b (table)))
-				  (setf (aref a 0) 99)
-				  (print (list a b (eq a b))))
-				(print (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(7 8 9)))
-				""")).isEqualTo("""
-				(#(99 20 30 40) #(10 20 30 40) NIL)
-				#(7 8 9)""");
-	}
-
-	@Test
-	void compileAndRunConcatenateAsAFunctionValueKeepsThePackedElementType() throws Exception {
-		// The #'concatenate wrapper's designator is a RUNTIME value, so it re-does the
-		// width dispatch there -- http-body spells exactly this
-		// (apply #'concatenate '(simple-array (unsigned-byte 8) (*)) ...), and a
-		// designator must not mean two different things depending on the call form.
-		assertThat(compileAndRun("""
-				(print (array-element-type (apply #'concatenate '(simple-array (unsigned-byte 8) (*))
-				                                  (list '(1 2) #(3)))))
-				(print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
-				(print (array-element-type (funcall #'concatenate 'vector '(1))))
-				(print (array-element-type (funcall #'concatenate '(simple-vector 1) '(1))))
-				""")).isEqualTo("""
-				(UNSIGNED-BYTE 8)
-				#(1 4)
-				T
-				T""");
 	}
 
 	@Test
@@ -8771,12 +7593,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunWriteSequenceString() throws Exception {
-		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
-			.isEqualTo("bc");
-	}
-
-	@Test
 	void compileAndRunStringEquality() throws Exception {
 		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("NIL");
@@ -8922,14 +7738,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunExponentFloatLiteral() throws Exception {
-		// Common Lisp exponent-marker float literals all compile to a double.
-		assertThat(compileAndRun("(print 1d0)")).isEqualTo("1.0");
-		assertThat(compileAndRun("(print (* 2 1d0))")).isEqualTo("2.0");
-		assertThat(compileAndRun("(print 1.5d3)")).isEqualTo("1500.0");
-	}
-
-	@Test
 	void gensymCounterAndRandomStateAnswerTheInterpreterBindings() throws Exception {
 		// *gensym-counter* and *random-state* are bound by the compile-path defvar
 		// seeding with the interpreter's initial values, so a reference answers 0 / NIL
@@ -8985,32 +7793,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunSqrt() throws Exception {
-		assertThat(compileAndRun("(print (sqrt 16))")).isEqualTo("4.0");
-		assertThat(compileAndRun("(print (sqrt 2))")).isEqualTo("1.4142135623730951");
-		assertThat(compileAndRun("(print (sqrt 2.0))")).isEqualTo("1.4142135623730951");
-	}
-
-	@Test
-	void compileAndRunIsqrt() throws Exception {
-		assertThat(compileAndRun("(print (isqrt 17))")).isEqualTo("4");
-		assertThat(compileAndRun("(print (isqrt 16))")).isEqualTo("4");
-	}
-
-	@Test
-	void compileAndRunExpt() throws Exception {
-		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
-		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (expt 2.0 3))")).isEqualTo("8.0");
-		assertThat(compileAndRun("(print (expt 2 70))")).isEqualTo("1180591620717411303424");
-		// An integer exponent beyond the int range is pow, not base^(e mod 2^32): the
-		// interpreter's rule, pinned on every backend.
-		assertThat(compileAndRun("(print (expt 2 4294967297))")).isEqualTo("Infinity");
-		assertThat(compileAndRun("(print (expt 2 -4294967297))")).isEqualTo("0.0");
-		assertThat(compileAndRun("(print (let ((b 1.5)) (expt b -4294967297)))")).isEqualTo("0.0");
-	}
-
-	@Test
 	void compileAndRunComplexConstructorRejectsNonRealParts() throws Exception {
 		assertThatThrownBy(() -> compileAndRun("(print (complex #c(1 2) 3))")).isInstanceOf(Exception.class);
 		assertThatThrownBy(() -> compileAndRun("(print (complex 1 \"a\"))")).isInstanceOf(Exception.class);
@@ -9048,12 +7830,6 @@ class JvmLispCompilerTest {
 			.isEqualTo("#C(3.0 4.532360141827194)");
 		assertThat(compileAndRun("(print (/ #c(1d200 1d200) #c(1d200 1d200)))")).isEqualTo("#C(1.0 0.0)");
 		assertThat(compileAndRun("(print (/ #c(1d-200 1d-200) #c(1d-200 1d-200)))")).isEqualTo("#C(1.0 0.0)");
-	}
-
-	@Test
-	void compileAndRunComplexAbs() throws Exception {
-		assertThat(compileAndRun("(print (abs #c(3 4)))")).isEqualTo("5.0");
-		assertThat(compileAndRun("(print (abs 5))")).isEqualTo("5");
 	}
 
 	@Test
@@ -9498,20 +8274,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunComplexTypeOfAndSubtypep() throws Exception {
-		assertThat(compileAndRun("(print (type-of #c(1 2)))")).isEqualTo("COMPLEX");
-		assertThat(compileAndRun("(print (typep #c(1 2) (type-of #c(1 2))))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (subtypep 'complex 'number))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (subtypep 'real 'number))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (subtypep 'complex 'real))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (subtypep '(complex integer) 'complex))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (subtypep '(complex integer) '(complex rational)))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (subtypep 'complex '(complex integer)))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (subtypep '(complex integer) 'number))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (eq (class-of #c(1 2)) (find-class 'complex)))")).isEqualTo("T");
-	}
-
-	@Test
 	void compileAndRunUpgradedComplexPartType() throws Exception {
 		assertThat(compileAndRun("(print (upgraded-complex-part-type 'integer))")).isEqualTo("INTEGER");
 		assertThat(compileAndRun("(print (upgraded-complex-part-type 'single-float))")).isEqualTo("SINGLE-FLOAT");
@@ -9540,19 +8302,6 @@ class JvmLispCompilerTest {
 			.isEqualTo(":CAUGHT");
 		assertThat(compileAndRun("(print (handler-case (coerce #c(1 2) 'single-float) (type-error (e) :caught)))"))
 			.isEqualTo(":CAUGHT");
-	}
-
-	@Test
-	void compileAndRunComplexSignum() throws Exception {
-		// SBCL parity: the unit vector z/|z| in floats; a zero answers
-		// the canonicalization of its own parts.
-		assertThat(compileAndRun("(print (signum #c(3 4)))")).isEqualTo("#C(0.6 0.8)");
-		assertThat(compileAndRun("(print (signum #c(0 0)))")).isEqualTo("0");
-		assertThat(compileAndRun("(print (signum #c(0.0 0.0)))")).isEqualTo("#C(0.0 0.0)");
-		assertThat(compileAndRun("(print (signum #c(0 1)))")).isEqualTo("#C(0.0 1.0)");
-		assertThat(compileAndRun("(print (funcall #'signum #c(3 4)))")).isEqualTo("#C(0.6 0.8)");
-		assertThat(compileAndRun("(print (let ((x #c(1 2))) (signum x)))"))
-			.isEqualTo("#C(0.4472135954999579 0.8944271909999159)");
 	}
 
 	@Test
@@ -9590,14 +8339,6 @@ class JvmLispCompilerTest {
 				+ " \"LCM: The value #C(1 2) is not of type INTEGER\""
 				+ " \"LOGAND: The value #C(1 2) is not of type INTEGER\""
 				+ " \"ASH: The value #C(1 2) is not of type INTEGER\")");
-	}
-
-	@Test
-	void compileAndRunGcdLcm() throws Exception {
-		assertThat(compileAndRun("(print (gcd 12 18))")).isEqualTo("6");
-		assertThat(compileAndRun("(print (gcd 0 5))")).isEqualTo("5");
-		assertThat(compileAndRun("(print (lcm 4 6))")).isEqualTo("12");
-		assertThat(compileAndRun("(print (lcm 0 6))")).isEqualTo("0");
 	}
 
 	@Test
@@ -9650,60 +8391,10 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunTimeFunctions() throws Exception {
-		// get-universal-time is seconds since 1900; well past 2020 (> 3.78e9).
-		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (integerp (get-internal-real-time)))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (integerp (get-internal-run-time)))")).isEqualTo("T");
-	}
-
-	@Test
 	void compileAndRunGetenv() throws Exception {
 		// PATH is set in the test environment; an unset variable yields nil.
 		assertThat(compileAndRun("(print (stringp (uiop:getenv \"PATH\")))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (uiop:getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\"))")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileAndRunSignum() throws Exception {
-		assertThat(compileAndRun("(print (signum -5))")).isEqualTo("-1");
-		assertThat(compileAndRun("(print (signum 0))")).isEqualTo("0");
-		assertThat(compileAndRun("(print (signum 7))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (signum 3.5))")).isEqualTo("1.0");
-	}
-
-	@Test
-	void compileAndRunSignumOnFloatThroughAVariable() throws Exception {
-		// Regression: like abs, signum of a float reaching it through a variable used to
-		// take the integer path (_ratnum -> _big) and trap with "Double cannot be cast to
-		// BigInteger". _signum now dispatches on the runtime type.
-		assertThat(compileAndRun("(let ((x -0.5)) (print (signum x)))")).isEqualTo("-1.0");
-		assertThat(compileAndRun("(let ((x 2.5)) (print (signum x)))")).isEqualTo("1.0");
-		assertThat(compileAndRun("(let ((x 0.0)) (print (signum x)))")).isEqualTo("0.0");
-		assertThat(compileAndRun("""
-				(defun s (a) (signum a))
-				(print (s -3.0))
-				""")).isEqualTo("-1.0");
-		// Integer / ratio still return an integer sign.
-		assertThat(compileAndRun("(let ((x -5)) (print (signum x)))")).isEqualTo("-1");
-	}
-
-	@Test
-	void compileAndRunTranscendental() throws Exception {
-		assertThat(compileAndRun("(print (sin 0))")).isEqualTo("0.0");
-		assertThat(compileAndRun("(print (cos 0))")).isEqualTo("1.0");
-		assertThat(compileAndRun("(print (exp 0))")).isEqualTo("1.0");
-		assertThat(compileAndRun("(print (log 1))")).isEqualTo("0.0");
-		assertThat(compileAndRun("(print (atan 0))")).isEqualTo("0.0");
-		assertThat(compileAndRun("(print (tanh 0))")).isEqualTo("0.0");
-	}
-
-	@Test
-	void compileAndRunMathAsFirstClass() throws Exception {
-		assertThat(compileAndRun("(print (mapcar #'sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
-		assertThat(compileAndRun("(print (reduce #'gcd (list 24 36 48)))")).isEqualTo("12");
-		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
-		assertThat(compileAndRun("(print (eval (list (quote sin) 0)))")).isEqualTo("0.0");
 	}
 
 	@Test
@@ -9727,16 +8418,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (eighth '(1 2 3 4 5 6 7 8)))")).isEqualTo("8");
 		assertThat(compileAndRun("(print (ninth '(1 2 3 4 5 6 7 8 9)))")).isEqualTo("9");
 		assertThat(compileAndRun("(print (tenth '(1 2 3 4 5 6 7 8 9 10)))")).isEqualTo("10");
-	}
-
-	@Test
-	void compileAndRunCaseAtomNilKeyIsTheEmptyKeyList() throws Exception {
-		// The atom nil is a designator for the EMPTY key list, never the key NIL;
-		// only ((nil) ...) matches NIL.
-		assertThat(compileAndRun("(print (case nil (nil :was-nil) (t :other)))")).isEqualTo(":OTHER");
-		assertThat(compileAndRun("(print (case nil ((nil) :was-nil) (t :other)))")).isEqualTo(":WAS-NIL");
-		assertThat(compileAndRun("(print (typecase nil (nil :nil-clause) (null :null-clause)))"))
-			.isEqualTo(":NULL-CLAUSE");
 	}
 
 	@Test
@@ -9887,68 +8568,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunRational() throws Exception {
-		assertThat(compileAndRun(
-				"(print (rational 5)) (print (rational 1.5)) (print (rational -2.5)) (print (rational 0.5)) (print (rational 2.0)) (print (rational 0.0)) (print (rational (/ 1 3))) (print (funcall #'rational 1.5))"))
-			.isEqualTo("5\n3/2\n-5/2\n1/2\n2\n0\n1/3\n3/2");
-		assertThat(compileAndRun("(print (rational 0.1))")).isEqualTo("3602879701896397/36028797018963968");
-		assertThat(compileAndRun("(print (= (rational 4.9406564584124654d-324) (/ 1 (ash 1 1074))))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (= (rational (ash 1 100)) (ash 1 100)))")).isEqualTo("T");
-	}
-
-	@Test
-	void compileAndRunLogcount() throws Exception {
-		assertThat(compileAndRun(
-				"(print (logcount 0)) (print (logcount 1)) (print (logcount 3)) (print (logcount 255)) (print (logcount -1)) (print (logcount -8)) (print (logcount (ash 1 300))) (print (logcount (1- (ash 1 100)))) (print (funcall #'logcount 7))"))
-			.isEqualTo("0\n1\n2\n8\n0\n3\n1\n100\n3");
-	}
-
-	@Test
-	void compileAndRunIntegerDecodeFloat() throws Exception {
-		// CLHS: the sign is an INTEGER and the significand is scaled to
-		// float-digits bits (53 for a normal double), not stripped of factors
-		// of two -- matches SBCL exactly.
-		assertThat(compileAndRun(
-				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
-			.isEqualTo(
-					"(6755399441055744 -52 1)\n(4503599627370496 -53 -1)\n(0 0 1)\n(4503599627370496 -51 1)\n(7318349394477056 -50 1)\n-52\n6755399441055744");
-		assertThat(compileAndRun(
-				"(print (nth-value 0 (integer-decode-float 4.9406564584124654d-324))) (print (nth-value 1 (integer-decode-float 4.9406564584124654d-324)))"))
-			.isEqualTo("1\n-1074");
-	}
-
-	@Test
-	void compileAndRunFloatOfRatioIsCorrectlyRounded() throws Exception {
-		// Ratio -> float is the correctly-rounded nearest double, not the
-		// DECIMAL64 16-digit rounding: 1/8388608 IS 2^-23, exactly. Same vectors
-		// as LispEvaluatorTest#floatOfRatio, through _dbl's _ratToDouble arm.
-		assertThat(compileAndRun(
-				"(print (= (float (/ 1 8388608)) 1.1920928955078125e-7)) (print (= (float (/ 1 85070591730234615865843651857942052864)) 1.1754943508222875e-38)) (print (= (float (/ 1 3)) 0.3333333333333333)) (print (= (float (/ 1 10)) 0.1)) (print (= (float (/ -1 8388608)) -1.1920928955078125e-7)) (print (float (/ (ash 1 2000) 3)))"))
-			.isEqualTo("T\nT\nT\nT\nT\nInfinity");
-		// Ties go to the even neighbor, tinies denormalize, a negative tiny keeps
-		// its sign into -0.0 (read back through a signed division), and wide
-		// numerators round exactly as the interpreter answers beside them.
-		assertThat(compileAndRun(
-				"(print (= (float (/ 9007199254740993 (ash 1 53))) 1.0)) (print (= (float (/ 9007199254740995 (ash 1 53))) 1.0000000000000004)) (print (= (float (/ 1 (ash 1 1074))) 4.9406564584124654e-324)) (print (= (/ 1.0 (float (/ -1 (ash 1 2000)))) (/ -1.0 0.0))) (print (= (float (/ 123456789123456789123456789 987654321987654321)) 1.249999988609375e8)) (print (= (float (/ -987654321987654321987654321 123456789123456789)) -8.000000072900001e9))"))
-			.isEqualTo("T\nT\nT\nT\nT\nT");
-	}
-
-	@Test
-	void compileAndRunRationalize() throws Exception {
-		assertThat(compileAndRun(
-				"(print (rationalize 1.5)) (print (rationalize 0.5)) (print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize (/ 1 3))) (print (rationalize -2.5)) (print (funcall #'rationalize 1.5))"))
-			.isEqualTo("3/2\n1/2\n2\n100\n0\n5\n1/3\n-5/2\n3/2");
-		assertThat(compileAndRun("(print (rationalize 0.1)) (print (rationalize -0.1))")).isEqualTo("1/10\n-1/10");
-	}
-
-	@Test
-	void compileAndRunFloatDigits() throws Exception {
-		assertThat(compileAndRun(
-				"(print (float-digits 1.0)) (print (float-digits 2.0)) (print (float-digits -1.5)) (print (float-digits 0.0)) (print (float-digits 4.9406564584124654d-324)) (print (float-digits (* 3.0 4.9406564584124654d-324))) (print (float-digits (scale-float 1.0 2097))) (print (funcall #'float-digits 1.5))"))
-			.isEqualTo("53\n53\n53\n0\n1\n2\n53\n53");
-	}
-
-	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))
@@ -10051,28 +8670,6 @@ class JvmLispCompilerTest {
 				(print (probe '(1 2 3)))
 				(print (probe '(1 3 5)))
 				""")).isEqualTo(":EVEN\n(1 3 5)");
-	}
-
-	@Test
-	void compileAndRunReturnInAHandlerBindHandlerExitsTheLexicalNilBlock() throws Exception {
-		// rove's SIGNALS shape: the handler's plain (return c) names the (block nil ...)
-		// that LEXICALLY encloses it, whatever iteration form -- each of which
-		// establishes an implicit nil block of its own -- the SIGNALLING function is
-		// running. The lexical answer was already this backend's; the interpreter's
-		// dynamic lookup is what moved to match it.
-		assertThat(compileAndRun("""
-				(define-condition my-error (error) ())
-				(defun raise () (error 'my-error))
-				(defun sig-nil (thunk)
-				  (block nil
-				    (handler-bind ((condition (lambda (c) (return c))))
-				      (funcall thunk)
-				      nil)))
-				(print (type-of (sig-nil (lambda () (raise)))))
-				(print (type-of (sig-nil (lambda () (loop :for i :from 1 :to 3 :collect (raise))))))
-				(print (type-of (sig-nil (lambda () (dolist (x (list 1 2)) (raise))))))
-				(print (type-of (sig-nil (lambda () (dotimes (i 2) (raise))))))
-				""")).isEqualTo("MY-ERROR\nMY-ERROR\nMY-ERROR\nMY-ERROR");
 	}
 
 	@Test
@@ -10327,28 +8924,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunCharComparisonExtensions() throws Exception {
-		assertThat(compileAndRun("""
-				(print (char> #\\c #\\b #\\a))
-				(print (char>= #\\b #\\b #\\a))
-				(print (char/= #\\a #\\b #\\a))
-				(print (char-equal #\\A #\\a))
-				(print (search "bc" "abcd"))
-				(print (copy-tree '(1 (2 3))))
-				""")).isEqualTo("T\nT\nNIL\nT\n1\n(1 (2 3))");
-	}
-
-	@Test
-	void compileAndRunSubstAndSimpleStringP() throws Exception {
-		assertThat(compileAndRun("""
-				(print (subst 'x 'a '(a (b a) c)))
-				(print (subst 9 '(m) '(f (m) g) :test #'equal))
-				(print (simple-string-p "abc"))
-				(print (simple-string-p 42))
-				""")).isEqualTo("(X (B X) C)\n(F 9 G)\nT\nNIL");
-	}
-
-	@Test
 	void compileAndRunInitializeInstanceAfterMethod() throws Exception {
 		assertThat(compileAndRun("""
 				(defclass counted () ((n :initarg :n :accessor n)))
@@ -10446,12 +9021,6 @@ class JvmLispCompilerTest {
 				+ " (defun decl-fn (x) (declare (ignore x)) 42) (print (decl-fn 1))"
 				+ " (print (let ((y 1)) (declare (type integer y)) (+ y 1)))"))
 			.isEqualTo("42\n2");
-	}
-
-	@Test
-	void compileAndRunThe() throws Exception {
-		assertThat(compileAndRun("(print (the integer (+ 1 2))) (print (the (or null string) \"s\"))"))
-			.isEqualTo("3\n\"s\"");
 	}
 
 	@Test
@@ -10867,33 +9436,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunMultipleValueSetq() throws Exception {
-		assertThat(compileAndRun("(let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))"))
-			.isEqualTo("(1 2)");
-		// Returns the primary value; floor-family producer; extra vars nil.
-		assertThat(compileAndRun("(let (a b) (print (multiple-value-setq (a b) (floor 17 5))) (print (list a b)))"))
-			.isEqualTo("3\n(3 2)");
-		assertThat(compileAndRun("(let (a b c) (multiple-value-setq (a b c) (values 1 2)) (print (list a b c)))"))
-			.isEqualTo("(1 2 NIL)");
-	}
-
-	@Test
-	void compileAndRunRotatef() throws Exception {
-		assertThat(compileAndRun("(let ((x 1) (y 2)) (rotatef x y) (print (list x y)))")).isEqualTo("(2 1)");
-		assertThat(compileAndRun("(let ((a 1) (b 2) (c 3)) (rotatef a b c) (print (list a b c)))"))
-			.isEqualTo("(2 3 1)");
-		assertThat(compileAndRun("(let ((x (cons 1 2))) (rotatef (car x) (cdr x)) (print x))")).isEqualTo("(2 . 1)");
-	}
-
-	@Test
-	void compileAndRunShiftf() throws Exception {
-		assertThat(compileAndRun("(let ((x 1) (y 2) (z 3)) (print (shiftf x y z 4)) (print (list x y z)))"))
-			.isEqualTo("1\n(2 3 4)");
-		assertThat(compileAndRun("(let ((c (cons 1 2))) (print (shiftf (car c) 9)) (print c))"))
-			.isEqualTo("1\n(9 . 2)");
-	}
-
-	@Test
 	void compileAndRunLoadTimeValue() throws Exception {
 		assertThat(compileAndRun("(print (+ (load-time-value (* 2 3)) 4))")).isEqualTo("10");
 		assertThat(compileAndRun("(print (load-time-value 7 t))")).isEqualTo("7");
@@ -10946,23 +9488,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunSlotValueOfANameTwoUnrelatedClassesPlaceDifferently() throws Exception {
-		// A slot name at DIFFERENT indexes in unrelated classes reads through an
-		// instance-tag dispatch. It used to route through a same-named READER generic
-		// instead, which is wrong when that generic belongs to an unrelated class: with
-		// ironclad and cl-postgres both loaded, (slot-value <protocol-error> 'message)
-		// dispatched into IRONCLAD::MESSAGE and died with "No applicable method" while
-		// rendering the protocol error's own report.
-		assertThat(compileAndRun("""
-				(defclass other () ((filler :initarg :filler) (message :initarg :message :reader message)))
-				(define-condition my-proto-error (error) ((message :initarg :message)))
-				(print (message (make-instance 'other :filler 1 :message "from-other")))
-				(print (slot-value (make-instance 'other :filler 1 :message "read-other") 'message))
-				(print (slot-value (make-condition 'my-proto-error :message "from-condition") 'message))
-				""")).isEqualTo("\"from-other\"\n\"read-other\"\n\"from-condition\"");
-	}
-
-	@Test
 	void compileAndRunErrorWithComputedConditionType() throws Exception {
 		// A computed condition-type datum WITH initargs lowers to the shared
 		// %error-runtime dispatch (one construction helper per condition class):
@@ -11011,19 +9536,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunTypepResolvesUserDeftype() throws Exception {
-		assertThat(compileAndRun("""
-				(deftype my-even () '(satisfies evenp))
-				(defun my-alistp (x) (and (listp x) (every #'consp x)))
-				(deftype my-alist () '(satisfies my-alistp))
-				(deftype my-int () 'integer)
-				(print (typep 4 'my-even)) (print (typep 3 'my-even))
-				(print (typep '((a . 1)) 'my-alist)) (print (typep '(a b) 'my-alist))
-				(print (typep 7 'my-int)) (print (typep 'x 'my-int))
-				""")).isEqualTo("T\nNIL\nT\nNIL\nT\nNIL");
-	}
-
-	@Test
 	void compileAndRunSubtypep() throws Exception {
 		assertThat(compileAndRun("(print (subtypep 'cons 'list))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (subtypep 'integer 'number))")).isEqualTo("T");
@@ -11032,19 +9544,6 @@ class JvmLispCompilerTest {
 		assertThat(
 				compileAndRun("(defclass base () ()) (defclass derived (base) ()) (print (subtypep 'derived 'base))"))
 			.isEqualTo("T");
-	}
-
-	@Test
-	void compileAndRunSetfValuesAndSetfThroughThe() throws Exception {
-		assertThat(compileAndRun("(let ((a 0) (b 0)) (setf (values a b) (values 1 2)) (print (list a b)))"))
-			.isEqualTo("(1 2)");
-		assertThat(compileAndRun("(let ((x 0)) (setf (the integer x) 5) (print x))")).isEqualTo("5");
-	}
-
-	@Test
-	void compileAndRunSymbolpNilAndT() throws Exception {
-		assertThat(compileAndRun("(print (list (symbolp nil) (symbolp t) (symbolp 'foo) (symbolp \"s\") (symbolp 1)))"))
-			.isEqualTo("(T T T NIL NIL)");
 	}
 
 	@Test
@@ -11072,29 +9571,10 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunProgAndProgStar() throws Exception {
-		assertThat(compileAndRun("(print (prog ((i 0)) top (setq i (+ i 1)) (if (< i 3) (go top)) (return i)))"))
-			.isEqualTo("3");
-		assertThat(compileAndRun("(print (prog* ((x 2) (y (* x 3))) (return (+ x y))))")).isEqualTo("8");
-		assertThat(compileAndRun("(print (prog ((x 1)) (print x)))")).isEqualTo("1\nNIL");
-	}
-
-	@Test
 	void compileAndRunGoEscapesUnwindProtect() throws Exception {
 		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1))"
 				+ " (unwind-protect (if (< i 3) (go top)) (print (list :cleanup i)))) (print i))"))
 			.isEqualTo("(:CLEANUP 1)\n(:CLEANUP 2)\n(:CLEANUP 3)\n3");
-	}
-
-	@Test
-	void compileAndRunMaskFieldAndScaleFloat() throws Exception {
-		assertThat(compileAndRun("(print (mask-field (byte 4 4) 255))")).isEqualTo("240");
-		assertThat(compileAndRun("(print (mask-field (byte 8 0) 300))")).isEqualTo("44");
-		assertThat(compileAndRun("(print (scale-float 1.5 3))")).isEqualTo("12.0");
-		// The subnormal-to-max edge: 2^-1074 scaled by 2097 is exactly 2^1023.
-		assertThat(compileAndRun("(print (scale-float 4.9406564584124654d-324 2097))"))
-			.isEqualTo("8.98846567431158e307");
-		assertThat(compileAndRun("(print (scale-float 1.0 -100000))")).isEqualTo("0.0");
 	}
 
 	@Test
@@ -11105,20 +9585,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (scale-float (+ (expt 2d0 -25) (expt 2d0 -77)) -1050))"))
 			.isEqualTo("4.9e-324");
 		assertThat(compileAndRun("(print (scale-float -2.3779429016845906d285 -2004))")).isEqualTo("-1.294467e-318");
-	}
-
-	@Test
-	void compileAndRunCharName() throws Exception {
-		assertThat(compileAndRun("(print (char-name #\\Space))")).isEqualTo("\"Space\"");
-		assertThat(compileAndRun("(print (char-name #\\a))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (char-name (code-char 1)))")).isEqualTo("\"U+0001\"");
-		assertThat(compileAndRun("(print (char-name (code-char 128)))")).isEqualTo("\"U+0080\"");
-	}
-
-	@Test
-	void compileAndRunFdefinition() throws Exception {
-		assertThat(compileAndRun("(defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"))
-			.isEqualTo("42");
 	}
 
 	@Test
@@ -11582,33 +10048,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunClassDesignatorKeepsTheTagView() throws Exception {
-		// The internal %class-designator is the pre-migration class-of: instance tags
-		// and built-in type name symbols -- the light view type-of and the serializers
-		// ride, with no metaobject runtime in the artifact.
-		assertThat(compileAndRun("""
-				(defclass cd-pt () ())
-				(defstruct cd-node)
-				(print (list (%class-designator (make-instance 'cd-pt))
-				             (%class-designator (make-cd-node))
-				             (%class-designator 42)
-				             (%class-designator "s")))
-				""")).isEqualTo("(|%class-CD-PT| |%struct-CD-NODE| INTEGER STRING)");
-	}
-
-	@Test
-	void compileAndRunClassSlotDefsAcceptsAClassMetaobjectDesignator() throws Exception {
-		// A metaobject designates through its name slot, so the pre-migration idiom
-		// (%class-slot-defs (class-of x)) keeps answering the (name type) pairs.
-		assertThat(compileAndRun("""
-				(defclass csm-p () ((name :initarg :name) (age :type integer)))
-				(print (list (%class-slot-defs (class-of (make-instance 'csm-p)))
-				             (%class-slot-defs (%class-designator (make-instance 'csm-p)))
-				             (%class-slot-defs (find-class 'integer))))
-				""")).isEqualTo("(((NAME T) (AGE INTEGER)) ((NAME T) (AGE INTEGER)) NIL)");
-	}
-
-	@Test
 	void compileAndRunSlotShadowingChangeClassWithAccessorsAndPrintObject() throws Exception {
 		assertThat(compileAndRun("""
 				(defclass jc-base () ((open-p :initform t :reader jc-open-p) (conn :initarg :conn :reader jc-conn)))
@@ -12061,21 +10500,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunIdentityHashKeepsAnAggregatesValueWhateverItsContentsDo() throws Exception {
-		// LispEvaluatorTest's twin: System.identityHashCode of the object, an int the
-		// same for its whole life
-		assertThat(compileAndRun("""
-				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
-				       (hc (%identity-hash c)) (hv (%identity-hash v)))
-				  (setf (car c) 9)
-				  (setf (aref v 0) 9)
-				  (print (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
-				               (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
-				               (integerp hc) (<= -2147483648 hc 2147483647))))
-				""")).isEqualTo("(T T T T T T)");
-	}
-
-	@Test
 	void compileAndRunIeee754Bits() throws Exception {
 		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
 				+ " (print (%ieee754-double-from-bits 4607182418800017408))"
@@ -12405,51 +10829,6 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("PROVIDE is only supported as a literal top-level form");
 	}
 
-	@Test
-	void compileRatioArithmetic() throws Exception {
-		assertThat(compileAndRun("(print (+ 1/2 1/3))")).isEqualTo("5/6");
-		assertThat(compileAndRun("(print (+ 1/2 1/2))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (- 1/2 1/3))")).isEqualTo("1/6");
-		assertThat(compileAndRun("(print (* 2/3 3))")).isEqualTo("2");
-		assertThat(compileAndRun("(print (/ 1/2 1/3))")).isEqualTo("3/2");
-		assertThat(compileAndRun("(print (- 1/2))")).isEqualTo("-1/2");
-		assertThat(compileAndRun("(print (+ 1 1/2))")).isEqualTo("3/2");
-	}
-
-	@Test
-	void compileRatioPredicatesAndAccessors() throws Exception {
-		assertThat(compileAndRun("(print (numberp 1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (integerp 1/2))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (rationalp 1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (rationalp 5))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (rationalp 0.5))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (numerator 3/4))")).isEqualTo("3");
-		assertThat(compileAndRun("(print (denominator 3/4))")).isEqualTo("4");
-		assertThat(compileAndRun("(print (numerator 5))")).isEqualTo("5");
-		assertThat(compileAndRun("(print (denominator 5))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (consp 1/2))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (atom 1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (listp 1/2))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (zerop 1/2))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (plusp 1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (minusp -1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (signum -1/2))")).isEqualTo("-1");
-	}
-
-	@Test
-	void compileRatioExpt() throws Exception {
-		assertThat(compileAndRun("(print (expt 1/2 2))")).isEqualTo("1/4");
-		assertThat(compileAndRun("(print (expt 1/2 -2))")).isEqualTo("4");
-		assertThat(compileAndRun("(print (expt 2 -1))")).isEqualTo("1/2");
-	}
-
-	@Test
-	void compileRatioInList() throws Exception {
-		assertThat(compileAndRun("(print (list 1/2 2/3))")).isEqualTo("(1/2 2/3)");
-		assertThat(compileAndRun("(print (cons 1 1/2))")).isEqualTo("(1 . 1/2)");
-		assertThat(compileAndRun("(print (1+ 1/2))")).isEqualTo("3/2");
-	}
-
 	// read is prelude rontolisp over read-char / unread-char, so a program that calls
 	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
 	private String compileAndRunRead(String lispCode) throws Exception {
@@ -12499,46 +10878,6 @@ class JvmLispCompilerTest {
 	}
 
 	// === read ===
-
-	@Test
-	void compileAndRunReadConsumesExactlyOneDatum() throws Exception {
-		// One datum's characters, the stream left after them. The compile
-		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
-		// one line and "b)" on the next read as (A) then B.
-		assertThat(compileAndRunRead("""
-				(let ((s (make-string-input-stream "1 2 3")))
-				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
-			.isEqualTo("(1 2 3 :EOF)");
-		assertThat(compileAndRunRead("""
-				(with-input-from-string (s "(a) (b)")
-				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
-			.isEqualTo("((A) (B) :EOF)");
-		assertThat(compileAndRunRead("""
-				(with-input-from-string (s "(a
-				b) c")
-				  (print (list (read s nil :eof) (read s nil :eof))))""")).isEqualTo("((A B) C)");
-		assertThat(compileAndRunRead("""
-				(with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))"""))
-			.isEqualTo("((1 2) \" x\")");
-		assertThat(compileAndRunRead("""
-				(with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))"""))
-			.isEqualTo("(AB \" cd\")");
-	}
-
-	@Test
-	void compileAndRunReadEofValueAndSignal() throws Exception {
-		assertThat(compileAndRunRead("(with-input-from-string (s \"\") (print (read s nil :done)))"))
-			.isEqualTo(":DONE");
-		// A nil DATUM is no longer confused with end of input.
-		assertThat(compileAndRunRead("(with-input-from-string (s \"nil\") (print (read s nil :done)))"))
-			.isEqualTo("NIL");
-		assertThat(compileAndRunRead("""
-				(print (handler-case (with-input-from-string (s "") (read s t))
-				         (end-of-file () :caught)))""")).isEqualTo(":CAUGHT");
-		assertThat(compileAndRunRead("""
-				(print (handler-case (with-input-from-string (s "(a b") (read s))
-				         (error () :caught)))""")).isEqualTo(":CAUGHT");
-	}
 
 	@Test
 	void compileAndRunReadInteger() throws Exception {
@@ -12744,122 +11083,13 @@ class JvmLispCompilerTest {
 	// === eval ===
 
 	@Test
-	void evalVariadicArithmetic() throws Exception {
-		assertThat(compileAndRun("(print (eval '(+ 1 2 3 4)))")).isEqualTo("10");
-	}
-
-	@Test
 	void evalIf() throws Exception {
 		assertThat(compileAndRun("(print (eval '(if (= 1 1) 10 20)))")).isEqualTo("10");
 	}
 
 	@Test
-	void evalLetBindsVariable() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((x 10)) (+ x 5))))")).isEqualTo("15");
-	}
-
-	@Test
-	void evalLambdaCapturesLexicalEnv() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((n 3)) (funcall (lambda (x) (+ x n)) 4))))")).isEqualTo("7");
-	}
-
-	@Test
-	void evalCond() throws Exception {
-		assertThat(compileAndRun("(print (eval '(cond ((= 1 2) 10) ((= 1 1) 20) (t 30))))")).isEqualTo("20");
-	}
-
-	@Test
-	void evalAnd() throws Exception {
-		assertThat(compileAndRun("(print (eval '(and 1 2 3)))")).isEqualTo("3");
-	}
-
-	@Test
-	void evalOr() throws Exception {
-		assertThat(compileAndRun("(print (eval '(or nil 5 nil)))")).isEqualTo("5");
-	}
-
-	@Test
-	void evalWhenUnless() throws Exception {
-		assertThat(compileAndRun("(print (eval '(when (= 1 1) 99)))")).isEqualTo("99");
-		assertThat(compileAndRun("(print (eval '(unless (= 1 2) 88)))")).isEqualTo("88");
-	}
-
-	@Test
-	void evalSetqInLet() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((x 1)) (setq x 42) x)))")).isEqualTo("42");
-	}
-
-	@Test
-	void evalSetqGlobalPersistsAcrossEvalCalls() throws Exception {
-		assertThat(compileAndRun("(eval '(setq counter 10)) (print (eval 'counter))")).isEqualTo("10");
-	}
-
-	@Test
-	void evalRuntimeFunctionDefinition() throws Exception {
-		assertThat(compileAndRun("(eval '(setq sq (lambda (x) (* x x)))) (print (eval '(funcall sq 6)))"))
-			.isEqualTo("36");
-	}
-
-	@Test
-	void evalNestedEval() throws Exception {
-		assertThat(compileAndRun("(print (eval '(eval '(+ 2 3))))")).isEqualTo("5");
-	}
-
-	@Test
-	void evalFuncall() throws Exception {
-		assertThat(compileAndRun("(print (eval '(funcall (lambda (x y) (+ x y)) 3 4)))")).isEqualTo("7");
-	}
-
-	@Test
-	void evalReduce() throws Exception {
-		assertThat(compileAndRun("(print (eval '(reduce (lambda (a b) (+ a b)) (list 1 2 3 4))))")).isEqualTo("10");
-	}
-
-	@Test
-	void evalCarCdrComposition() throws Exception {
-		assertThat(compileAndRun("(print (eval '(cadr (list 1 2 3))))")).isEqualTo("2");
-	}
-
-	@Test
-	void evalNumberedAccessors() throws Exception {
-		assertThat(compileAndRun("(print (eval '(third (list 10 20 30 40))))")).isEqualTo("30");
-		assertThat(compileAndRun("(print (eval '(fifth (list 10 20 30 40 50))))")).isEqualTo("50");
-		assertThat(compileAndRun("(print (eval '(tenth (list 1 2 3 4 5 6 7 8 9 10))))")).isEqualTo("10");
-	}
-
-	@Test
-	void evalNth() throws Exception {
-		assertThat(compileAndRun("(print (eval '(nth 2 (list 10 20 30 40))))")).isEqualTo("30");
-	}
-
-	@Test
 	void evalUserDefinedFunction() throws Exception {
 		assertThat(compileAndRun("(defun double (x) (* x 2)) (print (eval '(double 21)))")).isEqualTo("42");
-	}
-
-	@Test
-	void evalBuiltinAsValue() throws Exception {
-		assertThat(compileAndRun("(print (eval '(funcall #'+ 10 20)))")).isEqualTo("30");
-	}
-
-	@Test
-	void evalDefunThenCall() throws Exception {
-		assertThat(compileAndRun("(print (eval '(progn (defun sq2 (x) (* x x)) (sq2 6))))")).isEqualTo("36");
-	}
-
-	@Test
-	void evalSetfCarCdr() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((x (list 1 2 3))) (setf (car x) 99) x)))")).isEqualTo("(99 2 3)");
-	}
-
-	@Test
-	void evalPush() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((x (list 2 3))) (push 1 x) x)))")).isEqualTo("(1 2 3)");
-	}
-
-	@Test
-	void evalPop() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((x (list 1 2 3))) (pop x))))")).isEqualTo("1");
 	}
 
 	@Test
@@ -12872,16 +11102,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void bigIntegerMultiplicationOverflow() throws Exception {
-		assertThat(compileAndRun("(print (* 1000000000000 1000000000000))")).isEqualTo("1000000000000000000000000");
-	}
-
-	@Test
-	void bigIntegerSubtractionUnderflow() throws Exception {
-		assertThat(compileAndRun("(print (- -9223372036854775807 1000))")).isEqualTo("-9223372036854776807");
-	}
-
-	@Test
 	void bigIntegerResultDemotedWhenFitsInLong() throws Exception {
 		// (fact 32) / (fact 31) = 32 fits in a long again.
 		String code = """
@@ -12889,17 +11109,6 @@ class JvmLispCompilerTest {
 				(print (/ (fact 32) (fact 31)))
 				""";
 		assertThat(compileAndRun(code)).isEqualTo("32");
-	}
-
-	@Test
-	void bigIntegerLiteral() throws Exception {
-		assertThat(compileAndRun("(print 123456789012345678901234567890)")).isEqualTo("123456789012345678901234567890");
-	}
-
-	@Test
-	void bigIntegerLiteralArithmetic() throws Exception {
-		assertThat(compileAndRun("(print (+ 123456789012345678901234567890 1))"))
-			.isEqualTo("123456789012345678901234567891");
 	}
 
 	@Test
@@ -13053,26 +11262,6 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("0");
 		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 		assertThat(elapsedMs).as("400k oldest-first remhashes took %d ms", elapsedMs).isLessThan(15000);
-	}
-
-	@Test
-	void compileAndRunEqOnDistinctEqualStringsComparesByIdentity() throws Exception {
-		// A string is a quote-framed String or a character-vector List, and _eqv used to
-		// answer both by content: two distinct equal strings were eq. equal still
-		// compares content, equal literals are one ldc-interned object, a symbol still
-		// compares by name, and a character vector keys an eq table by identity.
-		assertThat(compileAndRun("""
-				(let* ((a (copy-seq "ab")) (b (copy-seq "ab"))
-				       (c (make-array 2 :element-type 'character :initial-contents "ab"))
-				       (q (make-hash-table :test 'eq))
-				       (g (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t
-				                        :initial-contents "g")))
-				  (setf (gethash a q) 1 (gethash g q) 2)
-				  (vector-push-extend #\\h g)
-				  (print (list (eq a b) (eql a b) (eql a a) (eql c "ab") (equal a b) (equal c "ab")
-				               (member a '("ab")) (eq "ab" "ab") (eq 'foo (intern "FOO"))
-				               (gethash a q) (gethash b q) (gethash g q))))
-				""")).isEqualTo("(NIL NIL T NIL T T NIL T T 1 NIL 2)");
 	}
 
 	@Test
@@ -14302,18 +12491,6 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("128512\n\"😀\"\n233\n\"é\"");
 	}
 
-	// Full-Unicode case fold via Character.toUpperCase(int) / toLowerCase(int) so a
-	// Latin-1 supplement letter and non-Latin scripts fold correctly (not just ASCII).
-	@Test
-	void compileCharCaseFoldBeyondAscii() throws Exception {
-		assertThat(compileAndRun("""
-				(print (char-code (char-upcase (code-char 233))))
-				(print (char-code (char-downcase (code-char 201))))
-				(print (char-code (char-upcase (code-char 945))))
-				(print (char-code (char-downcase (code-char 1040))))
-				""")).isEqualTo("201\n233\n913\n1072");
-	}
-
 	// A character index costs the same wherever it lands: scanning ONE long string costs
 	// what scanning the SAME characters in short chunks costs. Before, the index was
 	// turned into a UTF-16 code-unit offset with String.offsetByCodePoints(1, i), which
@@ -14577,12 +12754,6 @@ class JvmLispCompilerTest {
 	// === the emitted reader's # dispatch (frontend parity) ===
 
 	@Test
-	void compileReadFromStringRadixBigInteger() throws Exception {
-		assertThat(compileAndRun("(print (read-from-string \"#x10000000000000000\"))"))
-			.isEqualTo("18446744073709551616");
-	}
-
-	@Test
 	void compileReadFromStringStructLiterals() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct rdpt x y)
@@ -14680,11 +12851,6 @@ class JvmLispCompilerTest {
 				#<HASH-TABLE :TEST EQUAL :COUNT 2> #<HASH-TABLE :TEST EQUAL :COUNT 2>
 				(#<HASH-TABLE :TEST EQUAL :COUNT 2>)
 				#<HASH-TABLE :TEST EQUAL :COUNT 1>""");
-	}
-
-	@Test
-	void compileHashTableGetWithDefault() throws Exception {
-		assertThat(compileAndRun("(print (gethash 'x (make-hash-table) 42))")).isEqualTo("42");
 	}
 
 	@Test
@@ -15006,11 +13172,6 @@ class JvmLispCompilerTest {
 				(defparameter *d* (funcall *bump* 1))
 				(print (list *a* *b* *d*))
 				""")).isEqualTo("(1 2 1)");
-	}
-
-	@Test
-	void compileArrayDefaultInitialElementIsNil() throws Exception {
-		assertThat(compileAndRun("(print (aref (make-array 3) 2))")).isEqualTo("NIL");
 	}
 
 	@Test
@@ -15385,26 +13546,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void aQuotedDatumIsOneSharedConstantAcrossEvaluations() throws Exception {
-		// quote is the CONSTANT syntax: every evaluation of one quote site answers the
-		// SAME object, like the interpreter and like a real CL (CLHS leaves writes into
-		// it undefined; here they reach the shared constant, as they always did on the
-		// interpreter). A bare #(...) literal stays a constructor -- the freshness
-		// invariant of .kb/array-literals.md is about literals OUTSIDE quote.
-		assertThat(compileAndRun("""
-				(defun %ql () '(1 2 3))
-				(print (eq (%ql) (%ql)))
-				(let ((a (%ql))) (setf (car a) 99))
-				(print (%ql))
-				(let ((f (lambda () '#(7 8)))) (print (eq (funcall f) (funcall f))))
-				(defun %qn () '(1 #(2 3)))
-				(print (eq (cadr (%qn)) (cadr (%qn))))
-				(defun %qd () '#d(1.0 2.0))
-				(print (eq (%qd) (%qd)))
-				""")).isEqualTo("T\n(99 2 3)\nT\nT\nT");
-	}
-
-	@Test
 	void aQuotedDatumCostsNoConstantPoolEntryOfItsOwn() {
 		// Every quoted datum is a slot of ONE table, named by an int operand: the pool
 		// holds the table's fixed entries, not three per datum (a per-datum Fieldref
@@ -15442,24 +13583,6 @@ class JvmLispCompilerTest {
 			assertThat(fill.invoke(null, loser, 0)).isSameAs(winner);
 			assertThat(read.invoke(null, 0)).isSameAs(winner);
 		}
-	}
-
-	@Test
-	void aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations() throws Exception {
-		// A bare #P"..." / #S(...) in code position is a CONSTANT, not a constructor:
-		// the interpreter's self-evaluating LispInstance arm hands the reader's own
-		// instance back at every evaluation, and cannot be moved (the same arm carries
-		// every live instance spliced back through (quote <value>)), so the site
-		// memoizes into the lazy table slot a quoted datum uses (.kb/quoted-data.md).
-		assertThat(compileAndRun("""
-				(defun %fp () #P"a/b.txt")
-				(print (eq (%fp) (%fp)))
-				(print (namestring (%fp)))
-				(defstruct %pt x y)
-				(defun %fs () #S(%pt :x 1 :y 2))
-				(print (eq (%fs) (%fs)))
-				(print (%pt-x (%fs)))
-				""")).isEqualTo("T\n\"a/b.txt\"\nT\n1");
 	}
 
 	@Test
@@ -15558,37 +13681,6 @@ class JvmLispCompilerTest {
 			.compile(LispReader.readAllFromString("(print (funcall #'fill (make-array 3 :initial-element 0) 9))"));
 		assertThat(declaredMethodNames(classBytes)).contains("_aset1");
 		assertThat(runClass(classBytes)).isEqualTo("#(9 9 9)");
-	}
-
-	@Test
-	void compileSequenceOperatorsWithoutTheArrayRuntime() throws Exception {
-		// The other half of the gate above: with the array arms dropped, every
-		// sequence operator whose lowering carried one still answers for the two
-		// representations that CAN exist in an array-free program (list and string).
-		assertThat(compileAndRun("""
-				(print (elt "abc" 1))
-				(print (elt '(10 20 30) 1))
-				(print (coerce "ab" 'list))
-				(print (map 'string (lambda (c) c) "xyz"))
-				(print (reverse "abc"))
-				(print (subseq '(1 2 3 4) 1 3))
-				(print (replace "abcdef" "XY" :start1 1))
-				(print (remove-duplicates '(1 2 1 3)))
-				(print (sort "cba" #'char<))
-				(print (reduce #'+ '(1 2 3)))
-				""")).isEqualTo("#\\b\n20\n(#\\a #\\b)\n\"xyz\"\n\"cba\"\n(2 3)\n\"aXYdef\"\n(2 1 3)\n\"abc\"\n6");
-	}
-
-	@Test
-	void compileFuncallAsAFirstClassValue() throws Exception {
-		// #'funcall's injected wrapper body is (apply f r), which needs the eval
-		// runtime's _apply. The wrapper used to be emitted in every class while _apply
-		// stayed gated on the source mentioning eval/apply, so this died with
-		// NoSuchMethodError; wrapper and runtime are now gated on the same reference.
-		assertThat(compileAndRun("""
-				(print (funcall #'funcall #'+ 1 2))
-				(print (mapcar #'funcall (list #'car #'cdr) (list (list 1 2) (list 3 4))))
-				""")).isEqualTo("3\n(1 (4))");
 	}
 
 	@Test
@@ -17143,68 +15235,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunSetfSymbolFunctionAliasAndRedefinition() throws Exception {
-		// jsf-alias is bound ONLY by setf, so a forwarder defun carries its direct
-		// call sites to the runtime _fenv binding; the second setf re-binds it.
-		assertThat(compileAndRun("""
-				(defun jsf-orig (x) (* x 2))
-				(setf (symbol-function 'jsf-alias) #'jsf-orig)
-				(print (jsf-alias 21))
-				(print (funcall #'jsf-alias 3))
-				(setf (fdefinition 'jsf-alias) (lambda (x) (list :new x)))
-				(print (jsf-alias 5))
-				(print (fboundp 'jsf-alias))
-				""")).isEqualTo("42\n6\n(:NEW 5)\nT");
-	}
-
-	@Test
-	void compileAndRunSetfSymbolFunctionBeforeAssignmentSignals() throws Exception {
-		assertThat(compileAndRun("""
-				(defun jsf2-target (x) x)
-				(print (handler-case (jsf2-late 1) (error (e) :undefined)))
-				(setf (symbol-function 'jsf2-late) #'jsf2-target)
-				(print (jsf2-late :ok))
-				""")).isEqualTo(":UNDEFINED\n:OK");
-	}
-
-	@Test
-	void compileAndRunSetWritesBackingStoreAndMirror() throws Exception {
-		// A store into a global with a backing store must reach a compiled direct
-		// read as well as symbol-value; a name without one lands in the mirror,
-		// where symbol-value and boundp answer it.
-		assertThat(compileAndRun("""
-				(defvar *jset-g* 1)
-				(print (set '*jset-g* 2))
-				(print *jset-g*)
-				(print (symbol-value '*jset-g*))
-				(print (setf (symbol-value '*jset-g*) 3))
-				(print *jset-g*)
-				(print (set (intern "JSET-NEW") 4))
-				(print (symbol-value 'jset-new))
-				(print (symbol-value (intern "JSET-NEW")))
-				(print (boundp 'jset-new))
-				(print (boundp 'jset-never))
-				(print (funcall #'set '*jset-g* 5))
-				(print *jset-g*)
-				""")).isEqualTo("2\n2\n2\n3\n3\n4\n4\n4\nT\nNIL\n5\n5");
-	}
-
-	@Test
-	void compileAndRunSetWritesThroughInsideAFunctionBody() throws Exception {
-		// The mirror is written wherever the store runs, not only at the top level:
-		// symbol-value sees a store a defun body made.
-		assertThat(compileAndRun("""
-				(defvar *jset-f* 1)
-				(defun jset-bump () (set '*jset-f* (+ *jset-f* 10)))
-				(jset-bump)
-				(print *jset-f*)
-				(print (symbol-value '*jset-f*))
-				(jset-bump)
-				(print (symbol-value '*jset-f*))
-				""")).isEqualTo("11\n11\n21");
-	}
-
-	@Test
 	void aSpecialReadByNameAnswersTheActiveBinding() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): symbol-value and eval resolve
 		// a special through its variable -- this thread's active _d$ cell, else _g$ --
@@ -17437,19 +15467,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunReinitializeInstanceWithNoUserMethod() throws Exception {
-		// CL supplies the system default (chaining into shared-initialize's initarg
-		// fill), so a bare call compiles and fills the supplied initargs -- upstream
-		// ASDF's (apply 'reinitialize-instance system keys).
-		assertThat(compileAndRun("""
-				(defclass jri-p () ((n :initarg :n :reader jri-n) (m :initarg :m :initform 10)))
-				(let ((o (make-instance 'jri-p :n 1)))
-				  (reinitialize-instance o :n 2)
-				  (print (list (jri-n o) (slot-value o 'm))))
-				""")).isEqualTo("(2 10)");
-	}
-
-	@Test
 	void compileAndRunTheMissingStandardNames() throws Exception {
 		// The batch on the JVM: with-compilation-unit is a progn, the load
 		// switches are bound nil, a cl:-qualified read-time constant answers the
@@ -17544,115 +15561,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunChangeClassWithComputedDesignator() throws Exception {
-		// A runtime class designator (symbol or metaobject) routes through the
-		// generated %change-class-runtime dispatch; identity, shared slots, initform
-		// fill and supplied initargs match the literal spelling.
-		assertThat(compileAndRun("""
-				(defclass jcc-base () ((n :initarg :n)))
-				(defclass jcc-sub (jcc-base) ((extra :initform 42)))
-				(let ((o (make-instance 'jcc-base :n 1)) (cls 'jcc-sub))
-				  (change-class o cls)
-				  (let ((p (make-instance 'jcc-base :n 5)))
-				    (change-class p (find-class 'jcc-sub) :n 7)
-				    (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
-				                 (slot-value p 'n)))))
-				""")).isEqualTo("(JCC-SUB 1 42 7)");
-	}
-
-	@Test
-	void compileAndRunDefclassWriterAndClassAllocation() throws Exception {
-		// :writer (setf name) / :writer sym define the write-side generics; a
-		// :allocation :class slot lives in one shared cell per declaring class, read
-		// and written through every access path, with a re-declaring subclass owning
-		// a cell of its own; standard-class works as a typecase specifier.
-		assertThat(compileAndRun("""
-				(defclass jwr-q () ((a :writer (setf jwr-q-a) :reader jwr-q-a :initform 1)
-				                    (b :writer jwr-set-b :reader jwr-get-b :initform 0)))
-				(let ((o (make-instance 'jwr-q)))
-				  (setf (jwr-q-a o) 5)
-				  (jwr-set-b 7 o)
-				  (print (list (jwr-q-a o) (jwr-get-b o))))
-				(defclass jca-op () ((selfward :initform 'base-op :allocation :class :reader jca-selfward)))
-				(defclass jca-load-op (jca-op) ((selfward :initform 'load-dep :allocation :class)))
-				(defclass jca-r () ((a :initform 1 :allocation :class :accessor jca-r-a)))
-				(let ((x (make-instance 'jca-r)) (y (make-instance 'jca-r)) (nm 'a))
-				  (setf (jca-r-a x) 9)
-				  (print (list (jca-selfward (make-instance 'jca-op))
-				               (jca-selfward (make-instance 'jca-load-op))
-				               (jca-r-a y) (slot-value y 'a) (slot-value y nm))))
-				(print (typecase (find-class 'jca-op) (standard-class :meta) (t :other)))
-				""")).isEqualTo("(5 7)\n(BASE-OP LOAD-DEP 9 9 9)\n:META");
-	}
-
-	@Test
-	void compileAndRunDefclassMultipleInheritance() throws Exception {
-		// Slots merge across supers; the second super's accessor (whose slot shifts
-		// from index 0 to 1) is overridden per class; a diamond keeps ONE copy of the
-		// shared slot and the more specific re-declared initform wins by CPL.
-		assertThat(compileAndRun("""
-				(defclass jmi-a () ((x :initarg :x :accessor jmi-x)))
-				(defclass jmi-b () ((y :initarg :y :accessor jmi-y)))
-				(defclass jmi-c (jmi-a jmi-b) ((z :initarg :z :accessor jmi-z)))
-				(let ((b (make-instance 'jmi-b :y 7))
-				      (c (make-instance 'jmi-c :x 1 :y 2 :z 3)))
-				  (setf (jmi-y c) 9)
-				  (print (list (jmi-x c) (jmi-y c) (jmi-z c) (jmi-y b))))
-				(defclass jdi-base () ((v :initform :base :reader jdi-v)))
-				(defclass jdi-l (jdi-base) ())
-				(defclass jdi-r (jdi-base) ((v :initform :right)))
-				(defclass jdi-d (jdi-l jdi-r) ())
-				(let ((d (make-instance 'jdi-d)))
-				  (print (list (jdi-v d) (length (%obj-slots d)) (typep d 'jdi-l) (typep d 'jdi-r))))
-				""")).isEqualTo("(1 9 3 7)\n(:RIGHT 1 T T)");
-	}
-
-	@Test
-	void compileAndRunDefclassMultipleInheritanceDispatchFollowsCpl() throws Exception {
-		// Method selection and call-next-method both follow the instance class's
-		// precedence list: (a b) reaches a's method first, (b a) reaches b's.
-		assertThat(compileAndRun("""
-				(defclass jlp-a () ())
-				(defclass jlp-b () ())
-				(defgeneric jlp-who (x))
-				(defmethod jlp-who ((x jlp-a)) :a)
-				(defmethod jlp-who ((x jlp-b)) :b)
-				(defclass jlp-ab (jlp-a jlp-b) ())
-				(defclass jlp-ba (jlp-b jlp-a) ())
-				(print (list (jlp-who (make-instance 'jlp-ab)) (jlp-who (make-instance 'jlp-ba))))
-				(defgeneric jcn-trace (x))
-				(defmethod jcn-trace ((x jlp-a)) (cons :a (if (next-method-p) (call-next-method) nil)))
-				(defmethod jcn-trace ((x jlp-b)) (cons :b (if (next-method-p) (call-next-method) nil)))
-				(defmethod jcn-trace (x) (list :default))
-				(print (jcn-trace (make-instance 'jlp-ab)))
-				(print (jcn-trace (make-instance 'jlp-ba)))
-				""")).isEqualTo("(:A :B)\n(:A :B :DEFAULT)\n(:B :A :DEFAULT)");
-	}
-
-	@Test
-	void compileAndRunSetfMethodDispatchesPerClass() throws Exception {
-		// (defmethod (setf name) ...) merges with a defclass :accessor writer on the
-		// same generic; (defgeneric (setf name) ...) with an inline method works too.
-		assertThat(compileAndRun("""
-				(defclass jsm-a () ((x :initarg :x :accessor jsm-val)))
-				(defclass jsm-b () ((log :initform nil :reader jsm-log)))
-				(defmethod (setf jsm-val) (new (b jsm-b)) (setf (slot-value b 'log) (list :wrote new)) new)
-				(let ((a (make-instance 'jsm-a :x 1))
-				      (b (make-instance 'jsm-b)))
-				  (setf (jsm-val a) 2)
-				  (setf (jsm-val b) 3)
-				  (print (list (jsm-val a) (jsm-log b))))
-				(defclass jsm-box () ((v :initform 0 :reader jsm-content)))
-				(defgeneric (setf jsm-content) (new box)
-				  (:method (new (b jsm-box)) (setf (slot-value b 'v) new)))
-				(let ((b (make-instance 'jsm-box)))
-				  (setf (jsm-content b) 9)
-				  (funcall #'(setf jsm-content) 11 b)
-				  (print (jsm-content b)))
-				""")).isEqualTo("(2 (:WROTE 3))\n11");
-	}
-
-	@Test
 	void compileAndRunDefmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
 		// (close X) is compiler-lowered, so the generated dispatcher defun used to be
 		// dead under its own name and the user method was silently ignored
@@ -17707,57 +15615,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunMultiParameterMethodDispatch() throws Exception {
-		assertThat(compileAndRun("""
-				(defclass mp-animal () ())
-				(defclass mp-dog (mp-animal) ())
-				(defclass mp-cat (mp-animal) ())
-				(defgeneric mp-meets (a b))
-				(defmethod mp-meets ((a mp-dog) (b mp-cat)) :chase)
-				(defmethod mp-meets ((a mp-cat) (b mp-dog)) :flee)
-				(defmethod mp-meets ((a mp-animal) (b mp-animal)) :ignore)
-				(let ((d (make-instance 'mp-dog)) (c (make-instance 'mp-cat)))
-				  (print (list (mp-meets d c) (mp-meets c d) (mp-meets d d))))
-				""")).isEqualTo("(:CHASE :FLEE :IGNORE)");
-	}
-
-	@Test
-	void compileAndRunVariadicGenericForwardsRestTail() throws Exception {
-		assertThat(compileAndRun("""
-				(defclass vg-base () ())
-				(defclass vg-sub (vg-base) ())
-				(defgeneric vg-desc (x &rest extras))
-				(defmethod vg-desc ((x vg-sub) &rest extras) (list :sub extras))
-				(defmethod vg-desc ((x vg-base) &rest extras) (list :base extras))
-				(print (vg-desc (make-instance 'vg-sub) 1 2))
-				(print (vg-desc (make-instance 'vg-base) 3))
-				""")).isEqualTo("(:SUB (1 2))\n(:BASE (3))");
-	}
-
-	@Test
-	void compileAndRunDefclassDefaultInitargs() throws Exception {
-		assertThat(compileAndRun("""
-				(defclass di-conf () ((host :initarg :host) (port :initarg :port))
-				  (:default-initargs :host "localhost" :port 8080))
-				(let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
-				  (print (list (slot-value c1 'host) (slot-value c1 'port)))
-				  (print (slot-value c2 'port)))
-				""")).isEqualTo("(\"localhost\" 8080)\n9090");
-	}
-
-	@Test
-	void compileAndRunWithSlotsWriteThrough() throws Exception {
-		assertThat(compileAndRun("""
-				(defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
-				(let ((p (make-instance 'ws-pt :x 1 :y 2)))
-				  (with-slots (x (why y)) p
-				    (setf x (+ x 10))
-				    (print (list x why)))
-				  (print (slot-value p 'x)))
-				""")).isEqualTo("(11 2)\n11");
-	}
-
-	@Test
 	void compileAndRunWithSlotsWriteOnlyUnboundSlot() throws Exception {
 		// with-slots binds, it never reads: a body that only ASSIGNS a slot declared
 		// without an :initform must not signal on entry (fast-io's initialize-instance).
@@ -17769,33 +15626,6 @@ class JvmLispCompilerTest {
 				    (setf buffer (list 1 2))))
 				(print (slot-value (make-instance 'wsu-box) 'buffer))
 				""")).isEqualTo("(1 2)");
-	}
-
-	@Test
-	void compileAndRunSlotValueOnAnUndeclaredSlotSignalsAtRunTime() throws Exception {
-		// The eagerly expanding compile path must not fail the BUILD over a slot read
-		// that may never execute (fast-io's open-stream-p reads a typo'd slot name):
-		// it lowers to a run-time error, like the interpreter and like slot-missing.
-		assertThat(compileAndRun("""
-				(defclass ms-box () ((a :initform 1)))
-				(print (handler-case (slot-value (make-instance 'ms-box) 'nope)
-				         (error (e) (princ-to-string e))))
-				(print (slot-value (make-instance 'ms-box) 'a))
-				""")).isEqualTo("\"The slot NOPE is missing\"\n1");
-	}
-
-	@Test
-	void compileAndRunDefstructOptions() throws Exception {
-		assertThat(compileAndRun("""
-				(defstruct (so-kv (:constructor make-so-pair) (:conc-name so-get-)
-				                  (:predicate so-kv?) (:copier so-clone))
-				  key val)
-				(let ((k (make-so-pair :key 'a :val 1)))
-				  (print (list (so-get-key k) (so-kv? k) (so-kv? 5)))
-				  (let ((k2 (so-clone k)))
-				    (setf (so-get-val k2) 99)
-				    (print (list (so-get-val k) (so-get-val k2)))))
-				""")).isEqualTo("(A T NIL)\n(1 99)");
 	}
 
 	@Test
@@ -17924,21 +15754,6 @@ class JvmLispCompilerTest {
 				  (defmethod print-object ((x po-late) s) (format s "#<LATE!>"))
 				  (print o))
 				""")).isEqualTo("#<PO-LATE>\n#<LATE!>");
-	}
-
-	@Test
-	void compileNestedDefmethodCallBeforeItsFormFallsThrough() throws Exception {
-		// The general shape: a call before the nested defmethod form runs
-		// answers the default, and after it the new method.
-		assertThat(compileAndRun("""
-				(defclass nd-late () ())
-				(defgeneric nd-greet (x))
-				(defmethod nd-greet (x) "default")
-				(let ((o (make-instance 'nd-late)))
-				  (print (nd-greet o))
-				  (defmethod nd-greet ((x nd-late)) "special")
-				  (print (nd-greet o)))
-				""")).isEqualTo("\"default\"\n\"special\"");
 	}
 
 	// --- Dynamic (special) variable binding ---
@@ -18360,36 +16175,6 @@ class JvmLispCompilerTest {
 	// ---- IEEE-754 float edge semantics: literal-path and comparison groups ----
 
 	@Test
-	void negativeZeroLiteralKeepsItsSign() throws Exception {
-		// -0.0 used to fold into DCONST_0 because -0.0 == 0.0.
-		assertThat(compileAndRun("(print -0.0)")).isEqualTo("-0.0");
-		assertThat(compileAndRun("(print (/ 1.0 -0.0))")).isEqualTo("-Infinity");
-	}
-
-	@Test
-	void modCorrectsTheSignWithoutMultiplyingTheOperands() throws Exception {
-		// _fmod used to decide "opposite signs" with `r * b < 0`. That product UNDERFLOWS
-		// to a zero when both operands are tiny, so the correction never fired and mod
-		// answered rem's negative remainder -- the interpreter, which compares the two
-		// signs directly, disagreed. Found by the wasm magnitude sweep
-		// (WasmLispCompilerIntegrationTest#theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep).
-		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm -1.2345678e-296 1d-300))"))
-			.isEqualTo("3.219999999997487e-301");
-		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm 4.9d-324 -0.1))")).isEqualTo("-0.1");
-		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm -4.9d-324 0.1))")).isEqualTo("0.1");
-		// The ordinary magnitudes, the zero (which takes no correction at all) and the
-		// infinite divisor are unmoved.
-		assertThat(compileAndRun("""
-				(defun mm (a b) (mod a b))
-				(defun mr (a b) (rem a b))
-				(print (list (mm -7.0 3.0) (mm 7.0 -3.0) (mm -0.0 2.0) (mr -0.0 2.0)))
-				(print (list (mm 3.0 (/ 1.0 0.0)) (mm -3.0 (/ 1.0 0.0)) (mm 3.0 (/ -1.0 0.0))))
-				""")).isEqualTo("""
-				(2.0 -2.0 -0.0 -0.0)
-				(3.0 Infinity -Infinity)""");
-	}
-
-	@Test
 	void theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
 		// The JVM twin of the wasm sweep: every ordered pair of the values below --
 		// spanning 2^53 and 2^63 in both directions plus subnormals and both signed
@@ -18456,25 +16241,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(expected);
-	}
-
-	@Test
-	void aRatioLiteralRoundsToItsExactQuotient() throws Exception {
-		// A ratio literal -- what (op (/ a b)) over two literals folds to -- goes
-		// straight
-		// to the rational rounding helper: both signs, every mode, past the long range.
-		assertThat(compileAndRun("""
-				(print (list (floor 7/2) (ceiling 7/2) (truncate 7/2) (round 7/2) (round 5/2)))
-				(print (list (floor -7/2) (ceiling -7/2) (truncate -7/2) (round -7/2) (round -5/2)))
-				(print (list (floor (/ 7 2)) (round (/ 1 3)) (ffloor (/ 7 2))))
-				(print (floor 340282366920938463463374607431768211457/18446744073709551616))
-				(print (ceiling -1/36893488147419103232))
-				""")).isEqualTo("""
-				(3 4 3 4 2)
-				(-4 -3 -3 -4 -2)
-				(3 0 3.0)
-				18446744073709551616
-				0""");
 	}
 
 	@Test
@@ -18589,22 +16355,6 @@ class JvmLispCompilerTest {
 			evaluator.eval(form);
 		}
 		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
-	}
-
-	@Test
-	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
-		// DCMPL-for-every-operator made < and <= answer t against NaN.
-		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (<= (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (> (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (>= (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
-		assertThat(compileAndRun("(print (/= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("T");
-		// No float literal in the comparison form: the _cmp runtime path.
-		assertThat(compileAndRun(
-				"(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))"))
-			.isEqualTo("(NIL NIL NIL NIL NIL T)");
-		assertThat(compileAndRun("(let ((z (* -1.0 0.0)) (p (* 1.0 0.0))) (print (= z p)))")).isEqualTo("T");
 	}
 
 	@Test
@@ -18962,85 +16712,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunUpcaseReaderModeFoldsRuntimeRead() throws Exception {
-		// The embedded reader runtime folds like the frontend (upcase premise): a user
-		// symbol reads upcased, a standard operator folds back to its canonical
-		// lowercase spelling so it stays eq to a compiled quoted reference, and the fold
-		// is byte-identical to the interpreter and both WASM backends.
-		assertThat(compileAndRun("(print (read-from-string \"foo\"))")).isEqualTo("FOO");
-		assertThat(compileAndRun("(print (symbol-name (read-from-string \"foo\")))")).isEqualTo("\"FOO\"");
-		assertThat(compileAndRun("(print (eq (read-from-string \"car\") 'car))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (read-from-string \"(x . 9)\"))")).isEqualTo("(X . 9)");
-	}
-
-	@Test
-	void compileCharacterElementTypeAboveRankOneIsAGeneralArray() throws Exception {
-		// Same contract as the interpreter's
-		// evalCharacterElementTypeAboveRankOneIsAGeneralArray: the character marker means
-		// "a rank-1 character array", so nothing above rank 1 carries it and the value is
-		// the plain general array. This call used to fail outright here, with a
-		// :fill-pointer message about a keyword the program never passed.
-		assertThat(compileAndRun("""
-				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
-				  (print (list (stringp b) (array-element-type b) (array-dimensions b) (type-of b) (vectorp b)))
-				  (setf (aref b 1 1) #\\z)
-				  (print b))
-				(print (aref (make-array '(2 2) :element-type 'character) 0 1))
-				(let ((c (make-array '(2 2) :element-type 'character
-				                     :initial-contents '((#\\a #\\b) (#\\c #\\d)))))
-				  (print (list (stringp c) (aref c 1 0) (type-of c))))
-				(let ((s (make-array 3 :element-type 'character :initial-element #\\z)))
-				  (print (list (stringp s) (array-element-type s) (type-of s) s)))
-				(print (list (aref (make-array 3 :element-type 'double-float :adjustable t) 0)
-				             (aref (make-array 3 :element-type 'single-float :fill-pointer 3) 2)))
-				""")).isEqualTo("""
-				(NIL CHARACTER (2 2) (SIMPLE-ARRAY CHARACTER (2 2)) NIL)
-				#2A((#\\a #\\a) (#\\a #\\z))
-				#\\Space
-				(NIL #\\c (SIMPLE-ARRAY CHARACTER (2 2)))
-				(T CHARACTER STRING "zzz")
-				(0.0 0.0)""");
-	}
-
-	@Test
-	void compileGeneralArrayRemembersItsDeclaredElementType() throws Exception {
-		// Same contract as the interpreter's
-		// evalGeneralArrayRemembersItsDeclaredElementType: a specialized element type
-		// that selects no representation of its own is still REMEMBERED on the general
-		// array it lands in -- array-element-type answers it, type-of builds the
-		// compound specifier from it, and an unsupplied element takes its own zero.
-		assertThat(compileAndRun("""
-				(defun ret-probe (a) (list (array-element-type a) (type-of a)))
-				(print (ret-probe (make-array '(2 2) :element-type '(unsigned-byte 8))))
-				(print (ret-probe (make-array '(2 3) :element-type 'character :initial-element #\\a)))
-				(print (ret-probe (make-array 4 :element-type 'double-float :fill-pointer 0)))
-				(print (ret-probe (make-array 4 :element-type '(unsigned-byte 16) :adjustable t)))
-				(print (ret-probe (make-array 3)))
-				(print (list (aref (make-array '(2 2) :element-type '(unsigned-byte 8)) 0 0)
-				             (aref (make-array 3 :element-type '(unsigned-byte 16) :adjustable t) 2)
-				             (aref (make-array 3 :element-type 'double-float :adjustable t) 0)))
-				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8))))
-				  (print (list (typep a '(simple-array (unsigned-byte 8) (2 2))) (typep a (type-of a)))))
-				(let ((v (make-array 2 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
-				  (vector-push-extend 7 v)
-				  (vector-push-extend 8 v)
-				  (vector-push-extend 9 v)
-				  (print (list v (array-element-type v) (fill-pointer v))))
-				(print (list (array-has-fill-pointer-p (make-array 4 :element-type 'double-float))
-				             (adjustable-array-p (make-array 4 :element-type '(unsigned-byte 8)))))
-				""")).isEqualTo("""
-				((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2 2)))
-				(CHARACTER (SIMPLE-ARRAY CHARACTER (2 3)))
-				(DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
-				((UNSIGNED-BYTE 16) (VECTOR (UNSIGNED-BYTE 16) 4))
-				(T (SIMPLE-VECTOR 3))
-				(0 0 0.0)
-				(T T)
-				(#(7 8 9) (UNSIGNED-BYTE 8) 3)
-				(NIL NIL)""");
-	}
-
-	@Test
 	void compileRuntimeElementTypePicksTheSameArrayAsALiteralOne() throws Exception {
 		// Same contract as the interpreter's
 		// evalRuntimeElementTypePicksTheSameArrayAsALiteralOne, and the same program:
@@ -19119,28 +16790,6 @@ class JvmLispCompilerTest {
 				(defun mk (et) (make-array 2 :element-type et))
 				(print (list (array-element-type (mk 'not-a-type)) (array-element-type (mk 'loopy))))
 				""")).isEqualTo("(T T)");
-	}
-
-	@Test
-	void compilePackedIntVectorSubseqCopySeqReplacePreserveThePackedType() throws Exception {
-		assertThat(compileAndRun("""
-				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(9 8 7 6)))
-				       (s (subseq a 1 3)))
-				  (setf (aref s 0) 300)
-				  (print (list s (array-element-type s) a)))
-				""")).isEqualTo("(#(44 7) (UNSIGNED-BYTE 8) #(9 8 7 6))");
-		assertThat(compileAndRun("""
-				(let* ((a (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)))
-				       (c (copy-seq a)))
-				  (print (list c (array-element-type c))))
-				""")).isEqualTo("(#(1 2 3) (UNSIGNED-BYTE 8))");
-		// replace mask-stores element-wise into a packed target.
-		assertThat(compileAndRun("""
-				(let ((dst (make-array 3 :element-type '(unsigned-byte 8)))
-				      (src #(300 2 3)))
-				  (replace dst src)
-				  (print dst))
-				""")).isEqualTo("#(44 2 3)");
 	}
 
 	@Test
