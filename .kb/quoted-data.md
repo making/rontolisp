@@ -49,14 +49,15 @@ names and string literals, each deduped class-wide (the quote-framed ones are
 the runtime's string representation, some also spelled as a bare symbol name -- a
 representation cost, not a site cost), and the own-class
 `Methodref`s are one per callee (`_lambda_N`, `_fx$N`, ...). The tripwire stays
-(52,000 until 2026-10-07, 54,000 since): past 65,534 the class now splits instead of failing
+(52,000 until 2026-10-07, 54,000 until 2026-10-17, 61,000 since): past 65,534 the class now splits instead of failing
 (`.kb/jvm-method-size-limits.md`), so what it guards is that the corpus class stays ONE class,
 the shape its run-and-compare covers; the split's placement is pinned by the split tests. It is
 an alarm well below that ceiling, not a budget a ci-spec row has to fit. Since 2026-09-29 every
 level's class is written with a pool of its own holding only what its members reference. The
 tripwire moved to 54,000 on 2026-10-07 when the corpus class's pool count, as the test builds
 it (build info included), crossed the 52,000 the tripwire then stood at -- with
-`.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program) back in.
+`.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program) back in. It moved to 61,000 on
+2026-10-17 at 59,131 entries, after the per-backend stdout tests moved into ci-spec.
 
 Other costs of the change:
 

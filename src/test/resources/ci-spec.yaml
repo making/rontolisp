@@ -27058,7 +27058,7 @@ cases:
       :CAUGHT
   - name: handler-bind-sees-an-undefined-function-error
     source: |
-      (print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1))))
+      (print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (funcall (intern "NO-SUCH-FUNCTION-XYZ") 1))))
     expected: |
       :CAUGHT
   - name: handler-bind-runs-each-cluster-once-for-a-built-in-error-innermost-first
@@ -27085,7 +27085,7 @@ cases:
       (print (handler-case (car 1) (type-error (e) :type-error) (error (e) :plain)))
       (print (handler-case (/ 1 0) (division-by-zero (e) :dbz) (error (e) :plain)))
       (print (handler-case (aref (vector 1 2) 5) (type-error (e) :type-error) (error (e) :plain)))
-      (print (handler-case (no-such-function-xyz 1) (undefined-function (e) :undefined) (error (e) :plain)))
+      (print (handler-case (funcall (intern "NO-SUCH-FUNCTION-XYZ") 1) (undefined-function (e) :undefined) (error (e) :plain)))
       (print (handler-case (symbol-value 'no-such-var-xyz) (unbound-variable (e) :unbound) (error (e) :plain)))
       (print (handler-case (error "boom") (type-error (e) :wrong) (simple-error (e) :simple)))
     expected: |
@@ -30152,7 +30152,7 @@ cases:
       (print (block b
         (handler-bind ((error (lambda (e) (return-from b (list :typed (typep e 'type-error))))))
           (error 'type-error :datum 1 :expected-type 'cons))))
-      (print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1))))
+      (print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (funcall (intern "NO-SUCH-FUNCTION-XYZ") 1))))
     expected: |
       (:TYPED T)
       :CAUGHT
@@ -30162,7 +30162,7 @@ cases:
                (handler-case
                    (handler-bind ((error (lambda (c) (setq log (cons :outer log)))))
                      (handler-bind ((error (lambda (c) (setq log (cons :inner log)))))
-                       (no-such-function-xyz 1)))
+                       (funcall (intern "NO-SUCH-FUNCTION-XYZ") 1)))
                  (error (e) (cons :caught log)))))
     expected: |
       (:CAUGHT :OUTER :INNER)
