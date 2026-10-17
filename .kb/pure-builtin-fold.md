@@ -98,8 +98,8 @@ case-fold tables) where fold+copy pays a sliver. `%str-fresh` is also the genera
 for the mutable-result wrap. **Trigger**: if a backend ever compiles `%str-fresh` as the bare
 literal, the forgery returns. Pins:
 `PureBuiltinFolderTest.aFreshStringProducerFoldsToAStrFreshConstantAndNotASharedLiteral`, the
-`fold-fresh` ci-spec rows, `Jvm`/`Wasm`'s
-`compileALiteralArgumentProducerCallAnswersAFreshMutableStringPerEvaluation`.
+`fold-fresh` ci-spec rows and ci-spec
+`a-literal-argument-producer-call-answers-a-fresh-mutable-string-per-evaluation`.
 
 ## Deliberately OUT
 - **Float ARITHMETIC** — a float literal is fine as an ARGUMENT and the print family folds it

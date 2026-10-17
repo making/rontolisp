@@ -301,9 +301,8 @@ rest-list param (`variadic`), reusing `TYPE_CALLABLE_BASE + paramCount` on WASM.
 idempotence, the supplied-p test in place, the `flet` list the interpreter meets -- and the
 two helper bodies); the physical optionals on every call path: ci-spec
 `optional-arguments-travel-as-parameters`,
-`JvmLispCompilerTest#compileAndRunOptionalArgumentsTravelAsParametersOnEveryCallPath`,
-`#anOptionalIsAParameterOfTheCompiledMethodAndTheMarkerTravelsOnlyWithOne`,
-`WasmLispCompilerIntegrationTest#optionalArgumentsTravelAsParametersOnEveryCallPath`,
+`optional-arguments-travel-as-parameters-on-every-call-path`,
+`JvmLispCompilerTest#anOptionalIsAParameterOfTheCompiledMethodAndTheMarkerTravelsOnlyWithOne`,
 `LispEvaluatorTest#optionalArgumentsAnswerTheSameOnEveryCallPath`;
 `LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux}`, `#defunEmptyKeySection`,
 `#defunExtraArgumentsPastTheLambdaListSignalProgramError`;

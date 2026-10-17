@@ -289,18 +289,18 @@ pre-existing `evalCopyTreeAndSearch`,
 `compileSearchAndMismatchAnswerTheSameAsTheInterpretersNativeArm`,
 `compileSearchAndMismatchWalkAListWithACursor`,
 `compileAndRunMakeArrayInitialContentsWalksAListWithACursor`,
-`compileAndRunMapWalksAListWithACursor`,
 `compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor`,
 `compileAndRunTheFormatRendererReadsItsArgumentListThroughAMaterializedVector`,
 `compileAndRunTheMapIntoWrapperWalksAListDestinationWithACursor`,
-`compileAndRunTheStringResultOfMapJoinsItsPiecesOnce`, `compileCoerceConversions`.
+`compileCoerceConversions`; ci-spec `map-walks-a-list-with-a-cursor`,
+`the-string-result-of-map-joins-its-pieces-once`.
 
 `WasmLispCompilerIntegrationTest`, the twins:
 `sequenceCoerceAnswersTheSameForEveryRepresentation`,
 `searchAndMismatchAnswerTheSameAsTheInterpretersNativeArm`,
 `searchAndMismatchWalkAListWithACursor`,
-`makeArrayInitialContentsWalksAListWithACursor`, `mapWalksAListWithACursor`,
-the list-source rows appended to `replaceIntoAList`, and the last three without
+`makeArrayInitialContentsWalksAListWithACursor`,
+the list-source rows appended to `replaceIntoAList`, and the last two without
 the `compileAndRun` prefix. **The search/mismatch ones must use
 `compileAndRunPrelude`, not `compileAndRun`**: without the prelude splice the
 module has no `search` at all and traps. Each cursor test carries a 2,000-element operand.

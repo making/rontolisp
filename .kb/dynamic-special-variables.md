@@ -98,7 +98,7 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   the region's exception range covers the continuation CALL and nothing in a continuation can
   leave the region lexically.
 - Non-special globals stay lexical under `let`
-  (`JvmLispCompilerTest.lexicalGlobalLetStaysLexical`).
+  (ci-spec `lexical-global-let-stays-lexical`).
 - A spawned thread does NOT inherit the spawner's bindings; `rontolisp:make-thread`'s bindings
   alist is the hand-over, and a program using the thread primitives forces EVERY special into
   the dynamically-bound set (`.kb/threads.md`).

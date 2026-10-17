@@ -81,8 +81,7 @@ read the same on all four backends:
   compiled backends.
 - Pinned by ci-spec `string-identity-edges-string-and-macro-built-constants`,
   `LispEvaluatorTest#stringOfAStringIsThatStringAndMacroBuiltStringsAreConstants`,
-  `JvmLispCompilerTest#compileAndRunStringIdentityEdges`,
-  `WasmLispCompilerIntegrationTest#compileStringIdentityEdges`.
+  ci-spec `string-identity-edges`.
 - **The transport boundary keeps its own render**: the HTTP stack read `string` as
   "normalize to a framed string" (a charvec from `string-downcase`/`format`/
   `concatenate`/`get-output-stream-string` into the transports, which unquote

@@ -57,8 +57,8 @@ nesting `#|...|#`.
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`). A dot token ahead of the first
   element, or a second object after the tail, is refused ("The one-argument `read-from-string` refuses malformed text" below).
 
-Pinned by `Jvm/WasmLispCompilerTest#compileReadFromString{CharLiterals,RatiosAndRadix,VectorsAndArrays,StructLiterals,SymbolParityAndBlockComments,ReaderErrors*}`,
-ci-spec `runtime-read-*`.
+Pinned by `Jvm/WasmLispCompilerTest#compileReadFromString{CharLiterals,VectorsAndArrays,StructLiterals,SymbolParityAndBlockComments,ReaderErrors*}`,
+ci-spec `runtime-read-*`, `read-from-string*`.
 
 ## `read` is PRELUDE RONTOLISP, not a primitive on any backend
 One `LispPreludeLibrary` entry (`read` + the `%rd-*` family), so all four backends run one code path.
@@ -977,11 +977,9 @@ validator so the two cannot disagree on the rule or the text).
 - Pinned by `LispEvaluatorTest#evalWriteLineTakesStartAndEnd` (bounds, first-wins,
   first class, the stdout keyword position, the three error shapes, the Gray
   instance honoring them),
-  `JvmLispCompilerTest#writeLineTakesStartAndEnd` /
-  `#compileAndRunGrayWriteLineHonorsItsBounds`,
-  `WasmLispCompilerIntegrationTest#writeLineTakesStartAndEnd` /
-  `#grayWriteLineHonorsItsBounds`, ci-spec
-  `write-line-start-end-keywords`; docs `reference/functions/write-line.md` (en+ja).
+  `JvmLispCompilerTest#compileAndRunGrayWriteLineHonorsItsBounds`,
+  `WasmLispCompilerIntegrationTest#grayWriteLineHonorsItsBounds`, ci-spec
+  `write-line-start-end-keywords`, `write-line-takes-start-and-end`; docs `reference/functions/write-line.md` (en+ja).
 
 ## Element types wider and narrower than one octet
 

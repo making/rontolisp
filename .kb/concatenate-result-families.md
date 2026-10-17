@@ -165,7 +165,7 @@ the scan, and wrapping those would call a helper the gate did not inject.
   `#evalCoerceKeepsThePackedElementType`,
   `#evalCoerceAndConcatenateKeepThePackedFloatElementType`,
   `#evalConcatenateAndCoerceToVectorCharacterBuildAString`.
-- `JvmLispCompilerTest#compileAndRunConcatenate*`,
+- ci-spec `concatenate`; `JvmLispCompilerTest#compileAndRunConcatenate*`,
   `#compileConcatenateWithComputedResultTypeFails`,
   `#compileAndRunCoerceKeepsThePackedElementType`,
   `#compileAndRunCoerceAndConcatenateKeepThePackedFloatElementType`,

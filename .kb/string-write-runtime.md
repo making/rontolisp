@@ -236,7 +236,7 @@ the call -- NOT a return to inlining the rebuild.
   `.compileAFlippedStringProducerResultHasWritableIdentity`,
   `.compileDisplacedStringViewOverACopySeqResultWritesThrough`,
   `.compileAPrintObjectRoutedPrincToStringResultHasWritableIdentity`,
-  `.compileAProducerBuiltStringFoldsAsAnEqualpHashKey`, plus
+  ci-spec `a-producer-built-string-folds-as-an-equalp-hash-key`, plus
   `JvmLispCompilerTest.compileALiteralArgumentProducerCallIsNotFoldedIntoASharedLiteral`.
 - Boundaries: `JvmFfiInteropCompilerTest.aProducerBuiltStringCrossesTheFfiBoundary`,
   `JvmObjcInteropCompilerTest.aProducerBuiltStringCrossesTheObjcBoundary`, the producer rows in

@@ -371,3 +371,11 @@ the case holds `(print <form>)`). Kept: methods a `.kb` file names, a case with
 `expectedByBackend`, any other assertion. The cost is the local loop: `./mvnw test` skips
 `CiSpecE2eTest`, so a regression there surfaces in CI or in the native E2E run
 (`.kb/running-backends.md`). Add a case to the corpus rather than a per-backend method.
+
+The same day 298 JVM/WASM twin pairs (one program, one expected text, in both classes) moved
+into the corpus as cases named after the JVM method in kebab case, and both methods went. The
+corpus is ONE program per backend, so a moved case must define no name another case defines:
+a compiled backend resolves a `defun` across the whole program, and the first attempt (403
+pairs, collisions included) broke EARLIER cases on every leg (`Function expects 1 argument,
+got 0`). Left in Java: pairs defining a name another case defines, pairs whose name an
+existing case already has, and output depending on global counters (`gensym`).

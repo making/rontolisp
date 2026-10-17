@@ -23711,6 +23711,3196 @@ cases:
       (CI-RSN-X:CI-RSN-OWN :INHERITED)
       5
       (7 . 1)
+  - name: find-class-returns-an-eq-stable-class-metaobject
+    source: |
+      (defclass fc-animal () ((legs :initarg :legs :accessor fc-legs :type integer)))
+      (defclass fc-dog (fc-animal) ((name :initarg :name)))
+      (let ((c (find-class 'fc-dog)))
+        (print (list (eq c (find-class 'fc-dog))
+                     (%obj-ref c 0)
+                     (eq (car (%obj-ref c 1)) (find-class 'fc-animal))
+                     (%obj-ref c 4))))
+    expected: |
+      (T FC-DOG T T)
+  - name: find-class-metaobject-carries-effective-slot-definitions
+    source: |
+      (defclass fc-box () ((w :initarg :w :accessor fc-w :type integer) (h :initform 2)))
+      (let* ((c (find-class 'fc-box))
+             (slots (%obj-ref c 3)))
+        (print (list (length slots)
+                     (mapcar (lambda (s) (%obj-ref s 0)) slots)
+                     (%obj-ref (car slots) 1)
+                     (%obj-ref (car slots) 3)
+                     (%obj-ref (car slots) 4)
+                     (%obj-ref (car (cdr slots)) 2))))
+    expected: |
+      (2 (W H) (:W) INTEGER (FC-W) 2)
+  - name: setf-slot-value-with-a-runtime-slot-name
+    source: |
+      (defclass rs-pt () ((x :initarg :x :initform 0) (y :initform 1)))
+      (let ((p (make-instance 'rs-pt))
+            (n 'y))
+        (print (list (setf (slot-value p n) 42) (slot-value p 'y) (slot-value p n))))
+    expected: |
+      (42 42 42)
+  - name: slot-value-with-a-package-qualified-runtime-slot-name
+    source: |
+      (defpackage :rsn-pkg (:use :cl) (:export #:make-holder))
+      (in-package :rsn-pkg)
+      (defstruct holder (fields-clause 7))
+      (in-package :cl-user)
+      (let ((h (rsn-pkg:make-holder))
+            (n (car (list 'rsn-pkg::fields-clause))))
+        (setf (slot-value h n) 8)
+        (print (slot-value h n)))
+      (in-package :cl-user)
+    expected: |
+      8
+  - name: make-instance-as-a-first-class-function
+    source: |
+      (defclass fv-pt () ((x :initarg :x :initform 0)))
+      (defclass fv-line () ((n :initarg :n)))
+      (let ((a (apply #'make-instance (list (find-class 'fv-pt) :x 7)))
+            (b (funcall #'make-instance 'fv-line :n 3)))
+        (print (list (slot-value a 'x) (slot-value b 'n) (typep a 'fv-pt) (typep b 'fv-line))))
+    expected: |
+      (7 3 T T)
+  - name: runtime-subtypep-beside-circular-deftypes
+    source: |
+      (deftype sc-self () 'sc-self)
+      (deftype sc-ping () '(or sc-pong integer))
+      (deftype sc-pong () '(or sc-ping string))
+      (defun stp (a b) (subtypep a b))
+      (print (list (stp 'fixnum 'sc-self) (stp 'sc-self 'sc-self)
+                   (stp 'fixnum 'sc-ping) (stp 'character 'sc-ping)))
+    expected: |
+      (NIL T T NIL)
+  - name: simple-type-name-subtypep-lattice
+    source: |
+      (defun sts (a b) (subtypep a b))
+      (print
+        (list (list (subtypep 'simple-vector 'vector)
+                    (subtypep 'vector 'simple-vector)
+                    (subtypep 'simple-array 'array)
+                    (subtypep 'array 'simple-array)
+                    (subtypep 'simple-string 'string)
+                    (subtypep 'string 'simple-string))
+              (list (subtypep 'simple-vector 'simple-array)
+                    (subtypep 'simple-string 'simple-array)
+                    (subtypep 'simple-vector 'sequence)
+                    (subtypep 'simple-array 'sequence)
+                    (subtypep 'string 'simple-vector)
+                    (subtypep 'simple-string 'simple-vector))
+              (list (subtypep 'simple-base-string 'simple-string)
+                    (subtypep 'simple-string 'simple-base-string)
+                    (subtypep 'base-string 'string)
+                    (subtypep 'string 'base-string))
+              (list (sts 'simple-vector 'vector)
+                    (sts 'vector 'simple-vector)
+                    (sts 'simple-string 'string)
+                    (sts 'string 'simple-string)
+                    (sts '(simple-vector 4) 'vector)
+                    (sts 'vector '(simple-vector 4)))))
+    expected: |
+      ((T NIL T NIL T NIL) (T T T NIL NIL NIL) (T T T T) (T NIL T NIL T NIL))
+  - name: bit-type-lattice
+    source: |
+      (defun bts (a b) (subtypep a b))
+      (defun btt (v s) (typep v s))
+      (print
+        (list (list (subtypep 'bit 'integer)
+                    (subtypep 'bit 'bit)
+                    (subtypep 'integer 'bit)
+                    (subtypep 'bit 'number))
+              (list (bts 'bit 'integer)
+                    (bts 'bit 'bit)
+                    (bts 'integer 'bit)
+                    (bts 'bit 'number))
+              (list (typep 0 'bit)
+                    (typep 1 'bit)
+                    (typep 2 'bit)
+                    (typep -1 'bit)
+                    (typep 1.0 'bit))
+              (list (btt 0 'bit)
+                    (btt 1 'bit)
+                    (btt 2 'bit)
+                    (btt (car (list 1)) (car (list 'bit))))))
+    expected: |
+      ((T T NIL T) (T T NIL T) (T T NIL NIL NIL) (T T NIL T))
+  - name: typep-and-subtypep-accept-class-metaobjects-as-type-specifiers
+    source: |
+      (defclass mo-super () ())
+      (defclass mo-sub (mo-super) ())
+      (print (list (subtypep (find-class 'mo-sub) (find-class 'mo-super))
+                   (subtypep (find-class 'mo-super) (find-class 'mo-sub))
+                   (subtypep (find-class 'mo-sub) 'mo-super)
+                   (subtypep 'mo-sub (find-class 'mo-super))
+                   (typep (find-class 'mo-sub) 'class)
+                   (typep (find-class 'mo-sub) 'standard-class)
+                   (typep 42 'class)
+                   (typep (make-instance 'mo-sub) (find-class 'mo-super))
+                   (typep (make-instance 'mo-super) (find-class 'mo-sub))
+                   (typep 42 (find-class 'integer))
+                   (typep 42 (find-class 't))
+                   (typep (make-instance 'mo-sub) (find-class 't))))
+    expected: |
+      (T NIL T T T T NIL T NIL T T T)
+  - name: multiple-value-setq-of-a-user-functions-values-in-a-program-with-no-other-operator
+    source: |
+      (defun mvs-g () (floor 7 2))
+      (let (a b) (multiple-value-setq (a b) (mvs-g)) (print (list a b)))
+      (print (funcall (lambda () (let (a b) (multiple-value-setq (a b) (mvs-g)) (list a b)))))
+    expected: |
+      (3 1)
+      (3 1)
+  - name: a-handler-bind-handler-prints-the-report-of-its-condition
+    source: |
+      (defun hb-main ()
+        (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+          (car 5)))
+      (print (handler-case (hb-main) (error () :caught)))
+    expected: |
+      saw CAR: The value 5 is not of type LIST
+      :CAUGHT
+  - name: standard-condition-type-names-are-cl-symbols
+    source: |
+      (defpackage #:ct-pkg (:use #:cl))
+      (in-package #:ct-pkg)
+      (print (list 'type-error 'condition 'warning 'division-by-zero 'undefined-function 'end-of-file))
+      (in-package :cl-user)
+    expected: |
+      (TYPE-ERROR CONDITION WARNING DIVISION-BY-ZERO UNDEFINED-FUNCTION END-OF-FILE)
+  - name: runtime-type-specifier-naming-a-seeded-condition-class
+    source: |
+      (print (list (let ((ty 'type-error)) (typep (make-condition 'type-error) ty))
+                   (let ((ty 'condition)) (typep (make-condition 'simple-warning) ty))
+                   (let ((ty 'type-error)) (typep (make-condition 'simple-warning) ty))))
+    expected: |
+      (T T NIL)
+  - name: condition-with-no-report-keeps-the-instance-rendering
+    source: |
+      (define-condition cr-bare (error) ((v :initarg :v)))
+      (print (princ-to-string (make-condition 'cr-bare :v 1)))
+    expected: |
+      "#<CR-BARE :V 1>"
+  - name: prin1-returns-argument
+    source: |
+      (prin1 (prin1 11))
+      (terpri)
+    expected: |
+      1111
+  - name: princ-returns-argument
+    source: |
+      (princ (princ 11))
+      (terpri)
+    expected: |
+      1111
+  - name: print-return-value-through-let
+    source: |
+      (let ((x (print 11))) (let ((a x)) (print a)))
+    expected: |
+      11
+      11
+  - name: print-to-string-stream-returns-argument
+    source: |
+      (let ((v nil)) (with-output-to-string (s) (setq v (print 11 s))) (print v))
+    expected: |
+      11
+  - name: intern-into-a-literal-package
+    source: |
+      (defpackage :rt-pkg (:use :cl) (:export :ex-fn))
+      (in-package :rt-pkg)
+      (defun ex-fn (x) (+ x 1))
+      (defun in-fn (x) (+ x 2))
+      (in-package :cl-user)
+      (print (eq (intern "EX-FN" :rt-pkg) 'rt-pkg:ex-fn))
+      (print (funcall (intern "EX-FN" :rt-pkg) 1))
+      (print (funcall (intern "IN-FN" :rt-pkg) 1))
+      (print (intern "foo" :cl-user))
+      (in-package :cl-user)
+    expected: |
+      T
+      2
+      3
+      |foo|
+  - name: intern-into-a-computed-package
+    source: |
+      (defpackage :rt-h (:use :cl) (:export :run :*mw*))
+      (in-package :rt-h)
+      (defun run (x) (concatenate 'string "run:" x))
+      (defparameter *mw* "the-mw")
+      (in-package :cl-user)
+      (let ((pkg (find-package :rt-h)))
+        (print (apply (intern (string :run) pkg) (list "a")))
+        (print (symbol-value (intern (concatenate 'string "*" "MW*") pkg)))
+        (print (boundp (intern "*MW*" pkg))))
+      (let ((kw (find-package :keyword)))
+        (print (intern "K2" kw)))
+      (in-package :cl-user)
+    expected: |
+      "run:a"
+      "the-mw"
+      T
+      :K2
+  - name: uiop-with-upgradability-splices-its-definitions
+    source: |
+      (uiop:with-upgradability ()
+        (defun up-a (x) (* x 2))
+        (defvar *up-v* 5))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (uiop/utility:with-upgradability ()
+          (defun up-b (x) (+ x 1))))
+      (print (list (up-a 3) (up-b 3) *up-v*))
+    expected: |
+      (6 4 5)
+  - name: defconstant
+    source: |
+      (defconstant +k+ 7) (print +k+)
+    expected: |
+      7
+  - name: every-some-over-multiple-sequences
+    source: |
+      (print (every #'< '(1 2) '(3 4)))
+      (print (every #'< '(1 2) '(3 0)))
+      (print (every #'< '(1 2 3) '(9 9)))
+      (print (every #'char= "abc" "abd"))
+      (print (some #'> '(1 5) '(3 4)))
+      (print (notany #'> '(1 2) '(3 4)))
+      (print (notevery #'< '(1 2) '(3 0)))
+      (print (funcall #'every #'< '(1 2) '(3 4)))
+      (print (funcall #'some #'> '(1 5) '(3 4)))
+      (print (funcall #'every #'evenp '(2 4)))
+    expected: |
+      T
+      NIL
+      T
+      NIL
+      T
+      T
+      T
+      T
+      T
+      T
+  - name: map-family-multiple-lists
+    source: |
+      (print (mapcan #'list '(1 2) '(3 4)))
+      (print (maplist #'list '(1 2) '(3 4)))
+      (print (mapcon #'list '(1 2) '(3 4)))
+      (print (mapc (lambda (a b) (print (list a b))) '(1 2) '(3 4)))
+      (print (mapl (lambda (a b) (print (list a b))) '(1 2) '(3 4)))
+      (print (mapcan #'list '(1 2 3) '(3 4)))
+      (print (mapcan #'list '(1 2) '(3 4) '(5 6)))
+      (print (mapc #'list nil '(1 2)))
+    expected: |
+      (1 3 2 4)
+      (((1 2) (3 4)) ((2) (4)))
+      ((1 2) (3 4) (2) (4))
+      (1 3)
+      (2 4)
+      (1 2)
+      ((1 2) (3 4))
+      ((2) (4))
+      (1 2)
+      (1 3 2 4)
+      (1 3 5 2 4 6)
+      NIL
+  - name: mapcar-as-value-over-multiple-lists
+    source: |
+      (print (apply #'mapcar #'list '((1 2) (3 4))))
+      (print (apply #'mapcar #'+ '((1 2) (10 20) (100 200))))
+      (print (apply #'mapcar #'list '((1 2 3) (3 4))))
+      (print (funcall #'mapcar #'1+ '(1 2 3)))
+    expected: |
+      ((1 3) (2 4))
+      (111 222)
+      ((1 3) (2 4))
+      (2 3 4)
+  - name: map-family-as-values-over-multiple-lists
+    source: |
+      (print (apply #'mapcan #'list '((1 2) (3 4))))
+      (print (apply #'maplist #'list '((1 2) (3 4))))
+      (print (apply #'mapcon #'list '((1 2) (3 4))))
+      (print (apply #'mapc #'list '((1 2) (3 4))))
+      (print (apply #'mapl #'list '((1 2) (3 4))))
+      (print (funcall #'maplist #'identity '(1 2 3)))
+      (print (funcall #'mapcan #'list '(1 2 3)))
+      (print (funcall #'mapc #'1+ '(1 2)))
+      (print (funcall #'mapl #'car '(1 2)))
+    expected: |
+      (1 3 2 4)
+      (((1 2) (3 4)) ((2) (4)))
+      ((1 2) (3 4) (2) (4))
+      (1 2)
+      (1 2)
+      ((1 2 3) (2 3) (3))
+      (1 2 3)
+      (1 2)
+      (1 2)
+  - name: a-direct-builtin-call-with-a-wrong-count-signals-at-call-time
+    source: |
+      (defun wc-car (x) (car x 2))
+      (defun wc-nth (x) (nth x))
+      (print (handler-case (wc-car '(1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (wc-nth 1) (program-error (c) (princ-to-string c))))
+      (print (let ((n 0)) (handler-case (cons (incf n)) (program-error (c) (list n (princ-to-string c))))))
+      (print (handler-case (minusp 1 2) (program-error (c) (princ-to-string c))))
+      (print (handler-case (1+) (program-error (c) (princ-to-string c))))
+      (print (handler-case (floor 1 2 3) (program-error (c) (princ-to-string c))))
+      (print (handler-case (gethash 1) (program-error (c) (princ-to-string c))))
+      (print (handler-case (error) (program-error (c) (princ-to-string c))))
+      (print (list (< 1 2 3) (gethash 1 (make-hash-table) 3) (logand 1 3 7) (char= #\a #\a #\a)
+                   (flet ((car (a b) (list a b))) (car 1 2))))
+    expected: |
+      "CAR expects 1 argument, got 2"
+      "NTH expects 2 arguments, got 1"
+      (1 "CONS expects 2 arguments, got 1")
+      "MINUSP expects 1 argument, got 2"
+      "1+ expects 1 argument, got 0"
+      "FLOOR expects at most 2 arguments, got 3"
+      "GETHASH expects at least 2 arguments, got 1"
+      "ERROR expects at least 1 argument, got 0"
+      (T 3 1 T (1 2))
+  - name: eval-reports-a-wrong-argument-count-as-the-interpreter-does
+    source: |
+      (defun ev-one (x) x)
+      (print (handler-case (eval '(apply #'car '(1 2))) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(car 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(cons 1)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(ev-one 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(apply #'+)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(<)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '((lambda (x) x) 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(progn (defun ev-two (a b) (list a b)) (ev-two 1))) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(apply #'list 1 2)) (program-error () :pe) (error (c) (princ-to-string c))))
+      (print (list (eval '(apply #'cons '(1 2))) (eval '(apply #'+ 1 2 '(3 4))) (eval '(< 1 3 2))
+                   (eval '(<= 1 2 2 3)) (eval '(/= 1 2 1)) (eval '(/= 1 2 3)) (eval '(= 4))
+                   (eval '(funcall (lambda (a &optional b) (list a b)) 1))))
+      (print (list (funcall #'apply #'+ 1 2 '(3 4)) (mapcar #'apply (list #'+ #'*) '((1 2) (3 4)))))
+    expected: |
+      "CAR expects 1 argument, got 2"
+      "CAR expects 1 argument, got 2"
+      "CONS expects 2 arguments, got 1"
+      "Function expects 1 argument, got 2"
+      "APPLY expects at least 2 arguments, got 1"
+      "< expects at least 1 argument, got 0"
+      "Function expects 1 argument, got 2"
+      "Function expects 2 arguments, got 1"
+      "APPLY: last argument must be a list"
+      ((1 . 2) 10 NIL T NIL T T (1 NIL))
+      (10 (3 12))
+  - name: eval-checks-the-count-of-the-operators-it-used-to-inline
+    source: |
+      (defun ev-wide (a b c d e f g h i j k) (list a k))
+      (print (handler-case (eval '(funcall)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(mapcar #'car)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(first 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(nth 1)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(rest)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(reduce #'+)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(-)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(eval 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(ev-wide 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (funcall #'max) (program-error (c) (princ-to-string c))))
+      (print (list (eval '(mapcar #'+ '(1 2) '(10 20))) (eval '(first nil)) (eval '(rest nil)) (eval '(+)) (eval '(*))
+                   (eval '(reduce #'list '(1 2 3) :from-end t)) (eval '(reduce #'+ nil))
+                   (eval '(ev-wide 1 2 3 4 5 6 7 8 9 10 11)) (funcall #'ev-wide 1 2 3 4 5 6 7 8 9 10 11)
+                   (funcall #'reduce #'+ '(1 2 3) :initial-value 10 :from-end t)))
+    expected: |
+      "FUNCALL expects at least 1 argument, got 0"
+      "MAPCAR expects at least 2 arguments, got 1"
+      "FIRST expects 1 argument, got 2"
+      "NTH expects 2 arguments, got 1"
+      "REST expects 1 argument, got 0"
+      "REDUCE expects at least 2 arguments, got 1"
+      "- expects at least 1 argument, got 0"
+      "EVAL expects 1 argument, got 2"
+      "Function expects 11 arguments, got 2"
+      "MAX expects at least 1 argument, got 0"
+      ((11 22) NIL NIL 0 1 (1 (2 3)) 0 (1 11) (1 11) 16)
+  - name: builtin-function-values-take-their-keywords-and-apply-checks-its-list
+    source: |
+      (defvar *kw-list* #'list)
+      (defun kw-try (thunk)
+        (handler-case (funcall thunk)
+          (simple-error (c) (list :simple (princ-to-string c)))
+          (error (c) (list :error (princ-to-string c)))))
+      (print (list (funcall #'find 3 '((1) (3)) :key #'car)
+                   (funcall #'find 2 '(1 2 3) :test #'< :from-end t)
+                   (apply #'find-if #'evenp '((1) (4)) :key #'car nil)
+                   (funcall #'find-if-not #'evenp '(2 4 5 6) :start 1)
+                   (funcall #'sort (list '(3) '(1) '(2)) #'< :key #'car)
+                   (let ((v (vector 3 1 2))) (funcall #'sort v #'< :key #'-) v)
+                   (funcall #'make-list 2 :initial-element 'x)))
+      (print (list (eval '(find 3 '((1) (3)) :key #'car))
+                   (eval '(sort (list '(3) '(1)) #'< :key #'car))
+                   (eval '(make-list 2 :initial-element 7))))
+      (print (kw-try (lambda () (funcall #'find 1))))
+      (print (kw-try (lambda () (apply *kw-list* 1 2))))
+      (print (kw-try (lambda () (apply *kw-list* 1 '(2 . 3)))))
+      (print (kw-try (lambda () (apply #'list 1 2))))
+      (print (kw-try (lambda () (apply (eval '(lambda (&rest r) r)) 1 2))))
+      (print (list (apply *kw-list* 1 '(2 3)) (apply #'list nil)))
+    expected: |
+      ((3) 3 (4) 5 ((1) (2) (3)) #(3 2 1) (X X))
+      ((3) ((1) (3)) (7 7))
+      (:ERROR "FIND expects at least 2 arguments, got 1")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      ((1 2 3) NIL)
+  - name: map-into-vector-and-symbol-designator
+    source: |
+      (print (map-into (make-array 3) #'* #(2 3 4) #(5 6 7)))
+      (print (map-into (list nil nil nil) '1+ '(7 8 9)))
+    expected: |
+      #(10 18 28)
+      (8 9 10)
+  - name: map-into-mixed-operands-and-large-list
+    source: |
+      (print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))
+      (print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))
+      (print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))
+    expected: |
+      (11 22 33)
+      #(11 22 33)
+      20000
+  - name: rank-n-array-dimensions-and-introspection
+    source: |
+      (defparameter *t4* (make-array (list 2 3 4 5) :initial-element 0))
+      (print (array-dimensions *t4*))
+      (print (array-rank *t4*))
+      (print (array-dimension *t4* 2))
+      (print (array-total-size *t4*))
+    expected: |
+      (2 3 4 5)
+      4
+      4
+      120
+  - name: rank-zero-array
+    source: |
+      (defparameter *z* (make-array nil :initial-element 5))
+      (print (list (array-rank *z*) (array-dimensions *z*) (array-total-size *z*)
+                   (aref *z*) (row-major-aref *z* 0) (array-row-major-index *z*)))
+      (setf (aref *z*) 7)
+      (print *z*)
+      (setf (row-major-aref *z* 0) 9)
+      (print (list (aref *z*) *z*))
+      (print (list #0A5 (aref #0A5) #0ANIL #0A(1 2) (array-rank #0A(1 2))))
+    expected: |
+      (0 NIL 1 5 5 0)
+      #0A7
+      (9 #0A9)
+      (#0A5 5 #0ANIL #0A(1 2) 0)
+  - name: row-major-aref-reads-and-writes-a-string
+    source: |
+      (defun %rmar-lit () "abc")
+      (print (row-major-aref (%rmar-lit) 1))
+      (let ((a (%rmar-lit))) (setf (row-major-aref a 0) #\Z) (print a))
+      (print (%rmar-lit))
+      (let ((b (make-string 3 :initial-element #\a)))
+        (setf (row-major-aref b 1) #\Z)
+        (print b))
+    expected: |
+      #\b
+      "Zbc"
+      "abc"
+      "aZa"
+  - name: closure-reads-let-var-shadowing-global
+    source: |
+      (setq c 777) (print (let ((c 5)) (funcall (lambda () c))))
+    expected: |
+      5
+  - name: delete
+    source: |
+      (print (delete 2 '(1 2 3 2 1)))
+      (print (delete-if #'evenp '(1 2 3 4 5)))
+      (print (delete-if-not #'oddp '(1 2 3 4 5)))
+    expected: |
+      (1 3 1)
+      (1 3 5)
+      (1 3 5)
+  - name: substitute
+    source: |
+      (print (substitute 0 2 '(1 2 3 2 1)))
+      (print (nsubstitute 9 1 '(1 2 1 3)))
+    expected: |
+      (1 0 3 0 1)
+      (9 2 9 3)
+  - name: nsubstitute-family-writes-through-vector-argument
+    source: |
+      (let ((x (vector 1 2 1))) (nsubstitute 9 1 x) (print x))
+      (let ((x (vector 1 2 3))) (nsubstitute-if 0 #'oddp x) (print x))
+      (let ((x (vector 1 2 3))) (nsubstitute-if-not 0 #'oddp x) (print x))
+      (let ((x (vector 1 2 1))) (print (eq x (nsubstitute 9 1 x))))
+      (let ((x (vector 1 2 1))) (funcall #'nsubstitute 9 1 x) (print x))
+    expected: |
+      #(9 2 9)
+      #(0 2 0)
+      #(1 0 3)
+      T
+      #(9 2 9)
+  - name: destructive-list-ops
+    source: |
+      (setq a (list 1 2 3)) (setq b a) (nreverse a) (print b)
+      (setq a (list 1 2 3 2 1)) (setq b a) (delete 2 a) (print b)
+      (setq a (list 1 2 3 4 5)) (setq b a) (delete-if #'evenp a) (print b)
+      (setq a (list 1 2 1 3)) (setq b a) (nsubstitute 9 1 a) (print b)
+    expected: |
+      (1)
+      (1 3 1)
+      (1 3 5)
+      (9 2 9 3)
+  - name: substitute-if
+    source: |
+      (print (substitute-if 0 #'oddp '(1 2 3 4 5)))
+      (print (substitute-if-not 0 #'oddp '(1 2 3 4 5)))
+      (print (substitute-if 0 #'oddp '((1) (2) (3)) :key #'car))
+      (print (substitute-if #\- (lambda (c) (member c '(#\. #\/) :test 'char=)) "lack/mw.backtrace"))
+      (print (nsubstitute-if 0 #'oddp (list 1 2 3)))
+      (print (nsubstitute-if-not 0 #'oddp (list 1 2 3)))
+      (print (funcall #'substitute-if 0 #'oddp '(1 2 3)))
+    expected: |
+      (0 2 0 4 0)
+      (1 0 3 0 5)
+      (0 (2) 0)
+      "lack-mw-backtrace"
+      (0 2 0)
+      (1 0 3)
+      (0 2 0)
+  - name: import-makes-a-symbol-accessible-unqualified
+    source: |
+      (defpackage :impkg (:use :cl) (:export #:pub))
+      (in-package :impkg)
+      (defun pub () 1)
+      (defun priv () 2)
+      (in-package :cl-user)
+      (import 'impkg:pub)
+      (import '(impkg::priv))
+      (print (+ (pub) (priv)))
+      (in-package :cl-user)
+    expected: |
+      3
+  - name: write-line-without-stream-prints-to-stdout
+    source: |
+      (write-line "to stdout")
+    expected: |
+      to stdout
+  - name: write-line-takes-start-and-end
+    source: |
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s :start 1 :end 3))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (funcall #'write-line "abcdef" s :end 2))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s :start 2))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s :start 0 :end nil))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s))
+        (terpri)
+        (princ (get-output-stream-string s)))
+    expected: |
+      "hello"
+      el
+      "abcdef"
+      ab
+      "hello"
+      llo
+      "hello"
+      hello
+      "hello"
+      hello
+  - name: with-output-to-string-collects-print-family-output
+    source: |
+      (print (with-output-to-string (s)
+        (princ "a=" s)
+        (princ 42 s)
+        (terpri s)
+        (prin1 "q" s)
+        (write-line " end" s)
+        (write-string "tail" s)))
+    expected: |
+      "a=42
+      \"q\" end
+      tail"
+  - name: with-output-to-string-empty-body-is-empty-string
+    source: |
+      (print (with-output-to-string (s)))
+    expected: |
+      ""
+  - name: with-output-to-string-binding-standard-output-captures-streamless-prints
+    source: |
+      (defun emit-name () (princ "foo") (write-char #\.) (write-string "bar"))
+      (princ (with-output-to-string (*standard-output*)
+        (emit-name)
+        (format t "~a" 42)))
+      (princ "|")
+      (let ((*standard-output* (%make-string-output-stream)))
+        (princ "hidden"))
+      (princ "visible")
+      (terpri)
+    expected: |
+      foo.bar42|visible
+  - name: readtable-case-is-constant-upcase-and-intern-accepts-found-keyword-package
+    source: |
+      (print (readtable-case *readtable*))
+      (print (intern "ZAP" (find-package :keyword)))
+    expected: |
+      :UPCASE
+      :ZAP
+  - name: with-output-to-string-does-not-touch-standard-output
+    source: |
+      (with-output-to-string (s) (princ "hidden" s)) (princ "visible")
+      (terpri)
+    expected: |
+      visible
+  - name: format-stream-destination-writes-to-string-stream
+    source: |
+      (princ (with-output-to-string (s) (format s "x=~a, y=~s~%" 1 "two")))
+    expected: |
+      x=1, y="two"
+  - name: format-write-directive-renders-like-prin1-on-both-paths
+    source: |
+      (princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
+      (terpri)
+      (let ((c "Expect ~W to be ~:[true~;false~]."))
+        (princ (format nil c '(= (add 1 2) 3) t)))
+      (terpri)
+      (princ (format nil "~w|~:w|~@w|~a" "s" 'a nil "s"))
+      (terpri)
+    expected: |
+      Expect (= (ADD 1 2) 3) to be true.
+      Expect (= (ADD 1 2) 3) to be false.
+      "s"|A|NIL|s
+  - name: format-runtime-control-string-honors-every-directive
+    source: |
+      (let ((c "A=~A S=~S D=~D ~5,'0D% ~{~A~^,~} ~@[cond=~A~] ~~ end"))
+        (princ (format nil c 1 "s" 42 7 (list 1 2) "c")))
+      (terpri)
+    expected: |
+      A=1 S="s" D=42 00007% 1,2 cond=c ~ end
+  - name: format-as-a-function-value-honors-every-directive
+    source: |
+      (princ (apply #'format nil (list "~{~a~^ | ~} (~5,'0d)" (list 'a 'b) 7)))
+      (terpri)
+    expected: |
+      A | B (00007)
+  - name: format-user-function-directive-renders-through-a-runtime-control
+    source: |
+      (defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+      (let ((c "~/fmt-slash-brackets/ ~:@/fmt-slash-brackets/"))
+        (princ (format nil c 1 2)))
+      (terpri)
+    expected: |
+      <1> [2]
+  - name: print-to-string-stream
+    source: |
+      (princ (with-output-to-string (s) (print 42 s)))
+    expected: |
+      42
+  - name: read-char-combines-surrogate-pairs-on-supplementary-code-point
+    source: |
+      (with-input-from-string (s "😀X")
+        (let* ((c1 (read-char s))
+               (c2 (read-char s))
+               (c3 (read-char s nil 'done)))
+          (princ (list (char-code c1) (char-code c2) c3))))
+      (terpri)
+    expected: |
+      (128512 88 DONE)
+  - name: string-output-stream-names-clear-on-read
+    source: |
+      (let ((s (make-string-output-stream)))
+        (write-string "ab" s)
+        (princ (get-output-stream-string s))
+        (write-string "cd" s)
+        (princ (get-output-stream-string s))
+        (princ (list (length (get-output-stream-string s)))))
+      (terpri)
+    expected: |
+      abcd(0)
+  - name: string-input-stream-reads-without-with-input-from-string
+    source: |
+      (let ((s (make-string-input-stream "ab
+      cd")))
+        (princ (read-line s))
+        (princ (read-line s))
+        (princ (read-line s nil 'eof)))
+      (terpri)
+    expected: |
+      abcdEOF
+  - name: string-input-stream-honours-start-and-end
+    source: |
+      (let ((s (make-string-input-stream "xxhixx" 2 4)))
+        (princ (read-char s))
+        (princ (read-char s))
+        (princ (read-char s nil 'eof)))
+      (terpri)
+    expected: |
+      hiEOF
+  - name: peek-char-leaves-the-character-in-the-stream
+    source: |
+      (with-input-from-string (s "ab")
+        (princ (peek-char nil s))
+        (princ (peek-char nil s))
+        (princ (read-char s))
+        (princ (read-char s))
+        (princ (peek-char nil s nil 'eof)))
+      (terpri)
+    expected: |
+      aaabEOF
+  - name: peek-char-skips-whitespace-and-up-to-a-character
+    source: |
+      (with-input-from-string (s "   xy")
+        (princ (peek-char t s))
+        (princ (read-char s))
+        (princ (peek-char #\y s))
+        (princ (read-char s)))
+      (terpri)
+    expected: |
+      xxyy
+  - name: write-to-string-is-prin1-to-string
+    source: |
+      (princ (write-to-string '(a "b" 3)))
+      (terpri)
+    expected: |
+      (A "b" 3)
+  - name: princ-stream-designator-t-goes-to-standard-output
+    source: |
+      (princ "a" t) (princ "b" nil)
+      (terpri)
+    expected: |
+      ab
+  - name: mod-takes-sign-of-divisor
+    source: |
+      (print (mod 13 4))
+      (print (mod -13 4))
+      (print (mod 13 -4))
+      (print (mod -13 -4))
+    expected: |
+      1
+      3
+      -3
+      -1
+  - name: rem-takes-sign-of-dividend
+    source: |
+      (print (rem 13 4))
+      (print (rem -13 4))
+      (print (rem 13 -4))
+      (print (rem -13 -4))
+    expected: |
+      1
+      -1
+      1
+      -1
+  - name: variadic-comparison
+    source: |
+      (print (< 1 2 3 4))
+      (print (< 1 2 2 4))
+      (print (<= 1 2 2 4))
+      (print (= 3 3 3))
+      (print (> 5 4 3 2 1))
+      (print (< 5))
+    expected: |
+      T
+      NIL
+      T
+      T
+      T
+      T
+  - name: boolean-is-symbol-t
+    source: |
+      (print (list (= 1 1) (= 1 0)))
+      (print t)
+      (print (eq t (= 1 1)))
+    expected: |
+      (T NIL)
+      T
+      T
+  - name: own-feature-push-is-visible-to-the-same-sources-conditionals
+    source: |
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (pushnew :announced *features*))
+      (print #+announced :saw-it #-announced :missed-it)
+      (print (and (member :announced *features*) t))
+    expected: |
+      :SAW-IT
+      T
+  - name: division
+    source: |
+      (print (/ 10 3))
+      (print (/ 10 2))
+    expected: |
+      10/3
+      5
+  - name: defun-no-params
+    source: |
+      (defun answer () 42)
+      (print (answer))
+    expected: |
+      42
+  - name: setq-reassign
+    source: |
+      (print (progn (setq x 10) (setq x 20) x))
+    expected: |
+      20
+  - name: setq-mutate-let
+    source: |
+      (print (let ((x 1)) (setq x 2) x))
+    expected: |
+      2
+  - name: setq-in-expression
+    source: |
+      (print (+ (setq x 5) 3))
+    expected: |
+      8
+  - name: setq-lambda-square
+    source: |
+      (setq square (lambda (x) (* x x)))
+      (print (funcall square 5))
+    expected: |
+      25
+  - name: setq-lambda-no-params
+    source: |
+      (setq answer (lambda () 42))
+      (print (funcall answer))
+    expected: |
+      42
+  - name: setq-lambda-multiple-functions
+    source: |
+      (setq double (lambda (x) (* x 2)))
+      (setq add1 (lambda (x) (+ x 1)))
+      (print (funcall add1 (funcall double 5)))
+    expected: |
+      11
+  - name: let-shadowing-boxed-outer-variable
+    source: |
+      (let ((g (lambda () 1)))
+        (let ((g (lambda () (+ 10 (funcall g)))))
+          (print (funcall g))))
+    expected: |
+      11
+  - name: lambda-captures-variable-shadowing-function-name
+    source: |
+      (defun grab (list count)
+        (let ((list (nthcdr count list)))
+          (let ((g (lambda () (car list))))
+            (funcall g))))
+      (print (grab '(1 2 3) 1))
+    expected: |
+      2
+  - name: format
+    source: |
+      (format t "Hello ~a, you are ~d! ~s~%" 'world 42 "str")
+    expected: |
+      Hello WORLD, you are 42! "str"
+  - name: format-list
+    source: |
+      (format t "list=~a tilde=~~" (list 1 2 3))
+      (terpri)
+    expected: |
+      list=(1 2 3) tilde=~
+  - name: format-inside-defun
+    source: |
+      (defun greet (name) (format t "Hi, ~a!~%" name)) (greet 'alice) (greet "bob")
+    expected: |
+      Hi, ALICE!
+      Hi, bob!
+  - name: format-nil
+    source: |
+      (princ (format nil "Hello ~a, ~d! ~s~%" 'world 42 "str"))
+    expected: |
+      Hello WORLD, 42! "str"
+  - name: format-nil-list
+    source: |
+      (princ (format nil "list=~a tilde=~~" (list 1 2 3)))
+      (terpri)
+    expected: |
+      list=(1 2 3) tilde=~
+  - name: format-nil-is-string
+    source: |
+      (print (stringp (format nil "~a" 1))) (print (length (format nil "~a" 12345)))
+    expected: |
+      T
+      5
+  - name: format-exponential
+    source: |
+      (format t "~e ~,4e ~e ~,2e ~e" pi pi 1234.5 9.999 0.0)
+      (terpri)
+    expected: |
+      3.141593e+0 3.1416e+0 1.2345e+3 1.00e+1 0.0e+0
+  - name: format-decimal-modifiers
+    source: |
+      (format t "~:d ~@d ~:@d" 1000000 1000000 1000000)
+      (terpri)
+    expected: |
+      1,000,000 +1000000 +1,000,000
+  - name: format-padding
+    source: |
+      (format t "~10a|~10@a|~5,'0d|" "foo" "foo" 42)
+      (terpri)
+    expected: |
+      foo       |       foo|00042|
+  - name: format-fresh-line
+    source: |
+      (format t "a") (format t "~&b~&c~%") (fresh-line) (princ "d")
+      (terpri)
+    expected: |
+      a
+      b
+      c
+      d
+  - name: format-radix
+    source: |
+      (format t "~x ~o ~b ~8r ~x [~8,'0x]" 255 256 10 4096 -255 255)
+      (terpri)
+    expected: |
+      FF 400 1010 10000 -FF [000000FF]
+  - name: format-character
+    source: |
+      (format t "~c ~@c ~:c ~:c" #\a #\b #\Newline #\z)
+      (terpri)
+    expected: |
+      a #\b Newline z
+  - name: format-case-conversion
+    source: |
+      (format t "~(~a~) ~:@(~a~) ~:(~a~) ~@(~a~)" "FOO BAR" "foo bar" "foo bar" "foo BAR")
+      (terpri)
+    expected: |
+      foo bar FOO BAR Foo Bar Foo bar
+  - name: format-conditional
+    source: |
+      (format t "~[a~a~;b~a~:;c~a~]|~:[no~a~;yes~a~]|~@[v=~a~] ~a" 1 10 nil 20 nil 30)
+      (terpri)
+      (format t "~#[none~;one ~a~;two ~a ~a~]" 5 6)
+      (terpri)
+    expected: |
+      b10|no20| 30
+      two 5 6
+  - name: format-iteration
+    source: |
+      (format t "~{<~a>~}|~2{ ~a~}|~:{(~a,~a)~}" '(1 2) '(a b c d) '((x 1) (y 2)))
+      (terpri)
+      (format t "x~2@{ ~a~}|~:@{(~a)~}" 1 2 '(3) '(4))
+      (terpri)
+    expected: |
+      <1><2>| A B|(X,1)(Y,2)
+      x 1 2|(3)(4)
+  - name: format-argument-jump
+    source: |
+      (format t "~a ~2* ~a ~2:* ~a" 1 2 3 4)
+      (terpri)
+    expected: |
+      1  4  3
+  - name: format-iteration-escape
+    source: |
+      (format t "~{~a~^, ~}|~@{~a~^, ~}" '(1 2 3) 4 5)
+      (terpri)
+      (format t "~:['{}'~;ARRAY[~:*~{~A~^, ~}]~]" '(1 2 3))
+      (terpri)
+    expected: |
+      1, 2, 3|4, 5
+      ARRAY[1, 2, 3]
+  - name: format-runtime-pad-char-and-exponent-params
+    source: |
+      (format t "~v,vd [~15,5,3e] [~8,4,,,'*e]" 6 #\0 42 pi pi)
+      (terpri)
+    expected: |
+      000042 [   3.14159e+000] [********]
+  - name: princ-to-string
+    source: |
+      (print (princ-to-string 42)) (princ (princ-to-string 'sym))
+      (terpri)
+    expected: |
+      "42"
+      SYM
+  - name: prin1-escapes-quotes-and-backslashes-in-strings
+    source: |
+      (prin1 "{\"hello\":\"aaa\"}")
+      (terpri)
+      (prin1 (list "x\"y" 'foo))
+      (terpri)
+      (princ (prin1-to-string "a\"b\\c"))
+      (terpri)
+      (princ (format nil "~s|~a" "a\"b" "a\"b"))
+      (terpri)
+      (princ "{\"hello\":\"aaa\"}")
+      (terpri)
+    expected: |
+      "{\"hello\":\"aaa\"}"
+      ("x\"y" FOO)
+      "a\"b\\c"
+      "a\"b"|a"b
+      {"hello":"aaa"}
+  - name: prin1-output-reads-back-as-the-same-string
+    source: |
+      (let ((s (concatenate 'string "a" (string (code-char 34)) "b"
+                            (string (code-char 92)) "c"
+                            (string #\Newline) "d")))
+        (prin1 (list (equal (read-from-string (prin1-to-string s)) s) (length s))))
+      (terpri)
+    expected: |
+      (T 7)
+  - name: concatenate
+    source: |
+      (princ (concatenate 'string "foo" "bar" "baz"))
+      (terpri)
+    expected: |
+      foobarbaz
+  - name: internal-string-concat-copies-bytes
+    source: |
+      (print (%string-concat "foo" "bar"))
+      (print (%string-concat "" ""))
+      (print (%string-concat "" "x"))
+      (print (%string-concat "y" ""))
+      (print (%string-concat "héllo→" "世界"))
+      (print (%string-concat "prefix-" (make-array 3 :element-type 'character :initial-element #\z)))
+      (let ((s (copy-seq "abc")))
+        (setf (aref s 1) #\X)
+        (print s))
+    expected: |
+      "foobar"
+      ""
+      "x"
+      "y"
+      "héllo→世界"
+      "prefix-zzz"
+      "aXc"
+  - name: princ-to-string-as-function-value
+    source: |
+      (print (mapcar #'princ-to-string (list 1 2)))
+    expected: |
+      ("1" "2")
+  - name: map-list-stops-at-shortest-sequence
+    source: |
+      (print (map 'list #'+ '(1 2 3) '(10 20)))
+    expected: |
+      (11 22)
+  - name: map-list-over-string
+    source: |
+      (print (map 'list (lambda (c) (char-code c)) "AB"))
+    expected: |
+      (65 66)
+  - name: map-nil-calls-for-effect
+    source: |
+      (map nil #'print '(7 8 9))
+    expected: |
+      7
+      8
+      9
+  - name: string-upcase-downcase
+    source: |
+      (princ (string-upcase "Hello, World"))
+      (terpri)
+      (princ (string-downcase "Hello, World"))
+      (terpri)
+    expected: |
+      HELLO, WORLD
+      hello, world
+  - name: string-capitalize
+    source: |
+      (princ (string-capitalize "hello world  foo"))
+      (terpri)
+    expected: |
+      Hello World  Foo
+  - name: subseq
+    source: |
+      (princ (subseq "hello world" 6))
+      (terpri)
+      (princ (subseq "hello world" 0 5))
+      (terpri)
+    expected: |
+      world
+      hello
+  - name: subseq-list
+    source: |
+      (print (subseq '(1 2 3 4 5) 1 3))
+      (print (subseq '(1 2 3 4 5) 2))
+      (print (subseq '(a b c) 0))
+      (print (subseq '(1 2 3) 3))
+    expected: |
+      (2 3)
+      (3 4 5)
+      (A B C)
+      NIL
+  - name: make-string
+    source: |
+      (princ (make-string 3 :initial-element #\x))
+      (terpri)
+      (princ (length (make-string 5)))
+      (terpri)
+      (princ (length (funcall #'make-string 2)))
+      (terpri)
+    expected: |
+      xxx
+      5
+      2
+  - name: replace
+    source: |
+      (princ (replace (make-string 5 :initial-element #\a) "XY" :start1 1))
+      (terpri)
+      (princ (replace "aaaaa" "XY"))
+      (terpri)
+      (princ (funcall #'replace "aaaaa" "XY"))
+      (terpri)
+    expected: |
+      aXYaa
+      XYaaa
+      XYaaa
+  - name: replace-of-overlapping-regions-of-one-sequence
+    source: |
+      (let ((v (vector 1 2 3 4 5))
+            (b (make-array 5 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 5)))
+            (s (copy-seq "abcde"))
+            (l (list 1 2 3 4 5)))
+        (print (list (replace v v :start1 1 :end2 3) (replace b b :start1 1 :end2 3)
+                     (replace s s :start1 1 :end2 3) (replace l l :start1 1 :end2 3)
+                     (funcall #'replace (list 1 2 3 4 5) (list 9) :start1 2))))
+    expected: |
+      (#(1 1 2 3 5) #(1 1 2 3 5) "aabce" (1 1 2 3 5) (1 2 9 4 5))
+  - name: map-walks-a-list-with-a-cursor
+    source: |
+      (let ((l (list 1 2 3 4))) (print (map 'list #'1+ l)))
+      (let ((l (list 1 2 3 4))) (print (map 'vector #'1+ l)))
+      (let ((l (list 1 2 3))) (print (map 'list #'+ l (coerce (list 10 20) 'vector))))
+      (let ((l (list 1 2 3))) (print (map 'list #'list l "ab")))
+      (print (map 'string #'char-upcase (coerce (list #\a #\b) 'string)))
+      (let ((l (list 1 2 3))) (print (map nil #'1+ l)))
+      (let ((long (let ((out nil))
+                    (dotimes (i 2000) (setq out (cons (mod i 7) out)))
+                    (nreverse out))))
+        (print (list (first (map 'list #'1+ long)) (car (last (map 'list #'1+ long)))
+                     (length (map 'vector #'1+ long)))))
+    expected: |
+      (2 3 4 5)
+      #(2 3 4 5)
+      (11 22)
+      ((1 #\a) (2 #\b))
+      "AB"
+      NIL
+      (1 5 2000)
+  - name: copy-list-keeps-a-dotted-tail
+    source: |
+      (print (list (copy-list '(1 2 . 3)) (mapcar #'copy-list '((a . b) (c)))
+                   (handler-case (copy-list 5) (error () :not-a-list))))
+    expected: |
+      ((1 2 . 3) ((A . B) (C)) :NOT-A-LIST)
+  - name: the-string-result-of-map-joins-its-pieces-once
+    source: |
+      (print (list (map 'string #'identity nil)
+                   (map 'string #'identity (list #\a))
+                   (map 'string #'identity (list #\a #\b))
+                   (map 'string #'identity (list #\a #\b #\c))
+                   (map 'string #'identity (list #\a #\b #\c #\d))
+                   (map 'string #'identity (list #\a #\b #\c #\d #\e))
+                   (map 'string #'char-upcase "abc")
+                   (map 'string #'identity "")
+                   (map 'string #'identity #(#\x #\y))))
+      (print (list (coerce (list #\x #\y #\z) 'string)
+                   (handler-case (coerce '(1 2) 'string) (error () :not-a-character))
+                   (handler-case (map 'string #'identity (list #\a 33)) (error () :not-a-character))))
+      (let ((s (map 'string #'char-upcase (make-string 5000 :initial-element #\q))))
+        (print (list (length s) (subseq s 0 4) (char s 4999))))
+    expected: |
+      ("" "a" "ab" "abc" "abcd" "abcde" "ABC" "" "xy")
+      ("xyz" :NOT-A-CHARACTER :NOT-A-CHARACTER)
+      (5000 "QQQQ" #\Q)
+  - name: case-predicates-and-constantp
+    source: |
+      (print (list (lower-case-p #\a) (upper-case-p #\A)))
+      (print (list (lower-case-p #\A) (upper-case-p #\a)))
+      (print (list (constantp 5) (constantp 'x) (constantp '(quote y))))
+      (print (mapcar #'upper-case-p '(#\A #\b)))
+    expected: |
+      (T T)
+      (NIL NIL)
+      (T NIL T)
+      (T NIL)
+  - name: streamp
+    source: |
+      (princ (with-output-to-string (s) (princ (streamp s) s)))
+      (terpri)
+      (princ (with-output-to-string (s) (check-type s stream) (write-string "ok" s)))
+      (terpri)
+    expected: |
+      T
+      ok
+  - name: string-trim
+    source: |
+      (princ (string-trim " xy" "xyhelloyx "))
+      (terpri)
+      (princ (string-left-trim "x" "xxhello"))
+      (terpri)
+      (princ (string-right-trim "x" "helloxx"))
+      (terpri)
+    expected: |
+      hello
+      hello
+      hello
+  - name: string-functions-as-values
+    source: |
+      (print (mapcar #'string-upcase (list "ab" "cd")))
+      (print (funcall #'subseq "hello" 2))
+    expected: |
+      ("AB" "CD")
+      "llo"
+  - name: string-in-let
+    source: |
+      (let ((x "world")) (print x))
+    expected: |
+      "world"
+  - name: cons
+    source: |
+      (print (car (cons 1 2)))
+      (print (cdr (cons 1 2)))
+    expected: |
+      1
+      2
+  - name: funcall-lambda
+    source: |
+      (print (funcall (lambda (x) (* x x)) 5))
+    expected: |
+      25
+  - name: null-predicate
+    source: |
+      (print (if (null nil) 42 99))
+      (print (if (null 1) 42 99))
+    expected: |
+      42
+      99
+  - name: atom
+    source: |
+      (print (if (atom 1) 42 99))
+      (print (if (atom '(1 2)) 42 99))
+      (print (if (atom nil) 42 99))
+    expected: |
+      42
+      99
+      42
+  - name: numberp
+    source: |
+      (print (if (numberp 42) 42 99))
+      (print (if (numberp 3.14) 42 99))
+      (print (if (numberp "hello") 42 99))
+    expected: |
+      42
+      42
+      99
+  - name: integerp
+    source: |
+      (print (if (integerp 42) 42 99))
+      (print (if (integerp 3.14) 42 99))
+    expected: |
+      42
+      99
+  - name: floatp
+    source: |
+      (print (if (floatp 3.14) 42 99))
+      (print (if (floatp 42) 42 99))
+    expected: |
+      42
+      99
+  - name: symbolp
+    source: |
+      (print (if (symbolp 'foo) 42 99))
+      (print (if (symbolp 42) 42 99))
+    expected: |
+      42
+      99
+  - name: stringp
+    source: |
+      (print (if (stringp "hello") 42 99))
+      (print (if (stringp 42) 42 99))
+    expected: |
+      42
+      99
+  - name: listp
+    source: |
+      (print (if (listp '(1 2)) 42 99))
+      (print (if (listp nil) 42 99))
+      (print (if (listp 42) 42 99))
+    expected: |
+      42
+      42
+      99
+  - name: consp
+    source: |
+      (print (if (consp '(1 2)) 42 99))
+      (print (if (consp nil) 42 99))
+    expected: |
+      42
+      99
+  - name: pi-constant
+    source: |
+      (print pi)
+    expected: |
+      3.141592653589793
+  - name: double-comparison
+    source: |
+      (print (if (= 1.0 1.0) 42 99))
+      (print (if (< 1.0 2.0) 42 99))
+      (print (if (> 2.0 1.0) 42 99))
+      (print (if (<= 1.5 1.5) 42 99))
+      (print (if (>= 2.0 3.0) 42 99))
+    expected: |
+      42
+      42
+      42
+      42
+      99
+  - name: zerop
+    source: |
+      (print (if (zerop 0) 42 99))
+      (print (if (zerop 1) 42 99))
+    expected: |
+      42
+      99
+  - name: plusp
+    source: |
+      (print (if (plusp 1) 42 99))
+      (print (if (plusp 0) 42 99))
+    expected: |
+      42
+      99
+  - name: minusp
+    source: |
+      (print (if (minusp -1) 42 99))
+      (print (if (minusp 0) 42 99))
+    expected: |
+      42
+      99
+  - name: evenp
+    source: |
+      (print (if (evenp 4) 42 99))
+      (print (if (evenp 3) 42 99))
+    expected: |
+      42
+      99
+  - name: oddp
+    source: |
+      (print (if (oddp 3) 42 99))
+      (print (if (oddp 4) 42 99))
+    expected: |
+      42
+      99
+  - name: abs
+    source: |
+      (print (abs 5))
+      (print (abs -5))
+    expected: |
+      5
+      5
+  - name: min
+    source: |
+      (print (min 3 5))
+      (print (min 5 3))
+    expected: |
+      3
+      3
+  - name: max
+    source: |
+      (print (max 3 5))
+      (print (max 5 3))
+    expected: |
+      5
+      5
+  - name: complex-constructor
+    source: |
+      (print (complex 1 2))
+      (print (complex 1 0))
+      (print (complex 1))
+      (print (complex 1/2 0))
+      (print (complex 2.0 0))
+      (print (complex 1 0.0))
+      (print (complex 1 2.0))
+      (print (complex 0 1))
+    expected: |
+      #C(1 2)
+      1
+      1
+      1/2
+      #C(2.0 0.0)
+      #C(1.0 0.0)
+      #C(1.0 2.0)
+      #C(0 1)
+  - name: complex-sharp-c-reader
+    source: |
+      (print #C(1 2))
+      (print #c(1 2))
+      (print #C(1/2 1/3))
+      (print #C(1 0))
+      (print '#C(1 2))
+    expected: |
+      #C(1 2)
+      #C(1 2)
+      #C(1/2 1/3)
+      1
+      #C(1 2)
+  - name: complex-arithmetic-stays-exact
+    source: |
+      (print (+ #c(1 1/2) #c(1 1/3)))
+      (print (- #c(1 2) #c(3 4)))
+      (print (- #c(1 2)))
+      (print (* #c(1 2) 2))
+      (print (/ #c(1 2) 2))
+      (print (/ #c(1 2)))
+      (print (+ #c(1 2) #c(3 4) 1))
+      (print (1+ #c(1 2)))
+      (print (1- #c(1 2)))
+      (print (- #c(0 1) #c(0 1)))
+    expected: |
+      #C(2 5/6)
+      #C(-2 -2)
+      #C(-1 -2)
+      #C(2 4)
+      #C(1/2 1)
+      #C(1/5 -2/5)
+      #C(5 6)
+      #C(2 2)
+      #C(0 2)
+      0
+  - name: complex-arithmetic-contagion
+    source: |
+      (print (+ #c(1 2) 1.5))
+      (print (* #c(1 2) 2.0))
+      (print (- 1 #c(1 2)))
+    expected: |
+      #C(2.5 2.0)
+      #C(2.0 4.0)
+      #C(0 -2)
+  - name: complex-sqrt
+    source: |
+      (print (sqrt -1))
+      (print (sqrt -4))
+      (print (sqrt #c(3 4)))
+      (print (sqrt 4))
+    expected: |
+      #C(0.0 1.0)
+      #C(0.0 2.0)
+      #C(2.0 1.0)
+      2.0
+  - name: complex-equality
+    source: |
+      (print (= #c(1 2) #c(1 2)))
+      (print (= 2.0 #c(2.0 0.0)))
+      (print (= #c(1 2) 1))
+      (print (= #c(1 2) #c(1 3)))
+      (print (eql 1 #c(1 0)))
+      (print (eql 2.0 #c(2.0 0)))
+      (print (eql #c(1 2) #c(1 2)))
+      (print (equal #c(1 2) #c(1 2)))
+      (print (/= #c(1 2) #c(1 3)))
+      (print (/= #c(1 2) #c(1 2)))
+    expected: |
+      T
+      T
+      NIL
+      NIL
+      T
+      NIL
+      T
+      T
+      T
+      NIL
+  - name: complex-predicates
+    source: |
+      (print (complexp #c(1 2)))
+      (print (complexp 1))
+      (print (numberp #c(1 2)))
+      (print (numberp 1))
+      (print (realp #c(1 2)))
+      (print (realp 1))
+      (print (realp 1.5))
+      (print (realp 1/2))
+      (print (realp nil))
+      (print (integerp #c(1 2)))
+      (print (floatp #c(1.0 2.0)))
+      (print (rationalp #c(1 2)))
+      (print (zerop #c(0 0)))
+      (print (zerop #c(0.0 0.0)))
+      (print (zerop #c(1 2)))
+    expected: |
+      T
+      NIL
+      T
+      T
+      NIL
+      T
+      T
+      T
+      NIL
+      NIL
+      NIL
+      NIL
+      T
+      T
+      NIL
+  - name: imagpart-signed-zero
+    source: |
+      (print (imagpart -1.0))
+      (print (imagpart 1.0))
+      (print (eql (* 0 -1.0) (imagpart -1.0)))
+      (print (imagpart -2))
+    expected: |
+      -0.0
+      0.0
+      T
+      0
+  - name: complex-first-class
+    source: |
+      (print (funcall #'complex 1 2))
+      (print (funcall #'conjugate #c(1 2)))
+      (print (mapcar #'complexp (list #c(1 2) 1)))
+    expected: |
+      #C(1 2)
+      #C(1 -2)
+      (T NIL)
+  - name: random
+    source: |
+      (print (random 1))
+      (print (integerp (random 100)))
+      (print (floatp (random 5.0)))
+      (let ((r (random 10))) (if (and (>= r 0) (< r 10)) (print "in") (print "oob")))
+      (let ((r (random 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print "in") (print "oob")))
+    expected: |
+      0
+      T
+      T
+      "in"
+      "in"
+  - name: random-on-float-limit-through-a-variable
+    source: |
+      (let ((x 5.0)) (print (floatp (random x))))
+      (let ((x 5)) (print (integerp (random x))))
+      (defun rnd (limit) (random limit))
+      (let ((r (rnd 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print "in") (print "oob")))
+      (defun rndi (limit) (random limit))
+      (let ((r (rndi 10))) (if (and (>= r 0) (< r 10)) (print "in") (print "oob")))
+    expected: |
+      T
+      T
+      "in"
+      "in"
+  - name: while
+    source: |
+      (print (let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s))
+      (print (let ((n 0)) (while nil (setq n 99)) n))
+    expected: |
+      10
+      0
+  - name: dotimes
+    source: |
+      (print (let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s))
+      (print (dotimes (i 3)))
+      (print (let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2)))))
+      (print (let ((s 7)) (dotimes (i 0) (setq s 0)) s))
+      (print (let ((s 0)) (dotimes (i 3) (dotimes (j 2) (setq s (+ s 1)))) s))
+    expected: |
+      10
+      NIL
+      16
+      7
+      6
+  - name: nth
+    source: |
+      (print (nth 0 '(1 2 3)))
+      (print (nth 2 '(1 2 3)))
+    expected: |
+      1
+      3
+  - name: nthcdr
+    source: |
+      (print (nthcdr 0 '(1 2 3)))
+      (print (nthcdr 2 '(1 2 3)))
+    expected: |
+      (1 2 3)
+      (3)
+  - name: car-cdr-composition
+    source: |
+      (print (cadr '(1 2 3)))
+      (print (caddr '(1 2 3)))
+      (print (caar '((1 2) 3)))
+      (print (cadddr '(1 2 3 4)))
+    expected: |
+      2
+      3
+      1
+      4
+  - name: rplacd
+    source: |
+      (setq x (cons 1 2))
+      (rplacd x 20)
+      (print (cdr x))
+    expected: |
+      20
+  - name: setf-car
+    source: |
+      (setq x (list 1 2 3))
+      (setf (car x) 10)
+      (print (car x))
+    expected: |
+      10
+  - name: setf-cdr
+    source: |
+      (setq x (cons 1 2))
+      (setf (cdr x) 20)
+      (print (cdr x))
+    expected: |
+      20
+  - name: setf-nth
+    source: |
+      (setq x (list 1 2 3))
+      (setf (nth 1 x) 20)
+      (print (nth 1 x))
+    expected: |
+      20
+  - name: setf-second
+    source: |
+      (setq x (list 1 2 3))
+      (setf (second x) 20)
+      (print (second x))
+    expected: |
+      20
+  - name: setf-fifth-through-tenth
+    source: |
+      (setq x (list 1 2 3 4 5 6 7 8 9 10))
+      (setf (fifth x) 50)
+      (setf (tenth x) 100)
+      (print (fifth x))
+      (print (tenth x))
+    expected: |
+      50
+      100
+  - name: setf-returns-value
+    source: |
+      (setq x (list 1 2 3))
+      (print (setf (car x) 42))
+    expected: |
+      42
+  - name: eql-as-function-value
+    source: |
+      (print (funcall #'eql 5 5))
+    expected: |
+      T
+  - name: eql-floats-by-value
+    source: |
+      (print (eql 1.5 1.5))
+    expected: |
+      T
+  - name: eq-integers-still-eq
+    source: |
+      (print (eq 3 3))
+    expected: |
+      T
+  - name: equal-different-type-numbers
+    source: |
+      (print (equal 3 3.0))
+    expected: |
+      NIL
+  - name: equal-fresh-conses-unlike-eql
+    source: |
+      (print (eql (list 1 2) (list 1 2)))
+      (print (equal (list 1 2) (list 1 2)))
+    expected: |
+      NIL
+      T
+  - name: equal-as-function-value
+    source: |
+      (print (funcall #'equal '(1) '(1)))
+    expected: |
+      T
+  - name: push
+    source: |
+      (setq x (list 2 3))
+      (push 1 x)
+      (print x)
+    expected: |
+      (1 2 3)
+  - name: pop
+    source: |
+      (setq x (list 1 2 3))
+      (print (pop x))
+      (print x)
+    expected: |
+      1
+      (2 3)
+  - name: remf-head
+    source: |
+      (setq plist (list 'a 1 'b 2 'c 3))
+      (remf plist 'a)
+      (print plist)
+    expected: |
+      (B 2 C 3)
+  - name: remf-tail
+    source: |
+      (setq plist (list 'a 1 'b 2 'c 3))
+      (remf plist 'c)
+      (print plist)
+    expected: |
+      (A 1 B 2)
+  - name: remf-not-found
+    source: |
+      (setq plist (list 'a 1 'b 2))
+      (print (if (remf plist 'z) 42 99))
+    expected: |
+      99
+  - name: remf-empty
+    source: |
+      (setq plist nil)
+      (print (if (remf plist 'a) 42 99))
+    expected: |
+      99
+  - name: keyword-eq
+    source: |
+      (print (if (eq :foo :foo) 42 99))
+      (print (if (eq :foo :bar) 42 99))
+    expected: |
+      42
+      99
+  - name: keywordp
+    source: |
+      (print (if (keywordp :foo) 42 99))
+      (print (if (keywordp 'foo) 42 99))
+      (print (if (keywordp 42) 42 99))
+    expected: |
+      42
+      99
+      99
+  - name: reduce-over-an-empty-sequence
+    source: |
+      (print (reduce #'append '()))
+      (print (reduce #'+ '()))
+      (print (funcall #'append))
+      (print (reduce #'append '((1 2) (3))))
+    expected: |
+      NIL
+      0
+      NIL
+      (1 2 3)
+  - name: setf-rest-place
+    source: |
+      (setq l (list 1 2 3)) (setf (rest l) '(9)) (print l)
+    expected: |
+      (1 9)
+  - name: rest-inside-eval
+    source: |
+      (print (eval '(rest '(1 2 3))))
+    expected: |
+      (2 3)
+  - name: dolist
+    source: |
+      (setq s 0) (dolist (e '(1 2 3 4)) (setq s (+ s e))) (print s)
+    expected: |
+      10
+  - name: return-exits-innermost-loop-only
+    source: |
+      (setq total 0)
+      (dolist (a '(1 2 3))
+        (dolist (b '(10 20 30))
+          (if (= b 20) (return))
+          (setq total (+ total b))))
+      (print total)
+    expected: |
+      30
+  - name: incf-decf
+    source: |
+      (setq n 10) (incf n) (incf n 5) (decf n 6) (print n)
+    expected: |
+      10
+  - name: incf-place
+    source: |
+      (setq l (list 1 2 3)) (incf (cadr l)) (print l)
+    expected: |
+      (1 3 3)
+  - name: position
+    source: |
+      (print (position 3 '(1 2 3 4))) (print (position 9 '(1 2 3))) (print (funcall #'position 2 '(5 2 8)))
+    expected: |
+      2
+      NIL
+      1
+  - name: sequence-returning-functions-on-strings
+    source: |
+      (print (reverse "abc"))
+      (print (remove #\l "hello"))
+      (print (remove-if #'digit-char-p "a1b2"))
+      (print (remove-if-not #'digit-char-p "a1b2"))
+      (print (remove-duplicates "banana"))
+      (print (substitute #\o #\a "banana"))
+      (print (sort "cab" #'char<))
+      (print (funcall #'reverse "abc"))
+    expected: |
+      "cba"
+      "heo"
+      "ab"
+      "12"
+      "bna"
+      "bonono"
+      "abc"
+      "cba"
+  - name: count
+    source: |
+      (print (count 2 '(1 2 3 2 2))) (print (count 9 '(1 2 3))) (print (funcall #'count 2 '(2 2 8)))
+    expected: |
+      3
+      0
+      2
+  - name: copy-alist
+    source: |
+      (print (copy-alist '((a . 1) (b . 2))))
+      (print (copy-alist nil))
+      (let* ((orig (list (cons 'a 1) (cons 'b 2)))
+             (copy (copy-alist orig)))
+        (rplacd (assoc 'a copy) 99)
+        (print (cdr (assoc 'a orig))))
+      (print (funcall #'copy-alist '((a . 1))))
+    expected: |
+      ((A . 1) (B . 2))
+      NIL
+      1
+      ((A . 1))
+  - name: member-if
+    source: |
+      (print (member-if #'oddp '(2 4 5 6))) (print (member-if #'evenp '(1 3 5))) (print (funcall #'member-if #'plusp '(-1 3 4)))
+    expected: |
+      (5 6)
+      NIL
+      (3 4)
+  - name: assoc-if
+    source: |
+      (print (assoc-if #'oddp '((2 a) (3 b) (5 c)))) (print (assoc-if #'evenp '((1 a) (3 b)))) (print (funcall #'assoc-if #'plusp '((-1 a) (2 b))))
+    expected: |
+      (3 B)
+      NIL
+      (2 B)
+  - name: getf
+    source: |
+      (print (getf '(:a 1 :b 2) :b)) (print (getf '(:a 1) :x)) (print (funcall #'getf '(:x 10 :y 20) :y))
+    expected: |
+      2
+      NIL
+      20
+  - name: remove-duplicates
+    source: |
+      (print (remove-duplicates '(1 2 1 3))) (print (remove-duplicates '(1 2 3))) (print (funcall #'remove-duplicates '(a b a a c)))
+    expected: |
+      (2 1 3)
+      (1 2 3)
+      (B A C)
+  - name: delete-duplicates-and-from-end
+    source: |
+      (print (delete-duplicates '(1 2 1 3 2))) (print (delete-duplicates '(1 2 1 3 2) :from-end t)) (print (remove-duplicates '(1 2 1 3 2) :from-end t)) (print (funcall #'delete-duplicates '(a b a a c)))
+    expected: |
+      (1 3 2)
+      (1 2 3)
+      (1 2 3)
+      (B A C)
+  - name: butlast
+    source: |
+      (print (butlast '(1 2 3))) (print (butlast '(1))) (print (butlast nil)) (print (funcall #'butlast '(a b c d)))
+    expected: |
+      (1 2)
+      NIL
+      NIL
+      (A B C)
+  - name: nconc
+    source: |
+      (print (nconc (list 1 2) (list 3 4))) (print (nconc nil (list 1 2))) (print (funcall #'nconc (list 'a) (list 'b 'c)))
+    expected: |
+      (1 2 3 4)
+      (1 2)
+      (A B C)
+  - name: identity
+    source: |
+      (print (identity 42)) (print (identity '(1 2 3))) (print (funcall #'identity 'x))
+    expected: |
+      42
+      (1 2 3)
+      X
+  - name: copy-list
+    source: |
+      (print (copy-list '(1 2 3))) (print (copy-list nil)) (print (funcall #'copy-list '(a b)))
+    expected: |
+      (1 2 3)
+      NIL
+      (A B)
+  - name: nreverse
+    source: |
+      (print (nreverse '(1 2 3))) (print (nreverse nil)) (print (funcall #'nreverse '(a b c)))
+    expected: |
+      (3 2 1)
+      NIL
+      (C B A)
+  - name: make-list
+    source: |
+      (print (make-list 3)) (print (make-list 0)) (print (funcall #'make-list 2))
+    expected: |
+      (NIL NIL NIL)
+      NIL
+      (NIL NIL)
+  - name: union
+    source: |
+      (print (union '(1 2 3) '(2 3 4))) (print (union nil '(1 2))) (print (funcall #'union '(a) '(a b)))
+    expected: |
+      (4 1 2 3)
+      (2 1)
+      (B A)
+  - name: intersection
+    source: |
+      (print (intersection '(1 2 3) '(2 3 4))) (print (intersection '(1 2) '(3 4))) (print (funcall #'intersection '(a b c) '(b c d)))
+    expected: |
+      (3 2)
+      NIL
+      (C B)
+  - name: set-difference
+    source: |
+      (print (set-difference '(1 2 3) '(2))) (print (set-difference '(1 2 3) '(1 2 3))) (print (funcall #'set-difference '(a b c) '(b)))
+    expected: |
+      (3 1)
+      NIL
+      (C A)
+  - name: adjoin
+    source: |
+      (print (adjoin 1 '(2 3))) (print (adjoin 2 '(1 2 3))) (print (adjoin 'a nil)) (print (funcall #'adjoin 5 '(5 6)))
+    expected: |
+      (1 2 3)
+      (1 2 3)
+      (A)
+      (5 6)
+  - name: bitwise-variadic-and-first-class
+    source: |
+      (print (logand 12 10 6)) (print (logior 1 2 4 8)) (print (funcall #'logand 6 3)) (print (funcall #'lognot 0))
+    expected: |
+      0
+      15
+      2
+      -1
+  - name: log-nand-nor-eqv
+    source: |
+      (print (lognand 0 0)) (print (lognand 0 -1)) (print (lognand -1 123)) (print (lognor 0 0)) (print (lognor 0 -1)) (print (lognor -1 123))
+      (print (logeqv)) (print (logeqv 1231)) (print (logeqv 12 10)) (print (logeqv 27 22 53)) (print (funcall #'lognand 0 0)) (print (funcall #'lognor 0 -1)) (print (funcall #'logeqv 27 22 53)) (print (apply #'logeqv '(27 22 53)))
+    expected: |
+      -1
+      -1
+      -124
+      -1
+      0
+      0
+      -1
+      1231
+      -7
+      56
+      -1
+      0
+      56
+      56
+  - name: list-star-and-acons
+    source: |
+      (print (list* 1 2 '(3 4))) (print (list* 1 2 3)) (print (list* 'x)) (print (acons 'a 1 nil))
+    expected: |
+      (1 2 3 4)
+      (1 2 . 3)
+      X
+      ((A . 1))
+  - name: notany-notevery
+    source: |
+      (print (notany #'evenp '(1 3 5))) (print (notany #'evenp '(1 2 3))) (print (notevery #'evenp '(2 4 5))) (print (notevery #'evenp '(2 4 6)))
+    expected: |
+      T
+      NIL
+      T
+      NIL
+  - name: cross-lambda-return-from-recursive-targets-correct-frame
+    source: |
+      (defun deep (n)
+        (if (= n 0)
+            :bottom
+            (block done
+              (mapcar #'(lambda (x) (return-from done (list n (deep (- n 1)) x))) '(:mark))
+              :unreached)))
+      (print (deep 3))
+    expected: |
+      (3 (2 (1 :BOTTOM :MARK) :MARK) :MARK)
+  - name: cross-lambda-exit-tolerates-block-as-variable-name
+    source: |
+      (defun uses-block-as-var (xs)
+        (let ((block 10) (return-from 20))
+          (mapcar #'(lambda (x)
+                      (if (evenp x)
+                          (return-from uses-block-as-var (+ x block return-from))
+                          x))
+                  xs)))
+      (print (uses-block-as-var '(1 2 3)))
+      (print (uses-block-as-var '(1 3 5)))
+    expected: |
+      32
+      (1 3 5)
+  - name: cross-lambda-return-from-does-not-leak-handler-depth
+    source: |
+      (defun leak (xs)
+        (handler-case
+            (mapcar #'(lambda (x) (return-from leak :exited)) xs)
+          (error (e) :caught)))
+      (print (leak '(1)))
+      (print (signal "quiet"))
+    expected: |
+      :EXITED
+      NIL
+  - name: cross-lambda-go-recursive-targets-correct-frame
+    source: |
+      (defun rec (n)
+        (let ((hit nil))
+      	(tagbody
+      	 top
+      	   (if (= n 0) (go fin))
+      	   (setq hit (rec (- n 1)))
+      	   (funcall (lambda () (go fin)))
+      	   (setq hit :never)
+      	 fin)
+      	(list n hit)))
+      (print (rec 2))
+      (defun cleaned ()
+        (let ((log nil))
+      	(tagbody
+      	 top
+      	   (unwind-protect (funcall (lambda () (go out)))
+      		 (setq log (cons :cleanup log)))
+      	   (setq log (cons :never log))
+      	 out
+      	   (setq log (cons :out log)))
+      	(reverse log)))
+      (print (cleaned))
+    expected: |
+      (2 (1 (0 NIL)))
+      (:CLEANUP :OUT)
+  - name: catch-throw-runs-unwind-protect-cleanups
+    source: |
+      (let ((log nil))
+        (print (catch 'z
+                 (unwind-protect
+                     (unwind-protect (throw 'z :deep) (setq log (cons :inner log)))
+                   (setq log (cons :outer log)))))
+        (print log))
+      (print (catch 'c (unwind-protect :body (throw 'c :from-cleanup))))
+    expected: |
+      :DEEP
+      (:OUTER :INNER)
+      :FROM-CLEANUP
+  - name: throw-is-not-caught-by-handler-case
+    source: |
+      (defun hc-throw (xs)
+        (handler-case (mapcar (lambda (x) (if (evenp x) (throw 'up :hit) x)) xs)
+          (error (e) :caught)))
+      (print (catch 'up (hc-throw '(1 2 3))))
+      (print (hc-throw '(1 3)))
+      (print (signal "quiet"))
+      (print (catch 'up (handler-case (error "boom") (error (e) :caught))))
+    expected: |
+      :HIT
+      (1 3)
+      NIL
+      :CAUGHT
+  - name: catch-throw-and-cross-lambda-exit-do-not-collide
+    source: |
+      (defun probe2 (xs)
+        (list :after (catch 1 (mapcar #'(lambda (x) (if (evenp x) (return-from probe2 :exited) x)) xs))))
+      (print (probe2 '(1 2)))
+      (defun probe3 (xs)
+        (list :from-probe
+              (mapcar #'(lambda (x) (if (evenp x) (return-from probe3 :nlx) (throw 1 :thrown))) xs)))
+      (print (catch 1 (list :outer (probe3 '(1 2)))))
+    expected: |
+      :EXITED
+      :THROWN
+  - name: psetf
+    source: |
+      (print (let ((a 1) (b 2)) (psetf a b b a) (list a b)))
+      (print (let* ((tail (list 2))
+                    (last-cdr tail)
+                    (fresh (list 3)))
+               (psetf last-cdr fresh
+                      (cdr last-cdr) fresh)
+               (list tail last-cdr)))
+    expected: |
+      (2 1)
+      ((2 3) (3))
+  - name: clos-reader-methods-dispatch-per-class
+    source: |
+      (defclass w1 () ((pad :initarg :pad) (size :initarg :size :accessor size)))
+      (defclass w2 () ((size :initarg :size :accessor size)))
+      (defclass w3 () ())
+      (defmethod size ((w w3)) 0)
+      (defvar *w2* (make-instance 'w2 :size 22))
+      (setf (size *w2*) 23)
+      (print (list (size (make-instance 'w1 :pad 9 :size 11)) (size *w2*) (size (make-instance 'w3))))
+    expected: |
+      (11 23 0)
+  - name: typecase
+    source: |
+      (print (typecase 42 (string "s") (integer "i") (t "?"))) (print (typecase "x" (string "s") (integer "i") (t "?"))) (print (typecase 'sym (string "s") (integer "i") (t "?")))
+    expected: |
+      "i"
+      "s"
+      "?"
+  - name: widen-and-narrow-float-bits
+    source: |
+      (let* ((bits (make-array 3 :element-type '(unsigned-byte 16)
+                               :initial-contents (list (rontolisp:float16-bits 1.0)
+                                                        (rontolisp:float16-bits -2.5)
+                                                        (rontolisp:float16-bits 100.0))))
+             (dst (make-array 5 :element-type 'single-float :initial-element 0.0))
+             (back (make-array 5 :element-type '(unsigned-byte 16))))
+        (rontolisp:widen-float-bits bits :float16 dst :start 2)
+        (rontolisp:narrow-float-bits dst :float16 back)
+        (print (list (aref dst 0) (aref dst 1) (aref dst 2) (aref dst 3) (aref dst 4)))
+        (print (list (aref back 0) (aref back 1) (aref back 2) (aref back 3) (aref back 4))))
+      (let* ((bits (make-array 1 :element-type '(unsigned-byte 16)
+                               :initial-contents (list (rontolisp:float16-bits -2.5))))
+             (dst (make-array 1 :element-type 'single-float)))
+        (rontolisp:widen-float-bits bits :float16 dst)
+        (print (aref dst 0)))
+    expected: |
+      (0.0 0.0 1.0 -2.5 100.0)
+      (0 0 15360 49408 22080)
+      -2.5
+  - name: unwind-protect-keeps-the-protected-forms-values
+    source: |
+      (setq uwp-log nil)
+      (defun uwp-zero () (values))
+      (defun uwp-one () (values 7))
+      (defun uwp-two () (values 7 8))
+      (defun uwp-release () (setq uwp-log (cons 'released uwp-log)) (values))
+      (defun uwp-compute () (values 1 2 3))
+      (defun uwp-nil () (unwind-protect (values 1 2 3) nil))
+      (defun uwp-v0 () (unwind-protect (values 1 2 3) (uwp-zero)))
+      (defun uwp-v1 () (unwind-protect (values 1 2 3) (uwp-one)))
+      (defun uwp-v2 () (unwind-protect (values 1 2 3) (values 7 8)))
+      (defun uwp-call () (unwind-protect (uwp-compute) (uwp-release)))
+      (defun uwp-nested ()
+        (unwind-protect (values 1 2 3) (unwind-protect (uwp-two) (uwp-zero))))
+      (defun uwp-return ()
+        (block b (unwind-protect (return-from b (values 1 2 3)) (uwp-two))))
+      (defun uwp-return-call ()
+        (block b (unwind-protect (return-from b (uwp-compute)) (uwp-release))))
+      (defun uwp-go ()
+        (let ((r 0))
+          (block b (tagbody (unwind-protect (go done) (uwp-two)) done))
+          (values r 2 3)))
+      (defun uwp-signal ()
+        (handler-case (unwind-protect (error "boom") (uwp-release))
+          (error (e) (values 1 2 3))))
+      (defun uwp-signal-plain ()
+        (handler-case (unwind-protect (error "boom") (uwp-two)) (error (e) 'caught)))
+      (print (multiple-value-list (uwp-nil)))
+      (print (multiple-value-list (uwp-v0)))
+      (print (multiple-value-list (uwp-v1)))
+      (print (multiple-value-list (uwp-v2)))
+      (print (multiple-value-list (uwp-call)))
+      (print (multiple-value-list (uwp-nested)))
+      (print (multiple-value-list (uwp-return)))
+      (print (multiple-value-list (uwp-return-call)))
+      (print (multiple-value-list (uwp-go)))
+      (print (multiple-value-list (uwp-signal)))
+      (print (multiple-value-list (uwp-signal-plain)))
+      (print (multiple-value-list (unwind-protect (values 1 2 3) (uwp-zero))))
+      (print uwp-log)
+    expected: |
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (0 2 3)
+      (1 2 3)
+      (CAUGHT)
+      (1 2 3)
+      (RELEASED RELEASED RELEASED)
+  - name: some
+    source: |
+      (print (some #'oddp '(2 4 5))) (print (some #'oddp '(2 4 6)))
+      (print (some (lambda (x) (if (> x 3) (* x 10))) '(1 2 5)))
+    expected: |
+      T
+      NIL
+      50
+  - name: remove
+    source: |
+      (print (remove 2 '(1 2 3 2 4))) (print (remove 9 '(1 2 3)))
+    expected: |
+      (1 3 4)
+      (1 2 3)
+  - name: remove-if-not-as-first-class
+    source: |
+      (print (funcall #'remove-if-not #'oddp '(1 2 3 4)))
+    expected: |
+      (1 3)
+  - name: remove-as-first-class
+    source: |
+      (print (funcall #'remove 2 '(1 2 3 2)))
+    expected: |
+      (1 3)
+  - name: mapcan
+    source: |
+      (print (mapcan (lambda (x) (list x x)) '(1 2 3)))
+      (print (mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4)))
+      (print (funcall #'mapcan (lambda (x) (list x)) '(1 2 3)))
+    expected: |
+      (1 1 2 2 3 3)
+      (2 4)
+      (1 2 3)
+  - name: sort
+    source: |
+      (print (sort '(3 1 4 1 5 9 2 6) #'<))
+      (print (sort '(3 1 4) #'>))
+      (print (sort '() #'<)) (print (sort '(5) #'<))
+      (print (funcall #'sort '(2 3 1) #'<))
+    expected: |
+      (1 1 2 3 4 5 6 9)
+      (4 3 1)
+      NIL
+      (5)
+      (1 2 3)
+  - name: sort-of-a-large-list-is-linearithmic-and-orders-equal-elements-like-every-other-backend
+    source: |
+      (let ((data nil) (s 42))
+        (dotimes (i 50000)
+          (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+          (setq data (cons s data)))
+        (let ((sorted (sort data #'<)) (ordered t) (n 0))
+          (do ((c sorted (cdr c))) ((null (cdr c)) nil)
+            (if (> (car c) (car (cdr c))) (setq ordered nil)))
+          (do ((c sorted (cdr c))) ((null c) nil) (setq n (+ n 1)))
+          (print (list ordered n))))
+      (print (sort (list (cons 1 'a) (cons 1 'b) (cons 0 'c) (cons 1 'd) (cons 0 'e))
+                   (lambda (x y) (< (car x) (car y)))))
+    expected: |
+      (T 50000)
+      ((0 . C) (0 . E) (1 . A) (1 . B) (1 . D))
+  - name: apply
+    source: |
+      (print (apply #'+ '(1 2)))
+      (print (apply #'cons 1 '(2)))
+      (print (apply (lambda (a b) (+ a b)) '(3 4)))
+      (defun add3 (a b c) (+ a (+ b c))) (print (apply #'add3 1 2 '(3)))
+    expected: |
+      3
+      (1 . 2)
+      7
+      6
+  - name: sequence-function-inside-eval
+    source: |
+      (print (eval '(reverse '(1 2 3))))
+    expected: |
+      (3 2 1)
+  - name: funcall-sharp-quoted-plus
+    source: |
+      (print (funcall #'+ 1 2))
+    expected: |
+      3
+  - name: map-sharp-quoted-car
+    source: |
+      (print (mapcar #'car '((1 2) (3 4))))
+    expected: |
+      (1 3)
+  - name: funcall-quoted-symbol-designator
+    source: |
+      (print (funcall 'car '(9 8)))
+    expected: |
+      9
+  - name: setq-sharp-quoted-builtin-then-funcall
+    source: |
+      (setq f #'+)
+      (print (funcall f 1 2))
+    expected: |
+      3
+  - name: ratio-literal
+    source: |
+      (print 1/3)
+      (print -2/4)
+      (print '4/2)
+    expected: |
+      1/3
+      -1/2
+      2
+  - name: ratio-float-contagion
+    source: |
+      (print (/ 1 2.0))
+      (print (float 1/2))
+      (print (+ 1/2 0.5))
+    expected: |
+      0.5
+      0.5
+      1.0
+  - name: ratio-comparison
+    source: |
+      (print (if (< 1/3 1/2) 1 0))
+      (print (if (= 2/4 1/2) 1 0))
+      (print (if (= 1/2 0.5) 1 0))
+      (print (eql 1/2 1/2))
+      (print (eq 1/2 1/2))
+      (print (max 1/2 1/3))
+      (print (min 1/2 1/3))
+      (print (abs -1/2))
+    expected: |
+      1
+      1
+      1
+      T
+      T
+      1/2
+      1/3
+      1/2
+  - name: ratio-conversions
+    source: |
+      (print (truncate 7/2))
+      (print (truncate -7/2))
+      (print (floor 7/2))
+      (print (floor -7/2))
+      (print (ceiling 7/2))
+      (print (ceiling -7/2))
+      (print (round 7/2))
+      (print (round 5/2))
+      (print (round 1/3))
+    expected: |
+      3
+      -3
+      3
+      -4
+      4
+      -3
+      4
+      2
+      0
+  - name: eval-self-evaluating-integer
+    source: |
+      (print (eval 42))
+    expected: |
+      42
+  - name: eval-unary-minus-negates
+    source: |
+      (print (eval '(- 5)))
+      (print (eval '(- -5)))
+    expected: |
+      -5
+      5
+  - name: eval-while
+    source: |
+      (print (eval '(let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s)))
+    expected: |
+      10
+  - name: eval-dotimes
+    source: |
+      (print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))
+      (print (eval '(dotimes (i 3))))
+      (print (eval '(let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2))))))
+      (print (eval '(dotimes (i 3 i))))
+    expected: |
+      10
+      NIL
+      16
+      3
+  - name: string-identity-edges
+    source: |
+      (let ((s (copy-seq "ab")))
+        (print (list (eq s (string s)) (eq "ab" (string "ab")) (eq s (string "ab")))))
+    expected: |
+      (T T NIL)
+  - name: package-var
+    source: |
+      (print *package*)
+      (print (eq *package* (find-package "CL-USER")))
+    expected: |
+      :CL-USER
+      T
+  - name: first-rest-nth-as-function-values
+    source: |
+      (print (funcall #'first '(1 2 3)))
+      (print (mapcar #'rest '((1 2) (3 4))))
+      (print (funcall #'nth 1 '(1 2 3)))
+      (print (mapcar #'second '((1 2) (3 4))))
+    expected: |
+      1
+      ((2) (4))
+      2
+      (2 4)
+  - name: char-accessors
+    source: |
+      (print (char-code #\A)) (print (code-char 66)) (print (char "hello" 1))
+    expected: |
+      65
+      #\B
+      #\e
+  - name: char-case-and-predicates
+    source: |
+      (print (char-upcase #\a))
+      (print (char-downcase #\Z))
+      (print (characterp #\a))
+      (print (characterp 5))
+      (print (alpha-char-p #\x))
+      (print (alpha-char-p #\5))
+      (print (digit-char-p #\7))
+      (print (digit-char-p #\f 16))
+      (print (digit-char-p #\9 8))
+    expected: |
+      #\A
+      #\z
+      T
+      NIL
+      T
+      NIL
+      7
+      15
+      NIL
+  - name: char-comparisons-variadic
+    source: |
+      (print (char= #\a #\a)) (print (char< #\a #\b #\c)) (print (char<= #\a #\a #\b)) (print (char< #\b #\a))
+    expected: |
+      T
+      T
+      T
+      NIL
+  - name: char-equality-and-first-class
+    source: |
+      (print (eql #\a #\a))
+      (print (equal (list #\a #\b) (list #\a #\b)))
+      (print (mapcar #'char-upcase (list #\a #\b #\c)))
+    expected: |
+      T
+      T
+      (#\A #\B #\C)
+  - name: char-printing
+    source: |
+      (prin1 #\a) (prin1 #\Space) (prin1 #\Newline) (princ #\!)
+      (terpri)
+    expected: |
+      #\a#\Space#\Newline!
+  - name: parse-integer
+    source: |
+      (print (parse-integer "42"))
+      (print (parse-integer "  -13  "))
+      (print (parse-integer "ff" :radix 16))
+      (print (parse-integer "12abc" :junk-allowed t))
+      (print (parse-integer "xyz" :junk-allowed t))
+    expected: |
+      42
+      -13
+      255
+      12
+      NIL
+  - name: read-from-string
+    source: |
+      (print (read-from-string "(+ 1 2)")) (print (read-from-string "42"))
+    expected: |
+      (+ 1 2)
+      42
+  - name: read-from-string-answers-the-first-datum
+    source: |
+      (print (read-from-string "5.)"))
+      (print (read-from-string "abc)"))
+      (print (read-from-string "(1 2))"))
+      (print (read-from-string "+.5)"))
+      (print (read-from-string "1 (2"))
+      (print (read-from-string "1 #<"))
+    expected: |
+      5
+      ABC
+      (1 2)
+      0.5
+      1
+      1
+  - name: parse-integer-and-read-from-string-as-values
+    source: |
+      (print (mapcar #'parse-integer (list "1" "2" "3")))
+      (print (funcall #'read-from-string "(a b c)"))
+    expected: |
+      (1 2 3)
+      (A B C)
+  - name: read-from-string-ratios-and-radix
+    source: |
+      (print (read-from-string "1/3"))
+      (print (read-from-string "-2/8"))
+      (print (* 3 (read-from-string "1/3")))
+      (print (read-from-string "4/2"))
+      (print (read-from-string "#x10"))
+      (print (read-from-string "#o17"))
+      (print (read-from-string "#b101"))
+      (print (read-from-string "#x-ff"))
+      (print (read-from-string "+347"))
+      (print (read-from-string "+2.5"))
+    expected: |
+      1/3
+      -1/4
+      1
+      2
+      16
+      15
+      5
+      -255
+      347
+      2.5
+  - name: read-from-string-struct-slot-designators-and-allow-other-keys
+    source: |
+      (defstruct skpt a b c)
+      (print (skpt-a (read-from-string "#s(SKPT \"A\" x)")))
+      (print (skpt-a (read-from-string "#S(SKPT #\\A x)")))
+      (print (skpt-a (read-from-string "#S(SKPT :A X :ALLOW-OTHER-KEYS 1)")))
+      (print (skpt-b (read-from-string "#s(SKPT :B Z :ALLOW-OTHER-KEYS NIL)")))
+      (print (read-from-string "#S(SKPT :B Z :ALLOW-OTHER-KEYS T :A X :FOO BAR)"))
+      (print (read-from-string "#S(SKPT :FOO 1 :ALLOW-OTHER-KEYS T :A X)"))
+    expected: |
+      X
+      X
+      X
+      Z
+      #S(SKPT :A X :B Z :C NIL)
+      #S(SKPT :A X :B NIL :C NIL)
+  - name: make-hash-table-as-first-class-value
+    source: |
+      (let ((h (funcall #'make-hash-table)))
+        (setf (gethash 1 h) 'x)
+        (print (gethash 1 h)))
+    expected: |
+      X
+  - name: argument-forms-evaluate-left-to-right
+    source: |
+      (defun noter (buf pos)
+        (lambda (x)
+          (setf (aref buf (aref pos 0)) x)
+          (setf (aref pos 0) (+ 1 (aref pos 0)))
+          x))
+      (defparameter *buf* (make-array 3 :initial-element 0))
+      (defparameter *pos* (make-array 1 :initial-element 0))
+      (defparameter *note* (noter *buf* *pos*))
+      (defun reset () (setf (aref *pos* 0) 0))
+      (defun seen () (list (aref *buf* 0) (aref *buf* 1) (aref *buf* 2)))
+      (reset)
+      (print (list (funcall *note* 1) (funcall *note* 2) (funcall *note* 3)))
+      (print (seen))
+      (reset)
+      (print `(,(funcall *note* 1) ,(funcall *note* 2) ,(funcall *note* 3)))
+      (print (seen))
+      (reset)
+      (print (make-array 3 :initial-contents
+                         (list (funcall *note* 1) (funcall *note* 2) (funcall *note* 3))))
+      (print (seen))
+    expected: |
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      #(1 2 3)
+      (1 2 3)
+  - name: vector-literal-prin1-quotes-strings-princ-does-not
+    source: |
+      (prin1 #(a "b")) (terpri) (princ #(a "b"))
+      (terpri)
+    expected: |
+      #(A "b")
+      #(A b)
+  - name: empty-vector-literal
+    source: |
+      (print #())
+    expected: |
+      #()
+  - name: rank2-array-literal-is-a-readable-array
+    source: |
+      (print (aref #2A((1 2) (3 4)) 1 0))
+      (print (array-dimensions #2A((1 2 3) (4 5 6))))
+    expected: |
+      3
+      (2 3)
+  - name: length-of-vector-returns-element-count
+    source: |
+      (print (length (make-array 5 :initial-element 0)))
+      (print (length #(10 20 30)))
+      (print (length #()))
+    expected: |
+      5
+      3
+      0
+  - name: fill-pointer-vector-prints-up-to-fill-pointer
+    source: |
+      (let ((v (make-array 5 :fill-pointer 3 :initial-element 9)))
+        (print v))
+    expected: |
+      #(9 9 9)
+  - name: vector-push-extend-growth-policy-is-doubling
+    source: |
+      (defun growth-run (cap n)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v))
+          (array-dimension v 0)))
+      (defun growth-run-string (cap n)
+        (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend #\a s))
+          (array-dimension s 0)))
+      (defun growth-run-ext (cap n ext)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v ext))
+          (array-dimension v 0)))
+      (print (list (growth-run 2 5) (growth-run-string 2 5) (growth-run 0 1)
+                   (growth-run 0 5) (growth-run-ext 2 3 100) (growth-run-ext 2 5 1)))
+    expected: |
+      (8 8 1 8 102 5)
+  - name: a-slot-opened-by-growth-takes-the-element-type-zero
+    source: |
+      (defun opened-push (cap n)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v))
+          (aref v (1- (array-dimension v 0)))))
+      (defun opened-push-string (cap n)
+        (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend #\a s))
+          (char-code (aref s (1- (array-dimension s 0))))))
+      (defun opened-push-typed (cap n)
+        (let ((f (make-array cap :element-type 'double-float :fill-pointer 0 :adjustable t))
+              (b (make-array cap :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend 1.5d0 f))
+          (dotimes (i n) (vector-push-extend 7 b))
+          (list (aref f (1- (array-dimension f 0))) (aref b (1- (array-dimension b 0))))))
+      (defun opened-adjust ()
+        (let ((s (make-array 2 :element-type 'character :fill-pointer 1 :adjustable t))
+              (f (make-array 2 :element-type 'double-float :fill-pointer 1 :adjustable t))
+              (v (make-array 2 :fill-pointer 1 :adjustable t)))
+          (adjust-array s 5)
+          (adjust-array f 5)
+          (adjust-array v 5)
+          (list (char-code (aref s 4)) (aref f 4) (aref v 4))))
+      (print (list (opened-push 2 3) (opened-push-string 2 3) (opened-push-typed 2 3)
+            (opened-adjust)))
+    expected: |
+      (NIL 32 (0.0 0) (32 0.0 NIL))
+  - name: replace-on-immutable-string-stays-functional
+    source: |
+      (defparameter *pad* (make-array 1 :initial-element 0))
+      (defparameter *orig* "abc")
+      (defparameter *r* (replace *orig* "xy"))
+      (print (list *r* *orig*))
+    expected: |
+      ("xyc" "abc")
+  - name: a-producer-built-string-folds-as-an-equalp-hash-key
+    source: |
+      (let ((h (make-hash-table :test 'equalp)))
+        (setf (gethash (format nil "K~a" 1) h) 42)
+        (print (gethash "k1" h))
+        (print (gethash (concatenate 'string "k" "1") h))
+        (print (gethash (string-upcase "k1") h)))
+    expected: |
+      42
+      42
+      42
+  - name: a-literal-argument-producer-call-answers-a-fresh-mutable-string-per-evaluation
+    source: |
+      (defun t596g () (string-upcase "ab"))
+      (let ((s (t596g))) (setf (char s 0) #\z) (print (list s (t596g))))
+      (let ((s (subseq "abcdef" 1 3))) (replace s "Q") (print s))
+      (let* ((s (concatenate 'string "ab" "cd")) (a s)) (fill s #\y) (print (list s a)))
+    expected: |
+      ("zB" "AB")
+      "Qc"
+      ("yyyy" "yyyy")
+  - name: a-displaced-view-carries-its-own-fill-pointer-and-adjustable-flag
+    source: |
+      (let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+             (v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2)))
+        (print (list (length v) (fill-pointer v) (array-has-fill-pointer-p v)
+                     (adjustable-array-p v) (array-dimensions v) (array-total-size v)
+                     (aref v 3) v (multiple-value-list (array-displacement v))))
+        (vector-push 99 v)
+        (print (list (length v) b v))
+        (print (list (vector-pop v) (length v))))
+    expected: |
+      (2 2 T NIL (4) 4 50 #(20 30) (#(10 20 30 40 50 60) 1))
+      (3 #(10 20 30 99 50 60) #(20 30 99))
+      (99 2)
+  - name: a-full-displaced-view-undisplaces-when-it-grows
+    source: |
+      (let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+             (v (make-array 4 :displaced-to b :displaced-index-offset 1
+                              :adjustable t :fill-pointer 2)))
+        (vector-push-extend 100 v)
+        (vector-push-extend 101 v)
+        (vector-push-extend 102 v)
+        (print (list (length v) (array-total-size v)
+                     (multiple-value-list (array-displacement v)) v b)))
+      (let* ((s (copy-seq "abcdef"))
+             (sv (make-array 4 :element-type 'character :displaced-to s
+                               :displaced-index-offset 1 :fill-pointer 2)))
+        (vector-push #\Z sv)
+        (vector-push-extend #\Y sv)
+        (vector-push-extend #\X sv)
+        (print (list sv s (stringp sv) (array-displacement sv) (length sv)
+                     (array-total-size sv))))
+    expected: |
+      (5 8 (NIL 0) #(20 30 100 101 102) #(10 20 30 100 101 60))
+      ("bcZYX" "abcZYf" T NIL 5 8)
+  - name: adjust-array-undisplaces-a-displaced-argument
+    source: |
+      (let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+             (v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t)))
+        (print (list (eq (adjust-array v 3) v) v b
+                     (multiple-value-list (array-displacement v)))))
+      (let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+             (v (make-array 4 :displaced-to b :displaced-index-offset 1)))
+        (let ((r (adjust-array v 3)))
+          (print (list (eq r v) r v (multiple-value-list (array-displacement v))
+                       (multiple-value-list (array-displacement r))))))
+      (let* ((s (copy-seq "abcdef"))
+             (v (make-array 4 :element-type 'character :displaced-to s
+                               :displaced-index-offset 1 :adjustable t)))
+        (print (list (adjust-array v 3) (stringp v)
+                     (multiple-value-list (array-displacement v)))))
+    expected: |
+      (T #(20 30 40) #(10 20 30 40 50 60) (NIL 0))
+      (NIL #(20 30 40) #(20 30 40 50) (NIL 0) (NIL 0))
+      ("bcd" T (NIL 0))
+  - name: un-displacing-keeps-the-views-own-element-type
+    source: |
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1 :adjustable t))
+             (before (array-element-type v)))
+        (adjust-array v 3)
+        (print (list before (array-element-type v))))
+      (let* ((b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
+             (v (make-array 2 :element-type 'double-float :displaced-to b :displaced-index-offset 1
+                              :adjustable t :fill-pointer 2))
+             (before (array-element-type v)))
+        (vector-push-extend 9 v)
+        (print (list before (array-element-type v)
+                     (multiple-value-list (array-displacement v)))))
+      (let* ((b (make-array 4 :element-type 'character :adjustable t :fill-pointer 4))
+             (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+             (before (list (array-element-type v) (stringp v))))
+        (adjust-array v 3)
+        (print (list before (array-element-type v) (stringp v))))
+      (let* ((b (make-array 4 :adjustable t :initial-element 0))
+             (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+             (before (array-element-type v)))
+        (adjust-array v 3)
+        (print (list before (array-element-type v))))
+    expected: |
+      ((UNSIGNED-BYTE 8) (UNSIGNED-BYTE 8))
+      (DOUBLE-FLOAT DOUBLE-FLOAT (NIL 0))
+      ((CHARACTER T) CHARACTER T)
+      (T T)
+  - name: a-displaced-view-answers-its-targets-element-type
+    source: |
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1 :adjustable t)))
+        (print (array-element-type v)))
+      (let* ((b (make-array 6 :element-type '(unsigned-byte 16) :adjustable t :initial-element 0))
+             (v (make-array 4 :element-type '(unsigned-byte 16) :displaced-to b
+                              :displaced-index-offset 1))
+             (w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+                              :displaced-index-offset 1)))
+        (print (list (array-element-type v) (array-element-type w))))
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+             (v (make-array 2 :displaced-to b :displaced-index-offset 1)))
+        (print (array-element-type v)))
+    expected: |
+      (UNSIGNED-BYTE 8)
+      ((UNSIGNED-BYTE 16) (UNSIGNED-BYTE 16))
+      (UNSIGNED-BYTE 8)
+  - name: a-packed-vector-can-be-a-displacement-target
+    source: |
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1)))
+        (setf (aref v 1) 200)
+        (print (list (aref v 0) (aref v 1) (aref b 2) (array-element-type v)
+                     (length v) (array-dimensions v) (arrayp v) (vectorp v) (stringp v))))
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1)))
+        (setf (aref v 0) 300)
+        (print (list (aref v 0) (aref b 1))))
+      (let* ((b (make-array 8 :element-type '(unsigned-byte 16) :initial-element 3))
+             (v (make-array 6 :element-type '(unsigned-byte 16) :displaced-to b
+                              :displaced-index-offset 1))
+             (w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+                              :displaced-index-offset 2)))
+        (setf (aref b 3) 9)
+        (multiple-value-bind (tgt off) (array-displacement v)
+          (print (list (aref w 0) (array-element-type w) (eq tgt b) off))))
+      (let* ((b (make-array 4 :element-type 'double-float :initial-element 1.5d0))
+             (v (make-array 2 :element-type 'double-float :displaced-to b
+                              :displaced-index-offset 1)))
+        (setf (aref v 1) 2.5d0)
+        (print (list (aref v 0) (aref b 2) (array-element-type v))))
+    expected: |
+      (7 200 200 (UNSIGNED-BYTE 8) 2 (2) T T NIL)
+      (44 44)
+      (9 (UNSIGNED-BYTE 16) T 1)
+      (1.5 2.5 DOUBLE-FLOAT)
+  - name: a-view-over-a-packed-target-undisplaces-when-it-grows
+    source: |
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1 :fill-pointer 1 :adjustable t)))
+        (vector-push-extend 5 v)
+        (vector-push-extend 6 v)
+        (print (list (aref v 0) (aref v 1) (aref v 2) (array-element-type v)
+                     (multiple-value-list (array-displacement v)) (coerce b 'list) (length v))))
+      (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                              :displaced-index-offset 1 :adjustable t)))
+        (adjust-array v 3)
+        (print (list (aref v 0) (aref v 2) (array-element-type v)
+                     (multiple-value-list (array-displacement v)))))
+    expected: |
+      (7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)
+      (7 0 (UNSIGNED-BYTE 8) (NIL 0))
+  - name: optional-arguments-travel-as-parameters-on-every-call-path
+    source: |
+      (defvar *oa-special* :global)
+      (defun oa-f (a &optional (b 10 bp) (c (+ a b))) (list a b bp c))
+      (defun oa-g (a &optional b &rest r) (list a b r))
+      (defun oa-k (&optional (x 1) &key (y 2)) (list x y))
+      (defun oa-late (&optional (x *oa-special*) (*oa-special* :bound)) (list x *oa-special*))
+      (defun oa-test-only (&optional (a 1 ap)) (if ap (list :given a) (list :default a)))
+      (defun oa-close (&optional (n 0)) (lambda () (incf n)))
+      (defun oa-wide (p1 p2 p3 p4 p5 p6 p7 p8 &optional (o1 :d1) (o2 :d2) (o3 :d3))
+        (list p1 p8 o1 o2 o3))
+      (defun oa-full (p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional (o1 :d1)) (list p9 o1))
+      (defun oa-count (n &optional (acc 0)) (if (= n 0) acc (oa-count (- n 1) (+ acc 1))))
+      (print (list (oa-f 1) (oa-f 1 2) (oa-f 1 2 3) (oa-f 1 nil 0)))
+      (print (list (oa-g 1) (oa-g 1 2) (oa-g 1 2 3 4)))
+      (print (list (oa-k) (oa-k 5) (oa-k 5 :y 6)))
+      (print (list (oa-late) (oa-late :x) (oa-late :x :y) *oa-special*))
+      (print (list (oa-test-only) (oa-test-only nil) (oa-test-only 7)))
+      (print (let ((c (oa-close 5))) (funcall c) (list (funcall c) (funcall (oa-close)))))
+      (print (list (oa-wide 1 2 3 4 5 6 7 8) (oa-wide 1 2 3 4 5 6 7 8 :a :b) (oa-wide 1 2 3 4 5 6 7 8 :a :b :c)))
+      (print (list (oa-full 1 2 3 4 5 6 7 8 9) (oa-full 1 2 3 4 5 6 7 8 9 :x)))
+      (print (oa-count 10000))
+      (let ((f #'oa-f) (g #'oa-g) (w #'oa-wide))
+        (print (list (funcall f 1) (funcall f 1 2) (funcall f 1 2 3)))
+        (print (list (funcall g 1) (funcall g 1 2) (funcall g 1 2 3 4 5)))
+        (print (list (apply f '(1)) (apply f 1 '(2)) (apply f 1 2 '(3)) (apply g 1 2 3 '(4))))
+        (print (list (funcall w 1 2 3 4 5 6 7 8 :a) (apply w 1 2 3 4 5 6 7 8 '(:a :b :c)))))
+      (print (list (apply #'oa-f '(1)) (apply #'oa-f 1 '(2)) (apply #'oa-f 1 2 3 nil) (apply #'oa-g 1 2 3 '(4 5))
+                   (apply #'oa-g 1 '(2 3))))
+      (print (list (eval '(oa-f 7)) (eval '(oa-f 7 8)) (eval '(oa-g 1 2 3))))
+      (print (list ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1)
+                   ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1 2 5)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2) '(10 20)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2)))
+      (print (flet ((lf (a &optional (b 2)) (* a b))) (list (lf 3) (lf 3 4) (funcall #'lf 5))))
+      (print (labels ((lr (n &optional (acc 1)) (if (= n 0) acc (lr (- n 1) (* acc n))))) (lr 5)))
+      (print (list (handler-case (oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (funcall #'oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (apply #'oa-f '(1 2 3 4)) (program-error (e) (princ-to-string e)))
+                   (handler-case (oa-full 1 2 3 4 5 6 7 8 9 10 11) (program-error (e) (princ-to-string e)))))
+    expected: |
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 NIL T 0))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4)))
+      ((1 2) (5 2) (5 6))
+      ((:GLOBAL :BOUND) (:X :BOUND) (:X :Y) :GLOBAL)
+      ((:DEFAULT 1) (:GIVEN NIL) (:GIVEN 7))
+      (7 1)
+      ((1 8 :D1 :D2 :D3) (1 8 :A :B :D3) (1 8 :A :B :C))
+      ((9 :D1) (9 :X))
+      10000
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4 5)))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4)))
+      ((1 8 :A :D2 :D3) (1 8 :A :B :C))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4 5)) (1 2 (3)))
+      ((7 10 NIL 17) (7 8 T 15) (1 2 (3)))
+      ((1 3 4 NIL) (1 2 5 T))
+      (11 22)
+      (101 102)
+      (6 12 10)
+      120
+      ("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")
+  - name: setf-function-definition
+    source: |
+      (defvar *mode* :xml)
+      (defun (setf my-mode) (m) (setq *mode* m))
+      (setf (my-mode) :html5)
+      (print *mode*)
+      (funcall #'(setf my-mode) :sgml)
+      (print *mode*)
+    expected: |
+      :HTML5
+      :SGML
+  - name: defmethod-eql-specializer-naming-a-constant
+    source: |
+      (defconstant +eql-spec-utf8+ 12)
+      (defconstant +eql-spec-tag+ :tag)
+      (defgeneric decode-it (a b))
+      (defmethod decode-it (a b) (list :default a b))
+      (defmethod decode-it (a (b (eql +eql-spec-utf8+))) (list :utf8 a b))
+      (defmethod decode-it (a (b (eql +eql-spec-tag+))) (list :tag a b))
+      (print (list (decode-it 1 12) (decode-it 1 :tag) (decode-it 1 99)))
+    expected: |
+      ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
+  - name: defgeneric-defmethod-eql-dispatch
+    source: |
+      (defgeneric describe-it (x))
+      (defmethod describe-it (x) (list :default x))
+      (defmethod describe-it ((x (eql :br))) (list :special x))
+      (print (list (describe-it 5) (describe-it :br)))
+      (print (funcall #'describe-it 9))
+    expected: |
+      ((:DEFAULT 5) (:SPECIAL :BR))
+      (:DEFAULT 9)
+  - name: defclass-slots-accessors-and-dispatch
+    source: |
+      (defclass animal () ((name :initarg :name :accessor animal-name)))
+      (defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+      (defgeneric speak (x))
+      (defmethod speak ((x dog)) "woof")
+      (defmethod speak ((x animal)) "...")
+      (defmethod speak ((x integer)) "number")
+      (defmethod speak (x) "?")
+      (setq d (make-instance 'dog :name "Rex"))
+      (print (list (speak d) (speak (make-instance 'animal :name "A")) (speak 1) (speak "s")))
+      (print (list (animal-name d) (dog-breed d) (slot-value d 'name)))
+      (setf (animal-name d) "Max")
+      (setf (slot-value d 'name) (concatenate 'string (slot-value d 'name) "!"))
+      (print (animal-name d))
+    expected: |
+      ("woof" "..." "number" "?")
+      ("Rex" "mixed" "Rex")
+      "Max!"
+  - name: defstruct-include-predicate-matches-later-children
+    source: |
+      (defstruct dp-base a)
+      (defstruct (dp-child (:include dp-base)) b)
+      (defstruct (dp-grand (:include dp-child)) c)
+      (print (list (dp-base-p (make-dp-child)) (dp-base-p (make-dp-grand))
+                   (dp-child-p (make-dp-grand)) (dp-grand-p (make-dp-child))
+                   (dp-base-p (make-dp-base)) (dp-base-p 5)))
+    expected: |
+      (T T T NIL T NIL)
+  - name: defstruct-print-object-and-print-function-options
+    source: |
+      (defstruct (dpo-pt (:print-object dpo-pt-printer)) (x 1) (y 2))
+      (defun dpo-pt-printer (obj stream)
+        (format stream "<~D,~D>" (dpo-pt-x obj) (dpo-pt-y obj)))
+      (defstruct (dpf-set (:print-function (lambda (obj stream depth)
+                                             (print-unreadable-object (obj stream :type t)
+                                               (format stream "of ~D element~:P at ~D"
+                                                       (dpf-set-size obj) depth)))))
+        (size 1))
+      (print (list (princ-to-string (make-dpo-pt)) (prin1-to-string (make-dpo-pt :y 9))
+                   (princ-to-string (make-dpf-set)) (princ-to-string (make-dpf-set :size 3))))
+    expected: |
+      ("<1,2>" "<1,9>" "#<DPF-SET of 1 element at 0>" "#<DPF-SET of 3 elements at 0>")
+  - name: package-is-a-defmethod-specializer
+    source: |
+      (defpackage :rov-suite (:use :cl))
+      (defvar *package-suites* (make-hash-table :test 'equal))
+      (defgeneric find-suite (package)
+        (:method ((package package))
+          (values (gethash package *package-suites*)))
+        (:method (package-name)
+          (check-type package-name string-designator)
+          (let ((package (find-package package-name)))
+            (unless package (error "No package '~A' found" package-name))
+            (find-suite package))))
+      (setf (gethash :rov-suite *package-suites*) "suite")
+      (print (list (find-suite :rov-suite) (find-suite "ROV-SUITE") (find-suite 'rov-suite)))
+    expected: |
+      ("suite" "suite" "suite")
+  - name: package-specializer-outranks-keyword-and-symbol
+    source: |
+      (defpackage :psk-pkg (:use :cl))
+      (defgeneric psk-kind (x))
+      (defmethod psk-kind ((x symbol)) :symbol)
+      (defmethod psk-kind ((x keyword)) :keyword)
+      (defmethod psk-kind ((x package)) :package)
+      (defmethod psk-kind (x) :other)
+      (print (list (psk-kind :psk-pkg) (psk-kind :no-such-pkg-xyz) (psk-kind 'psk-pkg) (psk-kind 42)))
+    expected: |
+      (:PACKAGE :KEYWORD :SYMBOL :OTHER)
+  - name: streamp-accepts-the-standard-output-designator
+    source: |
+      (print (streamp t))
+      (print (streamp "x"))
+      (let ((s t)) (check-type s stream) (print :ok))
+    expected: |
+      T
+      NIL
+      :OK
+  - name: special-var-binding-visible-across-function-calls
+    source: |
+      (defvar *y* 1)
+      (defun get-y () *y*)
+      (print (list (get-y) (let ((*y* 2)) (get-y)) (get-y)))
+    expected: |
+      (1 2 1)
+  - name: lexical-global-let-stays-lexical
+    source: |
+      (setq g 1)
+      (defun read-g () g)
+      (print (list (let ((g 2)) (read-g)) g))
+    expected: |
+      (1 1)
+  - name: unary-minus-of-float-literal-form-negates
+    source: |
+      (print (- 5.0))
+      (print (- (* 2.0 3.0)))
+      (print (- -1.5))
+      (print (- 0.0))
+    expected: |
+      -5.0
+      -6.0
+      1.5
+      -0.0
+  - name: packed-int-vector-make-array-masks-and-reads-unsigned
+    source: |
+      (let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (stored (setf (aref a 1) 300))
+             (readback (aref a 1)))
+        (print (list stored readback (aref a 0) (length a) a)))
+      (print (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 70000 3)))
+      (let ((a (make-array 2 :element-type '(unsigned-byte 32))))
+        (setf (aref a 0) 4294967295)
+        (setf (aref a 1) 4294967296)
+        (print a))
+    expected: |
+      (44 44 7 4 #(7 44 7 7))
+      #(1 4464 3)
+      #(4294967295 0)
+  - name: rank2-initial-contents-fills-row-major
+    source: |
+      (print (aref (make-array '(2 2) :initial-contents '((1 2) (3 4))) 1 1))
+      (print (aref (make-array '(2 3) :initial-contents '((1 2 3) (4 5 6))) 1 0))
+      (print (make-array '(2 2) :element-type 'double-float
+                          :initial-contents '((1.0 2.0) (3.0 4.0))))
+      (print (make-array '(2 2 2) :initial-contents '(((1 2) (3 4)) ((5 6) (7 8)))))
+    expected: |
+      4
+      4
+      #d((1.0 2.0) (3.0 4.0))
+      #3A(((1 2) (3 4)) ((5 6) (7 8)))
+  - name: packed-int-vector-introspection
+    source: |
+      (let ((a (make-array 3 :element-type '(unsigned-byte 8))))
+        (print (list (array-element-type a) (arrayp a) (vectorp a) (array-dimensions a)
+                     (typep a '(simple-array (unsigned-byte 8) (*))))))
+      (print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))
+      (let ((a (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 3)))
+        (setf (aref a 1 1) 9)
+        (print (list (aref a 0 0) (aref a 1 1))))
+    expected: |
+      ((UNSIGNED-BYTE 8) T T (3) T)
+      (UNSIGNED-BYTE 8)
+      (3 9)
+  - name: vectorp-checks-the-rank
+    source: |
+      (print (list (vectorp #2A((1 2) (3 4))) (vectorp (make-array nil)) (arrayp #2A((1 2)))
+                   (vectorp (vector 1 2)) (vectorp "ab")
+                   (vectorp (make-array 3 :element-type '(unsigned-byte 8)))
+                   (funcall #'vectorp #2A((1 2)))))
+      (print (list (typep #2A((1 2)) 'vector) (typep #2A((1 2)) 'simple-vector)
+                   (typep #2A((1 2)) 'array) (typep (vector 1) 'vector)
+                   (typecase #2A((1 2)) (vector 'vec) (array 'arr) (t 'other))
+                   (let ((s 'vector)) (typep #2A((1 2)) s))))
+    expected: |
+      (NIL NIL T T T T NIL)
+      (NIL NIL T T ARR NIL)
+  - name: make-array-evaluates-its-dimensions-exactly-once
+    source: |
+      (let ((n 0))
+        (flet ((bump () (setq n (+ n 1)) 3))
+          (let ((s (make-array (bump) :element-type 'character :initial-element #\k)))
+            (print (list s n)))))
+    expected: |
+      ("kkk" 1)
+  - name: fill-writes-every-element-in-range
+    source: |
+      (let* ((a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
+             (same (eq a (fill a 300 :start 1 :end 4))))
+        (print (list a same (array-element-type a))))
+      (let ((l (list 1 2 3 4 5))) (fill l 0 :start 1 :end 3) (print l))
+      (print (fill (make-array 5 :element-type 'character :initial-element #\a) #\z :start 2))
+      (print (funcall #'fill (make-array 2 :initial-element 1) 8))
+    expected: |
+      (#(9 44 44 44 9) T (UNSIGNED-BYTE 8))
+      (1 0 0 4 5)
+      "aazzz"
+      #(8 8)
+  - name: make-array-element-type-resolves-a-deftype-alias
+    source: |
+      (deftype octet () '(unsigned-byte 8))
+      (deftype byte-buffer () 'octet)
+      (deftype real-double () 'double-float)
+      (deftype char-buf () 'character)
+      (let ((a (make-array 3 :element-type 'octet))
+            (b (make-array 2 :element-type 'byte-buffer :initial-contents '(1 300)))
+            (c (make-array 2 :element-type 'real-double))
+            (s (make-array 3 :element-type 'char-buf :initial-element #\x)))
+        (print (list (array-element-type a) (aref a 0) b (array-element-type c) (aref c 0) (stringp s) s)))
+      (print (array-element-type (make-array 2 :element-type 'not-a-type)))
+    expected: |
+      ((UNSIGNED-BYTE 8) 0 #(1 44) DOUBLE-FLOAT 0.0 T "xxx")
+      T
+  - name: make-array-does-not-signal-on-an-unknown-element-type
+    source: |
+      (let ((a (make-array 3 :element-type 'single-flaot)))
+        (print (list (array-element-type a) (aref a 0))))
+      (defun mk-unknown-et (et) (make-array 3 :element-type et))
+      (let ((a (mk-unknown-et 'single-flaot)))
+        (print (list (array-element-type a) (aref a 0))))
+      (print (list (array-element-type (make-array 2 :element-type 'bit))
+                   (array-element-type (make-array 2 :element-type 'fixnum))
+                   (array-element-type (make-array 2 :element-type '(unsigned-byte 64)))
+                   (array-element-type (make-array 2 :element-type '(or null fixnum)))))
+    expected: |
+      (T NIL)
+      (T NIL)
+      (BIT T T T)
+  - name: packed-int-vector-reader-literal-and-row-major
+    source: |
+      (print (list #8@(1 2 300) (array-element-type #32@(1 2))))
+      (let ((a #8@(1 2 3)))
+        (%row-major-aset a 1 999)
+        (print (list (row-major-aref a 1) a)))
+    expected: |
+      (#(1 2 44) (UNSIGNED-BYTE 32))
+      (231 #(1 231 3))
+  - name: short-form-method-combination
+    source: |
+      (defclass mc-base () ())
+      (defclass mc-leaf (mc-base) ())
+      (defgeneric mc-trace (x) (:method-combination progn :most-specific-last))
+      (defmethod mc-trace progn ((x mc-base)) (print :base))
+      (defmethod mc-trace progn ((x mc-leaf)) (print :leaf))
+      (defgeneric mc-sum (x) (:method-combination +))
+      (defmethod mc-sum + ((x mc-base)) 1)
+      (defmethod mc-sum + ((x mc-leaf)) 100)
+      (mc-trace (make-instance 'mc-leaf))
+      (print (mc-sum (make-instance 'mc-leaf)))
+      (print (mc-sum (make-instance 'mc-base)))
+    expected: |
+      :BASE
+      :LEAF
+      101
+      1
+  - name: arithmetic-with-no-arguments
+    source: |
+      (print (list (+) (*)))
+      (defun sum-nothing () (+))
+      (print (+ (sum-nothing) (*) 5))
+    expected: |
+      (0 1)
+      6
 standalone:
   - name: uncaught-defmethod-lambda-list-refusal
     source: |

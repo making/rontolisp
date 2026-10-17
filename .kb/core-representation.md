@@ -56,8 +56,8 @@ escaping happens at PRINT time on the content between them.
 - `princ` / `~A` / `princ-to-string` / `write-line` are the no-escape half BY DEFINITION.
   Un-escaping mirror: `WasmReadRuntimeBuilder`'s string scanner, `LispReader`.
 - Pins: `prin1EscapesQuotesAndBackslashesInStrings`, `prin1OutputReadsBackAsTheSameString` in
-  `LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`; ci-spec
-  `prin1-escapes-quotes-and-backslashes`.
+  `LispEvaluatorTest`; ci-spec `prin1-escapes-quotes-and-backslashes`,
+  `prin1-escapes-quotes-and-backslashes-in-strings`, `prin1-output-reads-back-as-the-same-string`.
 
 ## Three-pass compilation
 

@@ -133,8 +133,7 @@ order is `.kb/jvm-int-fusion.md` / `.kb/wasm-int-fusion.md`, "The interpreter's 
 ## Tests
 ci-spec `argument-evaluation-order-left-to-right` and
 `array-operations-enablement-language-group` (four backends);
-`JvmLispCompilerTest#compileArgumentFormsEvaluateLeftToRight`,
-`WasmLispCompilerIntegrationTest#argumentFormsEvaluateLeftToRight`,
+ci-spec `argument-forms-evaluate-left-to-right`,
 `LispEvaluatorTest#aPlaceSubformEvaluatesOncePerReadModifyWriteMacro`.
 The operation order: `FastPathEvaluationOrderFixture` (`LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest#...FastPathsKeepTheInterpretersEvaluationOrder`:

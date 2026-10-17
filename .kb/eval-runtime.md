@@ -74,10 +74,9 @@ stubs to hold fixed function indices, JVM needs none.
 
 **Invariant: a wrong argument count inside a compiled `eval` is the interpreter's `program-error`,
 with its text, on both backends** (2026-09-26). Pinned by ci-spec
-`eval-wrong-arity-signals-program-error` and `eval-inline-operators-check-their-argument-count`,
-`JvmLispCompilerTest.compileAndRunEvalReportsAWrongArgumentCountAsTheInterpreterDoes` /
-`compileAndRunEvalChecksTheCountOfTheOperatorsItUsedToInline`, their `WasmLispCompilerIntegrationTest`
-twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCount`.
+`eval-wrong-arity-signals-program-error`, `eval-inline-operators-check-their-argument-count`,
+`eval-reports-a-wrong-argument-count-as-the-interpreter-does`,
+`eval-checks-the-count-of-the-operators-it-used-to-inline`, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCount`.
 
 - **A registered function gets EVERY argument form evaluated** and `_apply` hands the list to the
   spread dispatcher, whose case guard (`_arityChk` / `_arity_chk`) judges the count and names the

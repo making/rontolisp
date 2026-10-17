@@ -144,9 +144,8 @@ LOWERING carries a cursor per source and one for the result (`mapIntoDispatch`),
   (marginal byte budgets),
   `.aProvenArrayDestinationLeavesTheSharedRuntimesNonArrayArmsWithoutACaller`.
 - Behavior: ci-spec `replace-into-a-list`, `sequence-op-runtime-arm-routing`,
-  `replace-overlapping-regions-of-one-sequence` (with `replaceOfOverlappingRegionsOfOneSequence` in
-  `LispEvaluatorTest`, `WasmLispCompilerIntegrationTest` and, `compileAndRun`-prefixed,
-  `JvmLispCompilerTest`);
+  `replace-overlapping-regions-of-one-sequence`, `replace-of-overlapping-regions-of-one-sequence`
+  (and `LispEvaluatorTest#replaceOfOverlappingRegionsOfOneSequence`);
   `JvmLispCompilerTest.compileAndRunReplaceIntoAList`,
   `WasmLispCompilerIntegrationTest.replaceIntoAList` / `.sequenceOpRuntimeArmRouting`.
 - Source cursors:

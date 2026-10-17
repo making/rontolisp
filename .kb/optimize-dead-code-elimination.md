@@ -291,8 +291,8 @@ engine itself still rendered). Measured 2026-09-09: a print-free concat-only mod
 the zlib `--optimize=size` row does NOT move --
 the printer stays reachable through chipz's own `princ-to-string` uses and the `apply`-pulled
 `eval` runtime, so the `.todo/338` chain premise is stale for that row: the mechanism pays where
-concat was the only printer edge). Pinned by `internalStringConcatCopiesBytes` in
-`LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` (empty operands,
+concat was the only printer edge). Pinned by `LispEvaluatorTest#internalStringConcatCopiesBytes` and ci-spec
+`internal-string-concat-copies-bytes` (empty operands,
 multi-byte UTF-8, a character-vector operand, the `setf`-`aref` rebuild, and the non-string
 contract error on the interpreter).
 
@@ -947,7 +947,7 @@ lowerings emit. What escapes them is a name assembled out of COMPUTED pieces -- 
 binding). Two rontolisp-owned blockers had to be retired first: the runtime `format` renderer's
 `%fmt-function-designator`, now a separately-injected arm (`.kb/format.md`), and the generated
 slot-name fold's `intern`. Judging the `intern` ARGUMENT shape was tried and REJECTED: it shrank
-nothing and broke `internIntoALiteralPackage`, because the two-argument lowering folds the literal
+nothing and broke ci-spec `intern-into-a-literal-package`, because the two-argument lowering folds the literal
 into the qualified symbol before either probe sees it. Tests:
 `internDoesNotHoldTheFuncallDispatchGateOpen`, `internDoesNotHoldTheDispatchGateOpen`,
 `keywordInternStaysInternedInAGateShakenModule`, `componentCoreIsTreeShakenUnderOptimize`,

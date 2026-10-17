@@ -133,7 +133,8 @@ eval runtime's global-environment mirror is seeded when the program merely NAMES
 
 ## Pinning tests
 Each name below exists in `LispEvaluatorTest` (`eval`-prefixed), `JvmLispCompilerTest` and
-`WasmLispCompilerIntegrationTest`:
+`WasmLispCompilerIntegrationTest` (the first one's compiled twins are now ci-spec
+`with-output-to-string-binding-standard-output-captures-streamless-prints`):
 `withOutputToStringBindingStandardOutputCapturesStreamlessPrints`,
 `explicitNilStreamArgumentIsTheStandardOutputDesignator`,
 `synonymStreamOverStandardOutputFollowsALaterBinding`,

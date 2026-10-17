@@ -2719,8 +2719,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   failed compile ([compile-warnings.md](compile-warnings.md)). Pinned by ci-spec
   `direct-builtin-call-wrong-count-signals-program-error`, `BuiltinCallArityTest`,
   `LispEvaluatorTest.everyWrappedBuiltinReportsAWrongDirectCountWithItsCallShape` (every catalog
-  name, counts 0..4) and `JvmLispCompilerTest.compileAndRunADirectBuiltinCallWithAWrongCountSignalsAtCallTime`
-  with its wasm twin.
+  name, counts 0..4) and ci-spec
+  `a-direct-builtin-call-with-a-wrong-count-signals-at-call-time`.
   - Before: every call-position lowering indexed the argument list by the count it expected, so
     compiled `(car x 2)` answered the car and `(nth x)` failed the COMPILE with `Index 2 out of
     bounds`; the interpreter answered `(minusp 1 2)` => NIL and `(array-rank v 2)` => 1, and said

@@ -41,9 +41,9 @@ operator with no argument is a compile error naming it. Was an
 
 ## Tests
 
-`JvmLispCompilerTest.compileAndRunLetBindsInParallel` / `.compileAndRunArithmeticWithNoArguments`,
-`WasmLispCompilerIntegrationTest.letBindsInParallel` / `.arithmeticWithNoArguments`, ci-spec
-`let-binds-in-parallel`, `arithmetic-identities-with-no-arguments`; the special case:
+`JvmLispCompilerTest.compileAndRunLetBindsInParallel`,
+`WasmLispCompilerIntegrationTest.letBindsInParallel`, ci-spec
+`let-binds-in-parallel`, `arithmetic-identities-with-no-arguments`, `arithmetic-with-no-arguments`; the special case:
 `specialVarLetBindsAfterEveryInit` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
 `WasmLispCompilerIntegrationTest`), ci-spec `special-let-binds-after-every-init`; scheme-spec
 `internal-defines-are-letrec-star` (the swap through the Scheme front end).

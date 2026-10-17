@@ -7102,9 +7102,7 @@ class LispEvaluatorTest {
 		// Every answer is SBCL 2.2.9's on this very program EXCEPT the two marked
 		// below, where base-string/simple-base-string stay aliases because there is one
 		// character type here (the base-char collapse, same argument as the float
-		// family). Pinned identically by
-		// JvmLispCompilerTest#compileSimpleTypeNameSubtypepLattice,
-		// WasmLispCompilerIntegrationTest#simpleTypeNameSubtypepLattice and the
+		// family). Pinned identically on the compiled backends by the
 		// simple-type-name-subtypep-lattice ci-spec case.
 		assertThat(evalMulti("""
 				(defun sts (a b) (subtypep a b))
@@ -7141,10 +7139,8 @@ class LispEvaluatorTest {
 		// bit is (integer 0 1): a lattice edge below integer with a matching typep
 		// test, so the literal fold and the computed/runtime dispatch agree. The
 		// lattice is edges only, so bit is NOT below unsigned-byte here (CL would
-		// answer T); that range reasoning is out of scope. Pinned identically by
-		// JvmLispCompilerTest#compileBitTypeLattice,
-		// WasmLispCompilerIntegrationTest#bitTypeLattice and the bit-type-lattice
-		// ci-spec case.
+		// answer T); that range reasoning is out of scope. Pinned identically on the
+		// compiled backends by the bit-type-lattice ci-spec case.
 		assertThat(evalMulti("""
 				(defun bts (a b) (subtypep a b))
 				(defun btt (v s) (typep v s))
@@ -18545,7 +18541,7 @@ class LispEvaluatorTest {
 	}
 
 	// The interpreter's answers for the program its compiled twins pin
-	// (JvmLispCompilerTest#compileAndRunOptionalArgumentsTravelAsParametersOnEveryCallPath):
+	// (ci-spec optional-arguments-travel-as-parameters-on-every-call-path):
 	// its lambda lists keep stepping the optionals off the argument list.
 	@Test
 	void optionalArgumentsAnswerTheSameOnEveryCallPath() {

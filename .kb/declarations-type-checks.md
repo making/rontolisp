@@ -264,9 +264,8 @@ table is GENERATED from it. **Change them together.**
   because `subtypepAncestorTableForms` asks about EVERY registered deftype name: one circular
   name overflowed the stack of every JVM/WASM compile of a program with a computed `subtypep`
   (all of postmodern). `typep` over such a name still recurses (undefined in CL; nothing loads
-  one into a `typep`). Pins `LispEvaluatorTest#evalSubtypepOverCircularDeftypes`,
-  `JvmLispCompilerTest#compileRuntimeSubtypepBesideCircularDeftypes`,
-  `WasmLispCompilerIntegrationTest#runtimeSubtypepBesideCircularDeftypes`.
+  one into a `typep`). Pins `LispEvaluatorTest#evalSubtypepOverCircularDeftypes`, ci-spec
+  `runtime-subtypep-beside-circular-deftypes`.
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a

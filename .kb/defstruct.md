@@ -202,9 +202,8 @@ accessor places (`doc/en/guides/eval-limitations.md`).
   / `#evalDefstructRejectsBothPrinterOptions` / `#setfFunction*` /
   `#defstructIncludeInheritsSlotsAndTypeTests`
 - `JvmLispCompilerTest#compileAndRunDefstruct*` + `compileNestedDefstructFails`;
-  `Jvm/WasmLispCompilerIntegrationTest#compileAndRunDefstructIncludePredicateMatchesLaterChildren`
-  / `#compileAndRunSetfFunctionDefinition`;
-  `Jvm/WasmLispCompilerTest#compileAndRunDefstructPrintObjectAndPrintFunctionOptions`
+  ci-spec `defstruct-include-predicate-matches-later-children`, `setf-function-definition`,
+  `defstruct-print-object-and-print-function-options`
 - `UserMacroExpanderTest#defstructNamesAreNotMistakenForMacroCalls*` /
   `macroExpandingToDefstructIsKept`
 - ci-spec `defstruct-constructor-accessors-predicate-copier`,

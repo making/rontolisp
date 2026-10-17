@@ -163,7 +163,7 @@ qualification, not the constant, tells them apart.
 `LispEvaluatorTest.returnInAHandlerBindHandlerExitsTheLEXICALNilBlock` (+ four neighbours),
 `.unwindProtectCleanupCompletingItsOwnExitKeepsThePendingOne`; wasm
 `returnFromExitsDefunAcrossLoop`, `goInsideLambdaReentersOuterTagbody`,
-`nestedNonLocalExitInACleanupDoesNotLoseTheOuterOne`,
-`catchThrowAndCrossLambdaExitDoNotCollide`; ci-spec `handler-case-in-argument-position`,
+`nestedNonLocalExitInACleanupDoesNotLoseTheOuterOne`; ci-spec
+`catch-throw-and-cross-lambda-exit-do-not-collide`, `handler-case-in-argument-position`,
 `handler-bind-return-lexical-block`, `cross-lambda-return-from`, `cross-lambda-go`,
 `nested-exit-in-an-unwind-cleanup`, `catch-throw`.
