@@ -265,6 +265,14 @@ examples:
       a server blocks and a war or reactor is never run as a program. The
       request round trips on all four backends are ClojureRingAdapterTest (and
       ServeRingComponentE2eTest for `wasmtime serve`).
+  - path: clojure/serve-html.clj
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      net/serve-html.lisp in Clojure: one page as the answer to every request,
+      the page a string-literal resource embedded in the artifact at build
+      time (no runtime filesystem, like the #. read-time form the Lisp
+      original uses), served by ring.adapter.rontolisp/run-server. Compile
+      legs only: a server blocks.
   - path: clojure/host-boundary/main.clj
     backends: [jvm-compile, wasm-reactor]
     note: >-
