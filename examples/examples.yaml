@@ -1073,6 +1073,8 @@ examples:
     backends: [jvm-compile, wasm-component]
   - path: net/http-hello.lisp
     backends: [jvm-compile, wasm-component]
+  - path: net/serve-html.lisp
+    backends: [jvm-compile, wasm-component]
   - path: net/http-handler.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/http-handler-cl-who.lisp
