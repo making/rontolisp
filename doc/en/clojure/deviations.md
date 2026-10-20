@@ -515,6 +515,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `()`); a test passed to `subseq` as a value is recognized by how it answers `(1 0)`,
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
+- String indexes and lengths count Unicode code points on every backend, past the BMP
+  included: `count`, `subs`, `.substring`/`.subSequence`, `.charAt`, `nth`/`get`,
+  `clojure.string/index-of`/`last-index-of`, `.indexOf`/`.lastIndexOf` and `compare`
+  all read that space (`.indexOf` of an `int` searches its character). The oracle counts
+  UTF-16 units instead, so every astral answer differs there (`(count "a🌍b")` is 3 here
+  and 4 there). A UTF-16 offset from Java, JavaScript, the LSP or another editor crosses
+  the boundary converted: index arithmetic composed from one of these calls to another keeps
+  working, but a foreign offset must be translated first. `lower-case` (and `.toLowerCase`)
+  folds the same code-point word scan, so the astral word edge stays divergent too
+  (`(lower-case "Α𝐀Σ")` is `"α𝐀ς"` here and `"α𝐀σ"` in the oracle).
 - `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
   `0.33333334`); a value past the float range still signals.
 - `mod` and `rem` of a NaN or infinite dividend throw an `ArithmeticException` (the oracle: a
