@@ -545,7 +545,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers where the oracle's refuses. A `reduced` value prints as its wrapper list.
 - Transactions run one at a time: `dosync` holds one lock for every transaction
   of the process, so a body never retries and its side effects run once
-  (`commute` runs its function once; the oracle may run it twice). A body that
+  (`commute` runs its function once; the oracle may run it twice). `sync` is the
+  same one-lock run with its flags dropped unevaluated (a nested `sync` joins the
+  running transaction like a nested `dosync`); `io!` refuses inside one with the
+  oracle's `IllegalStateException` (`I/O in transaction`); `with-loading-context`
+  is its body as-is. A body that
   waits for another thread's transaction never finishes, and a read outside a
   transaction may see a running one's write, where the oracle's sees only
   committed values.

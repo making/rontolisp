@@ -5127,6 +5127,57 @@ cases:
       :no-txn
       :no-txn
       :ok
+  - name: sync-runs-the-body-in-one-transaction
+    # Oracle-identical (clj 1.12.6): sync drops its flags unevaluated and runs the
+    # body as one transaction under the one lock dosync takes -- answering its last
+    # value, joining a running transaction, and never retrying. Transactions run one
+    # at a time under one lock, so a body never retries and its side effects run once
+    # (the documented deviation, shared with dosync).
+    source: |
+      (def sior (ref 0))
+      (println (sync nil 41))
+      (println (sync (println "dropped") 42))
+      (println (sync nil (alter sior inc) (alter sior inc)))
+      (println @sior)
+      (println (dosync (sync nil (alter sior + 10)) @sior))
+      (println @sior)
+      (println (sync nil))
+    expected: |
+      41
+      42
+      2
+      2
+      12
+      12
+      nil
+  - name: io-runs-outside-and-refuses-inside-a-transaction
+    # Oracle-identical (clj 1.12.6): io! runs its body outside a transaction and
+    # refuses inside one with the oracle's IllegalStateException (I/O in
+    # transaction), whether the transaction is a dosync or a sync.
+    source: |
+      (println (io! :ok))
+      (println (io! 1 2))
+      (println (io!))
+      (println (try (dosync (io! :no)) (catch IllegalStateException e (ex-message e))))
+      (println (try (sync nil (io! :no)) (catch IllegalStateException e (ex-message e))))
+    expected: |
+      :ok
+      2
+      nil
+      I/O in transaction
+      I/O in transaction
+  - name: with-loading-context-runs-the-body
+    # Oracle-identical (clj 1.12.6): with-loading-context runs its body as-is --
+    # loading has no separate context to thread through -- answering its last value.
+    source: |
+      (println (with-loading-context (+ 1 2)))
+      (println (with-loading-context))
+      (def wlc-x (with-loading-context (+ 40 2)))
+      (println wlc-x)
+    expected: |
+      3
+      nil
+      42
   - name: transactions-commit-whole-and-agents-hold-sends
     # Oracle-identical (clj 1.12.6): validators run on a transaction's final values and on
     # a ref's or agent's initial one; a failing transaction puts back every ref it wrote; a

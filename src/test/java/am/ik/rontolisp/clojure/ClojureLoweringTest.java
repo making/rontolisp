@@ -4038,6 +4038,15 @@ class ClojureLoweringTest {
 		// a transaction is its body's thunk run by the one-lock runtime, the thunk its
 		// own zero-arity recur target like the oracle's (fn [] body)
 		assertThat(lowered("(dosync 1)")).contains("(RONTOLISP::%CLOJURE-STM-RUN (LAMBDA NIL 1))");
+		// sync is the same one-lock transaction with its flags dropped unevaluated, a
+		// nested sync joining the running one like a nested dosync
+		assertThat(lowered("(sync nil 1)")).contains("(RONTOLISP::%CLOJURE-STM-RUN (LAMBDA NIL 1))");
+		assertThatThrownBy(() -> Clojure.read("(sync)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/sync");
+		// io! is its body behind the in-transaction check, in the oracle's wording
+		assertThat(lowered("(io! 1)")).contains("(IF RONTOLISP::%CLOJURE-STM-LOG").contains("I/O in transaction");
+		// with-loading-context is its body as-is: loading has no separate context
+		assertThat(lowered("(with-loading-context 1)")).isEqualTo(FALSE_BINDING + "1");
 		assertThatThrownBy(() -> Clojure.read("(loop [i 0] (dosync (if (< i 3) (recur (inc i)) i)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 0, got 1");

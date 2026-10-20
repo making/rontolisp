@@ -364,7 +364,9 @@ metadata is `:name`, `:ns` and a macro's `:macro`. A core var with no value here
 
 A `ref` is the atom cell written only in a transaction: `dosync` runs its body
 holding one lock for every transaction of the process (a nested `dosync` joins
-the running one), `alter`/`commute`/`ref-set` write the ref and keep its old
+the running one), and `sync` is the same run with its flags dropped; `io!`
+refuses inside one (`I/O in transaction`). `alter`/`commute`/`ref-set` write
+the ref and keep its old
 value, and `ensure` answers its value -- every verb requiring a transaction.
 When the body returns, the `:validator` of every ref it wrote runs on the final
 value; when it signals, every ref it wrote gets its old value back. An `agent`

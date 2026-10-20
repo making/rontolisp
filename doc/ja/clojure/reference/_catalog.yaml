@@ -51,6 +51,7 @@ categories:
       - { slug: with-bindings, name: "with-bindings" }
       - { slug: push-thread-bindings, name: "push-thread-bindings" }
       - { slug: time, name: "time" }
+      - { slug: with-loading-context, name: "with-loading-context" }
   - title: "スレッディング"
     index_page: clojure/reference/threading.md
     functions:
@@ -437,10 +438,12 @@ categories:
       - { slug: vreset-bang, name: "vreset!" }
       - { slug: ref, name: "ref" }
       - { slug: dosync, name: "dosync" }
+      - { slug: sync, name: "sync" }
       - { slug: alter, name: "alter" }
       - { slug: commute, name: "commute" }
       - { slug: ref-set, name: "ref-set" }
       - { slug: ensure, name: "ensure" }
+      - { slug: io-bang, name: "io!" }
       - { slug: ref-history-count, name: "ref-history-count" }
       - { slug: ref-min-history, name: "ref-min-history" }
       - { slug: ref-max-history, name: "ref-max-history" }

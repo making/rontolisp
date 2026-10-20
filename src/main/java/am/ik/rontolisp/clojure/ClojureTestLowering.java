@@ -65,10 +65,11 @@ final class ClojureTestLowering {
 			"cond->", "cond->>", "some->", "some->>", "and", "or", "when", "when-not", "when-let", "when-first",
 			"when-some", "if-let", "if-not", "if-some", "cond", "condp", "case", "doto", "dotimes", "doseq", "for",
 			"while", "with-open", "with-out-str", "with-in-str", "with-local-vars", "with-redefs", "binding", "dosync",
-			"sync", "io!", "time", "lazy-seq", "lazy-cat", "delay", "future", "assert", "comment", "declare", "defn",
-			"defn-", "defmacro", "defmulti", "defmethod", "defonce", "defprotocol", "defrecord", "deftype",
-			"definterface", "defstruct", "extend-protocol", "extend-type", "reify", "proxy", "memfn", "import", "ns",
-			"locking", "gen-class", "vswap!", "monitor-enter", "monitor-exit", "amap", "areduce");
+			"sync", "io!", "with-loading-context", "time", "lazy-seq", "lazy-cat", "delay", "future", "assert",
+			"comment", "declare", "defn", "defn-", "defmacro", "defmulti", "defmethod", "defonce", "defprotocol",
+			"defrecord", "deftype", "definterface", "defstruct", "extend-protocol", "extend-type", "reify", "proxy",
+			"memfn", "import", "ns", "locking", "gen-class", "vswap!", "monitor-enter", "monitor-exit", "amap",
+			"areduce");
 
 	/** The run-time helpers, as the lowered program spells them. */
 	static final String INIT = "RONTOLISP::%CLOJURE-TEST-INIT";
