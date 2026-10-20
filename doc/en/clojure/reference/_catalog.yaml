@@ -8,6 +8,7 @@ categories:
       - { slug: defonce, name: "defonce" }
       - { slug: defn, name: "defn" }
       - { slug: defn-dash, name: "defn-" }
+      - { slug: definline, name: "definline" }
       - { slug: fn, name: "fn" }
       - { slug: let, name: "let" }
       - { slug: seq-to-map-for-destructuring, name: "seq-to-map-for-destructuring" }
@@ -52,6 +53,7 @@ categories:
       - { slug: push-thread-bindings, name: "push-thread-bindings" }
       - { slug: time, name: "time" }
       - { slug: with-loading-context, name: "with-loading-context" }
+      - { slug: with-precision, name: "with-precision" }
   - title: "Threading"
     index_page: clojure/reference/threading.md
     functions:
@@ -536,6 +538,7 @@ categories:
       - { slug: ns-imports, name: "ns-imports" }
       - { slug: alias, name: "alias" }
       - { slug: refer, name: "refer" }
+      - { slug: refer-clojure, name: "refer-clojure" }
       - { slug: ns-unmap, name: "ns-unmap" }
       - { slug: ns-unalias, name: "ns-unalias" }
       - { slug: requiring-resolve, name: "requiring-resolve" }

@@ -15387,3 +15387,89 @@ cases:
       :cce
       :cce
       (:caught :caught)
+  - name: refer-clojure-standalone-narrows-the-referred-core
+    # (refer-clojure ...) is the ns (:refer-clojure ...) wiring as a standalone
+    # form: :exclude narrows the referred core, :rename spells a core var under its
+    # new name, and the form answers nil like refer. A name a filter hides spells
+    # its own namespace in syntax-quote, like the ns clause's. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns g25-rc)
+      (println `map `filter)
+      (println (refer-clojure :exclude '[map]))
+      (println `map `filter)
+      (refer-clojure :rename '{filter core-filter})
+      (println (core-filter odd? [1 2 3]))
+      (println `filter `core-filter)
+      (in-ns 'user)
+    expected: |
+      clojure.core/map clojure.core/filter
+      nil
+      g25-rc/map clojure.core/filter
+      (1 3)
+      g25-rc/filter clojure.core/filter
+  - name: refer-clojure-only-keeps-the-listed-core
+    # (refer-clojure :only [...]) restricts the referred core to the listed names:
+    # a listed call still lowers to the core verb. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns g25-only)
+      (refer-clojure :only '[+ map println])
+      (println (map + [1 2] [3 4]))
+      (in-ns 'user)
+    expected: |
+      (4 6)
+  - name: definline-defines-a-function-like-defn
+    # definline is defn plus a recorded inline expander: call-site inlining is a
+    # documented no-op (nothing here inlines), so the definition is the function
+    # itself -- direct calls, first-class values, multi-arity dispatch and the
+    # oracle's arity refusal all match defn, including a use above the definition.
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns g25-definline)
+      (definline di-add [x y] (+ x y))
+      (println (di-add 2 3))
+      (println (map di-add [1 2] [3 4]))
+      (definline di-mul "multiply" ([x] (* x 2)) ([x y] (* x y)))
+      (println (di-mul 21) (di-mul 6 7))
+      (defn di-user [] (di-fwd 1))
+      (definline di-fwd [x] (+ x 10))
+      (println (di-user))
+      (println (try (di-add 1) (catch clojure.lang.ArityException e (.getMessage e))))
+      (in-ns 'user)
+    expected: |
+      5
+      (4 6)
+      42 42
+      11
+      Wrong number of args (1) passed to: g25-definline/di-add
+  - name: with-precision-binds-math-context-around-an-exact-body
+    # (with-precision precision body...) binds *math-context* to the evaluated
+    # precision around its body and answers the last value (nil for an empty body);
+    # nesting rebinds and leaving restores the root. Division stays exact here --
+    # a ratio, never the oracle's BigDecimal -- so each exact answer maps onto the
+    # oracle's rounded one: 1/3 is the oracle's 0.3333333333M at precision 10, 1/2
+    # its 0.5M. Every line is the oracle's shape with the exact value (clj 1.12.6),
+    # on all four backends.
+    source: |
+      (ns g25-precision)
+      (println *math-context*)
+      (println (with-precision 10 *math-context*))
+      (println *math-context*)
+      (println (with-precision 10 (/ 1 3)))
+      (println (with-precision 10 (/ 1 2)))
+      (println (with-precision (+ 5 5) *math-context*))
+      (println (with-precision 10 (with-precision 2 *math-context*)))
+      (println (with-precision 10 (+ 1 2)))
+      (println (with-precision 10))
+      (in-ns 'user)
+    expected: |
+      nil
+      10
+      nil
+      1/3
+      1/2
+      10
+      2
+      3
+      nil

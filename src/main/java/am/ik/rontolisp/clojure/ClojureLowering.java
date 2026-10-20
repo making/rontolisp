@@ -2268,10 +2268,12 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
-				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")) {
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "definline")) {
 			// a ^:dynamic or redefinable defn holds its function in the value cell
 			// (like a def), so even a forward call routes through it and sees a
-			// binding or a with-redefs
+			// binding or a with-redefs; a definline defines the same function, its
+			// inline body recorded as a documented no-op
 			String key = preDeclareUnlessCoreShadow(items.get(1), "defn", Kind.FUNCTION,
 					ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"));
 			if (key != null && (ClojureLowerUtil.nameIsDynamic(items.get(1)) || redefinable(key, items.get(1)))) {
@@ -3844,6 +3846,13 @@ public final class ClojureLowering {
 			// private by convention only: metadata never affects dispatch
 			return defnInBody(form, items);
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "definline")) {
+			// like defn: call-site inlining is a documented no-op (nothing here
+			// inlines), so the definition is the function itself
+			List<LispVal> defnItems = new ArrayList<>(items);
+			defnItems.set(0, new LispSymbol("defn"));
+			return defnInBody(form, defnItems);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmacro")) {
 			// in a body: a single progn, like ever; the expander registers when
 			// reached, the table entry runs with the body
@@ -4041,6 +4050,9 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-bindings")) {
 			return ClojureStateLowering.withBindingsOf(this, items);
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-precision")) {
+			return ClojureStateLowering.withPrecisionOf(this, items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-open")) {
 			return ClojureStateLowering.withOpenOf(this, items);
 		}
@@ -4085,6 +4097,12 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "refer")) {
 			return ClojureNamespaceLowering.referOf(this, form != this.topDatum, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "refer-clojure")) {
+			// the standalone form: the same :only/:exclude/:rename wiring the ns
+			// (:refer-clojure ...) clause shares, answering nil
+			ClojureNamespaceLowering.referClojure(this, items.subList(1, items.size()));
+			return NIL_CONST;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "alias")) {
 			return ClojureNamespaceLowering.aliasOf(this, items);
