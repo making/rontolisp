@@ -220,6 +220,11 @@ final class ClojureVarLowering {
 			if (library != null) {
 				return library;
 			}
+			if (ctx.isLocal(name) && ctx.isLocalVar(name)) {
+				// a with-local-vars cell in a lexically enclosing scope: the
+				// local holds the cell object itself
+				return ctx.symOf(name);
+			}
 			throw new LispReadException("Unable to resolve var: " + name + " in this context");
 		}
 		return coreVarOf(ctx, core);

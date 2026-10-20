@@ -507,8 +507,7 @@ final class ClojureCoreLowering {
 				throw new LispReadException(
 						"get-thread-bindings is not supported yet: thread bindings are not reified at run time");
 			case "bound-fn*":
-				throw new LispReadException(
-						"bound-fn* is not supported yet: thread bindings are not reified at run time");
+				return ClojureStateLowering.boundFnStarOf(ctx, items);
 			case "read+string":
 				throw new LispReadException(
 						"read+string is not supported yet: reading the consumed text needs a position-tracking reader");

@@ -15500,3 +15500,114 @@ cases:
       2
       3
       nil
+  - name: bound-fn-captures-the-creation-bindings
+    # bound-fn is bound-fn* over fn: the fdecl travels untouched (multi-arity,
+    # named and call-time arity errors included). bound-fn* captures every
+    # thread-bound program dynamic var and core special at the call plus the
+    # lexically enclosing with-local-vars cells, and pushes them over the
+    # caller's own bindings when the function runs -- so a var bound nowhere at
+    # creation stays out of the map, and a call on another extent sees the
+    # captured values. Every line is the oracle's (clj 1.12.6) but the arity
+    # message, which names the anonymous fn the house way, on all four backends.
+    source: |
+      (ns g24-bound-fn)
+      (def ^:dynamic *bf-x* 1)
+      (def ^:dynamic *bf-y* 10)
+      (binding [*bf-x* 2]
+        (def bf-f (bound-fn [] *bf-x*)))
+      (println (bf-f))
+      (println (thread-bound? #'*bf-x*))
+      (binding [*bf-x* 2]
+        (println ((bound-fn [] [(thread-bound? #'*bf-x*) *bf-x*]))))
+      (binding [*bf-x* 2]
+        (println ((bound-fn [] [(thread-bound? #'*bf-y*) *bf-x* *bf-y*]))))
+      (println ((bound-fn [x] (* x 2)) 21))
+      (def bf-named (bound-fn myname [x] (* x 3)))
+      (println (bf-named 7))
+      (println ((bound-fn ([x] [:one x]) ([x y] [:two x y])) 1))
+      (println ((bound-fn ([x] [:one x]) ([x y] [:two x y])) 1 2))
+      (binding [*bf-x* :outer]
+        (let [f (bound-fn [] *bf-x*)]
+          (binding [*bf-x* :inner] (println (f)))))
+      (binding [*print-length* 1] (def bf-p (bound-fn [] (pr-str [1 2 3]))))
+      (println (bf-p))
+      (println (with-local-vars [a 9] (def bf-lv (bound-fn [] @a)) (bf-lv)))
+      (println (bf-lv))
+      (println (try ((bound-fn [x y] x) 1) (catch Exception e (ex-message e))))
+      (in-ns 'user)
+    expected: |
+      2
+      false
+      [true 2]
+      [false 2 10]
+      42
+      21
+      [:one 1]
+      [:two 1 2]
+      :outer
+      [1 ...]
+      9
+      9
+      Wrong number of args (1) passed to: g24-bound-fn/fn
+  - name: with-local-vars-binds-fresh-var-cells
+    # with-local-vars binds each name to a fresh var cell holding the init,
+    # thread-locally around the body: deref, var-get and the var read the cell,
+    # var-set stores through it while bound, and leaving restores the unbound
+    # root -- an escaped cell derefs to it, and a throw still restores. The cells
+    # print #'ns/name (the oracle's are unnamed), and a with-local-vars var-set
+    # outside any extent is the oracle's root-binding refusal. Every other line
+    # is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns g24-with-local-vars)
+      (println (with-local-vars [a 1 b 2] [@a @b]))
+      (println (with-local-vars [a 1] (var-set a 5) @a))
+      (println (with-local-vars [a 1] [(var? a) (bound? a) (thread-bound? a)]))
+      (println (with-local-vars [a 1] [(bound? a) @a (var-get a) (deref a)]))
+      (println (with-local-vars [a 1] (with-local-vars [a 2] @a)))
+      (println (with-local-vars [a 1] (str a)))
+      (def g24-lv (with-local-vars [a 7] a))
+      (println [@g24-lv (var? g24-lv) (bound? g24-lv) (thread-bound? g24-lv)])
+      (println (try (var-set g24-lv 9) (catch Exception e (ex-message e))))
+      (println (with-local-vars [a 1] (meta a)))
+      (println (with-local-vars [a 1] [(var a) (= (var a) a) @(var a)]))
+      (println (try (with-local-vars [a 1] (var-set a 2) (throw (ex-info "boom" {}))) (catch Exception e (ex-message e))))
+      (println [@g24-lv (bound? g24-lv)])
+      (in-ns 'user)
+    expected: |
+      [1 2]
+      5
+      [true true true]
+      [true 1 1 1]
+      2
+      #'g24-with-local-vars/a
+      [#<Unbound: #'g24-with-local-vars/a> true false false]
+      Can't change/establish root binding of: a with set
+      {:ns nil, :name nil}
+      [#'g24-with-local-vars/a true 1]
+      boom
+      [#<Unbound: #'g24-with-local-vars/a> false]
+  - name: pvalues-evaluates-in-order-sequentially
+    # pvalues has no thread pool behind it (pmap is map here), so each expression
+    # runs in order on the calling thread and the values answer as a seq: a
+    # thread-local write stays visible where the oracle's pool thread refuses it,
+    # and a throwing expression stops the later ones with its own exception. An
+    # empty pvalues answers nil, where the oracle's empty lazy seq prints ().
+    source: |
+      (ns g24-pvalues)
+      (println (pvalues 1 (+ 1 2) "x"))
+      (println (pvalues))
+      (println (seq? (pvalues 1 2)) (= (pvalues 1 2) '(1 2)))
+      (let [order (atom [])]
+        (println (pvalues (swap! order conj :a) (swap! order conj :b) (swap! order conj :c)))
+        (println @order))
+      (println (with-local-vars [a 5] (pvalues @a (do (var-set a 6) @a) @a)))
+      (println (try (pvalues 1 (throw (ex-info "pboom" {})) 3) (catch Exception e (ex-message e))))
+      (in-ns 'user)
+    expected: |
+      (1 3 x)
+      nil
+      true true
+      ([:a] [:a :b] [:a :b :c])
+      [:a :b :c]
+      (5 6 6)
+      pboom

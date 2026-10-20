@@ -14586,6 +14586,47 @@
   (rontolisp::%clojure-with-bindings (car args)
    (lambda () (rontolisp::%clojure-call (car (cdr args)) (cdr (cdr args))))))
 
+(defun rontolisp::%clojure-bound-fn* (f bindings)
+  "bound-fn* of the function F: a function calling F with the captured BINDINGS
+   pushed, like the oracle's get-thread-bindings frame around the call -- each
+   captured var rebound to its creation-time value over the caller's own
+   bindings, through the binder its site carries, so a call on another thread
+   sees the captured values. BINDINGS is the map the call site built of every
+   thread-bound dynamic var and core special plus the enclosing
+   with-local-vars cells."
+  (lambda (&rest args)
+    (rontolisp::%clojure-with-bindings bindings
+      (lambda () (rontolisp::%clojure-call f args)))))
+
+(defun rontolisp::%clojure-local-var (name box)
+  "A with-local-vars var cell: the var NAME (\"ns/name\") holding BOX, a cons
+   of the current value and the binding depth. Deref and var-get read the
+   current value -- the unbound root outside the extent, like the oracle's --
+   thread-bound? the depth, the binder save/restores both around a call, and
+   var-set stores through it when bound. Fresh per evaluation, never interned."
+  (let ((v (list :C%VAR name
+                 (lambda () (car box))
+                 (lambda () (cdr box))
+                 (lambda (value thunk)
+                   (let ((old-value (car box)) (old-depth (cdr box)))
+                     (rplaca box value)
+                     (rplacd box (+ old-depth 1))
+                     (unwind-protect (funcall thunk)
+                       (rplaca box old-value)
+                       (rplacd box old-depth))))
+                 (lambda (value)
+                   (if (<= (cdr box) 0)
+                       (rontolisp::%clojure-illegal-state-exception
+                        (concatenate 'string "Can't change/establish root binding of: "
+                                     (rontolisp::%clojure-var-short-name (list :C%VAR name))
+                                     " with set")))
+                   (rplaca box value)
+                   value))))
+    (rontolisp::%clojure-put-meta v
+     (rontolisp::%clojure-map-literal
+      (list (list :C%KEYWORD "ns") nil (list :C%KEYWORD "name") nil)))
+    v))
+
 (defun rontolisp::%clojure-replace-meta (x m)
   "X with the metadata map M replacing its own, none for a nil M; answers X."
   (if (rontolisp::%clojure-check-meta m)
@@ -15111,13 +15152,17 @@
     (if at (subseq name (+ at 1)) name)))
 
 (defun rontolisp::%clojure-var-set (v val)
-  "(var-set v val): refused -- a var that is not thread-locally bound takes
-   no root through set, like the oracle's."
+  "(var-set v val): the thread-local value of a with-local-vars cell under its
+   extent, else refused -- a var that is not thread-locally bound takes no
+   root through set, like the oracle's."
   (if (not (rontolisp::%clojure-var-p v))
       (rontolisp::%clojure-class-cast-exception-of "var-set needs a var" v))
-  (rontolisp::%clojure-illegal-state-exception
-   (concatenate 'string "Can't change/establish root binding of: "
-                (rontolisp::%clojure-var-short-name v) " with set")))
+  (let ((setter (car (cdr (cdr (cdr (cdr (cdr v))))))))
+    (if (not (null setter))
+        (funcall setter val)
+        (rontolisp::%clojure-illegal-state-exception
+         (concatenate 'string "Can't change/establish root binding of: "
+                      (rontolisp::%clojure-var-short-name v) " with set")))))
 
 (defun rontolisp::%clojure-var-set-v (&rest args)
   "var-set as a value."

@@ -253,7 +253,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   macro names answer the run-time once-expansion over the quoted form: `(def x
   when)` hands out the same answer `macroexpand-1` gives (for a core form the form
   itself -- the run-time table holds program macros only), where the oracle refuses
-  a bare macro name in value position at compile time.
+  a bare macro name in value position at compile time. `bound-fn`, `with-local-vars`
+  and `pvalues` answer that delegate too; `bound-fn*` answers its function, capturing
+  the bindings where the value is called.
 - `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
   macro body and what it calls); at run time they throw an
   `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
@@ -562,7 +564,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   of `rest`), so it carries no metadata, and of a map entry `[]` (the oracle `nil`).
 - `partition-all` with a non-positive size or step signals,
   where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
-  calling thread. `take-nth` with a zero step signals, and its seq arity steps by the
+  calling thread. `pvalues` evaluates its expressions in order on the calling
+  thread and answers a realized seq (`nil` when empty, where the oracle's empty
+  lazy seq prints `()`); a thread-local write stays visible where the oracle's
+  pool thread refuses it, and a throwing expression stops the later ones. `take-nth` with a zero step signals, and its seq arity steps by the
   magnitude of a negative one, where the oracle's repeats the first member forever.
 - Transducers are the oracle's functions over reducing functions, but an `eduction` is
   the `sequence` of its input through them, computed once (strictly over a strict input,
@@ -605,6 +610,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   binds `*math-context*` to the evaluated precision around its body (`nil` at the root,
   where the oracle binds its default context); division stays exact -- a ratio, never the
   oracle's `BigDecimal` -- so the binding scopes the extent without rounding anything.
+  `bound-fn` is `bound-fn*` over `fn`: the captured creation-time bindings are
+  pushed over the caller's own, so a call on another thread sees them; a var
+  bound nowhere at creation stays out of the map, and a `bound-fn*` created
+  under a dynamically entered `with-local-vars` extent does not see that cell.
+  `with-local-vars` binds each name to a fresh var cell, unbound at the root and
+  restored by leaving (an `unwind-protect` restores every cell, so a throw still
+  restores); the cells print `#'ns/name` (the oracle's are unnamed),
+  `alter-var-root` of one is refused, and a `recur` across the body is refused
+  like the oracle's `try` boundary.
 - In the REPL, a local named like a `^:dynamic` var that a later input defines binds
   that var for its extent once it is defined, so a function called there reads the
   local's value; the oracle binds a local lexically, and the function reads the var.

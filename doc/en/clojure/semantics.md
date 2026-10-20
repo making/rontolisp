@@ -384,7 +384,10 @@ stay refused by name, and so does `proxy-super` (proxy methods take no super
 handle).
 
 `binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
-extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`/
+extent; anything else is refused. `bound-fn` is `bound-fn*` over `fn`: the
+captured creation-time bindings push over the caller's own when the function
+runs. `with-local-vars` binds each name to a fresh var cell, unbound at the
+root, around the body. `*out*`/`*in*`/`*err*` are `*standard-output*`/
 `*standard-input*`/`*error-output*`; the flags hold the oracle's values under
 `clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` the program's
 data readers, `{}` without one,

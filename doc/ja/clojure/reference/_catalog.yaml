@@ -51,6 +51,8 @@ categories:
       - { slug: binding, name: "binding" }
       - { slug: with-bindings, name: "with-bindings" }
       - { slug: push-thread-bindings, name: "push-thread-bindings" }
+      - { slug: bound-fn, name: "bound-fn" }
+      - { slug: with-local-vars, name: "with-local-vars" }
       - { slug: time, name: "time" }
       - { slug: with-loading-context, name: "with-loading-context" }
       - { slug: with-precision, name: "with-precision" }
@@ -133,6 +135,7 @@ categories:
       - { slug: not-empty, name: "not-empty" }
       - { slug: empty, name: "empty" }
       - { slug: pmap, name: "pmap" }
+      - { slug: pvalues, name: "pvalues" }
       - { slug: tree-seq, name: "tree-seq" }
       - { slug: flatten, name: "flatten" }
       - { slug: reductions, name: "reductions" }

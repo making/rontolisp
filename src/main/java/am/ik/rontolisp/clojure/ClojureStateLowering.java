@@ -1707,6 +1707,207 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * {@code bound-fn*} as the run-time library calls it: the function and its bindings.
+	 */
+	private static final LispSymbol BOUND_FN_STAR = new LispSymbol("RONTOLISP::%CLOJURE-BOUND-FN*");
+
+	/** A {@code with-local-vars} cell as the run-time library builds it. */
+	private static final LispSymbol LOCAL_VAR = new LispSymbol("RONTOLISP::%CLOJURE-LOCAL-VAR");
+
+	/** The current value of a {@code with-local-vars} cell. */
+	private static final LispSymbol VAR_GET = new LispSymbol("RONTOLISP::%CLOJURE-VAR-GET");
+
+	/** Whether the vars are bound right now. */
+	private static final LispSymbol IS_THREAD_BOUND = new LispSymbol("RONTOLISP::%CLOJURE-IS-THREAD-BOUND");
+
+	/** The unbound root a {@code with-local-vars} cell holds outside its extent. */
+	private static final LispSymbol UNBOUND = new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND");
+
+	/** A map literal's map over its evaluated alternating keys and values. */
+	private static final LispSymbol MAP_LITERAL = new LispSymbol("RONTOLISP::%CLOJURE-MAP-LITERAL");
+
+	/**
+	 * {@code (bound-fn & fdecl)}: {@code (bound-fn* (fn ...fdecl))}, like the oracle's
+	 * expansion -- the fdecl travels untouched, so a docstring or an arity the {@code fn}
+	 * lowering refuses fails there, where the oracle's macroexpansion fails. A program
+	 * macro or a local of the name shadows this row, like any core meaning.
+	 */
+	static LispVal boundFnOf(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> fnItems = new ArrayList<>();
+		fnItems.add(new LispSymbol("fn"));
+		fnItems.addAll(items.subList(1, items.size()));
+		return boundFnStarCall(ctx, ctx.lower(ClojureLowerUtil.list(fnItems)));
+	}
+
+	/**
+	 * {@code (bound-fn* f)}: a function calling {@code f} with the creation-time bindings
+	 * pushed -- every program dynamic var and core special thread-bound where the call
+	 * stands, plus the lexically enclosing {@code with-local-vars} cells -- over the
+	 * caller's own bindings, through the binder each var's site carries, so a call on
+	 * another thread sees the captured values. A var bound nowhere at creation stays out
+	 * of the map, like the oracle's frame. The capture enumerates the program's dynamic
+	 * vars, so a pass that declares more of them after a capture site lowers again with
+	 * the full set seeded.
+	 */
+	static LispVal boundFnStarOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureCoreLowering.arity("bound-fn*", items.size() - 1, 1, 1);
+		return boundFnStarCall(ctx, ctx.lower(items.get(1)));
+	}
+
+	/** A function value wrapped to call it with its creation-time bindings pushed. */
+	private static LispVal boundFnStarCall(ClojureLowering ctx, LispVal fun) {
+		ctx.boundFnUsed = true;
+		ctx.needThreadBinders();
+		LispSymbol f = ctx.freshTemp();
+		LispSymbol cap = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil
+					.list(List.of(ClojureLowerUtil.list(f, fun), ClojureLowerUtil.list(cap, captureForm(ctx)))),
+				ClojureLowerUtil.list(BOUND_FN_STAR, f, cap));
+	}
+
+	/**
+	 * The map of the bindings in effect where a {@code bound-fn*} call stands: every
+	 * program dynamic var and core special, each read only when thread-bound, plus the
+	 * lexically enclosing {@code with-local-vars} cells. A program definition shadowing a
+	 * special without being dynamic is skipped (it is not bindable); the unbound root a
+	 * cell holds outside its extent is skipped the same way.
+	 */
+	private static LispVal captureForm(ClojureLowering ctx) {
+		List<LispVal> unconditional = new ArrayList<>();
+		List<LispVal> conditional = new ArrayList<>();
+		List<String> keys = new ArrayList<>(ctx.dynamicVars);
+		keys.sort(null);
+		for (String key : keys) {
+			LispVal var = ClojureVarLowering.varOf(ctx, List.of(new LispSymbol("var"), new LispSymbol(key)));
+			conditional.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), ClojureLowering.boundDepthSym(key),
+							new LispInteger(0)),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(var, ClojureLowering.varSym(key))),
+					ClojureLowering.NIL_CONST));
+		}
+		for (String name : ClojureCoreSpecials.names()) {
+			String key = ctx.lookupVar(name);
+			ClojureCoreSpecials.Special special = ClojureCoreSpecials.required(name);
+			if (key != null && !ctx.dynamicVars.contains(key)) {
+				continue;
+			}
+			LispVal var = ClojureVarLowering.varOf(ctx,
+					List.of(new LispSymbol("var"), new LispSymbol(key != null ? key : name)));
+			LispVal value = key != null ? ClojureLowering.varSym(key) : ctx.specialValue(special);
+			if (special.counter() == null) {
+				unconditional.add(var);
+				unconditional.add(value);
+				continue;
+			}
+			conditional.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), special.counter(), new LispInteger(0)),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(var, value)),
+					ClojureLowering.NIL_CONST));
+		}
+		for (Set<String> scope : ctx.localVarScopes) {
+			for (String name : scope) {
+				LispSymbol local = ctx.symOf(name);
+				LispVal var = local;
+				LispVal value = ClojureLowerUtil.list(VAR_GET, local);
+				conditional.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(IS_THREAD_BOUND,
+								ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(var))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(var, value)),
+						ClojureLowering.NIL_CONST));
+			}
+		}
+		List<LispVal> segments = new ArrayList<>(conditional);
+		if (!unconditional.isEmpty()) {
+			segments.add(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), unconditional));
+		}
+		LispVal entries = segments.isEmpty() ? ClojureLowering.NIL_CONST
+				: ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), segments);
+		return ClojureLowerUtil.list(MAP_LITERAL, entries);
+	}
+
+	/**
+	 * {@code (with-local-vars [name init ...] body...)}: each name a fresh var cell
+	 * holding the init, thread-locally bound around the body with dynamic extent -- an
+	 * {@code unwind-protect} restores every cell, so a throw leaves the unbound root
+	 * behind, like the oracle's {@code try} popping its frame. The cell starts unbound
+	 * (the init binds only the extent); after the extent deref reads the unbound root,
+	 * and {@code var-set} stores only while bound. Inits run in order after every cell
+	 * exists, so an init reads the earlier cells unbound, like the oracle's map build.
+	 * The body lowers behind the {@code try} barrier like a {@code binding} body, so a
+	 * {@code recur} across it is refused where the oracle's is.
+	 */
+	static LispVal withLocalVarsOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "with-local-vars needs a binding vector and a body");
+		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "with-local-vars");
+		ClojureLowerUtil.isTrue(bindings.size() % 2 == 0,
+				"with-local-vars requires an even number of forms in binding vector");
+		List<String> names = new ArrayList<>();
+		for (int i = 0; i < bindings.size(); i += 2) {
+			names.add(ClojureLowerUtil.plainName(ClojureLowerUtil.stripMeta(bindings.get(i)), "with-local-vars"));
+		}
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		for (String name : names) {
+			scope.put(name, ClojureLowering.Kind.VARIABLE);
+		}
+		ctx.scopes.add(scope);
+		ctx.directScopes.add(new HashSet<>());
+		ctx.localVarScopes.addLast(new LinkedHashSet<>(names));
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			List<LispVal> sets = new ArrayList<>();
+			List<LispVal> restores = new ArrayList<>();
+			for (int i = 0; i < names.size(); i++) {
+				String name = names.get(i);
+				LispSymbol box = ctx.freshTemp();
+				LispSymbol cell = ctx.localSym(name);
+				LispSymbol temp = ctx.freshTemp();
+				LispSymbol oldValue = ctx.freshTemp();
+				LispSymbol oldDepth = ctx.freshTemp();
+				String key = ClojureLowering.varKey(ctx.currentNs, name);
+				pairs.add(ClojureLowerUtil.list(box, ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
+						ClojureLowerUtil.list(UNBOUND, LispString.literal(key)), new LispInteger(0))));
+				pairs.add(ClojureLowerUtil.list(cell, ClojureLowerUtil.list(LOCAL_VAR, LispString.literal(key), box)));
+				pairs.add(ClojureLowerUtil.list(temp, ctx.lower(bindings.get(i * 2 + 1))));
+				pairs.add(ClojureLowerUtil.list(oldValue, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), box)));
+				pairs.add(ClojureLowerUtil.list(oldDepth, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), box)));
+				sets.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("rplaca"), box, temp));
+				sets.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("rplacd"), box,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), oldDepth, new LispInteger(1))));
+				restores.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("rplaca"), box, oldValue));
+				restores.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("rplacd"), box, oldDepth));
+			}
+			List<LispVal> guarded = new ArrayList<>(sets);
+			List<LispVal> cleanup = new ArrayList<>();
+			cleanup.add(ClojureLowerUtil.sym("unwind-protect"));
+			cleanup.add(barrierBody(ctx, items, 2));
+			cleanup.addAll(restores);
+			guarded.add(ClojureLowerUtil.list(cleanup));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), guarded));
+		}
+		finally {
+			ctx.localVarScopes.removeLast();
+			ctx.directScopes.remove(ctx.directScopes.size() - 1);
+			ctx.scopes.remove(ctx.scopes.size() - 1);
+		}
+	}
+
+	/**
+	 * {@code (pvalues expr...)}: each expression in order on the calling thread,
+	 * answering a seq of the values. There is no thread pool on any backend (like
+	 * {@code pmap}, which is {@code map}), so a sequential in-order evaluation is the
+	 * documented deviation; an expression throwing stops the later ones, and a
+	 * thread-local write stays visible where the oracle's pool thread would refuse it.
+	 */
+	static LispVal pvaluesOf(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(ClojureLowerUtil.sym("list"));
+		out.addAll(ctx.lowers(items, 1));
+		return ClojureLowerUtil.list(out);
+	}
+
+	/**
 	 * {@code (defonce name init?)}: {@code def} unless the name is already bound -- a
 	 * reload keeps the root, like the oracle.
 	 */

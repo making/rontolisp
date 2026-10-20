@@ -49,6 +49,8 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `binding` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] *d*))` | `2` |
 | `with-bindings` | `(do (def ^:dynamic *d* 1) (with-bindings {#'*d* 2} *d*))` | `2` |
 | `push-thread-bindings` | `(do (push-thread-bindings {#'*print-length* 1}) (try (pr-str [1 2]) (finally (pop-thread-bindings))))` | `"[1 ...]"` |
+| `bound-fn` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] ((bound-fn [] *d*))))` | `2` |
+| `with-local-vars` | `(with-local-vars [a 1] @a)` | `1` |
 | `time` | `(time (+ 1 2))` | `3` |
 | `with-loading-context` | `(with-loading-context (+ 1 2))` | `3` |
 | `with-precision` | `(with-precision 10 (/ 1 3))` | `1/3` |

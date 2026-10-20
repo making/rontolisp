@@ -372,7 +372,10 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
 
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
-再束縛します。それ以外は拒否されます。`*out*`/`*in*`/`*err*` は `*standard-output*`/
+再束縛します。それ以外は拒否されます。`bound-fn` は `fn` に対する `bound-fn*`
+です。取り込んだ生成時の束縛は関数実行時に呼び出し元の束縛の上に積まれます。
+`with-local-vars` は各 name を新しい var セルに束縛します。根は unbound で、
+範囲は body です。`*out*`/`*in*`/`*err*` は `*standard-output*`/
 `*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
 （`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` はプログラムの
 データリーダ（なければ `{}`）、

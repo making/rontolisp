@@ -324,6 +324,21 @@ public final class ClojureLowering {
 	boolean unboundDynamicSites;
 
 	/**
+	 * Whether this pass met a {@code bound-fn} or {@code bound-fn*}: its capture
+	 * enumerates the program's dynamic vars, so a pass that declared more of them after a
+	 * capture site lowers again with the full set seeded ({@link #lower}).
+	 */
+	boolean boundFnUsed;
+
+	/**
+	 * The names the lexically enclosing {@code with-local-vars} forms bind, innermost
+	 * last: a {@code bound-fn*} captures their cells beside the program's dynamic vars,
+	 * and a {@code var} of one reads the local cell. A binding entered dynamically
+	 * (through a called function) is not captured, only a lexically enclosing one.
+	 */
+	final Deque<Set<String>> localVarScopes = new ArrayDeque<>();
+
+	/**
 	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
 	 * the forms lower in.
 	 */
@@ -1616,12 +1631,14 @@ public final class ClojureLowering {
 		ClojureSourcePath sourcePath = null;
 		boolean rootSetters = false;
 		boolean threadBinders = false;
+		Set<String> dynamicSeed = new HashSet<>();
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.rootSetters = rootSetters;
 			lowering.threadBinders = threadBinders;
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
+			lowering.dynamicVars.addAll(dynamicSeed);
 			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
 			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
 					sourcePath);
@@ -1636,7 +1653,8 @@ public final class ClojureLowering {
 			rootSetters |= lowering.rootSetterMiss;
 			boolean binders = lowering.threadBinderMiss && !threadBinders;
 			threadBinders |= lowering.threadBinderMiss;
-			if (!redefs && !walks && !guarded && !setters && !binders) {
+			boolean dynamics = lowering.boundFnUsed && dynamicSeed.addAll(lowering.dynamicVars);
+			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1740,6 +1758,18 @@ public final class ClojureLowering {
 		}
 		// every unbound var holds its root before anything runs, like the false value
 		lowering.forms.addAll(1, ClojureVarLowering.unboundRootInits(lowering.unboundRoots));
+		if (lowering.boundFnUsed && !lowering.dynamicVars.isEmpty()) {
+			// a bound-fn capture may run before the def below it declares the
+			// var, so every dynamic var's binding-depth counter starts at zero
+			// before anything runs; the def's own counter store keeps its value
+			List<String> depths = new ArrayList<>(lowering.dynamicVars);
+			depths.sort(null);
+			List<LispVal> inits = new ArrayList<>();
+			for (String key : depths) {
+				inits.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), boundDepthSym(key), new LispInteger(0)));
+			}
+			lowering.forms.addAll(1, inits);
+		}
 		return lowering.forms;
 	}
 
@@ -2787,6 +2817,20 @@ public final class ClojureLowering {
 	boolean isLocal(String name) {
 		for (Map<String, Kind> scope : this.scopes) {
 			if (scope.containsKey(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the name is a {@code with-local-vars} cell in a lexically enclosing scope:
+	 * the cell object the local holds, which a {@code bound-fn*} captures and a
+	 * {@code var} of the name reads.
+	 */
+	boolean isLocalVar(String name) {
+		for (Set<String> scope : this.localVarScopes) {
+			if (scope.contains(name)) {
 				return true;
 			}
 		}
@@ -4049,6 +4093,15 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-bindings")) {
 			return ClojureStateLowering.withBindingsOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "bound-fn")) {
+			return ClojureStateLowering.boundFnOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-local-vars")) {
+			return ClojureStateLowering.withLocalVarsOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "pvalues")) {
+			return ClojureStateLowering.pvaluesOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-precision")) {
 			return ClojureStateLowering.withPrecisionOf(this, items);

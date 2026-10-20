@@ -1106,6 +1106,35 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void boundFnWithLocalVarsAndPvaluesLower() {
+		// bound-fn is bound-fn* over fn: the fdecl travels untouched, so a docstring
+		// the fn lowering refuses fails there, where the oracle's macroexpansion
+		// fails; the wrapper pushes the creation-time bindings around the call
+		assertThat(lowered("(bound-fn [x] x)")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*");
+		assertThat(lowered("(bound-fn name [x] x)")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*");
+		assertThat(lowered("(clojure.core/bound-fn [x] x)")).isEqualTo(lowered("(bound-fn [x] x)"));
+		assertThatThrownBy(() -> Clojure.read("(bound-fn)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("fn needs a parameter vector and a body");
+		// bound-fn* takes exactly the function; anything else is the oracle's
+		// arity refusal
+		assertThat(lowered("(bound-fn* (fn [x] x))")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*");
+		assertThatThrownBy(() -> Clojure.read("(bound-fn* 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/bound-fn*");
+		// with-local-vars binds each name to a fresh cell: the constructor, the
+		// box stores and the unwind-protect restoring them
+		assertThat(lowered("(with-local-vars [a 1] a)")).contains("(RONTOLISP::%CLOJURE-LOCAL-VAR")
+			.contains("UNWIND-PROTECT");
+		assertThatThrownBy(() -> Clojure.read("(with-local-vars [a] a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("with-local-vars requires an even number of forms in binding vector");
+		assertThatThrownBy(() -> Clojure.read("(with-local-vars \"x\" a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("with-local-vars takes its bindings in a vector");
+		// pvalues is a list of the expressions in order: a seq, evaluated
+		// sequentially on the calling thread
+		assertThat(lowered("(pvalues 1 2)")).isEqualTo(FALSE_BINDING + "(LIST 1 2)");
+		assertThat(lowered("(pvalues)")).isEqualTo(FALSE_BINDING + "(LIST)");
+	}
+
+	@Test
 	void amapAreduceLowerToIndexedWalks() {
 		// amap clones the array once and sets each element by index, answering
 		// the clone; areduce walks the index with the accumulator, answering it.
