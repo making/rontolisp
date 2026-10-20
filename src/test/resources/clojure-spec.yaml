@@ -2154,6 +2154,49 @@ cases:
       3
       arity
       arity
+  - name: string-index-space-is-code-points-past-the-bmp
+    # The index space is Unicode code points on every backend, past the BMP too:
+    # count, subs, .substring, .charAt, nth/get, clojure.string/index-of (and
+    # .indexOf, whose int argument searches its character) and last-index-of (and
+    # .lastIndexOf), and compare all read that space. The oracle (clj 1.12.6,
+    # 2026-10-20) counts UTF-16 units instead, so every astral answer differs there:
+    # "a🌍b" is 3 here, 4 there; (subs s 1 2) is the globe here, the lone
+    # high surrogate there; a start of 3 is the end here and "b" there, so a start
+    # of 4 refuses here and answers "" there; .charAt/nth/get read the globe's code
+    # point here, the high surrogate's there; the from/end clamps land one astral
+    # character apart; compare orders by code point (the globe past U+FFFF sorts
+    # after it here, before it there); and lower-case folds the same code-point word
+    # scan, so the sigma of "Α𝐀Σ" stays final here where the JDK sees a word
+    # end that is not there.
+    source: |
+      (require '[clojure.string :as s])
+      (def asp-s "a🌍b")
+      (def asp-t "a🌍b🌍")
+      (def asp-u "a🌍b🌍c")
+      (def asp-bmp (str (char 65535)))
+      (println (count asp-s) (count "") (count "abc"))
+      (println (mapv int (subs asp-s 1 2)) (mapv int (subs asp-s 0 3)) (mapv int (subs asp-s 3)))
+      (println (try (subs asp-s 2 4) (catch StringIndexOutOfBoundsException e :sioobe))
+               (try (subs asp-s 4) (catch StringIndexOutOfBoundsException e :sioobe)))
+      (println (mapv int (.substring asp-s 1 2)) (mapv int (.substring asp-s 0 3)) (mapv int (.substring asp-s 3)))
+      (println (int (.charAt asp-s 1)) (int (nth asp-s 1)) (int (get asp-s 1)))
+      (println (nth asp-s 9 :dflt) (get asp-s 9 :dflt) (nth asp-s 0))
+      (println (s/index-of asp-s "🌍") (s/index-of asp-u "🌍" 2)
+               (s/last-index-of asp-t "🌍") (s/last-index-of asp-u "🌍" 2))
+      (println (.indexOf asp-s "🌍") (.indexOf asp-s 98) (.indexOf asp-s 98 2) (.lastIndexOf asp-t "🌍"))
+      (println (compare "🌍" asp-bmp) (compare asp-bmp "🌍"))
+      (println (mapv int (s/lower-case "Α𝐀Σ")))
+    expected: |
+      3 0 3
+      [127757] [97 127757 98] []
+      :sioobe :sioobe
+      [127757] [97 127757 98] []
+      127757 127757 127757
+      :dflt :dflt a
+      1 3 3 1
+      1 2 2 3
+      62222 -62222
+      [945 119808 962]
   - name: try-catch-finally-and-throw
     # try guards handler-case inside unwind-protect; the catch clauses test their
     # classes in order. throw of a value that is no exception is the oracle's

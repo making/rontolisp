@@ -24,8 +24,7 @@
 
 (defun handle (env)
   (declare (ignore env))
-  (list 200 '(:content-type "text/html; charset=utf-8")
-        (list *html*)))
+  (list 200 '(:content-type "text/html; charset=utf-8") (list *html*)))
 
 ;; Blocks and serves on :8080 (interpreter / JVM); under --component the port
 ;; is ignored (wasmtime owns the socket) and the handler is served through the
