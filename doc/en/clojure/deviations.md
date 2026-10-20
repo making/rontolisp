@@ -215,7 +215,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).
 - `def` inside a body sets the global when the body runs; `defn` inside a body works only
-  in statement position.
+  in statement position. `definline` is `defn`: its inline body is a documented no-op
+  (nothing here inlines call sites), so the definition is the function itself.
 - Verbs assume the right collection kind; misuse may signal the Common Lisp type error
   instead of the oracle's.
 - Macros expand while lowering, so every backend runs expanded code; the interpreter's
@@ -229,7 +230,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   no function value. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
-  accepts it (and ignores it at call sites, for a special form).
+  accepts it (and ignores it at call sites, for a special form). As values,
+  `refer-clojure`, `definline` and `with-precision` stay unknown names (`(def x
+  refer-clojure)` refuses): macro var values come later, so their pinning stays there.
 - `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
   macro body and what it calls); at run time they throw an
   `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
@@ -275,7 +278,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
   the program lowers, so inside a body they still reach the whole file (the oracle's run
   when the body runs); a `load-string` of a literal declares ahead like a file, so the
-  same form may already name what it defines (the oracle's needs a later form).
+  same form may already name what it defines (the oracle's needs a later form). The
+  standalone `(refer-clojure ...)` wires the same `(:refer-clojure ...)` filter that
+  way (`:only`, `:exclude`, `:rename`, answering `nil`).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`; a bit operation takes an
@@ -574,7 +579,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `binding` rebinds only `^:dynamic` vars (anything else is refused, like the
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
   go through the var while the definition stays direct); reader metadata on names
-  and locals otherwise parses and drops, never affecting dispatch.
+  and locals otherwise parses and drops, never affecting dispatch. `with-precision`
+  binds `*math-context*` to the evaluated precision around its body (`nil` at the root,
+  where the oracle binds its default context); division stays exact -- a ratio, never the
+  oracle's `BigDecimal` -- so the binding scopes the extent without rounding anything.
 - In the REPL, a local named like a `^:dynamic` var that a later input defines binds
   that var for its extent once it is defined, so a function called there reads the
   local's value; the oracle binds a local lexically, and the function reads the var.

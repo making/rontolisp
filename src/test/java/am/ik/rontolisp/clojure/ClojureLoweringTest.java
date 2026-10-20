@@ -1071,6 +1071,41 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void referClojureDefinlineAndWithPrecisionLower() {
+		// (refer-clojure ...) is the ns (:refer-clojure ...) wiring as a standalone
+		// form: the same :only/:exclude/:rename options, answering nil
+		assertThat(lowered("(refer-clojure :exclude '[map])")).isEqualTo(FALSE_BINDING + "NIL");
+		assertThat(lowered("(refer-clojure :only '[map])")).isEqualTo(FALSE_BINDING + "NIL");
+		assertThat(lowered("(refer-clojure :rename '{map core-map})")).isEqualTo(FALSE_BINDING + "NIL");
+		assertThatThrownBy(() -> Clojure.read("(refer-clojure :bogus '[map])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(":refer-clojure option :bogus is not supported yet");
+		// a rename spells the core var under its new name at a call head, like the
+		// ns clause's
+		assertThat(lowered("(refer-clojure :rename '{map core-map}) (defn f [x] (core-map inc x))"))
+			.contains("(RONTOLISP::%CLOJURE-MAP ");
+		// definline is defn: the same defun, no compiler macro (nothing here inlines
+		// call sites), spelled the oracle's qualified way too
+		assertThat(lowered("(definline di [x] x)")).contains("(DEFUN |c%di|").doesNotContain("COMPILER-MACRO");
+		assertThat(lowered("(definline di \"doc\" [x] x)")).contains("(DEFUN |c%di|");
+		assertThat(lowered("(clojure.core/definline di [x] x)")).isEqualTo(lowered("(definline di [x] x)"));
+		assertThatThrownBy(() -> Clojure.read("(definline di)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defn needs a parameter vector and a body");
+		// a definline below its use pre-scans like a defn, so a function defined
+		// above calls the definition below
+		assertThat(lowered("(defn fwd-user [] (di-fwd 1)) (definline di-fwd [x] (+ x 10))"))
+			.contains("(DEFUN |c%di-fwd|");
+		// with-precision binds *math-context* around its body, answering the last
+		// value
+		assertThat(lowered("(with-precision 10 1)")).contains("(LET* ((RONTOLISP::%CLOJURE-MATH-CONTEXT 10)) 1)")
+			.contains("DEFVAR RONTOLISP::%CLOJURE-MATH-CONTEXT");
+		assertThat(lowered("(with-precision (+ 5 5))"))
+			.contains("(LET* ((RONTOLISP::%CLOJURE-MATH-CONTEXT (+ 5 5))) NIL)");
+		assertThatThrownBy(() -> Clojure.read("(with-precision)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("with-precision takes a precision and a body");
+	}
+
+	@Test
 	void amapAreduceLowerToIndexedWalks() {
 		// amap clones the array once and sets each element by index, answering
 		// the clone; areduce walks the index with the accumulator, answering it.

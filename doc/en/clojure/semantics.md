@@ -23,7 +23,9 @@ other count signals. `fn` with several arities is one `lambda` dispatching the s
 and a named `fn` binds itself for self-calls; `#(...)` reads as the oracle's `(fn*
 [p1__N# ...] (body))`, a `lambda` over the parameters up to the highest `%N` used plus a
 rest parameter for `%&`, its body forms wrapped as one call. `declare`
-names what is defined below, so a definition may use one.
+names what is defined below, so a definition may use one. `definline` is `defn` with the
+same shapes (docstring, attr map, arities, forward uses): its inline body is a documented
+no-op (nothing here inlines call sites), so the definition is the function itself.
 
 A function value is one object per definition on every backend: two references
 to one `defn` answer the same object, so they are `identical?` and `=`; two
@@ -73,7 +75,9 @@ defines into the requiring namespace. `(load "path")` and the `(:load "path" ...
 every call, answering `nil`; its own `in-ns` does not outlive it. The path is a string literal: the file is read while the
 program lowers. `use` and `:refer :all` bring in every public var; a
 file no root holds, a cycle of requires and a refer of a missing or private var are errors
-in the oracle's words. A [built-in namespace](reference/namespaces.md#built-in-namespaces)
+in the oracle's words. The standalone `(refer-clojure ...)` applies the
+`(:refer-clojure ...)` filter (`:only`, `:exclude`, `:rename`) to the current namespace,
+answering `nil`. A [built-in namespace](reference/namespaces.md#built-in-namespaces)
 needs no file.
 
 `*ns*` is the current namespace as a value, switched by `ns` and `in-ns` where they run and
@@ -397,7 +401,10 @@ binds `*standard-output*` to a string stream (never a literal
 `Elapsed time: N msecs` (a double count, like the oracle's) and answers its value.
 `with-open` binds and closes in
 reverse order through `unwind-protect`, calling the `close` method (Java
-closeables need the JVM, like all interop); `(. stream write x)` prints through
+closeables need the JVM, like all interop); `with-precision` binds `*math-context*` to
+the evaluated precision around its body and answers the last value -- division stays
+exact (a ratio, never the oracle's `BigDecimal`), so the binding only scopes the
+extent; `(. stream write x)` prints through
 `princ` on every backend, `(.readLine stream)` reads through `read-line`
 (`nil` past the end, like the oracle) and `(.read stream)` answers the next
 character's code (`-1` past the end).

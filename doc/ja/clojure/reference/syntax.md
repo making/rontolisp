@@ -7,6 +7,7 @@
 | `def` | `(do (def x 5) nil)` | `nil` |
 | `defn` | `(do (defn sq [x] (* x x)) (sq 7))` | `49` |
 | `defn-` | `(do (defn- sq [x] (* x x)) (sq 7))` | `49` |
+| `definline` | `(do (definline sq [x] (* x x)) (sq 7))` | `49` |
 | `defonce` | `(do (defonce x 5) x)` | `5` |
 | `fn` | `((fn [a b] (+ a b)) 1 2)` | `3` |
 | `let` | `(let [x 1 y x] y)` | `1` |
@@ -50,3 +51,4 @@
 | `push-thread-bindings` | `(do (push-thread-bindings {#'*print-length* 1}) (try (pr-str [1 2]) (finally (pop-thread-bindings))))` | `"[1 ...]"` |
 | `time` | `(time (+ 1 2))` | `3` |
 | `with-loading-context` | `(with-loading-context (+ 1 2))` | `3` |
+| `with-precision` | `(with-precision 10 (/ 1 3))` | `1/3` |

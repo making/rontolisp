@@ -22,7 +22,10 @@ head 位置呼び出しは値セルの `funcall` になります -- だから `(
 `fn` は自己呼び出しのために自分自身を束縛します。`#(...)` はオラクルと同じ `(fn* [p1__N# ...]
 (body))` と読まれ、使われた最大の `%N` までの引数と `%&` の rest 引数をとる `lambda` に
 なります。本体フォームは 1 呼び出しに包まれます。
-`declare` は後で定義される名前を前もって宣言します。
+`declare` は後で定義される名前を前もって宣言します。`definline` は同じ形
+（docstring・attr map・アリティ・前方参照）を持つ `defn` です。inline 本体は文書化
+された no-op（呼び出し側を inline 展開するものはここにはありません）ので、定義は関数
+そのものです。
 
 関数値はどのバックエンドでも定義ごとに 1 オブジェクトです。1 つの `defn` への 2 つの
 参照は同じオブジェクトに答えるので、`identical?` でも `=` でも真になります。逆に 2 つの
@@ -70,7 +73,9 @@ Common Lisp ファイルはこの名前で呼び出します。
 `:reload-all` は依存先を先に再実行します。いずれも oracle と同じです。`ns` フォームのないファイルは、require した側の
 名前空間に定義を追加します。`(load "path")` と ns の `(:load "path" ...)` 節は、現在の名前空間のファイルがあるディレクトリからの相対パス（先頭が `/` ならソースルートから）でファイル（`path.clj`、なければ `path.cljc`）を読み、現在の名前空間で実行します。呼ぶたびに再実行し、`nil` を返し、ファイル内の `in-ns` は終了後に残りません。パスは文字列リテラルで、ファイルは lower の間に読まれます。`use` と `:refer :all` は public な var をすべて refer します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
-oracle と同じ文言のエラーになります。[組み込みの名前空間](reference/namespaces.md#built-in-namespaces)
+oracle と同じ文言のエラーになります。単独の `(refer-clojure ...)` は現在の名前空間に
+`(:refer-clojure ...)` フィルタ（`:only`・`:exclude`・`:rename`）を適用し、`nil` を
+返します。[組み込みの名前空間](reference/namespaces.md#built-in-namespaces)
 はファイルを必要としません。
 
 `*ns*` は現在の名前空間を値として持ちます。`ns` と `in-ns` が実行された時点で切り替わり、
@@ -383,7 +388,9 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `Elapsed time: N msecs`（オラクル同様、倍精度の数）を報告して値を答えます。
 `with-open` は束縛して
 `unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
-closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
+closeable は他の interop 同様 JVM が要ります）。`with-precision` は本体の周囲で
+`*math-context*` を評価された精度に束縛し、最後の値を返します。除算は正確なまま
+（oracle の `BigDecimal` ではなく有理数）なので、この束縛は範囲を区切るだけです。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
 `read-line` 越しに読み（末尾越しはオラクル同様 `nil`）、`(.read stream)` は次の
 文字のコードを答えます（末尾越しは `-1`）。

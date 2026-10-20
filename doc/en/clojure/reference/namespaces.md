@@ -28,6 +28,7 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 | `ns-imports` | `(get (ns-imports 'user) 'String)` | `java.lang.String` |
 | `alias` | `(do (alias 's 'clojure.string) (s/join "-" ["a"]))` | `a-b` |
 | `refer` | `(do (refer 'clojure.string :only '[upper-case]) (upper-case "ab"))` | `AB` |
+| `refer-clojure` | `(do (refer-clojure :rename '{map core-map}) (core-map inc [1 2]))` | `(2 3)` |
 | `ns-unmap` | `(do (refer 'clojure.string :only '[join]) (ns-unmap 'user 'join) (get (ns-refers 'user) 'join))` | `nil` |
 | `ns-unalias` | `(do (alias 's 'clojure.string) (ns-unalias 'user 's) (get (ns-aliases 'user) 's))` | `nil` |
 | `requiring-resolve` | `(requiring-resolve 'clojure.string/join)` | `#'clojure.string/join` |

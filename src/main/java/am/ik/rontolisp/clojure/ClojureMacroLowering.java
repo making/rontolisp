@@ -268,8 +268,8 @@ final class ClojureMacroLowering {
 	 * evaluator replays all of it. Any other datum's statements ({@code prn}, a
 	 * {@code swap!}, a server start) run only in the program.
 	 */
-	private static final Set<String> DEFINITION_HEADS = Set.of("defn", "defn-", "defmulti", "defmethod", "defprotocol",
-			"defrecord", "deftype", "extend-protocol", "extend-type", "extend", "defstruct");
+	private static final Set<String> DEFINITION_HEADS = Set.of("defn", "defn-", "definline", "defmulti", "defmethod",
+			"defprotocol", "defrecord", "deftype", "extend-protocol", "extend-type", "extend", "defstruct");
 
 	/**
 	 * Hands one top-level datum's lowered forms to the macro evaluator, so a macro body
