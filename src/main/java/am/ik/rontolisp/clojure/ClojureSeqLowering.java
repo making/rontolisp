@@ -304,6 +304,27 @@ final class ClojureSeqLowering {
 				ClojureLowerUtil.list(List.of(arg, ClojureLowering.AMPERSAND_REST, rest)), read);
 	}
 
+	/**
+	 * {@code EMPTY-NODE}: the oracle's persistent-vector node is the empty vector here,
+	 * so a call reads like one of {@code []} -- a key (and an optional default) through
+	 * {@code nth}, any other count refused at lower time like {@code ([])}. As a value
+	 * ({@link #emptyNodeValue}) it is the empty vector itself.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal emptyNodeCall(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispCons(ClojureReader.VECTOR, ClojureLowering.NIL_CONST));
+		call.addAll(items.subList(1, items.size()));
+		return collectionCall(ctx, call);
+	}
+
+	/** {@code EMPTY-NODE} as a value: the empty vector. */
+	static LispVal emptyNodeValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"));
+	}
+
 	/** {@code (and a b ...)} answers the first falsey value or the last value. */
 	static LispVal andOf(ClojureLowering ctx, List<LispVal> args) {
 		if (args.isEmpty()) {

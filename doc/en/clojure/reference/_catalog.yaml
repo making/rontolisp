@@ -157,6 +157,7 @@ categories:
       - { slug: vector, name: "vector" }
       - { slug: vector-p, name: "vector?" }
       - { slug: vec, name: "vec" }
+      - { slug: empty-node, name: "EMPTY-NODE" }
       - { slug: hash-map, name: "hash-map" }
       - { slug: array-map, name: "array-map" }
       - { slug: hash-set, name: "hash-set" }
@@ -506,6 +507,7 @@ categories:
       - { slug: ex-message, name: "ex-message" }
       - { slug: ex-cause, name: "ex-cause" }
       - { slug: throwable-to-map, name: "Throwable->map" }
+      - { slug: stack-trace-element-vec, name: "StackTraceElement->vec" }
       - { slug: assert, name: "assert" }
   - title: "Namespaces"
     index_page: clojure/reference/namespaces.md

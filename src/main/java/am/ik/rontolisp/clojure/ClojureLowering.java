@@ -4524,6 +4524,14 @@ public final class ClojureLowering {
 		switch (name) {
 			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt":
 				return plain(name, items);
+			case "EMPTY-NODE":
+				// g26: the oracle's persistent-vector node is the empty vector
+				// here, so a call reads like one of []
+				return ClojureSeqLowering.emptyNodeCall(this, items);
+			case "StackTraceElement->vec":
+				// g26: the oracle's [class method file line] vector of a host
+				// stack-trace element
+				return ClojureStateLowering.stackTraceElementVecOf(this, items);
 			case "reverse":
 				// over the whole-collection view: a vector or string reverses into a
 				// list like the oracle, and a lazy seq realizes first
@@ -5330,6 +5338,8 @@ public final class ClojureLowering {
 			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
 			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
 			case "Throwable->map" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.THROWABLE_TO_MAP);
+			case "StackTraceElement->vec" -> ClojureStateLowering.stackTraceElementVecValue(this);
+			case "EMPTY-NODE" -> ClojureSeqLowering.emptyNodeValue();
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "eval" -> ClojureMacroLowering.evalValue();
 			case "resolve" -> ClojureVarLowering.resolveValue();

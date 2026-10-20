@@ -161,6 +161,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Throwable` finds no match for one. `throw` of a value that is
   no exception is a `ClassCastException` whose message is the value's rendering, where the
   oracle's message names the two classes.
+- Six deprecated or internal `clojure.core` names resolve per name rather than as the
+  oracle spells them. `EMPTY-NODE` is the empty vector ([EMPTY-NODE](reference/empty-node.md)):
+  `(= EMPTY-NODE [])` and `(identical? EMPTY-NODE EMPTY-NODE)` are `true`, and a call
+  reads like one of `[]` (a key and an optional default, any other count refused) --
+  where the oracle's persistent-vector node is `=` to no vector, `count`/`nth` of it
+  throw, and calling it is a `ClassCastException`. `StackTraceElement->vec` answers
+  the oracle's `[class method file line]` vector of a host stack-trace element
+  ([StackTraceElement->vec](reference/stack-trace-element-vec.md)): the class and the
+  method as symbols, `nil` the oracle's `NullPointerException`, anything else its
+  `ClassCastException`. Elements exist only on the interpreter and the JVM
+  (`.getStackTrace` answers `[]`). `add-classpath`, `Inst`, `PrintWriter-on` and
+  `primitives-classnames` stay refused: no class loader exists here (dependencies come
+  from `deps.edn`, `--java-dep` and `--java-classpath`; the oracle deprecated
+  `add-classpath` in 1.1), `Inst` is the host protocol object `inst-ms*` extends, which
+  exists on no backend (`inst?` and `inst-ms` cover the predicate and the reading),
+  `PrintWriter-on` builds a host `PrintWriter` over a proxied writer (print into a
+  string with `with-out-str`, or rebind `*out*`, instead), and `primitives-classnames`
+  is the print-dup helper map for primitive `Class` objects (a class prints by its
+  name here).
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword

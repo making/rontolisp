@@ -11,5 +11,6 @@ try は unwind-protect の中の handler-case です。catch 節は自分が名�
 | `ex-message` | `(ex-message (ex-info "boom" {}))` | `boom` |
 | `ex-cause` | `(ex-message (ex-cause (ex-info "a" {} (Exception. "c"))))` | `c` |
 | `Throwable->map` | `(:cause (Throwable->map (ex-info "a" {} (Exception. "c"))))` | `c` |
+| `StackTraceElement->vec` | `(StackTraceElement->vec (StackTraceElement. "C" "m" "F.clj" 42))` | `[C m "F.clj" 42]` |
 | `.getMessage` | `(.getMessage (Exception. "boom"))` | `boom` |
 | `assert` | `(assert (= 1 1))` | `nil` |

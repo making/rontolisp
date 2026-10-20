@@ -15348,3 +15348,42 @@ cases:
       :s
       :d
       :l
+  - name: empty-node-is-the-empty-vector
+    # g26: EMPTY-NODE, the oracle's persistent-vector node, is the empty vector
+    # here -- the honest equivalent a program can observe. The oracle diverges
+    # everywhere a node is not a vector: (= EMPTY-NODE []) is false there, count
+    # and nth of it throw UnsupportedOperationException, it prints as a VecNode
+    # object, and calling it is a ClassCastException (checked clj 1.12.6). Here a
+    # call reads like one of []: a key (and an optional default) through nth, any
+    # other count refused at lower time like ([]). Every line below is the same on
+    # all four backends.
+    source: |
+      (prn EMPTY-NODE)
+      (prn (= EMPTY-NODE []) (identical? EMPTY-NODE EMPTY-NODE))
+      (prn (count EMPTY-NODE) (seq EMPTY-NODE) (empty? EMPTY-NODE) (vector? EMPTY-NODE))
+      (prn (EMPTY-NODE 0 :dflt) (get EMPTY-NODE 0))
+      (prn (map #(EMPTY-NODE % :d) [0 1]))
+      (prn (= @#'EMPTY-NODE []))
+    expected: |
+      []
+      true true
+      0 nil true true
+      :dflt nil
+      (:d :d)
+      true
+  - name: stack-trace-element-vec-refuses-nil-and-foreign-values
+    # g26: StackTraceElement->vec of nil is the oracle's NullPointerException, of
+    # anything else its ClassCastException (checked clj 1.12.6); the class, method,
+    # file and line of a real element are pinned on the interpreter and the JVM by
+    # ClojureInteropTest, since no element exists on the wasm backends. Every line
+    # below is the same on all four backends.
+    source: |
+      (prn (try (StackTraceElement->vec nil) (catch NullPointerException e :npe)))
+      (prn (try (StackTraceElement->vec 5) (catch ClassCastException e :cce)))
+      (prn (try (StackTraceElement->vec "x") (catch ClassCastException e :cce)))
+      (prn (map (fn [e] (try (StackTraceElement->vec e) (catch Exception e :caught))) [nil 5]))
+    expected: |
+      :npe
+      :cce
+      :cce
+      (:caught :caught)

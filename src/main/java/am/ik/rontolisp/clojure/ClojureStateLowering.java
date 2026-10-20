@@ -998,6 +998,66 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * {@code (StackTraceElement->vec e)}: the oracle's {@code [class method file line]}
+	 * vector of the host stack-trace element E -- the class and the method as symbols,
+	 * the file as written (nil when the element names none), the line as written. The
+	 * argument evaluates once, into a temporary the nil test, the instance test and the
+	 * four host-method reads share. Nil is the oracle's NullPointerException, anything
+	 * else its ClassCastException; the arity is checked at lower time in the oracle's
+	 * wording. Elements exist only where the host does ({@code .getStackTrace} answers []
+	 * here), so on wasm only the two refusals can run.
+	 */
+	static LispVal stackTraceElementVecOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureCoreLowering.arity("StackTraceElement->vec", items.size() - 1, 1, 1);
+		LispSymbol target = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(target, ctx.lower(items.get(1))))),
+				stackTraceElementVecBody(ctx, target));
+	}
+
+	/**
+	 * {@code StackTraceElement->vec} as a value: a one-argument lambda over the same
+	 * read.
+	 */
+	static LispVal stackTraceElementVecValue(ClojureLowering ctx) {
+		LispSymbol element = new LispSymbol(ClojureLowering.mangle("stack-trace-element"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(element),
+				stackTraceElementVecBody(ctx, element));
+	}
+
+	/**
+	 * The read {@link #stackTraceElementVecOf} and {@link #stackTraceElementVecValue}
+	 * share over TARGET, which holds the already-evaluated argument: the nil refusal, the
+	 * instance test with the oracle's cast refusal, else the four readings as a vector.
+	 */
+	private static LispVal stackTraceElementVecBody(ClojureLowering ctx, LispSymbol target) {
+		LispVal className = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-METHOD"), target,
+				LispString.literal("getClassName"));
+		LispVal methodName = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-METHOD"), target,
+				LispString.literal("getMethodName"));
+		LispVal fileName = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-METHOD"), target,
+				LispString.literal("getFileName"));
+		LispVal lineNumber = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-METHOD"), target,
+				LispString.literal("getLineNumber"));
+		LispVal built = ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-1"), className),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-1"), methodName), fileName,
+				lineNumber);
+		LispVal cast = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("string")),
+						LispString.literal("class "),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CLASS-NAME-OF"), target),
+						LispString.literal(" cannot be cast to class java.lang.StackTraceElement")));
+		LispVal npe = ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER, LispString
+			.literal("Cannot invoke \"java.lang.StackTraceElement.getClassName()\" because \"o\" is null"));
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureDispatchLowering.instanceTest(ctx, "StackTraceElement", target), built, cast);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), target), npe, typed);
+	}
+
+	/**
 	 * {@code (alter ref fun args...)} and {@code (commute ref fun args...)}: the function
 	 * applied to the old value and the arguments, written through the transaction's log.
 	 * Transactions run one at a time, so the two commute identically (the oracle may run

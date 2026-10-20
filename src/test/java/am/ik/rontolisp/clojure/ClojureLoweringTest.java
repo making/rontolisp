@@ -4081,6 +4081,39 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void emptyNodeIsTheEmptyVectorAndStackTraceElementVecReadsAnElement() {
+		// g26: EMPTY-NODE, the oracle's persistent-vector node, is the empty vector
+		// here -- the value is one vector shared program-wide, a call reads like one
+		// of [], and a bare call is refused at lower time like ([])
+		assertThat(lowered("EMPTY-NODE")).contains("(RONTOLISP::%CLOJURE-SHARED-VALUE \"EMPTY-NODE\"")
+			.contains("(VECTOR)");
+		assertThat(lowered("clojure.core/EMPTY-NODE")).contains("(RONTOLISP::%CLOJURE-SHARED-VALUE \"EMPTY-NODE\"");
+		assertThat(lowered("(EMPTY-NODE :k)")).contains("(RONTOLISP::%CLOJURE-NTH (VECTOR)");
+		assertThat(lowered("(EMPTY-NODE :k :d)")).contains("(RONTOLISP::%CLOJURE-NTH (VECTOR)");
+		assertThatThrownBy(() -> Clojure.read("(EMPTY-NODE)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a collection as a function takes a key and an optional default");
+		assertThatThrownBy(() -> Clojure.read("(EMPTY-NODE 1 2 3)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a collection as a function takes a key and an optional default");
+		// StackTraceElement->vec is the oracle's [class method file line] vector of
+		// a host element: the nil and the instance tests first, then the four host
+		// reads; the arity is checked at lower time in the oracle's wording, and the
+		// value is a one-argument lambda over the same read
+		assertThat(lowered("(defn f [e] (StackTraceElement->vec e))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-METHOD |__clojure_")
+			.contains("getClassName")
+			.contains("getMethodName")
+			.contains("getFileName")
+			.contains("getLineNumber")
+			.contains("RONTOLISP::%CLOJURE-SYMBOL-1")
+			.contains("cannot be cast to class java.lang.StackTraceElement");
+		assertThat(lowered("(map StackTraceElement->vec [])"))
+			.contains("(RONTOLISP::%CLOJURE-SHARED-VALUE \"StackTraceElement->vec\"")
+			.contains("(LAMBDA (|c%stack-trace-element|)");
+		assertThatThrownBy(() -> Clojure.read("(StackTraceElement->vec)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/StackTraceElement->vec");
+	}
+
+	@Test
 	void bindingNeedsDynamicVars() {
 		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 2] *d*)")).contains("LET*")
 			.contains("|c%*d*|")

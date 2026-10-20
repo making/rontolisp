@@ -37,12 +37,19 @@ This item is worked slice by slice; each slice has its own todo and DoD:
 - `.todo/g25`: `refer-clojure`/`definline`/`with-precision`
 - `.todo/g26`: the deprecated/internal six (`add-classpath`,
   `primitives-classnames`, `EMPTY-NODE`, `Inst`, `PrintWriter-on`,
-  `StackTraceElement->vec`), whose disposition this item's original
-  "17/17 lower and run" requirement is amended by -- see `g26`.
+  `StackTraceElement->vec`): `EMPTY-NODE` and `StackTraceElement->vec` lower
+  and run; `add-classpath` and `Inst` keep their documented `unknown name`
+  refusal; `PrintWriter-on` and `primitives-classnames` are exempt from the
+  probe with reasons recorded. This item's original "17/17 lower and run"
+  requirement is amended by that disposition -- see `g26`.
 
 This item is done when all five slices are done and a re-run of the presence
-probe (script kept beside this todo's artefacts) reports 679/679 in head
-position and the same as values for the fns, modulo the `g26` dispositions.
+probe (script kept beside this todo's artefacts) reports every name at its
+natural position: the lowered names resolve and run (functions in both
+positions, non-function values as values), `add-classpath` and `Inst` keep
+their documented `unknown name` refusal in both positions, and
+`PrintWriter-on`/`primitives-classnames` are exempt with reasons recorded --
+the counted gap is exactly the 2 documented refusals.
 
 ## Non-goals
 

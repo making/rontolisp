@@ -158,6 +158,23 @@
   実行時エラーとランタイムの拒否にはそのようなホストの例外がないため、`Throwable` を受け取る
   Java のメンバはそれに一致しません。例外でない値の `throw` は、値のレンダリングをメッセージとする
   `ClassCastException` になります（オラクルのメッセージは 2 つのクラス名を挙げます）。
+- 非推奨または内部用の 6 つの `clojure.core` 名は、オラクル通りにではなく名前ごとに解決します。
+  `EMPTY-NODE` は空のベクターです（[EMPTY-NODE](reference/empty-node.md)）：`(= EMPTY-NODE [])` と
+  `(identical? EMPTY-NODE EMPTY-NODE)` は `true` を返し、呼び出しは `[]` の呼び出しと同様です
+  （キーと省略可能な既定値、それ以外の個数は拒否）。オラクルの persistent-vector ノードはどのベクター
+  とも `=` にならず、`count`・`nth` は例外を投げ、呼び出しは `ClassCastException` になります。
+  `StackTraceElement->vec` はホストのスタックトレース要素に対するオラクル通りの `[class method file line]`
+  ベクターを返します（[StackTraceElement->vec](reference/stack-trace-element-vec.md)）：クラスと
+  メソッドはシンボル、`nil` はオラクルの `NullPointerException`、それ以外は `ClassCastException`
+  です。要素はインタプリタと JVM にのみ存在します（`.getStackTrace` は `[]` を返します）。
+  `add-classpath`、`Inst`、`PrintWriter-on`、`primitives-classnames` は拒否のままです：ここには
+  クラスローダが存在しないためです（依存関係は `deps.edn`、`--java-dep`、`--java-classpath` から取得します。
+  オラクルは 1.1 で `add-classpath` を非推奨にしました）。`Inst` は `inst-ms*` が拡張するホストの
+  プロトコルオブジェクトであり、どのバックエンドにも存在しません（述語と読み取りは `inst?` と `inst-ms`
+  が担います）。`PrintWriter-on` はプロキシした writer 上にホストの `PrintWriter` を構築します
+  （代わりに `with-out-str` で文字列に印字するか `*out*` を再束縛してください）。
+  `primitives-classnames` はプリミティブ `Class` オブジェクト用の print-dup ヘルパーマップです
+  （ここではクラスは名前で印字します）。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
  `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える

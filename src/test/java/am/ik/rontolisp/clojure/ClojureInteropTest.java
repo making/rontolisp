@@ -1121,6 +1121,20 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void stackTraceElementVecAnswersTheOraclesVector() throws Exception {
+		// g26, oracle-identical (clj 1.12.6, 2026-10-20): [class method file line],
+		// the class and the method as symbols, the file nil when the element names
+		// none. Only a host element reaches it (clojure-spec
+		// stack-trace-element-vec-refuses-nil-and-foreign-values pins nil and the
+		// foreign values on all four backends).
+		assertBothEqual(
+				"(prn (StackTraceElement->vec (StackTraceElement. \"my.ns$f__123\" \"invoke\" \"f.clj\" 10)))"
+						+ " (prn (StackTraceElement->vec (StackTraceElement. \"a.b$c\" \"doInvoke\" nil -1)))"
+						+ " (prn (map StackTraceElement->vec [(StackTraceElement. \"C\" \"m\" \"F.clj\" 42)]))",
+				"[my.ns$f__123 invoke \"f.clj\" 10]\n[a.b$c doInvoke nil -1]\n([C m \"F.clj\" 42])\n");
+	}
+
+	@Test
 	void printThrowableSpellsTheClassOfACaughtHostException() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-09): a caught host exception is the
 		// host's

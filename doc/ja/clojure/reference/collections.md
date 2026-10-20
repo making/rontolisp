@@ -7,6 +7,7 @@
 | `vector` | `(vector 1 2)` | `[1 2]` |
 | `vector?` | `(vector? [1])` | `true` |
 | `vec` | `(vec '(1 2))` | `[1 2]` |
+| `EMPTY-NODE` | `(= EMPTY-NODE [])` | `true` |
 | `hash-map` | `(hash-map :a 1)` | `{:a 1}` |
 | `array-map` | `(array-map :a 1)` | `{:a 1}` |
 | `hash-set` | `(hash-set 1 2 1)` | `#{1 2}` |
