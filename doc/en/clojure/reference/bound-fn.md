@@ -11,9 +11,12 @@ core special plus the lexically enclosing [`with-local-vars`](with-local-vars.md
 cells -- over the caller's own bindings, so a call on another thread sees the
 captured values. A var bound nowhere at creation stays out of the map, like the
 oracle's frame; a `bound-fn*` created under a `with-local-vars` extent entered
-dynamically (through a called function) does not see that cell. As values the
-two stay macros (`(def x bound-fn)` refuses): macro var values come later, so
-their pinning stays there.
+dynamically (through a called function) does not see that cell. As values,
+`bound-fn`, `with-local-vars` and `pvalues` answer the run-time once-expansion
+delegate -- calling one answers what `macroexpand-1` answers (the form itself
+for these core forms) -- and `bound-fn*` answers its function, capturing the
+bindings where the value is called. The oracle refuses a bare macro name in
+value position at compile time.
 
 ```clojure
 (def ^:dynamic *loud* false)

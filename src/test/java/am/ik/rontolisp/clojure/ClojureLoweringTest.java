@@ -1132,6 +1132,14 @@ class ClojureLoweringTest {
 		// sequentially on the calling thread
 		assertThat(lowered("(pvalues 1 2)")).isEqualTo(FALSE_BINDING + "(LIST 1 2)");
 		assertThat(lowered("(pvalues)")).isEqualTo(FALSE_BINDING + "(LIST)");
+		// g16's values: the three macros answer the run-time once-expansion
+		// delegate, while bound-fn* answers its function, capturing where the
+		// value is called
+		assertThat(lowered("(def x bound-fn)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x with-local-vars)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x pvalues)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x bound-fn*)")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*")
+			.doesNotContain("C%MACROEXPAND-1");
 	}
 
 	@Test
@@ -3425,8 +3433,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("resultset-seq is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(compile 'foo)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("compile is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(bound-fn* f)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("bound-fn* is not supported yet");
+		assertThat(lowered("(bound-fn* (fn [x] x))")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*");
 		assertThatThrownBy(() -> Clojure.read("(get-thread-bindings)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("get-thread-bindings is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(read+string s)", null)).isInstanceOf(LispReadException.class)

@@ -6311,7 +6311,9 @@ resolve var`.
   starts at zero before anything runs, so a capture ahead of the `def` reads bound and
   skips unbound. A `bound-fn*` created under a dynamically entered `with-local-vars`
   extent sees no cell (only a lexically enclosing one), and a session captures the
-  dynamic vars declared in earlier buffers. As values both stay macros. Pinned by
+  dynamic vars declared in earlier buffers. As values the three answer g16's
+  once-expansion delegate, and `bound-fn*` its function (`boundFnStarValue`, capturing
+  per call). Pinned by
   clojure-spec `bound-fn-captures-the-creation-bindings` (all four backends).
 - **Local vars** (2026-10-20, g24): `(with-local-vars [name init ...] body...)`
   binds each name to a fresh cell (`ClojureStateLowering.withLocalVarsOf`,

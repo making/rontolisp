@@ -14,9 +14,9 @@ unbound な root が残ります。オラクルの `try` がフレームを pop 
 `Cannot assign to non-mutable` の拒否になります。body で作られた
 [`bound-fn`](bound-fn.md) はセルを取り込みます。セルは `#'ns/name` と
 印字されます（オラクルのセルは無名です）。セルへの `alter-var-root` は
-拒否されます。値としてはマクロのままです（`(def x with-local-vars)` は
-拒否されます）。マクロの var 値は後回しのため、そのピン留めもそちらに
-残ります。
+拒否されます。値としては実行時の一回展開の委譲を答えます（[bound-fn](bound-fn.md) を
+見てください）。オラクルはむき出しのマクロ名を値位置でコンパイル時に
+拒否します。
 
 ```clojure
 (println (with-local-vars [a 1 b 2] [@a @b])) ; [1 2]

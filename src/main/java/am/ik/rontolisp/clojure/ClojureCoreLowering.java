@@ -679,6 +679,7 @@ final class ClojureCoreLowering {
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "with-bindings*" -> ClojureStateLowering.withBindingsStarValue(ctx);
+			case "bound-fn*" -> ClojureStateLowering.boundFnStarValue(ctx);
 			case "find-var" -> ClojureVarLowering.findVarValue();
 			case "test" -> ClojureVarLowering.testValue();
 			case "type" -> ClojureDispatchLowering.typeValue(ctx);

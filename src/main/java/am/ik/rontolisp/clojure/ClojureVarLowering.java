@@ -763,7 +763,7 @@ final class ClojureVarLowering {
 		return ClojureLowerUtil.list(runtime("VAR-SETTER"), var, rootSetterOf(ctx, key));
 	}
 
-	private static LispVal internedVarOf(ClojureLowering ctx, String key) {
+	static LispVal internedVarOf(ClojureLowering ctx, String key) {
 		LispVal root = rootOfKey(ctx, key);
 		VarMeta meta = ctx.varMetas.get(key);
 		// the definition whose metadata the site carries: 0 before any

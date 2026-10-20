@@ -1767,6 +1767,18 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * {@code bound-fn*} as a value: of the function, the same wrapper a call builds,
+	 * capturing the bindings where the value is called.
+	 */
+	static LispVal boundFnStarValue(ClojureLowering ctx) {
+		ctx.boundFnUsed = true;
+		ctx.needThreadBinders();
+		LispSymbol f = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(f),
+				ClojureLowerUtil.list(BOUND_FN_STAR, f, captureForm(ctx)));
+	}
+
+	/**
 	 * The map of the bindings in effect where a {@code bound-fn*} call stands: every
 	 * program dynamic var and core special, each read only when thread-bound, plus the
 	 * lexically enclosing {@code with-local-vars} cells. A program definition shadowing a
@@ -1779,7 +1791,11 @@ final class ClojureStateLowering {
 		List<String> keys = new ArrayList<>(ctx.dynamicVars);
 		keys.sort(null);
 		for (String key : keys) {
-			LispVal var = ClojureVarLowering.varOf(ctx, List.of(new LispSymbol("var"), new LispSymbol(key)));
+			// the site itself, not through `var`: the key is absolute, while a
+			// `(var ns/name)` spelling resolves in the current namespace (an
+			// `ns-map` elsewhere lowering this value would refuse it), and the
+			// site carries no computed root setter
+			LispVal var = ClojureVarLowering.internedVarOf(ctx, key);
 			conditional.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), ClojureLowering.boundDepthSym(key),
 							new LispInteger(0)),

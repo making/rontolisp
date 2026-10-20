@@ -15611,3 +15611,38 @@ cases:
       [:a :b :c]
       (5 6 6)
       pboom
+  - name: bound-fn-and-friends-answer-values
+    # g16's values reach the three macros: a bare bound-fn, with-local-vars or
+    # pvalues answers the run-time once-expansion delegate, so calling it answers
+    # what macroexpand-1 answers (the form itself for these core forms -- the
+    # run-time table holds program macros only). bound-fn* answers its function,
+    # capturing the bindings where the value is called: a maker taken under one
+    # binding still reads the caller's extent. Deviation: the oracle refuses a
+    # bare macro name in value position at compile time. All four backends.
+    source: |
+      (ns g24-values)
+      (def g24-bf bound-fn)
+      (def g24-wlv with-local-vars)
+      (def g24-pv pvalues)
+      (def g24-bfs bound-fn*)
+      (println (fn? g24-bf) (fn? g24-wlv) (fn? g24-pv) (fn? g24-bfs))
+      (println (g24-bf '(bound-fn [a] a)))
+      (println (g24-wlv '(with-local-vars [a 1] a)))
+      (println (g24-pv '(pvalues 1 2)))
+      (println (fn? @(resolve 'bound-fn)) (fn? (deref (resolve 'pvalues))))
+      (println (fn? @#'bound-fn) (fn? @#'with-local-vars) (fn? @#'bound-fn*))
+      (def ^:dynamic *vx* 1)
+      (binding [*vx* 9]
+        (def g24-maker g24-bfs))
+      (println ((g24-maker (fn [] *vx*))))
+      (println ((g24-bfs (fn [] *vx*))))
+      (in-ns 'user)
+    expected: |
+      true true true true
+      (bound-fn [a] a)
+      (with-local-vars [a 1] a)
+      (pvalues 1 2)
+      true true
+      true true true
+      1
+      1

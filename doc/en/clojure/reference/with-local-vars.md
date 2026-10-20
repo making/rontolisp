@@ -13,8 +13,9 @@ earlier cells unbound. A `recur` across the body is refused, like the oracle's
 `try` boundary, and `set!` of a cell is the `Cannot assign to non-mutable`
 refusal. [`bound-fn`](bound-fn.md) created in the body captures the cells. A
 cell prints `#'ns/name` (the oracle's cells are unnamed); `alter-var-root` of
-one is refused. As a value it stays a macro (`(def x with-local-vars)`
-refuses): macro var values come later, so their pinning stays there.
+one is refused. As a value it answers the run-time once-expansion delegate
+(see [bound-fn](bound-fn.md)); the oracle refuses a bare macro name in value
+position at compile time.
 
 ```clojure
 (println (with-local-vars [a 1 b 2] [@a @b])) ; [1 2]

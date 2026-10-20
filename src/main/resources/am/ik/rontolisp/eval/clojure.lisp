@@ -14596,7 +14596,7 @@
    with-local-vars cells."
   (lambda (&rest args)
     (rontolisp::%clojure-with-bindings bindings
-      (lambda () (rontolisp::%clojure-call f args)))))
+     (lambda () (rontolisp::%clojure-call f args)))))
 
 (defun rontolisp::%clojure-local-var (name box)
   "A with-local-vars var cell: the var NAME (\"ns/name\") holding BOX, a cons
@@ -14604,27 +14604,28 @@
    current value -- the unbound root outside the extent, like the oracle's --
    thread-bound? the depth, the binder save/restores both around a call, and
    var-set stores through it when bound. Fresh per evaluation, never interned."
-  (let ((v (list :C%VAR name
-                 (lambda () (car box))
-                 (lambda () (cdr box))
-                 (lambda (value thunk)
-                   (let ((old-value (car box)) (old-depth (cdr box)))
-                     (rplaca box value)
-                     (rplacd box (+ old-depth 1))
-                     (unwind-protect (funcall thunk)
-                       (rplaca box old-value)
-                       (rplacd box old-depth))))
-                 (lambda (value)
-                   (if (<= (cdr box) 0)
-                       (rontolisp::%clojure-illegal-state-exception
-                        (concatenate 'string "Can't change/establish root binding of: "
-                                     (rontolisp::%clojure-var-short-name (list :C%VAR name))
-                                     " with set")))
+  (let ((v
+         (list :C%VAR name (lambda () (car box)) (lambda () (cdr box))
+               (lambda (value thunk)
+                 (let ((old-value (car box)) (old-depth (cdr box)))
                    (rplaca box value)
-                   value))))
+                   (rplacd box (+ old-depth 1))
+                   (unwind-protect (funcall thunk)
+                     (rplaca box old-value)
+                     (rplacd box old-depth))))
+               (lambda (value)
+                 (if (<= (cdr box) 0)
+                     (rontolisp::%clojure-illegal-state-exception
+                      (concatenate 'string
+                       "Can't change/establish root binding of: "
+                       (rontolisp::%clojure-var-short-name (list :C%VAR name))
+                       " with set")))
+                 (rplaca box value)
+                 value))))
     (rontolisp::%clojure-put-meta v
-     (rontolisp::%clojure-map-literal
-      (list (list :C%KEYWORD "ns") nil (list :C%KEYWORD "name") nil)))
+                                  (rontolisp::%clojure-map-literal
+                                   (list (list :C%KEYWORD "ns") nil
+                                         (list :C%KEYWORD "name") nil)))
     v))
 
 (defun rontolisp::%clojure-replace-meta (x m)
