@@ -1,10 +1,14 @@
 ;;;; Serves ONE HTML page over HTTP: every request answers with the page as
-;;;; text/html. The page is embedded at READ time -- the #. form is evaluated
-;;;; while the source is read (on the compile host for the JVM/WASM paths), so
-;;;; the program carries the page as a literal and needs NO runtime
-;;;; capabilities: no filesystem, no environment, no arguments. Point the #.
-;;;; path at the file to serve and recompile/restart; the path is relative to
-;;;; the working directory.
+;;;; text/html. The page is embedded at READ time -- the #. form in
+;;;; page-html.lisp is evaluated while the source is read (on the compile host
+;;;; for the JVM/WASM paths), so the program carries the page as a literal and
+;;;; needs NO runtime capabilities: no filesystem, no environment, no
+;;;; arguments. The slurp lives in page-html.lisp rather than here because a
+;;;; #. reads its own file's load context and the ENTRY file has none: (load)
+;;;; splices page-html.lisp with its context bracketed, so the default
+;;;; page.html resolves beside the sources wherever the compile runs. Point
+;;;; the HTML_FILE path at the file to serve and recompile/restart; the
+;;;; override is working-directory-relative, the default is source-relative.
 ;;;;
 ;;;; The handler is the Clack shape (env plist in, (status headers body) out)
 ;;;; served by rontolisp:http-handler -- no socket code of our own, request
@@ -15,12 +19,10 @@
 ;;;; Run (WASM component):     java -jar $JAR examples/net/serve-html.lisp -o serve-html.wasm --component && wasmtime serve serve-html.wasm
 ;;;; Talk to it with:          curl http://127.0.0.1:8080/   (or a browser)
 
-(defparameter *html*
-  ;; Read at READ time: on the compile path the file is slurped on the build
-  ;; host, so the page travels inside the artifact as a literal. Pick the file
-  ;; with HTML_FILE at BUILD time (default "page.html"); the artifact keeps
-  ;; NO runtime filesystem/environment capability.
-  #.(uiop:read-file-string (or (uiop:getenv "HTML_FILE") "page.html")))
+;; The page, as a literal: (load) splices page-html.lisp inline on the compile
+;; paths (defining *html* there, no runtime file read) and loads it at run
+;; time on the interpreter.
+(load "page-html.lisp")
 
 (defun handle (env)
   (declare (ignore env))
