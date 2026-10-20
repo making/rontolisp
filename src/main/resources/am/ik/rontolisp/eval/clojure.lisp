@@ -17199,6 +17199,43 @@
                                          (setq started t)
                                          (funcall rf acc x)))) nil))))
 
+(defun rontolisp::%clojure-halt-p (x)
+  "Whether X is the (:C%HALT value) halt marker a halt-when step answers
+   through reduced."
+  (and (consp x) (eq (car x) :C%HALT) (consp (cdr x)) (null (cdr (cdr x)))))
+
+(defun rontolisp::%clojure-xf-halt-when (pred retf)
+  "(halt-when pred [retf]): ends the transduction with the triggering input
+   when PRED holds of it; with RETF the (completed) result so far and the
+   triggering input through RETF. The completion answers the halt unwrapped
+   and runs no further completion, like the oracle's."
+  (lambda (rf)
+    (rontolisp::%clojure-xf-rf rf
+                               (lambda (acc x)
+                                 (if (rontolisp::%clojure-truthy
+                                      (funcall pred x))
+                                     (rontolisp::%clojure-reduced
+                                      (list :C%HALT
+                                            (if (rontolisp::%clojure-truthy
+                                                 retf)
+                                                (funcall retf (funcall rf acc)
+                                                         x)
+                                                x)))
+                                     (funcall rf acc x)))
+                               (lambda (acc)
+                                 (if (rontolisp::%clojure-halt-p acc)
+                                     (car (cdr acc))
+                                     (funcall rf acc))))))
+
+(defun rontolisp::%clojure-halt-when-v (&rest args)
+  "halt-when as a value: [pred] or [pred retf]."
+  (let ((n (rontolisp::%clojure-check-arity args 1 2 "halt-when")))
+    (if (= n 1)
+        (rontolisp::%clojure-xf-halt-when (rontolisp::%clojure-as-fn (car args))
+                                          nil)
+        (rontolisp::%clojure-xf-halt-when (rontolisp::%clojure-as-fn (car args))
+         (rontolisp::%clojure-as-fn (car (cdr args)))))))
+
 (defun rontolisp::%clojure-xf-comp (xfs)
   "The transducers of the XFS list composed like comp: the first sees each
    input first."

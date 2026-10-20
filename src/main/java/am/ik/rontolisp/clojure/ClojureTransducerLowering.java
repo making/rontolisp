@@ -11,12 +11,13 @@ import org.jspecify.annotations.Nullable;
  * Transducers in the Clojure lowering: the one-argument arities of the seq verbs
  * ({@code (map f)}, {@code (take n)}, {@code (dedupe)}, ...) and their consumers
  * ({@code transduce}, {@code eduction}, {@code sequence}, {@code completing},
- * {@code reduced} and its companions, {@code cat}, {@code take-nth}). A transducer is
- * what the oracle's is -- a function from a reducing function to a reducing function --
- * built by a spliced {@code rontolisp::%clojure-xf-} worker in {@code clojure.lisp}, so
- * {@code comp} composes transducers left to right with no help and a program may write
- * its own. {@code into}'s transducer arity lowers in {@link ClojureUpdateLowering} and
- * {@code reduce} (which stops at a {@code reduced} answer) in {@link ClojureSeqLowering}.
+ * {@code reduced} and its companions, {@code cat}, {@code halt-when}, {@code take-nth}).
+ * A transducer is what the oracle's is -- a function from a reducing function to a
+ * reducing function -- built by a spliced {@code rontolisp::%clojure-xf-} worker in
+ * {@code clojure.lisp}, so {@code comp} composes transducers left to right with no help
+ * and a program may write its own. {@code into}'s transducer arity lowers in
+ * {@link ClojureUpdateLowering} and {@code reduce} (which stops at a {@code reduced}
+ * answer) in {@link ClojureSeqLowering}.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -186,6 +187,12 @@ final class ClojureTransducerLowering {
 			case "cat":
 				ClojureCoreLowering.arity(name, n, 1, 1);
 				return call("xf-cat", fnArgs(ctx, items, 1, 1));
+			case "halt-when":
+				ClojureCoreLowering.arity(name, n, 1, 2);
+				List<LispVal> haltArgs = fnArgs(ctx, items, 1, 1);
+				haltArgs
+					.add(n == 2 ? ClojureBindingLowering.realFnValue(ctx, items.get(2)) : ClojureLowering.NIL_CONST);
+				return call("xf-halt-when", haltArgs);
 			case "take-nth":
 				ClojureCoreLowering.arity(name, n, 2, 2);
 				return call("take-nth", List.of(ctx.lower(items.get(1)), ctx.lower(items.get(2))));
@@ -202,7 +209,7 @@ final class ClojureTransducerLowering {
 	 */
 	static @Nullable LispVal valueOf(String name) {
 		String worker = switch (name) {
-			case "transduce", "eduction", "sequence", "completing", "take-nth" -> name + "-v";
+			case "transduce", "eduction", "sequence", "completing", "take-nth", "halt-when" -> name + "-v";
 			case "reduced", "unreduced", "ensure-reduced" -> name;
 			case "reduced?" -> "reduced-pred";
 			case "cat" -> "xf-cat";

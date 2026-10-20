@@ -223,7 +223,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `gen-class` `gen-interface`; `use-fixtures`; `eval` and `resolve` of a computed symbol at run time ("Macros"); `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `future-call` `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `halt-when` (transducer); `compile` `get-thread-bindings` `bound-fn*` `read+string` |
+| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `gen-class` `gen-interface`; `use-fixtures`; `eval` and `resolve` of a computed symbol at run time ("Macros"); `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `future-call` `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `bound-fn*` `read+string` |
 
 ## Deviations
 
@@ -5349,7 +5349,16 @@ tail after an early `take` stop).
   calls and values) wraps such an argument first.
 - Deviations: an `eduction` is a seq computed once (the oracle re-runs it per reduction and
   `println` prints the object); `take-nth` of the seq arity signals on a zero step and
-  steps by the magnitude of a negative one; `halt-when`/`random-sample` are absent.
+  steps by the magnitude of a negative one; `random-sample`'s transducer arity is
+  absent (its collection arity answers). `halt-when` (2026-10-20) lowers like the
+  oracle's: with no `retf` the triggering input is the result and no further
+  completion runs, with `retf` the (completed) result so far and the input through
+  it; `sequence`/`eduction` stop before the triggering input either way. The halt
+  marker is the private `(:C%HALT value)` wrapper, not the oracle's
+  `{::halt value}` map, so a final result that is a map holding `:clojure.core/halt`
+  answers itself here where the oracle unwraps it; and a `reduce`/`transduce` over
+  an eduction whose transducer halts with a value answers the computed seq's
+  reduction, not the re-run's (the computed-once eduction above).
 
 ## Case mapping
 

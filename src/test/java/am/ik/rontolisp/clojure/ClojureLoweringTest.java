@@ -3294,8 +3294,6 @@ class ClojureLoweringTest {
 			.hasMessageContaining("taps have no rendezvous design");
 		assertThatThrownBy(() -> Clojure.read("(send-via e a f)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("agents take no custom executor");
-		assertThatThrownBy(() -> Clojure.read("(halt-when p)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("halt-when is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(enumeration-seq x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("enumeration-seq is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(resultset-seq x)", null)).isInstanceOf(LispReadException.class)
@@ -4225,6 +4223,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/transduce");
 		assertThatThrownBy(() -> Clojure.read("(take-nth 1 2 3)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/take-nth");
+		assertThatThrownBy(() -> Clojure.read("(halt-when odd? + -)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/halt-when");
 		assertThatThrownBy(() -> Clojure.read("(completing)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/completing");
 		assertThatThrownBy(() -> Clojure.read("(replace {} [] [])", null)).isInstanceOf(LispReadException.class)
@@ -4388,6 +4388,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(reduced? (reduced 1))"))
 			.contains("(RONTOLISP::%CLOJURE-REDUCED-PRED (RONTOLISP::%CLOJURE-REDUCED 1))");
 		assertThat(lowered("(into [] cat [[1]])")).contains("#'RONTOLISP::%CLOJURE-XF-CAT");
+		assertThat(lowered("(halt-when odd?)")).contains("(RONTOLISP::%CLOJURE-XF-HALT-WHEN");
+		assertThat(lowered("(into [] (halt-when odd?) [1])")).contains("%CLOJURE-XF-HALT-WHEN");
+		assertThat(lowered("(map halt-when [odd?])")).contains("#'RONTOLISP::%CLOJURE-HALT-WHEN-V");
 		// reduce goes through the lazy-aware, reduced-aware runtime; a value that may
 		// hold a collection is wrapped over the dispatcher at the call site
 		assertThat(lowered("(reduce + [1])")).contains("(RONTOLISP::%CLOJURE-REDUCE #'+ (VECTOR 1))");

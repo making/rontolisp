@@ -503,8 +503,6 @@ final class ClojureCoreLowering {
 						"enumeration-seq is not supported yet: host enumerations stop at the host boundary");
 			case "resultset-seq":
 				throw new LispReadException("resultset-seq is not supported yet: JDBC stops at the host boundary");
-			case "halt-when":
-				throw new LispReadException("halt-when is not supported yet: its transducer has no lowering");
 			case "get-thread-bindings":
 				throw new LispReadException(
 						"get-thread-bindings is not supported yet: thread bindings are not reified at run time");
