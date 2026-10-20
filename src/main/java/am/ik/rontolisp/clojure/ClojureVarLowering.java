@@ -647,16 +647,12 @@ final class ClojureVarLowering {
 	private static LispVal coreVarOf(ClojureLowering ctx, String name) {
 		String key = ClojureCoreNames.PREFIX + name;
 		boolean macro = ClojureCoreNames.isMacro(name);
-		LispVal root;
-		if (macro) {
-			root = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("Can't take value of a macro: #'" + key));
-		}
-		else {
-			root = ctx.coreValueOrNull(name);
-			if (root == null) {
-				throw new LispReadException("var of a clojure.core var is not supported yet: #'" + key);
-			}
+		// a macro's root is its expander as a value (g16): deref/@ of the var hands
+		// back the fn, like a program macro's table entry handed out; every other
+		// core name's root is its core value (what clojure.core/name reads)
+		LispVal root = ctx.coreValueOrNull(name);
+		if (root == null) {
+			throw new LispReadException("var of a clojure.core var is not supported yet: #'" + key);
 		}
 		List<LispVal> meta = new ArrayList<>(List.of(new LispSymbol("%hash-map"), keyword("name"),
 				ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol(name)), keyword("ns"),

@@ -233,12 +233,14 @@
  の値）は見えますが、それ以外のトップレベル文はそこでは実行されず、本体が変えたもの
  （プログラムの atom への `swap!`）はプログラムからは見えません。oracle はコンパイルと
  実行を一つのプロセスで行います。プログラムのマクロが展開した `defmethod` やプロトコル
- 拡張はそこでは見えません。定義より上での呼び出しは拒否され、マクロに関数値はありません。値としては
- `refer-clojure`・`definline`・`with-precision` は未知の名前のままです（`(def x
- refer-clojure)` は拒否されます）。マクロの var の値は後回しのため、そこの確定はそちらに残ります。special
+ 拡張はそこでは見えません。定義より上での呼び出しは拒否され、プログラム定義のマクロに関数値はありません。special
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
- 受け付けます（special form なら呼び出し位置では無視します）。
+ 受け付けます（special form なら呼び出し位置では無視します）。値としては、core マクロの
+ 名前は quote したフォームに対する実行時の一回展開を答えます（`(def x when)` は
+ `macroexpand-1` と同じ答えを渡します。core フォームに対してはフォーム自身です。
+ 実行時の表が持つのはプログラム定義のマクロだけだからです）。oracle はむき出しの
+ マクロ名を値位置でコンパイル時に拒否します。
 - `eval` と、計算で得たシンボルの `resolve` は、プログラムの lower 中（マクロ本体と
  そこから呼ぶもの）でだけ動きます。実行時は `UnsupportedOperationException` を投げ、
  oracle は評価・解決します。`resolve` は、このフロントエンドにない `clojure.core` の
@@ -267,10 +269,12 @@
   見ます（オラクルの var はすぐに最新を見ます）。`:ns` は名前空間のシンボルです（オラクルは Namespace オブジェクト）。
   入口ファイルの `:file` は与えたままのパスです（オラクルは絶対パスにします）。
   `def`/`defn`/`defn-`/`defmacro` 以外（`defmulti`、`deftest`、レコードのファクトリなど）で
-  定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
-  上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
-  `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
-  持ちます）。ここで値を持たない core の var（`#'and`）は拒否されます。
+  定義された var は `:name` と `:ns` だけを持ちます。プログラム定義のマクロの var の
+  deref はシグナルを上げます（オラクルは展開関数を答えます）。core マクロの var の
+  deref は、むき出しの core マクロ名と同じ一回展開を答えます。`clojure.core` の var の
+  メタデータは `:name`、`:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、
+  `:doc`、`:added` と位置も持ちます）。ここで値を持たない core の var
+  （`#'add-classpath`）は拒否されます。
 - 名前空間は oracle の `#object[clojure.lang.Namespace "user"]` から identity hash を除いた
   形で印字され、その `class` は `:clojure.lang.Namespace` を答えます。`the-ns` と `find-ns` が
   知っているのは、呼び出しより上でプログラムが作った名前空間、require したライブラリ、

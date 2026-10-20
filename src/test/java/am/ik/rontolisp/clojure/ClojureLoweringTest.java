@@ -3158,6 +3158,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void coreMacroNamesAnswerTheirExpanderAsAValue() {
+		// g16: a core-macro name with no value arm answers the macro's expander as a
+		// value -- the run-time once-expansion over the quoted form, shared per name
+		// like every other site-independent core value. Program-defined macros keep
+		// their refusal (macrosHaveNoValue).
+		assertThat(lowered("(def x when)")).contains("C%MACROEXPAND-1").contains("%CLOJURE-SHARED-VALUE");
+		assertThat(lowered("(def x (deref (resolve 'when)))")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x @(resolve 'when))")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x (deref (resolve 'cond->)))")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x clojure.core/when)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(list when when)")).contains("%CLOJURE-SHARED-VALUE");
+		// the g22/g23/g25 slices left value-pinning to g16: their macros lower as
+		// values now, with no per-verb behavior change
+		assertThat(lowered("(def x amap)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x sync)")).contains("C%MACROEXPAND-1");
+		assertThat(lowered("(def x definline)")).contains("C%MACROEXPAND-1");
+	}
+
+	@Test
 	void unquoteOutsideSyntaxQuoteIsAnError() {
 		assertThatThrownBy(() -> Clojure.read("(list ~x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unquote outside syntax-quote");
@@ -3535,7 +3554,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn str [] 1) #'clojure.core/str"))
 			.contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\"");
 		assertThat(lowered("(defn str [] 1) #'str")).contains("\"user/str\"").doesNotContain("clojure.core/str");
-		assertThat(lowered("#'when")).contains("Can't take value of a macro: #'clojure.core/when")
+		assertThat(lowered("#'when")).contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/when\" (LAMBDA NIL")
+			.contains("C%MACROEXPAND-1")
 			.contains("(LIST :C%KEYWORD \"macro\") T");
 		assertThat(lowered("#'*out*"))
 			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL (RONTOLISP::%CLOJURE-OUT))")

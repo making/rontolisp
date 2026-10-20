@@ -245,13 +245,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   body first reads it), but no other top-level statement runs there, and what the body
   changes (a `swap!` of a program atom) the program never sees -- the oracle compiles
   and runs in one process. A `defmethod` or protocol extension a program macro expands
-  to is not seen there. A call above a macro's definition is refused, and a macro has
-  no function value. A `defmacro` of a special
+  to is not seen there. A call above a macro's definition is refused, and a program
+  macro has no function value. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
-  accepts it (and ignores it at call sites, for a special form). As values,
-  `refer-clojure`, `definline` and `with-precision` stay unknown names (`(def x
-  refer-clojure)` refuses): macro var values come later, so their pinning stays there.
+  accepts it (and ignores it at call sites, for a special form). As values, core
+  macro names answer the run-time once-expansion over the quoted form: `(def x
+  when)` hands out the same answer `macroexpand-1` gives (for a core form the form
+  itself -- the run-time table holds program macros only), where the oracle refuses
+  a bare macro name in value position at compile time.
 - `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
   macro body and what it calls); at run time they throw an
   `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
@@ -280,10 +282,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is a Namespace object), `:file` of the entry file is the path as given (the oracle
   absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
   (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
-  Deref of a macro's var signals (the oracle answers its expander function). A
-  `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
-  oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
-  with no value here (`#'and`) is refused.
+  Deref of a program macro's var signals (the oracle answers its expander function);
+  deref of a core macro's var answers the same once-expansion a bare core-macro
+  name does. A `clojure.core` var's metadata is only `:name`, `:ns` and a macro's
+  `:macro` (the oracle's also carries `:arglists`, `:doc`, `:added` and the position),
+  and a core var with no value here (`#'add-classpath`) is refused.
 - A namespace prints as the oracle's `#object[clojure.lang.Namespace "user"]` without the
   identity hash, and `class` of one answers `:clojure.lang.Namespace`. `the-ns` and
   `find-ns` know the namespaces the program created above the call, the libraries it

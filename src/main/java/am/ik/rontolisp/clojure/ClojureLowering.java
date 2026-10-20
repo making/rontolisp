@@ -5373,6 +5373,12 @@ public final class ClojureLowering {
 			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
 			default -> {
+				if (ClojureCoreNames.isMacro(name)) {
+					// a core-macro name with no value arm answers the macro's expander
+					// as a value (g16): the run-time once-expansion over the quoted
+					// form, shared per name like every other site-independent value
+					yield ClojureMacroLowering.coreMacroValue(this);
+				}
 				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
 				if (predicate != null) {
 					yield predicate;

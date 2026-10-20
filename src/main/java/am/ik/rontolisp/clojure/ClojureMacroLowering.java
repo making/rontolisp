@@ -1380,6 +1380,28 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * A core macro's expander as a value: a one-argument function over the quoted call
+	 * form answering the run-time once-expansion ({@link #MACROEXPAND_1}), so
+	 * {@code (def x when)}, {@code @(resolve 'when)} and
+	 * {@code (deref (resolve 'cond->))} hand out a real fn value. A core macro lowers
+	 * inline from its call-site datums and owns no per-macro expander, so the value
+	 * delegates to the program's run-time expander: {@code (x f)} answers exactly what
+	 * {@code (macroexpand-1 f)} answers, on every backend -- the identity for a core form
+	 * (the run-time table holds program macros only), the expansion for a program
+	 * macro's. The oracle refuses a bare macro name in value position at compile time and
+	 * hands back the macro fn through {@code deref} of the var; here both positions
+	 * answer this delegate (deviation).
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal coreMacroValue(ClojureLowering ctx) {
+		expandsAtRunTime(ctx);
+		LispSymbol form = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(form),
+				ClojureLowerUtil.list(new LispSymbol(MACROEXPAND_1), form));
+	}
+
+	/**
 	 * The program expands at run time: it carries the macro runtime, which reads
 	 * {@code *ns*}.
 	 */

@@ -4054,6 +4054,33 @@ cases:
       :x3 :f4 :new :yes
       [3 ab [1 2]] 6 1 :caught true false
       #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
+  - name: core-macro-names-answer-their-expander-as-a-value
+    # g16: a core-macro name with no value arm answers the macro's expander as a
+    # value -- the run-time once-expansion over the quoted form. (def x when),
+    # @(resolve 'when) and (deref (resolve 'cond->)) lower and run on all four
+    # backends; calling the value answers what macroexpand-1 answers, for a core
+    # form (the run-time table holds program macros only, so the form itself) and
+    # for a program macro's expansion alike. Program-defined macros keep their
+    # refusal. Deviation: the oracle refuses a bare macro name in value position
+    # at compile time; here it answers the delegate, like deref does there.
+    source: |
+      (def g16-x when)
+      (def g16-sync sync)
+      (def g16-amap amap)
+      (defmacro g16-twice [a] `(* 2 ~a))
+      (println (fn? g16-x) (fn? @(resolve 'when)) (fn? (deref (resolve 'cond->))))
+      (println (fn? g16-sync) (fn? g16-amap))
+      (println (= (g16-x '(when true 1)) (macroexpand-1 '(when true 1))))
+      (println (= (g16-x '(g16-twice 21)) (macroexpand-1 '(g16-twice 21))))
+      (println (g16-x '(g16-twice 21)))
+      (println (try (deref #'g16-twice) (catch Exception e :refused)))
+    expected: |
+      true true true
+      true true
+      true
+      true
+      (clojure.core/* 2 21)
+      :refused
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
     # A compiled program carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.

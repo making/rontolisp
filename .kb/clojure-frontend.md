@@ -114,7 +114,7 @@ answered `2 5 3` before).
 | `for` | `(rontolisp::%clojure-for coll step depth)` | "Laziness". Modifiers as in `doseq` (an inner `:while` ends only its level); unknown keywords the oracle's `Invalid ... keyword`; an empty vector refused |
 | `dotimes [i n]` | the core `dotimes` over `(truncate n)` | the oracle's `intCast` (`2.5` counts `0 1`); exactly one plain name |
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
-| `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
+| `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` answer the run-time once-expansion as values, like every core macro (g16, "Macros") |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
 | `if-some` `when-some` | `if-let`/`when-let` with `(null tmp)` as the test (`ClojureSeqLowering.testedBinding`, shared by all four) | `false` binds. The pattern destructures inside the taken branch only, so the else sees the outer names and a failing init destructures nothing; until 2026-10-08 `if-let`/`when-let` destructured before the test (`(let [x 1] (if-let [x nil] :t x))` answered nil, `(when-let [[a] false] a)` signalled `nth`), clojure-spec `if-let-and-when-let-destructure-only-in-the-taken-branch`. Refusals in the oracle's words (`if-some requires a vector for its binding`, `... exactly 2 forms in binding vector`, `... 1 or 2 forms after binding vector`) |
 | `case` | `(let ((tmp e)) (if TEST1 R1 (if TEST2 R2 ... DEFAULT)))` (`ClojureControlLowering.caseOf`) | one test per constant, picked at lower time by its kind -- the oracle's hash-then-`=` (verified against clj 1.12.6): `eql` for a number or char (`1.0` never matches `1`, `-0.0` never `0.0`, `##NaN` lowers to no test), `equal` for a string or keyword constant, `eq` for a symbol, `null`/`eq` for nil/true/false, `%clojure-equal` for a vector, map, set or `((1 2))` list constant (a vector constant matches a list or lazy seq). A list test is the alternatives. Duplicates are refused at lower time (`Duplicate case test constant: X`, `caseKey`: `1`=`1N`, `-0.0`=`0.0`, a map or set in any order, `[1]`=`((1))`; NaN never), an empty list test is refused (the oracle's `max` arity error). No default: `%clojure-illegal-argument-exception` over `No matching clause: ` + `str` of the value. Linear, never a jump table: `1M` is the integer `1` here (deviation) |
@@ -3295,7 +3295,12 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   same lambda expands call sites datum-to-datum at lower time (through
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
   time. Docstring and attr map skipped, `&` rest works. A call
-  above the definition names the missing expander; a macro has no function value; a
+  above the definition names the missing expander; a program macro has no function
+  value (a core macro's name answers its expander as a value instead: the run-time
+  once-expansion over the quoted form, `ClojureMacroLowering.coreMacroValue`, shared
+  per name like every other site-independent value -- g16; the oracle refuses a bare
+  macro name in value position at compile time and hands back the fn through deref
+  of the var, while here both positions answer the delegate); a
   later `def`/`defn` wins the call sites back. A redefined `defmacro` (or a first one
   over a macro, function, valued or declared root) validates and notifies like the
   oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
@@ -6305,10 +6310,12 @@ resolve var`.
 - **Core vars** (`coreVarOf`): a name no program var claims, or a `clojure.core/`
   spelling, is `(%clojure-var "clojure.core/x" (lambda () CORE-VALUE) META)`, the value
   `coreValueOrNull` gives `clojure.core/x`; a macro's (`ClojureCoreNames.MACROS`, the
-  oracle's 79) root signals `Can't take value of a macro`. META is `:name`/`:ns` (+
+  oracle's 79) root is the same once-expansion delegate a bare core-macro name
+  answers (g16, `ClojureMacroLowering.coreMacroValue`), so deref/`@` of the var hands
+  back the fn. META is `:name`/`:ns` (+
   `:macro`) only -- the oracle's `:arglists`/`:doc`/`:added`/position would be a table
-  per core name (deviation). A core name with no value here (`#'all-ns`) keeps the
-  refusal `var of a clojure.core var is not supported yet`. The core specials
+  per core name (deviation). A core name with no value here (`#'add-classpath`) keeps
+  the refusal `var of a clojure.core var is not supported yet`. The core specials
   (`ClojureCoreSpecials`: the streams, `*agent*`, the flags) are `%clojure-var-dynamic`
   sites. On clj 1.12.6 (2026-10-03, `clj -M file` and the REPL alike):
   `clojure.main` binds `*ns*`, the print/compiler flags, `*command-line-args*`, `*file*`,
