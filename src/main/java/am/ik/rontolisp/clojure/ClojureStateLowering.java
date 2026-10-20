@@ -963,6 +963,41 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * {@code (sync flags body...)}: the flags dropped unevaluated (the oracle's
+	 * {@code flags-ignored-for-now}, never spliced into its expansion) and the body run
+	 * as one transaction under the same one lock {@code dosync} takes -- a nested
+	 * {@code sync} joins the running transaction, and nothing ever retries, so the body's
+	 * side effects run once. At least the flags are required, like the oracle's arity.
+	 */
+	static LispVal syncOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureCoreLowering.arity("sync", items.size() - 1, 1, -1);
+		List<LispVal> dosyncItems = new ArrayList<>(items);
+		dosyncItems.remove(1);
+		return dosyncOf(ctx, dosyncItems);
+	}
+
+	/**
+	 * {@code (io! body...)}: the body, refused inside a transaction with the oracle's
+	 * {@code IllegalStateException} ({@code I/O in transaction}, read off
+	 * {@code %clojure-stm-log} like {@code await}'s guard) and run as-is outside one,
+	 * answering its last value.
+	 */
+	static LispVal ioOf(ClojureLowering ctx, List<LispVal> items) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), STM_LOG,
+				ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE, LispString.literal("I/O in transaction")),
+				ctx.body(items, 1));
+	}
+
+	/**
+	 * {@code (with-loading-context body...)}: the body as-is -- loading has no separate
+	 * context to thread through here (the oracle rebinds its compiler loader around it,
+	 * unobservable past the load).
+	 */
+	static LispVal withLoadingContextOf(ClojureLowering ctx, List<LispVal> items) {
+		return ctx.body(items, 1);
+	}
+
+	/**
 	 * {@code (alter ref fun args...)} and {@code (commute ref fun args...)}: the function
 	 * applied to the old value and the arguments, written through the transaction's log.
 	 * Transactions run one at a time, so the two commute identically (the oracle may run

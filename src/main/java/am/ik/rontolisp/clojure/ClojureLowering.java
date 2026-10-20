@@ -4003,6 +4003,15 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "dosync")) {
 			return capturingMutableFields(() -> ClojureStateLowering.dosyncOf(this, items));
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "sync")) {
+			return capturingMutableFields(() -> ClojureStateLowering.syncOf(this, items));
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "io!")) {
+			return ClojureStateLowering.ioOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-loading-context")) {
+			return ClojureStateLowering.withLoadingContextOf(this, items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "alter")) {
 			return ClojureStateLowering.alterOf(this, items, "alter");
 		}
