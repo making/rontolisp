@@ -29,14 +29,20 @@ form `future`/`pmap` users reach for.
 
 ## Definition of done
 
-- Each of the 17 lowers and runs on all four backends, pinned by tests
-  alongside the existing Clojure lowering tests.
-- `amap`/`areduce`/`bound-fn`/`definline` desugar the way the oracle's macros
-  do (the same shapes `ClojureLoopLowering` uses for `doseq`).
-- `sync`/`io!` lower to their bodies plus whatever transaction discipline the
-  refs section already has; where refs are unsupported the body still runs.
-- A re-run of the presence probe (script kept beside this todo's artefacts)
-  reports 679/679 in head position and the same as values for the fns.
+This item is worked slice by slice; each slice has its own todo and DoD:
+
+- `.todo/g22`: `amap`/`areduce`
+- `.todo/g23`: `sync`/`io!`/`with-loading-context`
+- `.todo/g24`: `bound-fn`/`with-local-vars`/`pvalues`
+- `.todo/g25`: `refer-clojure`/`definline`/`with-precision`
+- `.todo/g26`: the deprecated/internal six (`add-classpath`,
+  `primitives-classnames`, `EMPTY-NODE`, `Inst`, `PrintWriter-on`,
+  `StackTraceElement->vec`), whose disposition this item's original
+  "17/17 lower and run" requirement is amended by -- see `g26`.
+
+This item is done when all five slices are done and a re-run of the presence
+probe (script kept beside this todo's artefacts) reports 679/679 in head
+position and the same as values for the fns, modulo the `g26` dispositions.
 
 ## Non-goals
 
