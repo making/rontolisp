@@ -60,6 +60,8 @@
 | `byte-array` | `(vec (byte-array [1 -1 300]))` | `[1 -1 44]` |
 | `bytes` | `(bytes nil)` | `nil` |
 | `aclone` | `(vec (aclone (byte-array [1 2])))` | `[1 2]` |
+| `amap` | `(vec (amap (int-array [1 2]) i r (* 10 i)))` | `[0 10]` |
+| `areduce` | `(let [a (int-array [1 2 3])] (areduce a i r 0 (+ r (aget a i))))` | `6` |
 | `aset-byte` | `(aset-byte (byte-array 1) 0 -5)` | `-5` |
 | `object-array` | `(vec (object-array [1 nil]))` | `[1 nil]` |
 | `to-array` | `(vec (to-array [1 nil]))` | `[1 nil]` |

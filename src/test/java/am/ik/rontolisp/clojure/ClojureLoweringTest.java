@@ -1071,6 +1071,48 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void amapAreduceLowerToIndexedWalks() {
+		// amap clones the array once and sets each element by index, answering
+		// the clone; areduce walks the index with the accumulator, answering it.
+		// Both lower the oracle's own macroexpansion, so a program's redefinition
+		// of an expansion verb never leaks in.
+		assertThat(lowered("(let [a [1] e 2] (amap a i r e))")).contains("LABELS")
+			.contains("RONTOLISP::%CLOJURE-ALENGTH")
+			.contains("ACLONE")
+			.contains("(RONTOLISP::%CLOJURE-ASET ")
+			.doesNotContain("DOLIST");
+		assertThat(lowered("(let [a [1] e 2] (areduce a i r 0 e))")).contains("LABELS")
+			.contains("RONTOLISP::%CLOJURE-ALENGTH")
+			.doesNotContain("ACLONE")
+			.doesNotContain("DOLIST");
+		assertThat(lowered("(defn alength [x] 99) (let [a [1]] (amap a i r (alength a)))"))
+			.contains("RONTOLISP::%CLOJURE-ALENGTH")
+			.contains("|c%alength|");
+		assertThat(lowered("(let [a [1] e 2] (clojure.core/amap a i r e))"))
+			.isEqualTo(lowered("(let [a [1] e 2] (amap a i r e))"));
+		assertThat(lowered("(let [a [1] e 2] (clojure.core/areduce a i r 0 e))"))
+			.isEqualTo(lowered("(let [a [1] e 2] (areduce a i r 0 e))"));
+		// both are macros in the oracle, so an is over one is the any-form
+		// assertion, like over doseq
+		assertThat(lowered(
+				"(ns t (:use clojure.test)) (deftest a (let [x [1]] (is (amap x i r i)) (is (areduce x i r 0 i))))"))
+			.contains("RONTOLISP::%CLOJURE-TEST-ANY")
+			.doesNotContain("RONTOLISP::%CLOJURE-TEST-PRED");
+		assertThatThrownBy(() -> Clojure.read("(amap)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/amap");
+		assertThatThrownBy(() -> Clojure.read("(amap a i r)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/amap");
+		assertThatThrownBy(() -> Clojure.read("(amap a i r e x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (5) passed to: clojure.core/amap");
+		assertThatThrownBy(() -> Clojure.read("(areduce)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/areduce");
+		assertThatThrownBy(() -> Clojure.read("(areduce a i r init)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (4) passed to: clojure.core/areduce");
+		assertThatThrownBy(() -> Clojure.read("(areduce a i r init e x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (6) passed to: clojure.core/areduce");
+	}
+
+	@Test
 	void defmultiIsATablePlusADispatcherDefun() {
 		assertThat(lowered("(defmulti area :shape)")).contains("DEFUN |c%area|")
 			.contains("GETHASH")

@@ -68,7 +68,7 @@ final class ClojureTestLowering {
 			"sync", "io!", "time", "lazy-seq", "lazy-cat", "delay", "future", "assert", "comment", "declare", "defn",
 			"defn-", "defmacro", "defmulti", "defmethod", "defonce", "defprotocol", "defrecord", "deftype",
 			"definterface", "defstruct", "extend-protocol", "extend-type", "reify", "proxy", "memfn", "import", "ns",
-			"locking", "gen-class", "vswap!", "monitor-enter", "monitor-exit");
+			"locking", "gen-class", "vswap!", "monitor-enter", "monitor-exit", "amap", "areduce");
 
 	/** The run-time helpers, as the lowered program spells them. */
 	static final String INIT = "RONTOLISP::%CLOJURE-TEST-INIT";

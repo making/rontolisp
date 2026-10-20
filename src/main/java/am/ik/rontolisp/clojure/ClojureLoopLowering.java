@@ -204,6 +204,93 @@ final class ClojureLoopLowering {
 	}
 
 	/**
+	 * {@code (amap a idx ret expr)}: the oracle's array map -- the array evaluated once,
+	 * cloned, each element of the clone set to the expression's value by index, answering
+	 * the clone. Lowers the oracle's own macroexpansion as datums, so {@code let},
+	 * {@code loop}, {@code recur}, {@code alength}, {@code aclone} and {@code aset} keep
+	 * their own rows (a program's redefinition never leaks in: every synthesized verb
+	 * head is {@code clojure.core/}-qualified while the special forms stay bare, like the
+	 * oracle's syntax-quote). Typed arrays are vectors here, so the answer is the cloned
+	 * vector.
+	 */
+	static LispVal amapOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 5,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/amap");
+		String arr = "amap-" + ctx.counter++;
+		String len = "amaplen-" + ctx.counter++;
+		LispVal arrRef = new LispSymbol(arr);
+		LispVal lenRef = new LispSymbol(len);
+		// (loop [idx 0] (if (< idx len) (do (aset ret idx expr) (recur
+		// (unchecked-inc idx))) ret))
+		LispVal advance = bareCall("recur", List.of(coreCall("unchecked-inc", List.of(items.get(2)))));
+		LispVal store = coreCall("aset", List.of(items.get(3), items.get(2), items.get(4)));
+		LispVal again = bareCall("if", List.of(coreCall("<", List.of(items.get(2), lenRef)),
+				bareCall("do", List.of(store, advance)), items.get(3)));
+		LispVal loop = coreBinding("loop", List.of(items.get(2), new LispInteger(0)), again);
+		// (let [arr a] (let [len (alength arr)] (let [ret (aclone arr)] loop)))
+		return ctx.lowerTailSlot(ClojureBindingLowering.letDatum(arr, items.get(1),
+				ClojureBindingLowering.letDatum(len, coreCall("alength", List.of(arrRef)),
+						coreBinding("let", List.of(items.get(3), coreCall("aclone", List.of(arrRef))), loop))));
+	}
+
+	/**
+	 * {@code (areduce a idx ret init expr)}: the oracle's array reduction -- the array
+	 * evaluated once, the index walked from zero with the accumulator set to the
+	 * expression's value at each step, answering the accumulator. Lowers the oracle's own
+	 * macroexpansion as datums, like {@link #amapOf}.
+	 */
+	static LispVal areduceOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 6,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/areduce");
+		String arr = "areduce-" + ctx.counter++;
+		String len = "areducelen-" + ctx.counter++;
+		LispVal arrRef = new LispSymbol(arr);
+		LispVal lenRef = new LispSymbol(len);
+		// (loop [idx 0 ret init] (if (< idx len) (recur (unchecked-inc-int idx)
+		// expr) ret))
+		LispVal advance = bareCall("recur",
+				List.of(coreCall("unchecked-inc-int", List.of(items.get(2))), items.get(5)));
+		LispVal again = bareCall("if", List.of(coreCall("<", List.of(items.get(2), lenRef)), advance, items.get(3)));
+		LispVal loop = coreBinding("loop", List.of(items.get(2), new LispInteger(0), items.get(3), items.get(4)),
+				again);
+		// (let [arr a] (let [len (alength arr)] loop))
+		return ctx.lowerTailSlot(ClojureBindingLowering.letDatum(arr, items.get(1),
+				ClojureBindingLowering.letDatum(len, coreCall("alength", List.of(arrRef)), loop)));
+	}
+
+	/**
+	 * The datum {@code (HEAD args...)} over an oracle special form: bare, the way the
+	 * oracle's syntax-quote leaves {@code if}, {@code do} and {@code recur} -- no program
+	 * definition shadows them.
+	 */
+	private static LispVal bareCall(String head, List<LispVal> args) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(new LispSymbol(head));
+		form.addAll(args);
+		return ClojureLowerUtil.list(form);
+	}
+
+	/**
+	 * The datum {@code (clojure.core/HEAD args...)}: the core meaning whatever the
+	 * program defines under the name, like the oracle's syntax-quote.
+	 */
+	private static LispVal coreCall(String head, List<LispVal> args) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(new LispSymbol(ClojureCoreNames.PREFIX + head));
+		form.addAll(args);
+		return ClojureLowerUtil.list(form);
+	}
+
+	/**
+	 * The datum {@code (clojure.core/HEAD [pairs...] body)}: a binding form over the raw
+	 * pair datums, lowering through the head's own row.
+	 */
+	private static LispVal coreBinding(String head, List<LispVal> pairs, LispVal body) {
+		return ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + head),
+				new LispCons(ClojureReader.VECTOR, ClojureLowerUtil.list(pairs)), body));
+	}
+
+	/**
 	 * {@code doseq}: side-effecting iteration over the seq view, answering nil. One
 	 * stepped {@code do} loop per binding pair ({@link #stepOf}), nested left to right;
 	 * patterns destructure through the same {@code let} lowering; {@code :when} skips the

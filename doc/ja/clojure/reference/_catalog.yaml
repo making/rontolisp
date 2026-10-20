@@ -211,6 +211,8 @@ categories:
       - { slug: byte-array, name: "byte-array" }
       - { slug: bytes, name: "bytes" }
       - { slug: aclone, name: "aclone" }
+      - { slug: amap, name: "amap" }
+      - { slug: areduce, name: "areduce" }
       - { slug: aset-byte, name: "aset-byte" }
       - { slug: aset-int, name: "aset-int" }
       - { slug: aset-long, name: "aset-long" }

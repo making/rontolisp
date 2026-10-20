@@ -3903,6 +3903,12 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "for")) {
 			return capturingMutableFields(() -> ClojureLoopLowering.forOf(this, items));
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "amap")) {
+			return ClojureLoopLowering.amapOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "areduce")) {
+			return ClojureLoopLowering.areduceOf(this, items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmulti")) {
 			List<LispVal> forms = ClojureDispatchLowering.defmultiForms(this, items);
 			return forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);

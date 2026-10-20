@@ -13820,6 +13820,45 @@ cases:
       "Unable to convert: class java.lang.Long to Object[]"
       [[1 2]]
       :refused
+  - name: amap-and-areduce-map-and-reduce-indexed-arrays
+    # amap maps the expression across a clone of the array by index and answers
+    # the clone; areduce walks the index with the accumulator set to the
+    # expression's value at each step. The array form runs once, the index and
+    # return names stay local to the form, and both run anywhere a value runs.
+    # Typed arrays are vectors here, so the answered clone pins through vec.
+    # Runs on every backend; oracle-identical (clj 1.12.6, 2026-10-20).
+    source: |
+      (prn (let [a (int-array [1 2 3])] (vec (amap a i r (* 2 (aget a i))))))
+      (prn (let [a (int-array [1 2 3]) c (amap a i r (* 10 i))] [(vec c) (vec a)]))
+      (prn (vec (amap (int-array []) i r i)))
+      (prn (let [n (atom 0)] [(vec (amap (do (swap! n inc) (int-array [7])) i r i)) @n]))
+      (prn (let [a (int-array [1 2 3])] (areduce a i r 0 (+ r (aget a i)))))
+      (prn (areduce (int-array []) i r 99 (+ r i)))
+      (prn (areduce (int-array [5]) i r 100 (+ r i)))
+      (prn (let [a (into-array [1 2 3])] (areduce a i r 0 (+ r (aget a i)))))
+      (prn (let [a (into-array [1 2 3])] (vec (amap a i r (* 2 (aget r i))))))
+      (prn (let [a (double-array [1.5 2.5])] [(vec (amap a i r (aget r i))) (areduce a i r 0.0 (+ r (aget a i)))]))
+      (prn (count (amap (int-array [1 2 3]) i r i)))
+      (prn (let [i 99 r 88 a (int-array [1 2])] [(vec (amap a i r (+ i (aget r i)))) i r]))
+      (prn (let [a (int-array [1 2 3])] (areduce a i r [] (conj r (aget a i)))))
+      (prn (let [a (long-array [1 2])] (vec (amap a i r (aget r i)))))
+      (prn (let [n (atom 0)] [(areduce (do (swap! n inc) (int-array [4 5])) i r 0 (+ r i)) @n]))
+    expected: |
+      [2 4 6]
+      [[0 10 20] [1 2 3]]
+      []
+      [[0] 1]
+      6
+      99
+      100
+      6
+      [2 4 6]
+      [[1.5 2.5] 4.0]
+      3
+      [[1 3] 99 88]
+      [1 2 3]
+      [1 2]
+      [1 1]
   - name: aset-star-stores-cast-the-value-and-answer-it
     # aset-int, aset-long, aset-double, aset-float, aset-short, aset-boolean and
     # aset-char store the value cast as int, long, double, float, short,
