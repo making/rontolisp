@@ -12708,6 +12708,49 @@
   "The integer N as a signed 64-bit value; any other number passes."
   (if (integerp n) (%mask-signed-field 64 n) n))
 
+(defun rontolisp::%clojure-long-p (x)
+  "Whether X is an integer a 64-bit operation takes: in the signed 64-bit
+   range. Like %clojure-bit-long, but answering T-or-false instead of
+   signalling, so the unchecked-math workers can pick the wrapping path."
+  (and (integerp x) (typep x '(signed-byte 64))))
+
+(defun rontolisp::%clojure-+ (&rest xs)
+  "(+ xs): the sum. While *unchecked-math* is truthy (true or :warn-on-boxed)
+   and every operand is a 64-bit integer, the sum wraps mod 2^64, like the
+   oracle's unchecked add; anything else -- and the flag down -- is the plain
+   sum. The flag is read when the call runs, not when it compiles: a binding
+   around the call wraps where the oracle (which bakes the flag into the
+   compiled call) throws, and calling after a top-level set! wraps a function
+   defined before it. No boxed-math warning is ever emitted: :warn-on-boxed
+   wraps exactly like true (a documented difference)."
+  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+           (every #'rontolisp::%clojure-long-p xs))
+      (%mask-signed-field 64 (apply #'+ xs))
+      (apply #'+ xs)))
+
+(defun rontolisp::%clojure-- (&rest xs)
+  "(- xs): the difference (of one operand, its negation). While
+   *unchecked-math* is truthy and every operand is a 64-bit integer, the
+   answer wraps mod 2^64, like the oracle's unchecked subtract; anything else
+   -- and the flag down -- is the plain difference. Read at run time, like
+   %clojure-+, and never warning."
+  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+           (every #'rontolisp::%clojure-long-p xs))
+      (%mask-signed-field 64 (apply #'- xs))
+      (apply #'- xs)))
+
+(defun rontolisp::%clojure-* (&rest xs)
+  "(* xs): the product. While *unchecked-math* is truthy (true or
+   :warn-on-boxed) and every operand is a 64-bit integer, the product wraps
+   mod 2^64, like the oracle's unchecked multiply -- the SplittableRandom
+   port's mix functions depend on it; anything else -- and the flag down --
+   is the plain product. Read at run time, like %clojure-+, and never
+   warning."
+  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+           (every #'rontolisp::%clojure-long-p xs))
+      (%mask-signed-field 64 (apply #'* xs))
+      (apply #'* xs)))
+
 (defun rontolisp::%clojure-int-arg (x)
   "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
    double (truncated) inside the int range; anything else signals."

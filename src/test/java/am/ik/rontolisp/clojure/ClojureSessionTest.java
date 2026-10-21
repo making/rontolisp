@@ -32,13 +32,15 @@ class ClojureSessionTest {
 	@Test
 	void aLaterBufferCallsWhatAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
-		assertThat(session.read("(defn twice [x] (* 2 x))").get(0).forms().stream().map(LispVal::print).toList())
-			.hasSize(2)
-			.startsWith("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)")
-			.last()
+		List<ClojureTopLevel> defined = session.read("(defn twice [x] (* 2 x))");
+		assertThat(defined.get(0).forms().stream().map(LispVal::print).toList()).containsExactly(
+				"(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)",
+				"(DEFVAR RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)");
+		assertThat(defined.get(1).forms().stream().map(LispVal::print).toList()).hasSize(1)
+			.first()
 			.asString()
 			.startsWith(INPUT + "(DEFUN |c%twice| (|c%x|) " + ClojureLoweringTest.arity("user/twice")
-					+ " (* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
+					+ " (RONTOLISP::%CLOJURE-* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
 		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly(input("(|c%twice| 21)"));
 	}
@@ -488,8 +490,8 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(required).anyMatch(form -> form
-			.contains("(DEFUN |c%app.lib/f| (|c%x|) " + ClojureLoweringTest.arity("app.lib/f") + " (+ |c%x| 1))"));
+		assertThat(required).anyMatch(form -> form.contains("(DEFUN |c%app.lib/f| (|c%x|) "
+				+ ClojureLoweringTest.arity("app.lib/f") + " (RONTOLISP::%CLOJURE-+ |c%x| 1))"));
 		assertThat(session.read("(l/f 1)").get(0).forms().stream().map(LispVal::print).toList())
 			.containsExactly(input("(|c%app.lib/f| 1)"));
 		List<String> again = session.read("(require 'app.lib)")

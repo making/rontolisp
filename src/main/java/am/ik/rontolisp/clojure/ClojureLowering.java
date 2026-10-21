@@ -4608,7 +4608,19 @@ public final class ClojureLowering {
 		}
 		int n = items.size() - 1;
 		switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt":
+			case "+", "*":
+				// g28: under a truthy *unchecked-math* (true or :warn-on-boxed)
+				// the sum and product of 64-bit integers wrap mod 2^64, like the
+				// oracle's unchecked arithmetic (the SplittableRandom port's mix
+				// functions depend on it); the flag down they are the plain
+				// verbs. The worker reads the flag when the call runs.
+				return uncheckedMath(name, lowers(items, 1));
+			case "-":
+				// g28: the difference wraps like the sum, of one operand its
+				// negation; of no operand the oracle's arity refusal.
+				ClojureCoreLowering.arity("-", n, 1, -1);
+				return uncheckedMath(name, lowers(items, 1));
+			case "/", "max", "min", "rem", "mod", "abs", "list", "expt":
 				return plain(name, items);
 			case "EMPTY-NODE":
 				// g26: the oracle's persistent-vector node is the empty vector
@@ -4647,7 +4659,7 @@ public final class ClojureLowering {
 				return booleanAnswer(plain("=", items));
 			case "inc":
 				ClojureLowerUtil.isTrue(n == 1, "inc takes one argument");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
+				return uncheckedMath("+", List.of(lower(items.get(1)), new LispInteger(1)));
 			case "inc'":
 				// checked inc: integers are bignums here, so this is inc, with
 				// the oracle's arity wording
@@ -4655,7 +4667,7 @@ public final class ClojureLowering {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
 			case "dec":
 				ClojureLowerUtil.isTrue(n == 1, "dec takes one argument");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), lower(items.get(1)), new LispInteger(1));
+				return uncheckedMath("-", List.of(lower(items.get(1)), new LispInteger(1)));
 			case "dec'":
 				// checked dec: integers are bignums here, so this is dec, with
 				// the oracle's arity wording
@@ -5480,6 +5492,25 @@ public final class ClojureLowering {
 
 	LispVal plain(String clName, List<LispVal> items) {
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym(clName), lowers(items, 1));
+	}
+
+	/**
+	 * A {@code +}, {@code -} or {@code *} call honoring {@code *unchecked-math*} (g28):
+	 * the run-time worker of the name over the already-lowered operands. The worker wraps
+	 * a 64-bit-integer sum, difference or product mod 2^64 while the flag is truthy and
+	 * answers the plain verb otherwise, so the flag down the call is exactly the old one.
+	 * The flag's definition travels with any program naming the worker, whether the
+	 * program names the flag or not.
+	 * @param name the Clojure name ({@code +}, {@code -} or {@code *})
+	 * @param operands the lowered operands
+	 * @return the worker call
+	 */
+	LispVal uncheckedMath(String name, List<LispVal> operands) {
+		this.usedSpecials.add("*unchecked-math*");
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol("RONTOLISP::%CLOJURE-" + name.toUpperCase(java.util.Locale.ROOT)));
+		out.addAll(operands);
+		return ClojureLowerUtil.list(out);
 	}
 
 	List<LispVal> lowers(List<LispVal> items, int from) {

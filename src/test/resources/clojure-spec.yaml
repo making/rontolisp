@@ -15775,3 +15775,69 @@ cases:
       a-b
       [1 2] {:a 1}
       true true
+  - name: unchecked-math-wraps-star-and-plus-for-splittable-random
+    # Oracle-checked (clj 1.12.6, 2026-10-21) wherever the oracle runs it: while
+    # *unchecked-math* is truthy (true or :warn-on-boxed) the sum, difference
+    # and product of 64-bit integers wrap mod 2^64 -- the SplittableRandom
+    # port's mix functions (clojure.test.check.random, test.check 1.1.3) run
+    # under (set! *unchecked-math* :warn-on-boxed) -- while a double, ratio or
+    # out-of-range-integer operand takes the plain verb (a bigint promotes,
+    # like the oracle's) and the bit operations keep refusing a bigint. The
+    # flag is read when the call runs, not when it compiles, and no boxed-math
+    # warning is ever emitted (:warn-on-boxed wraps exactly like true). The
+    # draws replicate the port's mix-64/mix-gamma/split over fixed seeds
+    # (longify expanded, the population count portable); the printed numbers
+    # are the oracle's for the same code. The default line pins the other
+    # half: the flag down the verbs promote (the oracle throws, a pinned
+    # deviation of the default arithmetic, unchanged by g28).
+    source: |
+      (prn :default (+ 9223372036854775807 1) (* 9223372036854775807 2) (- -9223372036854775808 1) (inc 9223372036854775807) (dec -9223372036854775808))
+      (set! *unchecked-math* :warn-on-boxed)
+      (prn :wrapped (+ 9223372036854775807 1) (* 9223372036854775807 2) (- -9223372036854775808 1) (inc 9223372036854775807) (dec -9223372036854775808))
+      (prn :pass (+ 1.5 2) (+ 1/2 1) (+ 9223372036854775808N 1) (* 3037000500 3037000500) (- -9223372036854775808))
+      (prn :bits (bit-xor -9223372036854775808 1) (unsigned-bit-shift-right -1 1) (bit-or -1 0))
+      (defn uw-longify [num]
+        (if (> num 9223372036854775807)
+            (bit-or (long (- num 18446744073709551616)) -9223372036854775808)
+            num))
+      (defn uw-bxoubsr [x n]
+        (-> x (unsigned-bit-shift-right n) (bit-xor x)))
+      (defn uw-mix-64 [n]
+        (-> n
+            (uw-bxoubsr 30)
+            (* (uw-longify 13787848793156543929))
+            (uw-bxoubsr 27)
+            (* (uw-longify 10723151780598845931))
+            (uw-bxoubsr 31)))
+      (defn uw-bit-count [x]
+        (loop [i 0 c 0]
+          (if (= i 64) c (recur (inc i) (if (bit-test x i) (inc c) c)))))
+      (defn uw-mix-gamma [n]
+        (as-> n z
+          (uw-bxoubsr z 33)
+          (* z (uw-longify 18397679294719823053))
+          (uw-bxoubsr z 33)
+          (* z (uw-longify 14181476777654086739))
+          (uw-bxoubsr z 33)
+          (bit-or z 1)
+          (cond-> z (> 24 (uw-bit-count (uw-bxoubsr z 1))) (bit-xor (uw-longify 12297829382473034410)))))
+      (def uw-golden-gamma (uw-longify 11400714819323198485))
+      (prn :draw1 (uw-mix-64 (+ 42 uw-golden-gamma)))
+      (prn :draw2 (uw-mix-64 (+ 7 uw-golden-gamma)))
+      (prn :gamma1 (uw-mix-gamma (+ (+ 42 uw-golden-gamma) uw-golden-gamma)))
+      (let [state1 (+ uw-golden-gamma 42)
+            state2 (+ uw-golden-gamma state1)
+            gamma1 (uw-mix-gamma state2)]
+        (prn :split [(uw-mix-64 state2) (uw-mix-64 state1) gamma1 (uw-mix-64 gamma1)]))
+      (set! *unchecked-math* false)
+      (prn :restored (+ 1 2))
+    expected: |
+      :default 9223372036854775808 18446744073709551614 -9223372036854775809 9223372036854775808 -9223372036854775809
+      :wrapped -9223372036854775808 -2 9223372036854775807 -9223372036854775808 9223372036854775807
+      :pass 3.5 3/2 9223372036854775809 -9223372036709301616 -9223372036854775808
+      :bits -9223372036854775807 9223372036854775807 -1
+      :draw1 -4767286540954276203
+      :draw2 7191089600892374487
+      :gamma1 540350159304224773
+      :split [2949826092126892291 -4767286540954276203 540350159304224773 -2488624846224467125]
+      :restored 3
