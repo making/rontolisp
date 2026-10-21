@@ -2352,6 +2352,87 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void mathAbsBitCountAndLeadingZerosLowerToTheirWorkersWhereTheHostIsNot() {
+		// (Math/abs x), (Long/bitCount x) and (Long/numberOfLeadingZeros x) of
+		// one argument are their portable workers where the host is not (wasm)
+		// -- test.check's shrink-long reads abs and numberOfLeadingZeros, its
+		// mix-gamma bitCount -- never a java:static (which wasm refuses); as a
+		// value the arity lambda wraps the same worker. Any other arity stays
+		// the host call; where the host is every spelling keeps java:static.
+		assertThat(wasmLowered("(Math/abs -5)")).contains("RONTOLISP::%CLOJURE-MATH-ABS").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Long/bitCount 7)")).contains("RONTOLISP::%CLOJURE-LONG-BIT-COUNT")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Long/numberOfLeadingZeros 7)"))
+			.contains("RONTOLISP::%CLOJURE-LONG-NUMBER-OF-LEADING-ZEROS")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(map Math/abs [-5])")).contains("RONTOLISP::%CLOJURE-MATH-ABS");
+		assertThat(wasmLowered("(map Long/bitCount [7])")).contains("RONTOLISP::%CLOJURE-LONG-BIT-COUNT");
+		assertThat(wasmLowered("(Math/abs 1 2)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-MATH-ABS");
+		assertThat(wasmLowered("(Long/bitCount 1 2)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-LONG-BIT-COUNT");
+		assertThat(lowered("(Math/abs -5)")).contains("JAVA:STATIC").doesNotContain("RONTOLISP::%CLOJURE-MATH-ABS");
+		assertThat(lowered("(Long/bitCount 7)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-LONG-BIT-COUNT");
+		assertThat(lowered("(Long/numberOfLeadingZeros 7)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-LONG-NUMBER-OF-LEADING-ZEROS");
+	}
+
+	@Test
+	void doubleLimitsAnswerThemselvesWhereTheHostIsNot() {
+		// Double/MAX_VALUE (and MIN_VALUE, the infinities and NaN) is itself
+		// where the host is not (wasm), so test.check's double-generator bound
+		// defs load -- never a java:field (which wasm refuses). Where the host
+		// is the field read stays untouched; any other member keeps it
+		// everywhere.
+		assertThat(wasmLowered("(println Double/MAX_VALUE Double/MIN_VALUE)")).contains("1.7976931348623157e308")
+			.contains("4.9e-324")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(println Double/POSITIVE_INFINITY Double/NEGATIVE_INFINITY Double/NaN)"))
+			.contains("Infinity")
+			.contains("-Infinity")
+			.contains("NaN")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(println Double/MAX_VALUE)")).contains("JAVA:FIELD");
+		assertThat(wasmLowered("(println Double/SIZE)")).contains("JAVA:FIELD");
+	}
+
+	@Test
+	void aThreadLocalProxyLowersToThePortableCellWhereTheHostIsNot() {
+		// (proxy [ThreadLocal] [] (initialValue [] ...)) is the portable
+		// single-threaded cell where the host is not (wasm), so test.check's
+		// seedless next-rng loads -- never a java:subclass (which wasm refuses
+		// at call time). .get/.set/.remove on a receiver of unknown class
+		// answer the cell's worker there, gated on the receiver being a cell;
+		// anything else keeps what the call lowered to. Constructor arguments
+		// stay the host's java:subclass; any other method is refused by name.
+		// Where the host is the proxy keeps java:subclass and the calls
+		// java:call.
+		assertThat(wasmLowered("(proxy [ThreadLocal] [] (initialValue [] 42))"))
+			.contains("(RONTOLISP::%CLOJURE-THREAD-LOCAL (LAMBDA")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(proxy [ThreadLocal] [] (initialValue [] 42))")).contains("42");
+		assertThat(wasmLowered("(defn f [c] (.get c))")).contains("RONTOLISP::%CLOJURE-THREAD-LOCAL-GET")
+			.contains("RONTOLISP::%CLOJURE-THREAD-LOCAL-P")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [c v] (.set c v))")).contains("RONTOLISP::%CLOJURE-THREAD-LOCAL-SET")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [c] (.remove c))")).contains("RONTOLISP::%CLOJURE-THREAD-LOCAL-REMOVE")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [c] (.get c 1))")).doesNotContain("RONTOLISP::%CLOJURE-THREAD-LOCAL-")
+			.contains("No matching method get");
+		assertThat(wasmLowered("(proxy [java.io.File] [\"f\"] (lastModified [] 1))")).contains("JAVA:SUBCLASS")
+			.doesNotContain("THREAD-LOCAL");
+		assertThatThrownBy(
+				() -> Clojure.read("(proxy [ThreadLocal] [] (get [] 1))", null, null, ClojureFiles.NONE, false))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy of ThreadLocal supports initialValue, not get");
+		assertThat(lowered("(proxy [ThreadLocal] [] (initialValue [] 42))")).contains("JAVA:SUBCLASS")
+			.doesNotContain("THREAD-LOCAL");
+		assertThat(lowered("(defn f [c] (.get c))")).contains("JAVA:CALL").doesNotContain("THREAD-LOCAL");
+	}
+
+	@Test
 	void systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot() {
 		// (System/getProperty k) of a literal key is nil and (System/getProperty k
 		// dflt) its default where the host is not (wasm) -- no properties exist

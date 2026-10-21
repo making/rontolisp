@@ -227,7 +227,13 @@ class ClojureWasmInteropRefusalTest {
 				+ " (println (try (Math/min 1/2 2) (catch IllegalArgumentException e (ex-message e))))"
 				+ " (println (try (Math/min \"a\" 1) (catch IllegalArgumentException e (ex-message e))))"
 				+ " (println (try (Math/min nil 1) (catch IllegalArgumentException e (ex-message e))))"
-				+ " (println (try (Math/min true 1) (catch IllegalArgumentException e (ex-message e))))";
+				+ " (println (try (Math/min true 1) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Long/bitCount \"a\") (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Long/bitCount :k) (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Long/numberOfLeadingZeros true) (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Math/abs nil) (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (Long/bitCount nil) (catch NullPointerException e (ex-message e))))"
+				+ " (println (try (Long/numberOfLeadingZeros nil) (catch NullPointerException e (ex-message e))))";
 		String expected = "No matching method valueOf found taking 1 args\n"
 				+ "No matching method valueOf found taking 1 args\n"
 				+ "No matching method valueOf found taking 1 args\n"
@@ -241,7 +247,13 @@ class ClojureWasmInteropRefusalTest {
 				+ "class java.lang.String cannot be cast to class java.lang.Number\n"
 				+ "No matching method min found taking 2 args\n" + "No matching method min found taking 2 args\n"
 				+ "No matching method min found taking 2 args\n" + "No matching method min found taking 2 args\n"
-				+ "No matching method min found taking 2 args\n";
+				+ "No matching method min found taking 2 args\n"
+				+ "class java.lang.String cannot be cast to class java.lang.Number\n"
+				+ "class clojure.lang.Keyword cannot be cast to class java.lang.Number\n"
+				+ "class java.lang.Boolean cannot be cast to class java.lang.Number\n"
+				+ "No matching method abs found taking 1 args\n"
+				+ "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n"
+				+ "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n";
 		for (boolean component : new boolean[] { false, true }) {
 			assertThat(run(program, component)).as(component ? "component" : "preview 1").isEqualTo(expected);
 		}

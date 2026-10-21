@@ -1533,7 +1533,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
 | data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called |
-| test.check 1.1.3 | = | = | red | red | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). Both wasm backends refuse the namespace at load: the seedless `next-rng` builds a `proxy` of `ThreadLocal` (`JAVA:SUBCLASS` undefined where no host is), and past it every draw needs `Math/floor` and a split `Long/bitCount` (`.todo/g31-test-check-wasm-gaps.md`, the wasm follow-up). `clojure.test.check.clojure-test` (and hive-test's `properties` macros, which emit its `defspec`s) needs `clojure.test`'s `report`/`do-report` (`.todo/g32-clojure-test-report-do-report.md`, the reporting follow-up); the direct `quick-check` path the probe pins needs neither |
+| test.check 1.1.3 | = | = | = | = | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). g31: `Math/abs`, `Long/bitCount` and `Long/numberOfLeadingZeros` of one argument answer portably ("Portable number statics"), `Double/MAX_VALUE` and its siblings load ("Boxed-integer limits ..."), and the seedless `next-rng`'s `proxy` of `ThreadLocal` is the portable single-threaded cell ("Portable ThreadLocal"), so the namespace loads and the 12-call probe -- three seeded `quick-check`s with `:seed` and `:max-size 10`, nine seeded small-valued `gen/generate`s -- prints the oracle's lines on both wasm backends too. The `JAVA:STATIC`+`JAVA:NEW` warnings on both wasm backends come from the double/uuid generators' bodies, off the probe's path. Large `choose` ranges hang on every backend (eager shrink trees, `.todo/g33-*`); `clojure.test.check.clojure-test` (and hive-test's `properties` macros, which emit its `defspec`s) needs `clojure.test`'s `report`/`do-report` (`.todo/g32-clojure-test-report-do-report.md`, the reporting follow-up); the direct `quick-check` path the probe pins needs neither |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s; the `properties` macros emit test.check `defspec`s, still needing `clojure.test`'s `report`/`do-report` -- `.todo/g32-clojure-test-report-do-report.md`); the JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
 | core.memoize 1.2.281 | = | = | = | = | transitive core.cache 1.2.254 -> 1.2.999 by newest-wins; g29: a kind keyword's `ancestors` hold the supers of the values it stands for (`clojure.lang.IFn` among a function's) and a class name in value position reads as its class keyword, so `check-args`' `(some #{clojure.lang.IFn ...} (ancestors (class f)))` compiles and passes; the `JAVA:NEW`+`JAVA:CALL` warnings on both wasm backends come from core.cache's own sources, off the probe's path |
@@ -2730,7 +2730,17 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   through it, so the string-transformer decode runs where the host is not.
   `Math/floor`, `Math/ceil` and `Math/log` of one argument join them (2026-10-21,
   g27): data.generators' `uniform` reads `floor`, its `geometric` reads `ceil`
-  and `log`. `.isInfinite`/`.isNaN`
+  and `log`. `Math/abs` of one argument joins them (2026-10-21, g31):
+  test.check's `shrink-long` reads it -- an integer in the long range (its
+  `Long/MIN_VALUE` its own, like the oracle's) or a double (`-0.0` answers
+  `0.0`, `NaN` stays `NaN`, like the oracle's overloads); anything else,
+  nil included, its no-matching-method refusal. `Long/bitCount` and
+  `Long/numberOfLeadingZeros` of one argument join them (2026-10-21, g31):
+  test.check's `mix-gamma` (every split) and `shrink-long` read them -- the
+  count and the leading zero count of the `longCast` of a number (ratios
+  truncated, out-of-range the oracle's long refusal); nil the oracle's
+  `doubleValue` `NullPointerException`, anything else no number its
+  `ClassCastException` to `Number`. `.isInfinite`/`.isNaN`
   of no argument answer what `infinite?`/`NaN?` answer over a double, as a
   Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
   `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
@@ -2767,6 +2777,12 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   long past the int range wraps under `toHexString`, `(Math/min 1 1.0)` is
   `1.0` and `(Math/min \a 1)` is `1`, while a double under `toHexString` and a
   non-string under `parseInt` are `No matching method`; `.todo` follow-up).
+  An `N` literal in the long range reads as its plain integer (the `N`
+  literal rule), so `(Math/abs 5N)` answers where the oracle refuses a
+  `BigInt`, like `(Math/min 5 10N)`. A param-tagged call
+  (`(^[double] Math/abs -1)`) names its host overload and keeps the host's
+  call on every backend, refusing where no host is (wasm), like every other
+  tagged form ("Java interop").
   Rejected: lowering every backend (the host paths work, and the probe needs
   nothing there; a host behavior change for no oracle gain).
 - **Pins**: clojure-spec `long-value-of-reads-like-the-host-static`,
@@ -2776,12 +2792,40 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `integer-to-hex-string-writes-like-the-host-static`,
   `math-min-of-two-answers-like-the-host-static`,
   `math-floor-ceil-and-log-read-like-the-host-statics`,
+  `math-abs-answers-like-the-host-static`,
+  `long-bit-count-and-leading-zeros-answer-like-the-host-statics`,
   `isInfinite-and-isNaN-of-a-double-answer-like-the-host-methods` (four
   backends, the host∩oracle lines; the rest on both wasm backends in
   `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`
   and `#portableRandomDrawsAndRefusesLikeTheHostOnBothBackends`),
   `ClojureLoweringTest#longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot`
-  and `#mathFloorCeilAndLogLowerToTheirWorkersWhereTheHostIsNot`.
+  and `#mathFloorCeilAndLogLowerToTheirWorkersWhereTheHostIsNot`,
+  `#mathAbsBitCountAndLeadingZerosLowerToTheirWorkersWhereTheHostIsNot`.
+
+## Portable ThreadLocal
+
+- **The cell** (2026-10-21, g31; `ClojureInteropLowering`,
+  `ClojurePortableThreadLocalLowering`, `clojure.lisp` "Portable
+  ThreadLocal"): a `(proxy [ThreadLocal] [] (initialValue [] ...))` where the
+  host is not (wasm) is the portable single-threaded cell -- the
+  `(:C%THREAD-LOCAL value has init)` list -- never a `java:subclass`, which
+  wasm refuses at call time and which would kill the module's start function
+  while test.check's seedless `next-rng` loads. Wasm runs one thread, so no
+  thread key is kept; the `initialValue` body sees the cell as `this`, like
+  the oracle's proxy body sees its proxy. `.get` (of no argument) answers
+  the stored value, computing and storing the initial once when none is
+  stored; `.set` (of one) stores and `.remove` (of none) clears, each
+  answering nil like the host's void methods -- each gated on the receiver
+  being a cell (`%clojure-thread-local-p`), anything else what the call
+  lowered to. Constructor arguments stay the host's `java:subclass`; any
+  other method but a parameterless `initialValue` is refused by name, before
+  it runs. Where the host is the proxy keeps the host's subclass and calls.
+- **Pins**: clojure-spec `proxy-of-thread-local-is-a-portable-cell` (all four
+  backends, oracle-identical),
+  `ClojureLoweringTest#aThreadLocalProxyLowersToThePortableCellWhereTheHostIsNot`
+  (the cell, the three gates, the constructor-argument fall-through and the
+  by-name refusal where the host is not; `java:subclass` and `java:call`
+  where it is).
 
 ## Portable Random
 
@@ -2820,7 +2864,10 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
 - **The limits** (2026-10-13, f92; `ClojureNumericLimitsLowering`):
   `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs) is
   itself where the host is not (wasm), so malli's `+max-size+` `def` loads --
-  never a `java:field`, which wasm refuses. The values are exact integers, so
+  never a `java:field`, which wasm refuses. `Double/MAX_VALUE` (and
+  `MIN_VALUE`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`) joins them
+  (2026-10-21, g31), so test.check's double-generator bound `def`s load.
+  The values are exact integers and doubles, so
   where the host is the field read stays untouched; any other member stays the
   host's own, on every backend.
 - **The designator** (2026-10-13, f92): a bare loadable class name where the
@@ -2846,6 +2893,7 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `class-literals-and-date-builder-chains-evaluate-where-the-host-is-not`
   (all four backends), `ClojureLoweringTest`
   `boxedIntegerLimitsAnswerThemselvesWhereTheHostIsNot` /
+  `doubleLimitsAnswerThemselvesWhereTheHostIsNot` /
   `aClassLiteralIsItsDesignatorWhereTheHostIsNot` /
   `dateBuilderChainsThreadTheirMarkerWhereTheHostIsNot`.
 

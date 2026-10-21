@@ -14,10 +14,13 @@ import org.jspecify.annotations.Nullable;
  * the string-transformer decode reads), {@code Integer/parseInt} of a string and a
  * literal radix 16, {@code Integer/toHexString} of one argument, {@code Math/min} of two
  * and {@code Math/floor}, {@code Math/ceil} and {@code Math/log} of one argument
- * (data.generators' {@code uniform} and {@code geometric}). Where the host is not (wasm)
- * each lowers to its portable worker in {@code clojure.lisp} -- never a
- * {@code java:static}, which wasm refuses; where the host is each stays the host's call.
- * Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s and
+ * (data.generators' {@code uniform} and {@code geometric}), {@code Math/abs} of one
+ * argument (test.check's {@code shrink-long} and generators), {@code Long/bitCount} of
+ * one argument (test.check's {@code mix-gamma}, every split) and
+ * {@code Long/numberOfLeadingZeros} of one argument (test.check's {@code shrink-long}).
+ * Where the host is not (wasm) each lowers to its portable worker in {@code clojure.lisp}
+ * -- never a {@code java:static}, which wasm refuses; where the host is each stays the
+ * host's call. Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s and
  * {@code Long/parseLong}'s grammar being {@code parse-long}'s and
  * {@code Double/valueOf}'s {@code parse-double}'s.
  *
@@ -52,6 +55,15 @@ final class ClojurePortableStaticsLowering {
 
 	/** {@code (Math/log x)}. */
 	static final String MATH_LOG = "RONTOLISP::%CLOJURE-MATH-LOG";
+
+	/** {@code (Math/abs x)}. */
+	static final String MATH_ABS = "RONTOLISP::%CLOJURE-MATH-ABS";
+
+	/** {@code (Long/bitCount x)}. */
+	static final String LONG_BIT_COUNT = "RONTOLISP::%CLOJURE-LONG-BIT-COUNT";
+
+	/** {@code (Long/numberOfLeadingZeros x)}. */
+	static final String LONG_NLZ = "RONTOLISP::%CLOJURE-LONG-NUMBER-OF-LEADING-ZEROS";
 
 	/** {@code infinite?} over a double: what {@code .isInfinite} answers. */
 	static final String IS_INFINITE = "RONTOLISP::%CLOJURE-IS-INFINITE";
@@ -100,6 +112,15 @@ final class ClojurePortableStaticsLowering {
 		}
 		if (cls.equals("java.lang.Math") && member.equals("log") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(MATH_LOG), args.get(0));
+		}
+		if (cls.equals("java.lang.Math") && member.equals("abs") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(MATH_ABS), args.get(0));
+		}
+		if (cls.equals("java.lang.Long") && member.equals("bitCount") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(LONG_BIT_COUNT), args.get(0));
+		}
+		if (cls.equals("java.lang.Long") && member.equals("numberOfLeadingZeros") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(LONG_NLZ), args.get(0));
 		}
 		return null;
 	}

@@ -427,7 +427,18 @@
   からシードします。シードと上限のキャストはオラクル通りに拒否します。ホストがある
   場合（インタープリターと JVM）は、ホストのオブジェクトのまま残ります。1引数の
   `(Math/floor x)`、`(Math/ceil x)`、`(Math/log x)` も wasm
-  バックエンドではオラクルの double を返し、キャストはオラクル通りに拒否します。
+  バックエンドではオラクルの double を返し、キャストはオラクル通りに拒否します。1引数の
+  `(Math/abs x)` も wasm バックエンドでは long の範囲の整数または double
+  の絶対値を返し（`Long/MIN_VALUE` は自身、`-0.0` は `0.0` を返します）、それ以外は
+  オラクルの no-matching-method 通りに拒否します。1引数の `(Long/bitCount x)` と
+  `(Long/numberOfLeadingZeros x)` は数値の `longCast` に対するポピュレーションカウントと
+  先行ゼロカウントを返し、キャストはオラクル通りに拒否します。`Double/MAX_VALUE`
+  （`MIN_VALUE`、無限大、`NaN` も）は wasm バックエンドでは自身です。
+  `(proxy [ThreadLocal] [] (initialValue [] ...))` は wasm
+  バックエンドではシングルスレッドのセルになります（実行スレッドは1つです）。`.get`
+  は格納値を返し、未格納なら初期値を一度だけ計算して格納します。`.set`
+  は格納、`.remove` は消去します。ホストがある場合はプロキシはホストのサブクラスの
+  まま残ります。
 - リテラルなキーからの `(System/getProperty k)` は nil、`(System/getProperty k dflt)`
   は既定値を返します（wasm バックエンド。プロパティは存在しないため。プロパティがない
   ホストと同じで、ライブラリのロードが読むものです）。nil はオラクルの

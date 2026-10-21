@@ -1246,9 +1246,10 @@ final class ClojureInteropLowering {
 				return args.get(1);
 			}
 		}
-		if (!ctx.hostTarget) {
+		if (!ctx.hostTarget && designator.equals(member)) {
 			// where no host is, the pure number statics data.json's read path calls
-			// answer portably; the host's own answer them elsewhere
+			// answer portably (a param-tagged call names its host overload and
+			// stays the host's); the host's own answer them elsewhere
 			LispVal portable = ClojurePortableStaticsLowering.staticCall(cls, member, args);
 			if (portable != null) {
 				return portable;
@@ -2254,6 +2255,15 @@ final class ClojureInteropLowering {
 		if (isFinalClass(superclass)) {
 			throw new LispReadException("proxy cannot extend final class " + superclass);
 		}
+		if (!ctx.hostTarget && superclass.equals("java.lang.ThreadLocal")) {
+			// where no host is, a ThreadLocal proxy is the portable
+			// single-threaded cell, so the namespace defining it loads;
+			// constructor arguments stay the host's java:subclass
+			LispVal cell = ClojurePortableThreadLocalLowering.cellOf(ctx, items);
+			if (cell != null) {
+				return cell;
+			}
+		}
 		List<LispVal> javaSubclass = new ArrayList<>();
 		javaSubclass.add(LispString.literal(superclass));
 		List<LispVal> ifaceNames = new ArrayList<>();
@@ -2495,6 +2505,13 @@ final class ClojureInteropLowering {
 			// call lowered to (the host call, or the oracle's refusal where no
 			// hostless class has the method)
 			call = randomArm(method, recv, args, call);
+		}
+		if (!ctx.hostTarget && ClojurePortableThreadLocalLowering.THREAD_LOCAL_METHODS.containsKey(method)
+				&& ClojurePortableThreadLocalLowering.THREAD_LOCAL_METHODS.get(method).contains(args.size())) {
+			// where no host is, a portable ThreadLocal cell answers its member;
+			// anything else keeps what the call lowered to (the host call, or
+			// the oracle's refusal where no hostless class has the method)
+			call = ClojurePortableThreadLocalLowering.arm(method, recv, args, call);
 		}
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
