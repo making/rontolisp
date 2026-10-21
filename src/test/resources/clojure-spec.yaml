@@ -7981,6 +7981,7 @@ cases:
       (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (successful? s)))
     expected: |
       :vars nil
+
       Testing g32-report-fn
       nil
       nil

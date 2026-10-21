@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -944,7 +945,7 @@ class ClojureLibraryTest {
 		LispVal rest = code;
 		while (rest instanceof LispCons cell) {
 			if (cell.car() instanceof LispSymbol head
-					&& (head.name().equals("INTERN") || head.name().equals(":C%KEYWORD")
+					&& (isComputedIntern(head, cell.cdr()) || head.name().equals(":C%KEYWORD")
 							&& cell.cdr() instanceof LispCons next && !(next.car() instanceof LispString))) {
 				return true;
 			}
@@ -954,6 +955,23 @@ class ClojureLibraryTest {
 			rest = cell.cdr();
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the call interns a computed spelling: an {@code INTERN} call whose argument
+	 * is not the same name read back ({@code with-meta} of a symbol answers a fresh copy
+	 * of the name it was handed, introducing no new spelling, so the printer's
+	 * namespace-map arm need not be kept for it).
+	 */
+	private static boolean isComputedIntern(LispSymbol head, LispVal args) {
+		if (!head.name().equals("INTERN")) {
+			return false;
+		}
+		if (args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons call
+				&& call.car() instanceof LispSymbol fn && fn.name().equals("SYMBOL-NAME")) {
+			return false;
+		}
+		return true;
 	}
 
 	private static boolean mentionsAny(LispVal code, Set<String> names) {
