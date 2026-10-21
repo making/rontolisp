@@ -25016,6 +25016,162 @@
       (rontolisp::%clojure-illegal-argument-exception
        "No matching method min found taking 2 args")))
 
+(defun rontolisp::%clojure-math-double (x)
+  "X as a java.lang.Math double argument takes it: a number widened to a
+   double; nil is the oracle's doubleValue NullPointerException, anything
+   else its ClassCastException to Number (the reflector casts the argument)."
+  (if (numberp x)
+      (float x)
+      (if (null x)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                        " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-math-floor (x)
+  "(Math/floor x) of one argument: the double below X, exact like the
+   oracle's, where no host is (wasm); the cast above refuses as it does."
+  (%strict-math :floor (rontolisp::%clojure-math-double x)))
+
+(defun rontolisp::%clojure-math-ceil (x)
+  "(Math/ceil x) of one argument: the double above X, exact like the
+   oracle's, where no host is (wasm); the cast above refuses as it does."
+  (%strict-math :ceil (rontolisp::%clojure-math-double x)))
+
+(defun rontolisp::%clojure-math-log (x)
+  "(Math/log x) of one argument: the natural logarithm of X, the oracle's
+   bits, where no host is (wasm); the cast above refuses as it does."
+  (%strict-math :log (rontolisp::%clojure-math-double x)))
+
+;;;; Portable java.util.Random: the 48-bit linear congruential generator the
+;;;; JDK documents (next/nextInt/nextLong/nextFloat/nextDouble/nextBoolean/
+;;;; nextGaussian/setSeed), bit-identical on every backend, so a seeded
+;;;; generator answers the oracle's draws where no host is (wasm;
+;;;; ClojureLowering keeps the host's own where one is). A generator is the
+;;;; (:C%RANDOM seed have-next next-gauss) list, mutated in place like the
+;;;; host object: the seed a 48-bit integer, the gaussian cache the JDK's
+;;;; haveNextNextGaussian/nextNextGaussian pair. Unseeded construction draws
+;;;; its 48 bits from rontolisp:random-bytes -- host entropy, like random
+;;;; (the boundary's UUID does the same). The seed and bound casts carry the
+;;;; oracle's classes (pinned at the class: the message's module tail names
+;;;; no JVM here).
+
+(defun rontolisp::%clojure-random-p (x)
+  "Whether X is a portable java.util.Random: the (:C%RANDOM seed ...) list a
+   (java.util.Random. ...) construction makes where no host is (wasm)."
+  (and (consp x) (eq (car x) :C%RANDOM) (consp (cdr x))))
+
+(defun rontolisp::%clojure-random-entropy ()
+  "Six bytes of host entropy as a 48-bit integer: the seed a zero-argument
+   (java.util.Random.) takes where no host is (wasm)."
+  (let ((bytes (rontolisp:random-bytes 6)) (seed 0))
+    (dotimes (i 6 seed) (setq seed (logior (ash seed 8) (aref bytes i))))))
+
+(defun rontolisp::%clojure-random-seed (x)
+  "X as a java.util.Random seed takes it: the oracle's long of the Number
+   (RT.longCast: an integer in range, a double or ratio truncated, a huge
+   bigint refused); nil is its doubleValue NullPointerException, anything
+   else its ClassCastException to Number (the reflector casts the seed)."
+  (if (numberp x)
+      (rontolisp::%clojure-long-cast x)
+      (if (null x)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                        " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-random-new (seed)
+  "A (java.util.Random. SEED) construction where no host is (wasm): the
+   (:C%RANDOM seed nil 0.0) the seed names, masked as setSeed masks it."
+  (list :C%RANDOM (logand
+                   (logxor (rontolisp::%clojure-random-seed seed) 25214903917)
+                   281474976710655) nil 0.0))
+
+(defun rontolisp::%clojure-random-step (r bits)
+  "Advance R's 48-bit seed once and answer its top BITS: the JDK's next."
+  (let ((seed (logand (+ (* (car (cdr r)) 25214903917) 11) 281474976710655)))
+    (rplaca (cdr r) seed)
+    (ash seed (- bits 48))))
+
+(defun rontolisp::%clojure-random-int (r)
+  "(.nextInt R): the next 32 bits as a signed int."
+  (rontolisp::%clojure-wrap-bits (rontolisp::%clojure-random-step r 32) 32))
+
+(defun rontolisp::%clojure-random-int-bound (r bound)
+  "(.nextInt R BOUND): the JDK's bounded draw (the power-of-two fast path,
+   rejection otherwise); a bound that is no positive int is its refusal --
+   nil the oracle's charValue NullPointerException, anything else no number
+   its ClassCastException to Number, a non-positive int its
+   IllegalArgumentException."
+  (let ((n
+         (if (numberp bound)
+             (rontolisp::%clojure-int-cast bound)
+             (if (null bound)
+                 (rontolisp::%clojure-null-pointer-exception
+                  "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null")
+                 (rontolisp::%clojure-class-cast-exception
+                  (concatenate 'string "class "
+                               (rontolisp::%clojure-class-name-of bound)
+                               " cannot be cast to class java.lang.Number"))))))
+    (if (<= n 0)
+        (rontolisp::%clojure-illegal-argument-exception
+         "bound must be positive")
+        (let ((m (- n 1)))
+          (if (= (logand n m) 0)
+              (ash (* n (rontolisp::%clojure-random-step r 31)) -31)
+              (do ((u
+                    (rontolisp::%clojure-random-step r 31)
+                    (rontolisp::%clojure-random-step r 31)))
+                  ((>= (- u (mod u n)) (- m)) (mod u n))))))))
+
+(defun rontolisp::%clojure-random-long (r)
+  "(.nextLong R): the next 64 bits as a signed long."
+  (rontolisp::%clojure-signed-64
+   (+ (ash (rontolisp::%clojure-random-step r 32) 32)
+      (rontolisp::%clojure-random-step r 32))))
+
+(defun rontolisp::%clojure-random-float (r)
+  "(.nextFloat R): the next 24 bits over 2^24, a double in [0, 1) of the
+   float's exact value, like the oracle's draw widened."
+  (/ (rontolisp::%clojure-random-step r 24) 16777216.0))
+
+(defun rontolisp::%clojure-random-double (r)
+  "(.nextDouble R): 26 then 27 bits over 2^53, a double in [0, 1)."
+  (/ (+ (ash (rontolisp::%clojure-random-step r 26) 27)
+        (rontolisp::%clojure-random-step r 27)) 9007199254740992.0))
+
+(defun rontolisp::%clojure-random-boolean (r)
+  "(.nextBoolean R): the next bit as a Clojure boolean."
+  (if (= (rontolisp::%clojure-random-step r 1) 0) rontolisp::%clojure-false t))
+
+(defun rontolisp::%clojure-random-gaussian (r)
+  "(.nextGaussian R): polar-method normals with the JDK's cached second
+   deviate, which setSeed clears; the oracle's bits through %strict-math."
+  (if (car (cdr (cdr r)))
+      (progn
+        (rplaca (cdr (cdr r)) nil)
+        (car (cdr (cdr (cdr r)))))
+      (do ((v1 0.0) (v2 0.0) (s 0.0))
+          ((and (< s 1.0) (/= s 0.0))
+           (let ((m (%strict-math :sqrt (/ (* -2.0 (%strict-math :log s)) s))))
+             (rplaca (cdr (cdr r)) t)
+             (rplaca (cdr (cdr (cdr r))) (* v2 m))
+             (* v1 m)))
+        (setq v1 (- (* 2.0 (rontolisp::%clojure-random-double r)) 1.0))
+        (setq v2 (- (* 2.0 (rontolisp::%clojure-random-double r)) 1.0))
+        (setq s (+ (* v1 v1) (* v2 v2))))))
+
+(defun rontolisp::%clojure-random-set-seed (r seed)
+  "(.setSeed R SEED): re-seed R as the construction seeds it and clear the
+   gaussian cache; the oracle's void, so nil."
+  (rplaca (cdr r)
+          (logand (logxor (rontolisp::%clojure-random-seed seed) 25214903917)
+                  281474976710655))
+  (rplaca (cdr (cdr r)) nil)
+  nil)
+
 ;;;; Typed arrays: object-array, to-array, into-array and the primitive
 ;;;; constructors (clojure.core/int-array and friends). An array is a vector
 ;;;; here, as one make-array makes (doc deviations): the constructors coerce

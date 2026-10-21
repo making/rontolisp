@@ -13772,6 +13772,66 @@ cases:
       false
       [false true true false]
       [false true false]
+  - name: math-floor-ceil-and-log-read-like-the-host-statics
+    # (Math/floor x), (Math/ceil x) and (Math/log x) of one argument where no
+    # host is (wasm) answer the oracle's double through %strict-math:
+    # data.generators' uniform reads floor, its geometric reads ceil and log.
+    # nil is the oracle's doubleValue NullPointerException, anything else no
+    # number its ClassCastException to Number (the reflector casts the
+    # argument); any other arity stays the host's call. The host's own answers
+    # or refuses its own way. Oracle-identical (clj 1.12.6, 2026-10-21) but
+    # for the cast message's module tail, which names no JVM here (pinned at
+    # the class).
+    source: |
+      (defmacro mc-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map #(Math/floor %) [5 2.5 -2.5 -0.5 0.0]))
+      (prn (map #(Math/ceil %) [5 2.5 -2.5 -0.5 0.0]))
+      (prn (map #(Math/log %) [2 1.0 0.0 -1.0]))
+      (prn [(mc-rfc ClassCastException (Math/floor "a")) (mc-rfc NullPointerException (Math/floor nil)) (mc-rfc ClassCastException (Math/ceil :k)) (mc-rfc ClassCastException (Math/log true))])
+    expected: |
+      (5.0 2.0 -3.0 -1.0 0.0)
+      (5.0 3.0 -2.0 -0.0 0.0)
+      (0.6931471805599453 0.0 ##-Inf ##NaN)
+      [:ok :ok :ok :ok]
+  - name: java-util-random-draws-answer-the-oracle-bits
+    # (java.util.Random. seed) where no host is (wasm) is the portable 48-bit
+    # LCG, bit-identical with the oracle on every backend, so data.generators'
+    # *rnd* root loads there and its draws print the oracle's lines. Every
+    # line constructs a fresh generator, so each expectation is one draw off
+    # the seed; the gaussian pair shares one, like the setSeed pair.
+    # The float draw goes through a ^double wrapper like data.generators'
+    # float: a bare (.nextFloat r) answers the float's exact value as a double
+    # here, where the oracle answers a Float (the host legs' unmarshal,
+    # unchanged). Construction refusals carry the oracle's classes (pinned at
+    # the class: the message's module tail names no JVM here); a construction
+    # names its class literally, so it refuses the same way after any library
+    # loads. Instance-call refusals with bad arguments depend on the call
+    # site's resolution, which clojure.java.io's host crossing leniens (its
+    # own pre-existing behavior, unchanged), so they are pinned in
+    # ClojureInteropTest and ClojureWasmInteropRefusalTest instead of here.
+    # Oracle-identical (clj 1.12.6, 2026-10-21).
+    source: |
+      (defmacro rg-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (defn rg-float ^double [] (.nextFloat (java.util.Random. 42)))
+      (prn (.nextInt (java.util.Random. 42)))
+      (prn (.nextLong (java.util.Random. 42)))
+      (prn (.nextDouble (java.util.Random. 42)))
+      (prn (rg-float))
+      (prn (.nextBoolean (java.util.Random. 42)))
+      (prn (.nextInt (java.util.Random. 42) 16))
+      (prn (let [r (java.util.Random. 42)] [(.nextGaussian r) (.nextGaussian r)]))
+      (prn (let [r (java.util.Random. 42)] (.setSeed r 99) [(.nextInt r) (.nextInt r)]))
+      (prn [(rg-rfc ClassCastException (java.util.Random. "a")) (rg-rfc NullPointerException (java.util.Random. nil)) (rg-rfc IllegalArgumentException (java.util.Random. 9999999999999999999999N))])
+    expected: |
+      -1170105035
+      -5025562857975149833
+      0.7275636800328681
+      0.7275636792182922
+      true
+      11
+      [1.1419053154730547 0.9194079489827879]
+      [-1192035722 1672896916]
+      [:ok :ok :ok]
   - name: object-array-to-array-and-into-array-answer-vectors
     # object-array of a number is that many nils, else the members as a vector;
     # to-array is always an Object vector; into-array infers the component from

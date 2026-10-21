@@ -1526,7 +1526,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | math.combinatorics 0.3.2 | = | = | = | = | no transitive deps; the subsets walk prints a bare empty list, which is `nil` here (the pinned empty-list deviation), so the probe prints counts there |
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
-| data.generators 1.1.1 | = | = | red | red | no transitive deps; `.todo/g27`: `*rnd*`'s root `(java.util.Random. 42)` constructs at load, refused where no host is (`JAVA:NEW` undefined) |
+| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called |
 | test.check 1.1.3 | red | red | red | red | no transitive deps; `.todo/g28`: the SplittableRandom port runs under `(set! *unchecked-math* :warn-on-boxed)`, which stores but never wraps, so `*` promotes to BigInt and the next bit op refuses |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s; the `properties` macros emit test.check `defspec`s, g28); the JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
@@ -2721,7 +2721,10 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   the host is not (wasm); where the host is each stays the host's call (like
   `String/valueOf` where no host is, "Java interop"). `Long/parseLong` of one
   argument joins them (2026-10-13, f99): malli's `-string->long` reads strings
-  through it, so the string-transformer decode runs where the host is not. `.isInfinite`/`.isNaN`
+  through it, so the string-transformer decode runs where the host is not.
+  `Math/floor`, `Math/ceil` and `Math/log` of one argument join them (2026-10-21,
+  g27): data.generators' `uniform` reads `floor`, its `geometric` reads `ceil`
+  and `log`. `.isInfinite`/`.isNaN`
   of no argument answer what `infinite?`/`NaN?` answer over a double, as a
   Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
   `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
@@ -2766,10 +2769,45 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `parse-int-of-radix-16-reads-like-the-host-static`,
   `integer-to-hex-string-writes-like-the-host-static`,
   `math-min-of-two-answers-like-the-host-static`,
+  `math-floor-ceil-and-log-read-like-the-host-statics`,
   `isInfinite-and-isNaN-of-a-double-answer-like-the-host-methods` (four
   backends, the host∩oracle lines; the rest on both wasm backends in
-  `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`),
-  `ClojureLoweringTest#longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot`.
+  `ClojureWasmInteropRefusalTest#portableNumberStaticsRefuseLikeTheHostStaticsOnBothBackends`
+  and `#portableRandomDrawsAndRefusesLikeTheHostOnBothBackends`),
+  `ClojureLoweringTest#longParseLongOfOneStringIsThePortableReaderWhereTheHostIsNot`
+  and `#mathFloorCeilAndLogLowerToTheirWorkersWhereTheHostIsNot`.
+
+## Portable Random
+
+- **The generator** (2026-10-21, g27; `ClojureInteropLowering`,
+  `clojure.lisp` "Portable java.util.Random"): a `(java.util.Random. seed)` or
+  `(new java.util.Random seed)` construction -- or `java.util.Random/new`, as a
+  call or a value -- is the JDK's 48-bit LCG as a `(:C%RANDOM seed have-next
+  next-gauss)` list where the host is not (wasm), mutated in place like the
+  host object; where the host is it keeps its `java:new`. The draws
+  (`.nextInt` of zero or one argument, `.nextLong`, `.nextFloat`,
+  `.nextDouble`, `.nextBoolean`, `.nextGaussian`, `.setSeed`) on a receiver of
+  unknown -- or known `java.util.Random` -- class answer the worker's draw
+  behind a `%clojure-random-p` gate, anything else what the call lowered to;
+  `.next` is protected and no Clojure call reaches it. A zero-argument
+  construction seeds from six `rontolisp:random-bytes` (host entropy, like
+  `random`); a tagged construction names the host overload and keeps
+  `java:new`. The seed is the oracle's `long` of the argument (`RT.longCast`),
+  the bound the oracle's `int`, the Math double the argument's `doubleValue`
+  -- nil the oracle's `NullPointerException`, anything else no number its
+  `ClassCastException` to `Number` (the cast message's module tail names no JVM
+  here, like every other portable cast). Every draw is bit-identical with the
+  oracle on all four backends, so data.generators' `*rnd*` root loads on wasm
+  and its `uniform`/`geometric` (over the portable `Math/floor`/`ceil`/`log`)
+  print the oracle's lines.
+- **Pins**: clojure-spec `java-util-random-draws-answer-the-oracle-bits` (all
+  four backends, oracle-identical),
+  `ClojureWasmInteropRefusalTest#portableRandomDrawsAndRefusesLikeTheHostOnBothBackends`
+  (the draws and the refusal texts on both wasm backends),
+  `ClojureInteropTest#aHostRandomDrawAnswersTheOraclesDraws` (the host legs
+  keep the host's own),
+  `ClojureLoweringTest#aRandomConstructionLowersToThePortableGeneratorWhereTheHostIsNot`
+  and `#aRandomDrawLowersToThePortableWorkerWhereTheHostIsNot`.
 
 ## Boxed-integer limits, class designators and date builder chains
 

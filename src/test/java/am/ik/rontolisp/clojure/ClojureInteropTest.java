@@ -1110,6 +1110,42 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aHostRandomDrawAnswersTheOraclesDraws() throws Exception {
+		// g27 (measured clj 1.12.6 2026-10-21): (java.util.Random. seed) and its
+		// draws keep the host's own where the host is (the interpreter, the JVM):
+		// seeded draws print the oracle's numbers. A bare (.nextFloat r) answers
+		// the float's exact value as a double (the host call's unmarshal), where
+		// the oracle answers a Float; through a ^double wrapper both print the
+		// same (data.generators' float). Where the host is not the portable LCG
+		// answers them instead (clojure-spec, ClojureWasmInteropRefusalTest).
+		assertBothEqual(
+				"(defn hfloat ^double [] (.nextFloat (java.util.Random. 42)))"
+						+ " (println (.nextInt (java.util.Random. 42)) (.nextLong (java.util.Random. 42))"
+						+ " (.nextDouble (java.util.Random. 42)) (hfloat) (.nextBoolean (java.util.Random. 42))"
+						+ " (.nextInt (java.util.Random. 42) 16))",
+				"-1170105035 -5025562857975149833 0.7275636800328681 0.7275636792182922 true 11\n");
+		assertBothEqual("(println (.nextFloat (java.util.Random. 42)))", "0.7275636792182922\n");
+		assertBothEqual(
+				"(println (let [r (java.util.Random. 42)] [(.nextGaussian r) (.nextGaussian r)]))"
+						+ " (println (let [r (java.util.Random. 42)] (.setSeed r 99) [(.nextInt r) (.nextInt r)]))",
+				"[1.1419053154730547 0.9194079489827879]\n[-1192035722 1672896916]\n");
+		// the seed, bound and Math double casts refuse with the oracle's classes
+		// (pinned at the class: the message's module tail names no JVM here)
+		assertBothEqual(
+				"(defmacro h-rfc [cls form]"
+						+ " `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))"
+						+ " (println [(h-rfc ClassCastException (java.util.Random. \"a\"))"
+						+ " (h-rfc NullPointerException (java.util.Random. nil))"
+						+ " (h-rfc IllegalArgumentException (java.util.Random. 9999999999999999999999N))])"
+						+ " (println [(h-rfc IllegalArgumentException (.nextInt (java.util.Random. 42) 0))"
+						+ " (h-rfc ClassCastException (.nextInt (java.util.Random. 42) \"a\"))"
+						+ " (h-rfc NullPointerException (.nextInt (java.util.Random. 42) nil))])"
+						+ " (println [(h-rfc ClassCastException (Math/floor \"a\"))"
+						+ " (h-rfc NullPointerException (Math/log nil))])",
+				"[:ok :ok :ok]\n[:ok :ok :ok]\n[:ok :ok]\n");
+	}
+
+	@Test
 	void printTraceElementSpellsAHostStackTraceElementLikeTheOracle() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-08); a throwable built here has no frames
 		// (clojure-spec clojure-stacktrace-prints-no-frames), so only a host element

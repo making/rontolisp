@@ -448,6 +448,56 @@ final class ClojureInteropLowering {
 	 */
 	static final String HASH_MAP_CLASS = "java.util.HashMap";
 
+	/**
+	 * {@code java.util.Random}: a zero- or one-argument construction is the portable
+	 * 48-bit LCG generator where the host is not (wasm; {@link #randomConstruction},
+	 * {@link #RANDOM_NEW}), so data.generators' {@code *rnd*} root loads there. Where the
+	 * host is the construction keeps its {@code java:new}, whose host object the host
+	 * tests pin.
+	 */
+	static final String RANDOM_CLASS = "java.util.Random";
+
+	/** A portable {@code java.util.Random}: its {@code (:C%RANDOM seed ...)} list. */
+	static final String RANDOM_NEW = "RONTOLISP::%CLOJURE-RANDOM-NEW";
+
+	/** Host entropy as a 48-bit integer: a zero-argument construction's seed. */
+	static final String RANDOM_ENTROPY = "RONTOLISP::%CLOJURE-RANDOM-ENTROPY";
+
+	/** Whether X is a portable {@code java.util.Random}. */
+	static final String RANDOM_P = "RONTOLISP::%CLOJURE-RANDOM-P";
+
+	/** A portable draw of the JDK's {@code nextInt()}. */
+	static final String RANDOM_NEXT_INT = "RONTOLISP::%CLOJURE-RANDOM-INT";
+
+	/** A portable draw of the JDK's {@code nextInt(int)}. */
+	static final String RANDOM_NEXT_INT_BOUND = "RONTOLISP::%CLOJURE-RANDOM-INT-BOUND";
+
+	/** A portable draw of the JDK's {@code nextLong()}. */
+	static final String RANDOM_NEXT_LONG = "RONTOLISP::%CLOJURE-RANDOM-LONG";
+
+	/** A portable draw of the JDK's {@code nextFloat()}. */
+	static final String RANDOM_NEXT_FLOAT = "RONTOLISP::%CLOJURE-RANDOM-FLOAT";
+
+	/** A portable draw of the JDK's {@code nextDouble()}. */
+	static final String RANDOM_NEXT_DOUBLE = "RONTOLISP::%CLOJURE-RANDOM-DOUBLE";
+
+	/** A portable draw of the JDK's {@code nextBoolean()}. */
+	static final String RANDOM_NEXT_BOOLEAN = "RONTOLISP::%CLOJURE-RANDOM-BOOLEAN";
+
+	/** A portable draw of the JDK's {@code nextGaussian()}. */
+	static final String RANDOM_NEXT_GAUSSIAN = "RONTOLISP::%CLOJURE-RANDOM-GAUSSIAN";
+
+	/** A portable {@code setSeed(long)}: re-seeds and answers nil. */
+	static final String RANDOM_SET_SEED = "RONTOLISP::%CLOJURE-RANDOM-SET-SEED";
+
+	/**
+	 * The portable {@code java.util.Random} members by name and argument count:
+	 * {@code next} is protected and no Clojure call reaches it, so it stays out.
+	 */
+	static final Map<String, Set<Integer>> RANDOM_METHODS = Map.of("nextInt", Set.of(0, 1), "nextLong", Set.of(0),
+			"nextFloat", Set.of(0), "nextDouble", Set.of(0), "nextBoolean", Set.of(0), "nextGaussian", Set.of(0),
+			"setSeed", Set.of(1));
+
 	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
 	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
 
@@ -729,6 +779,12 @@ final class ClojureInteropLowering {
 			if (hashMap != null) {
 				return hashMap;
 			}
+			if (argDatums.isEmpty()) {
+				LispVal random = randomConstruction(cls, null);
+				if (random != null) {
+					return random;
+				}
+			}
 			LispVal object = objectToken(cls, argDatums.size());
 			if (object != null) {
 				return object;
@@ -753,6 +809,10 @@ final class ClojureInteropLowering {
 				LispVal hashMap = hashMapCopy(ctx, cls, arg);
 				if (hashMap != null) {
 					return hashMap;
+				}
+				LispVal random = randomConstruction(cls, arg);
+				if (random != null) {
+					return random;
 				}
 			}
 		}
@@ -1486,6 +1546,12 @@ final class ClojureInteropLowering {
 			if (empty != null) {
 				return empty;
 			}
+			if (args.isEmpty()) {
+				LispVal random = randomConstruction(cls, null);
+				if (random != null) {
+					return random;
+				}
+			}
 		}
 		if (args.size() == 1 && types == null) {
 			// untagged only: param tags name the host overload, which keeps java:new
@@ -1501,6 +1567,10 @@ final class ClojureInteropLowering {
 				LispVal hashMap = hashMapCopy(ctx, cls, args.get(0));
 				if (hashMap != null) {
 					return hashMap;
+				}
+				LispVal random = randomConstruction(cls, args.get(0));
+				if (random != null) {
+					return random;
 				}
 			}
 		}
@@ -1669,6 +1739,28 @@ final class ClojureInteropLowering {
 			return ClojureCollectionLowering.mapBuild(List.of());
 		}
 		return null;
+	}
+
+	/**
+	 * A zero- or one-argument {@code java.util.Random} construction (dotted or imported,
+	 * resolved) where the host is not (wasm): the portable 48-bit LCG generator
+	 * ({@link #RANDOM_NEW} over the lowered seed, or over {@link #RANDOM_ENTROPY} with no
+	 * argument), so data.generators' {@code *rnd*} root loads -- never a
+	 * {@code java:new}, which wasm refuses. A tagged construction names the host overload
+	 * and keeps {@code java:new}, as does any other count; where the host is the
+	 * construction keeps its {@code java:new}, whose host object the host tests pin. The
+	 * callers try it only untagged and off a host target. Null for any other class, so
+	 * the call keeps its {@code java:new} shape.
+	 * @param cls the resolved class name
+	 * @param arg the already-lowered seed, or null for the zero-argument construction
+	 * @return the portable generator, or null
+	 */
+	static @Nullable LispVal randomConstruction(String cls, @Nullable LispVal arg) {
+		if (!RANDOM_CLASS.equals(cls)) {
+			return null;
+		}
+		LispVal seed = arg != null ? arg : ClojureLowerUtil.list(new LispSymbol(RANDOM_ENTROPY));
+		return ClojureLowerUtil.list(new LispSymbol(RANDOM_NEW), seed);
 	}
 
 	/**
@@ -2396,6 +2488,14 @@ final class ClojureInteropLowering {
 			// methods answer through the core verbs, any other is refused by name
 			call = ClojureValueMethodLowering.valueArm(ctx, method, designator, recv, args, call);
 		}
+		if ((cls == null || RANDOM_CLASS.equals(cls)) && !ctx.hostTarget && RANDOM_METHODS.containsKey(method)
+				&& RANDOM_METHODS.get(method).contains(args.size())) {
+			// where no host is, a portable generator answers the draw a
+			// java.util.Random of that seed answers; anything else keeps what the
+			// call lowered to (the host call, or the oracle's refusal where no
+			// hostless class has the method)
+			call = randomArm(method, recv, args, call);
+		}
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
 		}
@@ -2411,6 +2511,35 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(recv, receiver))), out);
+	}
+
+	/**
+	 * An instance call of a portable {@code java.util.Random} member where the host is
+	 * not (wasm): a portable generator answers its worker, anything else what the call
+	 * lowered to. The caller checks the method and the count.
+	 * @param method the method name
+	 * @param recv the bound receiver
+	 * @param args the lowered arguments
+	 * @param otherwise the form for any other receiver
+	 * @return the gated draw
+	 */
+	static LispVal randomArm(String method, LispSymbol recv, List<LispVal> args, LispVal otherwise) {
+		String worker = switch (method) {
+			case "nextInt" -> args.size() == 1 ? RANDOM_NEXT_INT_BOUND : RANDOM_NEXT_INT;
+			case "nextLong" -> RANDOM_NEXT_LONG;
+			case "nextFloat" -> RANDOM_NEXT_FLOAT;
+			case "nextDouble" -> RANDOM_NEXT_DOUBLE;
+			case "nextBoolean" -> RANDOM_NEXT_BOOLEAN;
+			case "nextGaussian" -> RANDOM_NEXT_GAUSSIAN;
+			case "setSeed" -> RANDOM_SET_SEED;
+			default -> throw new IllegalStateException("no portable draw: " + method);
+		};
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(worker));
+		call.add(recv);
+		call.addAll(args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(RANDOM_P), recv),
+				ClojureLowerUtil.list(call), otherwise);
 	}
 
 	/**

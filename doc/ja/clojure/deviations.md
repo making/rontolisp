@@ -416,6 +416,14 @@
   ロード時のロックが構築できます。2 つの構築はホストのオブジェクト同様 `=` にも
   `identical?` にもなりませんが、表示は gensym になります（オラクルはオブジェクトの
   識別子を表示します）。ホストがある場合はホストのオブジェクトのまま残ります。
+- `(java.util.Random. seed)`（`(new java.util.Random seed)` も）の構築は wasm
+  バックエンドでは JDK の 48 ビット線形合同法ジェネレーターになり、オラクルの描画と
+  ビット単位で一致します（`.nextInt`、`.nextLong`、`.nextFloat`、`.nextDouble`、
+  `.nextBoolean`、`.nextGaussian`、`.setSeed`）。引数なしの構築はホストのエントロピー
+  からシードします。シードと上限のキャストはオラクル通りに拒否します。ホストがある
+  場合（インタープリターと JVM）は、ホストのオブジェクトのまま残ります。1引数の
+  `(Math/floor x)`、`(Math/ceil x)`、`(Math/log x)` も wasm
+  バックエンドではオラクルの double を返し、キャストはオラクル通りに拒否します。
 - リテラルなキーからの `(System/getProperty k)` は nil、`(System/getProperty k dflt)`
   は既定値を返します（wasm バックエンド。プロパティは存在しないため。プロパティがない
   ホストと同じで、ライブラリのロードが読むものです）。nil はオラクルの

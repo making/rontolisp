@@ -248,6 +248,41 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
+	void portableRandomDrawsAndRefusesLikeTheHostOnBothBackends() throws Exception {
+		// (java.util.Random. seed) where no host is (wasm) is the portable 48-bit
+		// LCG: seeded draws print the oracle's numbers (data.generators' probe
+		// relies on them), and the seed, bound and Math double casts refuse with
+		// the oracle's classes, measured against clj 1.12.6. The interpreter and
+		// the JVM keep the host's own, pinned by clojure-spec and ClojureLoweringTest.
+		String program = "(defn rg-float ^double [] (.nextFloat (java.util.Random. 42)))"
+				+ " (println (.nextInt (java.util.Random. 42)) (.nextLong (java.util.Random. 42))"
+				+ " (.nextDouble (java.util.Random. 42)) (rg-float) (.nextBoolean (java.util.Random. 42))"
+				+ " (.nextInt (java.util.Random. 42) 16))"
+				+ " (println (let [r (java.util.Random. 42)] [(.nextGaussian r) (.nextGaussian r)]))"
+				+ " (println (let [r (java.util.Random. 42)] (.setSeed r 99) [(.nextInt r) (.nextInt r)]))"
+				+ " (println (try (java.util.Random. \"a\") (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (java.util.Random. nil) (catch NullPointerException e (ex-message e))))"
+				+ " (println (try (.nextInt (java.util.Random. 42) 0)"
+				+ " (catch IllegalArgumentException e (ex-message e))))"
+				+ " (println (try (.nextInt (java.util.Random. 42) \"a\")"
+				+ " (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Math/floor \"a\") (catch ClassCastException e (ex-message e))))"
+				+ " (println (try (Math/log nil) (catch NullPointerException e (ex-message e))))"
+				+ " (println (Math/floor 2.5) (Math/ceil -0.5) (Math/log 2))";
+		String expected = "-1170105035 -5025562857975149833 0.7275636800328681 0.7275636792182922 true 11\n"
+				+ "[1.1419053154730547 0.9194079489827879]\n" + "[-1192035722 1672896916]\n"
+				+ "class java.lang.String cannot be cast to class java.lang.Number\n"
+				+ "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n"
+				+ "bound must be positive\n" + "class java.lang.String cannot be cast to class java.lang.Number\n"
+				+ "class java.lang.String cannot be cast to class java.lang.Number\n"
+				+ "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n"
+				+ "2.0 -0.0 0.6931471805599453\n";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1").isEqualTo(expected);
+		}
+	}
+
+	@Test
 	void aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends() throws Exception {
 		// no value a wasm program makes has getBytes but a string, or a field s: the
 		// oracle's own refusal, where the host arm was a call-time error; a String

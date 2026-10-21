@@ -12,12 +12,14 @@ import org.jspecify.annotations.Nullable;
  * "Portable number statics"): {@code Long/valueOf} and {@code Double/valueOf} of one
  * argument, {@code Long/parseLong} of one argument (malli's {@code -string->long}, which
  * the string-transformer decode reads), {@code Integer/parseInt} of a string and a
- * literal radix 16, {@code Integer/toHexString} of one argument and {@code Math/min} of
- * two. Where the host is not (wasm) each lowers to its portable worker in
- * {@code clojure.lisp} -- never a {@code java:static}, which wasm refuses; where the host
- * is each stays the host's call. Each worker is measured against clj 1.12.6,
- * {@code Long/valueOf}'s and {@code Long/parseLong}'s grammar being {@code parse-long}'s
- * and {@code Double/valueOf}'s {@code parse-double}'s.
+ * literal radix 16, {@code Integer/toHexString} of one argument, {@code Math/min} of two
+ * and {@code Math/floor}, {@code Math/ceil} and {@code Math/log} of one argument
+ * (data.generators' {@code uniform} and {@code geometric}). Where the host is not (wasm)
+ * each lowers to its portable worker in {@code clojure.lisp} -- never a
+ * {@code java:static}, which wasm refuses; where the host is each stays the host's call.
+ * Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s and
+ * {@code Long/parseLong}'s grammar being {@code parse-long}'s and
+ * {@code Double/valueOf}'s {@code parse-double}'s.
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -41,6 +43,15 @@ final class ClojurePortableStaticsLowering {
 
 	/** {@code (Math/min a b)}. */
 	static final String MATH_MIN = "RONTOLISP::%CLOJURE-MATH-MIN";
+
+	/** {@code (Math/floor x)}. */
+	static final String MATH_FLOOR = "RONTOLISP::%CLOJURE-MATH-FLOOR";
+
+	/** {@code (Math/ceil x)}. */
+	static final String MATH_CEIL = "RONTOLISP::%CLOJURE-MATH-CEIL";
+
+	/** {@code (Math/log x)}. */
+	static final String MATH_LOG = "RONTOLISP::%CLOJURE-MATH-LOG";
 
 	/** {@code infinite?} over a double: what {@code .isInfinite} answers. */
 	static final String IS_INFINITE = "RONTOLISP::%CLOJURE-IS-INFINITE";
@@ -80,6 +91,15 @@ final class ClojurePortableStaticsLowering {
 		}
 		if (cls.equals("java.lang.Math") && member.equals("min") && args.size() == 2) {
 			return ClojureLowerUtil.list(new LispSymbol(MATH_MIN), args.get(0), args.get(1));
+		}
+		if (cls.equals("java.lang.Math") && member.equals("floor") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(MATH_FLOOR), args.get(0));
+		}
+		if (cls.equals("java.lang.Math") && member.equals("ceil") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(MATH_CEIL), args.get(0));
+		}
+		if (cls.equals("java.lang.Math") && member.equals("log") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(MATH_LOG), args.get(0));
 		}
 		return null;
 	}

@@ -2266,6 +2266,84 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aRandomConstructionLowersToThePortableGeneratorWhereTheHostIsNot() {
+		// (java.util.Random. seed), (new java.util.Random seed) and
+		// (java.util.Random/new seed) are the portable 48-bit LCG generator where
+		// the host is not (wasm) -- data.generators' *rnd* root loads there --
+		// never a java:new (which wasm refuses); a zero-argument construction
+		// seeds from host entropy, a tagged one keeps the host overload, as does
+		// any other count. Where the host is every spelling keeps java:new, whose
+		// host object the host tests pin.
+		assertThat(wasmLowered("(java.util.Random. 42)")).contains("RONTOLISP::%CLOJURE-RANDOM-NEW")
+			.contains("42")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(new java.util.Random 42)")).contains("RONTOLISP::%CLOJURE-RANDOM-NEW")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.Random/new 42)")).contains("RONTOLISP::%CLOJURE-RANDOM-NEW")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.Random.)")).contains("RONTOLISP::%CLOJURE-RANDOM-NEW")
+			.contains("RONTOLISP::%CLOJURE-RANDOM-ENTROPY")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(java.util.Random. 1 2)")).contains("JAVA:NEW").contains("java.util.Random");
+		assertThat(wasmLowered("(^[long] java.util.Random/new 42)")).contains("JAVA:NEW").contains("java.util.Random");
+		assertThat(lowered("(java.util.Random. 42)")).contains("JAVA:NEW").contains("java.util.Random");
+		assertThat(lowered("(java.util.Random.)")).contains("JAVA:NEW").contains("java.util.Random");
+	}
+
+	@Test
+	void aRandomDrawLowersToThePortableWorkerWhereTheHostIsNot() {
+		// (.nextInt r), (.nextLong r), (.nextFloat r), (.nextDouble r),
+		// (.nextBoolean r), (.nextGaussian r) and (.setSeed r s) on a receiver of
+		// unknown class answer the portable draw where the host is not (wasm),
+		// gated on the receiver being a portable generator; anything else keeps
+		// what the call lowered to (the oracle's refusal -- no hostless class has
+		// the method). As a value the lambda dispatches the same way. Any other
+		// count keeps the host call; where the host is every spelling keeps
+		// java:call.
+		assertThat(wasmLowered("(defn f [r] (.nextInt r))")).contains("RONTOLISP::%CLOJURE-RANDOM-P")
+			.contains("RONTOLISP::%CLOJURE-RANDOM-INT")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r] (.nextLong r))")).contains("RONTOLISP::%CLOJURE-RANDOM-LONG")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r] (.nextFloat r))")).contains("RONTOLISP::%CLOJURE-RANDOM-FLOAT")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r] (.nextDouble r))")).contains("RONTOLISP::%CLOJURE-RANDOM-DOUBLE")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r] (.nextBoolean r))")).contains("RONTOLISP::%CLOJURE-RANDOM-BOOLEAN")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r] (.nextGaussian r))")).contains("RONTOLISP::%CLOJURE-RANDOM-GAUSSIAN")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r s] (.setSeed r s))")).contains("RONTOLISP::%CLOJURE-RANDOM-SET-SEED")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(defn f [r b] (.nextInt r b))")).contains("RONTOLISP::%CLOJURE-RANDOM-INT-BOUND")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(map #(.nextInt %) [(java.util.Random. 42)])"))
+			.contains("RONTOLISP::%CLOJURE-RANDOM-INT");
+		assertThat(wasmLowered("(defn f [r] (.nextInt r 1 2))")).doesNotContain("RONTOLISP::%CLOJURE-RANDOM-")
+			.contains("No matching method nextInt");
+		assertThat(lowered("(defn f [r] (.nextInt r))")).contains("JAVA:CALL")
+			.doesNotContain("RONTOLISP::%CLOJURE-RANDOM-");
+	}
+
+	@Test
+	void mathFloorCeilAndLogLowerToTheirWorkersWhereTheHostIsNot() {
+		// (Math/floor x), (Math/ceil x) and (Math/log x) of one argument are
+		// their portable workers where the host is not (wasm) -- data.generators'
+		// uniform reads floor, its geometric reads ceil and log -- never a
+		// java:static (which wasm refuses); as a value the arity lambda wraps the
+		// same worker. Any other arity stays the host call; where the host is
+		// every spelling keeps java:static.
+		assertThat(wasmLowered("(Math/floor 2.5)")).contains("RONTOLISP::%CLOJURE-MATH-FLOOR").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Math/ceil 2.5)")).contains("RONTOLISP::%CLOJURE-MATH-CEIL").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(Math/log 2)")).contains("RONTOLISP::%CLOJURE-MATH-LOG").doesNotContain("JAVA:");
+		assertThat(wasmLowered("(map Math/floor [2.5])")).contains("RONTOLISP::%CLOJURE-MATH-FLOOR");
+		assertThat(wasmLowered("(Math/floor 1 2)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-MATH-FLOOR");
+		assertThat(lowered("(Math/floor 2.5)")).contains("JAVA:STATIC")
+			.doesNotContain("RONTOLISP::%CLOJURE-MATH-FLOOR");
+	}
+
+	@Test
 	void systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot() {
 		// (System/getProperty k) of a literal key is nil and (System/getProperty k
 		// dflt) its default where the host is not (wasm) -- no properties exist

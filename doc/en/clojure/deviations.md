@@ -439,6 +439,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   load-time lock builds; two constructions are never `=` or `identical?`, like two host
   objects, but one prints as a gensym where the oracle prints the object's identity.
   Where the host is it stays the host object.
+- A `(java.util.Random. seed)` (or `(new java.util.Random seed)`) construction is the
+  JDK's 48-bit linear congruential generator on the wasm backends, answering the
+  oracle's draws bit for bit (`.nextInt`, `.nextLong`, `.nextFloat`, `.nextDouble`,
+  `.nextBoolean`, `.nextGaussian`, `.setSeed`); a zero-argument construction seeds from
+  host entropy. The seed and bound casts refuse as the oracle's do. Where the host is
+  (the interpreter and the JVM) the construction stays the host object. `(Math/floor x)`,
+  `(Math/ceil x)` and `(Math/log x)` of one argument answer the oracle's double on the
+  wasm backends too, refusing as the oracle's casts do.
 - `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
   its default on the wasm backends, where no properties exist (like a host without the
   property, which is what a library load reads); nil is the oracle's
