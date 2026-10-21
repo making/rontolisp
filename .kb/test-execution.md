@@ -43,6 +43,12 @@
   so nothing in one process's heap (a weakly-keyed cache, a static counter,
   `am.ik.gpu.DeviceResidency`'s live set) is visible across forks; surefire guarantees neither
   which fork nor what order.
+- Each fork's heap is `-Xmx6g` in surefire's `argLine`, not the JVM default. Measured
+  2026-10-21: with the suite past ~19k tests the CI runner's default ergonomics heap
+  (~4 GB on the 16 GB runner) died with `OutOfMemoryError: Java heap space` mid-run four
+  consecutive times (zero assertion failures; the stacks were unrelated compile paths, i.e.
+  cumulative pressure, not one bad test). Two forks times 6 GB is the most the 16 GB
+  runner affords beside Maven itself and the wasmtime host compiles.
 
 ## Running a compiled class in process, concurrently
 

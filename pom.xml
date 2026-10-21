@@ -320,8 +320,15 @@ gitBranch=${git.branch}
 					     JVM must have jdk.incubator.vector in its module graph. The blas
 					     tests bind a tuned CBLAS through the foreign function API, which
 					     is a restricted method: without the second flag every such test
-					     prints a multi-line warning to stderr. -->
-					<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</argLine>
+					     prints a multi-line warning to stderr. The -Xmx floor is load-bearing:
+					     the suite passed ~19k tests and the CI runner's default ergonomics
+					     heap (~4 GB on the 16 GB runner) started dying with
+					     OutOfMemoryError: Java heap space mid-run on 2026-10-21 (four
+					     consecutive `test`-job failures, zero assertion failures, stacks
+					     in unrelated compile paths). Two forks times 6 GB is the most the
+					     16 GB runner affords beside Maven itself and the wasmtime host
+					     compiles; lower it only with a green CI run to show for it. -->
+					<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx6g</argLine>
 					<!-- Forked JVMs run different test classes in parallel, reused across
 					     classes so JVM startup is paid once per fork. The count is set by
 					     build-helper's size-test-forks execution from the free cores at test
