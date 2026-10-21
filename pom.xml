@@ -323,8 +323,9 @@ gitBranch=${git.branch}
 					     prints a multi-line warning to stderr. The -Xmx floor is load-bearing:
 					     the suite passed ~19k tests and the CI runner's default ergonomics
 					     heap (~4 GB on the 16 GB runner) started dying with
-					     OutOfMemoryError: Java heap space mid-run on 2026-10-21 (four
-					     consecutive `test`-job failures, zero assertion failures, stacks
+					     OutOfMemoryError: Java heap space mid-run on 2026-10-21 (five
+					     consecutive `test`-job failures, three with the confirmed heap
+					     signature, zero assertion failures, stacks
 					     in unrelated compile paths). Two forks times 6 GB is the most the
 					     16 GB runner affords beside Maven itself and the wasmtime host
 					     compiles; lower it only with a green CI run to show for it. -->
