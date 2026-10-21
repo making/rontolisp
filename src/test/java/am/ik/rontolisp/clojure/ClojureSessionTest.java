@@ -316,8 +316,9 @@ class ClojureSessionTest {
 					&& !form.contains("\"java.lang.Throwable\" \"java.lang.Object\""));
 		// a reader in a later buffer brings every class class answers, the core kinds too
 		List<String> read = forms(session.read("(ancestors (class 1))"));
-		assertThat(read).anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS (APPEND ")
-				&& form.contains("(\"number\" . T)") && form.contains("\"java.lang.ArithmeticException\""));
+		assertThat(read).anyMatch(
+				form -> form.startsWith("(SETQ C%H-SUPERS (APPEND ") && form.contains("(\"number\" \"java.lang.Long\"")
+						&& form.contains("\"java.lang.ArithmeticException\""));
 	}
 
 	@Test

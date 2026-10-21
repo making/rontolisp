@@ -1531,7 +1531,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | test.check 1.1.3 | = | = | red | red | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). Both wasm backends refuse the namespace at load: the seedless `next-rng` builds a `proxy` of `ThreadLocal` (`JAVA:SUBCLASS` undefined where no host is), and past it every draw needs `Math/floor` and a split `Long/bitCount` (`.todo/g31-test-check-wasm-gaps.md`, the wasm follow-up). `clojure.test.check.clojure-test` (and hive-test's `properties` macros, which emit its `defspec`s) needs `clojure.test`'s `report`/`do-report` (`.todo/g32-clojure-test-report-do-report.md`, the reporting follow-up); the direct `quick-check` path the probe pins needs neither |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s; the `properties` macros emit test.check `defspec`s, still needing `clojure.test`'s `report`/`do-report` -- `.todo/g32-clojure-test-report-do-report.md`); the JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
-| core.memoize 1.2.281 | red | red | red | red | transitive core.cache 1.2.254 -> 1.2.999 by newest-wins; `.todo/g29`: `check-args` tests `(some #{clojure.lang.IFn ...} (ancestors (class f)))`, but those classes have no value spelling and a kind's supers are `Object` alone, so the check can neither compile nor pass |
+| core.memoize 1.2.281 | = | = | = | = | transitive core.cache 1.2.254 -> 1.2.999 by newest-wins; g29: a kind keyword's `ancestors` hold the supers of the values it stands for (`clojure.lang.IFn` among a function's) and a class name in value position reads as its class keyword, so `check-args`' `(some #{clojure.lang.IFn ...} (ancestors (class f)))` compiles and passes; the `JAVA:NEW`+`JAVA:CALL` warnings on both wasm backends come from core.cache's own sources, off the probe's path |
 | potpuri 0.5.3 | = | = | = | = | no transitive deps |
 | core.unify 0.7.3 | = | = | = | = | no transitive deps; g20: a macro's gensym fn name reads its own function as a value ("The IFn dispatcher stays at the call site") |
 | integrant 1.0.1 + weavejester/dependency 1.0.0 | red | red | red | red | `.todo/g30`: `resources`/`load-hierarchy` define but never call `enumeration-seq` over `RT/baseLoader`; refusals throw at lower time, so the load stops there |
@@ -3941,17 +3941,27 @@ constructor and consumer, and a regex `replace` with a function replacement.
   any other throwable); `C%H-ISA?`'s last arm and the readers ask `clojure.lisp`'s "Class
   chains" (`%clojure-class-isa`/`-parents`/`-ancestors`/`-rows`). Every class row `isa?`
   `Object` (an interface too, like `isAssignableFrom`), while an interface's supers stop
-  short of it. A core kind, a record, a deftype or `reify` is a row `(name . t)`: its host
-  classes are no one value here (`:number` is `Long`, `Double`, `Ratio`...), so its supers
-  are `Object` alone and `parents` adds nothing -- the documented deviation.
+  short of it. A record, a deftype or `reify` is a row `(name . t)`: its host classes
+  are no one value here, so its supers are `Object` alone and `parents` adds nothing --
+  the documented deviation. A core kind is a row of the supers of the values it stands
+  for (`ClojureValueClasses.kindSupers`, read off clj 1.12.6 on JDK 25 with the
+  interface tables 2026-10-21, `Object` last): `:function`'s row names `AFn`,
+  `AFunction`, `IFn` and the rest, so its `ancestors` hold `clojure.lang.IFn`, and
+  `isa?` and `parents` follow them (g29; `ClojureSessionTest#aBufferSpelling*` pins the
+  row shape). A `clojure.lang` class the host does not load but a kind's values
+  implement (`clojure.lang.IFn`, spelled dotted or imported) reads in value position as
+  its class keyword, so `(= clojure.lang.IFn (class (fn [])))` stays false.
   Rows: `ClojureLowering.recordClass` records a class and its supers' rows (constructions,
   catches, `instance?`, spellings); a spelled class also records each class a value may have
   unnamed (`ClojureClassBases.implicitClasses`: the runtime errors', the streams') whose
-  supers hold it; `Object` spelled or a reader lowered (`allClassRows`) records all of them
-  plus the kinds and the program's types. Everything rides on `usedClassChains`: a hierarchy
-  runtime of a program spelling no class in those positions reads only the hierarchy (a
-  session redefines `C%H-ISA?` and the readers and sets the rows ahead of the first buffer
-  spelling one, then `append`s later buffers' rows, `ClojureSessionTest#aBufferSpelling*`,
+  supers hold it; `Object` spelled or a hierarchy reader lowered (`allClassRows`,
+  `ClojureHierarchyLowering.hierarchyOp`: a class keyword -- a `(class ...)` call, a kind
+  keyword or a kind spelling -- can always reach `isa?`/`parents`/`ancestors`/
+  `descendants`) records all of them plus the kinds and the program's types. Everything
+  rides on `usedClassChains`: the same four readers set it, so a program spelling no
+  class in those positions still walks the class rows (a session redefines `C%H-ISA?`
+  and the readers and sets the rows ahead of the first buffer spelling one, then
+  `append`s later buffers' rows, `ClojureSessionTest#aBufferSpelling*`,
   `#aSessionReadsAClassKeywordsSupersInALaterBuffer`). A class keyword with no row asks the
   host arm `%clojure-host-class-rows` (stand-in NIL without `java:`): a host Throwable class
   reflects its rows, so the class of a host throwable no construction names (one a host
@@ -3962,8 +3972,6 @@ constructor and consumer, and a regex `replace` with a function replacement.
   chains turns on the exception runtime; the walk carries the refusal arm only where
   `descendants` is read (or in a session), since 2026-10-04 -- before, every chain program
   reading none compiled `C%E-NEW` as an undefined call, with a warning.
-  Gap: `(ancestors (class x))` in a program spelling no class and naming no `java:`
-  operator answers only the hierarchy.
 - **Host classes** (oracle-checked clj 1.12.6, 2026-10-04). `class` of a host non-throwable
   (interpreter, JVM) is its host class OBJECT. A program using a hierarchy and naming a
   `java:` operator (`ClojureHierarchyLowering.namesHost`, the library's host-arm criterion;

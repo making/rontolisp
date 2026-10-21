@@ -15841,3 +15841,64 @@ cases:
       :gamma1 540350159304224773
       :split [2949826092126892291 -4767286540954276203 540350159304224773 -2488624846224467125]
       :restored 3
+  - name: ancestors-of-a-kind-hold-the-classes-its-values-implement-and-class-names-read-as-keywords
+    # g29 (core.memoize 1.2.281's check-args refused the load with
+    # `unknown name: clojure.lang.IFn` at memoize.clj:385): ancestors/parents/isa?
+    # of a kind keyword walk the supers of the values it stands for
+    # (ClojureValueClasses), so the check-args shape -- a
+    # (some #{clojure.lang.IFn ...} (ancestors (class f))) test inside an
+    # asserting macro with *assert* at its default -- compiles and passes for a
+    # function. A class name in value position reads as its class keyword
+    # (:clojure.lang.IFn), which keeps (= clojure.lang.IFn (class (fn []))) false.
+    # The Object bridge stays: a kind still isa? Object, and what derive records
+    # under Object still reaches a kind's ancestors. The exact-hit multimethod
+    # dispatch over a kind still answers it.
+    source: |
+      (set! *assert* true)
+      (defmacro g29-massert [condition msg] `(when-not ~condition (throw (new AssertionError (str ~msg "\n" (pr-str '~condition))))))
+      (defmacro g29-check-args [f base key threshold]
+        (when *assert*
+          `(do (g29-massert (= ~key :g29-fifo/threshold) "bad threshold key")
+               (g29-massert (some #{clojure.lang.IFn clojure.lang.AFn java.lang.Runnable java.util.concurrent.Callable}
+                                  (ancestors (class ~f)))
+                            "not a function")
+               (g29-massert (number? ~threshold) "bad threshold"))))
+      (defn g29-fifo [f base key threshold]
+        (g29-check-args f base key threshold)
+        (let [cache (atom {})]
+          (fn [x]
+            (if (contains? @cache x)
+              (get @cache x)
+              (let [v (f x)] (swap! cache assoc x v) v)))))
+      (def g29-calls (atom 0))
+      (def g29-f (g29-fifo (fn [x] (swap! g29-calls inc) (* x 2)) {} :g29-fifo/threshold 32))
+      (println (g29-f 21))
+      (println (g29-f 21))
+      (println @g29-calls)
+      (println (= clojure.lang.IFn (class (fn []))))
+      (println (contains? (ancestors (class (fn []))) :clojure.lang.IFn))
+      (println (contains? (ancestors :function) :clojure.lang.IFn))
+      (println (contains? (ancestors :function) :java.lang.Object))
+      (println (contains? (parents :function) :clojure.lang.AFunction))
+      (println (isa? (class (fn [])) :clojure.lang.IFn))
+      (println (isa? (class (fn [])) Object))
+      (println (isa? (class "a") java.io.Serializable))
+      (println (contains? (ancestors :string) :java.lang.CharSequence))
+      (defmulti g29-d class)
+      (defmethod g29-d :function [_] :g29-fn!)
+      (defmethod g29-d :default [_] :g29-dflt)
+      (println (g29-d (fn [] 1)) (g29-d 1))
+    expected: |
+      42
+      42
+      1
+      false
+      true
+      true
+      true
+      true
+      true
+      true
+      true
+      true
+      :g29-fn! :g29-dflt
