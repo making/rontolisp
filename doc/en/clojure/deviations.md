@@ -126,7 +126,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   stays silent for every type but `:pass`/`:fail`/`:error`/`:summary` (the oracle prints
   the map and runs custom `:type` methods); a `:fail`/`:error` map's `:file`/`:line` win,
   but conditions carry no portable stack trace, so test.check's file-and-line reads host
-  frames where the oracle names the test file.
+  frames where the oracle names the test file. test.check's larger-valued generators
+  hang: `int-rose-tree` builds the whole shrink tree eagerly here (`map` over a strict
+  input is strict, where the oracle's is always lazy), so the tree holds about k^k nodes
+  for a drawn value near 2^k (20 nodes for 5, 254 for 10, 37,954 for 20, 631,314 for 26,
+  3.3M for 30, 2.6e9 for 42). Small-valued generators answer on every backend (`choose`
+  within about 0..25, seeded `quick-check`s with `:max-size 10`); a larger-valued draw
+  such as `(gen/generate (gen/choose 0 100) 5 99)` crawls past a minute everywhere but
+  the JVM.
 - A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
   runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed

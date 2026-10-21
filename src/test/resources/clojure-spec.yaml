@@ -16138,3 +16138,44 @@ cases:
       true
       true
       :g29-fn! :g29-dflt
+  - name: eager-shrink-trees-answer-only-at-small-magnitudes
+    # g33 (cut from g28): test.check 1.1.3's int-rose-tree builds a value's
+    # whole shrink tree EAGERLY here -- (core/map int-rose-tree (shrink-int
+    # value)) over shrink-long's long array, and map over a strict input is
+    # strict (the lazy-or-strict rule, "Laziness": lazy only when an input is
+    # lazy; the per-verb pins and the strict-loop performance notes stand, so
+    # this shape stays strict and no laziness story is built for it). The
+    # oracle's map is always lazy, so only the consumed spine exists there.
+    # The child count of a value near 2^k is about k, each child nearly as
+    # large, so the eager tree holds on the order of k^k nodes; measured node
+    # counts (g33 probe, test.check 1.1.3 verbatim on all four backends): 20
+    # for 5, 254 for 10, 37,954 for 20 (this case: seconds on the
+    # interpreter, milliseconds on the JVM and both wasm backends), 631,314
+    # for 26 (about 110 s on the interpreter, 2.5 s on the JVM, about a
+    # minute on both wasm backends), 3,337,928 for 30 (minutes on the
+    # interpreter and both wasm backends, 3.4 s on the JVM), 2.6e9 for 42 and
+    # 7.5e26 for 126 (infeasible everywhere). So the supported boundary is
+    # the g28 probe's small-valued set: choose ranges within about 0..25 and
+    # seeded quick-checks with :max-size 10 answer on all four backends,
+    # while a larger-valued draw such as (gen/generate (gen/choose 0 100)
+    # 5 99) (drawn 26) crawls past a minute everywhere but the JVM and never
+    # answers past about 30 on the interpreter and wasm. The replication
+    # below is shrink-long/int-rose-tree verbatim (long array, aset, quot
+    # halving; a two-vector stands in for the deftype), counting the nodes
+    # at 5, 10 and 20.
+    source: |
+      (defn g33-shrink [x]
+        (let [size (- 64 (Long/numberOfLeadingZeros (Math/abs x)))
+              vals (long-array size)]
+          (loop [i 0 n x]
+            (if (zero? n)
+              vals
+              (do (aset vals i (- x n))
+                  (recur (inc i) (quot n 2)))))))
+      (defn g33-tree [v]
+        [v (map g33-tree (g33-shrink v))])
+      (defn g33-nodes [t]
+        (inc (reduce + 0 (map g33-nodes (second t)))))
+      (println (g33-nodes (g33-tree 5)) (g33-nodes (g33-tree 10)) (g33-nodes (g33-tree 20)))
+    expected: |
+      20 254 37954
