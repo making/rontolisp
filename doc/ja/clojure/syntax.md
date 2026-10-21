@@ -133,3 +133,30 @@ $ cat src/app/main.clj
 $ rontolisp src/app/main.clj
 {:x 1, :y 2}
 ```
+
+## Read-eval
+
+`#=form` はプログラムの lowering 中に（コンパイルホスト上で）評価され、その答えが
+そのフォームのあった位置の datum になります。コンパイル成果物は式ではなく RESULT
+をリテラルとして運びます。リストのフォームの先頭は現在の名前空間で解決され、残りの引数（未評価のまま）に
+関数として適用されます。つまり、サイトより上で定義した定義、コアや既知の
+ライブラリの値です。特殊フォームは決して解決されず（`#=(if true 1 2)` は
+`Can't resolve if`）、裸のシンボルはそのクラスに答え（`#=java.lang.String`）、
+シンボルでもリストでもないものは `Unsupported #= form` です。オラクルの読み取りと
+同じく、クォートはこれを遮らず（`'#=(+ 1 2)` は `3`）、入れ子の `#=` は先に解決
+され、`#=(var x)` はその var に答えます。`*read-eval*` が読み取りを守ります（既定で
+true。`#=` の読み取り中に `nil` ならオラクルの
+`EvalReader not allowed when *read-eval* is false` です）。
+
+```clojure
+(defn re-double [x] (* x 2))
+(println #=(+ 1 2))
+(println #=(re-double 21))
+(println #=(str "a" 1 "-" #=(+ 1 2)))
+```
+
+```
+3
+42
+a1-3
+```

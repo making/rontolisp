@@ -270,6 +270,19 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   of one text answer `=` forms here. A regex literal passed to a macro reaches the
   expansion as a fresh pattern compiled from the same source, where the oracle's
   expansion holds the one `Pattern` object.
+- `#=` evaluates while the program lowers, so every backend carries the answer as a
+  literal. Like the oracle's read, the head applies as a function to the unevaluated
+  rest, `*read-eval*` gates it, and a quote never shields one -- but the answer must
+  have a literal spelling here, so a class (`#=java.lang.String`), a constructor or a
+  static call, and any other value with none (an atom, a function, a host object other
+  than a UUID or Date) is refused (`Can't resolve` for an unknown name,
+  `Can't embed object in code` where the oracle embeds the object). A macro head is
+  the oracle's arity refusal whatever the count; of two or more arguments the oracle
+  runs the macro body on the shifted arguments instead. A discarded `#_` drops its
+  form without evaluating it, where the oracle evaluates an `#=` inside first. A map
+  or set literal refuses duplicate keys on the read forms, so two `#=` answers only
+  equal once evaluated stay two members here, where the oracle refuses the second. An
+  unqualified `#=(var x)` resolves in the current namespace, where the oracle throws.
 - Syntax-quote qualifies every symbol but a special form, like the oracle: a core name
   spells `clojure.core/name` (one a `(:refer-clojure ...)` filter hides spells its own
   namespace instead), any other unresolved spelling the defining namespace, an alias

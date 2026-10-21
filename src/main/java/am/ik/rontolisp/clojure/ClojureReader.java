@@ -112,6 +112,14 @@ final class ClojureReader {
 	static final LispSymbol PENDING_TAG = new LispSymbol("%pending-tag");
 
 	/**
+	 * Heads what {@code #=} reads as, {@code (%read-eval form)}: the form to evaluate
+	 * where the datum lowers, resolved before any macro sees it
+	 * ({@code ClojureReadEval}). A branch not taken still reads suppressed, as
+	 * {@code (%tagged = form)}, and drops.
+	 */
+	static final LispSymbol READ_EVAL = new LispSymbol("%read-eval");
+
+	/**
 	 * What reads in place of a tagged literal of an undotted tag, the oracle's
 	 * {@code *data-readers*} of a program: a data reader's answer for the form.
 	 */
@@ -482,9 +490,15 @@ final class ClojureReader {
 		if (Character.isLetter(peek())) {
 			return readRecordLiteral();
 		}
-		if (peek() == '=' && this.suppress) { // a branch not taken evaluates nothing
+		boolean unevaluated = this.suppress || this.edn;
+		if (peek() == '=' && unevaluated) { // a branch not taken, or EDN data, evaluates
+											// nothing
 			next();
 			return list(List.of(TAGGED, new LispSymbol("="), readRequired()));
+		}
+		if (peek() == '=') { // read-eval: the form travels, resolved where it lowers
+			next();
+			return list(List.of(READ_EVAL, readRequired()));
 		}
 		throw error("unsupported reader form #" + peek());
 	}
@@ -606,8 +620,9 @@ final class ClojureReader {
 				|| ClojureDefaultReaders.isMarker(head)) {
 			return null;
 		}
-		if (head == PENDING_TAG) {
-			// what the data reader answers is the second read's to splice
+		if (head == PENDING_TAG || head == READ_EVAL) {
+			// what the data readers answer is the second read's to splice; a
+			// read-eval answers where the datum lowers, resolved the same way
 			return List.of(list(items));
 		}
 		return items;

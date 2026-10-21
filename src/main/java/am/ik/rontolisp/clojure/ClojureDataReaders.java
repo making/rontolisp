@@ -45,9 +45,9 @@ final class ClojureDataReaders {
 	 * What the call of a reader var answers at macro time when the var is not bound yet:
 	 * a Common Lisp keyword, which no Clojure value is.
 	 */
-	private static final LispSymbol UNBOUND = new LispSymbol(":C%UNBOUND-READER");
+	static final LispSymbol UNBOUND = new LispSymbol(":C%UNBOUND-READER");
 
-	private static final LispSymbol CALL = new LispSymbol("RONTOLISP::%CLOJURE-CALL");
+	static final LispSymbol CALL = new LispSymbol("RONTOLISP::%CLOJURE-CALL");
 
 	/**
 	 * One {@code data_readers} file at a root.
@@ -220,7 +220,9 @@ final class ClojureDataReaders {
 			throw new LispReadException("the data reader #'" + var + " of #" + tag
 					+ " cannot run without a macro evaluator (lower with one)");
 		}
-		LispVal call = callOf(ctx, var, ctx.quote(form));
+		// a #= inside the form evaluates where the literal stands, like the oracle's
+		// read evaluating it before the reader function runs
+		LispVal call = callOf(ctx, var, ctx.quote(ClojureReadEval.resolve(ctx, form)));
 		if (call == null) {
 			throw unbound(var);
 		}

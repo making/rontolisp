@@ -15693,3 +15693,25 @@ cases:
       true true true
       1
       1
+  - name: read-eval-embeds-computed-literals-at-compile-time
+    # #= evaluates while the program lowers, on the compile host, and the answer
+    # stands as the datum where the form stood: the artifact carries the RESULT as a
+    # literal, identical on all four backends. The head's var -- a definition above
+    # the site, or a core or known-library value -- applies to the UNEVALUATED rest,
+    # so special forms never resolve and a quote never shields one; a nested #=
+    # resolves first. A #=(var x) answers the var. Oracle-identical (clj 1.12.6).
+    source: |
+      (defn rev-double [x] (* x 2))
+      (println #=(+ 1 2))
+      (println #=(rev-double 21))
+      (println [#=(str "a" 1) #=(rev-double #=(* 2 3))])
+      (println #=(clojure.string/join "-" ["a" "b"]))
+      (println #=(vector 1 2) #=(hash-map :a 1))
+      (println (var? #=(var rev-double)) (= #=(var rev-double) (var rev-double)))
+    expected: |
+      3
+      42
+      [a1 12]
+      a-b
+      [1 2] {:a 1}
+      true true

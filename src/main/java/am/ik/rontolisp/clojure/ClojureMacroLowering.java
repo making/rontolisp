@@ -681,6 +681,9 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
 				}
+				if (tag.name().equals(":C%VAR")) {
+					return decodeVar(cons);
+				}
 			}
 			List<LispVal> out = new ArrayList<>();
 			LispVal run = value;
@@ -830,6 +833,18 @@ final class ClojureMacroLowering {
 			if (parts.size() == 3 && parts.get(2) instanceof LispInteger second) {
 				return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, first, second);
 			}
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * A var answer back to its {@code (var ns/name)} datum, which lowers back to the same
+	 * var: what {@code #=(var x)} stands as, and what a macro answering a var expands to.
+	 */
+	static LispVal decodeVar(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() >= 3 && parts.get(1) instanceof LispString name) {
+			return ClojureLowerUtil.list(new LispSymbol("var"), new LispSymbol(name.value()));
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}

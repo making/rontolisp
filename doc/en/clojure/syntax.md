@@ -135,3 +135,30 @@ $ cat src/app/main.clj
 $ rontolisp src/app/main.clj
 {:x 1, :y 2}
 ```
+
+## Read-eval
+
+`#=form` evaluates while the program lowers -- on the compile host -- and the answer
+stands as the datum where the form stood, so a compiled artifact carries the RESULT as a
+literal. The head of a list form resolves in the current namespace and applies as a
+function to the UNEVALUATED rest: a definition above the site, or a core or
+known-library value. Special forms never resolve (`#=(if true 1 2)` is
+`Can't resolve if`), a bare symbol answers its class (`#=java.lang.String`), and
+anything that is neither a symbol nor a list is `Unsupported #= form`. Like the
+oracle's read, a quote never shields one (`'#=(+ 1 2)` is `3`), a nested `#=`
+resolves first, and `#=(var x)` answers the var. `*read-eval*` gates the read (true by
+default; `nil` while a `#=` is read is the oracle's
+`EvalReader not allowed when *read-eval* is false`).
+
+```clojure
+(defn re-double [x] (* x 2))
+(println #=(+ 1 2))
+(println #=(re-double 21))
+(println #=(str "a" 1 "-" #=(+ 1 2)))
+```
+
+```
+3
+42
+a1-3
+```

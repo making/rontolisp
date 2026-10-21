@@ -6324,6 +6324,51 @@ the inst override, the files' refusals, a session, the unfetched note), clojure-
 `#aTagIsARecordClassOnlyWhenItsNameIsDotted`, `#theDataReadersReadATagAfterItsFormLikeTheOracle`,
 `ClojureLibraryTest#aProgramNamingNoDataReaderSplicesTheReaderWithoutItsDataReaderClause`.
 
+## Read-eval (`#=`)
+
+`#=form` evaluates while the program lowers -- on the compile host -- and the answer
+stands as the datum where the form stood, so a compiled artifact carries the RESULT as
+a literal (motivated by `examples/clojure/serve-html.clj`: what `net/serve-html.lisp`'s
+`#.` embeds, spelled the oracle's way). The reader (`ClojureReader.readDispatch`) only
+marks it (`(%read-eval form)`); `ClojureReadEval.resolve` evaluates each marker in a
+post-order walk over the next top-level datum (`ClojureLowering.Datums.next`, so files,
+required files, sessions and `load-string` all resolve after the datums above handed
+their definitions over, like the oracle's form-by-form load), before any macro sees the
+enclosing form. Evaluation reuses the macro evaluator (the `*ns*`/`*file*`/
+`*source-path*` lets of a macro expansion), quoting each raw argument like a data
+reader's form and decoding the answer like a macro's (`ClojureMacroLowering.decodeDatum`,
+plus a `(:C%VAR ...)` answer back to `(var ns/name)`, which macros answering vars get
+too).
+
+The rule is the oracle's, measured by decompiling `LispReader$EvalReader` of
+clj 1.12.6.1673 (2026-10-21): a symbol answers the class (`RT.classForName`, no default
+imports); a list whose head is `var` answers the var, then resolves the head in the
+current namespace and applies the var -- as a function -- to the UNEVALUATED rest (a
+program definition above the site, a referred or aliased one, a core or known-library
+value; specials never resolve, a macro head is the arity refusal, an unknown head
+`Can't resolve`); anything else is `Unsupported #= form`. `*read-eval*` gates the read
+(`EvalReader not allowed when *read-eval* is false`, default true). The lowering tracks
+it as a field (`readEvalEnabled`), flipped by a top-level `set!` of a literal like
+`assertEnabled`. A branch not taken still reads suppressed (`(%tagged = form)`, like a
+tagged literal, and drops); a `#_` discard drops the marker without evaluating it.
+
+Divergences (kept, in `doc/en/clojure/deviations.md`): a found class, a constructor or
+static call, and any other answer with no literal spelling (an atom, a function, a host
+object other than a UUID or Date) is refused (`Can't resolve` for an unknown class
+name, `Can't embed object in code` otherwise) where the oracle embeds the object; a
+macro head of two or more arguments is the same arity refusal where the oracle runs the
+macro body on the shifted arguments; a `#=` of a var defined below the site is
+`Can't resolve` (the oracle's load never saw it either); duplicate map/set keys are
+checked on the read forms, not the evaluated answers; unqualified `#=(var x)` resolves
+in the current namespace where the oracle throws.
+
+Pins: `ClojureReadEvalTest` (the project on all four backends -- the literal kinds, the
+`*read-eval*` roundtrip, a data reader over a `#=` form, a session; the positioned
+refusals: nil, unknown head, special, macro, non-call, unembeddable answer, missing
+class, below-site), clojure-spec `read-eval-embeds-computed-literals-at-compile-time`
+(all four backends, oracle-identical),
+`ClojureReaderTest#readEvalReadsAsAMarkerForTheLowering`.
+
 ## Vars and metadata
 
 **A var is `(:C%VAR "ns/name" getter)`, interned per name in `%clojure-var-table`.**

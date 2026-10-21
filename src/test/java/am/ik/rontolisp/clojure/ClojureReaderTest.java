@@ -396,6 +396,20 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void readEvalReadsAsAMarkerForTheLowering() {
+		// the form travels unevaluated; the lowering evaluates it where the datum
+		// lowers, so a quote never shields one, like the oracle's read
+		assertThat(printed("#=(+ 1 2)")).isEqualTo("[(|%read-eval| (+ 1 2))]");
+		assertThat(printed("'#=(+ 1 2) [#=42]"))
+			.isEqualTo("[(|quote| (|%read-eval| (+ 1 2))), (|%vector| (|%read-eval| 42))]");
+		// a branch not taken still reads suppressed, like a tagged literal, and drops
+		assertThat(conditional("[#?(:cljs #=(+ 1 2) :clj 4)]")).isEqualTo("[(|%vector| 4)]");
+		// EDN data keeps the form, like any other tagged literal
+		assertThat(ClojureReader.forEdn("#=1", "a.edn").readAll().stream().map(LispVal::print).toList().toString())
+			.isEqualTo("[(|%tagged| = 1)]");
+	}
+
+	@Test
 	void theDataReadersReadATagAfterItsFormLikeTheOracle() {
 		List<String> asked = new java.util.ArrayList<>();
 		ClojureReader.Tags tags = (tag, form) -> {

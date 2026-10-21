@@ -1126,15 +1126,16 @@ final class ClojureCoreLowering {
 		List<LispVal> forms = new ArrayList<>();
 		try {
 			for (LispVal datum : datums) {
+				LispVal read = ClojureReadEval.resolve(ctx, datum);
 				if (top) {
-					List<LispVal> own = ctx.topLevels(datum);
+					List<LispVal> own = ctx.topLevels(read);
 					for (LispVal one : own) {
-						ClojureMacroLowering.handOver(ctx, datum, List.of(one));
+						ClojureMacroLowering.handOver(ctx, read, List.of(one));
 					}
 					forms.addAll(own);
 				}
 				else {
-					forms.add(ctx.lowerDetached(datum));
+					forms.add(ctx.lowerDetached(read));
 				}
 			}
 		}

@@ -1571,6 +1571,14 @@ public final class ClojureLowering {
 	boolean assertEnabled = true;
 
 	/**
+	 * What {@code *read-eval*} holds where the next {@code #=} lowers: true until a
+	 * top-level {@code set!} of it to a literal switches it off (or back on), like the
+	 * oracle's reader reading the flag. A {@code binding} around a read changes nothing
+	 * here -- the read already happened.
+	 */
+	boolean readEvalEnabled = true;
+
+	/**
 	 * The classes a session already registered for the run-time reader, by class name: a
 	 * later buffer registers only what it adds or redefines (files register every class
 	 * at once).
@@ -1843,14 +1851,17 @@ public final class ClojureLowering {
 		 * The next datum. Read again, the forms of a namespace a reader function's
 		 * namespace loading hoisted (a shipped one the oracle loads at startup) go where
 		 * the forms the datum lowers behind go, and a datum whose first read left what it
-		 * defines to the data readers is pre-scanned again.
+		 * defines to the data readers is pre-scanned again. A {@code #=} marker evaluates
+		 * where the datum lowers, after the datums above it handed their definitions
+		 * over, like the oracle's form-by-form load.
 		 * @param loaded where the hoisted forms go
 		 * @return the datum, or null at the end of the text
 		 */
 		@Nullable LispVal next(List<LispVal> loaded) {
 			int at = this.index++;
 			if (this.second == null) {
-				return at < this.first.size() ? this.first.get(at) : null;
+				LispVal firstDatum = at < this.first.size() ? this.first.get(at) : null;
+				return firstDatum == null ? null : ClojureReadEval.resolve(ClojureLowering.this, firstDatum);
 			}
 			List<LispVal> outer = ClojureLowering.this.hoisted;
 			ClojureLowering.this.hoisted = new ArrayList<>();
@@ -1869,7 +1880,7 @@ public final class ClojureLowering {
 				declare(List.of(datum));
 				ClojureLowering.this.globals.putAll(carried);
 			}
-			return datum;
+			return datum == null ? null : ClojureReadEval.resolve(ClojureLowering.this, datum);
 		}
 
 	}
@@ -3688,6 +3699,10 @@ public final class ClojureLowering {
 				Boolean flag = ClojureProtocolLowering.assertSetTo(this, items);
 				if (flag != null) {
 					this.assertEnabled = flag;
+				}
+				Boolean readEval = ClojureReadEval.readEvalSetTo(this, items);
+				if (readEval != null) {
+					this.readEvalEnabled = readEval;
 				}
 				return List.of(lowered);
 			}
