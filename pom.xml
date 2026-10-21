@@ -408,6 +408,56 @@ gitBranch=${git.branch}
 	</build>
 
 	<profiles>
+		<!-- CI-only test sharding (.kb/test-execution.md, "CI shards"): the `test`
+		     job split into `test-e2e` and `test-rest`. Each profile narrows
+		     surefire's selection; the base configuration (forkCount sizing,
+		     argLine, reuseForks) is untouched, so a local `./mvnw test` without
+		     the property runs the whole suite exactly as before. Activated by
+		     -Drontolisp.test.scope=e2e|rest, never by default. -->
+		<profile>
+			<id>test-scope-e2e</id>
+			<activation>
+				<property>
+					<name>rontolisp.test.scope</name>
+					<value>e2e</value>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<includes>
+								<include>**/e2e/**/*Test.java</include>
+							</includes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>test-scope-rest</id>
+			<activation>
+				<property>
+					<name>rontolisp.test.scope</name>
+					<value>rest</value>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<excludes>
+								<exclude>**/e2e/**/*Test.java</exclude>
+							</excludes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
 		<profile>
 			<id>native</id>
 			<properties>

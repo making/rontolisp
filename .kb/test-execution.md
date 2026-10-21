@@ -51,6 +51,65 @@
   cumulative pressure, not one bad test). Two forks times 6 GB is the most the 16 GB
   runner affords beside Maven itself and the wasmtime host compiles.
 
+## CI shards
+
+Since 2026-10-22 the CI `test` job is two jobs, `test-e2e` and `test-rest`,
+each on its own 16 GB runner with its own 2-fork heap budget. The cut is the
+`am.ik.rontolisp.e2e` package (subprocess-spawning, wasmtime compiles,
+network) versus everything else. The split is CI-only: a local `./mvnw test`
+runs the whole suite in one reactor, unchanged.
+
+Selection is two property-activated surefire profiles in `pom.xml`
+(`-Drontolisp.test.scope=e2e` narrows `includes` to `**/e2e/**/*Test.java`,
+`=rest` narrows `excludes` by the same pattern); the base configuration
+(`forkCount`, `argLine`, `reuseForks`) is untouched, so forkCount sizing from
+`size-test-forks` keeps working in both shards and the default local run is
+byte-for-byte the old selection. The profiles exist because `-Dtest` cannot
+express the cut: an exclusion-only `-Dtest` resolves every non-test class on
+the test classpath, and measured 2026-10-21 that path died in discovery on
+`Bf16NarrowBench` (`NoClassDefFoundError: jdk/incubator/vector/Vector`).
+Counted the same day: 424 test classes, all `*Test.java` (no `Test*.java`,
+`*Tests.java` or `*TestCase.java` anywhere), 63 under the one `e2e`
+directory and 361 outside it -- so the two shards select 63 + 361 with no
+class dropped or doubled.
+
+Per-shard floors, measured 2026-10-21 on the 64-core development box with
+`forkCount` pinned to 2 (the CI value) and the fork heaps polled by `jstat`
+every 5 s (peak USED heap, `S0U+S1U+EU+OU`):
+
+- `test-e2e`: 63 classes, 4,076 tests, wall 422 s, fork peaks 5.70 and
+  1.93 GB against the 6 GB floor. The halving hypothesis is dead on this
+  shard: one fork peaked at 5.7 of 6.0. The floor stays `-Xmx6g`; headroom on
+  the heavy fork is ~0.3 GB locally, but the local box runs far higher
+  intra-class parallelism than CI's 4 vCPU, so CI should read lower -- the
+  shard's CI run is the proof.
+- `test-rest`: 361 classes, 15,213 tests, wall 1,266 s, fork peaks 3.70 and
+  2.09 GB against the 6 GB floor. The floor stays `-Xmx6g` with ~2.3 GB of
+  headroom; 4 GB would leave only the sampling interval as margin, so no
+  shard moves until a shard's own numbers say so.
+
+Partition-safety across the jobs, not just the forks: the two shards run on
+separate runners, so they share no checkout, no port space and no `/tmp`.
+The only coupling is the caches. The Maven cache is read-mostly for one
+tree; the wasmtime module cache is keyed per module and content-identical
+for one tree, so concurrent restores and last-write-wins saves are benign --
+and the shards still use separate save lineages (`wasmtime-modules-*` keeps
+the old key, `test-e2e` saves under `wasmtime-e2e-modules-*` with a
+restore-key into the warm full cache) so no save races at all. Coverage
+parity: both shards install OpenBLAS and the same pinned wasmtime, because
+each shard owns classes needing them. What did NOT change: `release` and
+`examples` still chain through `native-image`, both shards run on pull
+requests exactly as `test` did, and `examples` still never runs on a PR.
+
+The NEXT split, decided 2026-10-22, not built: when a shard fills its runner
+again, split `test-rest` by package -- the `codegen.*` wasmtime-compile
+owners versus everything else -- as a third scope value on the same profile
+mechanism. Packages are stable, reviewable cuts; class-name-hash sharding
+is rejected (flaky-hostile: surefire ordering is unspecified and cache keys
+multiply). If `test-e2e` overflows instead, quarantine its single heaviest
+class by name into a third job. `forkCount=3` is not on the path: two 6 GB
+forks already fill the runner.
+
 ## Running a compiled class in process, concurrently
 
 `JvmLispCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmSimdAccelCompilerTest`,
