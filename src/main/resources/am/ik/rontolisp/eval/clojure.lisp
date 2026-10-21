@@ -25079,9 +25079,13 @@
 
 ;;;; Portable number statics: Long/valueOf, Double/valueOf, Integer/parseInt
 ;;;; of radix 16, Integer/toHexString and Math/min of two, which data.json's
-;;;; read path calls. Where the host is not (wasm) the static call lowers to
-;;;; one of these (clojure/ClojurePortableStaticsLowering); where the host is
-;;;; it stays the host's call. Each measured against clj 1.12.6, 2026-10-13.
+;;;; read path calls, and Math/floor, Math/ceil, Math/log, Math/abs,
+;;;; Long/bitCount and Long/numberOfLeadingZeros of one argument, which
+;;;; data.generators and test.check call. Where the host is not (wasm) the
+;;;; static call lowers to one of these
+;;;; (clojure/ClojurePortableStaticsLowering); where the host is it stays
+;;;; the host's call. Each measured against clj 1.12.6, 2026-10-13, the
+;;;; test.check three 2026-10-21.
 
 (defun rontolisp::%clojure-long-value-of (s)
   "(Long/valueOf s): the long S spells, its NumberFormatException naming the
@@ -25259,6 +25263,62 @@
    bits, where no host is (wasm); the cast above refuses as it does."
   (%strict-math :log (rontolisp::%clojure-math-double x)))
 
+(defun rontolisp::%clojure-math-abs (x)
+  "(Math/abs x) of one argument: the magnitude of an integer in the long
+   range (Long/MIN_VALUE its own, like the oracle's) or of a double (-0.0
+   answers 0.0, NaN stays NaN), where no host is (wasm); anything else is
+   the oracle's no-matching-method refusal. An N literal in the long range
+   reads as its plain integer here, so it answers where the oracle refuses
+   a BigInt."
+  (cond ((typep x '(signed-byte 64))
+         (if (and (< x 0) (/= x -9223372036854775808)) (- x) x))
+        ((floatp x) (if (< x 0.0) (- x) (+ x 0.0)))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching method abs found taking 1 args"))))
+
+(defun rontolisp::%clojure-long-bit-count-64 (n)
+  "The population count of N, an integer in the long range, in two's
+   complement: the logand/ash loop over the 64 bits, portable on every
+   backend (CL bit-test is no wasm builtin)."
+  (let ((count 0))
+    (dotimes (i 64 count)
+      (if (zerop (logand n (ash 1 i))) nil (setq count (+ count 1))))))
+
+(defun rontolisp::%clojure-long-class-cast (x)
+  "X as bitCount and numberOfLeadingZeros take it: the longCast of a number
+   (ratios truncated, out-of-range the oracle's long refusal); nil is the
+   oracle's doubleValue NullPointerException, anything else no number its
+   ClassCastException to Number (the reflector casts the argument)."
+  (if (numberp x)
+      (rontolisp::%clojure-long-cast x)
+      (if (null x)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                        " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-long-bit-count (x)
+  "(Long/bitCount x) of one argument: the population count of the longCast
+   of X, where no host is (wasm); the cast above refuses as it does."
+  (rontolisp::%clojure-long-bit-count-64
+   (rontolisp::%clojure-long-class-cast x)))
+
+(defun rontolisp::%clojure-long-number-of-leading-zeros-64 (n)
+  "The zero bits before the highest one-bit of N, an integer in the long
+   range, 64 of zero: the logand/ash loop from bit 63 down, portable on
+   every backend (CL bit-test is no wasm builtin)."
+  (do ((i 63 (- i 1)))
+      ((or (< i 0) (not (zerop (logand n (ash 1 i)))))
+       (if (< i 0) 64 (- 63 i)))))
+
+(defun rontolisp::%clojure-long-number-of-leading-zeros (x)
+  "(Long/numberOfLeadingZeros x) of one argument: 64 minus the bit length
+   of the longCast of X, where no host is (wasm); the cast above refuses as
+   it does."
+  (rontolisp::%clojure-long-number-of-leading-zeros-64
+   (rontolisp::%clojure-long-class-cast x)))
+
 ;;;; Portable java.util.Random: the 48-bit linear congruential generator the
 ;;;; JDK documents (next/nextInt/nextLong/nextFloat/nextDouble/nextBoolean/
 ;;;; nextGaussian/setSeed), bit-identical on every backend, so a seeded
@@ -25385,6 +25445,52 @@
           (logand (logxor (rontolisp::%clojure-random-seed seed) 25214903917)
                   281474976710655))
   (rplaca (cdr (cdr r)) nil)
+  nil)
+
+;;;; Portable ThreadLocal: the single-threaded cell a (proxy [ThreadLocal]
+;;;; [] (initialValue [] ...)) is where no host is (wasm), so test.check's
+;;;; seedless next-rng loads there -- never a java:subclass, which wasm
+;;;; refuses at call time. A cell is the (:C%THREAD-LOCAL value has init)
+;;;; list, mutated in place like the host object: get answers the stored
+;;;; value, computing and storing the initialValue answer once when none is
+;;;; stored; set stores and remove clears, each answering nil like the
+;;;; host's void methods. Wasm runs one thread, so no thread key is kept;
+;;;; the initialValue body sees the cell as this, like the oracle's proxy
+;;;; body sees its proxy
+;;;; (clojure/ClojurePortableThreadLocalLowering).
+
+(defun rontolisp::%clojure-thread-local-p (x)
+  "Whether X is a portable ThreadLocal cell: the (:C%THREAD-LOCAL ...)
+   list a (proxy [ThreadLocal] [] ...) makes where no host is (wasm)."
+  (and (consp x) (eq (car x) :C%THREAD-LOCAL) (consp (cdr x))))
+
+(defun rontolisp::%clojure-thread-local (init)
+  "A (proxy [ThreadLocal] [] ...) where no host is (wasm): the
+   (:C%THREAD-LOCAL nil nil INIT) cell INIT fills on the first get."
+  (list :C%THREAD-LOCAL nil nil init))
+
+(defun rontolisp::%clojure-thread-local-get (c)
+  "(.get C): the cell's stored value, or its initialValue answer computed
+   once through the cell and stored, like the host's ThreadLocal on one
+   thread."
+  (if (car (cdr (cdr c)))
+      (car (cdr c))
+      (let ((v (funcall (car (cdr (cdr (cdr c)))) c)))
+        (rplaca (cdr c) v)
+        (rplaca (cdr (cdr c)) t)
+        v)))
+
+(defun rontolisp::%clojure-thread-local-set (c v)
+  "(.set C V): store V in the cell, answering nil like the host's void
+   method."
+  (rplaca (cdr c) v)
+  (rplaca (cdr (cdr c)) t)
+  nil)
+
+(defun rontolisp::%clojure-thread-local-remove (c)
+  "(.remove C): clear the cell, answering nil like the host's void method."
+  (rplaca (cdr c) nil)
+  (rplaca (cdr (cdr c)) nil)
   nil)
 
 ;;;; Typed arrays: object-array, to-array, into-array and the primitive

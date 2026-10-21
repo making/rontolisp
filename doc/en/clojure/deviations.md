@@ -454,7 +454,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   host entropy. The seed and bound casts refuse as the oracle's do. Where the host is
   (the interpreter and the JVM) the construction stays the host object. `(Math/floor x)`,
   `(Math/ceil x)` and `(Math/log x)` of one argument answer the oracle's double on the
-  wasm backends too, refusing as the oracle's casts do.
+  wasm backends too, refusing as the oracle's casts do. `(Math/abs x)` of one argument
+  answers the magnitude of an integer in the long range or of a double (`Long/MIN_VALUE`
+  its own, `-0.0` answering `0.0`) on the wasm backends too, refusing as the oracle's
+  no-matching-method does; `(Long/bitCount x)` and `(Long/numberOfLeadingZeros x)` of
+  one argument answer the population count and the leading zero count of the `longCast`
+  of a number, refusing as the oracle's casts do. `Double/MAX_VALUE` (and `MIN_VALUE`,
+  the infinities, `NaN`) is itself on the wasm backends. A `(proxy [ThreadLocal] []
+  (initialValue [] ...))` is a single-threaded cell on the wasm backends (one thread
+  runs there): `.get` answers the stored value, computing and storing the initial once
+  when none is stored, `.set` stores and `.remove` clears. Where the host is the proxy
+  stays the host's subclass.
 - `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
   its default on the wasm backends, where no properties exist (like a host without the
   property, which is what a library load reads); nil is the oracle's

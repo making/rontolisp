@@ -13928,6 +13928,65 @@ cases:
       (5.0 3.0 -2.0 -0.0 0.0)
       (0.6931471805599453 0.0 ##-Inf ##NaN)
       [:ok :ok :ok :ok]
+  - name: math-abs-answers-like-the-host-static
+    # (Math/abs x) of one argument where no host is lowers to the portable
+    # magnitude: an integer in the long range (Long/MIN_VALUE its own, like
+    # the oracle's) or a double (-0.0 answers 0.0, NaN stays NaN). Anything
+    # else is the oracle's no-matching-method refusal (class-pinned here, the
+    # message in ClojureWasmInteropRefusalTest); the host's own answers or
+    # refuses its own way. An N literal in the long range reads as its plain
+    # integer here, so it answers where the oracle refuses a BigInt (the
+    # documented deviation). Oracle-identical (clj 1.12.6, 2026-10-21).
+    source: |
+      (defmacro ab-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map #(Math/abs %) [-5 5 0 Long/MIN_VALUE Long/MAX_VALUE -2147483648]))
+      (prn (map #(Math/abs %) [-1.5 1.5 -0.0 0.0 (/ 1.0 0.0) (/ 0.0 0.0)]))
+      (prn [(ab-rfc IllegalArgumentException (Math/abs nil)) (ab-rfc IllegalArgumentException (Math/abs "a")) (ab-rfc IllegalArgumentException (Math/abs 1/2)) (ab-rfc IllegalArgumentException (Math/abs true))])
+    expected: |
+      (5 5 0 -9223372036854775808 9223372036854775807 2147483648)
+      (1.5 1.5 0.0 0.0 ##Inf ##NaN)
+      [:ok :ok :ok :ok]
+  - name: long-bit-count-and-leading-zeros-answer-like-the-host-statics
+    # (Long/bitCount x) and (Long/numberOfLeadingZeros x) of one argument
+    # where no host is lower to the portable population count and leading
+    # zero count of the longCast of the number (ratios truncated, doubles
+    # refused past the long range; test.check's mix-gamma and shrink-long
+    # read them). nil is the oracle's doubleValue NullPointerException,
+    # anything else no number its ClassCastException to Number (classes pinned
+    # here, the messages in ClojureWasmInteropRefusalTest); the host's own
+    # answers or refuses its own way. Oracle-identical (clj 1.12.6,
+    # 2026-10-21).
+    source: |
+      (defmacro bc-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map #(Long/bitCount %) [0 1 2 127 255 256 -1 -2 Long/MIN_VALUE Long/MAX_VALUE]))
+      (prn (map #(Long/numberOfLeadingZeros %) [0 1 2 127 255 256 -1 -2 Long/MIN_VALUE Long/MAX_VALUE]))
+      (prn [(Long/bitCount 1.5) (Long/bitCount 7/2) (Long/bitCount 5N) (Long/numberOfLeadingZeros -1.5) (Long/numberOfLeadingZeros 1.5)])
+      (prn [(bc-rfc IllegalArgumentException (Long/bitCount 18446744073709551616N)) (bc-rfc IllegalArgumentException (Long/bitCount 1e19)) (bc-rfc NullPointerException (Long/bitCount nil)) (bc-rfc ClassCastException (Long/bitCount "a")) (bc-rfc ClassCastException (Long/numberOfLeadingZeros :k)) (bc-rfc ClassCastException (Long/numberOfLeadingZeros true))])
+    expected: |
+      (0 1 1 7 8 1 64 63 1 63)
+      (64 63 62 57 56 55 0 0 0 1)
+      [1 2 2 0 63]
+      [:ok :ok :ok :ok :ok :ok]
+  - name: proxy-of-thread-local-is-a-portable-cell
+    # (proxy [ThreadLocal] [] (initialValue [] ...)) where no host is is the
+    # portable single-threaded cell, so test.check's seedless next-rng loads:
+    # .get answers the computed and stored initial (computed once), .set
+    # stores, .remove clears and the next .get computes again. The
+    # interpreter and the JVM keep the host's ThreadLocal subclass and answer
+    # the same lines. Oracle-identical (clj 1.12.6, 2026-10-21).
+    source: |
+      (let [calls (atom 0) tl (proxy [ThreadLocal] [] (initialValue [] (swap! calls inc)))]
+        (prn [(.get tl) (.get tl) @calls])
+        (prn (.set tl :v))
+        (prn [(.get tl) @calls])
+        (prn (.remove tl))
+        (prn [(.get tl) @calls]))
+    expected: |
+      [1 1 1]
+      nil
+      [:v 1]
+      nil
+      [2 2]
   - name: java-util-random-draws-answer-the-oracle-bits
     # (java.util.Random. seed) where no host is (wasm) is the portable 48-bit
     # LCG, bit-identical with the oracle on every backend, so data.generators'
