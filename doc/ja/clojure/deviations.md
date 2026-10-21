@@ -191,11 +191,13 @@
  `java.io.Closeable`）と `Object` も含みます。`isa?`・`derive`・`underive`・`parents`・
  `ancestors`・`descendants` はクラス名を同じキーワードとして読むので
  `(isa? (class "a") String)` は `true` で、クラスの `parents`/`ancestors` はオラクルと同じく
- Java のスーパータイプを加えます。コアの種類（`:string`、`:number` など）、record、deftype は
+ Java のスーパータイプを加えます。コアの種類（`:string`、`:number` など）はそれが表す値の
+ スーパータイプを加えます。関数は `clojure.lang.IFn` に `isa?` で、その `ancestors` は
+ それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。値の位置の
+ クラス名はそのキーワードとして読みます（`(= clojure.lang.IFn (class (fn [])))` は
+ `false` のままです）。record や deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
- `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。これらの
- 位置にクラス名を書かずホスト相互運用も使わないプログラムは階層だけを読むので、そこでの
- `(ancestors (class e))` は `derive` が記録したものを返します。ここではキーワードがクラス
+ `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。ここではキーワードがクラス
  そのものなので、`:java.lang.Exception` と綴ったキーワードもそのクラスです。ホストの
  クラスオブジェクト（ホストオブジェクトの `class`、インタプリタと JVM）はその名前の
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、

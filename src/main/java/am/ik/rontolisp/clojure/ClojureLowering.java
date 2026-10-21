@@ -1143,9 +1143,14 @@ public final class ClojureLowering {
 
 	/**
 	 * The class rows not yet emitted, as {@code (name base ...)} conses, each a class
-	 * with known bases, or {@code (name . t)} for a core kind or a type
-	 * ({@link ClojureClassBases#KINDS}). With {@link #allClassRows}, every class
-	 * {@code class} may answer joins first.
+	 * with known bases, or {@code (name . t)} for a record, a deftype or a type whose
+	 * host classes are no one value here ({@link ClojureClassBases#KINDS}). With
+	 * {@link #allClassRows}, every class {@code class} may answer joins first: the core
+	 * kinds with the supers of the values they stand for
+	 * ({@link ClojureValueClasses#kindSupers}), so {@code ancestors} of one holds the
+	 * interfaces its values implement, and {@code isa?} and {@code parents} follow them
+	 * -- measured 2026-10-21 against the kinds-are-opaque premise and the dispatch rows
+	 * (g29).
 	 */
 	List<LispVal> pendingClassRows() {
 		List<String> opaque = new ArrayList<>();
@@ -1153,7 +1158,15 @@ public final class ClojureLowering {
 			for (String implicit : ClojureClassBases.implicitClasses()) {
 				recordClass(implicit);
 			}
-			opaque.addAll(ClojureClassBases.KINDS);
+			for (String kind : ClojureClassBases.KINDS) {
+				List<String> supers = ClojureValueClasses.kindSupers(kind);
+				if (supers == null) {
+					opaque.add(kind);
+				}
+				else {
+					this.classBases.putIfAbsent(kind, supers);
+				}
+			}
 			this.types.values().stream().map(TypeDef::tagSpelling).sorted().forEach(opaque::add);
 		}
 		List<LispVal> rows = new ArrayList<>();
@@ -5699,6 +5712,10 @@ public final class ClojureLowering {
 				LispVal classValue = ClojureInteropLowering.classValue(this, name);
 				if (classValue != null) {
 					return classValue;
+				}
+				LispVal langKeyword = ClojureValueClasses.classKeyword(this, name);
+				if (langKeyword != null) {
+					return langKeyword;
 				}
 				throw new LispReadException("unknown name: " + name);
 			}

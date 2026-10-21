@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.LispVal;
 
 /**
  * The host classes the oracle's value of each kind is an instance of, so
@@ -238,8 +241,16 @@ final class ClojureValueClasses {
 		/** The classes, the value's own first where it has one. */
 		final Set<String> classes;
 
+		/**
+		 * The classes in declaration order: the row's own first, then its supers. The set
+		 * above answers membership; this list answers the deterministic order a class row
+		 * or a printed answer needs.
+		 */
+		final List<String> ordered;
+
 		Kind(List<String> classes) {
 			this.classes = Set.copyOf(classes);
+			this.ordered = List.copyOf(classes);
 		}
 
 	}
@@ -329,6 +340,76 @@ final class ClojureValueClasses {
 	static @Nullable String clojureLang(String simpleName) {
 		String name = "clojure.lang." + simpleName;
 		return NAMED.contains(name) ? name : null;
+	}
+
+	/**
+	 * The class keywords' supers: each keyword {@code class} answers (the
+	 * {@link ClojureClassBases#KINDS} names that name a kind here) to the kinds whose
+	 * values it stands for. A kind stands for the one host class its values have here, so
+	 * the row is every kind's classes -- the value's own first where it has one -- merged
+	 * in {@link Kind} order where a keyword stands for several ({@code :number} is
+	 * {@code Long}, {@code Double} and {@code Ratio}; {@code :vector} both a vector and a
+	 * map entry, the {@code map-entry?} deviation), with {@code java.lang.Object} last:
+	 * the oracle's {@code supers} include it for every one of these values' classes, and
+	 * the hierarchy bridge ({@code (isa? (class 1) :o)} past {@code (derive Object :o)})
+	 * walks through it.
+	 */
+	private static final Map<String, List<Kind>> KIND_SUPERS = Map.ofEntries(
+			Map.entry("boolean", List.of(Kind.BOOLEAN)), Map.entry("char", List.of(Kind.CHAR)),
+			Map.entry("string", List.of(Kind.STRING)), Map.entry("keyword", List.of(Kind.KEYWORD)),
+			Map.entry("symbol", List.of(Kind.SYMBOL)), Map.entry("number", List.of(Kind.LONG, Kind.DOUBLE, Kind.RATIO)),
+			Map.entry("vector", List.of(Kind.VECTOR, Kind.MAP_ENTRY)),
+			Map.entry("list", List.of(Kind.LIST, Kind.LAZY_SEQ)), Map.entry("map", List.of(Kind.MAP, Kind.SORTED_MAP)),
+			Map.entry("set", List.of(Kind.SET, Kind.SORTED_SET)), Map.entry("function", List.of(Kind.FUNCTION)),
+			Map.entry("atom", List.of(Kind.ATOM)), Map.entry("pattern", List.of(Kind.PATTERN)),
+			Map.entry("matcher", List.of(Kind.MATCHER)), Map.entry("reify", List.of(Kind.REIFY)),
+			Map.entry("clojure.lang.Namespace", List.of(Kind.NAMESPACE)));
+
+	/**
+	 * The supers of the class keyword: the classes every value of its kinds is an
+	 * instance of, in declaration order ({@link Kind#ordered}, duplicates dropped), with
+	 * {@code java.lang.Object} last; null when the name is no class keyword with a kind
+	 * here (a record or deftype tag keeps its opaque row).
+	 * @param keywordName the keyword's spelling, without the colon
+	 * @return the binary names, or null
+	 */
+	static @Nullable List<String> kindSupers(String keywordName) {
+		List<Kind> kinds = KIND_SUPERS.get(keywordName);
+		if (kinds == null) {
+			return null;
+		}
+		List<String> supers = new ArrayList<>();
+		for (Kind kind : kinds) {
+			for (String name : kind.ordered) {
+				if (!supers.contains(name)) {
+					supers.add(name);
+				}
+			}
+		}
+		supers.add(ClojureClassBases.OBJECT);
+		return supers;
+	}
+
+	/**
+	 * A class name in value position to the keyword {@code class} answers for its values,
+	 * or null when it names none here: a {@code clojure.lang} class the host does not
+	 * load but a kind's values implement ({@code clojure.lang.IFn}, spelled dotted or
+	 * imported). A typo keeps the unknown-name refusal, like a class no kind names.
+	 * {@code (= clojure.lang.IFn (class (fn []))} stays false: the spelling is the
+	 * interface's keyword, never the function's kind.
+	 * @param ctx the lowering
+	 * @param name the spelling, as written
+	 * @return the keyword form, or null
+	 */
+	static @Nullable LispVal classKeyword(ClojureLowering ctx, String name) {
+		if (!ClojureNamespaceLowering.isClasslike(ctx, name)) {
+			return null;
+		}
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
+		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn) || kindsOf(fqn).isEmpty()) {
+			return null;
+		}
+		return ClojureCollectionLowering.keywordForm(fqn);
 	}
 
 	/**

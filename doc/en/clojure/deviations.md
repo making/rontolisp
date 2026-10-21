@@ -200,11 +200,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `java.io.Closeable`) and `Object` included; `isa?`, `derive`, `underive`, `parents`,
   `ancestors` and `descendants` read a class spelling as the same keyword, so
   `(isa? (class "a") String)` is `true` and `parents`/`ancestors` of a class add its Java
-  supers like the oracle. A core kind (`:string`, `:number`, ...), a record or a deftype
-  stands for host classes that are no one value here: it `isa?` `Object` and its
-  `ancestors` add `Object`, but its host class's other supers are not modeled. A program
-  that spells no class in those positions and uses no host interop reads only the
-  hierarchy, so `(ancestors (class e))` there answers what `derive` recorded. Since the
+  supers like the oracle. A core kind (`:string`, `:number`, ...) adds the supers of the
+  values it stands for: a function `isa?` `clojure.lang.IFn` and its `ancestors` hold it,
+  interfaces and `Object` included, like the oracle's inheritance; a class name in value
+  position reads as that keyword (`(= clojure.lang.IFn (class (fn [])))` stays `false`).
+  A record or a deftype stands for host classes that are no one value here: it `isa?`
+  `Object` and its `ancestors` add `Object`, but its host class's other supers are not
+  modeled. Since the
   keyword is the class here, a keyword spelled `:java.lang.Exception` is that class too.
   A host class object (`class` of a host object, interpreter and JVM) is the same class as
   its name's keyword and, by its simple name, a core kind's, so

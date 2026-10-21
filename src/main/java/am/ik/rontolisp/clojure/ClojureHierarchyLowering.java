@@ -535,6 +535,10 @@ final class ClojureHierarchyLowering {
 				LispVal hier = n == 3 ? ctx.lower(items.get(1)) : hierarchyGlobal();
 				LispVal child = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 3 ? 2 : 1));
 				LispVal parent = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 3 ? 3 : 2));
+				// a class keyword may be the child -- a (class ...) call, a kind keyword
+				// or a kind spelling -- so the walk reads the class rows (g29)
+				ctx.usedClassChains = true;
+				ctx.allClassRows = true;
 				yield ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("C%H-ISA?"), hier, child, parent));
 			}
 			case "parents", "ancestors", "descendants" -> {
@@ -542,7 +546,8 @@ final class ClojureHierarchyLowering {
 				LispVal hier = n == 2 ? ctx.lower(items.get(1)) : hierarchyGlobal();
 				LispVal child = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 2 ? 2 : 1));
 				// a class keyword may reach the read: every class class answers has its
-				// row
+				// row, so the walk reads them (g29)
+				ctx.usedClassChains = true;
 				ctx.allClassRows = true;
 				ctx.readsDescendants |= name.equals("descendants");
 				yield ClojureLowerUtil.list(new LispSymbol("C%H-" + name.toUpperCase(java.util.Locale.ROOT)), hier,

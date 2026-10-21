@@ -10,7 +10,9 @@
 キーワードです。`String` は `:string`、record はそのタグ、throwable やストリームのクラスは
 その名前です。throwable やストリームのクラスのキーワードは、オラクルの Java の継承と同じく
 インタフェースを含む各スーパータイプとそれらの派生先に `isa?` です。どのクラスも `Object` に
-`isa?` です。インタプリタと JVM では、ホストオブジェクトの `class` はそのクラスオブジェクトを
+`isa?` です。種類のキーワード（`:string`、`:function` など）はそれが表す値のホストの
+スーパータイプの各々に `isa?` です（インタフェースを含みます）。`(isa? (class "a") java.io.Serializable)`
+はオラクルと同じく `true` です。インタプリタと JVM では、ホストオブジェクトの `class` はそのクラスオブジェクトを
 返し、それは継承・実装する各クラスとそれらの派生先に、どの綴りでも `isa?` です。
 `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。
 
@@ -22,4 +24,5 @@
 (println (isa? (class "a") String)) ; true
 (println (isa? (class (NumberFormatException. "x")) IllegalArgumentException)) ; true
 (println (isa? NumberFormatException java.io.Serializable) (isa? (class "a") Object)) ; true true
+(println (isa? (class "a") java.io.Serializable) (isa? (class (fn [])) clojure.lang.IFn)) ; true true
 ```
