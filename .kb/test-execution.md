@@ -90,7 +90,11 @@ every 5 s (peak USED heap, `S0U+S1U+EU+OU`):
   the heavy fork is thin locally (2 of 116 samples above 4.5 GB -- bursts,
   collected, no OOM in any run), but the local box runs far higher
   intra-class parallelism than CI's 4 vCPU, so CI should read lower -- the
-  shard's CI run is the proof.
+  shard's CI run is the proof. COUNTED, not dropped: on CI the shard runs
+  3,608 tests, 468 fewer than locally, and the whole gap is
+  `ClojureDifferentialParityTest` (117 rows times 4 legs), whose factory
+  aborts without `clj` on PATH -- pre-existing environment gating, identical
+  under the old single `test` job, not a sharding artifact.
 - `test-rest`: 361 classes, 15,213 tests, wall 1,266 s, fork peaks 3.70 and
   2.09 GB against the 6 GB floor on 2026-10-21; a 2026-10-22 re-run of the
   same 361 classes peaked at 5.71 and 1.32 GB -- the 5.71 was ONE 5 s sample
