@@ -429,7 +429,7 @@ gitBranch=${git.branch}
 						<artifactId>maven-surefire-plugin</artifactId>
 						<configuration>
 							<includes>
-								<include>**/e2e/**/*Test.java</include>
+								<include>**/e2e/*Test.java</include>
 							</includes>
 						</configuration>
 					</plugin>
@@ -451,7 +451,7 @@ gitBranch=${git.branch}
 						<artifactId>maven-surefire-plugin</artifactId>
 						<configuration>
 							<excludes>
-								<exclude>**/e2e/**/*Test.java</exclude>
+								<exclude>**/e2e/*Test.java</exclude>
 							</excludes>
 						</configuration>
 					</plugin>

@@ -60,7 +60,7 @@ network) versus everything else. The split is CI-only: a local `./mvnw test`
 runs the whole suite in one reactor, unchanged.
 
 Selection is two property-activated surefire profiles in `pom.xml`
-(`-Drontolisp.test.scope=e2e` narrows `includes` to `**/e2e/**/*Test.java`,
+(`-Drontolisp.test.scope=e2e` narrows `includes` to `**/e2e/*Test.java`,
 `=rest` narrows `excludes` by the same pattern); the base configuration
 (`forkCount`, `argLine`, `reuseForks`) is untouched, so forkCount sizing from
 `size-test-forks` keeps working in both shards and the default local run is
@@ -68,6 +68,13 @@ byte-for-byte the old selection. The profiles exist because `-Dtest` cannot
 express the cut: an exclusion-only `-Dtest` resolves every non-test class on
 the test classpath, and measured 2026-10-21 that path died in discovery on
 `Bf16NarrowBench` (`NoClassDefFoundError: jdk/incubator/vector/Vector`).
+The two sides use the SAME single-level pattern deliberately: measured
+2026-10-22, `**/e2e/**/*Test.java` as an `includes` entry matches NOTHING
+(the `test-e2e` shard ran 0 tests and passed vacuously on its first CI run),
+while as an `excludes` entry it removes exactly the 63. Single-level on both
+sides also fails safe: a future `e2e` SUBPACKAGE's tests match neither side's
+pattern, so they run in `test-rest` instead of silently dropping out of CI --
+extend both patterns together if a subpackage ever appears.
 Counted the same day: 424 test classes, all `*Test.java` (no `Test*.java`,
 `*Tests.java` or `*TestCase.java` anywhere), 63 under the one `e2e`
 directory and 361 outside it -- so the two shards select 63 + 361 with no
@@ -80,12 +87,16 @@ every 5 s (peak USED heap, `S0U+S1U+EU+OU`):
 - `test-e2e`: 63 classes, 4,076 tests, wall 422 s, fork peaks 5.70 and
   1.93 GB against the 6 GB floor. The halving hypothesis is dead on this
   shard: one fork peaked at 5.7 of 6.0. The floor stays `-Xmx6g`; headroom on
-  the heavy fork is ~0.3 GB locally, but the local box runs far higher
+  the heavy fork is thin locally (2 of 116 samples above 4.5 GB -- bursts,
+  collected, no OOM in any run), but the local box runs far higher
   intra-class parallelism than CI's 4 vCPU, so CI should read lower -- the
   shard's CI run is the proof.
 - `test-rest`: 361 classes, 15,213 tests, wall 1,266 s, fork peaks 3.70 and
-  2.09 GB against the 6 GB floor. The floor stays `-Xmx6g` with ~2.3 GB of
-  headroom; 4 GB would leave only the sampling interval as margin, so no
+  2.09 GB against the 6 GB floor on 2026-10-21; a 2026-10-22 re-run of the
+  same 361 classes peaked at 5.71 and 1.32 GB -- the 5.71 was ONE 5 s sample
+  after a 3.98 GB sample (an allocation burst, collected; no OOM). Fork peaks
+  vary run to run with fork assignment and box load, so the floor stays
+  `-Xmx6g`: 4 GB would leave only the sampling interval as margin, and no
   shard moves until a shard's own numbers say so.
 
 Partition-safety across the jobs, not just the forks: the two shards run on
