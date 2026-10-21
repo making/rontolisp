@@ -557,6 +557,51 @@ final class ClojureHierarchyLowering {
 	}
 
 	/**
+	 * {@code derive}/{@code underive} as a value: over a child and a parent, or a
+	 * hierarchy and both, like the call (qbits.ex swaps one into an atom). Any other
+	 * count signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @param name {@code derive} or {@code underive}
+	 * @return the value form
+	 */
+	static LispVal valueOf(ClojureLowering ctx, String name) {
+		ctx.usedHierarchy = true;
+		String op = name.equals("derive") ? "C%H-DERIVE" : "C%H-UNDERIVE";
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle(name + "-args"));
+		LispVal one = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args);
+		LispVal two = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args));
+		LispVal three = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal(name + " takes a child and a parent, or a hierarchy and both"));
+		LispVal pair = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), hierarchyGlobal(),
+						ClojureLowerUtil.list(new LispSymbol(op), hierarchyGlobal(), two, three)),
+				ClojureLowering.NIL_CONST);
+		LispVal triple = ClojureLowerUtil.list(new LispSymbol(op), one, two, three);
+		LispVal body = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("cond"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
+					ClojureLowerUtil
+						.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)), arity),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+							pair),
+					ClojureLowerUtil.list(
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)))),
+							triple),
+					ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
+	}
+
+	/**
 	 * {@code (prefer-method name x y)}: {@code x} wins over {@code y} when both match a
 	 * dispatch of {@code name}. The multimethod must be defined -- forward order aside,
 	 * the pre-scan declares every {@code defmulti} first -- and answers itself, like

@@ -503,9 +503,9 @@ final class ClojureProtocolLowering {
 				}
 				else if (ClojureLowerUtil.items(datum) instanceof List<LispVal> impl && !impl.isEmpty()
 						&& ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol method) {
-					String owner = declaresMethod(ctx, protocolKey, method.name()) ? protocolKey : null;
+					String owner = declaresMethod(ctx, protocolKey, methodName(method.name())) ? protocolKey : null;
 					for (String key : protocols) {
-						if (owner == null && declaresMethod(ctx, key, method.name())) {
+						if (owner == null && declaresMethod(ctx, key, methodName(method.name()))) {
 							owner = key;
 						}
 					}
@@ -1066,6 +1066,16 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * An inline method's name as the oracle matches it: a syntax-quoted body qualifies
+	 * every method name with the defining namespace (core.cache's {@code defcache} spells
+	 * {@code clojure.core.cache/valAt}), which the oracle strips to the name.
+	 */
+	private static String methodName(String name) {
+		int slash = name.lastIndexOf('/');
+		return slash < 0 ? name : name.substring(slash + 1);
+	}
+
+	/**
 	 * The implementation groups behind {@code extend-type} (each headed by a known
 	 * protocol name): every method must belong to its protocol, like the oracle's "Can't
 	 * define method not in interfaces". An extension spells several arities as {@code fn}
@@ -1102,7 +1112,7 @@ final class ClojureProtocolLowering {
 				throw new LispReadException(
 						"a method implementation takes a name, parameters and a body, not " + datum.print());
 			}
-			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
+			String method = methodName(((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name());
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
 			methods.add(extensionMethod(method, impl));
 		}
@@ -1186,7 +1196,7 @@ final class ClojureProtocolLowering {
 				throw new LispReadException(
 						"a method implementation takes a name, parameters and a body, not " + datum.print());
 			}
-			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
+			String method = methodName(((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name());
 			ClojureLowerUtil.isTrue(ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1))),
 					"an inline method takes one parameter vector, naming the method again for another arity: "
 							+ method);

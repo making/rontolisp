@@ -635,7 +635,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `conj`, ...) starts without metadata, where the oracle keeps it, and a symbol carries
   none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
   literal stays the symbol as written (`String`), where the oracle resolves the class
-  (`java.lang.String`).
+  (`java.lang.String`); a `{:tag Type}` on a `def` naming a record or deftype keeps the
+  quoted symbol for the same reason (a type is no class here), where the oracle stores
+  the class.
 - `with-open` closes through the `close` method, so only closeables the backend
   reaches work (a `clojure.java.io` byte stream on every backend, a Java closeable on the
   interpreter and the JVM); `time` answers its value but its

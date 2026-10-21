@@ -5425,6 +5425,7 @@ public final class ClojureLowering {
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-V"));
 			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
+			case "derive", "underive" -> ClojureHierarchyLowering.valueOf(this, name);
 			default -> {
 				if (ClojureCoreNames.isMacro(name)) {
 					// a core-macro name with no value arm answers the macro's expander
@@ -5590,7 +5591,13 @@ public final class ClojureLowering {
 		}
 		if (name.startsWith("#:")) {
 			// a gensym a macro expansion returned: uninterned, so it lowers to
-			// itself instead of mangling behind the prefix
+			// itself instead of mangling behind the prefix -- but one naming a
+			// function (a fn's self name, core.unify's var-unification fns) is
+			// the function cell in value position, like any function name, so
+			// the labels expansion rewrites it to the shared cell
+			if (isFunction(name)) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
+			}
 			return s;
 		}
 		String core = coreSpelling(name);

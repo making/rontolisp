@@ -2791,6 +2791,53 @@ cases:
       #Box nil
       Pt!
       {:v 6}
+  - name: def-tag-names-a-deftype-and-entry-methods-read-values
+    # {:tag Type} on a def keeps the quoted symbol (flatland.ordered's
+    # empty-ordered-map/set defs; the oracle stores the class, which has no spelling
+    # here -- a bare type name stays an unknown-name refusal in value position -- like
+    # ^Type reader metadata already does); the .meta/.withMeta value methods answer for
+    # a collection, function, var or symbol and refuse anything else in the oracle's
+    # words; .key/.val/.getKey/.getValue read a map entry, which is a plain 2-vector
+    # here, so a 2-vector answers where the oracle's reflection refuses, while any
+    # other count refuses in the oracle's No matching field found words. The :tag line
+    # is the deviation (the oracle prints the class tagval_ns.TV); every other line is
+    # the oracle's (clj 1.12.6.1673).
+    source: |
+      (ns tagval-ns)
+      (deftype TV [x])
+      (def ^{:tag TV} tagged-holder (TV. 1))
+      (def normal-e (TV. 2))
+      (prn (:tag (meta #'tagged-holder)))
+      (prn (:tag (meta #'normal-e)))
+      (prn (.meta {:a 1}) (.meta 'sym-a))
+      (prn (.withMeta {:a 1} {:t 1}) (.withMeta 'sym-b {:t 2}))
+      (def entry-e (first {:a 1}))
+      (prn (.key entry-e) (.val entry-e) (.getKey entry-e) (.getValue entry-e))
+      (prn (try (.val [1 2 3]) (catch Exception e :refused)))
+      (prn (try (.meta 42) (catch Exception e :refused)))
+      (in-ns 'auto)
+    expected: |
+      TV
+      nil
+      nil nil
+      {:a 1} sym-b
+      :a 1 :a 1
+      :refused
+      :refused
+  - name: a-gensym-fn-name-reads-its-function-as-a-value
+    # A fn whose name is a macro's gensym reads its own function as a value,
+    # like any named fn (core.unify's var-unification fns pass themselves to
+    # garner-unifiers): the value is the labels cell, so a call through it
+    # recurses. The call head already did; the bare value used to stay
+    # uninterned past the function-cell rewrite and signal unbound.
+    # Oracle-identical (clj 1.12.6.1673).
+    source: |
+      (defmacro selfval-fn-mk [] (let [s (gensym)] `(fn ~s [~'x] (if (zero? ~'x) :done ((fn [~'f] (~'f (dec ~'x))) ~s)))))
+      (prn ((selfval-fn-mk) 3))
+      (prn ((selfval-fn-mk) 0))
+    expected: |
+      :done
+      :done
   - name: indirect-named-class-dispatch-hits-the-nil-method
     # A call to a named class-calling function nested inside an inline dispatch
     # datum answers the nil method for nil: the call site inlines the recorded

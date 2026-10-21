@@ -203,6 +203,8 @@ final class ClojureValueMethodLowering {
 	static {
 		collectionRows();
 		lookupRows();
+		entryRows();
+		metaRows();
 		functionRows();
 		updateRows();
 		nameAndNumberRows();
@@ -267,6 +269,50 @@ final class ClojureValueMethodLowering {
 		row("indexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, false)));
 		row("lastIndexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, true)));
 		row("entryAt", 1, arm(List.of("map?", "indexed?"), core("find", R, A)));
+	}
+
+	/**
+	 * A map entry's key and value: a map entry is a plain 2-vector here, so
+	 * {@code key}/{@code getKey} answer its first member and {@code val}/{@code getValue}
+	 * its second, while any other vector keeps the refusal, in the oracle's
+	 * {@code No matching field found} words (flatland.ordered reads its entries this way;
+	 * the oracle's reflection finds the methods only on a map entry).
+	 */
+	private static void entryRows() {
+		row("key", 0, new Arm(List.of("indexed?"), ctx -> entryPart(ctx, 0, "key")));
+		row("val", 0, new Arm(List.of("indexed?"), ctx -> entryPart(ctx, 1, "val")));
+		row("getKey", 0, new Arm(List.of("indexed?"), ctx -> entryPart(ctx, 0, "getKey")));
+		row("getValue", 0, new Arm(List.of("indexed?"), ctx -> entryPart(ctx, 1, "getValue")));
+	}
+
+	/**
+	 * The entry's member at the index: the member when the receiver is a 2-vector, else
+	 * the refusal. The arms' vector test answers every vector, so the count decides.
+	 */
+	/**
+	 * The entry's member at the index: the member when the receiver is a 2-vector, else
+	 * the refusal. The arms' vector test answers every vector, so the count decides; the
+	 * test is a Clojure boolean (true or the false object, both truthy but nil), so the
+	 * shell reads it through {@code ifFalsey} like any {@code if} does.
+	 */
+	private static LispVal entryPart(ClojureLowering ctx, int index, String method) {
+		LispSymbol recv = ctx.localSym(RECV);
+		LispVal test = ctx.lower(core("=", core("count", R), new LispInteger(2)));
+		LispVal member = ctx.lower(core("nth", R, new LispInteger(index)));
+		return ctx.ifFalsey(test, member, refusal(recv, method, true, List.of()));
+	}
+
+	/**
+	 * The metadata verbs: {@code meta} answers the metadata, {@code withMeta} a copy
+	 * carrying it, for a collection, a function, a var or a symbol, like the oracle's
+	 * {@code IObj} implementors; any other value keeps the refusal, in the oracle's
+	 * {@code No matching field found} words (flatland.ordered's {@code meta} method reads
+	 * its backing map this way).
+	 */
+	private static void metaRows() {
+		List<String> kinds = List.of("coll?", FUNCTION, "var?", "simple-symbol?", "qualified-symbol?");
+		row("meta", 0, arm(kinds, core("meta", R)));
+		row("withMeta", 1, arm(kinds, core("with-meta", R, A)));
 	}
 
 	/**

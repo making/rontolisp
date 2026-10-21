@@ -98,6 +98,15 @@ final class ClojureVarLowering {
 			List<LispVal> parts = ClojureLowerUtil.items(attrMap, List.of());
 			putAll(entries, parts.subList(Math.min(1, parts.size()), parts.size()));
 		}
+		LispVal tag = entries.get(keyword("tag"));
+		if (tag instanceof LispSymbol tagName && ctx.typeKeyOf(tagName.name()) != null) {
+			// {:tag Type} naming a record or deftype: the oracle stores the class,
+			// which has no spelling here (a bare name in value position stays an
+			// unknown-name refusal, ClojureInteropLowering.classValue), so keep the
+			// quoted symbol, like ^Type reader metadata does
+			// (ClojureCoreLowering.metaEntries)
+			entries.put(keyword("tag"), ClojureLowerUtil.list(new LispSymbol("quote"), tagName));
+		}
 		boolean stored = false;
 		for (LispVal value : entries.values()) {
 			stored |= !isConstant(value);

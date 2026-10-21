@@ -1523,10 +1523,24 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | hiccup 2.0.0 | = | = | = | = | f63: `StringBuilder` runs on wasm since 2026-10-13 (12-line probe `=` on all four; unreached `URI.`/`URLEncoder/encode` still warn); f71: builder portions (4-line render probe) re-run `=` on both wasm backends since 2026-10-13; f64: a 69,502 B top-level method is outlined into its own methods since 2026-10-13 (big `(h/html ...)` literal `=` with `clj`, `.kb/jvm-method-size-limits.md`) |
 | reitit-core 0.11.0 | = | = | = | = | `reitit.Trie`, Java over `clojure.lang` ("Classes compiled against `clojure.lang`"); with `clojure-trie-compiler` `=` on all four since 2026-10-13 ("HashMap construction": the 7-line probe -- match-by-path, match-by-name, `match->path`, routes -- prints the oracle's lines; both wasm backends warn `JAVA:STATIC`+`JAVA:CALL` off the probe's path) |
 | data.json 2.5.2 | = | = | = | = | f81: the load's `DateTimeFormatter/ISO_INSTANT` and the read path's number statics run portably on wasm since 2026-10-13 (the `N`/`M` literal rule lines stand); f89: the write path's three-argument `Writer.append` and `.toInstant` of a Date or Timestamp run portably since 2026-10-13 (`write-str` with escapes, `write-str` of instants) |
+| math.combinatorics 0.3.2 | = | = | = | = | no transitive deps; the subsets walk prints a bare empty list, which is `nil` here (the pinned empty-list deviation), so the probe prints counts there |
+| data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
+| flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
+| data.generators 1.1.1 | = | = | red | red | no transitive deps; `.todo/g27`: `*rnd*`'s root `(java.util.Random. 42)` constructs at load, refused where no host is (`JAVA:NEW` undefined) |
+| test.check 1.1.3 | red | red | red | red | no transitive deps; `.todo/g28`: the SplittableRandom port runs under `(set! *unchecked-math* :warn-on-boxed)`, which stores but never wraps, so `*` promotes to BigInt and the next bit op refuses |
+| hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s; the `properties` macros emit test.check `defspec`s, g28); the JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
+| core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
+| core.memoize 1.2.281 | red | red | red | red | transitive core.cache 1.2.254 -> 1.2.999 by newest-wins; `.todo/g29`: `check-args` tests `(some #{clojure.lang.IFn ...} (ancestors (class f)))`, but those classes have no value spelling and a kind's supers are `Object` alone, so the check can neither compile nor pass |
+| potpuri 0.5.3 | = | = | = | = | no transitive deps |
+| core.unify 0.7.3 | = | = | = | = | no transitive deps; g20: a macro's gensym fn name reads its own function as a value ("The IFn dispatcher stays at the call site") |
+| integrant 1.0.1 + weavejester/dependency 1.0.0 | red | red | red | red | `.todo/g30`: `resources`/`load-hierarchy` define but never call `enumeration-seq` over `RT/baseLoader`; refusals throw at lower time, so the load stops there |
+| cc.qbits/ex 0.1.3 | = | = | = | = | no transitive deps; g20: `derive`/`underive` as values ("Dispatch") |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
-`read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`). The gaps
+`read-string` there, since `Integer/parseInt` is host-only on wasm, `.todo/f57`; g20, 2026-10-21:
+math.combinatorics' subsets line prints counts, data.priority-map's tie lines sort, core.cache's
+probe skips `soft-cache-factory`, all for pinned representation deviations). The gaps
 fixed on the way (2026-10-12), each in its own section: a vector pattern's `& rest :as all`
 ("The lowering table", destructuring); `partition` with a pad; `apply` as a value; `some-fn`'s
 order and failing value; a multi-arity `defn` in a body and the `:pre`/`:post` condition map
@@ -3587,6 +3601,11 @@ constructor and consumer, and a regex `replace` with a function replacement.
   structural keys `get` needs. Every verb above keeps its direct call where the argument is
   a real function form (`%clojure-as-fn` answers the function itself), and a program
   passing none sheds the dispatcher.
+- A named `fn` reads its own name as the function in value position too: the name lowers
+  to the `labels` cell (`(function ...)`), so a macro's gensym-named self-passing fn
+  (core.unify's var-unification fns, g20) recurses through the argument. A bare `#:...`
+  symbol otherwise lowers to itself (uninterned); only a `FUNCTION`-kind one takes the
+  cell. Pinned by clojure-spec `a-gensym-fn-name-reads-its-function-as-a-value`.
 - Pins: `ClojureLoweringTest.aRuntimeWorkerTakesARealFunctionWrappedAtTheCallSite`,
   `aProgramPassingRealFunctionsSplicesNoDispatcher` (the pruned IR); clojure-spec
   `a-collection-as-the-function-of-a-seq-worker-answers-like-ifn` (every backend).
@@ -3694,6 +3713,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `No method in ...`.
 - A hierarchy is a map of `:parents`/`:ancestors`/`:descendants` tables to wrapped sets;
   the global one is `C%H-GLOBAL`, rebound by two-argument `derive`/`underive`.
+  `derive`/`underive` as values are rest-arg lambdas over the same runtime calls
+  (qbits.ex swaps one into an atom, g20); any other count is the call's arity refusal.
 - `defprotocol`: an `equal`-table global plus one dispatcher `defun` per method over
   `C%PROTOCOL-TAG`; exact tag, then (a walking protocol, below) the walked classes, then the
   method's `Object` row, else a signal. The
@@ -3998,7 +4019,10 @@ checked against clj 1.12.6, 2026-10-08).
   (`ClojureInterfaces.closure`: `Indexed` a `Counted`, `IObj` an `IMeta`, `IReduce` an
   `IReduceInit`) and `Object`'s three, then the body's other protocols -- the oracle's class
   matches across every interface, so a `toString` under a protocol group overrides `Object`'s
-  (before: `Can't define method not in interfaces`). An interface method takes fixed
+  (before: `Can't define method not in interfaces`). A syntax-quoted body qualifies every
+  method name with the defining namespace (core.cache's `defcache` spells
+  `clojure.core.cache/valAt`), which the oracle strips to the name, so the match reads the
+  part past the `/` (g20). An interface method takes fixed
   parameters (the oracle reads `&` as a parameter's name; refused here) and each count once.
   An interface the form's class implements itself stores no row (`RECORD_PROVIDED`: a
   record's map interfaces and their supers; `REIFY_PROVIDED`: `IMeta`/`IObj`). Naming one of
@@ -4651,6 +4675,12 @@ host alone answers ("Host arms where the host is not").
   `No matching field found: first for class ...`). The lowering fixes the words;
   `%clojure-no-method` appends the class. Checked 2026-10-04 against `clj` 1.12.6: clojure-spec
   `instance-calls-on-collections-keywords-symbols-and-ratios` oracle-identical.
+  `.meta`/`.withMeta` answer the metadata verbs for a collection, a function, a var or a
+  symbol (flatland.ordered's `meta` method reads its backing map this way, g20);
+  `.key`/`.val`/`.getKey`/`.getValue` read a map entry, which is a plain 2-vector here,
+  so a 2-vector answers and any other vector keeps the refusal in the oracle's
+  `No matching field found` words (a 2-vector answers where the oracle refuses, since
+  the representation cannot tell it from an entry).
   `.equiv` is `=`; `.equals` is the oracle's `Util.equals`, `%clojure-java-equal` (2026-10-11):
   a type's own `equals` (a collection argument too), any other deftype/reify identity, a map,
   sorted map or record against another of those by `mapEquals` (count, each key found by the
@@ -6407,6 +6437,10 @@ resolve var`.
   `:name`/`:ns`. `test` calls `(:test (meta v))`. `var-get` (no such var on clj 1.12.6, 2026-10-04) is
   `%clojure-var-root` (`ClojureVarLowering.getOf`, value `-v`): the root of a var, and unlike
   `deref` (atoms, reduced values) a signal for anything that is no var, like the oracle.
+  A `{:tag Type}` entry of the attr map naming a record or deftype keeps the quoted symbol
+  (flatland.ordered's `empty-ordered-map` def, g20), like `^Type` reader metadata already
+  does, where the oracle stores the class -- a type is no class here, and a bare name in
+  value position stays an unknown-name refusal (`ClojureInteropLowering.classValue`).
 - **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's
   unbound var: the value cell holds `(:C%UNBOUND "ns/name")` (`%clojure-unbound`), truthy,
   `str` `Unbound: #'ns/name`, printing `#<Unbound: #'ns/name>` (the oracle's `#object` has a
