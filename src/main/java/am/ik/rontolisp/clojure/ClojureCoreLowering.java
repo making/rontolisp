@@ -471,45 +471,46 @@ final class ClojureCoreLowering {
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "compile":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						"compile is not supported yet: namespaces compile ahead of time, never at run time");
 			case "bean", "supers", "bases":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						name + " is not supported yet: host classes are not answered on every backend");
 			case "clojure-version":
-				throw new LispReadException("clojure-version is not supported yet: no release of Clojure runs here");
+				return refusedCall(ctx, items, "clojure-version is not supported yet: no release of Clojure runs here");
 			case "destructure":
-				throw new LispReadException("destructure is not supported yet: the destructuring map has no lowering");
+				return refusedCall(ctx, items,
+						"destructure is not supported yet: the destructuring map has no lowering");
 			case "proxy-mappings", "proxy-name", "proxy-super", "proxy-call-with-super", "construct-proxy",
 					"init-proxy", "update-proxy", "get-proxy-class", "method-sig":
-				throw new LispReadException(name + " is not supported yet: proxy construction is not reified here");
+				return refusedCall(ctx, items, name + " is not supported yet: proxy construction is not reified here");
 			case "chunk", "chunk-append", "chunk-buffer", "chunk-cons", "chunk-first", "chunk-next", "chunk-rest",
 					"->ArrayChunk":
-				throw new LispReadException(name + " is not supported yet: sequences chunk nowhere here");
+				return refusedCall(ctx, items, name + " is not supported yet: sequences chunk nowhere here");
 			case "->Vec", "->VecNode", "->VecSeq", "->Eduction", "-cache-protocol-fn", "-reset-methods":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						name + " is not supported yet: construction of clojure.lang internals is not supported");
 			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!":
-				throw new LispReadException(name + " is not supported yet: streaming reduction has no lowering");
+				return refusedCall(ctx, items, name + " is not supported yet: streaming reduction has no lowering");
 			case "future-call", "pcalls", "seque", "await1":
-				throw new LispReadException(name + " is not supported yet: there is no thread pool on any backend");
+				return refusedCall(ctx, items, name + " is not supported yet: there is no thread pool on any backend");
 			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						name + " is not supported yet: agents take no custom executor on any backend");
 			case "tap>", "add-tap", "remove-tap":
-				throw new LispReadException(name + " is not supported yet: taps have no rendezvous design");
+				return refusedCall(ctx, items, name + " is not supported yet: taps have no rendezvous design");
 			case "enumeration-seq":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						"enumeration-seq is not supported yet: host enumerations stop at the host boundary");
 			case "resultset-seq":
-				throw new LispReadException("resultset-seq is not supported yet: JDBC stops at the host boundary");
+				return refusedCall(ctx, items, "resultset-seq is not supported yet: JDBC stops at the host boundary");
 			case "get-thread-bindings":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						"get-thread-bindings is not supported yet: thread bindings are not reified at run time");
 			case "bound-fn*":
 				return ClojureStateLowering.boundFnStarOf(ctx, items);
 			case "read+string":
-				throw new LispReadException(
+				return refusedCall(ctx, items,
 						"read+string is not supported yet: reading the consumed text needs a position-tracking reader");
 			case "with-bindings*":
 				return ClojureStateLowering.withBindingsStarOf(ctx, items);
@@ -518,6 +519,42 @@ final class ClojureCoreLowering {
 			default:
 				return null;
 		}
+	}
+
+	/**
+	 * A refused verb's call lowered to a call-time signal (g30): the arguments lower in
+	 * order, so their effects run, then {@code (error "same words")} signals. Naming the
+	 * verb compiles -- a library merely defining such a function loads -- and only the
+	 * call signals, still refused, in the same words. The signal names no class, like
+	 * every other refusal of a construct the oracle accepts: a catch of any class but
+	 * {@code clojure.lang.ExceptionInfo} takes it.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @param message the refusal's words, as before
+	 * @return the lowered call
+	 */
+	static LispVal refusedCall(ClojureLowering ctx, List<LispVal> items, String message) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(ClojureLowerUtil.sym("progn"));
+		for (int i = 1; i < items.size(); i++) {
+			out.add(ctx.lower(items.get(i)));
+		}
+		out.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal(message)));
+		return ClojureLowerUtil.list(out);
+	}
+
+	/**
+	 * A refused verb as a function value (g30): a {@code &rest} lambda over the same
+	 * call-time signal, shared program-wide like every other site-independent core value.
+	 * Calling it signals in the same words as the call position.
+	 * @param message the refusal's words, as before
+	 * @return the value form
+	 */
+	static LispVal refusedValue(String message) {
+		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("refused-rest"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, rest)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal(message)));
 	}
 
 	/**
@@ -711,6 +748,37 @@ final class ClojureCoreLowering {
 						worker("ns-computed-here", LispString.literal(name), designator));
 			}
 			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);
+			case "compile" ->
+				refusedValue("compile is not supported yet: namespaces compile ahead of time, never at run time");
+			case "bean", "supers", "bases" ->
+				refusedValue(name + " is not supported yet: host classes are not answered on every backend");
+			case "clojure-version" ->
+				refusedValue("clojure-version is not supported yet: no release of Clojure runs here");
+			case "destructure" ->
+				refusedValue("destructure is not supported yet: the destructuring map has no lowering");
+			case "proxy-mappings", "proxy-name", "proxy-super", "proxy-call-with-super", "construct-proxy",
+					"init-proxy", "update-proxy", "get-proxy-class", "method-sig" ->
+				refusedValue(name + " is not supported yet: proxy construction is not reified here");
+			case "chunk", "chunk-append", "chunk-buffer", "chunk-cons", "chunk-first", "chunk-next", "chunk-rest",
+					"->ArrayChunk" ->
+				refusedValue(name + " is not supported yet: sequences chunk nowhere here");
+			case "->Vec", "->VecNode", "->VecSeq", "->Eduction", "-cache-protocol-fn", "-reset-methods" ->
+				refusedValue(name + " is not supported yet: construction of clojure.lang internals is not supported");
+			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!" ->
+				refusedValue(name + " is not supported yet: streaming reduction has no lowering");
+			case "future-call", "pcalls", "seque", "await1" ->
+				refusedValue(name + " is not supported yet: there is no thread pool on any backend");
+			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!" ->
+				refusedValue(name + " is not supported yet: agents take no custom executor on any backend");
+			case "tap>", "add-tap", "remove-tap" ->
+				refusedValue(name + " is not supported yet: taps have no rendezvous design");
+			case "enumeration-seq" ->
+				refusedValue("enumeration-seq is not supported yet: host enumerations stop at the host boundary");
+			case "resultset-seq" -> refusedValue("resultset-seq is not supported yet: JDBC stops at the host boundary");
+			case "get-thread-bindings" ->
+				refusedValue("get-thread-bindings is not supported yet: thread bindings are not reified at run time");
+			case "read+string" -> refusedValue(
+					"read+string is not supported yet: reading the consumed text needs a position-tracking reader");
 			default -> null;
 		};
 	}

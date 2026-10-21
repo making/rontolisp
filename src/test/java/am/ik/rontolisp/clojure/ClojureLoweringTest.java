@@ -3112,11 +3112,13 @@ class ClojureLoweringTest {
 
 	@Test
 	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
-		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
-		// the expansion takes the fallback (the oracle, which has it, takes the other);
-		// one it has, hash-unordered-coll included, takes the oracle's branch
+		// data.priority-map's compile-if: a core var with no value here resolves to nil,
+		// so the expansion takes the fallback (the oracle, which has it, takes the
+		// other);
+		// one it has, hash-unordered-coll included, takes the oracle's branch. A refused
+		// verb's call-time value resolves too (g30): seque is :has for the same reason.
 		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
-		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/seque) :has :lacks)"))
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/add-classpath) :has :lacks)"))
 			.endsWith("\"lacks\")");
 		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
 			.endsWith("\"has\")");
@@ -3494,42 +3496,51 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void hostOnlyVarsAreRefusedByName() {
-		// f67: what no backend answers is refused naming the reason, never an
-		// unknown name
-		assertThatThrownBy(() -> Clojure.read("(bean x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("bean is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(supers x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("supers is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(clojure-version)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("clojure-version is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(destructure x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("destructure is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(future-call f)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("there is no thread pool on any backend");
-		assertThatThrownBy(() -> Clojure.read("(seque x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("there is no thread pool on any backend");
-		assertThatThrownBy(() -> Clojure.read("(tap> x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("taps have no rendezvous design");
-		assertThatThrownBy(() -> Clojure.read("(send-via e a f)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("agents take no custom executor");
-		assertThatThrownBy(() -> Clojure.read("(enumeration-seq x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("enumeration-seq is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(resultset-seq x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("resultset-seq is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(compile 'foo)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("compile is not supported yet");
+	void hostOnlyVarsAreRefusedWhenCalled() {
+		// g30: naming a refused verb compiles -- a library merely defining such a
+		// function loads -- and only the call signals, in the same words. What no
+		// backend answers is still refused naming the reason, never an unknown
+		// name; the run-time signal is pinned by clojure-spec
+		// refused-verbs-signal-at-call-time.
+		assertThat(lowered("(let [x 1] (bean x))"))
+			.contains("(ERROR \"bean is not supported yet: host classes are not answered on every backend\")");
+		assertThat(lowered("(let [x 1] (supers x))"))
+			.contains("(ERROR \"supers is not supported yet: host classes are not answered on every backend\")");
+		assertThat(lowered("(clojure-version)"))
+			.contains("(ERROR \"clojure-version is not supported yet: no release of Clojure runs here\")");
+		assertThat(lowered("(let [x 1] (destructure x))"))
+			.contains("(ERROR \"destructure is not supported yet: the destructuring map has no lowering\")");
+		assertThat(lowered("(let [f inc] (future-call f))"))
+			.contains("(ERROR \"future-call is not supported yet: there is no thread pool on any backend\")");
+		assertThat(lowered("(let [x 1] (seque x))"))
+			.contains("(ERROR \"seque is not supported yet: there is no thread pool on any backend\")");
+		assertThat(lowered("(let [x 1] (tap> x))"))
+			.contains("(ERROR \"tap> is not supported yet: taps have no rendezvous design\")");
+		assertThat(lowered("(let [e 1 a 2 f inc] (send-via e a f))"))
+			.contains("(ERROR \"send-via is not supported yet: agents take no custom executor on any backend\")");
+		assertThat(lowered("(let [x 1] (enumeration-seq x))"))
+			.contains("(ERROR \"enumeration-seq is not supported yet: host enumerations stop at the host boundary\")");
+		assertThat(lowered("(let [x 1] (resultset-seq x))"))
+			.contains("(ERROR \"resultset-seq is not supported yet: JDBC stops at the host boundary\")");
+		assertThat(lowered("(compile 'foo)"))
+			.contains("(ERROR \"compile is not supported yet: namespaces compile ahead of time, never at run time\")");
 		assertThat(lowered("(bound-fn* (fn [x] x))")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*");
-		assertThatThrownBy(() -> Clojure.read("(get-thread-bindings)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("get-thread-bindings is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(read+string s)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("read+string is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(chunk x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("sequences chunk nowhere here");
-		assertThatThrownBy(() -> Clojure.read("(->Vec x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("clojure.lang internals is not supported");
-		assertThatThrownBy(() -> Clojure.read("(proxy-mappings x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy construction is not reified here");
+		assertThat(lowered("(get-thread-bindings)")).contains(
+				"(ERROR \"get-thread-bindings is not supported yet: thread bindings are not reified at run time\")");
+		assertThat(lowered("(let [s \"x\"] (read+string s))")).contains(
+				"(ERROR \"read+string is not supported yet: reading the consumed text needs a position-tracking reader\")");
+		assertThat(lowered("(let [x 1] (chunk x))"))
+			.contains("(ERROR \"chunk is not supported yet: sequences chunk nowhere here\")");
+		assertThat(lowered("(let [x 1] (->Vec x))")).contains(
+				"(ERROR \"->Vec is not supported yet: construction of clojure.lang internals is not supported\")");
+		assertThat(lowered("(defn g30-never-called [e] (enumeration-seq e))"))
+			.contains("(ERROR \"enumeration-seq is not supported yet: host enumerations stop at the host boundary\")");
+		assertThat(lowered("enumeration-seq"))
+			.contains("(ERROR \"enumeration-seq is not supported yet: host enumerations stop at the host boundary\")");
+		assertThat(lowered("bean"))
+			.contains("(ERROR \"bean is not supported yet: host classes are not answered on every backend\")");
+		assertThat(lowered("(let [x 1] (proxy-mappings x))"))
+			.contains("(ERROR \"proxy-mappings is not supported yet: proxy construction is not reified here\")");
 	}
 
 	@Test
@@ -4358,13 +4369,17 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void futuresPromisesAndProxySuperStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("(future 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("future is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(promise)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("promise is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(deliver p 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("deliver is not supported yet");
+	void futuresAndPromisesAreRefusedWhenCalled() {
+		// g30: naming future/promise/deliver compiles -- a library merely defining
+		// such a function loads -- and only the call signals, in the same words;
+		// the run-time signal is pinned by clojure-spec
+		// refused-verbs-signal-at-call-time.
+		assertThat(lowered("(defn g30-never-called-future [] (future 1))"))
+			.contains("(ERROR \"future is not supported yet: there is no thread pool on any backend\")");
+		assertThat(lowered("(promise)"))
+			.contains("(ERROR \"promise is not supported yet: blocking rendezvous needs a design\")");
+		assertThat(lowered("(let [p 1] (deliver p 1))"))
+			.contains("(ERROR \"deliver is not supported yet: blocking rendezvous needs a design\")");
 		// proxy-super lowers inside a proxy method body only.
 		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy-super outside a proxy method");
@@ -4742,9 +4757,8 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (map is [1])", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can't take value of a macro: #'clojure.test/is");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (use-fixtures :each identity)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("use-fixtures is not supported yet");
+		assertThat(lowered("(ns t (:use clojure.test)) (use-fixtures :each identity)"))
+			.contains("(ERROR \"use-fixtures is not supported yet: fixtures need a design\")");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.test :as t])) (t/no-such 1)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: clojure.test/no-such");

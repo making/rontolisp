@@ -15841,3 +15841,44 @@ cases:
       :gamma1 540350159304224773
       :split [2949826092126892291 -4767286540954276203 540350159304224773 -2488624846224467125]
       :restored 3
+  - name: refused-verbs-signal-at-call-time
+    # Oracle notes (g30, 2026-10-21): naming a refused verb compiles -- a library
+    # merely defining such a function loads (integrant 1.0.1 defines resources and
+    # load-hierarchy over enumeration-seq without calling them) -- and only the
+    # call signals, still refused, in the same words. The signal names no class
+    # (a refusal of a construct the oracle accepts), so any catch but
+    # clojure.lang.ExceptionInfo takes it; ex-message reads the words.
+    source: |
+      (defn g30-never-called [e] (enumeration-seq e))
+      (def g30-es enumeration-seq)
+      (println :defined-loads)
+      (println (try (enumeration-seq nil) (catch Exception e (str "refused: " (ex-message e)))))
+      (println (try (future 1) (catch Exception e (str "refused: " (ex-message e)))))
+      (println (try (bean 1) (catch Exception e (str "refused: " (ex-message e)))))
+      (println (try (compile 'foo) (catch Exception e (str "refused: " (ex-message e)))))
+      (println (try (g30-es nil) (catch Exception e (str "refused: " (ex-message e)))))
+      (println (try (doall (map g30-es [nil])) (catch Exception e (str "refused: " (ex-message e)))))
+    expected: |
+      :defined-loads
+      refused: enumeration-seq is not supported yet: host enumerations stop at the host boundary
+      refused: future is not supported yet: there is no thread pool on any backend
+      refused: bean is not supported yet: host classes are not answered on every backend
+      refused: compile is not supported yet: namespaces compile ahead of time, never at run time
+      refused: enumeration-seq is not supported yet: host enumerations stop at the host boundary
+      refused: enumeration-seq is not supported yet: host enumerations stop at the host boundary
+  - name: assoc-keeps-the-source-metadata
+    # Oracle-identical (clj 1.12.6, 2026-10-21): an assoc (and everything through
+    # it: update, assoc-in) keeps the source's metadata; a source with none keeps
+    # none. integrant's build relies on it: the system map keeps ::origin through
+    # the assocs, so halt! sees it (g30). conj, dissoc and the rebuilds still
+    # start without metadata (the documented deviation).
+    source: |
+      (println (meta (assoc (with-meta {:a 1} {:m 1}) :b 2)))
+      (println (meta (update (with-meta {:a 1} {:m 1}) :a inc)))
+      (println (meta (assoc-in {:a {:b 1}} [:a :c] 2)))
+      (println (meta (assoc {:a 1} :b 2)))
+    expected: |
+      {:m 1}
+      {:m 1}
+      nil
+      nil

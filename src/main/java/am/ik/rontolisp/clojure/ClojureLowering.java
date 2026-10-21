@@ -5042,16 +5042,19 @@ public final class ClojureLowering {
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"),
 						ClojureBindingLowering.realFnValue(this, items.get(1)), lower(items.get(2)));
 			case "future":
-				throw new LispReadException("future is not supported yet: there is no thread pool on any backend");
+				return ClojureCoreLowering.refusedCall(this, items,
+						"future is not supported yet: there is no thread pool on any backend");
 			case "delay":
 				return capturingMutableFields(() -> ClojureLazyLowering.delayOf(this, items));
 			case "force":
 				ClojureCoreLowering.arity(name, n, 1, 1);
 				return ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.FORCE), lower(items.get(1)));
 			case "promise":
-				throw new LispReadException("promise is not supported yet: blocking rendezvous needs a design");
+				return ClojureCoreLowering.refusedCall(this, items,
+						"promise is not supported yet: blocking rendezvous needs a design");
 			case "deliver":
-				throw new LispReadException("deliver is not supported yet: blocking rendezvous needs a design");
+				return ClojureCoreLowering.refusedCall(this, items,
+						"deliver is not supported yet: blocking rendezvous needs a design");
 			default:
 				return builtinConvenience(name, items, n);
 		}

@@ -516,6 +516,22 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
+	 * An association answer carrying its source's metadata, like the oracle's: a map,
+	 * record, vector or sorted collection derived by {@code assoc} (and everything
+	 * through {@link #assocAnswer}, like {@code update} and {@code assoc-in}) keeps what
+	 * the source carried (g30; integrant's system map keeps {@code ::origin} through
+	 * {@code build}'s assocs). A source with none records nothing, so a program without
+	 * metadata pays only the two calls.
+	 * @param src the bound source form
+	 * @param answer the lowered answer form
+	 * @return the answer carrying the source's metadata
+	 */
+	static LispVal carryMeta(LispVal src, LispVal answer) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PUT-META"), answer,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-META"), src));
+	}
+
+	/**
 	 * The association over a bound target and a form answering the alternating keys and
 	 * values, evaluated once: a vector gets its indexes replaced in a fresh vector
 	 * ({@code rontolisp::%clojure-vector-assoc}), anything else a fresh table over the
@@ -539,8 +555,9 @@ final class ClojureCollectionLowering {
 		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol(IASSOCIATIVE_P), map),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ASSOCIATIVE-ASSOC"), map, pairs), core);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+		LispVal bound = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pairs, plist))), typed);
+		return carryMeta(map, bound);
 	}
 
 	/**

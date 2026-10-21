@@ -147,8 +147,8 @@ final class ClojureTestLowering {
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-SUCCESSFUL"),
 						ctx.lower(items.get(1)));
 			}
-			case "use-fixtures" ->
-				throw new LispReadException("use-fixtures is not supported yet: fixtures need a design");
+			case "use-fixtures" -> ClojureCoreLowering.refusedCall(ctx, items,
+					"use-fixtures is not supported yet: fixtures need a design");
 			default -> throw new LispReadException("unknown name: clojure.test/" + var);
 		};
 	}
@@ -175,7 +175,7 @@ final class ClojureTestLowering {
 			case "successful?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-TEST-SUCCESSFUL"));
 			case "use-fixtures" ->
-				throw new LispReadException("use-fixtures is not supported yet: fixtures need a design");
+				ClojureCoreLowering.refusedValue("use-fixtures is not supported yet: fixtures need a design");
 			default -> throw new LispReadException("unknown name: clojure.test/" + var);
 		};
 	}

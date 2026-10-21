@@ -122,7 +122,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
   the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
-  like the oracle. `use-fixtures` is refused by name.
+  like the oracle. Naming `use-fixtures` compiles, and only the call signals.
 - A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
   runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
@@ -179,7 +179,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `PrintWriter-on` builds a host `PrintWriter` over a proxied writer (print into a
   string with `with-out-str`, or rebind `*out*`, instead), and `primitives-classnames`
   is the print-dup helper map for primitive `Class` objects (a class prints by its
-  name here).
+  name here). A library reaching for the host class loader (`clojure.lang.RT/baseLoader`,
+  e.g. integrant's `load-hierarchy`) refuses at call time the same way: no class loader
+  exists here.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
@@ -661,8 +663,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `locking` holds a mutex kept per value, and the lock table keeps every value it was
   handed for the program's lifetime. The `NullPointerException` of a `nil` lock names
   the local `locklocal` (the oracle names a generated one).
-- `with-meta` answers a copy carrying the metadata; a value derived from it (`assoc`,
-  `conj`, ...) starts without metadata, where the oracle keeps it, and a symbol carries
+- `with-meta` answers a copy carrying the metadata; `assoc` (and `update` and
+  `assoc-in` through it) keeps the source's metadata, like the oracle, while any
+  other value derived from it (`conj`, `dissoc`, ...) starts without metadata,
+  where the oracle keeps it, and a symbol carries
   none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
   literal stays the symbol as written (`String`), where the oracle resolves the class
   (`java.lang.String`); a `{:tag Type}` on a `def` naming a record or deftype keeps the
