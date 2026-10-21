@@ -226,7 +226,7 @@ final class ClojureDispatchLowering {
 					v -> ClojureLowerUtil.list(new LispSymbol(HOST_OBJECT_P), v, LispString.literal(fqn))));
 		}
 		if (arms.isEmpty()) {
-			if (!loads) {
+			if (!loads && !fqn.equals(MULTI_FN)) {
 				throw new LispReadException("unknown name: " + name);
 			}
 			// a class no value here has (Integer: an int is a Long)
@@ -249,6 +249,15 @@ final class ClojureDispatchLowering {
 
 	/** {@code instance?}'s host arm ({@code clojure.lisp}). */
 	static final String HOST_OBJECT_P = "RONTOLISP::%CLOJURE-HOST-OBJECT-P";
+
+	/**
+	 * {@code clojure.lang.MultiFn}, which {@code instance?} answers false for on every
+	 * backend: a multimethod here is a function, never a {@code MultiFn} instance (even
+	 * where a host loads the class, which none here does), so the class test stays false
+	 * instead of refusing the name. clojure.test.check asks exactly this to detect a
+	 * rebound {@code report}.
+	 */
+	static final String MULTI_FN = "clojure.lang.MultiFn";
 
 	/**
 	 * How an arm reads the value: once, several times (a variable or a constant then), or
@@ -1109,6 +1118,21 @@ final class ClojureDispatchLowering {
 	static String multimethodKey(ClojureLowering ctx, String name) {
 		String key = ctx.isLocal(name) ? null : ctx.resolveVar(name);
 		if (key == null) {
+			// a known library's multimethod through an alias, its full name or a
+			// refer (test.check's (defmethod t/assert-expr ...) and (defmethod
+			// ct/report ...)): resolveVar never sees a known namespace's vars,
+			// so only a var the lowering itself multimethods (the test
+			// runtime's report and assert-expr) or a recorded defmulti counts
+			ClojureLowering.VarRef ref = ClojureNamespaceLowering.resolveQualified(ctx, name);
+			if (ref == null) {
+				ref = ClojureNamespaceLowering.libraryRefer(ctx, name);
+			}
+			if (ref != null) {
+				String candidate = ClojureLowering.varKey(ref.ns(), ref.var());
+				if (ctx.multimethods.contains(candidate) || ClojureTestLowering.isReportMultimethod(candidate)) {
+					return candidate;
+				}
+			}
 			throw new LispReadException("No such multimethod: " + name);
 		}
 		return key;
@@ -1186,8 +1210,28 @@ final class ClojureDispatchLowering {
 			return printMethodForm(ctx, items);
 		}
 		String key = multimethodKey(ctx, name);
+		if (ClojureTestLowering.isReportMultimethod(key)) {
+			// a defmethod on the test runtime's multimethod uses it: the runtime
+			// (with the method tables) travels with the program
+			ClojureTestLowering.use(ctx);
+		}
 		LispSymbol methods = tableGlobal(key, "%methods");
 		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
+		if (key.equals(ClojureTestLowering.varKeyOf("assert-expr"))) {
+			// an assert-expr method is also consulted at lower time: an is over
+			// its head spelling expands through it (see
+			// ClojureLowering.assertExprMethods), like the oracle's macro
+			// consulting the multimethod while compiling. Stored over the
+			// argument list, the shape a macro expander takes, so the is call
+			// site applies it through the same invocation.
+			String spelling = ClojureNamespaceLowering.literalSymbol(items.get(2));
+			if (spelling != null) {
+				LispSymbol args = ctx.freshTemp();
+				ctx.assertExprMethods.put(spelling,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(args),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), lambda, args)));
+			}
+		}
 		LispVal keyDatum = items.get(2);
 		if (keyDatum instanceof LispSymbol s && isObjectClassName(ctx, s.name())) {
 			// the table row (for get-method) and the catch-all slot the dispatcher

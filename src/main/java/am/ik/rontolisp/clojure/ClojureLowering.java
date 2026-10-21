@@ -1449,6 +1449,16 @@ public final class ClojureLowering {
 	final Set<String> multimethods = new HashSet<>();
 
 	/**
+	 * The lower-time {@code clojure.test/assert-expr} methods, by the assertion head
+	 * spelling they match (the symbol as written at the {@code is} call site, like the
+	 * oracle's {@code (first form)} dispatch): a {@code defmethod} on
+	 * {@code clojure.test/assert-expr} records its method lambda here besides the
+	 * run-time table, and an {@code is} over a registered head expands through it at
+	 * lower time, like the oracle's macro consulting the multimethod while compiling.
+	 */
+	final Map<String, LispVal> assertExprMethods = new LinkedHashMap<>();
+
+	/**
 	 * The binding-depth counter of a dynamic var: a special beside the var itself, zero
 	 * at the root and rebound one deeper by every {@code binding} of the var, so
 	 * {@code set!} tests at run time whether the var is thread-bound. Defined beside the
@@ -3662,7 +3672,11 @@ public final class ClojureLowering {
 			List<LispVal> items = ClojureLowerUtil.items(form);
 			if (items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"))) {
-				List<LispVal> defuns = ClojureBindingLowering.defuns(this, form, items);
+				List<LispVal> defuns = new ArrayList<>(ClojureBindingLowering.defuns(this, form, items));
+				LispVal registration = ClojureTestLowering.testMetaRegistration(this, form, form, items);
+				if (registration != null) {
+					defuns.add(registration);
+				}
 				// a top-level defun is what an export may name itself
 				this.wasm.topLevelDefuns
 					.add(currentDefnSym(varKey(this.currentNs, ClojureLowerUtil.plainName(items.get(1), "defn")))
@@ -3865,7 +3879,11 @@ public final class ClojureLowering {
 	 * closing over the body's locals, on every backend.
 	 */
 	LispVal defnInBody(LispVal form, List<LispVal> items) {
-		List<LispVal> forms = ClojureBindingLowering.defuns(this, form, items);
+		List<LispVal> forms = new ArrayList<>(ClojureBindingLowering.defuns(this, form, items));
+		LispVal registration = ClojureTestLowering.testMetaRegistration(this, form, this.topDatum, items);
+		if (registration != null) {
+			forms.add(registration);
+		}
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}

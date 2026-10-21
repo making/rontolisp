@@ -50,10 +50,11 @@ final class ClojureTestLowering {
 	 * refused by name).
 	 */
 	static final Set<String> VARS = Set.of("deftest", "deftest-", "is", "are", "testing", "run-tests", "run-all-tests",
-			"successful?", "use-fixtures");
+			"successful?", "report", "do-report", "assert-expr", "*testing-vars*", "testing-vars-str", "with-test-out",
+			"use-fixtures");
 
 	/** The vars that are macros in the oracle: no function value. */
-	static final Set<String> MACROS = Set.of("deftest", "deftest-", "is", "are", "testing");
+	static final Set<String> MACROS = Set.of("deftest", "deftest-", "is", "are", "testing", "with-test-out");
 
 	/**
 	 * The oracle's core macros and special forms: an {@code is} over one of these is the
@@ -74,18 +75,124 @@ final class ClojureTestLowering {
 	/** The run-time helpers, as the lowered program spells them. */
 	static final String INIT = "RONTOLISP::%CLOJURE-TEST-INIT";
 
+	/** The reporting helper behind {@code (do-report m)}. */
+	static final String DO_REPORT = "RONTOLISP::%CLOJURE-TEST-DO-REPORT";
+
+	/** {@code do-report} as a value (the map's own position or none). */
+	static final String DO_REPORT_VALUE = "RONTOLISP::%CLOJURE-TEST-DO-REPORT-V";
+
+	/** The helper behind {@code (testing-vars-str m)}. */
+	static final String TESTING_VARS_STR = "RONTOLISP::%CLOJURE-TEST-TESTING-VARS-STR";
+
+	/** {@code testing-vars-str} as a value. */
+	static final String TESTING_VARS_STR_VALUE = "RONTOLISP::%CLOJURE-TEST-TESTING-VARS-STR-V";
+
+	/** The test report stream, the oracle's {@code *test-out*}, as read while binding. */
+	static final String TEST_OUT = "RONTOLISP::%CLOJURE-TEST-OUT";
+
 	/**
 	 * The runtime the program runs first when it uses {@code clojure.test}: the report
-	 * stream captured (the oracle's {@code *test-out*}).
+	 * stream captured (the oracle's {@code *test-out*}), and the {@code report} and
+	 * {@code assert-expr} multimethods (see {@link #reportRuntime}).
 	 */
 	static List<LispVal> testRuntime(ClojureLowering ctx) {
-		return List.of(ClojureLowerUtil.list(new LispSymbol(INIT)));
+		List<LispVal> forms = new ArrayList<>(List.of(ClojureLowerUtil.list(new LispSymbol(INIT))));
+		forms.addAll(reportRuntime(ctx));
+		return forms;
+	}
+
+	/**
+	 * The {@code report} and {@code assert-expr} multimethods: the oracle defines both as
+	 * multimethods (dispatched on the result map's {@code :type} and on the assertion
+	 * form's head), so a {@code defmethod} on either loads through the existing
+	 * machinery. The dispatch functions and the default methods are synthesized here
+	 * because no Clojure source names them: {@code report} of a {@code :pass},
+	 * {@code :fail}, {@code :error} or {@code :summary} map counts and prints like the
+	 * {@code is} arms do, anything else answers nil; {@code assert-expr} carries no
+	 * method (an {@code is} consults the lower-time registry instead).
+	 */
+	static List<LispVal> reportRuntime(ClojureLowering ctx) {
+		String outerNs = ctx.currentNs;
+		ctx.currentNs = NAMESPACE;
+		try {
+			List<LispVal> forms = new ArrayList<>();
+			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx,
+					List.of(new LispSymbol("defmulti"), new LispSymbol("report"), reportDispatchFn())));
+			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx,
+					List.of(new LispSymbol("defmulti"), new LispSymbol("assert-expr"), assertDispatchFn())));
+			for (String type : List.of("pass", "fail", "error", "summary", "default")) {
+				forms.add(reportMethod(ctx, type));
+			}
+			return forms;
+		}
+		finally {
+			ctx.currentNs = outerNs;
+		}
+	}
+
+	/**
+	 * The synthesized {@code report} dispatch function datum: the result map's
+	 * {@code :type}, like the oracle's.
+	 */
+	static LispVal reportDispatchFn() {
+		LispSymbol m = new LispSymbol("m");
+		return ClojureLowerUtil.list(new LispSymbol("fn"), ClojureLowerUtil.list(ClojureReader.VECTOR, m),
+				ClojureLowerUtil.list(new LispSymbol(":type"), m));
+	}
+
+	/**
+	 * The synthesized {@code assert-expr} dispatch function datum: the oracle's
+	 * {@code (cond (nil? form) :always-fail (seq? form) (first form) :else
+	 * :default)}. It never runs here (an {@code is} consults the registry at lower time);
+	 * it exists so the multimethod loads.
+	 */
+	static LispVal assertDispatchFn() {
+		LispSymbol msg = new LispSymbol("msg");
+		LispSymbol form = new LispSymbol("form");
+		return ClojureLowerUtil.list(new LispSymbol("fn"), ClojureLowerUtil.list(ClojureReader.VECTOR, msg, form),
+				ClojureLowerUtil.list(new LispSymbol("cond"),
+						ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("nil?"), form),
+								new LispSymbol(":always-fail")),
+						ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("seq?"), form),
+								ClojureLowerUtil.list(new LispSymbol("first"), form)),
+						ClojureLowerUtil.list(new LispSymbol(":else"), new LispSymbol(":default"))));
+	}
+
+	/**
+	 * One synthesized {@code report} method row: the dispatch type's table entry holding
+	 * a lambda of the result map over the reporting helper (the {@code do-report}
+	 * contract with no baked position).
+	 */
+	static LispVal reportMethod(ClojureLowering ctx, String type) {
+		LispSymbol methods = ClojureDispatchLowering.tableGlobal(varKeyOf("report"), "%methods");
+		LispSymbol m = ctx.freshTemp();
+		LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(m),
+				ClojureLowerUtil.list(new LispSymbol(DO_REPORT), m, ClojureLowering.NIL_CONST));
+		return ClojureCollectionLowering.tablePut(methods,
+				ClojureDispatchLowering.dispatchKeyForm(ctx, new LispSymbol(":" + type)), lambda);
+	}
+
+	/** The var key of a {@code clojure.test} var. */
+	static String varKeyOf(String var) {
+		return ClojureLowering.varKey(NAMESPACE, var);
+	}
+
+	/**
+	 * Whether the var key is one of the multimethods the test runtime defines
+	 * ({@code report}, {@code assert-expr}): always multimethods when the runtime
+	 * travels, so a {@code defmethod} on one resolves through an alias, its full name or
+	 * a refer, like test.check's.
+	 */
+	static boolean isReportMultimethod(String key) {
+		return key.equals(varKeyOf("report")) || key.equals(varKeyOf("assert-expr"));
 	}
 
 	/** Marks the program as a {@code clojure.test} user: the runtime travels with it. */
 	static void use(ClojureLowering ctx) {
 		ctx.usedTest = true;
 		ctx.usedExInfo = true; // the error report reads exceptions
+		ctx.usedHierarchy = true; // the report/assert-expr multimethods dispatch through
+									// it
 	}
 
 	/**
@@ -140,6 +247,26 @@ final class ClojureTestLowering {
 			case "is" -> isOf(ctx, items, location(ctx, form));
 			case "are" -> areOf(ctx, items, location(ctx, form));
 			case "testing" -> testingOf(ctx, items);
+			case "with-test-out" -> withTestOutOf(ctx, items);
+			case "report" -> {
+				ClojureLowerUtil.isTrue(items.size() == 2, "report takes a result map");
+				yield ClojureLowerUtil.cons(ClojureLowering.varSym(varKeyOf("report")), ctx.lowers(items, 1));
+			}
+			case "do-report" -> {
+				ClojureLowerUtil.isTrue(items.size() == 2, "do-report takes a result map");
+				yield ClojureLowerUtil.list(new LispSymbol(DO_REPORT), ctx.lower(items.get(1)),
+						LispString.literal(location(ctx, form)));
+			}
+			case "assert-expr" -> {
+				ClojureLowerUtil.isTrue(items.size() == 3, "assert-expr takes a message and a form");
+				yield ClojureLowerUtil.cons(ClojureLowering.varSym(varKeyOf("assert-expr")), ctx.lowers(items, 1));
+			}
+			case "testing-vars-str" -> {
+				ClojureLowerUtil.isTrue(items.size() == 2, "testing-vars-str takes a result map");
+				yield ClojureLowerUtil.list(new LispSymbol(TESTING_VARS_STR), ctx.lower(items.get(1)));
+			}
+			case "*testing-vars*" -> ctx.callableApply(ClojureLowering.varSym(varKeyOf("*testing-vars*")),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 			case "run-tests" -> runTestsOf(ctx, items);
 			case "run-all-tests" -> runAllTestsOf(ctx, items);
 			case "successful?" -> {
@@ -160,6 +287,15 @@ final class ClojureTestLowering {
 			throw new LispReadException("Can't take value of a macro: #'clojure.test/" + var);
 		}
 		return switch (var) {
+			case "report" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(varKeyOf("report")));
+			case "do-report" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(DO_REPORT_VALUE));
+			case "assert-expr" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					ClojureLowering.varSym(varKeyOf("assert-expr")));
+			case "testing-vars-str" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(TESTING_VARS_STR_VALUE));
+			case "*testing-vars*" -> ClojureLowering.varSym(varKeyOf("*testing-vars*"));
 			case "run-tests" -> {
 				LispSymbol nss = new LispSymbol(ClojureLowering.mangle("run-tests-nss"));
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
@@ -273,7 +409,7 @@ final class ClojureTestLowering {
 			LispSymbol expected = ctx.freshTemp();
 			LispSymbol msg = ctx.freshTemp();
 			LispVal msgForm = items.size() == 3 ? ctx.lower(items.get(2)) : ClojureLowering.NIL_CONST;
-			LispVal assertion = assertion(ctx, form, expected, msg, LispString.literal(loc));
+			LispVal assertion = assertion(ctx, items, form, expected, msg, LispString.literal(loc));
 			LispVal thunk = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), LispNil.INSTANCE, assertion);
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(ClojureLowerUtil.list(expected, ctx.quote(form)),
@@ -287,12 +423,24 @@ final class ClojureTestLowering {
 	}
 
 	/**
-	 * The assertion kind the form takes, as the oracle's {@code assert-expr} picks it.
+	 * The assertion kind the form takes, as the oracle's {@code assert-expr} picks it. A
+	 * head with a lower-time {@code assert-expr} method (a {@code defmethod} on
+	 * {@code clojure.test/assert-expr} for its spelling, like test.check's
+	 * {@code check?}) expands through that method with the message and the form, so its
+	 * {@code do-report} calls count alone -- a predicate call around them would report
+	 * the same assertion twice.
 	 */
-	static LispVal assertion(ClojureLowering ctx, LispVal form, LispSymbol expected, LispSymbol msg, LispVal loc) {
+	static LispVal assertion(ClojureLowering ctx, List<LispVal> isItems, LispVal form, LispSymbol expected,
+			LispSymbol msg, LispVal loc) {
 		List<LispVal> items = form instanceof LispCons ? ClojureLowerUtil.items(form) : null;
 		List<LispVal> parts = items == null ? List.of() : items;
 		LispVal head = parts.isEmpty() ? LispNil.INSTANCE : parts.get(0);
+		if (head instanceof LispSymbol s && ctx.assertExprMethods.containsKey(s.name())) {
+			return ClojureMacroLowering.expandMacro(ctx, "assert-expr", ctx.assertExprMethods.get(s.name()),
+					List.of(ClojureLowerUtil.sym("assert-expr"),
+							isItems.size() == 3 ? isItems.get(2) : ClojureLowering.NIL_CONST, form),
+					false);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "thrown?")) {
 			ClojureLowerUtil.isTrue(parts.size() >= 2, "thrown? takes a class and a body");
 			LispVal type = ClojureThrowables.clauseType(ctx,
@@ -503,6 +651,24 @@ final class ClojureTestLowering {
 	}
 
 	/**
+	 * {@code (with-test-out body...)}: the body with the report stream bound to
+	 * {@code *out*}, so progress prints land where reports do. The oracle binds the
+	 * stream through {@code binding} (which wraps the body in a {@code try}); the body
+	 * lowers the same way here.
+	 */
+	static LispVal withTestOutOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 1, "with-test-out takes a body");
+		List<LispVal> pairs = new ArrayList<>();
+		pairs.add(ClojureLowerUtil.list(new LispSymbol("*STANDARD-OUTPUT*"), new LispSymbol(TEST_OUT)));
+		LispVal depth = ClojureVarLowering.specialDepthPair(ctx, "*out*");
+		if (depth != null) {
+			pairs.add(depth);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+				ClojureStateLowering.barrierBody(ctx, items, 1));
+	}
+
+	/**
 	 * {@code (run-tests ns...)}: the named namespaces (symbols or strings), or the
 	 * current one ({@code *ns*} at this form) without any.
 	 */
@@ -543,6 +709,121 @@ final class ClojureTestLowering {
 		ClojureLowerUtil.isTrue(items.size() <= 2, "run-all-tests takes an optional pattern");
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-RUN-ALL"),
 				items.size() == 2 ? ctx.lower(items.get(1)) : ClojureLowering.NIL_CONST, knownList(ctx));
+	}
+
+	/**
+	 * The {@code (file:line)} a {@code defn} registers its {@code :test} under: the defn
+	 * datum's own position, else the enclosing top-level datum's (a macro-emitted defn,
+	 * like test.check's {@code defspec}, carries no position of its own).
+	 */
+	static String defnLocation(ClojureLowering ctx, LispVal form, @Nullable LispVal top) {
+		String loc = location(ctx, form);
+		if (loc.equals("(NO_SOURCE_FILE:0)") && top != null && top != form) {
+			return location(ctx, top);
+		}
+		return loc;
+	}
+
+	/**
+	 * The registration of a {@code defn} whose name carries a {@code :test} function in
+	 * its metadata (test.check's {@code defspec} emits one): the test function runs
+	 * through the reporting wrapper under the namespace, like a {@code deftest}'s, so
+	 * {@code run-tests} counts it. Null when the name carries no such function.
+	 */
+	static @Nullable LispVal testMetaRegistration(ClojureLowering ctx, LispVal form, @Nullable LispVal top,
+			List<LispVal> items) {
+		if (items.size() < 2) {
+			return null;
+		}
+		LispVal test = testMetaFn(items.get(1));
+		if (test == null) {
+			test = attrTestFn(items);
+		}
+		if (test == null) {
+			return null;
+		}
+		use(ctx);
+		String name = ClojureLowerUtil.plainName(items.get(1), "defn");
+		String loc = defnLocation(ctx, form, top);
+		// the test function lowers under the definition's position, like an
+		// is inside a deftest body: a report it makes names the definition
+		String outer = ctx.testLocation;
+		ctx.testLocation = loc;
+		LispVal body;
+		try {
+			body = ctx.lower(test);
+		}
+		finally {
+			ctx.testLocation = outer;
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-REGISTER"),
+				LispString.literal(ctx.currentNs), LispString.literal(name),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), LispNil.INSTANCE,
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-VAR"), LispString.literal(name),
+								body, LispString.literal(loc))));
+	}
+
+	/**
+	 * The {@code :test} function a defn name datum carries in its {@code ^...} metadata,
+	 * or null: only a {@code (fn ...)} (or {@code (fn* ...)}) value registers, like the
+	 * oracle's test functions (a bare {@code ^:test} flag or any other value is not one).
+	 */
+	static @Nullable LispVal testMetaFn(LispVal nameDatum) {
+		List<LispVal> parts = ClojureLowerUtil.items(nameDatum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			LispVal test = testMetaValue(parts.get(2));
+			if (test != null) {
+				return test;
+			}
+			parts = ClojureLowerUtil.items(parts.get(1));
+		}
+		return null;
+	}
+
+	/** The {@code :test} function of one metadata datum, or null. */
+	private static @Nullable LispVal testMetaValue(LispVal meta) {
+		List<LispVal> parts = ClojureLowerUtil.items(meta);
+		if (parts == null || parts.isEmpty() || !ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")) {
+			return null;
+		}
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol k && k.name().equals(":test")) {
+				List<LispVal> test = ClojureLowerUtil.items(parts.get(i + 1));
+				if (test != null && test.size() >= 2 && test.get(0) instanceof LispSymbol head
+						&& isTestFnHead(head.name())) {
+					return parts.get(i + 1);
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether the head names a plain function literal: {@code fn} or {@code fn*} as
+	 * written, or qualified as a macro expansion spells them (a decoded expansion
+	 * qualifies {@code fn} through {@code clojure.core}, while the {@code fn*} special
+	 * form stays bare).
+	 */
+	private static boolean isTestFnHead(String name) {
+		return name.equals("fn") || name.equals("fn*") || name.equals("clojure.core/fn")
+				|| name.equals("clojure.core/fn*");
+	}
+
+	/**
+	 * The {@code :test} function of a defn's attr map (the map after an optional
+	 * docstring, with a body behind it), or null: the oracle's other spelling of the same
+	 * hook.
+	 */
+	private static @Nullable LispVal attrTestFn(List<LispVal> items) {
+		int at = 2;
+		if (items.size() > at && items.get(at) instanceof LispString) {
+			at++;
+		}
+		if (items.size() > at + 1 && ClojureBindingLowering.isAttrMap(items.get(at))) {
+			return testMetaValue(items.get(at));
+		}
+		return null;
 	}
 
 	/**

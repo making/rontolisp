@@ -2,9 +2,11 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -635,9 +637,79 @@ final class ClojureMacroLowering {
 	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
 	 * and tables their literals, a host UUID or instant its literal's marker
 	 * ({@link #decodeHostValue}), and a gensym ({@code #:}-spelled, uninterned) travels
-	 * as itself so the {@code #:} bypass lowers it back to the same symbol.
+	 * as itself so the {@code #:} bypass lowers it back to the same symbol. A symbol
+	 * carrying macro-time metadata (a {@code with-meta} of one, which answers a fresh
+	 * copy) decodes with it as reader metadata, so a defn name varied at macro time keeps
+	 * what the expansion attached.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
+		return decodeWithMetas(ctx, value, collectMetas(ctx, value),
+				Collections.newSetFromMap(new IdentityHashMap<>()));
+	}
+
+	/**
+	 * The macro-time metadata of the expansion's symbols, by identity, in one evaluation:
+	 * the values {@code with-meta} attached (test.check's defspec varies its name this
+	 * way), so decoding wraps only the symbols carrying some. Empty without an evaluator,
+	 * without symbols, or when the evaluator cannot answer.
+	 */
+	private static Map<LispSymbol, LispVal> collectMetas(ClojureLowering ctx, LispVal value) {
+		if (ctx.macroEvaluator == null) {
+			return Map.of();
+		}
+		List<LispSymbol> symbols = new ArrayList<>();
+		Map<LispVal, Boolean> seen = new IdentityHashMap<>();
+		collectSymbols(value, symbols, seen);
+		if (symbols.isEmpty()) {
+			return Map.of();
+		}
+		List<LispVal> metas = ctx.macroEvaluator.metasOf(new ArrayList<>(symbols));
+		if (metas == null || metas.size() != symbols.size()) {
+			return Map.of();
+		}
+		Map<LispSymbol, LispVal> out = new IdentityHashMap<>();
+		for (int i = 0; i < symbols.size(); i++) {
+			if (!(metas.get(i) instanceof LispNil)) {
+				out.put(symbols.get(i), metas.get(i));
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Every symbol of a macro-time value, once each by identity, over conses, vectors and
+	 * tables.
+	 */
+	private static void collectSymbols(LispVal value, List<LispSymbol> symbols, Map<LispVal, Boolean> seen) {
+		if (seen.containsKey(value)) {
+			return;
+		}
+		seen.put(value, Boolean.TRUE);
+		if (value instanceof LispSymbol s) {
+			symbols.add(s);
+			return;
+		}
+		if (value instanceof LispCons cons) {
+			collectSymbols(cons.car(), symbols, seen);
+			collectSymbols(cons.cdr(), symbols, seen);
+			return;
+		}
+		if (value instanceof am.ik.rontolisp.LispArray array && array.dimensions().length == 1) {
+			for (int i = 0; i < array.totalSize(); i++) {
+				collectSymbols(array.readFlat(i), symbols, seen);
+			}
+			return;
+		}
+		if (value instanceof LispHashTable table) {
+			for (LispHashTable.Entry entry : table.entries()) {
+				collectSymbols(entry.key(), symbols, seen);
+				collectSymbols(entry.value(), symbols, seen);
+			}
+		}
+	}
+
+	private static LispVal decodeWithMetas(ClojureLowering ctx, LispVal value, Map<LispSymbol, LispVal> metas,
+			Set<LispVal> active) {
 		if (value instanceof LispNil) {
 			return new LispSymbol("nil");
 		}
@@ -646,16 +718,30 @@ final class ClojureMacroLowering {
 		}
 		if (value instanceof LispSymbol s) {
 			String symbol = s.name();
+			LispVal decoded;
 			if (symbol.equals("false") || symbol.equals("T")) {
-				return new LispSymbol(symbol.equals("T") ? "true" : "false");
+				decoded = new LispSymbol(symbol.equals("T") ? "true" : "false");
 			}
-			if (symbol.startsWith("#:")) {
-				return new LispSymbol(symbol);
+			else if (symbol.startsWith("#:")) {
+				decoded = new LispSymbol(symbol);
 			}
-			if (symbol.startsWith(ClojureLowering.PREFIX)) {
-				return new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
+			else if (symbol.startsWith(ClojureLowering.PREFIX)) {
+				decoded = new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
 			}
-			throw new LispReadException("an unreadable symbol: " + value.print());
+			else {
+				throw new LispReadException("an unreadable symbol: " + value.print());
+			}
+			LispVal meta = metas.get(s);
+			if (meta != null && !(meta instanceof LispNil) && active.add(meta)) {
+				try {
+					return ClojureLowerUtil.list(new LispSymbol(ClojureLowerUtil.READER_META), decoded,
+							decodeWithMetas(ctx, meta, metas, active));
+				}
+				finally {
+					active.remove(meta);
+				}
+			}
+			return decoded;
 		}
 		if (value instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol tag) {
@@ -663,13 +749,13 @@ final class ClojureMacroLowering {
 					return decodeKeyword(ctx, cons);
 				}
 				if (tag.name().equals(":C%SET")) {
-					return decodeSet(ctx, cons);
+					return decodeSet(ctx, cons, metas, active);
 				}
 				if (tag.name().equals(":C%RECORD")) {
-					return decodeRecord(ctx, cons);
+					return decodeRecord(ctx, cons, metas, active);
 				}
 				if (tag.name().equals(":C%SORTED")) {
-					return decodeSorted(ctx, cons);
+					return decodeSorted(ctx, cons, metas, active);
 				}
 				if (tag.name().equals(":C%PATTERN")) {
 					return decodePattern(cons);
@@ -688,13 +774,13 @@ final class ClojureMacroLowering {
 			List<LispVal> out = new ArrayList<>();
 			LispVal run = value;
 			while (run instanceof LispCons cell) {
-				out.add(decodeDatum(ctx, cell.car()));
+				out.add(decodeWithMetas(ctx, cell.car(), metas, active));
 				run = cell.cdr();
 			}
 			if (run instanceof LispNil) {
 				return ClojureLowerUtil.list(out);
 			}
-			LispVal tail = decodeDatum(ctx, run);
+			LispVal tail = decodeWithMetas(ctx, run, metas, active);
 			for (int i = out.size() - 1; i >= 0; i--) {
 				tail = new LispCons(out.get(i), tail);
 			}
@@ -704,7 +790,7 @@ final class ClojureMacroLowering {
 			List<LispVal> elements = new ArrayList<>();
 			elements.add(ClojureReader.VECTOR);
 			for (int i = 0; i < array.totalSize(); i++) {
-				elements.add(decodeDatum(ctx, array.readFlat(i)));
+				elements.add(decodeWithMetas(ctx, array.readFlat(i), metas, active));
 			}
 			return ClojureLowerUtil.list(elements);
 		}
@@ -712,8 +798,8 @@ final class ClojureMacroLowering {
 			List<LispVal> elements = new ArrayList<>();
 			elements.add(new LispSymbol("%hash-map"));
 			for (LispHashTable.Entry entry : table.entries()) {
-				elements.add(decodeDatum(ctx, entry.key()));
-				elements.add(decodeDatum(ctx, entry.value()));
+				elements.add(decodeWithMetas(ctx, entry.key(), metas, active));
+				elements.add(decodeWithMetas(ctx, entry.value(), metas, active));
 			}
 			return ClojureLowerUtil.list(elements);
 		}
@@ -764,12 +850,13 @@ final class ClojureMacroLowering {
 	 * A record answer back to its literal: {@code (%record ns.Name {entries})}, which
 	 * lowers through the map constructor like the source spelling.
 	 */
-	static LispVal decodeRecord(ClojureLowering ctx, LispCons wrapper) {
+	static LispVal decodeRecord(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
+			Set<LispVal> active) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 5 && parts.get(3) instanceof LispHashTable table
 				&& parts.get(4) instanceof LispString className) {
 			return ClojureLowerUtil.list(new LispSymbol("%record"), new LispSymbol(className.value()),
-					decodeDatum(ctx, table));
+					decodeWithMetas(ctx, table, metas, active));
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
@@ -779,7 +866,8 @@ final class ClojureMacroLowering {
 	 * or members in order, which builds an unsorted one, like the oracle's compiler (a
 	 * returned collection is a literal of its kind, so {@code sorted?} of it is false).
 	 */
-	static LispVal decodeSorted(ClojureLowering ctx, LispCons wrapper) {
+	static LispVal decodeSorted(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
+			Set<LispVal> active) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 4 && parts.get(3) instanceof LispArray items
 				&& items.dimensions().length == 1) {
@@ -789,11 +877,11 @@ final class ClojureMacroLowering {
 			for (int i = 0; i < items.totalSize(); i++) {
 				LispVal item = items.readFlat(i);
 				if (set) {
-					elements.add(decodeDatum(ctx, item));
+					elements.add(decodeWithMetas(ctx, item, metas, active));
 				}
 				else if (item instanceof LispArray entry && entry.totalSize() == 2) {
-					elements.add(decodeDatum(ctx, entry.readFlat(0)));
-					elements.add(decodeDatum(ctx, entry.readFlat(1)));
+					elements.add(decodeWithMetas(ctx, entry.readFlat(0), metas, active));
+					elements.add(decodeWithMetas(ctx, entry.readFlat(1), metas, active));
 				}
 				else {
 					throw new LispReadException("an unreadable value: " + wrapper.print());
@@ -849,13 +937,14 @@ final class ClojureMacroLowering {
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
 
-	static LispVal decodeSet(ClojureLowering ctx, LispCons wrapper) {
+	static LispVal decodeSet(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
+			Set<LispVal> active) {
 		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispHashTable table
 				&& rest.cdr() instanceof LispNil) {
 			List<LispVal> elements = new ArrayList<>();
 			elements.add(new LispSymbol("%hash-set"));
 			for (LispHashTable.Entry entry : table.entries()) {
-				elements.add(decodeDatum(ctx, entry.key()));
+				elements.add(decodeWithMetas(ctx, entry.key(), metas, active));
 			}
 			return ClojureLowerUtil.list(elements);
 		}

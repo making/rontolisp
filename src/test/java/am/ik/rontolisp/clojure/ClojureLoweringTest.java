@@ -4768,6 +4768,71 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Could not locate no/such/lib.clj");
 	}
 
+	@Test
+	void clojureTestReportsThroughDoReportAndReport() {
+		// report and do-report resolve through an alias and a refer; the
+		// multimethods the runtime defines answer their calls and values
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (tt/do-report {:type :pass})"))
+			.contains("RONTOLISP::%CLOJURE-TEST-DO-REPORT");
+		assertThat(lowered("(ns t (:use clojure.test)) (do-report {:type :pass})"))
+			.contains("RONTOLISP::%CLOJURE-TEST-DO-REPORT");
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (tt/report {:type :pass})"))
+			.contains("(|c%clojure.test/report|");
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (map tt/do-report [{}])"))
+			.contains("RONTOLISP::%CLOJURE-TEST-DO-REPORT-V");
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (map tt/report [{}])"))
+			.contains("#'|c%clojure.test/report|");
+		// the runtime defines the report multimethod's tables ahead of everything
+		assertThat(lowered("(ns t (:use clojure.test)) (is true)")).contains("|c%clojure.test/report%methods|")
+			.contains("|c%clojure.test/assert-expr%methods|");
+		// *testing-vars* reads the dynamic var, testing-vars-str calls its helper
+		assertThat(lowered("(ns t (:use clojure.test)) *testing-vars*")).contains("|c%clojure.test/*testing-vars*|");
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (tt/testing-vars-str {})"))
+			.contains("RONTOLISP::%CLOJURE-TEST-TESTING-VARS-STR");
+		assertThat(lowered("(ns t (:require [clojure.test :as tt])) (map tt/testing-vars-str [{}])"))
+			.contains("RONTOLISP::%CLOJURE-TEST-TESTING-VARS-STR-V");
+		// with-test-out binds the report stream, and is a macro (no value)
+		assertThat(lowered("(ns t (:use clojure.test)) (with-test-out (println 1))")).contains("*STANDARD-OUTPUT*")
+			.contains("RONTOLISP::%CLOJURE-TEST-OUT");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (map with-test-out [1])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can't take value of a macro: #'clojure.test/with-test-out");
+		// a defn carrying a :test function registers it, by name metadata or attr map
+		assertThat(lowered("(ns t (:use clojure.test)) (defn ^{:test (fn [] 1)} foo [x] x)"))
+			.contains("RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"foo\"");
+		assertThat(lowered("(ns t (:use clojure.test)) (defn foo {:test (fn [] 1)} [x] x)"))
+			.contains("RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"foo\"");
+		assertThat(lowered("(ns t (:use clojure.test)) (defn foo ^:test [x] x)"))
+			.doesNotContain("RONTOLISP::%CLOJURE-TEST-REGISTER");
+	}
+
+	@Test
+	void clojureTestAssertExprMethodsExtendIsAtLowerTime() {
+		// a defmethod on clojure.test/assert-expr reaches through an alias, and an
+		// is over its head spelling expands through the method at lower time (no
+		// predicate wrapper around it, so its do-report calls count alone)
+		String out = loweredWithMacros("(ns t (:require [clojure.test :as tt :refer [is]]))"
+				+ " (defmethod tt/assert-expr 't/my-check [_ form] `(let [m# ~(nth form 1)] (tt/do-report m#)))"
+				+ " (is (t/my-check 1))");
+		assertThat(out).contains("RONTOLISP::%CLOJURE-TEST-DO-REPORT").doesNotContain("RONTOLISP::%CLOJURE-TEST-PRED");
+		// an is over any other head keeps the predicate call
+		assertThat(loweredWithMacros(
+				"(ns t (:require [clojure.test :as tt :refer [is]])) (defn tpred [x] x) (is (tpred 1))"))
+			.contains("RONTOLISP::%CLOJURE-TEST-PRED");
+	}
+
+	@Test
+	void instanceOfMultiFnAnswersFalse() {
+		// clojure.lang.MultiFn has no instances here (a multimethod is a function),
+		// so the test answers false instead of refusing the name, which is what
+		// clojure.test.check asks to detect a rebound report
+		assertThat(lowered("(instance? clojure.lang.MultiFn (fn [] 1))")).contains("PROGN")
+			.doesNotContain("CLOJURE-HOST-OBJECT-P");
+		assertThatThrownBy(() -> Clojure.read("(instance? clojure.lang.Nope 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.lang.Nope");
+	}
+
 	private static String loweredWithFiles(String source, Map<String, String> files) {
 		List<LispVal> forms = Clojure.read(source, null, ClojureMacroTime.create(), new MemoryClojureFiles(files));
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));

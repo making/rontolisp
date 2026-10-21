@@ -1533,8 +1533,8 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
 | data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called |
-| test.check 1.1.3 | = | = | red | red | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). Both wasm backends refuse the namespace at load: the seedless `next-rng` builds a `proxy` of `ThreadLocal` (`JAVA:SUBCLASS` undefined where no host is), and past it every draw needs `Math/floor` and a split `Long/bitCount` (`.todo/g31-test-check-wasm-gaps.md`, the wasm follow-up). `clojure.test.check.clojure-test` (and hive-test's `properties` macros, which emit its `defspec`s) needs `clojure.test`'s `report`/`do-report` (`.todo/g32-clojure-test-report-do-report.md`, the reporting follow-up); the direct `quick-check` path the probe pins needs neither |
-| hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s; the `properties` macros emit test.check `defspec`s, still needing `clojure.test`'s `report`/`do-report` -- `.todo/g32-clojure-test-report-do-report.md`); the JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
+| test.check 1.1.3 | = | = | red | red | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). g32: `clojure.test.check.clojure-test` loads there too (`do-report`/`report` over the test runtime, `*testing-vars*`, the lower-time `assert-expr` method, `instance?` of `clojure.lang.MultiFn` answering false), and a passing and a failing `defspec` under `run-tests` count and report like the oracle's (one stderr line, `report is not a multimethod`, where the oracle prints the trial/shrinking/complete/shrunk progress; the `:file`/`:line` names host frames, not the test file). Both wasm backends still refuse the namespace at load: the seedless `next-rng` builds a `proxy` of `ThreadLocal` (`JAVA:SUBCLASS` undefined where no host is), and past it every draw needs `Math/floor` and a split `Long/bitCount` (`.todo/g31-test-check-wasm-gaps.md`, the wasm follow-up) |
+| hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s); g32: the `properties` macros (`defprop-roundtrip`, `defprop-idempotent`) expand and their test.check `defspec`s pass on the interpreter and the JVM (one stderr line from the check integration, as above). The JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
 | core.memoize 1.2.281 | = | = | = | = | transitive core.cache 1.2.254 -> 1.2.999 by newest-wins; g29: a kind keyword's `ancestors` hold the supers of the values it stands for (`clojure.lang.IFn` among a function's) and a class name in value position reads as its class keyword, so `check-args`' `(some #{clojure.lang.IFn ...} (ancestors (class f)))` compiles and passes; the `JAVA:NEW`+`JAVA:CALL` warnings on both wasm backends come from core.cache's own sources, off the probe's path |
 | potpuri 0.5.3 | = | = | = | = | no transitive deps |
@@ -6952,10 +6952,14 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   `%defN`), so the calls below it run the newest, and validates and notifies like the
   oracle's `bindRoot` behind them ("State", validators and watches).
 - `is` -> `%clojure-test-try` over a lambda, behind the `try` barrier. The assertion kind
-  is the oracle's `assert-expr`: `thrown?`/`thrown-with-msg?` (bare names only); a
-  PREDICATE when the head resolves to a function var (not a local, keyword, interop
-  spelling, macro, `def`'d non-function, or `ClojureTestLowering.CORE_MACROS`), whose
-  arguments bind first so a failure shows `(not (f values...))`; else the value kind.
+  is the oracle's `assert-expr`: a head with a lower-time `assert-expr` method (a
+  `defmethod` on `clojure.test/assert-expr` for its spelling, like test.check's
+  `check?`) expands through it, so its `do-report` calls count alone; else
+  `thrown?`/`thrown-with-msg?` (bare names only); a PREDICATE when the head resolves
+  to a function var (not a local, keyword, interop spelling, macro, `def`'d
+  non-function, or `ClojureTestLowering.CORE_MACROS`), whose arguments bind first so
+  a failure shows `(not (f values...))`; else the value kind. The spelling matches
+  exactly, like the oracle's `(first form)` dispatch.
 - `are` substitutes its template per group at lower time; a count that does not divide is
   the oracle's message.
 - Reports go to `%clojure-test-out` (the oracle's `*test-out*`), so `with-out-str` never
@@ -6963,6 +6967,25 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   last segment or `NO_SOURCE_FILE`; an unlocated form names its `deftest`).
 - `run-tests` takes symbols or strings and bakes in the namespaces seen so far, so an
   unknown one is `No namespace: x found`; `run-all-tests` filters by `re-matches`.
+- `do-report` of a `:pass`/`:fail`/`:error` map counts and prints like the `is` arms
+  do (the report's position is the map's `:file`/`:line` where both are present, else
+  the call site); anything else answers nil. `report` is the `:type` multimethod over
+  the same arms (`:summary` prints the summary lines); a `:pass` counts silently and
+  any other type answers nil. `*testing-vars*` holds one `:name` map per running test
+  (nil outside a run, like the oracle's empty list); `testing-vars-str` renders them
+  the oracle's way; `with-test-out` binds the report stream around its body.
+  `report` and `assert-expr` are real multimethods, so a `defmethod` on either loads
+  through the existing machinery; a `defmethod` on `assert-expr` for a head spelling
+  also registers at lower time for the `is` above.
+- `defn` (top-level or in a body) whose name carries a `:test` function in its
+  metadata -- on the name (test.check's `defspec` varies it there) or the attr map --
+  registers it under `run-tests` through the reporting wrapper, like a `deftest`'s, so
+  a `defspec` run under `run-tests` counts and reports. Only a `(fn ...)` value
+  registers; a bare `^:test` flag or anything else does not. A macro varying its defn
+  name's metadata keeps it: `with-meta` of a symbol answers a fresh copy of the same
+  name carrying the metadata (so `=` still compares names, while `identical?` tells
+  the copy apart, both like the oracle's), and a macro expansion decodes such a
+  symbol with its metadata as reader metadata.
 - Deviations: definition order (the oracle's is map order); `thrown?` matches like `catch`
   ("Catching": on shcloj4 `examples.test.interop` (2026-10-14) the suite reads one error on
   the interpreter and the JVM -- the
@@ -6987,6 +7010,21 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   guard on every call would have to track JIT-varying frame sizes (`interpreter-stack.md`);
   revisit only if depth guards become a product feature;
   `run-all-tests` sees only the program's namespaces.
+- Reporting deviations (g32, 2026-10-21): `report` answers nil for every type but
+  `:pass`/`:fail`/`:error`/`:summary` -- the oracle prints the map (`prn`) and runs
+  custom `:type` methods, so clojure.test.check's trial/shrinking/complete/shrunk
+  progress stays silent here (its `::complete`/`::shrunk` prints included) while the
+  namespace loads with one stderr line (`report is not a multimethod`, the oracle's
+  own message for a rebound report). A `:fail`/`:error` map's `:file`/`:line` win
+  (the oracle's merge order), but conditions carry no portable stack trace here, so
+  test.check's file-and-line reads host frames (`(DirectMethodHandleAccess....:N)` on
+  the JVM) where the oracle names the test file. `*testing-vars*` elements are
+  `:name` maps, not vars. Pinned by clojure-spec
+  `do-report-counts-and-prints-like-is`,
+  `report-answers-nil-for-check-types-and-reads-testing-vars`,
+  `assert-expr-methods-extend-is`,
+  `a-defspec-shaped-macro-registers-its-test` (all four backends) and the real
+  defspec runs below.
 
 ## A session
 

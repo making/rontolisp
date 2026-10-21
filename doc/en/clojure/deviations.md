@@ -122,7 +122,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
   the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
-  like the oracle. Naming `use-fixtures` compiles, and only the call signals.
+  like the oracle. Naming `use-fixtures` compiles, and only the call signals. `report`
+  stays silent for every type but `:pass`/`:fail`/`:error`/`:summary` (the oracle prints
+  the map and runs custom `:type` methods); a `:fail`/`:error` map's `:file`/`:line` win,
+  but conditions carry no portable stack trace, so test.check's file-and-line reads host
+  frames where the oracle names the test file.
 - A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
   runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed

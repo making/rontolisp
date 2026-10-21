@@ -7920,6 +7920,141 @@ cases:
       Ran 8 tests containing 17 assertions.
       9 failures, 2 errors.
       8 6 9 2 :summary false
+  - name: do-report-counts-and-prints-like-is
+    # do-report of a :pass/:fail/:error map counts and prints through the is
+    # arms (g32): :pass is silent, :fail/:error print the FAIL/ERROR block with
+    # the message, the expected form and the actual value, and anything else
+    # answers nil. The report's position is the map's :file/:line where both are
+    # present (the oracle's merge order: the map wins), else the call site,
+    # like an is. The .cljc file below pins the map-wins order: it survives the
+    # harness's (spec.clj:N) normalization, which only rewrites .clj positions.
+    source: |
+      (ns g32-report (:require [clojure.test :refer [deftest is run-tests do-report successful?]]))
+      (deftest g32-pass (do-report {:type :pass}))
+      (deftest g32-fail
+        (do-report {:type :fail :expected '(= 1 2) :actual 1})
+        (do-report {:type :fail :expected '(= 1 2) :actual 1 :message "direct-msg" :file "f.cljc" :line 7})
+        (do-report {:type :pass})
+        (do-report {:type :oops}))
+      (deftest g32-error
+        (do-report {:type :error :expected '(boom) :actual (ex-info "bam" {:k 1}) :message "err-msg"}))
+      (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (successful? s)))
+    expected: |
+
+      Testing g32-report
+
+      FAIL in (g32-fail) (spec.clj:N)
+      expected: (= 1 2)
+        actual: 1
+
+      FAIL in (g32-fail) (f.cljc:7)
+      direct-msg
+      expected: (= 1 2)
+        actual: 1
+
+      ERROR in (g32-error) (spec.clj:N)
+      err-msg
+      expected: (boom)
+        actual: clojure.lang.ExceptionInfo: bam
+      {:k 1}
+
+      Ran 3 tests containing 5 assertions.
+      2 failures, 1 errors.
+      3 2 2 1 false
+  - name: report-answers-nil-for-check-types-and-reads-testing-vars
+    # report of a :pass counts silently; anything else -- an unknown type or one
+    # of clojure.test.check's trial/shrinking/complete/shrunk reports, whose
+    # custom methods never run here -- answers nil without printing (g32).
+    # *testing-vars* holds one :name map per running test, nil outside a run,
+    # and testing-vars-str renders them the oracle's way.
+    source: |
+      (ns g32-report-fn (:require [clojure.test :refer [deftest run-tests report successful? *testing-vars* testing-vars-str with-test-out]]))
+      (println :vars *testing-vars*)
+      (deftest g32-r
+        (println (report {:type :pass}))
+        (println (report {:type :clojure.test.check.clojure-test/complete :result true}))
+        (println (report {:type :clojure.test.check.clojure-test/trial}))
+        (println (report {:type :whatever}))
+        (println :vars *testing-vars*)
+        (println (testing-vars-str {:file "f.cljc" :line 3}))
+        (with-test-out (println :captured)))
+      (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (successful? s)))
+    expected: |
+      :vars nil
+      Testing g32-report-fn
+      nil
+      nil
+      nil
+      nil
+      :vars ({:name g32-r})
+      ("g32-r") (f.cljc:3)
+      :captured
+
+      Ran 1 tests containing 1 assertions.
+      0 failures, 0 errors.
+      1 1 0 0 true
+  - name: assert-expr-methods-extend-is
+    # A defmethod on clojure.test/assert-expr owns its head spelling: an is over
+    # it expands through the method at lower time (g32), like the oracle's macro
+    # consulting the multimethod while compiling, so the method's do-report calls
+    # count alone (a predicate call around them would report twice). The spelling
+    # matches exactly, as in the oracle: the fully-qualified head below is the
+    # method's, the shape test.check's check? takes.
+    source: |
+      (ns g32-assert (:require [clojure.test :refer [deftest is run-tests do-report successful?]]))
+      (defn g32-check-results [m]
+        (if (:pass? m)
+          (do-report {:type :pass})
+          (do-report (assoc m :type :fail))))
+      (defmethod clojure.test/assert-expr 'g32-assert/g32-check? [msg form]
+        `(let [m# ~(nth form 1)] (g32-check-results (assoc m# :message ~msg))))
+      (deftest g32-check
+        (is (g32-assert/g32-check? {:pass? true}))
+        (is (g32-assert/g32-check? {:pass? false :expected 1 :actual 2}) "chk-msg"))
+      (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (successful? s)))
+    expected: |
+
+      Testing g32-assert
+
+      FAIL in (g32-check) (spec.clj:N)
+      chk-msg
+      expected: 1
+        actual: 2
+
+      Ran 1 tests containing 2 assertions.
+      1 failures, 0 errors.
+      1 1 1 0 false
+  - name: a-defspec-shaped-macro-registers-its-test
+    # The defspec shape without the jar (g32): a macro varying its defn name's
+    # metadata to carry the :test function registers it under run-tests, the
+    # direct call answers without reporting, and the run counts and reports like
+    # the oracle's (a passing and a failing defspec).
+    source: |
+      (ns g32-defspec (:require [clojure.test :refer [run-tests do-report successful?]]))
+      (defmacro g32-defspec [name values prop]
+        `(defn ~(vary-meta name assoc :test
+                            `(fn [] (let [results# (map ~prop ~values)]
+                                      (clojure.test/do-report
+                                       {:type (if (every? identity results#) :pass :fail)
+                                        :expected '~prop
+                                        :actual (vec results#)}))))
+           ([] (map ~prop ~values))))
+      (g32-defspec g32-small [0 1 2 3 4 5] (fn [x] (< x 3)))
+      (g32-defspec g32-tiny [0 1 2] (fn [x] (< x 5)))
+      (println (g32-tiny))
+      (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (successful? s)))
+    expected: |
+      (true true true)
+
+      Testing g32-defspec
+
+      FAIL in (g32-small) (spec.clj:N)
+      expected: (fn [x] (< x 3))
+        actual: [true true true false false false]
+
+      Ran 2 tests containing 2 assertions.
+      1 failures, 0 errors.
+      2 1 1 0 false
   - name: thrown-matches-the-class-and-reports-any-other-exception-as-an-error
     # Oracle-identical (clj 1.12.6, 2026-10-03) but for the stack trace the
     # oracle prints below an error: thrown? and thrown-with-msg? take an exception

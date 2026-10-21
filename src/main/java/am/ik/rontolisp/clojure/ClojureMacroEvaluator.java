@@ -1,7 +1,10 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.List;
+
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Evaluates one lowered core form in a macro-time environment: the false value, the
@@ -52,6 +55,19 @@ public interface ClojureMacroEvaluator {
 	 * @param lowering the lowering
 	 */
 	default void lowerThrough(Lowering lowering) {
+	}
+
+	/**
+	 * The metadata maps of macro-time values, in order, or null when this evaluator
+	 * cannot answer: one {@code meta} of each quoted value. Decoding a macro expansion
+	 * back to a datum consults it, so a symbol {@code with-meta} answered at macro time
+	 * (test.check's defspec varies its name's metadata) decodes with its metadata as
+	 * reader metadata. A value with none contributes nil.
+	 * @param values the values, as quoted data answers them
+	 * @return the metadata maps in order, or null
+	 */
+	default @Nullable List<LispVal> metasOf(List<LispVal> values) {
+		return null;
 	}
 
 	/**

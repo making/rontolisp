@@ -13340,9 +13340,14 @@
 ;; interpreter and the JVM). with-meta answers a fresh shallow copy,
 ;; like the oracle's new object: the original keeps its own metadata and = still
 ;; compares contents (a reify copy keeps its tag, so it dispatches the same and is
-;; a different object, like the oracle's). The kinds that carry metadata are the
-;; oracle's IObj kinds the lowering has: maps, vectors, lists, sets, records, reify
-;; values, lazy seqs and functions (a wrapping closure).
+;; a different object, like the oracle's); = on symbols compares names, so a
+;; symbol's fresh copy stays = to its interned name while identical? tells them
+;; apart, like the oracle's. The copy of a symbol carries the name verbatim, so
+;; a macro expansion decoding it spells the same symbol (a gensym keeps its own
+;; spelling below); the table keeps every object it was handed for the program's
+;; lifetime. The kinds that carry metadata are the oracle's IObj kinds the
+;; lowering has: symbols, maps, vectors, lists, sets, records, reify values,
+;; lazy seqs and functions (a wrapping closure).
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md): a
 ;; derived value (assoc, conj, ...) starts without metadata where the oracle
@@ -13373,9 +13378,17 @@
 
 ;; A deftype implementing IObj answers its own withMeta, and one implementing
 ;; IMeta its own meta: arms of the meta-interface family ("Host interfaces").
+;; A symbol answers a fresh copy of itself carrying the metadata, like the
+;; oracle's new object: = still compares names (like every equal here), while
+;; identical?/eq tell the copy apart, like the oracle's. The copy carries the
+;; name verbatim (no case folding, the current package ignored), so a macro
+;; expansion decoding it spells the same symbol with its metadata as reader
+;; metadata -- test.check's defspec varies its name's metadata this way, and
+;; the defn it emits registers its :test below.
 (defun rontolisp::%clojure-with-meta (x m)
-  "A copy of X carrying the metadata map M, like the oracle's withMeta; a symbol
-   answers itself (see above), anything else that is no IObj in the oracle
+  "A copy of X carrying the metadata map M, like the oracle's withMeta; the
+   copy of a symbol is fresh, so the interned name keeps no metadata and = on
+   symbols still compares names. Anything else that is no IObj in the oracle
    signals, like its cast."
   (cond ((rontolisp::%clojure-iobj-p x)
          (funcall (rontolisp::%clojure-interface-entry x "withMeta") x m))
@@ -13398,7 +13411,7 @@
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
          (rontolisp::%clojure-check-meta m)
-         x)
+         (rontolisp::%clojure-put-meta (intern (symbol-name x)) m))
         (t (rontolisp::%clojure-class-cast-exception-of
             "with-meta takes a collection, a record or a function" x))))
 
@@ -17477,6 +17490,10 @@
 ;; runs first), the oracle's *test-out*: a with-out-str in a test never
 ;; captures a report. The counters exist only while run-tests runs, like the
 ;; oracle's *report-counters*, so an is outside it reports without counting.
+;; do-report of a :pass/:fail/:error map counts and prints through the same
+;; arms (its position the map's :file/:line, else the call site); report is
+;; the :type multimethod over those arms (anything else answers nil), and
+;; *testing-vars* holds one :name map per running test.
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; tests run in definition order (the oracle's order is its namespace map's,
@@ -17659,10 +17676,14 @@
     (funcall thunk)))
 
 (defun rontolisp::%clojure-test-var (name body loc)
-  "Run one test: count it, run BODY with NAME pushed on the running names, and
-   report an error escaping the body as uncaught. Answers nil, like the oracle."
+  "Run one test: count it, run BODY with NAME pushed on the running names and
+   its var object on *testing-vars*, and report an error escaping the body as
+   uncaught. Answers nil, like the oracle."
   (let ((rontolisp::%clojure-test-names
-         (cons name rontolisp::%clojure-test-names)))
+         (cons name rontolisp::%clojure-test-names))
+        (|c%clojure.test/*testing-vars*|
+         (cons (rontolisp::%clojure-test-var-object name)
+               |c%clojure.test/*testing-vars*|)))
     (rontolisp::%clojure-test-count 0)
     (handler-case (funcall body)
       (error (e)
@@ -17779,6 +17800,157 @@
                                                   summary 0) 0))
       t
       rontolisp::%clojure-false))
+
+;;;; clojure.test reporting: do-report, report and *testing-vars*.
+;;
+;; The result-map half of the test runtime: do-report of a :pass/:fail/:error
+;; map counts and prints like the is arms do, anything else answers nil. The
+;; :fail and :error maps carry the assertion's :expected and :actual values
+;; (already evaluated, like the is arms' arguments), its :message, and the
+;; :file/:line the oracle's do-report merges in -- read from the map where
+;; present (the oracle's merge order: the map wins), else the call site the
+;; lowering baked in (report answers nil there, like an unlocated form).
+;;
+;; report is the multimethod the lowering defines (dispatching on :type, like
+;; the oracle's): its :pass/:fail/:error methods count and print through the
+;; same helpers, :summary prints the summary lines, and anything else --
+;; including clojure.test.check's trial/shrinking/complete/shrunk reports --
+;; answers nil (a documented deviation: custom :type methods never run their
+;; bodies here). *testing-vars* is the oracle's dynamic var, bound while each
+;; test runs to one map per running test carrying its :name, so
+;; testing-vars-str and the check integration's test-var read work.
+
+(defvar |c%clojure.test/*testing-vars*|
+  nil
+  "The vars of the tests running, innermost first: the oracle's
+   *testing-vars*, one map per test carrying its :name. NIL outside a test
+   run, like the oracle's empty list.")
+
+(defun rontolisp::%clojure-test-var-object (name)
+  "The *testing-vars* element for the test NAME: a map carrying it as its
+   :name, with itself as its metadata's :name too, so both (meta v) and plain
+   reads find it."
+  (let ((v (make-hash-table :test 'equal)) (m (make-hash-table :test 'equal)))
+    (setf (gethash (list :C%KEYWORD "name") v) name)
+    (setf (gethash (list :C%KEYWORD "name") m) name)
+    (rontolisp::%clojure-with-meta v m)))
+
+(defun rontolisp::%clojure-test-report-loc (m baked)
+  "The (file:line) a result map M reports under: its :file/:line where both
+   are present (a string file and an integer line), else BAKED (the call site
+   the lowering baked in, or NO_SOURCE_FILE for a bare report call)."
+  (let ((file (rontolisp::%clojure-call-keyword (list :C%KEYWORD "file") m nil))
+        (line
+         (rontolisp::%clojure-call-keyword (list :C%KEYWORD "line") m nil)))
+    (if (and (stringp file) (integerp line))
+        (concatenate 'string "(" file ":" (princ-to-string line) ")")
+        (or baked "(NO_SOURCE_FILE:0)"))))
+
+(defun rontolisp::%clojure-test-report-actual (actual)
+  "The actual line a result map reports: a condition the way the error arm
+   describes it, anything else readably."
+  (if (typep actual 'condition)
+      (rontolisp::%clojure-test-describe actual)
+      (rontolisp::%clojure-str-of actual "nil" t)))
+
+(defun rontolisp::%clojure-test-report-expected-actual (expected actual)
+  "The expected and actual lines of a result map's report: both are values
+   already, rendered readably like the oracle's pr-str of each."
+  (let ((s rontolisp::%clojure-test-out))
+    (write-string "expected: " s)
+    (write-string (rontolisp::%clojure-str-of expected "nil" t) s)
+    (terpri s)
+    (write-string "  actual: " s)
+    (write-string (rontolisp::%clojure-test-report-actual actual) s)
+    (terpri s)))
+
+(defun rontolisp::%clojure-test-report-fail (expected actual msg loc)
+  "Report one failed result map: count it and print the FAIL block."
+  (rontolisp::%clojure-test-count 2)
+  (rontolisp::%clojure-test-header "FAIL" msg loc)
+  (rontolisp::%clojure-test-report-expected-actual expected actual))
+
+(defun rontolisp::%clojure-test-report-error (expected actual msg loc)
+  "Report one errored result map: count it and print the ERROR block."
+  (rontolisp::%clojure-test-count 3)
+  (rontolisp::%clojure-test-header "ERROR" msg loc)
+  (rontolisp::%clojure-test-report-expected-actual expected actual))
+
+(defun rontolisp::%clojure-test-report-summary-map (m)
+  "Print the two summary lines for a summary map M's counts."
+  (let ((s rontolisp::%clojure-test-out)
+        (test (rontolisp::%clojure-call-keyword (list :C%KEYWORD "test") m 0))
+        (pass (rontolisp::%clojure-call-keyword (list :C%KEYWORD "pass") m 0))
+        (fail (rontolisp::%clojure-call-keyword (list :C%KEYWORD "fail") m 0))
+        (error
+         (rontolisp::%clojure-call-keyword (list :C%KEYWORD "error") m 0)))
+    (terpri s)
+    (write-string "Ran " s)
+    (princ test s)
+    (write-string " tests containing " s)
+    (princ (+ pass fail error) s)
+    (write-string " assertions." s)
+    (terpri s)
+    (princ fail s)
+    (write-string " failures, " s)
+    (princ error s)
+    (write-string " errors." s)
+    (terpri s)))
+
+(defun rontolisp::%clojure-test-do-report (m baked)
+  "Add the report M makes: a :pass/:fail/:error map counts and prints like
+   the is arms do (the report's position is the map's :file/:line, else BAKED);
+   anything else answers nil. Answers nil, like the oracle's outside a run."
+  (let ((type
+         (rontolisp::%clojure-call-keyword (list :C%KEYWORD "type") m nil)))
+    (cond
+     ((equal type (list :C%KEYWORD "pass"))
+      (rontolisp::%clojure-test-pass)
+      nil)
+     ((equal type (list :C%KEYWORD "fail"))
+      (rontolisp::%clojure-test-report-fail
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "expected") m nil)
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "actual") m nil)
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "message") m nil)
+       (rontolisp::%clojure-test-report-loc m baked))
+      nil)
+     ((equal type (list :C%KEYWORD "error"))
+      (rontolisp::%clojure-test-report-error
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "expected") m nil)
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "actual") m nil)
+       (rontolisp::%clojure-call-keyword (list :C%KEYWORD "message") m nil)
+       (rontolisp::%clojure-test-report-loc m baked))
+      nil)
+     ((equal type (list :C%KEYWORD "summary"))
+      (rontolisp::%clojure-test-report-summary-map m)
+      nil)
+     (t nil))))
+
+(defun rontolisp::%clojure-test-do-report-v (&rest args)
+  "do-report as a value: the map's own :file/:line or NO_SOURCE_FILE."
+  (rontolisp::%clojure-check-arity args 1 1 "do-report")
+  (rontolisp::%clojure-test-do-report (car args) nil))
+
+(defun rontolisp::%clojure-test-testing-vars-str (m)
+  "The oracle's testing-vars-str: the running test names, then the map M's
+   position. A missing :file or :line renders empty, like the oracle's str."
+  (let ((names nil)
+        (file (rontolisp::%clojure-call-keyword (list :C%KEYWORD "file") m nil))
+        (line
+         (rontolisp::%clojure-call-keyword (list :C%KEYWORD "line") m nil)))
+    (dolist (v (reverse |c%clojure.test/*testing-vars*|))
+      (setq names
+            (cons (rontolisp::%clojure-call-keyword (list :C%KEYWORD "name")
+                                                    (rontolisp::%clojure-meta v)
+                                                    nil) names)))
+    (concatenate 'string (rontolisp::%clojure-str-of names "" nil) " ("
+                 (rontolisp::%clojure-str-of file "" nil) ":"
+                 (rontolisp::%clojure-str-of line "" nil) ")")))
+
+(defun rontolisp::%clojure-test-testing-vars-str-v (&rest args)
+  "testing-vars-str as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "testing-vars-str")
+  (rontolisp::%clojure-test-testing-vars-str (car args)))
 
 ;;;; Reading: read-string and read over one run-time reader.
 ;;

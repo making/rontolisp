@@ -96,6 +96,15 @@ public final class ClojureMacroTime {
 	 */
 	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
 
+	/** The run-time library's {@code meta} of a value. */
+	private static final LispSymbol META = new LispSymbol("RONTOLISP::%CLOJURE-META");
+
+	/** The quote of a value. */
+	private static final LispSymbol QUOTE = new LispSymbol("QUOTE");
+
+	/** The list of values. */
+	private static final LispSymbol LIST = new LispSymbol("LIST");
+
 	private static final class LazyEvaluator implements ClojureMacroEvaluator {
 
 		private final ClassLoader javaClasses;
@@ -199,6 +208,30 @@ public final class ClojureMacroTime {
 		@Override
 		public synchronized void defineLazy(LispSymbol var, LispVal value, boolean special, boolean once) {
 			this.pending.add(new Lazy(var, value, special, once));
+		}
+
+		@Override
+		public synchronized @Nullable List<LispVal> metasOf(List<LispVal> values) {
+			if (values.isEmpty()) {
+				return List.of();
+			}
+			// one evaluation for the whole expansion: the metadata of every
+			// quoted value in order (nil where it carries none)
+			LispVal reads = LispNil.INSTANCE;
+			for (int i = values.size() - 1; i >= 0; i--) {
+				reads = new LispCons(
+						new LispCons(META, new LispCons(
+								new LispCons(QUOTE, new LispCons(values.get(i), LispNil.INSTANCE)), LispNil.INSTANCE)),
+						reads);
+			}
+			LispVal answered = evaluate(new LispCons(LIST, reads));
+			List<LispVal> metas = new ArrayList<>();
+			LispVal run = answered;
+			while (run instanceof LispCons cell) {
+				metas.add(cell.car());
+				run = cell.cdr();
+			}
+			return run instanceof LispNil && metas.size() == values.size() ? List.copyOf(metas) : null;
 		}
 
 	}
