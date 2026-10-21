@@ -521,6 +521,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the value when it is an instance of the class (its `instance?` test for a named class,
   the protocol tag for a computed one), `nil` of `nil`, else the oracle's refusal; a host
   class no value here has always refuses (host classes exist on no wasm backend).
+- While `*unchecked-math*` is truthy (`true` or `:warn-on-boxed`), `+`, `-`, `*`, `inc`
+  and `dec` wrap a 64-bit-integer sum, difference or product mod 2^64; anything else -- a
+  double, ratio or out-of-range-integer operand, and the flag down -- is the plain verb.
+  The flag is read when the call runs, not when it compiles: a `binding` around the call
+  wraps where the oracle (which bakes the flag into the call at compile time) throws, and
+  a function defined before a top-level `set!` wraps when called after it. No boxed-math
+  warning is ever emitted, so `:warn-on-boxed` wraps exactly like `true`. As values
+  (`+`, `apply +`, `map inc`, ...) the verbs keep the default promoting behavior on
+  every flag, where the oracle's function values throw on overflow.
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.
