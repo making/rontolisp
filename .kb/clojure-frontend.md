@@ -15,6 +15,34 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 `code/test/**` namespaces run as drivers `(require 'ns) (clojure.test/run-tests 'ns)` from
 `test/`, under the project's own `deps.edn`.
 
+## Differential parity harness (g17)
+
+`src/test/java/am/ik/rontolisp/e2e/ClojureDifferentialParityTest.java` is the
+test-suite-resident driver: a corpus of `(ns, var, form)` rows -- one small pure
+expression per builtin where a canonical expression exists (docstring examples are
+the natural source; the per-ns families `clojure.string`/`set`/`walk`/`pprint`/
+`data` included). Pure expressions only -- no IO, no concurrency, no time-of-day.
+Each form runs through both `clj -M` and every rontolisp backend, compared as
+printed values (double-`pr-str`, so a multiline print stays one line per row).
+Adding a row is one `row(...)` call; the failure output names the ns, var, form
+and both outputs. The factory skips when `clj` is absent (like `CiSpecE2eTest`
+without its binary), so the suite stays green without the oracle; the interpreter
+and JVM legs always run, the wasm legs only with a usable `wasmtime` on `PATH`.
+Known printer deviations whitelist explicitly per row (`deviating(...)`), never
+globally: the row pins the deliberate deviation and fails if either side moves.
+
+First full run (2026-10-21, oracle clj 1.12.6.1673, 117 rows): green on all four
+backends, zero divergences -- nothing to fix, pin or cut as a follow-up.
+
+| ns | rows | diverging builtins |
+|---|---|---|
+| `clojure.core` | 89 | none |
+| `clojure.string` | 16 | none |
+| `clojure.set` | 7 | none |
+| `clojure.walk` | 2 | none |
+| `clojure.pprint` | 2 | none |
+| `clojure.data` | 1 | none |
+
 ## Where it sits
 
 - `ClojureReader` (text -> datums) and `ClojureLowering` (the hub: datums -> core forms;
