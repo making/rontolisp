@@ -225,7 +225,10 @@
   ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
   答えるキーワードで引き、オラクルは `Class` 自身で引きます。`prefers` は各ディスパッチ値と
   優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
-  multimethod を返します。どちらも名前の取り方は同じで、関数値はありません。
+  multimethod を返します。どちらも名前の取り方は同じです。値としては（`methods`・
+  `get-method`・`remove-method`・`prefer-method`・`prefers`・`remove-all-methods`）
+  呼び出しと同じ文言で引数の個数を確認してから実行時に拒否します。呼び出し位置で
+  綴られたリテラルの multimethod 名だけが読めます。
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは

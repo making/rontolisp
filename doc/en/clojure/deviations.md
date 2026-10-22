@@ -236,7 +236,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
   `prefers` answers each dispatch value with the set preferred over it, and
   `remove-all-methods` clears the methods and the preferences, answering the
-  multimethod; both take the name the same way and name no function value.
+  multimethod; both take the name the same way. As values (`methods`,
+  `get-method`, `remove-method`, `prefer-method`, `prefers`,
+  `remove-all-methods`) they check the argument count in the call's words, then
+  refuse at run time -- only a literal multimethod name reads, where the call
+  stands.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry

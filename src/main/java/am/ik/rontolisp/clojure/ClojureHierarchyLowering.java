@@ -571,6 +571,25 @@ final class ClojureHierarchyLowering {
 	 */
 	static LispVal valueOf(ClojureLowering ctx, String name) {
 		ctx.usedHierarchy = true;
+		return switch (name) {
+			case "derive", "underive" -> deriveValue(ctx, name);
+			case "isa?" -> isaValue(ctx);
+			case "parents", "ancestors", "descendants" -> readersValue(ctx, name);
+			case "make-hierarchy" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+					ClojureLowerUtil.list(new LispSymbol("C%H-EMPTY")));
+			default -> throw new LispReadException("unknown name: " + name);
+		};
+	}
+
+	/**
+	 * {@code derive}/{@code underive} as a value: over a child and a parent, or a
+	 * hierarchy and both, like the call (qbits.ex swaps one into an atom). Any other
+	 * count signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @param name {@code derive} or {@code underive}
+	 * @return the value form
+	 */
+	private static LispVal deriveValue(ClojureLowering ctx, String name) {
 		String op = name.equals("derive") ? "C%H-DERIVE" : "C%H-UNDERIVE";
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle(name + "-args"));
 		LispVal one = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args);
@@ -604,6 +623,107 @@ final class ClojureHierarchyLowering {
 					ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code isa?} as a value: over a child and a parent, or a hierarchy and both, like
+	 * the call -- the global hierarchy answering the two-argument shape, and the class
+	 * rows read like the call's, so a class keyword still walks them (g29). Any other
+	 * count signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	private static LispVal isaValue(ClojureLowering ctx) {
+		ctx.usedClassChains = true;
+		ctx.allClassRows = true;
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("isa-args"));
+		LispVal one = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args);
+		LispVal two = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args));
+		LispVal three = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("isa? takes a child and a parent, or a hierarchy and both"));
+		LispVal pair = ctx
+			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("C%H-ISA?"), hierarchyGlobal(), one, two));
+		LispVal triple = ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("C%H-ISA?"), one, two, three));
+		LispVal body = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("cond"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
+					ClojureLowerUtil
+						.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)), arity),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+							pair),
+					ClojureLowerUtil.list(
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)))),
+							triple),
+					ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code parents}/{@code ancestors}/{@code descendants} as a value: over a child, or
+	 * a hierarchy and a child, like the call -- the global hierarchy answering the
+	 * one-argument shape, and the class rows read like the call's, so a class keyword
+	 * still walks them (g29). Any other count signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @param name {@code parents}, {@code ancestors} or {@code descendants}
+	 * @return the value form
+	 */
+	private static LispVal readersValue(ClojureLowering ctx, String name) {
+		ctx.usedClassChains = true;
+		ctx.allClassRows = true;
+		if (name.equals("descendants")) {
+			ctx.readsDescendants = true;
+		}
+		LispSymbol op = new LispSymbol("C%H-" + name.toUpperCase(java.util.Locale.ROOT));
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle(name + "-args"));
+		LispVal one = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args);
+		LispVal two = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal(name + " takes a child, or a hierarchy and a child"));
+		LispVal single = ClojureLowerUtil.list(op, hierarchyGlobal(), one);
+		LispVal withHier = ClojureLowerUtil.list(op, one, two);
+		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)), single),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+						withHier),
+				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code prefer-method} as a value: the multimethod arrives as a run-time value, but
+	 * its preference table lives under the literal name the call names, so only the
+	 * call's shape runs -- anything else refuses at run time. The count is checked first,
+	 * in the call's words.
+	 * @return the value form
+	 */
+	static LispVal preferMethodValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("prefer-method-args"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args), new LispInteger(3)),
+						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString
+							.literal("prefer-method of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name prefers, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("prefer-method takes a multimethod and two dispatch values"))));
 	}
 
 	/**

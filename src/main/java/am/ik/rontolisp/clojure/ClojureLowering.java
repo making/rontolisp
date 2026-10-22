@@ -5483,7 +5483,31 @@ public final class ClojureLowering {
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-V"));
 			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
-			case "derive", "underive" -> ClojureHierarchyLowering.valueOf(this, name);
+			case "derive", "underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy" ->
+				ClojureHierarchyLowering.valueOf(this, name);
+			case "prefer-method" -> ClojureHierarchyLowering.preferMethodValue();
+			case "prefers" -> ClojureCoreLowering.prefersValue(name);
+			case "remove-all-methods" -> ClojureCoreLowering.removeAllMethodsValue(name);
+			case "get-method" -> ClojureDispatchLowering.getMethodValue();
+			case "remove-method" -> ClojureDispatchLowering.removeMethodValue();
+			case "methods" -> ClojureDispatchLowering.methodsValue();
+			case "instance?" -> ClojureDispatchLowering.instanceValue(this);
+			case "satisfies?" -> ClojureProtocolLowering.satisfiesValue();
+			case "extend" -> ClojureProtocolLowering.extendValue();
+			case "await" -> ClojureStateLowering.awaitValue(this);
+			case "await-for" -> ClojureStateLowering.awaitForValue(this);
+			case "ensure" -> ClojureStateLowering.ensureValue(this);
+			case "shutdown-agents" -> ClojureStateLowering.shutdownAgentsValue();
+			case "struct" -> ClojureStateLowering.structValue(this);
+			case "struct-map" -> ClojureStateLowering.structMapValue(this);
+			case "push-thread-bindings", "pop-thread-bindings" -> ClojureStateLowering.threadBindingsValue(name);
+			case "aget", "alength", "aset" -> ClojureBytesLowering.valueOf(this, name);
+			case "list*" -> ClojureLoopLowering.listStarValue(this);
+			case "make-array" -> ClojureInteropLowering.makeArrayValue(this);
+			case "load" -> ClojureNamespaceLowering.loadValue();
+			case "newline" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST));
 			default -> {
 				if (ClojureCoreNames.isMacro(name)) {
 					// a core-macro name with no value arm answers the macro's expander

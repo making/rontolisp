@@ -2053,6 +2053,45 @@ final class ClojureInteropLowering {
 	}
 
 	/**
+	 * The host class name a host class object answers, or nil: what tells the byte class
+	 * ({@code byte}) from any other where a host is, a nil-body arm where none is
+	 * ({@code clojure.lisp}).
+	 */
+	static final String HOST_CLASS_NAME = "RONTOLISP::%CLOJURE-HOST-CLASS-NAME";
+
+	/**
+	 * {@code make-array} as a value: over a class and dimensions -- of one dimension the
+	 * scalar, of several the dimension list, like the call. Of one dimension of the byte
+	 * class, a byte array, like the call: the class arrives evaluated, and only a host
+	 * class object still names the primitive byte (its host class name), so anywhere else
+	 * -- a designator, which names the boxed class -- the general array answers, like the
+	 * call of a boxed class. Anything shorter signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal makeArrayValue(ClojureLowering ctx) {
+		LispSymbol cls = new LispSymbol(ClojureLowering.mangle("make-array-class"));
+		LispSymbol dims = new LispSymbol(ClojureLowering.mangle("make-array-dims"));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("make-array takes a class and dimensions"));
+		LispVal hostByte = ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
+				ClojureLowerUtil.list(new LispSymbol(HOST_CLASS_NAME), cls), LispString.literal("byte"));
+		LispVal single = ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), dims));
+		LispVal bytes = ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTE_ARRAY),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), dims));
+		LispVal shape = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), single,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), dims), dims);
+		LispVal built = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), single, hostByte), bytes,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("make-array"), shape));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(cls, ClojureLowering.AMPERSAND_REST, dims)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), dims), arity, built));
+	}
+
+	/**
 	 * {@code (.-field target)}: a record or deftype answers its field table's entry (a
 	 * missing or mutable field signals in the oracle's words); anything else takes the
 	 * host field path, like before -- where the host is not (wasm), the oracle's refusal,

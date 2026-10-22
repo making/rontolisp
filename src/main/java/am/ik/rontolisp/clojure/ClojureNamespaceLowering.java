@@ -1222,6 +1222,23 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
+	 * {@code load} as a value: paths arrive evaluated, but only literal paths load --
+	 * where the call stands -- so only the no-argument shape runs (nil, like the call of
+	 * none), and anything else refuses at run time.
+	 * @return the value form
+	 */
+	static LispVal loadValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("load-args"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowering.NIL_CONST,
+						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
+								LispString.literal("load of a computed path is not supported"
+										+ " at run time: only literal paths load, where the call stands"))));
+	}
+
+	/**
 	 * One {@code load}: a path with a leading slash is root-relative, any other is
 	 * relative to the directory of the current namespace's file, like the oracle's.
 	 */
