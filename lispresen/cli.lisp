@@ -22,7 +22,7 @@
 (defparameter *usage*
   "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
   DECK and OUT may be - for standard input / output; OUT defaults to DECK with .html.
-  --theme NAME  light, dark or high-contrast, overriding the deck's :theme
+  --theme NAME  light, dark, high-contrast or midnight, overriding the deck's :theme
   --runtime R   where runnable code loads the runtime from, overriding the deck's
                 :runtime: a directory URL, hosted (the project site) or none (static code)
   --embed       inline images as data: URIs, so the HTML file stands alone

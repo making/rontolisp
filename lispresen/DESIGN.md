@@ -51,7 +51,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
 (deck :title "lispresen"
       :author "Toshiaki Maki"
       :date "2026-10-22"
-      :theme :light            ; :light | :dark | :high-contrast | (theme ...), below
+      :theme :light            ; :light | :dark | :high-contrast | :midnight | (theme ...), below
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
       :callouts :shown         ; :shown | :step, below
@@ -728,7 +728,8 @@ color, and titles use `fg`.
 A theme is fourteen colors: the page's `bg`, `fg`, `muted`, `accent`, `head-bg`, `rule`
 and `mark`, and the code's `code-bg`, `code-fg`, `code-muted` and highlight colors
 `hl-str`, `hl-kw`, `hl-def`, `hl-const`, written as custom properties of the same names.
-`:theme` names a built-in theme (`:light`, `:dark`, `:high-contrast`) or overrides one:
+`:theme` names a built-in theme (`:light`, `:dark`, `:high-contrast`, `:midnight`) or
+overrides one:
 
 ```lisp
 (deck :theme (theme :base :dark :accent "#ff9f43" :mark "#4a3b00"))
@@ -742,6 +743,26 @@ tuned the highlight colors to `bg`, so a dark `code-bg` on a light theme made ev
 pair unreadable. Code panels, inline `tt`, the editor's caret and the output panel all
 use the code group. A color is `#rgb` or `#rrggbb`. `--theme` on the command line
 names a built-in theme and replaces the deck's choice.
+
+A built-in theme may also add stylesheet rules, written after the fixed stylesheet; an
+override keeps the rules of its base, and they take their colors from the variables.
+None of them may move what the fit solver placed, so they draw outside the text or set
+it narrower than it was measured, never wider. `:midnight` uses this:
+
+- the title, section and statement slides stand between two 3 px arcs in the accent,
+  the edges of 1000 x 2400 px ellipses centered 540 px in from the canvas edge. An arc
+  runs 40 px from the edge at mid-height and 88 px at the top and bottom, always inside
+  the 112 px side margin, so it meets no text, QR code or page number;
+- display text takes proportional kana (`palt`) and -0.01 em tracking, and the kicker
+  the regular weight;
+- table headers are accent text over a hairline, code panels and callouts nearly
+  square with a hairline ring, inline code on `head-bg`, list markers accent dots, and
+  the quote rule 3 px, its padding widened by what the rule lost.
+
+Checked 2026-10-22 against the other directions tried (a light deck with full-bleed
+indigo slides and heavy vermilion parentheses; black and white with a signal yellow):
+the dark indigo with fine gold lines was chosen. Hiragino stays the face, since a
+display face would need its own width table.
 
 ## HTML output
 

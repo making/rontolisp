@@ -170,6 +170,7 @@ html:not(.js) #fs{display:none}
                          (list "KICKER" (px-string *kicker-size*))
                          (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
+    (write-theme-style theme out)
     ;; The canvas-dependent geometry.
     (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
     (format out ".kicker,.title,.body,.centered{left:~dpx;width:~dpx}~%"

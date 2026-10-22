@@ -34,7 +34,7 @@ The design is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
 | `"text"`, `(p inline...)` | a paragraph |
@@ -74,6 +74,8 @@ or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
 A theme is the page's colors and the code's (`code-bg`, `code-fg`, `code-muted` and the
 highlight colors). `(theme :base :light :code :dark)` sets code on dark panels in a light
 deck; any color can be replaced by name, and every text color is checked for contrast.
+`:midnight` is a dark indigo with gold: thin arcs frame the title, section and statement
+slides, and its tables, code and lists are drawn in fine lines.
 
 ```lisp
 (slide :title "列の幅は内容で決まる"

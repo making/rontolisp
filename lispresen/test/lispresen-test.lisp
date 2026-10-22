@@ -406,10 +406,15 @@
          "(deck :agenda t)
 (slide \"x\")")
         '((:warning 1 ":agenda lists the sections, and this deck has none"))))))
-  (testing "the built-in themes pass the contrast lint"
-    (dolist (theme '("light" "dark" "high-contrast"))
+  (testing "the built-in themes pass the contrast lint; an override keeps its base's rules"
+    (dolist (theme '("light" "dark" "high-contrast" "midnight"))
       (ok
-       (null (nth-value 1 (lispresen:render "(slide \"x\")" :theme theme))))))
+       (null (nth-value 1 (lispresen:render "(slide \"x\")" :theme theme)))))
+    (let ((html
+           (lispresen:render "(deck :theme (theme :base :midnight :accent \"#ffcc00\"))
+(slide \"x\")")))
+      (ok (contains html "--accent:#ffcc00;"))
+      (ok (contains html ".layout-statement::before{left:40px"))))
   (ok
    (equal (lispresen:format-diagnostic "t.lisp"
                                        (lispresen::make-diagnostic
