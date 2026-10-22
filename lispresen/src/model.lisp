@@ -1,0 +1,422 @@
+;;;; model.lisp -- the deck model and the parser from read forms to it.
+;;;;
+;;;; Tags are matched by SYMBOL-NAME, so the package the runtime reader interns into does
+;;;; not matter. Options are keyword/value pairs at the start of a form (after the source
+;;;; of an IMAGE, the URL of a LINK).
+;;;;
+;;;; Inline content is a list of nodes: a string, (:b nodes), (:i nodes), (:mark nodes),
+;;;; (:tt "string") or (:link "url" nodes).
+
+(in-package :lispresen)
+
+(defstruct deck title author date theme aspect page-numbers slides)
+
+;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
+;;; requested layout name or nil; FIT is the layout result (layout.lisp).
+(defstruct slide number line kind title layout class blocks notes title-run fit)
+
+(defstruct para inlines run)
+(defstruct bullets ordered items)
+(defstruct item inlines sublist run)
+(defstruct code-block lang lines)
+(defstruct figure src alt caption caption-run)
+(defstruct table-block
+  header
+  rows
+  align
+  caption
+  row-header
+  caption-run
+  size
+  widths
+  aligns)
+(defstruct cell inlines colspan run)
+
+;;; --- form helpers ------------------------------------------------------------
+
+(defun form-tag (form)
+  "The upper-case name of FORM's head symbol, or nil."
+  (and (consp form) (car form) (symbolp (car form))
+       (string-upcase (symbol-name (car form)))))
+
+(defun option-name (key)
+  (concatenate 'string ":" (string-downcase (symbol-name key))))
+
+(defun split-options (args allowed context)
+  "The leading keyword/value pairs of ARGS as ((NAME VALUE) ...) keyed by upper-case
+name, and the remaining arguments. An option not in ALLOWED is reported."
+  (let ((opts nil))
+    (loop while (and args (keywordp (car args)))
+          do
+            (let ((name (symbol-name (car args))))
+              (unless (member name allowed :test #'string=)
+                (report :warning (format nil "unknown option ~a for ~a"
+                                         (option-name (car args)) context)))
+              (when (null (cdr args))
+                (report :error (format nil "option ~a for ~a has no value"
+                                       (option-name (car args)) context)))
+              (push (list name (cadr args)) opts)
+              (setf args (cddr args))))
+    (values (nreverse opts) args)))
+
+(defun opt (opts name &optional default)
+  (let ((entry (assoc name opts :test #'string=)))
+    (if entry (second entry) default)))
+
+(defun symbol-value-name (x)
+  "The upper-case name of a symbol option value such as :light, or nil."
+  (and x (symbolp x) (string-upcase (symbol-name x))))
+
+(defun string-option (opts name context)
+  (let ((v (opt opts name)))
+    (cond ((null v) nil)
+          ((stringp v) (text-leaf v))
+          (t
+           (report :error (format nil "~a of ~a must be a string"
+                           (concatenate 'string ":" (string-downcase name))
+                           context))
+           nil))))
+
+;;; --- text --------------------------------------------------------------------
+
+(defun normalize-text (s)
+  "S with every whitespace run collapsed the way HTML renders it: dropped when it holds
+a line break between two wide characters, one space otherwise."
+  (with-output-to-string (out)
+    (let ((n (length s)) (i 0))
+      (loop while (< i n)
+            do
+              (let ((c (char s i)))
+                (if (blank-code-p (char-code c))
+                    (let ((j i) (newline nil))
+                      (loop while
+                              (and (< j n)
+                                   (blank-code-p (char-code (char s j))))
+                            do
+                              (when (char= (char s j) #\Newline)
+                                (setf newline t)) (incf j))
+                      (unless (and newline (> i 0) (< j n)
+                                   (wide-code-p (char-code (char s (1- i))))
+                                   (wide-code-p (char-code (char s j))))
+                        (write-char #\Space out))
+                      (setf i j))
+                    (progn
+                      (write-char c out)
+                      (incf i))))))))
+
+(defun check-full-width-alnum (s)
+  (when (find-if (lambda (c)
+                   (let ((code (char-code c)))
+                     (or (<= #xFF10 code #xFF19) (<= #xFF21 code #xFF3A)
+                         (<= #xFF41 code #xFF5A)))) s)
+    (report
+     :warning (format nil "full-width alphanumerics in ~s; use half-width" s))))
+
+(defun text-leaf (s)
+  (check-full-width-alnum s)
+  (normalize-text s))
+
+;;; --- inline content ----------------------------------------------------------
+
+(defun inline-tag-p (tag)
+  (member tag '("B" "I" "MARK" "TT" "LINK") :test #'equal))
+
+(defun parse-inline (x)
+  "The inline nodes X stands for; an unknown form is reported and dropped."
+  (cond ((stringp x) (list (text-leaf x)))
+        ((numberp x) (list (princ-to-string x)))
+        ((consp x)
+         (let ((tag (form-tag x)))
+           (cond ((equal tag "B") (list (list :b (parse-inlines (cdr x)))))
+            ((equal tag "I") (list (list :i (parse-inlines (cdr x)))))
+            ((equal tag "MARK") (list (list :mark (parse-inlines (cdr x)))))
+            ((equal tag "TT")
+             (if (every #'stringp (cdr x))
+                 (list
+                  (list
+                   :tt (normalize-text (apply #'concatenate 'string (cdr x)))))
+                 (progn
+                   (report :error "(tt ...) takes strings only")
+                   nil)))
+            ((equal tag "LINK")
+             (if (stringp (cadr x))
+                 (list
+                  (list :link (cadr x)
+                        (or (parse-inlines (cddr x)) (list (cadr x)))))
+                 (progn
+                   (report :error "(link ...) takes a URL string first")
+                   nil)))
+            (t
+             (report :error (format nil "unknown inline element ~a"
+                                    (if tag (string-downcase tag) "(a list)")))
+             nil))))
+        (t
+         (report
+          :error (format nil "unexpected ~a in text" (prin1-to-string x)))
+         nil)))
+
+(defun parse-inlines (args)
+  (let ((nodes nil))
+    (dolist (a args) (dolist (n (parse-inline a)) (push n nodes)))
+    (nreverse nodes)))
+
+;;; --- blocks ------------------------------------------------------------------
+
+(defun list-tag-p (form) (member (form-tag form) '("UL" "OL") :test #'equal))
+
+(defun parse-li (args)
+  "An item from the arguments of (li ...): inline content, then at most one list."
+  (let ((inlines nil) (sublist nil))
+    (dolist (a args)
+      (cond ((list-tag-p a)
+             (when sublist
+               (report :error "an item holds one nested list at most"))
+             (setf sublist (parse-list a)))
+            (t (dolist (n (parse-inline a)) (push n inlines)))))
+    (make-item :inlines (nreverse inlines) :sublist sublist)))
+
+(defun parse-list (form)
+  "A bullets from (ul ...) or (ol ...). A list directly inside a list nests under the
+item before it."
+  (let ((items nil))
+    (dolist (x (cdr form))
+      (cond ((equal (form-tag x) "LI") (push (parse-li (cdr x)) items))
+            ((list-tag-p x)
+             (cond
+              ((null items) (report :error "a nested list must follow an item"))
+              ((item-sublist (car items))
+               (report :error "an item holds one nested list at most"))
+              (t (setf (item-sublist (car items)) (parse-list x)))))
+            (t (push (make-item :inlines (parse-inline x)) items))))
+    (make-bullets :ordered (equal (form-tag form) "OL")
+                  :items (nreverse items))))
+
+(defun split-lines (s)
+  (let ((lines nil) (start 0))
+    (loop
+      (let ((nl (position #\Newline s :start start)))
+        (push (subseq s start nl) lines)
+        (if nl (setf start (1+ nl)) (return))))
+    (nreverse lines)))
+
+(defun expand-tabs (s)
+  (if (find #\Tab s)
+      (with-output-to-string (out)
+        (let ((col 0))
+          (loop for c across s
+                do
+                  (if (char= c #\Tab)
+                      (loop repeat (- 4 (mod col 4))
+                            do (write-char #\Space out) (incf col))
+                      (progn
+                        (write-char c out)
+                        (incf col))))))
+      s))
+
+(defun dedent (text)
+  "TEXT as lines with the leading blank line, trailing blank lines, trailing whitespace
+and the common indentation removed."
+  (let* ((lines
+          (mapcar
+           (lambda (l) (string-right-trim '(#\Space #\Return) (expand-tabs l)))
+           (split-lines text)))
+         (lines (if (and lines (string= (car lines) "")) (cdr lines) lines))
+         (lines
+          (reverse (member-if (lambda (l) (string/= l "")) (reverse lines))))
+         (indent nil))
+    (dolist (l lines)
+      (when (string/= l "")
+        (let ((k (or (position-if (lambda (c) (char/= c #\Space)) l) 0)))
+          (setf indent (if indent (min indent k) k)))))
+    (mapcar (lambda (l) (if (string= l "") l (subseq l (or indent 0)))) lines)))
+
+(defun parse-code (form)
+  (multiple-value-bind (opts body) (split-options (cdr form) '("LANG") "code")
+    (if (every #'stringp body)
+        (make-code-block :lang (opt opts "LANG")
+                         :lines (dedent (apply #'concatenate 'string body)))
+        (progn
+          (report :error "(code ...) takes strings only")
+          nil))))
+
+(defun parse-image (form)
+  (let ((src (cadr form)))
+    (if (not (stringp src))
+        (progn
+          (report :error "(image ...) takes the image path first")
+          nil)
+        (multiple-value-bind (opts rest)
+            (split-options (cddr form) '("ALT" "CAPTION") "image")
+          (when rest
+            (report :error "(image ...) takes only a path and options"))
+          (let ((alt (string-option opts "ALT" "image")))
+            (unless alt
+              (report :warning (format nil "image ~a has no :alt" src)))
+            (make-figure :src src
+                         :alt alt
+                         :caption (string-option opts "CAPTION" "image")))))))
+
+(defun parse-cell (x)
+  (if (equal (form-tag x) "CELL")
+      (multiple-value-bind (opts body)
+          (split-options (cdr x) '("COLSPAN") "cell")
+        (let ((span (opt opts "COLSPAN" 1)))
+          (unless (and (integerp span) (> span 0))
+            (report :error ":colspan must be a positive integer")
+            (setf span 1))
+          (make-cell :inlines (parse-inlines body) :colspan span)))
+      (make-cell :inlines (parse-inline x) :colspan 1)))
+
+(defun parse-row (row)
+  (if (and (consp row) (not (form-tag row)))
+      (mapcar #'parse-cell row)
+      (progn
+        (report :error "a table row must be a list of cells")
+        nil)))
+
+(defun row-span (row) (reduce #'+ (mapcar #'cell-colspan row)))
+
+(defun parse-table (form)
+  (multiple-value-bind (opts body) (split-options (cdr form)
+                                    '("HEADER" "ALIGN" "CAPTION" "ROW-HEADER")
+                                    "table")
+    (let* ((header-form (opt opts "HEADER"))
+           (header (and header-form (parse-row header-form)))
+           (rows (remove nil (mapcar #'parse-row body)))
+           (align (opt opts "ALIGN"))
+           (width
+            (if header (row-span header) (and rows (row-span (car rows))))))
+      (when (null rows) (report :error "a table needs at least one row"))
+      (dolist (row rows)
+        (unless (= (row-span row) width)
+          (report :error (format nil
+                          "a table row has ~d cells where the table has ~d"
+                          (row-span row) width))))
+      (when (and align
+                 (not
+                  (and (listp align) (= (length align) width)
+                       (every (lambda (a)
+                                (member (symbol-value-name a)
+                                        '("LEFT" "RIGHT" "CENTER")
+                                        :test #'equal)) align))))
+        (report
+         :error ":align must list :left, :right or :center for every column")
+        (setf align nil))
+      (when (and width (> width 5))
+        (report :warning (format nil
+                                 "a table with ~d columns is hard to read; keep it to 5"
+                                 width)))
+      (when (> (length rows) 7)
+        (report :warning (format nil
+                          "a table with ~d rows is hard to read; keep it to 7"
+                          (length rows))))
+      (and rows
+           (make-table-block :header header
+                             :rows rows
+                             :align (mapcar #'symbol-value-name align)
+                             :caption (string-option opts "CAPTION" "table")
+                             :row-header (opt opts "ROW-HEADER"))))))
+
+(defun parse-block (x)
+  "The block X stands for, or nil after reporting."
+  (cond ((stringp x) (make-para :inlines (list (text-leaf x))))
+        ((consp x)
+         (let ((tag (form-tag x)))
+           (cond ((equal tag "P") (make-para :inlines (parse-inlines (cdr x))))
+                 ((list-tag-p x) (parse-list x))
+                 ((equal tag "CODE") (parse-code x))
+                 ((equal tag "IMAGE") (parse-image x))
+                 ((equal tag "TABLE") (parse-table x))
+                 ((inline-tag-p tag) (make-para :inlines (parse-inline x)))
+                 ((equal tag "LI")
+                  (report :error "(li ...) belongs in (ul ...) or (ol ...)")
+                  nil)
+                 (t
+                  (report :error (format nil "unknown element ~a"
+                                  (if tag (string-downcase tag) "(a list)")))
+                  nil))))
+        (t
+         (report
+          :error (format nil "unexpected ~a on a slide" (prin1-to-string x)))
+         nil)))
+
+;;; --- slides and the deck -----------------------------------------------------
+
+(defun parse-slide (form number line)
+  (multiple-value-bind (opts body)
+      (split-options (cdr form) '("TITLE" "LAYOUT" "CLASS") "slide")
+    (let* ((title (string-option opts "TITLE" "slide"))
+           (*slide-title* title)
+           (blocks nil)
+           (notes nil))
+      (dolist (x body)
+        (if (equal (form-tag x) "NOTES")
+            (if (every #'stringp (cdr x))
+                (push (apply #'concatenate 'string (cdr x)) notes)
+                (report :error "(notes ...) takes strings only"))
+            (let ((b (parse-block x))) (when b (push b blocks)))))
+      (make-slide :number number
+       :line line
+       :kind :slide
+       :title title
+       :layout (let ((l (opt opts "LAYOUT")))
+                 (and l (string-downcase (symbol-value-name l))))
+       :class (opt opts "CLASS")
+       :blocks (nreverse blocks)
+       :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
+
+(defun parse-section (form number line)
+  (let ((title (cadr form)))
+    (unless (and (stringp title) (null (cddr form)))
+      (report :error "(section ...) takes one title string"))
+    (make-slide :number number
+                :line line
+                :kind :section
+                :title (and (stringp title) (text-leaf title)))))
+
+(defun parse-deck-header (form)
+  (multiple-value-bind (opts rest) (split-options (cdr form)
+                                                  '("TITLE" "AUTHOR" "DATE"
+                                                    "THEME" "ASPECT"
+                                                    "PAGE-NUMBERS") "deck")
+    (when rest (report :error "(deck ...) takes options only"))
+    (make-deck :title (string-option opts "TITLE" "deck")
+               :author (string-option opts "AUTHOR" "deck")
+               :date (string-option opts "DATE" "deck")
+               :theme (opt opts "THEME")
+               :aspect (opt opts "ASPECT")
+               :page-numbers (opt opts "PAGE-NUMBERS"))))
+
+(defun parse-deck (forms)
+  "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers."
+  (let ((deck nil) (slides nil) (number 0))
+    (when (and forms (equal (form-tag (car (car forms))) "DECK"))
+      (let ((*line* (second (car forms))))
+        (setf deck (parse-deck-header (car (car forms)))))
+      (setf forms (cdr forms)))
+    (unless deck (setf deck (make-deck)))
+    (when (deck-title deck)
+      (push (make-slide :number (incf number)
+                        :line 1
+                        :kind :title
+                        :title (deck-title deck)) slides))
+    (dolist (entry forms)
+      (let* ((form (first entry))
+             (*line* (second entry))
+             (tag (form-tag form))
+             (*slide* (1+ number))
+             (*slide-title* nil))
+        (cond ((equal tag "SLIDE")
+               (push (parse-slide form (incf number) *line*) slides))
+              ((equal tag "SECTION")
+               (push (parse-section form (incf number) *line*) slides))
+              ((equal tag "DECK")
+               (report :error "(deck ...) must be the first form"))
+              (t (let ((*slide* nil))
+                   (report :error (format nil
+                                          "expected (slide ...) or (section ...), found ~a"
+                                          (if tag
+                                              (string-downcase tag)
+                                              (prin1-to-string form)))))))))
+    (setf (deck-slides deck) (nreverse slides))
+    deck))

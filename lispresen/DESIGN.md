@@ -11,6 +11,22 @@ Decks are written in Japanese. Line breaking, measurement and fonts are designed
 Japanese text with embedded Latin words and code; English-only decks work but are not
 what the tuning targets.
 
+## Portability
+
+lispresen is portable Common Lisp first: it runs on SBCL as well, and produces the same
+bytes there. Code that needs a rontolisp feature (a literal `load` the compilers splice,
+a WASM export, the playground runtime's hooks) sits behind `#+rontolisp`, with a
+`#-rontolisp` spelling for other implementations where one is needed; without a
+specific reason, code is written in standard CL. SBCL then serves as the reference the
+rontolisp backends are checked against.
+
+The one place this costs code today is loading the sources. Standard CL resolves a
+relative `load` against the working directory, so the portable spelling is
+`(load (merge-pathnames "x.lisp" *load-truename*))`; rontolisp's compilers splice only a
+literal path, resolved against the loading file, and leave the portable spelling to a
+run-time `load` that cannot find the file. Until the compile path splices the portable
+spelling too, `cli.lisp`, `src/all.lisp` and the test file carry both.
+
 ## Goals and non-goals
 
 Goals:
@@ -167,8 +183,8 @@ Japanese body text (1.5 and up); the Latin-oriented 1.2-1.4 crowds kanji.
 ### Fonts
 
 System fonts only, so the file needs no network: `"Hiragino Sans", "Noto Sans JP",
-"BIZ UDGothic", "Yu Gothic", sans-serif`, and a monospace stack ending in `"BIZ
-UDGothic"` for code. Every Japanese face in the stack sets kana and kanji full-width,
+"BIZ UDGothic", "Yu Gothic", sans-serif`, and `Menlo, Consolas, "BIZ UDGothic",
+monospace` for code. Every Japanese face in the stack sets kana and kanji full-width,
 which is what makes the width model exact for Japanese. For that reason proportional
 Japanese faces (BIZ UDPGothic, Meiryo UI) are not in the stack, and neither `palt` nor
 `text-autospace` is turned on: each changes widths in a way the model would have to
@@ -176,22 +192,27 @@ reproduce per font.
 
 ### Text measurement
 
-Width of a code point, in milli-em, by class:
+Width of a code point, in milli-em:
 
-| Class | Width |
-|-------|-------|
-| Kanji, kana, full-width punctuation and forms | 1000 |
-| Wide Latin (`m w M W @`) | 900 |
-| Other upper case | 680 |
-| Digits | 580 |
-| Other lower case and punctuation | 550 |
-| Narrow (`i j l . , ; : ' ! \|` and space) | 300 |
-| Monospace (`code`, `tt`) | 600; full-width 1000 |
+| Characters | Width |
+|------------|-------|
+| Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
+| Printable ASCII | per character, measured on Hiragino Sans W3 (bold: W6), plus 2% |
+| Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
+| Other proportional characters | 800 (bold 840), plus 2% |
 
-Bold adds 5% to Latin, and the total carries a 4% safety margin. Japanese text is exact
-under the fonts above; the Latin rows are a conservative estimate, calibrated with a
-calibration deck (see Verification) rather than derived from font files, which lispresen
-does not ship.
+Japanese text is exact under the fonts above. Latin glyphs differ per face, and
+Hiragino's are the widest of the stack (its digits are 657, against Noto Sans JP's
+572), so the table measured on it over-estimates the other faces rather than under. A
+first table of character classes (digits 580, lower case 550) under-estimated Hiragino
+and wrapped a table cell the model had set on one line; the per-character table
+replaced it. The 2% covers sub-pixel rounding; it applies to proportional characters
+only, since a margin on full-width ones puts one character fewer on a line than the
+browser does.
+
+Measured with `tools/calibrate.lisp` in Chrome on 2026-10-22 (84 paragraphs: Japanese,
+Latin, mixed, bold, inline code, brackets; 40-120 px; 700-1696 px wide): the model never
+predicted fewer lines than Chrome rendered, and predicted one more in 9.
 
 ### Line breaking
 
@@ -207,6 +228,9 @@ phrases (文節), not between arbitrary characters.
   overflow-wrap: anywhere`. The browser then breaks only where the model breaks, in
   every browser, rather than where its own segmenter (`word-break: auto-phrase`, Chrome
   only) would.
+- Under `keep-all` the browser still breaks after closing punctuation (`、。」』）！？`)
+  and before an opening bracket, which are not letters to it; the model takes those
+  opportunities too, or it predicts lines the browser does not need.
 - The model wraps greedily phrase by phrase; Latin words break at spaces. A phrase wider
   than the line falls back to character breaks with kinsoku (no line starts with
   `、。，．）」』】ー・！？` or a small kana, no line ends with `（「『【`), the same rule
@@ -297,8 +321,8 @@ A row is as tall as its tallest cell (lines x line height plus vertical padding)
 the table height (rows, header, caption) enters the fit solver like any block. The
 widths are emitted as `<colgroup>` pixel widths under `table-layout: fixed`, and cells
 use the same `<wbr>` phrase breaks as body text, so the browser wraps each cell where
-the model did. The header row is bold on a tinted background; rows are striped when
-there are more than 4.
+the model did. The header row is bold on a tinted background, and each body row has a
+1 px rule drawn as an inset shadow, which takes no layout space.
 
 ### Runtime check
 
@@ -433,6 +457,8 @@ binary read and base64 and is phase 3.
 | JVM | `cli.lisp` | `rontolisp lispresen/cli.lisp -o lispresen.jar && java -jar lispresen.jar talk.lisp` |
 | WASM (WASI P1) | `cli.lisp` | `rontolisp lispresen/cli.lisp -o lispresen.wasm && wasmtime run --dir . lispresen.wasm talk.lisp` |
 | WASM component | `cli.lisp` | `rontolisp lispresen/cli.lisp --component -o lispresen.wasm && wasmtime run --dir . lispresen.wasm talk.lisp` |
+| Native executable | `cli.lisp` | `rontolisp lispresen/cli.lisp --native -o lispresen && ./lispresen talk.lisp` |
+| SBCL | `cli.lisp` | `sbcl --script lispresen/cli.lisp talk.lisp` |
 | Browser | `web/lispresen-web.lisp` | `--no-wasi` reactor exporting `render` (`:params '(:string) :returns :string`) |
 
 CLI:
@@ -462,6 +488,7 @@ lispresen/
   check.sh               cross-backend golden check + unit tests
   cli.lisp               CLI host: arguments, file I/O, exit status
   src/
+    all.lisp             loads the sources below in order
     package.lisp         defpackage lispresen
     reader.lisp          top-level forms with offsets and line numbers
     model.lisp           structs and parsing with diagnostics
@@ -484,6 +511,10 @@ lispresen/
   examples/
     intro.lisp           a deck presenting lispresen itself
     intro.html           its golden output
+  tools/
+    gen-budoux.py        regenerates src/budoux-ja.lisp from BudouX's model
+    BUDOUX-LICENSE       BudouX's Apache License 2.0
+    calibrate.lisp       writes the page comparing the width model with a browser
 ```
 
 `cli.lisp` and `lispresen-web.lisp` pull the sources in with top-level literal `load`s,
@@ -498,16 +529,19 @@ lispresen is not an `ExamplesE2eTest` target; `check.sh` is its verification and
 before committing a change under `lispresen/`.
 
 - **Cross-backend identity**: `check.sh` builds the CLI for the interpreter, the JVM,
-  WASM and the WASM component, renders `examples/intro.lisp` on each through stdin and
+  WASM, the WASM component and a native executable (skipped when the jar carries no
+  precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
+  renders `examples/intro.lisp` on each through stdin and
   stdout, and requires each output to equal `examples/intro.html` byte for byte.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
-  interpreter): phrase boundaries on a few sentences checked against BudouX's own
-  output, measurement and line breaking (Latin, Japanese, kinsoku fallback), step
-  selection at the boundaries, the hard-floor error, the three table-width cases,
-  numeric column detection, parser diagnostics with line numbers. The golden deck covers emission, so HTML is not asserted piecewise.
+  interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
+  vendor): phrase boundaries checked against BudouX's own output, measurement and
+  line breaking at their exact boundaries, step selection, the hard-floor error, the
+  three table-width cases, numeric column detection, parser diagnostics with line
+  numbers. The golden deck covers emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
-  the font stacks or the player change): a calibration deck of long Latin and Japanese
-  lines at each body step opened with `?check` must show no correction; a deck with
+  the font stacks or the player change): the page `tools/calibrate.lisp` writes must
+  report no paragraph where the model predicts fewer lines than the browser; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout. The
   documentation site's Run cells are verified the same way; no committed test drives a
@@ -516,21 +550,23 @@ before committing a change under `lispresen/`.
 ## Phases
 
 1. Reader, model, phrase segmentation, metrics, fit solver, layouts `title` / `section`
-   / `statement` / `standard` / `code` / `image` / `table`, HTML and navigation, full
-   screen, CLI, `check.sh`.
-2. Runnable code, presenter window, `columns`, `quote`, overview, print CSS,
-   runtime check, highlighting, themes and the contrast lint, browser editor.
+   / `statement` / `standard` / `code` / `image` / `table`, the built-in themes, HTML,
+   navigation, full screen, print CSS, CLI, `check.sh`.
+2. Runnable code, presenter window, `columns`, `quote`, overview, runtime check,
+   highlighting, theme overrides and the contrast lint, browser editor.
 3. `define` templates, `--embed` images.
 
-## Open points to verify first
+Phase 1 is implemented. The compiled CLI is 256 KB as a jar, 695 KB as a WASM module,
+704 KB as a component and 6.3 MB as a native executable (macOS arm64); the BudouX weights are 17 KB of source.
 
-- Literal `load` of files that contain `defpackage` / `in-package`, nested two levels
-  (`cli.lisp` -> `src/*.lisp`), inlines correctly on all compiled backends.
-- The runtime reader of the compiled backends reads deck text with Japanese strings and
-  keyword options identically to the interpreter (the golden check answers this).
+## Open points
+
+Verified in phase 1: a literal `load` of files holding `defpackage` / `in-package`,
+nested two levels (`cli.lisp` -> `src/all.lisp` -> `src/*.lisp`), inlines on every
+compiled backend, and the compiled runtime reader reads Japanese decks as the interpreter
+does (the golden check). Still open:
+
 - The playground runtime loads in a Blob worker from the hosted origin, and
   `rontoSetLanguage("clojure")` followed by `rontoEval` keeps Clojure definitions across
   calls as it does for Lisp (`PlaygroundRepl.eval` keeps one session per language).
-- The BudouX Japanese model's size as Lisp data, and the compiled WASM module size it
-  adds; if it dominates the reactor, the weights move to a compact string encoding
-  decoded at startup.
+- Safari's line breaking against the model (the calibration so far ran in Chrome).
