@@ -672,12 +672,20 @@ final class JvmRuntimeBuilder {
 	private static final int ARITY_TABLE_NONE = 0x7F;
 
 	/**
-	 * The widest funcId span {@code _arityErr} will table over. Past it the reporter is
-	 * dropped rather than emitted wrong: the length comparison is a {@code sipush} and
-	 * the table a single UTF-8 constant, both of which have hard ceilings, and no real
-	 * program comes within an order of magnitude of this one.
+	 * The widest funcId span one {@code _arityErr} table covers. Past it the span is
+	 * tabled in chunks of at most {@link #ARITY_TABLE_CHUNK_SPAN}, each chunk its own
+	 * string constants, so every constant stays under one {@code CONSTANT_Utf8} by
+	 * construction whatever the program's size.
 	 */
 	private static final int ARITY_TABLE_MAX_SPAN = 30_000;
+
+	/**
+	 * The most funcIds one {@code _arityErr} table chunk covers: a chunk's table takes at
+	 * most three bytes per cell and its operator table at most three bytes per char, so
+	 * both constants stay under one {@code CONSTANT_Utf8} (65,535 bytes) with headroom to
+	 * spare.
+	 */
+	private static final int ARITY_TABLE_CHUNK_SPAN = 20_000;
 
 	/**
 	 * Builds the arity-reporting helpers a program shares: {@code _arityMsg} (the
@@ -1027,95 +1035,198 @@ final class JvmRuntimeBuilder {
 		MethodCode.Label answerNil = code.newLabel();
 		int base = shapes.isEmpty() ? 0 : shapes.firstKey();
 		int span = shapes.isEmpty() ? 0 : shapes.lastKey() - base + 1;
-		if (span > 0 && span <= ARITY_TABLE_MAX_SPAN) {
+		if (span > 0) {
+			List<ArityErrChunk> chunks = arityErrChunks(shapes, base, span);
+			code.iload(0);
+			if (base != 0) {
+				emitArityInt(code, cp, base);
+				code.isub();
+			}
+			code.istore(2);
+			code.iload(2);
+			code.iflt(answerNil);
+			if (chunks.size() == 1 && span <= ARITY_TABLE_MAX_SPAN) {
+				// The span one table covers: the emission is what it always was,
+				// byte for byte.
+				code.iload(2);
+				emitArityInt(code, cp, span);
+				code.if_icmpge(answerNil);
+				emitArityErrLookup(code, chunks.get(0), 2, 2, 0, base, answerNil, cp, stringClass, runtimeEx, exCtor,
+						msgRef);
+			}
+			else {
+				// A span past one table: each chunk answers its own funcId range, so
+				// every value-path arity miss still reports in its words.
+				for (int k = 0; k < chunks.size(); k++) {
+					ArityErrChunk chunk = chunks.get(k);
+					MethodCode.Label next = k + 1 < chunks.size() ? code.newLabel() : answerNil;
+					code.iload(2);
+					emitArityInt(code, cp, chunk.offset() + chunk.length());
+					code.if_icmpge(next);
+					emitArityErrLookup(code, chunk, 2, 3, 2, chunk.offset(), answerNil, cp, stringClass, runtimeEx,
+							exCtor, msgRef);
+					if (k + 1 < chunks.size()) {
+						code.labelBinding(next);
+					}
+				}
+			}
+		}
+		code.labelBinding(answerNil);
+		code.aconst_null();
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * One {@code _arityErr} table chunk: the funcIds {@code [offset, offset + length)}
+	 * (relative to the table's base) with their table and operator constants.
+	 */
+	static record ArityErrChunk(int offset, int length, String table,
+			@org.jspecify.annotations.Nullable String operators, boolean named) {
+	}
+
+	/**
+	 * The funcId span tabled in chunks of at most {@link #ARITY_TABLE_CHUNK_SPAN}: each
+	 * chunk's table and operator constants stay under one {@code CONSTANT_Utf8} by
+	 * construction (a cell takes at most three bytes, an operator char at most three),
+	 * whatever the program's size. One chunk for a span one table covers; the single
+	 * table's emission stays byte for byte.
+	 * @param shapes the dispatchable callee shapes by funcId
+	 * @param base the lowest funcId the table covers
+	 * @param span the funcId count it covers
+	 * @return the chunks, covering {@code [0, span)} contiguously from the base
+	 */
+	static List<ArityErrChunk> arityErrChunks(SortedMap<Integer, Integer> shapes, int base, int span) {
+		List<ArityErrChunk> chunks = new ArrayList<>();
+		for (int start = 0; start < span; start += ARITY_TABLE_CHUNK_SPAN) {
+			int end = Math.min(span, start + ARITY_TABLE_CHUNK_SPAN);
 			// More operators than a cell's nine bits hold (a program whose functions
 			// declare their own reports names one per function): the indices move to a
 			// table of their own, one char per funcId, while it fits one constant.
-			StringBuilder operators = null;
-			if (shapes.values().stream().anyMatch(s -> s >>> ARITY_OPERATOR_SHIFT > ARITY_TABLE_MAX_OPERATOR)) {
-				operators = new StringBuilder(span);
-				for (int i = 0; i < span; i++) {
-					Integer shape = shapes.get(base + i);
-					operators.append((char) (shape == null || arityTableCell(shape) == ARITY_TABLE_NONE ? 0
-							: shape >>> ARITY_OPERATOR_SHIFT));
-				}
-				if (modifiedUtf8Length(operators) > MAX_CONSTANT_UTF8) {
-					operators = null;
+			boolean wide = false;
+			for (int i = start; i < end; i++) {
+				Integer shape = shapes.get(base + i);
+				if (shape != null && (shape >>> ARITY_OPERATOR_SHIFT) > ARITY_TABLE_MAX_OPERATOR) {
+					wide = true;
+					break;
 				}
 			}
-			StringBuilder table = new StringBuilder(span);
+			String operators = null;
+			if (wide) {
+				StringBuilder names = new StringBuilder(end - start);
+				for (int i = start; i < end; i++) {
+					Integer shape = shapes.get(base + i);
+					names.append((char) (shape == null || arityTableCell(shape) == ARITY_TABLE_NONE ? 0
+							: shape >>> ARITY_OPERATOR_SHIFT));
+				}
+				if (modifiedUtf8Length(names) <= MAX_CONSTANT_UTF8) {
+					operators = names.toString();
+				}
+			}
+			StringBuilder table = new StringBuilder(end - start);
 			boolean named = false;
-			for (int i = 0; i < span; i++) {
+			for (int i = start; i < end; i++) {
 				Integer shape = shapes.get(base + i);
 				int cell = shape == null ? ARITY_TABLE_NONE
 						: arityTableCell(operators != null ? shape & ((1 << ARITY_OPERATOR_SHIFT) - 1) : shape);
 				named |= cell > ARITY_TABLE_NONE;
 				table.append((char) cell);
 			}
-			code.iload(0);
-			if (base != 0) {
-				code.loadConstant(base);
-				code.isub();
-			}
-			code.istore(2);
-			code.iload(2);
-			code.iflt(answerNil);
-			code.iload(2);
-			code.loadConstant(span);
-			code.if_icmpge(answerNil);
-			code.ldc(cp.stringEntry(table.toString()));
-			code.iload(2);
-			code.invokevirtual(cp.methodRef(stringClass, "charAt", "(I)C"));
-			code.istore(2);
-			code.iload(2);
-			code.loadConstant(ARITY_TABLE_NONE);
-			code.if_icmpeq(answerNil);
-			code.new_(runtimeEx);
-			code.dup();
-			if (operators != null) {
-				// shape = OPERATORS.charAt(funcId - base) << 16 | (cell - 1)
-				code.ldc(cp.stringEntry(operators.toString()));
-				code.iload(0);
-				if (base != 0) {
-					code.loadConstant(base);
-					code.isub();
-				}
-				code.invokevirtual(cp.methodRef(stringClass, "charAt", "(I)C"));
-				code.loadConstant(ARITY_OPERATOR_SHIFT);
-				code.ishl();
-				code.iload(2);
-				code.iconst_1();
-				code.isub();
-				code.ior();
-			}
-			else if (named) {
-				// shape = (cell >>> 7) << 16 | ((cell & 0x7F) - 1)
-				code.iload(2);
-				code.loadConstant(ARITY_TABLE_OPERATOR_SHIFT);
-				code.iushr();
-				code.loadConstant(ARITY_OPERATOR_SHIFT);
-				code.ishl();
-				code.iload(2);
-				code.loadConstant((1 << ARITY_TABLE_OPERATOR_SHIFT) - 1);
-				code.iand();
-				code.iconst_1();
-				code.isub();
-				code.ior();
-			}
-			else {
-				code.iload(2);
-				code.iconst_1();
-				code.isub();
-			}
-			code.iload(1);
-			code.invokestatic(msgRef);
-			code.invokespecial(exCtor);
-			code.athrow();
+			chunks.add(new ArityErrChunk(start, end - start, table.toString(), operators, named));
 		}
-		code.labelBinding(answerNil);
-		code.aconst_null();
-		code.areturn();
-		return code;
+		return chunks;
+	}
+
+	/**
+	 * One {@code _arityErr} table lookup: the cell of the funcId in {@code indexSlot}
+	 * (relative to the table's base) read out of the chunk's table into {@code charSlot},
+	 * and a throw of the shape it names -- a miss answered nil by the caller.
+	 * @param code the body under construction
+	 * @param chunk the chunk tabled
+	 * @param indexSlot the local holding the funcId relative to the table's base
+	 * @param charSlot the local taking the cell
+	 * @param operatorsSlot the local holding the funcId the operators table reads (the
+	 * raw parameter where the cell clobbered the index, the index itself otherwise)
+	 * @param operatorsSub what to subtract from it (the base, or the chunk's offset)
+	 * @param answerNil the miss arm
+	 * @param cp the constant pool
+	 * @param stringClass the {@code String} class constant
+	 * @param runtimeEx the exception class thrown
+	 * @param exCtor its message constructor
+	 * @param msgRef the message builder
+	 */
+	private static void emitArityErrLookup(MethodCode code, ArityErrChunk chunk, int indexSlot, int charSlot,
+			int operatorsSlot, int operatorsSub, MethodCode.Label answerNil, ConstantPool cp, ClassEntry stringClass,
+			ClassEntry runtimeEx, MethodRefEntry exCtor, MethodRefEntry msgRef) {
+		MethodRefEntry charAt = cp.methodRef(stringClass, "charAt", "(I)C");
+		code.ldc(cp.stringEntry(chunk.table()));
+		code.iload(indexSlot);
+		if (chunk.offset() != 0) {
+			emitArityInt(code, cp, chunk.offset());
+			code.isub();
+		}
+		code.invokevirtual(charAt);
+		code.istore(charSlot);
+		code.iload(charSlot);
+		code.loadConstant(ARITY_TABLE_NONE);
+		code.if_icmpeq(answerNil);
+		code.new_(runtimeEx);
+		code.dup();
+		if (chunk.operators() != null) {
+			// shape = OPERATORS.charAt(funcId - base - offset) << 16 | (cell - 1): the
+			// id the table lookup clobbered reloaded, like the single table always did
+			code.ldc(cp.stringEntry(chunk.operators()));
+			code.iload(operatorsSlot);
+			if (operatorsSub != 0) {
+				emitArityInt(code, cp, operatorsSub);
+				code.isub();
+			}
+			code.invokevirtual(charAt);
+			code.loadConstant(ARITY_OPERATOR_SHIFT);
+			code.ishl();
+			code.iload(charSlot);
+			code.iconst_1();
+			code.isub();
+			code.ior();
+		}
+		else if (chunk.named()) {
+			// shape = (cell >>> 7) << 16 | ((cell & 0x7F) - 1)
+			code.iload(charSlot);
+			code.loadConstant(ARITY_TABLE_OPERATOR_SHIFT);
+			code.iushr();
+			code.loadConstant(ARITY_OPERATOR_SHIFT);
+			code.ishl();
+			code.iload(charSlot);
+			code.loadConstant((1 << ARITY_TABLE_OPERATOR_SHIFT) - 1);
+			code.iand();
+			code.iconst_1();
+			code.isub();
+			code.ior();
+		}
+		else {
+			code.iload(charSlot);
+			code.iconst_1();
+			code.isub();
+		}
+		code.iload(1);
+		code.invokestatic(msgRef);
+		code.invokespecial(exCtor);
+		code.athrow();
+	}
+
+	/**
+	 * An int on the stack in its shortest form: {@code iconst} / {@code bipush} /
+	 * {@code sipush} in the short range (what {@link MethodCode#loadConstant(int)}
+	 * takes), an {@code ldc} of an {@code Integer} entry past it -- a chunk boundary or
+	 * base past the short range still loads.
+	 */
+	private static void emitArityInt(MethodCode code, ConstantPool cp, int value) {
+		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			code.loadConstant(value);
+		}
+		else {
+			code.ldc(cp.entries().intEntry(value));
+		}
 	}
 
 	/**
