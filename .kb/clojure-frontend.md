@@ -180,7 +180,7 @@ answered `2 5 3` before).
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
 | `var` / `#'` | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)` | "Vars and metadata" |
 | `defmacro` `macroexpand(-1)` `gensym`, `` ` `` `~` `~@` | "Macros" | |
-| `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` `type` | "Dispatch" | a body's `clojure.lang` interfaces and `Object` overrides: "Host interfaces"; `instance?` as a value a two-argument lambda over the computed-class read (`%clojure-class-instance-p`) (g39, clojure-spec `core-functions-resolve-as-values`); `satisfies?`/`extends?`/`extend` and the multimethod verbs read only literal names -- as values see "Dispatch" |
+| `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` `type` | "Dispatch" | a body's `clojure.lang` interfaces and `Object` overrides: "Host interfaces"; `instance?` as a value a two-argument lambda over the computed-class read (`%clojure-class-instance-p`) (g39, clojure-spec `core-functions-resolve-as-values`); `satisfies?`/`extends?`/`extend` as values read the run-time protocol registry, running what the calls run (g42, clojure-spec `protocol-value-arms-run-where-calls-run`); the multimethod verbs as values read the multimethod registry -- as values see "Dispatch" |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `all-ns` `loaded-libs` | `(rontolisp::%clojure-all-ns KNOWN)` / `(rontolisp::%clojure-loaded-libs LIBS)` over the quoted names (`ClojureLowering.knownNamespaces`/`knownLoadedLibs`); as a value a zero-argument lambda over the same | `all-ns` skips removed namespaces, `loaded-libs` answers required libraries, ran files and loaded startup namespaces (never `user` or `clojure.core`); a past-hundred-pair mapping is built in pieces (`%clojure-ns-map-merge`, "Namespaces and project files") |
 | `create-ns` `remove-ns` | `(rontolisp::%clojure-create-ns x)` / `(rontolisp::%clojure-remove-ns x)` (`-v` as values) | interned on first use like every namespace value; `find-ns`/`the-ns` read the run-time table beside the lower-time names, so a created one is found and a removed one gone; a literal also joins the lower-time namespaces ("Namespaces and project files") |
@@ -3875,11 +3875,22 @@ constructor and consumer, and a regex `replace` with a function replacement.
   oracle answers the same, except that a non-protocol is its `NullPointerException` there.
   The tags are the keywords `class` answers, so an extender prints `:string` where the
   oracle prints its `Class`. A computed protocol (or any `-v` value) reads the table
-  itself, which holds no `Object` default. `satisfies?`/`extends?`/`extend` read only
-  literal names: as values they check the count in the call's words, then refuse at
-  run time -- a table read alone would miss the inline implementations and the
-  `Object` default, so no wrong boolean is answered (g39,
-  `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`). Pinned oracle-checked (clj 1.12.6, 2026-10-13)
+  itself, which holds no `Object` default. As values `satisfies?`/`extends?`/`extend`
+  check the count in the oracle's words, then read the run-time registry the `defprotocol`
+  populates beside the methods table (`%clojure-protocols`, an `eq` table from the table
+  to getters over its methods, inline and default tables plus the walk flag, the guard,
+  the method names and the reducing row writer, so a re-executed `defprotocol` reads the
+  new tables like the calls do; a record or deftype registers its tag beside its
+  constructors in `%clojure-protocol-type-tags`): `satisfies?` reads the tag's row, the
+  inline table's first, the walk behind the flag or guard, else the `Object` default;
+  `extends?` reads the key's row, the inline table's too, else the default; `extend`
+  installs each pair's rows in order, answering nil. A value the registry holds no
+  protocol for is the oracle's `NullPointerException`, a type that is no class its
+  `ClassCastException`, a pair whose protocol is none its `IllegalArgumentException`
+  (g42, `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`). Programs naming
+  no `defprotocol`, record or deftype and none of the three verbs compile byte-identically;
+  a `defprotocol` carries the registry store, a record or deftype its tag, and a value of
+  the three the registry read. Pinned oracle-checked (clj 1.12.6, 2026-10-13)
   by clojure-spec `protocol-extenders-and-find-protocol-impl-and-method` and
   `ClojureLoweringTest#protocolIntrospectionReadsTheMethodTables`. `create-struct`
   (2026-10-13, `.todo/f75`) answers the key vector `struct` and `struct-map` read (`%clojure-create-struct`,

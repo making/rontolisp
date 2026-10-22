@@ -6,7 +6,8 @@
 （`Throwable` への extend は `ex-info` について満たします）、または extend で入れた
 `Object` 行があれば真です（オラクル同様）。本体でそのプロトコルを挙げた record・deftype・`reify` は、
 メソッドの有無によらず満たします。プロトコルは `defmethod` の multimethod 同様
-リテラルの名前です。
+リテラルの名前です。値として（`(def sat satisfies?)` を適用するなど）使う場合も、
+実行時のプロトコル値が同じ表を読みます。
 
 ```clojure
 (defprotocol P (m [x]))

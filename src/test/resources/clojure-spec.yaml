@@ -15663,6 +15663,101 @@ cases:
       :no-method
       get-method takes a multimethod and a dispatch value
       get-method of a computed multimethod is not supported at run time: only a literal multimethod name reads, where the call stands
+  - name: protocol-value-arms-run-where-calls-run
+    # g42: satisfies?, extends? and extend run as values what the calls
+    # run -- over the run-time registry the defprotocol populates beside
+    # the methods table (and the tag registry the record and deftype
+    # constructors populate). Higher-order and (def x NAME) application,
+    # inline bodies, the Object and nil rows, an interface-walked row, a
+    # reify, mutations both directions (a value install a head call and
+    # satisfies? see, a head install the value arms read).
+    # Oracle-identical (clj 1.12.6, 2026-10-26, all four backends) except
+    # three wordings the head already customizes: nil answers the Object
+    # default here where the oracle answers false (the head call, which
+    # the value mirrors, reads it too), and a non-class type is refused
+    # without the JVM's module tail (like instance? of one).
+    source: |
+      (defprotocol G42 (g42-m [x]))
+      (defrecord G42R [a] G42 (g42-m [_] :rec))
+      (defrecord G42S [a])
+      (extend-protocol G42 String (g42-m [_] :str) Object (g42-m [_] :obj))
+      (extend-protocol G42 clojure.lang.IPersistentMap (g42-m [_] :ipm))
+      (def g42-sat satisfies?)
+      (println (g42-sat G42 (->G42R 1)))
+      (println (g42-sat G42 "hi"))
+      (println (g42-sat G42 42))
+      (println (g42-sat G42 nil))
+      (println (g42-sat G42 {}) (g42-sat G42 (->G42S 0)))
+      (def g42-p G42)
+      (println (g42-sat g42-p (->G42R 2)) (g42-sat g42-p :k))
+      (println (map g42-sat [G42 G42 G42] [(->G42R 3) "s" :k2]))
+      (def g42-ext? extends?)
+      (println (g42-ext? g42-p String) (g42-ext? G42 (class "hi")) (g42-ext? G42 Number))
+      (println (g42-ext? G42 nil))
+      (println (g42-ext? G42 Object))
+      (println (g42-ext? G42 clojure.lang.IPersistentMap))
+      (println (map g42-ext? [G42 G42] [String Number]))
+      (def g42-e extend)
+      (println (g42-e clojure.lang.Keyword G42 {:g42-m (fn [_] :kw)}))
+      (println (g42-sat G42 :k) (g42-m :k))
+      (println (g42-e String G42 {:nope (fn [_] 1) :g42-m (fn [_] :newstr)}))
+      (println (g42-m "nw"))
+      (println (g42-e nil G42 {:g42-m (fn [_] :nilx)}))
+      (println (g42-sat G42 nil) (g42-m nil))
+      (println (g42-e Object G42 {:g42-m (fn [_] :obj2)}))
+      (println (g42-m 99))
+      (println (g42-e (class (->G42S 3)) G42 {:g42-m (fn [_] :tagext)}))
+      (println (g42-m (->G42S 4)) (g42-sat G42 (->G42S 4)) (g42-ext? G42 (class (->G42S 4))))
+      (defprotocol G42M :extend-via-metadata true (g42-mm [x]))
+      (defrecord G42T [a] G42M (g42-mm [_] :inline))
+      (println (g42-sat G42M (->G42T 1)))
+      (def g42-q (reify G42 (g42-m [_] :reify)))
+      (println (g42-sat G42 g42-q))
+      (println (try (g42-sat G42) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try (g42-ext? G42 1 2) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try (g42-e) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try (g42-sat 42 1) (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try (g42-sat nil 1) (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try (g42-ext? 42 String) (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try (g42-ext? G42 :kw) (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try (g42-ext? G42 "hi") (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try (g42-e String 42 {:g42-m (fn [_] 1)}) (catch Exception e (str (.getName (class e)) "|" (.getMessage e)))))
+      (println (try ((fn [f a] (f a)) g42-ext? G42) (catch clojure.lang.ArityException e (.getMessage e))))
+    expected: |
+      true
+      true
+      true
+      true
+      true true
+      true true
+      (true true true)
+      true true false
+      false
+      true
+      true
+      (true false)
+      nil
+      true :kw
+      nil
+      :newstr
+      nil
+      true :nilx
+      nil
+      :obj2
+      nil
+      :tagext true true
+      true
+      true
+      Wrong number of args (1) passed to: clojure.core/satisfies?
+      Wrong number of args (3) passed to: clojure.core/extends?
+      Wrong number of args (0) passed to: clojure.core/extend
+      java.lang.NullPointerException|Cannot invoke "java.lang.Class.isInstance(Object)" because "c" is null
+      java.lang.NullPointerException|Cannot invoke "java.lang.Class.isInstance(Object)" because "c" is null
+      java.lang.NullPointerException|Cannot invoke "java.lang.Class.isAssignableFrom(java.lang.Class)"
+      java.lang.ClassCastException|class clojure.lang.Keyword cannot be cast to class java.lang.Class
+      java.lang.ClassCastException|class java.lang.String cannot be cast to class java.lang.Class
+      java.lang.IllegalArgumentException|42 is not a protocol
+      Wrong number of args (1) passed to: clojure.core/extends?
   - name: function-values-compare-by-identity
     # = over functions is identity on every backend, like the oracle's
     # Util.equiv: two references to one defn or defmulti are =, two

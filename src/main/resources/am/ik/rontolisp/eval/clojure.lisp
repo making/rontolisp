@@ -10244,6 +10244,317 @@
    the structural-key runtime, like a computed head call's lookup."
   (rontolisp::%clojure-table-key (rontolisp::%clojure-dispatch-value dv) table))
 
+;;;; Protocol values: the run-time registry behind the three value arms.
+;;
+;; A protocol var holds its methods table, so a value holding only that
+;; table reaches neither the inline-implementation table nor the Object
+;; default (a table read alone would answer wrong booleans, so the arms
+;; refused instead of approximating). Every defprotocol registers its
+;; tables beside the methods table here, and the value arms of satisfies?,
+;; extends? and extend read through the registry, running what the head
+;; calls run (g42). The registry is keyed by the methods table itself: a
+;; protocol value IS that table, so eq finds it on every backend. The
+;; record holds getters over the globals, never the tables themselves:
+;; every mutation edits the tables in place (only a re-executed
+;; defprotocol rebinds them, and the getters then read the new ones, like
+;; the calls do), so a captured old table reads what it reads like the
+;; calls do. Beside the getters the record carries the walk flag the final
+;; lowering pass settled, the guard closure over the interfaces' own tests
+;; (nil where the head asks none), the protocol's method names (what an
+;; extend entry must keyword-name to store) and the reducing row writer
+;; (nil except for clojure.core.protocols/CollReduce and IKVReduce).
+;; A defrecord or deftype registers its dispatch tag beside its
+;; constructors, so an extend of (class value) stores under a typed key
+;; with the reducing row where one applies.
+
+(defvar rontolisp::%clojure-protocols
+  (make-hash-table :test 'eq)
+  "A protocol's methods table to its (methods-getter inline-getter
+   default-getter default-ensurer walks-p guard methods reducer) record,
+   made by every defprotocol beside its tables.")
+
+(defvar rontolisp::%clojure-protocol-type-tags
+  (make-hash-table :test 'equal)
+  "A record's or deftype's dispatch-tag keyword to T, made beside its
+   constructors, so a run-time type value reads back as a typed key.")
+
+(defun rontolisp::%clojure-register-protocol (methods methods-getter
+                                                      inline-getter
+                                                      default-getter
+                                                      default-ensurer walks
+                                                      guard names reducer)
+  "Register METHODS' record beside the methods table, answering the table
+   (what the protocol's setq answers, so a defprotocol answers what it
+   answered before the registry existed)."
+  (setf (gethash methods rontolisp::%clojure-protocols)
+        (list methods-getter inline-getter default-getter default-ensurer walks
+              guard names reducer))
+  methods)
+
+(defun rontolisp::%clojure-register-type-tag (tag)
+  "Register the record or deftype dispatch-tag keyword TAG, answering it
+   (what the constructors' defun answers, so a definition answers what it
+   answered before the registry existed)."
+  (setf (gethash tag rontolisp::%clojure-protocol-type-tags) t)
+  tag)
+
+;; The class spellings an extend target resolves to, by kind (clojure/
+;; ClojureProtocolLowering, extendKeyForm): a class object or designator
+;; reads back as the keyword a class spelling stores, java.lang.Object is
+;; not in the map (the lowering special-cases it to the default) and is
+;; tested by its full name below.
+(defvar rontolisp::%clojure-extends-kind-names
+  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
+    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
+    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
+    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
+    ("Character" . "char") ("Char" . "char") ("Map" . "map")
+    ("IPersistentMap" . "map") ("Vector" . "vector")
+    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
+    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
+    ("Collection" . "list") ("IPersistentList" . "list")
+    ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
+    ("Function" . "function") ("Atom" . "atom"))
+  "Simple class names to the kind keyword spelling an extend target
+   stores under.")
+
+;; The instants' and the UUID's classes to the dispatch name an extend of
+;; one stores under (the class's own, but for Calendar, whose one class
+;; here is GregorianCalendar).
+(defvar rontolisp::%clojure-extends-time-names
+  '(("java.util.Date" . "java.util.Date")
+    ("java.sql.Timestamp" . "java.sql.Timestamp")
+    ("java.util.Calendar" . "java.util.GregorianCalendar")
+    ("java.util.GregorianCalendar" . "java.util.GregorianCalendar")
+    ("java.util.UUID" . "java.util.UUID"))
+  "Instant and UUID class names to the dispatch name an extend stores.")
+
+;; The clojure.java.io classes an extend target stores under its own name.
+(defvar rontolisp::%clojure-extends-io-names
+  '("java.io.File" "java.net.URL" "java.net.URI")
+  "java.io class names an extend stores under their own keyword.")
+
+;; The resolved class names whose kind-spelled target the lowering keys by
+;; the class's own name instead (an interface values of other kinds
+;; implement too, or an instant class): a run-time class of one refuses
+;; where it cannot decide, like the head call's walk it has not got.
+(defvar rontolisp::%clojure-extends-reaches
+  '("java.util.List" "java.util.Collection" "clojure.lang.Sequential"
+    "clojure.lang.IPersistentCollection" "clojure.lang.IFn" "java.util.Date"
+    "java.sql.Timestamp" "java.util.Calendar" "java.util.GregorianCalendar"
+    "java.util.UUID")
+  "Resolved class names an extend target keys by the class's own name.")
+
+;; The dotless spellings resolving to a clojure.lang class the kind tables
+;; name (the lowering's clojureLang leniency): a run-time class under one
+;; reads through the full name.
+(defvar rontolisp::%clojure-extends-dotless-names
+  '(("Atom" . "clojure.lang.Atom") ("Fn" . "clojure.lang.Fn")
+    ("IFn" . "clojure.lang.IFn")
+    ("IPersistentCollection" . "clojure.lang.IPersistentCollection")
+    ("IPersistentList" . "clojure.lang.IPersistentList")
+    ("IPersistentMap" . "clojure.lang.IPersistentMap")
+    ("IPersistentSet" . "clojure.lang.IPersistentSet")
+    ("IPersistentVector" . "clojure.lang.IPersistentVector")
+    ("Keyword" . "clojure.lang.Keyword")
+    ("Sequential" . "clojure.lang.Sequential")
+    ("Symbol" . "clojure.lang.Symbol"))
+  "Dotless class names to their clojure.lang class.")
+
+(defun rontolisp::%clojure-extends-class-name (x)
+  "The class name X, a class object or designator, spells, or nil: a class
+   designator's name, else a host class object's (nil where no host object
+   can exist, so only the designator decides there)."
+  (if (and (consp x) (eq (car x) :C%CLASS) (consp (cdr x))
+           (stringp (car (cdr x))))
+      (car (cdr x))
+      (rontolisp::%clojure-host-class-name x)))
+
+(defun rontolisp::%clojure-extends-simple-name (name)
+  "NAME past its last dot: the simple name a class object or designator
+   spells."
+  (let ((dot (position #\. name :from-end t)))
+    (if dot (subseq name (+ dot 1)) name)))
+
+(defun rontolisp::%clojure-extends-walked (name)
+  "NAME through the dotless leniency: its clojure.lang class where one
+   answers, else itself."
+  (if (position #\. name)
+      name
+      (let ((full
+             (cdr
+              (assoc name rontolisp::%clojure-extends-dotless-names
+                     :test #'equal))))
+        (if full full name))))
+
+(defun rontolisp::%clojure-extends-key (x)
+  "The methods-table key a run-time type value X reads: nil to the nil
+   keyword (no table keys on nil, like the dispatcher's own mapping), a
+   class keyword to the keyword a class spelling stores (:object to the
+   default marker), a class object or designator the same way -- what the
+   head call's mapping answers. Anything but a class object, a designator
+   or a class keyword is the oracle's cast failure."
+  (cond ((null x) (list :c%keyword "nil"))
+        ((rontolisp::%clojure-keyword-p x)
+         (rontolisp::%clojure-extends-spelling (car (cdr x)) x))
+        (t (let ((name (rontolisp::%clojure-extends-class-name x)))
+             (if (null name)
+                 (rontolisp::%clojure-host-cast-failure x "java.lang.Class")
+                 (rontolisp::%clojure-extends-named name))))))
+
+(defun rontolisp::%clojure-extends-spelling (spelling x)
+  "The methods-table key the class keyword of SPELLING reads: itself for a
+   tag, a kind, an instant, a java.io name or a nil, its kind for a class
+   keyword, the keyword a class spelling stores for any other dotted
+   class name. A dotless spelling naming none of those is no class, like
+   the oracle's cast of it."
+  (cond ((equal spelling "object") :default)
+        ((or (gethash x rontolisp::%clojure-protocol-type-tags)
+          (member spelling
+                  '("string" "number" "boolean" "keyword" "symbol" "char" "map"
+                    "vector" "set" "list" "function" "atom" "nil" "reify"
+                    "pattern" "matcher")
+                  :test #'equal)
+          (assoc spelling rontolisp::%clojure-extends-time-names :test #'equal)
+          (member spelling rontolisp::%clojure-extends-io-names :test #'equal))
+         x)
+        ;; a class value's keyword reads back as its kind, like the type
+        ;; designator does for the dispatcher's method table
+        ((cdr
+          (assoc spelling rontolisp::%clojure-type-class-names :test #'equal))
+         (list :c%keyword (cdr
+                           (assoc spelling rontolisp::%clojure-type-class-names
+                                  :test #'equal))))
+        ((position #\. spelling) (rontolisp::%clojure-extends-named spelling))
+        (t (rontolisp::%clojure-host-cast-failure x "java.lang.Class"))))
+
+(defun rontolisp::%clojure-extends-named (name)
+  "The methods-table key the resolved class NAME reads: the keyword a
+   class spelling stores -- the default marker for java.lang.Object, its
+   own keyword where the lowering keys it so, else the kind keyword."
+  (cond ((equal name "java.lang.Object") :default)
+        ((member name rontolisp::%clojure-extends-io-names :test #'equal)
+         (list :c%keyword name))
+        (t
+         (let ((kind
+                (or (cdr
+                     (assoc (rontolisp::%clojure-extends-simple-name name)
+                            rontolisp::%clojure-extends-kind-names
+                            :test #'equal))
+                    (cdr
+                     (assoc name rontolisp::%clojure-extends-time-names
+                            :test #'equal))
+                    (if (equal name "clojure.lang.BigInt") "number"))))
+           (if (and kind
+                    (not
+                     (member (rontolisp::%clojure-extends-walked name)
+                             rontolisp::%clojure-extends-reaches
+                             :test #'equal)))
+               (list :c%keyword kind)
+               (list :c%keyword (rontolisp::%clojure-extends-walked name)))))))
+
+(defun rontolisp::%clojure-satisfies (p x)
+  "satisfies? of the run-time protocol value P over X: the tag's row, the
+   inline table's first where the protocol is extend-via-metadata, the
+   walk behind the flag or the guard the registry settled, else the
+   Object default -- what the head call runs. A value the registry holds
+   no protocol for is the oracle's NullPointerException."
+  (let ((record (gethash p rontolisp::%clojure-protocols)))
+    (if (null record)
+        (rontolisp::%clojure-null-pointer-exception
+         "Cannot invoke \"java.lang.Class.isInstance(Object)\" because \"c\" is null")
+        (let* ((methods (funcall (car record)))
+               (inline-getter (car (cdr record)))
+               (default (funcall (car (cdr (cdr record)))))
+               (walks (car (cdr (cdr (cdr (cdr record))))))
+               (guard (car (cdr (cdr (cdr (cdr (cdr record)))))))
+               (tag (c%protocol-tag x))
+               (miss (list nil))
+               (inner (gethash tag methods miss)))
+          (if inline-getter
+              (let ((direct (gethash tag (funcall inline-getter) miss)))
+                (if (eq direct miss) nil (setq inner direct))))
+          (if (and (eq inner miss) (or walks (and guard (funcall guard x))))
+              (setq inner (c%protocol-super x methods nil miss)))
+          (if (eq inner miss)
+              (if (null default) rontolisp::%clojure-false t)
+              t)))))
+
+(defun rontolisp::%clojure-extends-p (p x)
+  "extends? of the run-time protocol value P over the run-time type X:
+   the key's row, the inline table's too, else the Object default -- what
+   the head call runs. A value the registry holds no protocol for is the
+   oracle's NullPointerException."
+  (let ((record (gethash p rontolisp::%clojure-protocols)))
+    (if (null record)
+        (rontolisp::%clojure-null-pointer-exception
+         "Cannot invoke \"java.lang.Class.isAssignableFrom(java.lang.Class)\"")
+        (let* ((methods (funcall (car record)))
+               (inline-getter (car (cdr record)))
+               (default (funcall (car (cdr (cdr record)))))
+               (key (rontolisp::%clojure-extends-key x))
+               (miss (list nil)))
+          (if (eq key :default)
+              (if (null default) rontolisp::%clojure-false t)
+              (let ((inner (gethash key methods miss)))
+                (if (and (eq inner miss) inline-getter)
+                    (setq inner (gethash key (funcall inline-getter) miss)))
+                (if (eq inner miss) rontolisp::%clojure-false t)))))))
+
+(defun rontolisp::%clojure-extend-method (methods key method fn reducer typed)
+  "Stores FN under METHOD of KEY's row in the methods TABLE, through the
+   reducing row where TYPED names one -- the row a literal extend stores."
+  (if (and typed reducer)
+      (funcall reducer methods key fn)
+      (let* ((miss (list nil)) (inner (gethash key methods miss)))
+        (if (eq inner miss)
+            (progn
+              (setq inner (make-hash-table :test 'equal))
+              (setf (gethash key methods) inner)))
+        (setf (gethash method inner) fn))))
+
+(defun rontolisp::%clojure-extend (args)
+  "extend of the run-time type over ARGS' protocol and method-map pairs:
+   each pair in order, a trailing odd entry dropped -- what the head call
+   runs. A pair whose protocol the registry holds none of is the oracle's
+   IllegalArgumentException, a method map that is no map ignored, and an
+   entry naming no method of the protocol never stored; anything else
+   stores its row, answering nil like the oracle."
+  (if (null args)
+      (rontolisp::%clojure-fn-arity-error 0 "clojure.core/extend")
+      (let ((key (rontolisp::%clojure-extends-key (car args)))
+            (pairs (cdr args)))
+        (do ((rest pairs (cdr (cdr rest))))
+            ((or (null rest) (null (cdr rest))) nil)
+          (let* ((proto (car rest))
+                 (mmap (car (cdr rest)))
+                 (record (gethash proto rontolisp::%clojure-protocols)))
+            (if (null record)
+                (rontolisp::%clojure-illegal-argument-exception
+                 (concatenate 'string (rontolisp::%clojure-str-of proto "" nil)
+                              " is not a protocol"))
+                (if (or (hash-table-p mmap) (rontolisp::%clojure-record-p mmap)
+                        (rontolisp::%clojure-sorted-p mmap))
+                    (let ((methods (funcall (car record)))
+                          (ensurer (car (cdr (cdr (cdr record)))))
+                          (names
+                           (car (cdr (cdr (cdr (cdr (cdr (cdr record))))))))
+                          (reducer
+                           (car
+                            (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))
+                          (typed
+                           (and (consp key)
+                                (gethash key
+                                 rontolisp::%clojure-protocol-type-tags))))
+                      (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+                        (let ((k (car e)))
+                          (if (and (rontolisp::%clojure-keyword-p k)
+                                   (member (car (cdr k)) names :test #'equal))
+                              (if (eq key :default)
+                                  (setf (gethash k (funcall ensurer)) (cdr e))
+                                  (rontolisp::%clojure-extend-method methods key
+                                   k (cdr e) reducer typed)))))))))))))
+
 ;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
 ;;
 ;; A protocol var holds its method table (a tag to its row of method keyword

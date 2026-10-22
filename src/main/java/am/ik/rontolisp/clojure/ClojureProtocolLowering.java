@@ -251,10 +251,12 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * The protocol runtime of a lowering: with the walk where a dispatcher walks (a
-	 * protocol extended to a walked class, or a session).
+	 * protocol extended to a walked class, or a session), or a protocol value arm may
+	 * consult it.
 	 */
 	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
-		return protocolRuntime(ctx, ctx.session || !ctx.walkingProtocols.isEmpty() || guardsReachable(ctx));
+		return protocolRuntime(ctx,
+				ctx.session || !ctx.walkingProtocols.isEmpty() || ctx.usedProtocolValues || guardsReachable(ctx));
 	}
 
 	/**
@@ -736,7 +738,91 @@ final class ClojureProtocolLowering {
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, name)), def.methodsVar()));
 		ctx.usedProtocols = true;
+		// the value arms resolve the protocol's tables through the registry: the
+		// record holds getters over the globals (a re-executed defprotocol rebinds
+		// them, and the getters read the new ones like the calls do) and an
+		// ensurer over the default, the walk flag and the guard the final pass
+		// settled, the method names an extend entry must keyword-name and the
+		// reducing row writer, so a captured old table reads what it reads like
+		// the calls do; the store answers the table (what the protocol's setq
+		// answers), so the definition answers what it answered before the
+		// registry existed
+		forms.add(registerProtocol(ctx, def));
 		return forms;
+	}
+
+	/**
+	 * The registry store of a {@code defprotocol}: the record beside the protocol's
+	 * methods table, answering the table.
+	 * @param ctx the hub
+	 * @param def the protocol
+	 * @return the register call
+	 */
+	static LispVal registerProtocol(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
+		List<LispVal> names = new ArrayList<>();
+		// sorted: the emitted program is the same on every lowering
+		for (String name : new TreeSet<>(def.methods())) {
+			names.add(LispString.literal(name));
+		}
+		LispVal guard = guardClosure(ctx, def);
+		return ClojureLowerUtil.list(new LispSymbol(REGISTER_PROTOCOL), def.methodsVar(), getter(def.methodsVar()),
+				def.inlineVar() == null ? ClojureLowering.NIL_CONST : getter(def.inlineVar()), getter(def.defaultVar()),
+				ensurer(def.defaultVar()), walks(ctx, def) ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST,
+				guard == null ? ClojureLowering.NIL_CONST : guard, ctx.quote(ClojureLowerUtil.list(names)),
+				def.reducerRow() == null ? ClojureLowering.NIL_CONST : new LispSymbol(def.reducerRow()));
+	}
+
+	/**
+	 * A getter over a protocol global: the zero-argument closure the registry record
+	 * reads the current table through.
+	 * @param global the methods, inline or default global
+	 * @return the getter
+	 */
+	private static LispVal getter(LispSymbol global) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), global);
+	}
+
+	/**
+	 * An ensurer over a protocol's default global: the zero-argument closure the registry
+	 * record makes the {@code Object} table through on the first {@code extend} to
+	 * {@code Object}, answering it (what the head call's store reads).
+	 * @param global the default global
+	 * @return the ensurer
+	 */
+	private static LispVal ensurer(LispSymbol global) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("or"), global,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), global, ClojureCollectionLowering.makeTable())));
+	}
+
+	/**
+	 * The guard closure the registry record carries: the interfaces' own tests over the
+	 * value, like the head call's guard ({@link #interfaceGuard}) but as a function of
+	 * the run-time value; null where the head asks none (or the protocol walks, which
+	 * answers without one).
+	 * @param ctx the hub
+	 * @param def the protocol
+	 * @return the closure, or null
+	 */
+	private static @Nullable LispVal guardClosure(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
+		if (walks(ctx, def)) {
+			return null;
+		}
+		Set<String> tests = ctx.interfaceGuards.get(def.methodsVar().name());
+		if (tests == null || tests.isEmpty()) {
+			return null;
+		}
+		LispSymbol value = ctx.freshTemp();
+		List<LispVal> disjuncts = new ArrayList<>();
+		for (String test : new TreeSet<>(tests)) {
+			disjuncts.add(ClojureLowerUtil.list(new LispSymbol(test), value));
+		}
+		// an if around the disjunction, like the head call's guard: the arm
+		// strip folds a test away, and a guard of nothing folded answers nil
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(value)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), disjuncts), ClojureLowering.TRUE_CONST,
+						ClojureLowering.NIL_CONST));
 	}
 
 	/**
@@ -1593,6 +1679,11 @@ final class ClojureProtocolLowering {
 		}
 		TypeBody body = typeBody(ctx, rest, what);
 		List<LispVal> forms = new ArrayList<>();
+		// the value arms read a run-time type back as a typed key through the
+		// tag registry: the tag beside the constructors, answering the tag
+		// (what the constructors' defuns answer), so the definition answers
+		// what it answered before the registry existed
+		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(name)));
 		forms.add(positionalCtor(ctx, name, def));
 		if (record) {
 			forms.add(mapCtor(ctx, name, def));
@@ -1823,6 +1914,36 @@ final class ClojureProtocolLowering {
 
 	/** The protocol runtime's read of one row of a protocol's table. */
 	static final String PROTOCOL_ROW = "C%PROTOCOL-ROW";
+
+	/**
+	 * The run-time registry a {@code defprotocol} registers its tables beside its methods
+	 * table in ({@code clojure.lisp}): an {@code eq} table from the table to its record.
+	 * The three value arms resolve the table they are handed through it, running what the
+	 * calls run (g42).
+	 */
+	static final String PROTOCOL_REGISTRY = "RONTOLISP::%CLOJURE-PROTOCOLS";
+
+	/** The registry store ({@code clojure.lisp}), answering the methods table. */
+	static final String REGISTER_PROTOCOL = "RONTOLISP::%CLOJURE-REGISTER-PROTOCOL";
+
+	/**
+	 * The run-time set of record and deftype dispatch tags ({@code clojure.lisp}): an
+	 * {@code equal} table from the tag keyword to {@code T}. A run-time type value reads
+	 * back as a typed key through it.
+	 */
+	static final String TYPE_TAGS = "RONTOLISP::%CLOJURE-PROTOCOL-TYPE-TAGS";
+
+	/** The tag store ({@code clojure.lisp}), answering the tag. */
+	static final String REGISTER_TAG = "RONTOLISP::%CLOJURE-REGISTER-TYPE-TAG";
+
+	/** {@code satisfies?} of a protocol value ({@code clojure.lisp}). */
+	static final String SATISFIES_CALL = "RONTOLISP::%CLOJURE-SATISFIES";
+
+	/** {@code extends?} of a protocol value and a type value ({@code clojure.lisp}). */
+	static final String EXTENDS_CALL = "RONTOLISP::%CLOJURE-EXTENDS-P";
+
+	/** {@code extend} of a type value and its pairs ({@code clojure.lisp}). */
+	static final String EXTEND_CALL = "RONTOLISP::%CLOJURE-EXTEND";
 
 	/**
 	 * The variable a dispatcher guarding its walk ({@link #interfaceGuard}) binds the
@@ -2406,47 +2527,57 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * {@code satisfies?} as a value: the protocol arrives as a run-time value, but only
-	 * the literal name the call names reads its tables, so only the call's shape runs --
-	 * anything else refuses at run time. The count is checked first, in the call's words.
+	 * {@code satisfies?} as a value: over the run-time protocol value (its methods table)
+	 * and a value, like the call -- the tag's row, the inline table's first where the
+	 * protocol is extend-via-metadata, the walk behind the registry's flag or guard, else
+	 * the {@code Object} default. A value the registry holds no protocol for is the
+	 * oracle's {@code NullPointerException}, like the call of a non-protocol. The count
+	 * is checked first, in the oracle's words.
+	 * @param ctx the hub
 	 * @return the value form
 	 */
-	static LispVal satisfiesValue() {
+	static LispVal satisfiesValue(ClojureLowering ctx) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("satisfies-args"));
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
-							ClojureRefusals.UNSUPPORTED_OPERATION,
-							LispString.literal("satisfies? of a computed protocol is not supported"
-									+ " at run time: only a literal protocol name satisfies, where the call stands")),
-						ClojureRefusals.refusal(ClojureRefusals.ARITY,
-								LispString.literal("satisfies? takes a protocol and a value"))));
+		LispSymbol protocol = new LispSymbol(ClojureLowering.mangle("satisfies-protocol"));
+		LispSymbol value = new LispSymbol(ClojureLowering.mangle("satisfies-value"));
+		return ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(
+									2)),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+									ClojureLowerUtil.list(List.of(
+											ClojureLowerUtil.list(protocol,
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+											ClojureLowerUtil.list(value,
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args)))),
+									ClojureLowerUtil.list(new LispSymbol(SATISFIES_CALL), protocol, value)),
+							ClojureLowerUtil.list(new LispSymbol(ClojureBindingLowering.FN_ARITY_ERROR), count,
+									LispString.literal("clojure.core/satisfies?"))));
 	}
 
 	/**
-	 * {@code extend} as a value: the type and the protocols arrive as run-time values,
-	 * but only the literal names the call names extend their tables, so only the call's
-	 * shape runs -- anything else refuses at run time. The count is checked first, in the
-	 * call's words.
+	 * {@code extend} as a value: over the run-time type and its protocol and method-map
+	 * pairs, like the call -- each pair in order, a trailing odd entry dropped, answering
+	 * nil. A pair whose protocol the registry holds none of is the oracle's
+	 * {@code IllegalArgumentException}, a method map that is no map ignored, and an entry
+	 * naming no method of the protocol never stored; a type or method map that is no
+	 * class or no map is the oracle's cast failure or ignored, like the call. Only the
+	 * missing type checks the count, in the oracle's words -- any other count runs, like
+	 * the oracle.
+	 * @param ctx the hub
 	 * @return the value form
 	 */
-	static LispVal extendValue() {
+	static LispVal extendValue(ClojureLowering ctx) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("extend-args"));
-		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		LispVal odd = ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("mod"), count, new LispInteger(2)), new LispInteger(1));
-		LispVal shape = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(3)), odd);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), shape, ClojureRefusals.refusal(
-						ClojureRefusals.UNSUPPORTED_OPERATION,
-						LispString.literal("extend of a computed type or protocol is not supported"
-								+ " at run time: only literal type and protocol names extend, where the call stands")),
-						ClojureRefusals.refusal(ClojureRefusals.ARITY, LispString.literal(
-								"extend takes a type, then a protocol and a map of methods, any number of times"))));
+				ClojureLowerUtil.list(new LispSymbol(EXTEND_CALL), args));
 	}
 
 	/**

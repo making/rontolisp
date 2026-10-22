@@ -337,26 +337,37 @@ final class ClojurePredicateLowering {
 	}
 
 	/**
-	 * {@code extends?} as a value: the protocol and the type arrive as run-time values,
-	 * but only the literal names the call names read their tables, so only the call's
-	 * shape runs -- anything else refuses at run time. The count is checked first, in the
-	 * call's words -- the call uses the oracle's arity wording, so the value reports the
-	 * same through the run-time arity worker.
+	 * {@code extends?} as a value: over the run-time protocol value (its methods table)
+	 * and the run-time type, like the call -- the key's row, the inline table's too, else
+	 * the {@code Object} default. A value the registry holds no protocol for is the
+	 * oracle's {@code NullPointerException}, like the call of a non-protocol; a type that
+	 * is no class is the oracle's {@code ClassCastException}. The count is checked first,
+	 * in the oracle's words.
 	 * @param ctx the hub
 	 * @return the value form
 	 */
 	private static LispVal extendsValue(ClojureLowering ctx) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("extends-args"));
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(2)),
-						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
-								LispString.literal("extends? of a computed protocol and type is not supported"
-										+ " at run time: only literal names extend, where the call stands")),
-						ClojureLowerUtil.list(new LispSymbol(ClojureBindingLowering.FN_ARITY_ERROR), count,
-								LispString.literal("clojure.core/extends?"))));
+		LispSymbol protocol = new LispSymbol(ClojureLowering.mangle("extends-protocol"));
+		LispSymbol type = new LispSymbol(ClojureLowering.mangle("extends-type"));
+		return ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(
+									2)),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+									ClojureLowerUtil.list(List.of(
+											ClojureLowerUtil.list(protocol,
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+											ClojureLowerUtil.list(type,
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args)))),
+									ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.EXTENDS_CALL),
+											protocol, type)),
+							ClojureLowerUtil.list(new LispSymbol(ClojureBindingLowering.FN_ARITY_ERROR), count,
+									LispString.literal("clojure.core/extends?"))));
 	}
 
 	/**

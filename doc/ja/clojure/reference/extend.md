@@ -7,7 +7,9 @@
 ます。マップリテラルの行は書いたとおりに格納され、プログラムが計算するマップ
 （`(assoc clojure.java.io/default-streams-impl ...)`、それを持つ var）はフォームの実行時に
 エントリごとに格納されます。プロトコルのメソッドを指さないエントリはオラクル同様に除かれます。
-型に `Object` を渡すと `extend-protocol` 同様外れ既定になります。
+型に `Object` を渡すと `extend-protocol` 同様外れ既定になります。値として
+（`(def e extend)` を適用するなど）使う場合も、実行時の型とそのプロトコル・
+メソッドマップのペアが同じ行を順に格納し、nil を答えます。
 
 ```clojure
 (defprotocol P (m [x]))

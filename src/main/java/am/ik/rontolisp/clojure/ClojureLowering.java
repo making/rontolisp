@@ -1323,6 +1323,14 @@ public final class ClojureLowering {
 	 */
 	boolean usedProtocols;
 
+	/**
+	 * Whether the program takes {@code satisfies?}, {@code extends?} or {@code extend} as
+	 * a value: the protocol runtime's walk is spliced in once, behind the false binding,
+	 * so a value arm consulting the walk past an exact miss finds it even where no head
+	 * call walks.
+	 */
+	boolean usedProtocolValues;
+
 	/** Whether the protocol runtime was already spliced in (files splice it inline). */
 	boolean protocolsEmitted;
 
@@ -5492,8 +5500,8 @@ public final class ClojureLowering {
 			case "remove-method" -> ClojureDispatchLowering.removeMethodValue();
 			case "methods" -> ClojureDispatchLowering.methodsValue();
 			case "instance?" -> ClojureDispatchLowering.instanceValue(this);
-			case "satisfies?" -> ClojureProtocolLowering.satisfiesValue();
-			case "extend" -> ClojureProtocolLowering.extendValue();
+			case "satisfies?" -> ClojureProtocolLowering.satisfiesValue(this);
+			case "extend" -> ClojureProtocolLowering.extendValue(this);
 			case "await" -> ClojureStateLowering.awaitValue(this);
 			case "await-for" -> ClojureStateLowering.awaitForValue(this);
 			case "ensure" -> ClojureStateLowering.ensureValue(this);

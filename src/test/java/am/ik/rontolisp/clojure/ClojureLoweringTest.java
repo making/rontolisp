@@ -1322,9 +1322,6 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x prefer-method)")).contains("of a computed multimethod");
 		assertThat(lowered("(def x prefers)")).contains("of a computed multimethod");
 		assertThat(lowered("(def x remove-all-methods)")).contains("of a computed multimethod");
-		assertThat(lowered("(def x satisfies?)")).contains("of a computed protocol");
-		assertThat(lowered("(def x extends?)")).contains("of a computed protocol and type");
-		assertThat(lowered("(def x extend)")).contains("of a computed type or protocol");
 		assertThat(lowered("(def x load)")).contains("of a computed path");
 		assertThat(lowered("(def x push-thread-bindings)")).contains("what binding expands to");
 		assertThat(lowered("(def x pop-thread-bindings)")).contains("what binding expands to");
@@ -1350,6 +1347,23 @@ class ClojureLoweringTest {
 			.contains("(DEFUN |c%area|");
 		assertThatThrownBy(() -> Clojure.read("(get-method m)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("get-method takes a multimethod and a dispatch value");
+		// g42: the three protocol arms run what the calls run over the registry,
+		// with the oracle's arities -- a value the protocol registry holds no
+		// tables for is the oracle's NullPointerException, a type that is no
+		// class its ClassCastException, a pair whose protocol is none its
+		// IllegalArgumentException
+		assertThat(lowered("(def x satisfies?)")).contains("RONTOLISP::%CLOJURE-SATISFIES")
+			.contains("clojure.core/satisfies?");
+		assertThat(lowered("(def x extends?)")).contains("RONTOLISP::%CLOJURE-EXTENDS-P")
+			.contains("clojure.core/extends?");
+		assertThat(lowered("(def x extend)")).contains("RONTOLISP::%CLOJURE-EXTEND");
+		// g42: a defprotocol registers its tables beside the methods table, and
+		// answers the table (what the bare setq answers); a defrecord registers
+		// its tag beside the constructors, answering the tag
+		assertThat(lowered("(defprotocol P (foo [x]))")).contains("RONTOLISP::%CLOJURE-REGISTER-PROTOCOL")
+			.contains("(SETQ |c%P| |c%P%methods|)");
+		assertThat(lowered("(defrecord R [a])")).contains("RONTOLISP::%CLOJURE-REGISTER-TYPE-TAG")
+			.contains("DEFUN |c%->R|");
 		assertThatThrownBy(() -> Clojure.read("(extends? p)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/extends?");
 	}
@@ -1561,11 +1575,12 @@ class ClojureLoweringTest {
 		assertThat(record).contains(
 				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%KEYWORD \"R\")");
 		// the namespace's own nil and Object rows, a core kind and any other protocol
-		// store as before
+		// store as before (the defprotocol registration names the reducing row
+		// writer, so only the store calls are asserted)
 		String core = lowered("(require '[clojure.core.protocols :as p])"
 				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
 				+ " (defprotocol Q (m [x])) (reify Q (m [_] 1))");
-		assertThat(core).doesNotContain("%CLOJURE-COLL-REDUCER-ROW").doesNotContain("%CLOJURE-KV-REDUCER-ROW");
+		assertThat(core).doesNotContain("(%CLOJURE-COLL-REDUCER-ROW").doesNotContain("(%CLOJURE-KV-REDUCER-ROW");
 	}
 
 	@Test
@@ -4851,7 +4866,7 @@ class ClojureLoweringTest {
 			assertThatThrownBy(() -> Clojure.read("(" + name + " 1 2)", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/" + name);
 		}
-		assertThat(lowered("(map extends? [])")).contains("of a computed protocol and type");
+		assertThat(lowered("(map extends? [])")).contains("RONTOLISP::%CLOJURE-EXTENDS-P");
 	}
 
 	@Test

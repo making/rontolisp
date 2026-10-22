@@ -7,7 +7,9 @@ rows `extend-protocol` stores, for use when the implementations already exist as
 values. A map literal's rows are stored as written; a map the program computes
 (`(assoc clojure.java.io/default-streams-impl ...)`, a var holding one) is stored entry
 by entry when the form runs, an entry naming no method of the protocol left out, like
-the oracle. `Object` as the type installs the miss default, like `extend-protocol`.
+the oracle. `Object` as the type installs the miss default, like `extend-protocol`. As
+a value (`(def e extend)` applied, or higher-order) the run-time type and its protocol
+and method-map pairs install the same rows in order, answering nil.
 
 ```clojure
 (defprotocol P (m [x]))

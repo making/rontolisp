@@ -6,7 +6,8 @@ Whether the protocol reaches `x`: the tag's row, the row of a class `x` extends 
 implements (an extension to `Throwable` satisfies for an `ex-info`), or the `Object` row
 an extension installed, like the oracle. A record, deftype or `reify` whose body names the protocol
 satisfies it, with methods or none. The protocol is a literal name, like `defmethod`'s
-multimethod.
+multimethod; as a value (`(def sat satisfies?)` applied, or higher-order) the
+run-time protocol value reads the same tables.
 
 ```clojure
 (defprotocol P (m [x]))

@@ -246,6 +246,22 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   calls. A function holding no registered multimethod still refuses there, and
   a hierarchy or default fallback `get-method` skips stays shared with the head
   call.
+- `satisfies?` takes the protocol's name and a value, `extends?` the protocol's and
+  the type's names, `extend` the type's name and then a protocol and a method map any
+  number of times: a local bound to a protocol or a type is refused at lowering. As
+  values they check the argument count in the oracle's words, then read the run-time
+  registry the `defprotocol` populates beside the methods table, running what the calls
+  run: `satisfies?` the tag's row, the inline table's first, the walk behind the
+  registry's flag or guard, else the `Object` default; `extends?` the key's row, the
+  inline table's too, else the default; `extend` each protocol and method-map pair in
+  order (a trailing odd entry dropped), answering nil. A value the registry holds no
+  protocol for is the oracle's `NullPointerException`, a type that is no class its
+  `ClassCastException` (without the JVM's module tail), a pair whose protocol is none
+  its `IllegalArgumentException`. Where the head already deviates, the value mirrors
+  the head: `nil` answers the `Object` default where the oracle answers false, an
+  `extend` installs its rows merged with the existing ones where the oracle replaces
+  the type's map, and non-map method maps and entries naming no method are ignored;
+  an interface-walk second row needs a literal `extend`.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
