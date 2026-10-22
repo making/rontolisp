@@ -25,6 +25,7 @@
   agenda
   logo
   url
+  progress
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -34,7 +35,8 @@
 ;;; line under the title of the title slide: the author, the date and the URL. STEPS
 ;;; lists what a page advance reveals, in source order (stepped items, code blocks with
 ;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS). MORPH
-;;; is the :morph option: its first code block changes from the previous slide's.
+;;; is the :morph option: its first code block changes from the previous slide's. SOURCE
+;;; holds the inline content of its (source ...) line, SOURCE-RUN its run.
 (defstruct slide
   number
   line
@@ -52,7 +54,9 @@
   meta
   steps
   (step-count 0)
-  morph)
+  morph
+  source
+  source-run)
 
 ;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
 (defstruct para inlines run lead)
@@ -94,9 +98,11 @@
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
 ;;; A diagram drawn from an S-expression. KIND is :flow, boxes joined by arrows, whose
-;;; LABELS hold each box's inline content and RUNS their runs; or :cells, the
-;;; box-and-pointer drawing of the list DATUM. SIZE is the label size and DRAWING the
-;;; shapes (diagram.lisp), both set when the slide is fitted.
+;;; LABELS hold each box's inline content and RUNS their runs; :bars, a horizontal bar
+;;; per label, DATUM listing each bar's (VALUE TEXT), the value a rational and the text it
+;;; is written with, its unit included; or :cells, the box-and-pointer drawing of the list
+;;; DATUM. SIZE is the label size and DRAWING the shapes (diagram.lisp), both set when the
+;;; slide is fitted.
 (defstruct diagram kind labels runs datum size drawing)
 ;;; Consecutive columns of a slide, side by side in one row; WIDTHS is set when the slide
 ;;; is fitted.
@@ -601,6 +607,95 @@ them for a box of mixed inline content."
                                    (length labels) *flow-boxes*)))
         (make-diagram :kind :flow :labels labels))))))
 
+(defparameter *bar-rows*
+  7
+  "A bar chart of more bars than this is reported, as a table of more rows is.")
+
+(defun bar-value (x)
+  "The value X stands for as a bar's value, a rational of 0 or more, and the text it is
+written with: an integer, or a decimal written as a string (\"2.1\", \"1,840\"), so no
+float printing reaches the output. Nil for anything else."
+  (cond ((and (integerp x) (>= x 0)) (values x (format nil "~d" x)))
+        ((stringp x)
+         (let* ((s (string-trim " " x))
+                (n (length s))
+                (i 0)
+                (whole 0)
+                (frac 0)
+                (scale 1)
+                (digits 0))
+           (loop while (and (< i n)
+                            (or (digit-char-p (char s i))
+                                (and (char= (char s i) #\,) (> digits 0))))
+                 do
+                   (let ((d (digit-char-p (char s i))))
+                     (when d
+                       (setf whole (+ (* whole 10) d))
+                       (incf digits)))
+                   (incf i))
+           (when (and (< (1+ i) n) (char= (char s i) #\.) (> digits 0))
+             (incf i)
+             (loop while (and (< i n) (digit-char-p (char s i)))
+                   do
+                     (setf frac (+ (* frac 10) (digit-char-p (char s i)))
+                           scale (* scale 10))
+                     (incf i)))
+           (if (and (> digits 0) (= i n))
+               (values (+ whole (/ frac scale)) s)
+               nil)))
+        (t nil)))
+
+(defun parse-bars (form)
+  "A diagram from (bars [:unit \"s\"] (label value)...): a horizontal bar per row, as
+long as its value's share of the largest. A label is a string, an inline form or a list
+of them; the unit is written after every value as it is."
+  (multiple-value-bind (opts body) (split-options (cdr form) '("UNIT") "bars")
+    (let ((unit (or (string-option opts "UNIT" "bars") ""))
+          (labels nil)
+          (data nil))
+      (loop while body
+            do
+              (let ((row (pop body)))
+                (cond ((keywordp row)
+                       (report :error "the options of (bars ...) come before its bars")
+                       (pop body))
+                      ((not (and (consp row) (not (form-tag row)) (consp (cdr row))
+                                 (null (cddr row))))
+                       (report :error "a bar is a list of its label and its value"))
+                      (t
+                       (let ((nodes
+                              (if (and (consp (car row)) (not (form-tag (car row))))
+                                  (parse-inlines (car row))
+                                  (parse-inline (car row)))))
+                         (multiple-value-bind (value text) (bar-value (cadr row))
+                           (cond ((null value)
+                                  (report :error
+                                          (if (floatp (cadr row))
+                                              "a bar's value is a float; write it as a string, such as \"2.1\""
+                                              "a bar's value is an integer or a decimal string of 0 or more")))
+                                 (nodes
+                                  (push nodes labels)
+                                  (push (list value (concatenate 'string text unit))
+                                        data)))))))))
+      (cond ((null labels)
+             (report :error "(bars ...) needs at least one bar")
+             nil)
+            (t
+             (when (> (length labels) *bar-rows*)
+               (report :warning (format nil
+                                        "a bar chart of ~d bars is hard to read; keep it to ~d"
+                                        (length labels) *bar-rows*)))
+             (make-diagram :kind :bars
+                           :labels (nreverse labels)
+                           :datum (nreverse data)))))))
+
+(defun diagram-name (b)
+  "What diagnostics call the diagram B."
+  (case (diagram-kind b)
+    (:flow "flow")
+    (:bars "bar chart")
+    (t "cells drawing")))
+
 (defun conses-within-p (x limit)
   "True when X holds at most LIMIT conses."
   (let ((n 0))
@@ -648,11 +743,11 @@ quoted or not."
 
 (defun diagram-label-texts (b)
   "The text of each label of the diagram B, in the order :at searches them: the boxes of
-a flow, the atoms of cells as printed."
-  (if (eq (diagram-kind b) :flow)
+a flow, the bars of a bar chart, the atoms of cells as printed."
+  (if (eq (diagram-kind b) :cells)
+      (datum-atoms (diagram-datum b))
       (mapcar (lambda (nodes) (values (flatten-inlines nodes nil)))
-              (diagram-labels b))
-      (datum-atoms (diagram-datum b))))
+              (diagram-labels b))))
 
 (defun label-index (texts at)
   "The index of the label AT names among TEXTS: the first equal to it, else the first
@@ -661,7 +756,7 @@ holding it; nil when none does."
       (position-if (lambda (s) (search at s)) texts)))
 
 (defparameter *anchor-blocks*
-  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE" "FLOW" "CELLS")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -692,10 +787,7 @@ callout points at, or else a paragraph holding it as inline content."
                     (null (label-index (diagram-label-texts b) (callout-at c))))
                    (report :error (format nil
                                    "the :at text ~s is not a label of the ~a"
-                                   (callout-at c)
-                                   (if (eq (diagram-kind b) :flow)
-                                       "flow"
-                                       "cells")))
+                                   (callout-at c) (diagram-name b)))
                    (setf (callout-at c) nil)))
             (when b
               (setf (callout-target c) b)
@@ -719,9 +811,13 @@ callout points at, or else a paragraph holding it as inline content."
                  ((equal tag "COLUMN") (parse-column x in-column))
                  ((equal tag "FLOW") (parse-flow x))
                  ((equal tag "CELLS") (parse-cells x))
+                 ((equal tag "BARS") (parse-bars x))
                  ((inline-tag-p tag) (make-para :inlines (parse-inline x)))
                  ((equal tag "LI")
                   (report :error "(li ...) belongs in (ul ...) or (ol ...)")
+                  nil)
+                 ((equal tag "SOURCE")
+                  (report :error "(source ...) belongs in (slide ...) itself")
                   nil)
                  (t
                   (report :error (format nil "unknown element ~a"
@@ -761,13 +857,18 @@ callout points at, or else a paragraph holding it as inline content."
            (*callouts* nil)
            (*steps* nil)
            (blocks nil)
-           (notes nil))
+           (notes nil)
+           (source nil))
       (dolist (x body)
-        (if (equal (form-tag x) "NOTES")
-            (if (every #'stringp (cdr x))
-                (push (apply #'concatenate 'string (cdr x)) notes)
-                (report :error "(notes ...) takes strings only"))
-            (let ((b (parse-block x))) (when b (push b blocks)))))
+        (cond ((equal (form-tag x) "NOTES")
+               (if (every #'stringp (cdr x))
+                   (push (apply #'concatenate 'string (cdr x)) notes)
+                   (report :error "(notes ...) takes strings only")))
+              ((equal (form-tag x) "SOURCE")
+               (if source
+                   (report :error "a slide holds one (source ...)")
+                   (setf source (parse-source x))))
+              (t (let ((b (parse-block x))) (when b (push b blocks))))))
       (let ((i 0))
         (dolist (c (reverse *callouts*))
           (setf (callout-id c) (format nil "s~dc~d" number (incf i)))))
@@ -784,8 +885,27 @@ callout points at, or else a paragraph holding it as inline content."
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
        :morph (and (opt opts "MORPH") t)
+       :source source
        :blocks (group-columns (nreverse blocks))
        :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
+
+(defun strip-callouts (nodes)
+  "The inline NODES with every callout replaced by the content it wraps."
+  (mapcan (lambda (n)
+            (cond ((or (stringp n) (eq (car n) :tt)) (list n))
+                  ((eq (car n) :say) (strip-callouts (third n)))
+                  ((eq (car n) :link)
+                   (list (list :link (second n) (strip-callouts (third n)))))
+                  (t (list (list (car n) (strip-callouts (second n)))))))
+          nodes))
+
+(defun parse-source (form)
+  "The inline content of (source inline...), the line naming where a slide's content
+comes from. It takes no callouts: one in it is reported, and the content it wraps kept."
+  (let* ((*callouts* nil) (*steps* nil) (nodes (parse-inlines (cdr form))))
+    (when *callouts* (report :error "a source takes no callouts"))
+    (unless nodes (report :error "(source ...) needs text"))
+    (strip-callouts nodes)))
 
 (defun number-steps (slide callouts)
   "Numbers the page advances of SLIDE in source order: one per stepped item, one per step
@@ -828,7 +948,7 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                                                     "THEME" "ASPECT" "RUNTIME"
                                                     "PAGE-NUMBERS" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
-                                                    "URL") "deck")
+                                                    "URL" "PROGRESS") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -849,6 +969,7 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                           ":logo of deck must be an image path or (image ...)")
                          nil)))
                :url (string-option opts "URL" "deck")
+               :progress (and (opt opts "PROGRESS") t)
                :agenda (let ((a (opt opts "AGENDA")))
                          (cond ((or (null a) (eq a t) (stringp a)) a)
                                (t

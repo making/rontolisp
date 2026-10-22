@@ -1,4 +1,4 @@
-;;;; diagram.lisp -- the drawings of (flow ...) and (cells ...).
+;;;; diagram.lisp -- the drawings of (flow ...), (bars ...) and (cells ...).
 ;;;;
 ;;;; A drawing is a list of shapes in canvas px from its top left corner. Every shape is a
 ;;;; filled area, never a stroke, so every coordinate is an integer and the box a browser
@@ -36,6 +36,8 @@
 ;;;   (:poly CLASS X1 Y1 ...)    a polygon: an arrowhead, or the slash of nil
 ;;;   (:dot X Y R)               where a pointer starts
 ;;;   (:box X Y W H I PAD)       the label of a flow's Ith box, PAD px above its lines
+;;;   (:bar-label X Y W H I)     the label of a bar chart's Ith bar
+;;;   (:value X Y W H TEXT)      a bar's value, at the bar's end
 ;;;   (:atom X Y W H TEXT)       an atom of cells, as printed
 (defstruct drawing width height shapes)
 
@@ -182,6 +184,60 @@ back below it."
                 (list (- x (floor (nth (1- i) widths) 2)) (+ y h)))
           (incf y (+ h row-gap))))
       (finish-drawing (nreverse shapes) 0 width (- y row-gap)))))
+
+;;; --- bars ----------------------------------------------------------------------------
+
+(defparameter *bar-room*
+  4
+  "The least room for the longest bar, in label sizes: a bar chart with less is too
+wide.")
+
+(defun bar-label-width (runs s avail)
+  "The width of a bar chart's label column at S px in AVAIL px: its widest label set on
+one line, or wrapped at its phrases when that is wider than a third of the chart."
+  (reduce #'max
+          (mapcar (lambda (run)
+                    (max (run-min-width run s)
+                         (min (run-full-width run s) (floor avail 3))))
+                  runs)))
+
+(defun bar-value-widths (b s)
+  (mapcar (lambda (v) (run-full-width (make-text-run (list (second v))) s))
+          (diagram-datum b)))
+
+(defun bars-drawing (b s avail)
+  "The bar chart B at label size S in AVAIL px: a row per bar, its label on the left
+(wrapped at its phrases when long), the bar as long as its value's share of the largest,
+the value at its end. The chart spans AVAIL; it is wider when the longest bar would have
+less than its least room."
+  (let* ((runs (diagram-runs b))
+         (gap (dg-pad-x s))
+         (lh (dg-lh s))
+         (pad (floor s 4))
+         (label-w (bar-label-width runs s avail))
+         (value-ws (bar-value-widths b s))
+         (value-w (reduce #'max value-ws))
+         (room (max (* *bar-room* s) (- avail label-w value-w (* 2 gap))))
+         (top (reduce #'max (mapcar #'first (diagram-datum b))))
+         (x (+ label-w gap))
+         (shapes nil)
+         (y 0))
+    (loop for run in runs
+          for (value text) in (diagram-datum b)
+          for vw in value-ws
+          for i from 0
+          do
+            (let* ((lines (run-lines run s label-w))
+                   (by (+ y pad (floor (* (1- lines) lh) 2)))
+                   (len
+                    (if (zerop value)
+                        0
+                        (max *dg-line* (floor (* value room) top)))))
+              (push (list :bar-label 0 (+ y pad) label-w (* lines lh) i) shapes)
+              (when (> len 0) (push (list :rect x by len lh "dg-b" 0) shapes))
+              (push (list :value (+ x len gap) by vw lh text) shapes)
+              (incf y (+ (* lines lh) (* 2 pad)))))
+    (finish-drawing (nreverse shapes) 0 (+ x room gap value-w) y)))
 
 ;;; --- cells ---------------------------------------------------------------------------
 
@@ -346,21 +402,33 @@ Cells move right as far as the drawings below them need."
 
 (defun draw-diagram (b s avail)
   "The diagram B at label size S in AVAIL px; wider than AVAIL when it does not fit."
-  (if (eq (diagram-kind b) :flow) (flow-drawing b s avail) (cells-drawing b s)))
+  (case (diagram-kind b)
+    (:flow (flow-drawing b s avail))
+    (:bars (bars-drawing b s avail))
+    (t (cells-drawing b s))))
 
 (defun diagram-bounds (b s)
-  "The narrowest width the diagram B takes at S px, and its width on one row."
-  (if (eq (diagram-kind b) :flow)
-      (let* ((px (* 2 (dg-pad-x s)))
-             (h (+ (dg-lh s) (* 2 (dg-pad-y s))))
-             (runs (diagram-runs b)))
-        (values (reduce #'max
-                        (mapcar
-                         (lambda (run) (max h (+ px (run-min-width run s))))
-                         runs))
-                (+ (* (flow-gap s) (1- (length runs)))
-                   (reduce #'+
-                           (mapcar
-                            (lambda (run) (max h (+ px (run-full-width run s))))
-                            runs)))))
-      (let ((w (drawing-width (cells-drawing b s)))) (values w w))))
+  "The narrowest width the diagram B takes at S px, and its width on one row; nil for the
+second of a bar chart, which takes whatever width it is given."
+  (case (diagram-kind b)
+    (:flow
+     (let* ((px (* 2 (dg-pad-x s)))
+            (h (+ (dg-lh s) (* 2 (dg-pad-y s))))
+            (runs (diagram-runs b)))
+       (values (reduce #'max
+                       (mapcar
+                        (lambda (run) (max h (+ px (run-min-width run s))))
+                        runs))
+               (+ (* (flow-gap s) (1- (length runs)))
+                  (reduce #'+
+                          (mapcar
+                           (lambda (run) (max h (+ px (run-full-width run s))))
+                           runs))))))
+    (:bars
+     (values (+ (reduce #'max
+                        (mapcar (lambda (run) (run-min-width run s))
+                                (diagram-runs b)))
+                (* 2 (dg-pad-x s)) (reduce #'max (bar-value-widths b s))
+                (* *bar-room* s))
+             nil))
+    (t (let ((w (drawing-width (cells-drawing b s)))) (values w w)))))

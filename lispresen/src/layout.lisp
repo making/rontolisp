@@ -35,6 +35,10 @@
 (defparameter *qr-caption-size* 24)
 (defparameter *qr-caption-gap* 8)
 (defparameter *qr-clearance* 24 "The free margin around the QR code.")
+(defparameter *source-size* 32)
+(defparameter *source-lh* 40)
+(defparameter *source-gap* 24 "Between the body and the source line under it.")
+(defparameter *progress-height* 6 "The progress bar along the bottom edge.")
 (defparameter *title-block-gap*
   48
   "Between the logo, the title and the lines under it.")
@@ -142,6 +146,8 @@
   (when (stringp (slide-kicker slide))
     (setf (slide-kicker-run slide)
           (make-text-run (list (slide-kicker slide)) :bold t)))
+  (when (slide-source slide)
+    (setf (slide-source-run slide) (make-text-run (slide-source slide))))
   (prepare-blocks (slide-blocks slide) (deck-runtime deck))
   (dolist (c (slide-callouts slide))
     (setf (callout-run c) (make-text-run (list (callout-text c))))))
@@ -735,12 +741,24 @@ when every corner is taken."
               "the QR code covers text of the title slide in every corner; shorten the title")
       (subseq (place (car (last *qr-steps*)) :bottom-right) 0 5))))
 
+(defun source-height (deck slide)
+  "The height SLIDE's source line takes from the room above it, the gap included; 0
+without one. The line stands at the bottom of the safe area, wrapped in the content
+width."
+  (if (slide-source-run slide)
+      (+ *source-gap*
+         (* *source-lh*
+            (run-lines (slide-source-run slide) *source-size*
+                       (content-width deck))))
+      0))
+
 (defun fit-slide (deck slide)
   "Lay out SLIDE and store the result in its FIT slot."
   (prepare-runs deck slide)
   (let* ((width (content-width deck))
          (layout (choose-layout slide))
-         (fit (make-fit :layout layout)))
+         (fit (make-fit :layout layout))
+         (source (source-height deck slide)))
     (setf (slide-fit slide) fit)
     (cond ((equal layout "title")
            (multiple-value-bind (s overflow) (fit-centered
@@ -765,7 +783,8 @@ when every corner is taken."
                   (make-text-run (para-inlines (car (slide-blocks slide)))
                                  :bold t)))
              (setf (para-run (car (slide-blocks slide))) run)
-             (multiple-value-bind (s overflow) (fit-centered run width 3)
+             (multiple-value-bind (s overflow)
+                 (fit-centered run width 3 (- (safe-height) source))
                (setf (fit-stmt-size fit) s (fit-overflow fit) overflow))))
           (t (let ((top *margin-top*))
                (when (slide-title-run slide)
@@ -773,7 +792,7 @@ when every corner is taken."
                    (setf (fit-title-size fit) s (fit-title-lines fit) lines)
                    (incf top (+ (* lines (title-lh s)) *title-gap*))))
                (setf (fit-body-top fit) top (fit-body-height fit)
-                     (- *canvas-height* *margin-bottom* top))
+                     (- *canvas-height* *margin-bottom* top source))
                (fit-body slide fit width))))
     fit))
 
@@ -976,8 +995,8 @@ image's own is unknown within, and its caption. Returns the picture area."
 
 (defun diagram-geometry (b s d x y)
   "Records the drawing D of the diagram B, set at S px from X, Y: every shape, and the
-lines of every flow label, which hold its inline callouts' anchors. A callout naming a
-label with :at points at that label's box, or its atom."
+lines of every flow and bar label, which hold its inline callouts' anchors. A callout
+naming a label with :at points at that label's box, its bar's value, or its atom."
   (let ((labels nil) (px (dg-pad-x s)))
     (dolist (shape (drawing-shapes d))
       (destructuring-bind (l top r bottom) (shape-box shape)
@@ -990,7 +1009,13 @@ label with :at points at that label's box, or its atom."
                (run-geometry (nth i (diagram-runs b)) s (- w (* 2 px)) (dg-lh s)
                              (+ x bx px) (+ y by pad) "center"))
              (push box labels))
-            (:atom (push box labels))))))
+            (:bar-label
+             (destructuring-bind (bx by w h i) (cdr shape)
+               (declare (ignore h))
+               (run-geometry (nth i (diagram-runs b)) s w (dg-lh s) (+ x bx)
+                             (+ y by))))
+            ;; A bar is named by its label and pointed at by its value.
+            ((:atom :value) (push box labels))))))
     (setf labels (nreverse labels))
     (dolist (co *slide-callouts*)
       (when (and (eq (callout-target co) b) (callout-at co))

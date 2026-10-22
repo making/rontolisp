@@ -43,13 +43,12 @@
           ((and (diagram-p b) (> (drawing-width (diagram-drawing b)) width))
            (report :error (format nil
                                   "the ~a is ~dpx wide at its smallest size, wider than the ~dpx it has; ~a"
-                                  (if (eq (diagram-kind b) :flow)
-                                      "flow"
-                                      "cells drawing")
+                                  (diagram-name b)
                                   (drawing-width (diagram-drawing b)) width
-                                  (if (eq (diagram-kind b) :flow)
-                                      "shorten its widest label"
-                                      "draw a shorter list"))))
+                                  (case (diagram-kind b)
+                                    (:flow "shorten its widest label")
+                                    (:bars "shorten its labels or values")
+                                    (t "draw a shorter list")))))
           ((and (diagram-p b) (< (diagram-size b) *diagram-floor*))
            (report :warning (format nil
                                     "diagram labels at ~dpx (floor ~dpx); draw fewer boxes or a shorter list"
@@ -66,6 +65,14 @@
              (report
               :warning
               "the kicker does not fit on one line and is cut; shorten it"))))
+    (when (slide-source-run slide)
+      (let ((lines
+             (run-lines (slide-source-run slide) *source-size*
+                        (content-width deck))))
+        (when (> lines 2)
+          (report :warning (format nil
+                                   "the source takes ~d lines; keep it to 2"
+                                   lines)))))
     (when (and (fit-title-size fit) (< (fit-title-size fit) *title-floor*))
       (report :warning (format nil
                         "title text at ~dpx (floor ~dpx); shorten the title"

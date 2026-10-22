@@ -8,6 +8,7 @@
       :theme (theme :base :light :code :dark)
       :kicker :section
       :agenda t
+      :progress t
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -104,6 +105,16 @@
     (ul "コードの列は最長の行が収まる幅を取る"
         "残りを文章の列が使う"
         "出力の長い行は端末のように折り返す")))
+
+;; A bar chart: a value is an integer or a decimal written as a string, the unit written
+;; after it; the callout names a bar by its label. The source stands at the bottom.
+(slide :title "コンパイルした CLI の大きさ"
+  (say "JVM なしで動く" :at "ネイティブ"
+    (bars :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("WASM component" 796)
+          ("ネイティブ" "6,700")))
+  (source "2026-10-22, macOS arm64 で測定 ("
+          (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
+                "DESIGN.md") ")"))
 
 (slide :title "引用"
   (quote :cite "Alan Perlis" "A language that doesn't affect the way you think about programming is not worth knowing."))

@@ -34,7 +34,7 @@ The design is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
@@ -48,8 +48,10 @@ The design is in [DESIGN.md](DESIGN.md).
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
 | `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
+| `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
+| `(source inline...)` | a line in the muted color at the bottom of the slide naming where its content comes from; one per slide |
 | `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(accent ...)`, `(link "url" ...)` | inline content; `accent` is text in the accent color |
 | `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
 | `(define name (param... [&rest rest]) body...)` | a template (below) |
@@ -101,6 +103,8 @@ and sized like the rest of the slide.
 (flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
 
 (cells '((a . 1) (b . 2)))
+
+(bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
 ```
 
 `flow` sets its boxes left to right, joined by arrows, one height for all; when they do
@@ -112,15 +116,24 @@ inside `cells`, and a template use inside it is drawn, not expanded. It holds at
 conses; atoms are symbols (lower case unless written otherwise), integers, ratios,
 strings and characters.
 
+`bars` draws a row per bar: the label on the left (inline content, wrapped at its
+phrases when long), the bar in the accent color as long as its value's share of the
+largest, and the value at its end, followed by `:unit` as written (`:unit " KB"` gives
+`297 KB`). A value is an integer or a decimal written as a string (`"2.1"`, `"1,840"`), 0
+or more; a float is refused, since its printing differs between implementations. More
+than 7 bars is a warning, as for a table's rows.
+
 Labels start at 48 px and step down to 36 px with the slide; a diagram wider than its
-room at 36 px is an error. A diagram is centered in its column or the body.
+room at 36 px is an error. A diagram is centered in its column or the body; a bar chart
+spans it.
 
 ## Callouts
 
 `say` puts a short comment in a speech bubble whose tail points at what it wraps: a
 phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
-block named by its text, a box of a `flow` or an atom of `cells` named by its label (the
-first equal to the text, else the first holding it).
+block named by its text, a box of a `flow`, a bar of `bars` (the tail at its value) or an
+atom of `cells` named by its label (the first equal to the text, else the first holding
+it).
 
 ```lisp
 (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")

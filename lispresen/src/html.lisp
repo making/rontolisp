@@ -40,6 +40,9 @@ mark{background:var(--mark);color:inherit}
 .lead{color:var(--muted)}
 .agenda>li{color:var(--muted)}
 .agenda>li.current{color:var(--accent);font-weight:700}
+.source{position:absolute;font-size:SOURCE;line-height:SOURCE-LH;color:var(--muted)}
+#progress{position:absolute;left:0;bottom:0;width:0;height:PROGRESS;background:var(--accent)}
+html:not(.js) #progress{display:none}
 .kicker{position:absolute;font-size:KICKER;line-height:KICKER-LH;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
@@ -146,6 +149,8 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 .dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
 .dg-flow>.dg-l{padding:0 var(--dg-x)}
 span.dg-l{font-family:MONO;white-space:pre}
+.dg-t,.dg-v{text-align:left}
+.dg-v{white-space:nowrap}
 figure.pointed{align-items:flex-end}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
@@ -183,13 +188,17 @@ html:not(.js) #fs{display:none}
                          (list "QR-SIZE" (px-string *qr-caption-size*))
                          (list "QR-LH" (px-string (qr-lh)))
                          (list "KICKER" (px-string *kicker-size*))
+                         (list "SOURCE-LH" (px-string *source-lh*))
+                         (list "SOURCE" (px-string *source-size*))
+                         (list "PROGRESS" (px-string *progress-height*))
                          (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
     (write-theme-style theme out)
     ;; The canvas-dependent geometry.
     (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
-    (format out ".kicker,.title,.body,.centered{left:~dpx;width:~dpx}~%"
+    (format out ".kicker,.title,.body,.centered,.source{left:~dpx;width:~dpx}~%"
             *margin-x* content)
+    (format out ".source{bottom:~dpx}~%" *margin-bottom*)
     (format out ".kicker{top:~dpx}~%" (- *margin-top* *kicker-lh* 8))
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
@@ -197,7 +206,7 @@ html:not(.js) #fs{display:none}
             *margin-x* content)
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
             width *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
@@ -412,8 +421,9 @@ takes a share of the room the other blocks leave, as the image does."
 
 (defun write-diagram (b out)
   "A diagram as an SVG of filled shapes in the theme's colors, with its labels as HTML
-over it where the fit solver put them: a flow's boxes as an ordered list, the atoms of
-cells as spans, the whole of cells named by the list it draws."
+over it where the fit solver put them: a flow's boxes as an ordered list, a bar chart's
+labels and values as paragraphs, the atoms of cells as spans, the whole of cells named by
+the list it draws."
   (let* ((d (diagram-drawing b))
          (s (diagram-size b))
          (w (drawing-width d))
@@ -421,7 +431,7 @@ cells as spans, the whole of cells named by the list it draws."
          (flow (eq (diagram-kind b) :flow))
          (shapes (drawing-shapes d)))
     (write-string "<figure class=\"dg\"" out)
-    (unless flow
+    (when (eq (diagram-kind b) :cells)
       (write-string " role=\"img\"" out)
       (write-attribute "aria-label" (print-datum (diagram-datum b)) out))
     (format out
@@ -457,6 +467,21 @@ cells as spans, the whole of cells named by the list it draws."
                 (write-inlines (nth i (diagram-labels b))
                                (nth i (diagram-runs b)) out)
                 (write-string "</li>" out)))
+        (:bar-label
+         (destructuring-bind (x y lw lh i) (cdr shape)
+           (format out
+                   "<p class=\"dg-l dg-t\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                   x y lw lh)
+           (write-inlines (nth i (diagram-labels b)) (nth i (diagram-runs b))
+                          out)
+           (write-string "</p>" out)))
+        (:value
+         (destructuring-bind (x y vw vh text) (cdr shape)
+           (format out
+                   "<p class=\"dg-l dg-v\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                   x y vw vh)
+           (write-escaped text out)
+           (write-string "</p>" out)))
         (:atom (destructuring-bind (x y aw ah text) (cdr shape)
                  (format out
                          "<span class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
@@ -614,9 +639,12 @@ corner the fit solver chose."
              (write-text (slide-title slide) (slide-title-run slide) out))
            (format out "</h1></div>~%"))
           ((equal layout "statement")
-           (let ((p (car (slide-blocks slide))))
-             (write-string "<div class=\"centered\"><p class=\"statement\">"
-                           out)
+           (let ((p (car (slide-blocks slide)))
+                 (source (source-height deck slide)))
+             (write-string "<div class=\"centered\"" out)
+             (when (> source 0)
+               (format out " style=\"height:~dpx\"" (- (safe-height) source)))
+             (write-string "><p class=\"statement\">" out)
              (write-inlines (para-inlines p) (para-run p) out)
              (format out "</p></div>~%")))
           (t
@@ -633,6 +661,10 @@ corner the fit solver chose."
            (dolist (b (slide-blocks slide)) (write-block b out))
            (format out "</div>~%")
            (dolist (c (slide-callouts slide)) (write-callout c out))))
+    (when (slide-source-run slide)
+      (write-string "<p class=\"source\">" out)
+      (write-inlines (slide-source slide) (slide-source-run slide) out)
+      (format out "</p>~%"))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
@@ -657,6 +689,9 @@ corner the fit solver chose."
   (format out "<div id=\"deck\" style=\"width:~dpx;height:~dpx\">~%"
           (canvas-width deck) *canvas-height*)
   (dolist (slide (deck-slides deck)) (write-slide deck slide out))
+  ;; The player sets its length; it is no slide's, so thumbnails and print leave it out.
+  (when (deck-progress deck)
+    (format out "<div id=\"progress\" aria-hidden=\"true\"></div>~%"))
   (format out
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)

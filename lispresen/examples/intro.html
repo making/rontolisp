@@ -33,6 +33,9 @@ mark{background:var(--mark);color:inherit}
 .lead{color:var(--muted)}
 .agenda>li{color:var(--muted)}
 .agenda>li.current{color:var(--accent);font-weight:700}
+.source{position:absolute;font-size:32px;line-height:40px;color:var(--muted)}
+#progress{position:absolute;left:0;bottom:0;width:0;height:6px;background:var(--accent)}
+html:not(.js) #progress{display:none}
 .kicker{position:absolute;font-size:32px;line-height:40px;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
@@ -139,6 +142,8 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 .dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
 .dg-flow>.dg-l{padding:0 var(--dg-x)}
 span.dg-l{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre}
+.dg-t,.dg-v{text-align:left}
+.dg-v{white-space:nowrap}
 figure.pointed{align-items:flex-end}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
@@ -146,13 +151,14 @@ figure.pointed figcaption{align-self:stretch}
 #stage.idle{cursor:none}
 html:not(.js) #fs{display:none}
 .slide{width:1920px;height:1080px}
-.kicker,.title,.body,.centered{left:112px;width:1696px}
+.kicker,.title,.body,.centered,.source{left:112px;width:1696px}
+.source{bottom:72px}
 .kicker{top:32px}
 .title,.centered{top:80px}
 .centered{height:928px}
 .page{right:112px}.out{left:112px;width:1696px}
 .thumb{aspect-ratio:1920/1080}
-@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
+@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
 </style>
 </head>
 <body>
@@ -340,30 +346,44 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">17</div>
 </section>
-<section class="slide layout-quote" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
+<h1 class="title">コンパイルした CLI の<wbr>大きさ</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1696px;height:368px;--dg:48px;--dg-lh:68px;--dg-x:28px" aria-describedby="s18c1">
+<svg class="dg-art" width="1696" height="368" aria-hidden="true"><rect class="dg-b" x="495" y="12" width="41" height="68"/><rect class="dg-b" x="495" y="104" width="110" height="68"/><rect class="dg-b" x="495" y="196" width="111" height="68"/><rect class="dg-b" x="495" y="288" width="941" height="68"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:12px;width:467px;height:68px">JVM (jar)</p><p class="dg-l dg-v" style="left:564px;top:12px;width:187px;height:68px">297 KB</p><p class="dg-l dg-t" style="left:0px;top:104px;width:467px;height:68px">WASM</p><p class="dg-l dg-v" style="left:633px;top:104px;width:187px;height:68px">788 KB</p><p class="dg-l dg-t" style="left:0px;top:196px;width:467px;height:68px">WASM component</p><p class="dg-l dg-v" style="left:634px;top:196px;width:187px;height:68px">796 KB</p><p class="dg-l dg-t" style="left:0px;top:288px;width:467px;height:68px">ネイティブ</p><p class="dg-l dg-v" style="left:1464px;top:288px;width:232px;height:68px">6,700 KB</p>
+</figure>
+</div>
+<div class="say" id="s18c1" role="note" data-side="below" data-at="ネイティブ" style="left:1423px;top:624px;width:385px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:266px"><p>JVM なしで<wbr>動く</p></div>
+<p class="source">2026-10-22, macOS arm64 で<wbr>測定 (<a href="https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md">DESIGN.md</a>)</p>
+<div class="page">18</div>
+</section>
+<section class="slide layout-quote" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">引用</h1>
 <div class="body" style="top:232px;height:776px">
 <figure class="quote"><blockquote><p>A language that doesn&#39;t affect the way you think about programming is not worth knowing.</p></blockquote><figcaption>— Alan Perlis</figcaption></figure>
 </div>
-<div class="page">18</div>
+<div class="page">19</div>
 </section>
-<section class="slide layout-table" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">バックエンドの<wbr>比較</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>どれも<wbr>同じ HTML を<wbr>出力する</caption><colgroup><col style="width:370px"><col style="width:369px"><col style="width:369px"><col style="width:588px"></colgroup><thead><tr><th scope="col">バックエンド</th><th scope="col">起動</th><th scope="col">成果物</th><th scope="col">コマンド</th></tr></thead><tbody><tr><td>インタプリタ</td><td>速い</td><td>なし</td><td><code>rontolisp cli.lisp</code></td></tr><tr><td>JVM</td><td>普通</td><td><code>.jar</code></td><td><code>java -jar</code></td></tr><tr><td>WASM</td><td>速い</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr></tbody></table>
 </div>
-<div class="page">19</div>
+<div class="page">20</div>
 </section>
-<section class="slide layout-table" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">表の<wbr>数値は<wbr>右に<wbr>揃う</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:424px"><col style="width:424px"><col style="width:424px"><col style="width:424px"></colgroup><thead><tr><th scope="col">項目</th><th scope="col" class="right">前年</th><th scope="col" class="right">今年</th><th scope="col" class="right">増減</th></tr></thead><tbody><tr><th scope="row">スライド数</th><td class="right">24</td><td class="right">31</td><td class="right">+7</td></tr><tr><th scope="row">平均文字数</th><td class="right">1,204</td><td class="right">986</td><td class="right">-18.1%</td></tr><tr><th scope="row">警告</th><td class="right">12</td><td class="right">--</td><td class="right">-12</td></tr></tbody></table>
 </div>
-<div class="page">20</div>
+<div class="page">21</div>
 </section>
+<div id="progress" aria-hidden="true"></div>
 </div>
 <button id="fs" title="Full screen (F)" aria-label="Full screen"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
 </div>
@@ -371,7 +391,7 @@ html:not(.js) #fs{display:none}
 <script>(function(){
 var d=document,de=d.documentElement;de.classList.add('js');
 var cfg=JSON.parse(d.getElementById('lp').textContent);
-var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs');
+var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs'),pg=d.getElementById('progress');
 var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
 var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
 var params=new URLSearchParams(location.search),presenter=params.has('presenter');
@@ -410,7 +430,8 @@ last.finished.then(function(){if(g===mgen)unmorph();},function(){});}
 function show(i,quiet,k,dir){if(!slides.length)return;i=Math.max(0,Math.min(slides.length-1,i));
 var n=steps(i);k=k===undefined?0:k<0?n:Math.min(k,n);if(i===cur&&k===shown)return;
 var same=i===cur,m=null;if(!same){unmorph();if(dir)m=grab(cur,i);if(cur>=0)slides[cur].classList.remove('active');cur=i;slides[cur].classList.add('active');
-try{if(location.hash!=='#'+(cur+1))history.replaceState(null,'','#'+(cur+1));}catch(e){}}
+try{if(location.hash!=='#'+(cur+1))history.replaceState(null,'','#'+(cur+1));}catch(e){}
+if(pg)pg.style.width=(cur+1)*100/slides.length+'%';}
 slides[cur].querySelectorAll('[data-step]').forEach(function(e){var s=+e.dataset.step;e.classList.toggle('pending',s>k);
 if(same&&s>shown&&s<=k&&e.classList.contains('say'))e.classList.add('front');});focus(slides[cur],k);shown=k;if(m)m();
 if(!quiet)send({t:'go',i:cur,k:shown,m:same?0:dir||0});hooks.go.forEach(function(f){f(cur);});}
@@ -629,8 +650,9 @@ while((n=w.nextNode())){if(n.parentElement.closest('.say,.notes,.out'))continue;
 function cmeet(a,b){return a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;}
 function canchor(sl,c,o,k){var el=null,at=c.dataset.at;sl.querySelectorAll('[aria-describedby]').forEach(function(e){
 if(!el&&e.getAttribute('aria-describedby').split(' ').indexOf(c.id)>=0)el=e;});if(!el)return [];
-if(el.classList.contains('dg')){var r=el,ls,j;if(at!==undefined){r=null;ls=el.querySelectorAll('.dg-l');
-for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent===at)r=ls[j];for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent.indexOf(at)>=0)r=ls[j];}
+if(el.classList.contains('dg')){var r=el,ls,j;if(at!==undefined){r=null;ls=el.querySelectorAll('.dg-l:not(.dg-v)');
+for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent===at)r=ls[j];for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent.indexOf(at)>=0)r=ls[j];
+if(r&&r.classList.contains('dg-t'))r=r.nextElementSibling;}
 return r?[cbox(r.getBoundingClientRect(),o,k)]:[];}
 if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.createRange(),w=d.createTreeWalker(el,NodeFilter.SHOW_TEXT),n;if(i<0)return [];
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}

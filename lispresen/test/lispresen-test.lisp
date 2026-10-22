@@ -123,7 +123,16 @@
   (testing "a short untitled paragraph is a statement at the statement scale"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")
-               "layout-statement\" id=\"s1\" style=\"--stmt:120px"))))
+               "layout-statement\" id=\"s1\" style=\"--stmt:120px")))
+  (testing "a source line takes its height and a gap out of the body or the statement"
+    ;; Body: 1080 - 72 - (80 + 104 + 48) = 776, less 24 + 40; statement: 928 - 64.
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" \"x\" (source \"s \" (link \"u\" \"l\")))
+(slide \"x\" (source \"s\"))")))
+      (ok (contains html "<div class=\"body\" style=\"top:232px;height:712px\">"))
+      (ok (contains html "<p class=\"source\">s <a href=\"u\">l</a></p>"))
+      (ok (contains html "<div class=\"centered\" style=\"height:864px\">")))))
 
 (defun parsed-table (form)
   (let ((lispresen::*diagnostics* nil))
@@ -271,14 +280,27 @@ q\")))")))
        (contains html
         "role=\"img\" aria-label=\"(1 (u) (#\\a . &quot;b&quot;) :k 1/2)\""))
       (ok (contains html ">#\\a</span>"))))
-  (testing "a callout names a box or an atom with :at"
+  (testing "bar values are integers or decimal strings, kept as written"
+    (ok (equal (multiple-value-list (lispresen::bar-value "1,840.25"))
+               '(7361/4 "1,840.25")))
+    (ok (equal (multiple-value-list (lispresen::bar-value 3)) '(3 "3")))
+    (ok (notany #'lispresen::bar-value '("2." ".5" "-1" "1e3" -1 1/2))))
+  (testing "a bar is its value's share of the longest; a callout names a box, a bar or an atom"
     (let ((html
            (lispresen:render
             "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" \"c\")))
-(slide :title \"t\" (say \"c\" :at \"2\" (cells '(1 2))))")))
+(slide :title \"t\" (say \"c\" :at \"2\" (cells '(1 2))))
+(slide :title \"t\" (say \"c\" :at \"y\" (bars :unit \"s\" (\"x\" \"0.5\") (\"y\" 2) (\"z\" 0))))")))
       (ok (equal (callout-side html "s1c1") "below"))
       (ok (contains html "data-at=\"b\""))
-      (ok (equal (callout-side html "s2c1") "right"))))
+      (ok (equal (callout-side html "s2c1") "right"))
+      ;; The longest bar takes the room the label and value columns leave, 1505 px; a
+      ;; quarter of the value a quarter of it; a zero draws none, its value at the axis.
+      (ok (contains html "<rect class=\"dg-b\" x=\"57\" y=\"12\" width=\"376\""))
+      (ok (contains html "<rect class=\"dg-b\" x=\"57\" y=\"104\" width=\"1505\""))
+      (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1590px;top:104px"))
+      (ok (contains html ">z</p><p class=\"dg-l dg-v\" style=\"left:85px;top:196px"))
+      (ok (equal (callout-side html "s3c1") "below"))))
   (testing "malformed, too large and too wide diagrams"
     (ok
      (equal (render-diagnostics
@@ -286,10 +308,13 @@ q\")))")))
                      "(slide :title \"t\" (flow) (cells 1) (cells '(1.5)) (cells '~a))
 (slide :title \"t\" (flow~{ ~s~}))
 (slide :title \"t\" (cells '~a))
-(slide :title \"t\" (say \"c\" :at \"z\" (flow \"a\")))"
+(slide :title \"t\" (say \"c\" :at \"z\" (flow \"a\")))
+(slide :title \"t\" (bars) (bars (\"a\" 2.5) (\"b\" -1) (c 1) (\"d\" 1) :unit \"s\"))
+(slide :title \"t\" (say \"c\" :at \"z\" (bars~{ (~s 1)~})))"
                      (make-list 33 :initial-element 1)
                      (make-list 9 :initial-element "x")
-                     (loop for i from 1 to 16 collect (list i))))
+                     (loop for i from 1 to 16 collect (list i))
+                     (make-list 8 :initial-element "x")))
             '((:error 1 "(flow ...) needs at least one box")
               (:error 1 "(cells ...) draws a list, such as '(1 (2 3))")
               (:error 1
@@ -301,7 +326,16 @@ q\")))")))
                       "the content does not fit the slide even at the smallest sizes; split the slide")
               (:error 3
                       "the cells drawing is 2172px wide at its smallest size, wider than the 1696px it has; draw a shorter list")
-              (:error 4 "the :at text \"z\" is not a label of the flow"))))))
+              (:error 4 "the :at text \"z\" is not a label of the flow")
+              (:error 5 "(bars ...) needs at least one bar")
+              (:error 5
+                      "a bar's value is a float; write it as a string, such as \"2.1\"")
+              (:error 5
+                      "a bar's value is an integer or a decimal string of 0 or more")
+              (:error 5 "a bar is a list of its label and its value")
+              (:error 5 "the options of (bars ...) come before its bars")
+              (:warning 6 "a bar chart of 8 bars is hard to read; keep it to 7")
+              (:error 6 "the :at text \"z\" is not a label of the bar chart"))))))
 
 (deftest templates
   (testing "a use is the body with its arguments substituted, &rest spliced"
@@ -465,6 +499,14 @@ q\")))")))
             (:warning 3 "a kicker stands above a title; this slide has none")
             (:error 4
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
+  (ok
+   (equal (render-diagnostics
+           "(slide :title \"t\" (source (say \"c\" \"a\")) (source \"b\") (column (source \"c\")))
+(slide :title \"t\" (source \"ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\"))")
+          '((:error 1 "a source takes no callouts")
+            (:error 1 "a slide holds one (source ...)")
+            (:error 1 "(source ...) belongs in (slide ...) itself")
+            (:warning 2 "the source takes 3 lines; keep it to 2"))))
   (testing "an agenda lists the sections; each section is the list with its own highlighted"
     (multiple-value-bind (html diagnostics) (lispresen:render
                                              "(deck :agenda t)

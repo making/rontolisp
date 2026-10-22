@@ -61,6 +61,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :agenda t                ; a list of the sections, repeated at each section
       :logo (image "logo.png" :alt "rontolisp")   ; on the title slide
       :url "https://example.com/talk"             ; a QR code of it on the title slide
+      :progress t              ; a bar along the bottom edge, as long as the slide's place
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -102,7 +103,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `notes`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -158,6 +159,19 @@ Rules:
   Template uses are expanded before any slide is parsed, so the sections are known when
   the agenda slide takes its number, and slide numbers in diagnostics count it. A deck
   without sections gets no agenda and a warning.
+- `(source inline...)` on a slide names where its content comes from (a quotation's
+  book, a measurement's date): one line in the muted color at the bottom of the safe
+  area, above the page number row, 32 px on a 40 px line, wrapped in the content width.
+  Its height and a 24 px gap come out of the body (or the statement's centered box)
+  before the slide is fitted, so the content never runs under it. It is inline content,
+  so a link in it is a link; like a title or a caption it takes no callout. A second
+  source on a slide is an error, a source longer than 2 lines a warning. It is a label
+  like the page number, outside the body type scale.
+- `(deck :progress t)` draws a 6 px bar in the accent color along the bottom edge of the
+  canvas, as wide as the current slide's place in the deck (slide 3 of 20: 15%). The
+  player sets its width on every move, so it is no slide's element: the overview and the
+  presenter window's thumbnails, which copy slides, never show it, the presenter
+  window hides the stage it is on, and print and the page without JavaScript hide it.
 
 ### Templates
 
@@ -375,7 +389,8 @@ size: lispresen computes the box, the browser fits the image inside it.
 For each slide:
 
 1. Fit the title: the largest title step at which it takes at most 2 lines.
-2. The body box is what remains of the safe area below the title and a fixed gap.
+2. The body box is what remains of the safe area below the title and a fixed gap, and
+   above the slide's source line and its gap.
 3. The body is a vertical stack of full-width blocks and rows of columns. Compute its
    height at each body step: lines x line height, plus block gaps, list indentation
    reducing the available width per nesting level, code sized by both its longest line
@@ -494,6 +509,7 @@ the model did. The header row is bold on a tinted background, and each body row 
 (flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
 (cells '(slide :title "t" (p "x")))
 (cells '((a . 1) (b . 2)))
+(bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
 ```
 
 A picture of a structure belongs in the deck as text for the reasons the rest of the
@@ -538,9 +554,24 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   their colon), integers, ratios, strings and characters. A float is refused because its
   printing is the one thing the backends may not share. The figure is `role="img"` named by
   the list as Lisp prints it, the atoms as spans.
+- **bars.** A horizontal bar chart: a row per `(label value)`, the label on the left,
+  the bar (an accent rectangle, `dg-b`) as long as the value's share of the largest, the
+  value at its end followed by `:unit` as written. It is sized like a table: the label
+  size steps with the body, and further while the chart does not fit its region; a row is
+  its label's lines at the label line height plus s/4 above and below, the bar as tall as
+  one line, centered on the label. The label column is as wide as its widest label set on
+  one line, or wrapped at its phrases when that is wider than a third of the chart; the
+  value column as wide as its widest value; 0.6 s separates them from the bars. The
+  longest bar takes the rest of the region, which must be at least 4 s, else the chart is
+  too wide (the error above); in a row of columns its minimum is that, and it takes
+  whatever width it is given, as an image does. A bar of a positive value is at least
+  4 px, a zero draws none. Values are integers or decimals written as strings, read into
+  rationals, so the lengths are integer arithmetic and no float is printed; the value is
+  shown as written. More than 7 bars is a warning, as a table's rows are. Labels and
+  values are `<p>`s over the SVG (`dg-t`, `dg-v`), read in row order.
 - **Callouts.** A `say` around a diagram points at its whole drawing; with `:at` at the
-  first label equal to the text, else the first holding it: a box of a flow, an atom of
-  cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
+  first label equal to the text, else the first holding it: a box of a flow, a bar of a
+  bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
   whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
 
 No diagram has steps of its own yet; a step callout on one works as on any block.
@@ -651,7 +682,7 @@ its anchor. The deck names the anchor, never a position; lispresen places the bu
 - Inline, `(say "comment" inline...)` wraps its anchor: a phrase, a whole list item, a
   table cell's text. It goes wherever inline content goes, inside `b` or `mark` too.
 - Around a block, `(say "comment" block)` points at one `p`, `ul`, `ol`, `code`, `image`,
-  `table`, `quote`, `flow` or `cells` as a whole. In block position a `say` whose content is one such form
+  `table`, `quote`, `flow`, `cells` or `bars` as a whole. In block position a `say` whose content is one such form
   is this kind; anything else is a paragraph holding an inline callout.
 - `:at "text"` on a callout around `code` points at the first occurrence of the text,
   which must lie within one line. Code is one string, so the anchor is named by its text
@@ -862,8 +893,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -943,8 +974,12 @@ One file containing:
 - A diagram as `<figure class="dg" style="width:...;height:...;--dg:48px ...">` holding
   `<svg class="dg-art">` (`rect`, `polygon` and `circle` elements, classed `dg-b`, `dg-f`
   and `dg-e` for their colors) and, over it, its labels at the places the solver gave
-  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, `<span
+  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
+  dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
+- A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
+  of the safe area; with `:progress`, a `<div id="progress">` after the slides in the
+  canvas.
 - Speaker notes in `<aside class="notes">`, hidden in the audience view.
 
 ### Overview and presenter window
@@ -1059,7 +1094,7 @@ lispresen/
     model.lisp           structs and parsing with diagnostics
     embed.lisp           code files as text (UTF-8), images as data: URIs (base64)
     qr.lisp              QR codes of the deck's URL as SVG
-    diagram.lisp         the drawings of flow and cells
+    diagram.lisp         the drawings of flow, bars and cells
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -1111,9 +1146,10 @@ before committing a change under `lispresen/`.
   agenda, a title slide with an embedded SVG logo and a QR code, a
   code morph, a
   quote, an embedded PNG, a list revealed by steps, a flow, two cells drawings in columns
-  (one with dotted pairs), and three callouts (an inline one, one naming a box of the flow
-  by `:at`, and a step one named by `:at` in runnable code read from a file by `:lines`,
-  which `:steps` brings forward line by line), so the
+  (one with dotted pairs), a bar chart with a source line under it, a progress bar, and
+  four callouts (an inline one, one naming a box of the flow and one a bar by `:at`, and
+  a step one named by `:at` in runnable code read from a file by `:lines`, which `:steps`
+  brings forward line by line), so the
   highlighter, the emitted player, template expansion, diagram drawing, callout placement
   and the binary
   read, UTF-8 decoding and base64 are in the comparison.
@@ -1127,7 +1163,8 @@ before committing a change under `lispresen/`.
   numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
   with dotted pairs and a list that looks like a template use, the callout sides on a flow
-  box and a cells atom, the diagram diagnostics, the agenda and its slide numbers, template
+  box, a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
+  a source takes and its diagnostics, the agenda and its slide numbers, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
   order of a slide's page advances (items, code lines, a bubble after what it wraps) and
@@ -1212,6 +1249,13 @@ playback was checked by seeking the animations: a paired token at 0, 300 and 600
 at its old place, halfway (ease-in-out) and its new place, the panel's box likewise, and
 finishing removes everything the morph added. A copy of a removed token rests at opacity
 0, so one the cleanup has not reached yet shows nothing.
+
+Bar charts, sources and the progress bar (2026-10-23, Chrome 155 through DevTools and
+Safari 26.3 through `safaridriver`): the golden deck's bar chart and a deck with a chart
+in a column (a zero value among the bars) and a statement with a source lay out with the
+runtime check making no correction; every label sets on the lines counted and every
+value in its box in both browsers, and the bubble naming a bar stays below its value, 1 px
+off. The progress bar follows navigation and is absent from the overview.
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.
