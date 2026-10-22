@@ -44,12 +44,12 @@
       (ok (= (lispresen::run-lines run 56 560) 1))
       (ok (= (lispresen::run-lines run 56 559) 2))))
   (testing "Latin breaks at spaces, and a space ending a line takes no width"
-    ;; aaa = 3 x 587 milli-em, the space 340, bbb = 3 x 659: 407.8 px at 100 px.
+    ;; aaa = 3 x 604 milli-em, the space 340, bbb = 3 x 677: 418.3 px at 100 px.
     (let ((run (lispresen::make-text-run (list "aaa bbb"))))
-      (ok (= (lispresen::run-lines run 100 408) 1))
-      (ok (= (lispresen::run-lines run 100 407) 2))
-      (ok (= (lispresen::run-min-width run 100) 198))
-      (ok (= (lispresen::run-full-width run 100) 408))))
+      (ok (= (lispresen::run-lines run 100 419) 1))
+      (ok (= (lispresen::run-lines run 100 418) 2))
+      (ok (= (lispresen::run-min-width run 100) 204))
+      (ok (= (lispresen::run-full-width run 100) 419))))
   (testing "inline code breaks only at its spaces"
     (let ((run
            (lispresen::make-text-run
@@ -271,6 +271,37 @@
                "(define w (x) (slide x x x x x x x x x x))
 (w \"a\")
 (w \"b\")") '((:error 2 "templates expand to more than 10 forms")))))))
+
+(deftest qr-codes
+  (testing "Reed-Solomon, format and version bits match the standard's examples"
+    ;; HELLO WORLD at 1-M, and the format and version tables of ISO/IEC 18004.
+    (ok
+     (equal (lispresen::rs-ec
+             '(32 91 11 120 209 114 220 77 67 64 236 17 236 17 236 17) 10)
+            '(196 35 39 119 235 215 231 226 93 23)))
+    (ok (= (lispresen::qr-format-bits 0) #x5412))
+    (ok (= (lispresen::qr-version-bits 7) #x07C94)))
+  (testing "the version is the smallest whose byte capacity at level M holds the text"
+    (ok
+     (equal (mapcar (lambda (n)
+                      (lispresen::qr-version (make-list n :initial-element 97)))
+                    '(14 15 122 123 213 214)) '(1 2 7 8 10 nil))))
+  (testing "the title slide shows the logo and the URL's QR code; their diagnostics"
+    (let ((html
+           (lispresen:render
+            "(deck :title \"t\" :logo (image \"l.png\" :alt \"l\") :url \"https://e.x/\")")))
+      (ok (contains html "<img class=\"logo\" src=\"l.png\" alt=\"l\">"))
+      (ok (contains html "<svg class=\"qr-code\" viewBox=\"0 0 29 29\""))
+      (ok (contains html "<a href=\"https://e.x/\">https://e.x/</a>")))
+    (ok
+     (equal (render-diagnostics
+             (format nil "(deck :title \"t\" :url \"~a\")"
+                     (make-string 214 :initial-element #\a)))
+            '((:error 1 "the :url is 214 bytes; a QR code holds 213 at most"))))
+    (ok
+     (equal (render-diagnostics "(deck :logo (image \"l.png\" :alt \"l\"))")
+            '((:warning 1
+                        ":logo and :url are shown on the title slide, which needs a :title"))))))
 
 (deftest embedding
   (testing "base64 pads the last group"

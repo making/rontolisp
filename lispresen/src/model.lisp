@@ -23,12 +23,15 @@
   callouts
   kicker
   agenda
+  logo
+  url
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
 ;;; CALLOUTS lists the slide's callouts in source order. KICKER is the label above the
-;;; title, :deck until the deck's :kicker decides it.
+;;; title, :deck until the deck's :kicker decides it. META lists the (TEXT RUN) of each
+;;; line under the title of the title slide: the author, the date and the URL.
 (defstruct slide
   number
   line
@@ -42,7 +45,8 @@
   fit
   callouts
   kicker
-  kicker-run)
+  kicker-run
+  meta)
 
 ;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
 (defstruct para inlines run lead)
@@ -596,7 +600,8 @@ callout points at, or else a paragraph holding it as inline content."
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
                                                     "PAGE-NUMBERS" "CALLOUTS"
-                                                    "KICKER" "AGENDA") "deck")
+                                                    "KICKER" "AGENDA" "LOGO"
+                                                    "URL") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -607,6 +612,16 @@ callout points at, or else a paragraph holding it as inline content."
                :page-numbers (opt opts "PAGE-NUMBERS")
                :callouts (parse-callouts-option (opt opts "CALLOUTS"))
                :kicker (parse-kicker-option (opt opts "KICKER"))
+               :logo (let ((l (opt opts "LOGO")))
+                       (cond ((null l) nil)
+                        ((stringp l) (parse-image (list 'image l)))
+                        ((equal (form-tag l) "IMAGE") (parse-image l))
+                        (t
+                         (report
+                          :error
+                          ":logo of deck must be an image path or (image ...)")
+                         nil)))
+               :url (string-option opts "URL" "deck")
                :agenda (let ((a (opt opts "AGENDA")))
                          (cond ((or (null a) (eq a t) (stringp a)) a)
                                (t
@@ -677,6 +692,11 @@ expanded first, so the sections an agenda lists are known before any slide is pa
         (setf (deck-line deck) *line*))
       (setf forms (cdr forms)))
     (unless deck (setf deck (make-deck)))
+    (when (and (or (deck-logo deck) (deck-url deck)) (null (deck-title deck)))
+      (let ((*line* (deck-line deck)))
+        (report
+         :warning
+         ":logo and :url are shown on the title slide, which needs a :title")))
     (when (deck-title deck)
       (push (make-slide :number (incf number)
                         :line 1

@@ -58,6 +58,10 @@ th{font-weight:700}
 .section-title{color:var(--accent)}
 .deck-meta{font-size:META;line-height:META-LH;color:var(--muted)}
 .deck-title+.deck-meta{margin-top:48px}
+.logo{height:LOGOpx;max-width:100%;object-fit:contain;margin-bottom:48px}
+.qr{position:absolute;display:flex;flex-direction:column;gap:QR-GAP;font-size:QR-SIZE;line-height:QR-LH;white-space:nowrap}
+.qr.right{align-items:flex-end}
+.qr a{color:var(--muted)}
 .page{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
@@ -158,6 +162,10 @@ html:not(.js) #fs{display:none}
                          (list "META" (px-string *meta-size*))
                          (list "PAGE" (px-string *page-number-size*))
                          (list "KICKER-LH" (px-string *kicker-lh*))
+                         (list "LOGO" (princ-to-string *logo-height*))
+                         (list "QR-GAP" (px-string *qr-caption-gap*))
+                         (list "QR-SIZE" (px-string *qr-caption-size*))
+                         (list "QR-LH" (px-string (qr-lh)))
                          (list "KICKER" (px-string *kicker-size*))
                          (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
@@ -435,6 +443,37 @@ shown here; the player hides it until a page advance."
     (write-text (callout-text c) (callout-run c) out)
     (format out "</p></div>~%")))
 
+(defun write-title-slide (deck slide out)
+  "The centered logo, title and lines under it, and the QR code of the deck's URL in the
+corner the fit solver chose."
+  (let ((logo (deck-logo deck))
+        (url (deck-url deck))
+        (qr (fit-qr (slide-fit slide))))
+    (write-string "<div class=\"centered\">" out)
+    (when logo
+      (write-string "<img class=\"logo\"" out)
+      (write-attribute "src" (figure-src logo) out)
+      (write-attribute "alt" (or (figure-alt logo) "") out)
+      (write-string ">" out))
+    (write-string "<h1 class=\"deck-title\">" out)
+    (write-text (slide-title slide) (slide-title-run slide) out)
+    (write-string "</h1>" out)
+    (loop for (text run) in (slide-meta slide)
+          do (write-string "<p class=\"deck-meta\">" out)
+            (write-text text run out) (write-string "</p>" out))
+    (format out "</div>~%")
+    (when qr
+      (destructuring-bind (x y size width align) qr
+        (format out
+                "<div class=\"qr ~a\" style=\"left:~dpx;top:~dpx;width:~dpx\">"
+                align x y width)
+        (write-qr-svg url size out)
+        (write-string "<p><a" out)
+        (write-attribute "href" url out)
+        (write-string ">" out)
+        (write-escaped url out)
+        (format out "</a></p></div>~%")))))
+
 (defun write-slide (deck slide out)
   (let* ((fit (slide-fit slide))
          (layout (fit-layout fit))
@@ -446,17 +485,7 @@ shown here; the player hides it until a page advance."
     (when (fit-overflow fit) (write-string " overflow" out))
     (format out "\" id=\"s~d\" style=\"~a\">~%" (slide-number slide)
             (slide-style fit))
-    (cond ((equal layout "title")
-           (write-string "<div class=\"centered\"><h1 class=\"deck-title\">"
-                         out)
-           (write-text (slide-title slide) (slide-title-run slide) out)
-           (write-string "</h1>" out)
-           (dolist (meta (list (deck-author deck) (deck-date deck)))
-             (when meta
-               (write-string "<p class=\"deck-meta\">" out)
-               (write-escaped meta out)
-               (write-string "</p>" out)))
-           (format out "</div>~%"))
+    (cond ((equal layout "title") (write-title-slide deck slide out))
           ((equal layout "section")
            (write-string "<div class=\"centered\"><h1 class=\"section-title\">"
                          out)

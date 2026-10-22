@@ -3,6 +3,8 @@
 (deck :title "lispresen: S式で書くプレゼンテーション"
       :author "rontolisp"
       :date "2026-10-22"
+      :logo (image "logo.svg" :alt "rontolisp")
+      :url "https://github.com/making/rontolisp/tree/develop/lispresen"
       :theme (theme :base :light :code :dark)
       :kicker :section
       :agenda t

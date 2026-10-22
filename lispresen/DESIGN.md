@@ -57,6 +57,8 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :callouts :shown         ; :shown | :step, below
       :kicker :section         ; each titled slide's kicker is its section's title
       :agenda t                ; a list of the sections, repeated at each section
+      :logo (image "logo.png" :alt "rontolisp")   ; on the title slide
+      :url "https://example.com/talk"             ; a QR code of it on the title slide
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -259,7 +261,7 @@ Width of a code point, in milli-em:
 | Characters | Width |
 |------------|-------|
 | Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
-| Printable ASCII | per character, measured on Hiragino Sans W3 (bold: W6), plus 2% |
+| Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Other proportional characters | 800 (bold 840), plus 2% |
 
@@ -276,6 +278,17 @@ Measured with `tools/calibrate.lisp` in Chrome on 2026-10-22 (84 paragraphs: Jap
 Latin, mixed, bold, inline code, brackets; 40-120 px; 700-1696 px wide): the model never
 predicted fewer lines than Chrome rendered, and predicted one more in 9. Safari 26.3, same
 day and page: never fewer, one more in 1.
+
+That table was measured in Chrome alone, and Safari sets Hiragino's Latin wider at every
+size: 2.7% on average at weight 400, 4.4% at 700, single characters up to 15% (measured
+2026-10-22, Safari 26.3 against Chrome 155, each character set twenty times). The 2%
+margin hid it in the paragraphs, which meet a line boundary only by chance, until a bold
+title the model set in two lines took three in Safari, 0.05 px over its width. The table
+now holds the wider of the two browsers per character, and the calibration page also sets
+every ASCII character in both weights and reports any wider than the model, which does
+not depend on chance. Same day, 96 paragraphs (a bold title among them): never fewer
+lines in either browser, one more in 18 (Chrome) and 11 (Safari); no character wider
+than the model in either.
 
 ### Line breaking
 
@@ -307,7 +320,7 @@ phrases (文節), not between arbitrary characters.
 
 | Shape | Layout |
 |-------|--------|
-| Deck header (generated first slide) | `title` |
+| Deck header (generated first slide) | `title` (below) |
 | `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
 | Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
@@ -316,6 +329,19 @@ phrases (文節), not between arbitrary characters.
 | Title + one `table` | `table` |
 | Title + `column`s, with or without full-width blocks | `columns` |
 | Anything else | `standard` (title on top, blocks stacked) |
+
+The title slide centers the deck's `:logo` (160 px high, the image's own width), its
+title at the statement scale (at most 2 lines) and the author and date in the safe area,
+the title stepping down when the logo and those lines leave it too little height. A
+deck's `:url` adds a QR code of the URL with the URL under it in a corner, so the slide's
+address can be scanned or typed. The corner never moves the text: the text is laid out as
+without the URL, and the QR code takes the largest of 320, 280, 240 and 200 px and the
+first corner of bottom right, bottom left, top right and top left where it and the URL
+under it, 24 px clear, cover none of the text. The logo counts as the full width (its own
+width is unknown) and each title line as wide as the widest, since `text-wrap: balance`
+evens the lines. When no corner is free, the smallest size goes to the bottom right and
+the slide is reported. A first version narrowed the text column to make room for the code
+on the right, which moved the title.
 
 Placement rules: the title sits at the same position on every content slide, and the
 body is top-aligned under it, so the audience's eye does not search for the start of
@@ -554,6 +580,19 @@ static place and is outlined. JavaScript is a correction on top of the static re
 not a replacement for it, so the deck still lays out correctly with JavaScript disabled
 and when printed.
 
+### QR codes
+
+`qr.lisp` encodes the URL itself, so the code cannot drift from the URL and no tool or
+service is needed: ISO/IEC 18004 byte mode (the URL's UTF-8), error correction level M,
+versions 1 to 10, up to 213 bytes (a longer URL is an error and gets no code). Reed-Solomon
+over GF(256) runs on log tables and the mask is the lowest penalty of the eight, all
+integer arithmetic, so every backend writes the same modules. The code is an SVG path of
+the dark modules, black on a white square with the four-module quiet zone whatever the
+theme, since many scanners do not read an inverted code. Checked 2026-10-22: the
+Reed-Solomon codewords, format and version bits equal the standard's examples (unit
+tests), and Chrome's `BarcodeDetector` reads back the text of a code of every version 1
+to 10, and of a Japanese text.
+
 ## Runnable code
 
 A `code` block whose `:lang` is `"lisp"`, `"scheme"` or `"clojure"` is runnable unless it
@@ -655,8 +694,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -825,6 +864,7 @@ lispresen/
     template.lisp        define templates: substitution on the read forms
     model.lisp           structs and parsing with diagnostics
     embed.lisp           images as data: URIs, base64
+    qr.lisp              QR codes of the deck's URL as SVG
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -845,6 +885,7 @@ lispresen/
     intro.lisp           a deck presenting lispresen itself
     intro.html           its golden output, rendered with --embed
     pipeline.png         the image intro.lisp shows
+    logo.svg             its title slide's logo
   tools/
     gen-budoux.py        regenerates src/budoux-ja.lisp from BudouX's model
     BUDOUX-LICENSE       BudouX's Apache License 2.0
@@ -870,7 +911,7 @@ before committing a change under `lispresen/`.
   `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
   console column and a list column, dark code panels (`:code :dark`), section kickers, an
-  agenda, a
+  agenda, a title slide with an embedded SVG logo and a QR code, a
   quote, an embedded PNG and two callouts (an inline one, and a step one named by `:at` in
   runnable code), so the
   highlighter, the emitted player, template expansion, callout placement and the binary
@@ -880,6 +921,8 @@ before committing a change under `lispresen/`.
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the
   three table-width cases, column widths beside a full-width block, a wrapping console,
+  the QR encoder against the standard's examples and its version boundaries, the title
+  slide's logo and QR code,
   numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
   expansion and its diagnostics and

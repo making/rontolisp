@@ -30,6 +30,14 @@
 (defparameter *page-number-size* 24)
 (defparameter *kicker-size* 32)
 (defparameter *kicker-lh* 40)
+(defparameter *logo-height* 160)
+(defparameter *qr-steps* '(320 280 240 200))
+(defparameter *qr-caption-size* 24)
+(defparameter *qr-caption-gap* 8)
+(defparameter *qr-clearance* 24 "The free margin around the QR code.")
+(defparameter *title-block-gap*
+  48
+  "Between the logo, the title and the lines under it.")
 
 (defun title-lh (s) (ceiling (* s 13) 10))
 (defun body-lh (s) (ceiling (* s 15) 10))
@@ -52,7 +60,9 @@
 (defun safe-height () (- *canvas-height* *margin-top* *margin-bottom*))
 
 ;;; The layout result of one slide. BODY-TOP and BODY-HEIGHT place the body box; the
-;;; sizes are px. OVERFLOW is true when the slide does not fit even at the hard floor.
+;;; sizes are px. QR places the title slide's QR code and the URL under it as (LEFT TOP
+;;; SIZE WIDTH ALIGN), WIDTH being the wider of the two. OVERFLOW is true
+;;; when the slide does not fit even at the hard floor.
 (defstruct fit
   layout
   title-size
@@ -62,6 +72,7 @@
   body-size
   code-size
   stmt-size
+  qr
   overflow)
 
 ;;; --- runs ------------------------------------------------------------------------
@@ -121,6 +132,11 @@
   (when (slide-title slide)
     (setf (slide-title-run slide)
           (make-text-run (list (slide-title slide)) :bold t)))
+  (when (eq (slide-kind slide) :title)
+    (setf (slide-meta slide)
+          (loop for text in (list (deck-author deck) (deck-date deck))
+                when text
+                collect (list text (make-text-run (list text))))))
   (when (stringp (slide-kicker slide))
     (setf (slide-kicker-run slide)
           (make-text-run (list (slide-kicker slide)) :bold t)))
@@ -519,16 +535,15 @@ and whether every block fits its width."
                                lines s))
       (values s lines))))
 
-(defun fit-centered (run width max-lines)
+(defun fit-centered (run width max-lines &optional (height (safe-height)))
   "The statement-scale size for RUN: the largest step with at most MAX-LINES lines that
-fits the safe area. The second value is true on overflow."
+fits HEIGHT px, the safe area by default. The second value is true on overflow."
   (dolist (s *statement-steps*)
     (let ((lines (run-lines run s width)))
-      (when (and (<= lines max-lines)
-                 (<= (* lines (statement-lh s)) (safe-height)))
+      (when (and (<= lines max-lines) (<= (* lines (statement-lh s)) height))
         (return-from fit-centered (values s nil)))))
   (let* ((s (car (last *statement-steps*))) (lines (run-lines run s width)))
-    (if (> (* lines (statement-lh s)) (safe-height))
+    (if (> (* lines (statement-lh s)) height)
         (progn
           (report
            :error "the text does not fit the slide even at the smallest size")
@@ -596,6 +611,103 @@ columns' minimum widths when nothing fits."
                   (multiple-value-bind (mins) (column-bounds tb s)
                     (coerce mins 'list)))))))
 
+(defun title-extras-height (deck slide width)
+  "The height the title slide's logo and the lines under its title take in WIDTH px."
+  (+ (if (deck-logo deck) (+ *logo-height* *title-block-gap*) 0)
+     (if (slide-meta slide)
+         (+ *title-block-gap*
+            (loop for (nil run) in (slide-meta slide)
+                  sum
+                    (* (run-lines run *meta-size* width)
+                       (body-lh *meta-size*))))
+         0)))
+
+(defun title-rects (deck slide s)
+  "The rectangles the title slide's logo, title and lines under it take at statement size
+S, set as the centered column sets them. The logo counts as the full width, its own
+being unknown, and each title line as wide as the widest, which text-wrap: balance may
+even the others up to."
+  (let* ((width (content-width deck))
+         (run (slide-title-run slide))
+         (starts (wrap-run run s width))
+         (widest
+          (loop for (a b) on starts
+                maximize
+                  (milli-px->px
+                   (run-span-width run a (or b (length (run-text run))) s))))
+         (rows nil))
+    ;; Rows as (WIDTH HEIGHT), nil for a gap, top to bottom.
+    (when (deck-logo deck)
+      (push (list width *logo-height*) rows)
+      (push (list 0 *title-block-gap*) rows))
+    (dolist (a starts)
+      (declare (ignorable a))
+      (push (list widest (statement-lh s)) rows))
+    (when (slide-meta slide)
+      (push (list 0 *title-block-gap*) rows)
+      (loop for (nil mrun) in (slide-meta slide)
+            do
+              (let ((mstarts (wrap-run mrun *meta-size* width)))
+                (loop for (a b) on mstarts
+                      do
+                        (push (list (milli-px->px
+                                     (run-span-width mrun a
+                                      (or b (length (run-text mrun)))
+                                      *meta-size*)) (body-lh *meta-size*))
+                              rows)))))
+    (setf rows (nreverse rows))
+    (let* ((cx (+ *margin-x* (floor width 2)))
+           (y
+            (+ *margin-top*
+             (floor (- (safe-height) (reduce #'+ (mapcar #'second rows))) 2))))
+      (loop for (w h) in rows
+            when (> w 0)
+            collect (list (- cx (ceiling w 2)) y (+ cx (ceiling w 2)) (+ y h))
+            do (incf y h)))))
+
+(defun qr-lh () (ceiling (* *qr-caption-size* 14) 10))
+
+(defun qr-corner (deck slide s)
+  "The place of the title slide's QR code and the URL under it, as FIT-QR holds it: the
+largest step and the first corner of the safe area, of bottom right, bottom left, top
+right and top left, where the two cover none of the text at statement size S. The text
+keeps its place whatever the corner. The smallest step at the bottom right, reported,
+when every corner is taken."
+  (let* ((cw
+          (run-full-width (make-text-run (list (deck-url deck)))
+                          *qr-caption-size*))
+         (rects (title-rects deck slide s))
+         (c *qr-clearance*)
+         (lo *margin-x*)
+         (hi (+ *margin-x* (content-width deck)))
+         (bottom (+ *margin-top* (safe-height))))
+    (flet ((place (q corner)
+             (let* ((right (member corner '(:bottom-right :top-right)))
+                    (w (max q cw))
+                    (h (+ q *qr-caption-gap* (qr-lh)))
+                    (x (if right (- hi w) lo))
+                    (y
+                     (if (member corner '(:bottom-right :bottom-left))
+                         (- bottom h)
+                         *margin-top*))
+                    (qx (if right (- hi q) lo))
+                    (cx (if right (- hi cw) lo))
+                    (cy (+ y q *qr-caption-gap*)))
+               (list x y q w (if right "right" "left")
+                     ;; The code and the caption, each with its clearance.
+                     (list (list (- qx c) (- y c) (+ qx q c) (+ y q c))
+                      (list (- cx c) (- cy c) (+ cx cw c) (+ cy (qr-lh) c)))))))
+      (dolist (q *qr-steps*)
+        (dolist (corner '(:bottom-right :bottom-left :top-right :top-left))
+          (let ((p (place q corner)))
+            (when (notany (lambda (r)
+                            (some (lambda (box) (rects-meet-p box r))
+                                  (sixth p))) rects)
+              (return-from qr-corner (subseq p 0 5))))))
+      (report :warning
+              "the QR code covers text of the title slide in every corner; shorten the title")
+      (subseq (place (car (last *qr-steps*)) :bottom-right) 0 5))))
+
 (defun fit-slide (deck slide)
   "Lay out SLIDE and store the result in its FIT slot."
   (prepare-runs deck slide)
@@ -603,7 +715,21 @@ columns' minimum widths when nothing fits."
          (layout (choose-layout slide))
          (fit (make-fit :layout layout)))
     (setf (slide-fit slide) fit)
-    (cond ((member layout '("title" "section") :test #'equal)
+    (cond ((equal layout "title")
+           (multiple-value-bind (s overflow) (fit-centered
+                                              (slide-title-run slide) width 2
+                                              (- (safe-height)
+                                                 (title-extras-height deck slide
+                                                                      width)))
+             (setf (fit-stmt-size fit) s (fit-overflow fit) overflow)
+             (when (deck-url deck)
+               (if (qr-version (utf-8-octets (deck-url deck)))
+                   (setf (fit-qr fit) (qr-corner deck slide s))
+                   (report :error (format nil
+                                   "the :url is ~d bytes; a QR code holds ~d at most"
+                                   (length (utf-8-octets (deck-url deck)))
+                                   *qr-max-bytes*))))))
+          ((equal layout "section")
            (when (slide-title-run slide)
              (setf (fit-stmt-size fit)
                    (fit-centered (slide-title-run slide) width 2))))
