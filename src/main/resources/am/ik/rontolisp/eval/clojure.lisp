@@ -10167,11 +10167,13 @@
 ;; is rebound (never edited), so the record carries only a clearer closure
 ;; over it.
 
-(defvar rontolisp::%clojure-multimethods (make-hash-table :test 'eq)
+(defvar rontolisp::%clojure-multimethods
+  (make-hash-table :test 'eq)
   "A dispatch function to its (methods-getter prefers-getter clearer), made
    by every defmulti beside its tables.")
 
-(defun rontolisp::%clojure-register-multimethod (name fn methods prefers clearer)
+(defun rontolisp::%clojure-register-multimethod
+    (name fn methods prefers clearer)
   "Register FN's table getters, answering NAME (what defun answers, so a
    defmulti answers what it answered before the registry existed). METHODS and
    PREFERS are zero-argument closures over the method and prefers globals,
@@ -10193,12 +10195,11 @@
     ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
     ("Character" . "char") ("Char" . "char") ("Map" . "map")
     ("IPersistentMap" . "map") ("Vector" . "vector")
-    ("IPersistentVector" . "vector") ("Set" . "set")
-    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
-    ("Sequential" . "list") ("Collection" . "list")
-    ("IPersistentList" . "list") ("IPersistentCollection" . "list")
-    ("Fn" . "function") ("IFn" . "function") ("Function" . "function")
-    ("Atom" . "atom"))
+    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
+    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
+    ("Collection" . "list") ("IPersistentList" . "list")
+    ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
+    ("Function" . "function") ("Atom" . "atom"))
   "Simple class names to the kind keyword spelling dispatch stores.")
 
 (defun rontolisp::%clojure-dispatch-name (dv)
@@ -10227,9 +10228,11 @@
       (let ((name (rontolisp::%clojure-dispatch-name dv)))
         (if (null name)
             dv
-            (let ((kind (cdr (assoc (rontolisp::%clojure-dispatch-simple-name name)
-                                    rontolisp::%clojure-dispatch-class-names
-                                    :test #'equal))))
+            (let ((kind
+                   (cdr
+                    (assoc (rontolisp::%clojure-dispatch-simple-name name)
+                           rontolisp::%clojure-dispatch-class-names
+                           :test #'equal))))
               (if kind
                   (list :c%keyword kind)
                   (if (equal name "java.lang.Object")
@@ -10239,8 +10242,7 @@
 (defun rontolisp::%clojure-dispatch-key (dv table)
   "The key TABLE holds DV's row under: the run-time dispatch value through
    the structural-key runtime, like a computed head call's lookup."
-  (rontolisp::%clojure-table-key (rontolisp::%clojure-dispatch-value dv)
-                                 table))
+  (rontolisp::%clojure-table-key (rontolisp::%clojure-dispatch-value dv) table))
 
 ;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
 ;;
