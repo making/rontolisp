@@ -100,7 +100,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul`, `ol`, `li`, `code` (`:lang`, `:file`, `:lines`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -126,6 +126,15 @@ Rules:
 - `code` content is dedented (the common leading whitespace removed, a leading blank
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
+- `(code :file "src/fib.lisp" [:lines (4 6)])` takes its text from a UTF-8 file (a
+  leading byte order mark dropped) instead, lines FIRST to LAST when `:lines` is given,
+  dedented the same way. A relative path resolves against the deck's directory, as an
+  image's does (Images, below). `:lang` defaults by extension: `lisp` / `lsp` / `cl`
+  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, none otherwise. The file is read
+  while the deck is parsed, with or without `--embed` (the code is part of the page), so
+  `:at` and every lint see its lines. A deck can name any file the host can read, so an
+  untrusted deck is rendered where it reads nothing else: the browser host, or WASM with
+  only its directory preopened.
 - Consecutive `column`s form one row of columns; full-width blocks may stand before,
   between and after rows. A column holds blocks, not columns.
 - Text roles are named, never colored: `lead` is a paragraph in the muted color (an
@@ -183,7 +192,8 @@ source string
   -> read      top-level forms + start offsets            (reader.lisp)
   -> expand    template uses replaced by their bodies      (template.lisp)
   -> parse     validated model: deck / slide / block / inline structs,
-               diagnostics for malformed or unknown forms  (model.lisp)
+               code files read, diagnostics for malformed
+               or unknown forms                            (model.lisp, embed.lisp)
   -> embed     image sources as data: URIs, with --embed   (embed.lisp)
   -> segment   Japanese phrase boundaries                  (phrase.lisp)
   -> layout    layout selection + fit solver -> per-slide geometry and sizes
@@ -195,12 +205,14 @@ source string
 The core is a pure function from a string to a string:
 
 ```lisp
-(lispresen:render source &key theme runtime embed) ; => (values html diagnostics)
+(lispresen:render source &key theme runtime read-file embed) ; => (values html diagnostics)
 ```
 
 It does no I/O, so every host (CLI, browser, a Java caller via `rontolisp:jvm-export`)
-is a thin shell over it. `embed` is the one place a host reaches in: a function from an
-image path to the file's bytes, which the CLI passes under `--embed`. A diagnostic is
+is a thin shell over it. `read-file` is the one place a host reaches in: a function from a
+path the deck names to the file's bytes, nil when it cannot be read. Code files are read
+with it, and under `embed` (the CLI's `--embed`) images too. The browser host passes none,
+so a `:file` there is an error. A diagnostic is
 `(severity line slide-number message)`.
 Diagnostic messages are in English.
 
@@ -696,7 +708,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
 | warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
@@ -865,7 +877,7 @@ lispresen/
     reader.lisp          top-level forms with offsets and line numbers
     template.lisp        define templates: substitution on the read forms
     model.lisp           structs and parsing with diagnostics
-    embed.lisp           images as data: URIs, base64
+    embed.lisp           code files as text (UTF-8), images as data: URIs (base64)
     qr.lisp              QR codes of the deck's URL as SVG
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
@@ -888,6 +900,7 @@ lispresen/
     intro.html           its golden output, rendered with --embed
     pipeline.png         the image intro.lisp shows
     logo.svg             its title slide's logo
+    fib.lisp             the code file one of its slides shows lines of
   tools/
     gen-budoux.py        regenerates src/budoux-ja.lisp from BudouX's model
     BUDOUX-LICENSE       BudouX's Apache License 2.0
@@ -909,15 +922,15 @@ before committing a change under `lispresen/`.
   WASM, the WASM component and a native executable (skipped when the jar carries no
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
-  `examples/`, so its image resolves), and requires each output to equal
+  `examples/`, so its files resolve), and requires each output to equal
   `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
   console column and a list column, dark code panels (`:code :dark`), section kickers, an
   agenda, a title slide with an embedded SVG logo and a QR code, a
   quote, an embedded PNG and two callouts (an inline one, and a step one named by `:at` in
-  runnable code), so the
+  runnable code read from a file by `:lines`), so the
   highlighter, the emitted player, template expansion, callout placement and the binary
-  read and base64 are in the comparison.
+  read, UTF-8 decoding and base64 are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
@@ -929,8 +942,9 @@ before committing a change under `lispresen/`.
   numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, step
-  callouts and the callout diagnostics, the kicker diagnostics, base64 padding, and the
-  embedding diagnostics. The golden deck covers
+  callouts and the callout diagnostics, the kicker diagnostics, base64 padding, the
+  embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
+  extension, their diagnostics). The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must

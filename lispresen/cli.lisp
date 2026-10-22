@@ -64,8 +64,8 @@
                     octets))
     (error () nil)))
 
-(defun image-reader (deck)
-  "A function from an image path in DECK to its bytes; a relative path is relative to
+(defun file-reader (deck)
+  "A function from a path DECK names to the file's bytes; a relative path is relative to
 DECK's directory, or to the working directory when DECK is standard input."
   (let* ((slash (position #\/ deck :from-end t))
          (dir
@@ -127,10 +127,10 @@ DECK's directory, or to the working directory when DECK is standard input."
       (multiple-value-bind (html diagnostics) (lispresen:render source
                                                                 :theme theme
                                                                 :runtime runtime
-                                                                :embed
-                                                                (and embed
-                                                                 (image-reader
-                                                                  deck)))
+                                                                :read-file
+                                                                (file-reader
+                                                                 deck)
+                                                                :embed embed)
         (let ((name (if (string= deck "-") "<stdin>" deck))
               (errors 0)
               (warnings 0))

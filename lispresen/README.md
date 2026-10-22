@@ -41,6 +41,7 @@ The design is in [DESIGN.md](DESIGN.md).
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul item...)`, `(ol item...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it |
 | `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge |
+| `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj` and their variants) |
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
@@ -143,10 +144,10 @@ lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
-`.html`. Images are referenced by their path, relative to the deck; `--embed` puts them in
+`.html`. Code files are read into the HTML. Images are referenced by their path, relative to the deck; `--embed` puts them in
 the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
-alone is the whole deck. A WASM build reads them only from a directory `wasmtime run
---dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
+alone is the whole deck. A WASM build reads code files and images only from a directory
+`wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
 

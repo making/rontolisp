@@ -314,19 +314,45 @@
 (slide :title \"b\" (image \"b.png\" :alt \"x\"))
 (slide :title \"c\" (image \"https://example.com/c.png\" :alt \"x\"))
 (slide :title \"d\" (column (image \"d.SVG\" :alt \"x\")))"
-                                                              :embed
+                                                              :read-file
                                                               (lambda (src)
                                                                 (and (string=
                                                                       src
                                                                       "d.SVG")
                                                                      (vector 60
-                                                                      115 62))))
+                                                                      115 62)))
+                                                              :embed t)
       (ok (contains html "src=\"data:image/svg+xml;base64,PHM+\""))
       (ok
        (equal (mapcar #'lispresen::diagnostic-message diagnostics)
               '("cannot embed image a.bmp: unknown type; use .png, .jpg, .jpeg, .gif, .webp, .avif, .svg"
                 "cannot embed image b.png: cannot read it"
-                "image https://example.com/c.png is a URL; only local files are embedded"))))))
+                "image https://example.com/c.png is a URL; only local files are embedded")))))
+  (testing "code files are read as UTF-8, by line range, the language by extension"
+    (let ((a
+           (concatenate 'vector (map 'vector #'char-code ";x
+  (f \"")
+                        #(#xC3 #xA9 #xE2 #x86 #x92 #xF0 #x9D #x84 #x9E)
+                        (map 'vector #'char-code "\")
+  (g)
+"))))
+      (multiple-value-bind (html diagnostics)
+          (lispresen:render "(slide :title \"a\" (code :file \"a.clj\" :lines (2 3)))
+(slide :title \"b\" (code :file \"b.txt\"))
+(slide :title \"c\" (code :file \"c.lisp\"))
+(slide :title \"d\" (code :file \"a.clj\" :lines (3 9)))
+(slide :title \"e\" (code :lines (1 2) \"x\"))"
+                            :read-file
+                            (lambda (path)
+                              (cond ((string= path "a.clj") a)
+                                    ((string= path "b.txt") (vector 255)))))
+        (ok (contains html "data-lang=\"clojure\""))
+        (ok (contains html "é→𝄞"))
+        (ok
+         (equal (mapcar #'lispresen::diagnostic-message diagnostics)
+                '("code file b.txt is not UTF-8" "cannot read code file c.lisp"
+                  ":lines 3-9 runs past the 3 lines of a.clj"
+                  ":lines belongs to (code :file ...)")))))))
 
 (deftest diagnostics
   (ok

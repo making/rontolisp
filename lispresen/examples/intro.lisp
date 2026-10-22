@@ -43,13 +43,11 @@
       (push (list form line) forms)
       (setf pos end))"))
 
-;; A callout on a piece of code, shown by the next page advance.
+;; A callout on a piece of code, shown by the next page advance; the code is lines of a
+;; file beside the deck, its language from the extension.
 (slide :title "その場で動かす"
   (say "Run で 6765 が出る" :at "(fib 20)" :step t
-    (code :lang "lisp" "
-      (defun fib (n)
-        (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-      (fib 20)")))
+    (code :file "fib.lisp" :lines (4 6))))
 
 (slide :title "前のスライドの定義を使う"
   (p "同じ言語のコードは一つの環境を共有する。")
