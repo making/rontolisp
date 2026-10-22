@@ -100,6 +100,27 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 .pv-cur>.thumb{cursor:default}
 .pv-next>.thumb{opacity:.85}
 .pv-notes{overflow:auto;font-size:24px;line-height:1.6;white-space:pre-wrap}
+.say{position:absolute;z-index:4;display:flex;flex-direction:column;justify-content:center;border:3px solid var(--accent);border-radius:16px;background:var(--head-bg);padding:var(--say-y) var(--say-x);font-size:var(--say);line-height:var(--say-lh);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.say::before,.say::after{content:'';position:absolute}
+.say::before{background:var(--accent)}
+.say::after{background:var(--head-bg)}
+.say[data-side=below]::before,.say[data-side=above]::before{left:calc(var(--tail) - 18px);width:36px;height:32px}
+.say[data-side=below]::after,.say[data-side=above]::after{left:calc(var(--tail) - 16px);width:32px;height:29px}
+.say[data-side=below]::before{top:-35px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=below]::after{top:-29px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=above]::before{bottom:-35px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=above]::after{bottom:-29px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=right]::before,.say[data-side=left]::before{top:calc(var(--tail) - 18px);width:32px;height:36px}
+.say[data-side=right]::after,.say[data-side=left]::after{top:calc(var(--tail) - 16px);width:29px;height:32px}
+.say[data-side=right]::before{left:-35px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=right]::after{left:-29px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.slide.editing .say,.say.pending{visibility:hidden}
+#ov .say.pending{visibility:visible}
+#pv .say.pending{visibility:visible;opacity:.35}
+figure.pointed{align-items:flex-end}
+figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
 #stage.pointer #fs{opacity:1}
 #stage.idle{cursor:none}
@@ -141,7 +162,7 @@ html:not(.js) #fs{display:none}
             *margin-x* content)
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}}~%"
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.say.pending{visibility:visible}}~%"
             width *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
@@ -179,6 +200,16 @@ html:not(.js) #fs{display:none}
                        ((eq (car n) :b) (wrap "strong" (second n)))
                        ((eq (car n) :i) (wrap "em" (second n)))
                        ((eq (car n) :mark) (wrap "mark" (second n)))
+                       ((eq (car n) :say)
+                        (if (callout-side (second n))
+                            (progn
+                              (write-string "<span" out)
+                              (write-attribute "aria-describedby"
+                                               (callout-id (second n)) out)
+                              (write-string ">" out)
+                              (walk (third n))
+                              (write-string "</span>" out))
+                            (walk (third n))))
                        ((eq (car n) :tt)
                         (write-string "<code>" out)
                         (chars (second n))
@@ -195,9 +226,21 @@ html:not(.js) #fs{display:none}
 
 ;;; --- blocks ------------------------------------------------------------------------
 
+(defun write-described-by (b out)
+  "The aria-describedby attribute naming the bubbles of the callouts pointing at the
+block B, which the player also finds the anchor by; nothing when there are none."
+  (let ((ids
+         (loop for c in *slide-callouts*
+               when (and (eq (callout-target c) b) (callout-side c))
+               collect (callout-id c))))
+    (when ids
+      (write-attribute "aria-describedby" (format nil "~{~a~^ ~}" ids) out))))
+
 (defun write-list (b out)
   (let ((tag (if (bullets-ordered b) "ol" "ul")))
-    (format out "<~a>" tag)
+    (format out "<~a" tag)
+    (write-described-by b out)
+    (write-string ">" out)
     (dolist (it (bullets-items b))
       (write-string "<li>" out)
       (write-inlines (item-inlines it) (item-run it) out)
@@ -231,6 +274,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (write-string "<pre class=\"code\"" out)
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
+    (write-described-by b out)
     (write-string "><code>" out)
     (write-code-text b out)
     (write-string "</code></pre>" out)
@@ -238,7 +282,9 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (terpri out)))
 
 (defun write-quote (q out)
-  (write-string "<figure class=\"quote\"><blockquote><p>" out)
+  (write-string "<figure class=\"quote\"" out)
+  (write-described-by q out)
+  (write-string "><blockquote><p>" out)
   (write-inlines (quotation-inlines q) (quotation-run q) out)
   (write-string "</p></blockquote>" out)
   (when (quotation-cite q)
@@ -253,7 +299,12 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
   (format out "</div>~%"))
 
 (defun write-figure (b out)
-  (write-string "<figure><img src=\"" out)
+  (write-string "<figure" out)
+  (when (figure-strip b)
+    (format out " class=\"pointed\" style=\"margin-right:~dpx\""
+            (figure-strip b)))
+  (write-described-by b out)
+  (write-string "><img src=\"" out)
   (write-escaped (figure-src b) out)
   (write-string "\" alt=\"" out)
   (write-escaped (or (figure-alt b) "") out)
@@ -289,9 +340,11 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 (defun write-table (b out)
   (let ((s (table-block-size b)))
     (format out
-            "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\">"
+            "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\""
             s (table-lh s) (cell-pad-x s) (cell-pad-y s)
             (reduce #'+ (table-block-widths b)))
+    (write-described-by b out)
+    (write-string ">" out)
     (when (table-block-caption b)
       (write-string "<caption>" out)
       (write-text (table-block-caption b) (table-block-caption-run b) out)
@@ -310,7 +363,9 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 
 (defun write-block (b out)
   (cond ((para-p b)
-         (write-string "<p>" out)
+         (write-string "<p" out)
+         (write-described-by b out)
+         (write-string ">" out)
          (write-inlines (para-inlines b) (para-run b) out)
          (format out "</p>~%"))
         ((bullets-p b) (write-list b out))
@@ -336,8 +391,31 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (format s "--stmt:~dpx;--stmt-lh:~dpx;" (fit-stmt-size fit)
               (statement-lh (fit-stmt-size fit))))))
 
+(defun write-callout (deck c out)
+  "The bubble of the callout C, placed where the fit solver found room for it. Its tail
+is drawn by the stylesheet at --tail along the side facing the anchor. A step bubble is
+shown here; the player hides it until a page advance."
+  (let ((s (callout-size c))
+        (step
+         (if (eq (callout-step c) :deck)
+             (eq (deck-callouts deck) :step)
+             (callout-step c))))
+    (format out
+            "<div class=\"say~:[~; step~]~:[~; overflow~]\" id=\"~a\" role=\"note\" data-side=\"~a\""
+            step (callout-overflow c) (callout-id c) (callout-side c))
+    (when (callout-at c) (write-attribute "data-at" (callout-at c) out))
+    (format out
+            " style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;--say:~dpx;--say-lh:~dpx;--say-x:~dpx;--say-y:~dpx;--tail:~dpx\"><p>"
+            (callout-x c) (callout-y c) (callout-width c) (callout-height c) s
+            (say-lh s) (say-pad-x s) (say-pad-y s)
+            (- (callout-tail c) *say-border*))
+    (write-text (callout-text c) (callout-run c) out)
+    (format out "</p></div>~%")))
+
 (defun write-slide (deck slide out)
-  (let* ((fit (slide-fit slide)) (layout (fit-layout fit)))
+  (let* ((fit (slide-fit slide))
+         (layout (fit-layout fit))
+         (*slide-callouts* (slide-callouts slide)))
     (format out "<section class=\"slide layout-~a" layout)
     (when (stringp (slide-class slide))
       (write-char #\Space out)
@@ -380,7 +458,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
              (if (column-p b)
                  (write-column b (fit-region-width fit) out)
                  (write-block b out)))
-           (format out "</div>~%")))
+           (format out "</div>~%")
+           (dolist (c (slide-callouts slide)) (write-callout deck c out))))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
@@ -409,8 +488,9 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)
   (write-config deck out)
-  (format out "<script>(function(){~a~a~a})();</script>~%</body>~%</html>~%"
+  (format out "<script>(function(){~a~a~a~a})();</script>~%</body>~%</html>~%"
           *player-script* (if (deck-runnable-p deck) *runner-script* "")
+          (if (some #'slide-callouts (deck-slides deck)) *say-script* "")
           *start-script*))
 
 (defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
@@ -421,8 +501,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
                 (region-blocks (slide-blocks slide)))) (deck-slides deck)))
 
 (defun write-config (deck out)
-  "The numbers the player needs: the type scale for the runtime check, and where the
-runtime is when the deck has runnable code."
+  "The numbers the player needs: the type scale for the runtime check, the geometry of a
+callout's bubble, and where the runtime is when the deck has runnable code."
   (write-string "<script type=\"application/json\" id=\"lp\">{\"runtime\":" out)
   (if (deck-runnable-p deck)
       (let ((r (deck-runtime deck)))
@@ -433,9 +513,12 @@ runtime is when the deck has runnable code."
   (format out ",\"top\":~d,\"bottom\":~d,\"gap\":~d,\"steps\":{" *margin-top*
           *margin-bottom* *title-gap*)
   (format out
-          "\"title\":[~{~d~^,~}],\"body\":[~{~d~^,~}],\"code\":[~{~d~^,~}],\"table\":[~{~d~^,~}],\"stmt\":[~{~d~^,~}]}}"
+          "\"title\":[~{~d~^,~}],\"body\":[~{~d~^,~}],\"code\":[~{~d~^,~}],\"table\":[~{~d~^,~}],\"stmt\":[~{~d~^,~}]},"
           *title-steps* *body-steps* *code-steps* *table-steps*
           *statement-steps*)
+  (format out
+   "\"say\":{\"reach\":~d,\"half\":~d,\"inset\":~d,\"clear\":~d,\"border\":~d}}"
+   *tail-reach* *tail-half* *tail-inset* *say-clearance* *say-border*)
   (format out "</script>~%"))
 
 (defun write-json-chars (s out)

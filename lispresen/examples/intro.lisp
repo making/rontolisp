@@ -22,7 +22,7 @@
   (p "スライドごとに、収まる最大の段を " (b "段階表") " から選ぶ。")
   (ol "本文は 56px から 40px まで"
       "最小でも収まらなければエラーとして報告する"
-      (li "日本語は " (mark "文節") " で改行する")))
+      (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")))
 
 (slide :title "全体像"
   (image "pipeline.png"
@@ -37,11 +37,13 @@
       (push (list form line) forms)
       (setf pos end))"))
 
+;; A callout on a piece of code, shown by the next page advance.
 (slide :title "その場で動かす"
-  (code :lang "lisp" "
-    (defun fib (n)
-      (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-    (fib 20)"))
+  (say "Run で 6765 が出る" :at "(fib 20)" :step t
+    (code :lang "lisp" "
+      (defun fib (n)
+        (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+      (fib 20)")))
 
 (slide :title "前のスライドの定義を使う"
   (p "同じ言語のコードは一つの環境を共有する。")

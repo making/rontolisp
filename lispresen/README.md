@@ -34,7 +34,7 @@ The design is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :theme :aspect :runtime :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)`, `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below) |
+| `(deck :title :author :date :theme :aspect :runtime :callouts :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)`, `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below) |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:layout name] [:class "c"] block...)` | a slide |
 | `"text"`, `(p inline...)` | a paragraph |
@@ -46,6 +46,7 @@ The design is in [DESIGN.md](DESIGN.md).
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
 | `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(link "url" ...)` | inline content |
+| `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
 | `(define name (param... [&rest rest]) body...)` | a template (below) |
 
 The deck is read, never evaluated: no macros, no backquote, no reader conditionals, no
@@ -67,6 +68,33 @@ inlines.
 
 Keywords are not substituted (a parameter `title` leaves `:title` alone), and a template
 or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
+
+## Callouts
+
+`say` puts a short comment in a speech bubble whose tail points at what it wraps: a
+phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
+block named by its text.
+
+```lisp
+(li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")
+
+(say "Run で 6765 が出る" :at "(fib 20)"
+  (code :lang "lisp" "
+    (defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+    (fib 20)"))
+```
+
+lispresen places the bubble beside its target where it covers no text: right of it,
+below, above or left, in that order. A bubble takes no room from the slide; when there is
+no free space for it, the bubble text and then the body text get smaller, and a bubble
+that still finds none is outlined in red and reported as an error. A bubble on an image
+gets a strip on the image's right.
+
+A bubble is shown with its slide. With `:step t` (or `(deck :callouts :step)` for every
+bubble, `:step nil` to opt one out) it appears on the next page advance instead: each
+advance shows the next bubble of the slide before moving on, and going back hides them
+again. Print and the overview show every bubble; the presenter window shows the ones
+still to come faded.
 
 ## Running
 

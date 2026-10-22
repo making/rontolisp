@@ -137,6 +137,69 @@
       (ok (contains html "<td class=\"right\">1,204</td>"))
       (ok (contains html "<td>x</td>")))))
 
+(defun callout-side (html id)
+  "The side the bubble ID was placed on in HTML."
+  (let* ((at (search (format nil "id=\"~a\"" id) html))
+         (side (search "data-side=\"" html :start2 at)))
+    (subseq html (+ side 11) (position #\" html :start (+ side 11)))))
+
+(deftest callouts
+  (testing "a bubble goes right of an anchor ending its line, below one inside it"
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (ul (say \"c\" \"短い項目\") (li \"日本語は \" (say \"d\" (mark \"文節\")) \" で改行する\")))")))
+      (ok (equal (callout-side html "s1c1") "right"))
+      (ok (equal (callout-side html "s1c2") "below"))
+      (ok
+       (contains html
+                 "<span aria-describedby=\"s1c2\"><mark>文節</mark></span>"))))
+  (testing "left of a right-aligned cell, right of an image, below a piece of code"
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (table :header (\"a\" \"b\") (\"x\" (say \"c\" \"31\")) (\"y\" \"12\")))
+(slide :title \"t\" (say \"c\" (image \"a.png\" :alt \"x\")))
+(slide :title \"t\" (say \"c\" :at \"(f 2)\" (code :lang \"lisp\" \"(defun f (x) x)
+(f 2)\")))")))
+      (ok (equal (callout-side html "s1c1") "left"))
+      (ok (equal (callout-side html "s2c1") "right"))
+      (ok (contains html "<figure class=\"pointed\" style=\"margin-right:"))
+      (ok (equal (callout-side html "s3c1") "below"))
+      (ok (contains html "data-at=\"(f 2)\""))))
+  (testing "a callout without room is marked and reported, a slide with one is no statement"
+    (let* ((line
+            (format nil "~{~a~}" (loop repeat 4 collect "とても長い項目を何度も繰り返して書く")))
+           (deck
+            (format nil
+                    "(slide :title \"t\" \"~a\" (p \"~a\" (say \"c\" \"文字\") \"~a\") \"~a\")
+(slide (say \"c\" \"一文\"))" line line line line)))
+      (multiple-value-bind (html diagnostics) (lispresen:render deck)
+        (ok (contains html "class=\"say overflow\" id=\"s1c1\""))
+        (ok (contains html "layout-standard\" id=\"s2\""))
+        (dolist (message
+                 '("the callout \"c\" has no room beside its anchor; shorten it or the slide"
+                   "callout text at 36px (floor 40px); shorten the callouts or make room"))
+          (ok
+           (member message (mapcar #'lispresen::diagnostic-message diagnostics)
+                   :test #'equal))))))
+  (testing "a page advance shows a step bubble, by its :step or the deck's :callouts"
+    (let ((html
+           (lispresen:render
+            "(deck :callouts :step)
+(slide :title \"t\" (ul (say \"a\" \"x\") (say \"b\" :step nil \"y\")))")))
+      (ok (contains html "class=\"say step\" id=\"s1c1\""))
+      (ok (contains html "class=\"say\" id=\"s1c2\""))))
+  (testing "malformed callouts"
+    (ok
+     (equal (render-diagnostics
+             "(deck :callouts :later)
+(slide :title \"t\" (say \"a\" :at \"y\" (code \"x\")) (say \"b\" :at \"x\" (p \"x\")))
+(slide :title \"t\" (p (say 1 \"x\") (say \"c\")))")
+            '((:error 1 ":callouts must be :shown or :step")
+              (:error 2 "the :at text \"y\" is not on a line of the code")
+              (:error 2 ":at belongs to a callout around a code block")
+              (:error 3 "(say ...) takes the comment string first")
+              (:error 3 "(say ...) needs the content it points at"))))))
+
 (deftest templates
   (testing "a use is the body with its arguments substituted, &rest spliced"
     ;; t2 is defined after t1 and before the use; :title is not the parameter title.

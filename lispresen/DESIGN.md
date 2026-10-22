@@ -39,7 +39,8 @@ Goals:
 - One HTML file. Without runnable code it has no network dependency at all.
 
 Non-goals: WYSIWYG editing, animations/transitions, free-form positioning, PowerPoint
-export.
+export. The one build step is a callout shown by a page advance (Callouts, below); it
+appears at once, without a transition.
 
 ## Deck format
 
@@ -53,6 +54,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :theme :light            ; :light | :dark | :high-contrast | (theme ...), below
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
+      :callouts :shown         ; :shown | :step, below
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -93,8 +95,8 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:layout`, `:class`), `define` (below) |
-| Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes` |
-| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark` |
+| Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
+| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
 
@@ -211,8 +213,10 @@ in the 1696 px body box.
 | Code | 44 | 40, 36, 32 | 32 | 28 | 1.4 | 64 (half-width) |
 | Table | 48 | 44, 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
 | Statement | 120 | 104, 88, 72 | -- | 56 | 1.35 | 14 |
+| Callout | 44 | 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
 
-Sizes only step down from the default, never up. A sparse slide keeps the default size
+A callout is never larger than the slide's body text. Sizes only step down from the
+default, never up. A sparse slide keeps the default size
 rather than inflating, so text size stays consistent across the deck; only the statement,
 section and title layouts have their own larger scale. Line heights are those of
 Japanese body text (1.5 and up); the Latin-oriented 1.2-1.4 crowds kanji.
@@ -284,7 +288,7 @@ phrases (文節), not between arbitrary characters.
 |-------|--------|
 | Deck header (generated first slide) | `title` |
 | `section` | `section` (large, centered) |
-| No title, one short paragraph | `statement` (centered, statement scale) |
+| No title, one short paragraph, no callout | `statement` (centered, statement scale) |
 | Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
@@ -373,6 +377,99 @@ use the same `<wbr>` phrase breaks as body text, so the browser wraps each cell 
 the model did. The header row is bold on a tinted background, and each body row has a
 1 px rule drawn as an inset shadow, which takes no layout space.
 
+### Callouts
+
+```lisp
+(li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")
+
+(say "Run で 6765 が出る" :at "(fib 20)" :step t
+  (code :lang "lisp" "..."))
+
+(say "四つの段階を順に通る" (image "img/arch.png" :alt "..."))
+```
+
+A callout is a short comment in a speech bubble whose tail points at what it is about,
+its anchor. The deck names the anchor, never a position; lispresen places the bubble.
+
+- Inline, `(say "comment" inline...)` wraps its anchor: a phrase, a whole list item, a
+  table cell's text. It goes wherever inline content goes, inside `b` or `mark` too.
+- Around a block, `(say "comment" block)` points at one `p`, `ul`, `ol`, `code`, `image`,
+  `table` or `quote` as a whole. In block position a `say` whose content is one such form
+  is this kind; anything else is a paragraph holding an inline callout.
+- `:at "text"` on a callout around `code` points at the first occurrence of the text,
+  which must lie within one line. Code is one string, so the anchor is named by its text
+  rather than wrapped; a line number would go stale when a line is added above.
+- The comment is a string. Titles, captions and notes take no callouts, and a slide with
+  one never takes the statement layout: its centered, balanced lines are not where the
+  model puts them.
+
+**Room.** A bubble is an overlay, like the runnable-code output: it takes no room in the
+flow, so a comment never re-wraps the text it is about. It is placed in the free space of
+the geometry the fit solver computed, in canvas px:
+
+- a text line is a rectangle as wide as its text (the model's widths, trailing spaces
+  excluded) and as tall as its line height, offset by its alignment (right or centered
+  in table cells, centered in figure captions); a list item's first line reaches left
+  over its marker;
+- a code line is its monospace width inside the panel's padding, and runnable code adds
+  its Run and Reset buttons (320 x 48 px, 12 px inside the top right corner);
+- an image is its whole picture area, since its own size is not known at build time;
+- a bubble already placed, with its tail.
+
+Backgrounds and rules are not obstacles: a bubble may sit over the empty part of a code
+panel or a table. An inline anchor is the part of each line its text takes, one fragment
+per line; a block anchor is the block's box (code, table, image) or the rectangle around
+its lines (text). The width model over-estimates Latin text, so a static tail can land a
+few px to the right of where the browser draws the anchor; the runtime check corrects it.
+
+**The bubble.** Text at the callout size, line height 1.4, padding s/4 by s/2, a 3 px
+accent border with a 16 px radius on the `head-bg` color, at most half the content width
+wide. The tail is 32 px long on a 36 px base and stops 4 px short of the anchor, so the
+bubble's edge is 36 px from it, and its middle stays 34 px (the radius and half the base)
+from a corner.
+
+**Candidates**, tried in order:
+
+1. right of the anchor's last fragment, centered on it vertically, then running down
+   from it, then up;
+2. below the last fragment, centered on it, then running right, then left;
+3. above the first fragment, likewise;
+4. left of the first fragment, as right.
+
+Each is moved into the body box along its side as long as the tail stays on that side. A
+candidate fails when the bubble leaves the body box, when the bubble grown by 12 px on
+every side meets an obstacle, or when the box the tail spans (the 36 px reach by its
+base) meets one. The anchor's own lines are obstacles, so a bubble never covers its
+anchor. Right comes first because it covers no following line: it holds when the anchor
+ends its line (a list item, the last phrase of a line) and the lines beside it are
+shorter. Below suits the last line of the content, above a line after a short one, and
+left a right-aligned table cell, whose neighbors stand at the far ends of their columns.
+
+**Images.** An image fills the room the other blocks leave, so there is no free space
+around it. A callout on one reserves a strip on the figure's right, as wide as the bubble
+plus its reach, and sets the image against the strip (`align-items: flex-end`). The
+middle of the image box's right edge is then on the picture whatever its aspect ratio
+(narrower: the picture fills the box's height at its right edge; wider: it fills the
+width at mid height), and the bubble sits in the strip, its tail at that point.
+
+**Sizes.** Callouts are placed in source order, each an obstacle for the next, at one size
+per slide: the largest callout step at which every one finds room. When none does, the
+body steps down too (shorter lines leave more room), down to the hard floor. A callout
+that has no room even then is emitted at its centered position below the anchor at the
+smallest size, outlined like an overflow, and reported as an error.
+
+**Visibility.** A callout is shown with the slide, unless it is a step: `:step t`, or every
+callout of a deck with `:callouts :step` (`:step nil` opts one out). The player hides the
+step bubbles of a slide when it is entered forward; each page advance (→, ↓, space,
+PageDown, Enter, a swipe) shows the next in source order before the next one moves to
+the next slide, and going back hides the last one shown before it moves to the previous
+slide, which it enters with all its bubbles shown. Every step bubble is placed when the
+slide is laid out, so showing one moves nothing. The presenter window and the audience
+window share the step with the slide number; the presenter's views show a hidden bubble
+faded. The overview, print and the page without JavaScript show every bubble. While a
+code block of the slide is edited, its bubbles are hidden, since the edited text may run
+under them, and placed again on every change.
+
 ### Runtime check
 
 The static estimate cannot see the font the presenting machine actually has. After
@@ -385,9 +482,15 @@ still overflowing there is marked like a build-time overflow. Each step is logge
 the corrected slides. The player derives the line heights, gaps and padding of a step with
 the formulas of `layout.lisp`, multiplying before dividing so they round as the integer
 arithmetic does; the type scale itself comes from the JSON the emitter writes
-(`<script type="application/json" id="lp">`). JavaScript is a correction
-on top of the static result, not a replacement for it, so the deck still lays out
-correctly with JavaScript disabled and when printed.
+(`<script type="application/json" id="lp">`). After the size
+corrections, the player places every callout of the slide again, with the candidates
+above, on measured geometry: the anchor's client rects (the `:at` text through a
+`Range`), the client rects of every text node, the picture areas and the Run and Reset
+buttons; the bubble keeps its size. So the tail lands on the anchor the browser drew. A
+callout that changes side is listed like a step, and one that finds no room keeps its
+static place and is outlined. JavaScript is a correction on top of the static result,
+not a replacement for it, so the deck still lays out correctly with JavaScript disabled
+and when printed.
 
 ## Runnable code
 
@@ -482,14 +585,14 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
 
 The contrast lint checks every text color against the background it is set on: `fg`,
-`muted` and `accent` on `bg`, `fg` on `head-bg` and `mark`, and `fg`, `muted` and the four
+`muted` and `accent` on `bg`, `fg` on `head-bg` (table headers and callouts) and `mark`, and `fg`, `muted` and the four
 highlight colors on `code-bg`. Every one of them carries body-size text somewhere (the
 accent colors links, the muted color captions and code comments), so each needs WCAG AA
 for normal text, 4.5:1; a separate 3:1 for large titles would only matter for a title
@@ -524,6 +627,11 @@ One file containing:
   below),
   the runtime check, a presenter window (`P`, below), and the runnable-code worker,
   included only when the deck has runnable code.
+- Callouts as `<div class="say" role="note" data-side="below" style="left:...;top:...">`
+  after the body, each named by its anchor's `aria-describedby` (an inline anchor is a
+  `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
+  triangles of the border and the fill color, and the bubble prints with its colors
+  (`print-color-adjust: exact`).
 - Speaker notes in `<aside class="notes">`, hidden in the audience view.
 
 ### Overview and presenter window
@@ -615,7 +723,7 @@ The browser host is an editor page: the deck source on the left, the rendered de
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
 and a download button for the HTML. The reactor returns the HTML and the diagnostics in
 one string (a fixed separator line), since a reactor export returns a single value. The
-lispresen reactor (766 KB) renders; the preview's runnable code loads the playground
+lispresen reactor (887 KB) renders; the preview's runnable code loads the playground
 runtime like any other deck. The preview keeps its slide across re-renders through
 `window.lispresen` (`show`, `current`), which the player defines. The reactor's
 arguments and results are allocated by a bump allocator that is never reset (about 15 KB
@@ -680,24 +788,27 @@ before committing a change under `lispresen/`.
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
   `examples/`, so its image resolves), and requires each output to equal
   `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
-  blocks, a columns slide built from a `&rest` template, a quote and an embedded PNG, so
-  the highlighter, the emitted player, template expansion and the binary read and base64
-  are in the comparison.
+  blocks, a columns slide built from a `&rest` template, a quote, an embedded PNG and two
+  callouts (an inline one, and a step one named by `:at` in runnable code), so the
+  highlighter, the emitted player, template expansion, callout placement and the binary
+  read and base64 are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the
   three table-width cases, numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), template expansion and its diagnostics and
-  bounds, base64 padding, and the embedding diagnostics. The golden deck covers
+  bounds, the side each kind of callout anchor gets, an unplaceable callout, step
+  callouts and the callout diagnostics, base64 padding, and the embedding diagnostics. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must
   report no paragraph where the model predicts fewer lines than the browser; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout; the
-  presenter window must follow navigation both ways, show edits and outputs, and
-  forward Run; Start must put the audience window in full screen on the other display,
+  presenter window must follow navigation both ways, step callouts included, show edits
+  and outputs, and forward Run; a callout must sit beside its anchor after the runtime
+  check; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.
@@ -711,7 +822,7 @@ before committing a change under `lispresen/`.
    highlighting, theme overrides and the contrast lint, browser editor.
 3. `define` templates, `--embed` images.
 
-All three phases are implemented. The compiled CLI is 297 KB as a jar, 788 KB as a WASM
+All three phases are implemented, and callouts after them. The compiled CLI is 297 KB as a jar, 788 KB as a WASM
 module, 796 KB as a component and 6.7 MB as a native executable (macOS arm64, measured
 2026-10-22 after phase 3); the BudouX weights are 17 KB of source.
 
@@ -726,6 +837,17 @@ Lisp, Scheme and Clojure definitions across `rontoEval` calls. Safari 26.3 (2026
 through `safaridriver`): the calibration page reports 0 paragraphs under the browser and
 1 over; the golden deck loads the hosted runtime, runs, shares definitions, recovers from
 a timeout, and the editor keys, overview and presenter window behave as in Chrome.
+
+Callouts (2026-10-22, Chrome 155 through DevTools and Safari 26.3 through `safaridriver`):
+the golden deck and a deck with a callout on an image, a right-aligned table cell, a
+column, a list item and a long paragraph place every bubble on the side the static layout
+chose, the runtime check moving it only so the tail meets the measured anchor (by up to
+18 px: the glyph box against the line box, and the Latin over-estimate), with the same
+coordinates in both browsers. A step bubble shows on an advance, hides on going back, and
+is shown when its slide is entered backward; the presenter window follows steps both ways
+(over HTTP, as `BroadcastChannel` needs an origin) and shows the hidden ones faded; the
+overview and print (headless Chrome `--print-to-pdf`) show all; editing the code hides
+the bubble, and the next placement follows the moved `:at` text.
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.

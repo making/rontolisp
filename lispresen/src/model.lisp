@@ -5,17 +5,39 @@
 ;;;; of an IMAGE, the URL of a LINK).
 ;;;;
 ;;;; Inline content is a list of nodes: a string, (:b nodes), (:i nodes), (:mark nodes),
-;;;; (:tt "string") or (:link "url" nodes).
+;;;; (:tt "string"), (:link "url" nodes) or (:say callout nodes).
 ;;;;
 ;;;; A deck can be rendered from an untrusted source, so nothing here evaluates a form.
 
 (in-package :lispresen)
 
-(defstruct deck line title author date theme aspect runtime page-numbers slides)
+(defstruct deck
+  line
+  title
+  author
+  date
+  theme
+  aspect
+  runtime
+  page-numbers
+  callouts
+  slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
-(defstruct slide number line kind title layout class blocks notes title-run fit)
+;;; CALLOUTS lists the slide's callouts in source order.
+(defstruct slide
+  number
+  line
+  kind
+  title
+  layout
+  class
+  blocks
+  notes
+  title-run
+  fit
+  callouts)
 
 (defstruct para inlines run)
 (defstruct bullets ordered items)
@@ -23,7 +45,8 @@
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
 ;;; fitted, from the language, RUN and the deck's runtime.
 (defstruct code-block lang lines (run t) runnable timeout fresh stdin)
-(defstruct figure src alt caption caption-run)
+;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
+(defstruct figure src alt caption caption-run strip)
 (defstruct table-block
   header
   rows
@@ -37,6 +60,33 @@
 (defstruct cell inlines colspan run)
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
+
+;;; A comment in a speech bubble pointing at its anchor. TARGET is the block it points
+;;; at, nil for an inline anchor (the run holding it lists it among its ANCHORS); AT is
+;;; the text that names the anchor inside a code block; STEP is the :step option, :deck
+;;; when the deck's :callouts decides whether a page advance shows the bubble. The rest
+;;; is set when the slide
+;;; is fitted (layout.lisp): RUN is the comment's text run, FRAGMENTS the anchor's
+;;; rectangles (one per line), and SIZE, SIDE, X, Y, WIDTH, HEIGHT and TAIL place the
+;;; bubble.
+(defstruct callout
+  id
+  text
+  at
+  step
+  target
+  run
+  fragments
+  size
+  side
+  x
+  y
+  width
+  height
+  tail
+  overflow)
+
+(defvar *callouts* nil "The callouts of the slide being parsed, newest first.")
 
 ;;; --- form helpers ------------------------------------------------------------
 
@@ -130,7 +180,39 @@ a line break between two wide characters, one space otherwise."
 ;;; --- inline content ----------------------------------------------------------
 
 (defun inline-tag-p (tag)
-  (member tag '("B" "I" "MARK" "TT" "LINK") :test #'equal))
+  (member tag '("B" "I" "MARK" "TT" "LINK" "SAY") :test #'equal))
+
+(defun say-content (form)
+  "The arguments of (say \"comment\" [:at \"text\"] content...) after the comment and
+the options."
+  (let ((args (cddr form)))
+    (loop while (and args (keywordp (car args))) do (setf args (cddr args)))
+    args))
+
+(defun parse-say (form)
+  "A new callout for (say \"comment\" [:at \"text\"] [:step t] content...), registered
+in *CALLOUTS*; nil after reporting a malformed one."
+  (let ((text (cadr form)))
+    (multiple-value-bind (opts content)
+        (split-options (cddr form) '("AT" "STEP") "say")
+      (cond ((not (stringp text))
+             (report :error "(say ...) takes the comment string first")
+             nil)
+            ((null content)
+             (report :error "(say ...) needs the content it points at")
+             nil)
+            (t
+             (let ((c
+                    (make-callout :text (text-leaf text)
+                                  :at (raw-string-option opts "AT" "say")
+                                  :step (if (assoc "STEP" opts :test #'string=)
+                                            (and (opt opts "STEP") t)
+                                            :deck))))
+               (when (equal (callout-at c) "")
+                 (report :error ":at of say must not be empty")
+                 (setf (callout-at c) nil))
+               (push c *callouts*)
+               c))))))
 
 (defun parse-inline (x)
   "The inline nodes X stands for; an unknown form is reported and dropped."
@@ -149,6 +231,15 @@ a line break between two wide characters, one space otherwise."
                  (progn
                    (report :error "(tt ...) takes strings only")
                    nil)))
+            ((equal tag "SAY")
+             (let ((c (parse-say x)) (nodes (parse-inlines (say-content x))))
+               (cond ((null c) nodes)
+                     (t
+                      (when (callout-at c)
+                        (report
+                         :error ":at belongs to a callout around a code block")
+                        (setf (callout-at c) nil))
+                      (list (list :say c nodes))))))
             ((equal tag "LINK")
              (if (stringp (cadr x))
                  (list
@@ -362,12 +453,42 @@ and the common indentation removed."
                                    (mapcar (lambda (x) (parse-block x t))
                                            (cdr form))))))
 
+(defparameter *anchor-blocks*
+  '("P" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE")
+  "The blocks a callout can point at as a whole.")
+
+(defun parse-block-say (form in-column)
+  "The block (say ...) stands for in block position: the one block it wraps, which its
+callout points at, or else a paragraph holding it as inline content."
+  (let ((content (say-content form)))
+    (if (not
+         (and (= (length content) 1)
+              (member (form-tag (car content)) *anchor-blocks* :test #'equal)))
+        (make-para :inlines (parse-inline form))
+        (let* ((c (parse-say form)) (b (parse-block (car content) in-column)))
+          (when c
+            (cond ((null b) (setf *callouts* (remove c *callouts*)))
+                  ((and (callout-at c) (not (code-block-p b)))
+                   (report
+                    :error ":at belongs to a callout around a code block")
+                   (setf (callout-at c) nil))
+                  ((and (callout-at c)
+                        (notany (lambda (l) (search (callout-at c) l))
+                                (code-block-lines b)))
+                   (report :error (format nil
+                                          "the :at text ~s is not on a line of the code"
+                                          (callout-at c)))
+                   (setf (callout-at c) nil)))
+            (setf (callout-target c) b))
+          b))))
+
 (defun parse-block (x &optional in-column)
   "The block X stands for, or nil after reporting. IN-COLUMN is true inside a column."
   (cond ((stringp x) (make-para :inlines (list (text-leaf x))))
         ((consp x)
          (let ((tag (form-tag x)))
            (cond ((equal tag "P") (make-para :inlines (parse-inlines (cdr x))))
+                 ((equal tag "SAY") (parse-block-say x in-column))
                  ((list-tag-p x) (parse-list x))
                  ((equal tag "CODE") (parse-code x))
                  ((equal tag "IMAGE") (parse-image x))
@@ -394,6 +515,7 @@ and the common indentation removed."
       (split-options (cdr form) '("TITLE" "LAYOUT" "CLASS") "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
+           (*callouts* nil)
            (blocks nil)
            (notes nil))
       (dolist (x body)
@@ -405,10 +527,14 @@ and the common indentation removed."
       (when (and (some #'column-p blocks) (notevery #'column-p blocks))
         (report :error "a slide with columns holds only (column ...) blocks")
         (setf blocks (remove-if-not #'column-p blocks)))
+      (let ((i 0))
+        (dolist (c (reverse *callouts*))
+          (setf (callout-id c) (format nil "s~dc~d" number (incf i)))))
       (make-slide :number number
        :line line
        :kind :slide
        :title title
+       :callouts (reverse *callouts*)
        :layout (let ((l (opt opts "LAYOUT")))
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
@@ -438,7 +564,8 @@ and the common indentation removed."
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
-                                                    "PAGE-NUMBERS") "deck")
+                                                    "PAGE-NUMBERS" "CALLOUTS")
+                                                  "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -446,7 +573,17 @@ and the common indentation removed."
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
-               :page-numbers (opt opts "PAGE-NUMBERS"))))
+               :page-numbers (opt opts "PAGE-NUMBERS")
+               :callouts (parse-callouts-option (opt opts "CALLOUTS")))))
+
+(defun parse-callouts-option (x)
+  "The deck's :callouts as :step (a page advance shows each bubble) or :shown."
+  (cond ((null x) :shown)
+        ((equal (symbol-value-name x) "STEP") :step)
+        ((equal (symbol-value-name x) "SHOWN") :shown)
+        (t
+         (report :error ":callouts must be :shown or :step")
+         :shown)))
 
 (defun parse-deck (forms)
   "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers."

@@ -68,28 +68,32 @@ not treat as letters."
 ;;; A paragraph's text with what wrapping needs. STYLES holds :normal, :bold or :mono
 ;;; per character, BREAKS is true at I when a line may start at character I, WIDTHS is
 ;;; milli-em per character, and UNITS lists (START END W WSP) for each stretch between
-;;; break opportunities, W excluding and WSP being its trailing spaces.
-(defstruct run text styles breaks widths units)
+;;; break opportunities, W excluding and WSP being its trailing spaces. ANCHORS lists
+;;; (CALLOUT START END) for each callout whose anchor is the characters START below END.
+(defstruct run text styles breaks widths units anchors)
 
 (defun flatten-inlines (inlines bold)
-  "The text of INLINES and the style of each of its characters."
-  (let ((styles nil))
+  "The text of INLINES, the style of each of its characters, and the anchors of the
+callouts in it."
+  (let ((styles nil) (anchors nil) (i 0))
     (values (with-output-to-string (out)
-              (labels ((walk (nodes style)
+              (labels ((chars (s style)
+                         (loop for c across s
+                               do (write-char c out) (push style styles)
+                                 (incf i)))
+                       (walk (nodes style)
                          (dolist (n nodes)
-                           (cond ((stringp n)
-                                  (loop for c across n
-                                        do (write-char c out)
-                                          (push style styles)))
-                                 ((eq (car n) :tt)
-                                  (loop for c across (second n)
-                                        do (write-char c out)
-                                          (push :mono styles)))
+                           (cond ((stringp n) (chars n style))
+                                 ((eq (car n) :tt) (chars (second n) :mono))
                                  ((eq (car n) :b) (walk (second n) :bold))
                                  ((eq (car n) :link) (walk (third n) style))
+                                 ((eq (car n) :say)
+                                  (let ((start i))
+                                    (walk (third n) style)
+                                    (push (list (second n) start i) anchors)))
                                  (t (walk (second n) style))))))
                 (walk inlines (if bold :bold :normal))))
-            (coerce (nreverse styles) 'simple-vector))))
+            (coerce (nreverse styles) 'simple-vector) (nreverse anchors))))
 
 (defun compute-units (text breaks widths)
   (let ((n (length text)) (units nil) (start 0))
@@ -106,7 +110,7 @@ not treat as letters."
 
 (defun make-text-run (inlines &key bold)
   "The run of INLINES; BOLD sets the whole text bold, as a title is."
-  (multiple-value-bind (text styles) (flatten-inlines inlines bold)
+  (multiple-value-bind (text styles anchors) (flatten-inlines inlines bold)
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
@@ -129,15 +133,17 @@ not treat as letters."
                 :styles styles
                 :breaks breaks
                 :widths widths
-                :units (compute-units text breaks widths)))))
+                :units (compute-units text breaks widths)
+                :anchors anchors))))
 
 (defun split-unit (run unit size limit)
-  "Lines beyond the first a unit wider than LIMIT takes when broken between characters
-(never before a character a line must not start with), and the width of its last line."
+  "The starts of the lines beyond the first a unit wider than LIMIT takes when broken
+between characters (never before a character a line must not start with), in reverse
+order, and the width of its last line."
   (let* ((text (run-text run))
          (widths (run-widths run))
          (end (second unit))
-         (extra 0)
+         (starts nil)
          (cur 0)
          (count 0)
          (prev 0))
@@ -148,32 +154,46 @@ not treat as letters."
           do
             (let ((cw (px (svref widths j) size)))
               (cond ((and (> count 0) (> (+ cur cw) limit))
-                     (incf extra)
                      (if (and (> count 1) (no-start-p (char text j)))
-                         (setf cur (+ prev cw) count 2)
-                         (setf cur cw count 1)))
+                         (setf cur (+ prev cw) count 2 starts
+                               (cons (1- j) starts))
+                         (setf cur cw count 1 starts (cons j starts))))
                     (t
                      (incf cur cw)
                      (incf count)))
               (setf prev cw)))
-    (values extra cur)))
+    (values starts cur)))
 
-(defun run-lines (run size avail)
-  "The lines RUN takes at SIZE px, wrapped greedily into AVAIL px."
-  (let ((limit (* avail 1000)) (lines 1) (cur 0))
-    (dolist (u (run-units run) lines)
+(defun wrap-run (run size avail)
+  "The index of the first character of each line RUN takes at SIZE px, wrapped greedily
+into AVAIL px."
+  (let ((limit (* avail 1000)) (starts (list 0)) (cur 0))
+    (dolist (u (run-units run) (nreverse starts))
       (let ((w (px (third u) size)) (wsp (px (fourth u) size)))
         (cond ((<= (+ cur w) limit) (incf cur (+ w wsp)))
               (t
                (when (> cur 0)
-                 (incf lines)
+                 (push (first u) starts)
                  (setf cur 0))
                (if (<= w limit)
                    (setf cur (+ w wsp))
-                   (multiple-value-bind (extra last)
+                   (multiple-value-bind (more last)
                        (split-unit run u size limit)
-                     (incf lines extra)
+                     (setf starts (append more starts))
                      (setf cur (+ last wsp))))))))))
+
+(defun run-lines (run size avail)
+  "The lines RUN takes at SIZE px, wrapped greedily into AVAIL px."
+  (length (wrap-run run size avail)))
+
+(defun run-span-width (run start end size)
+  "The milli-px width of RUN's characters from START below END at SIZE, trailing spaces
+excluded."
+  (let ((text (run-text run)) (widths (run-widths run)) (m 0))
+    (loop while (and (> end start) (char= (char text (1- end)) #\Space))
+          do (decf end))
+    (loop for j from start below end do (incf m (px (svref widths j) size)))
+    m))
 
 (defun run-min-width (run size)
   "The px width of RUN's widest unbreakable unit at SIZE."

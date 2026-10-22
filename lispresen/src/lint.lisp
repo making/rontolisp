@@ -56,7 +56,23 @@
           (report :warning (format nil
                                    "code at ~dpx (floor ~dpx); shorten the lines or the block"
                                    (fit-code-size fit) *code-floor*))))
-      (lint-blocks (slide-blocks slide) fit (content-width deck)))))
+      (lint-blocks (slide-blocks slide) fit (content-width deck)))
+    ;; The callouts of a slide share one size.
+    (let ((c (car (slide-callouts slide))))
+      (when (and c (< (callout-size c) *say-floor*))
+        (report
+         :warning (format nil
+                          "callout text at ~dpx (floor ~dpx); shorten the callouts or make room"
+                          (callout-size c) *say-floor*))))
+    (dolist (c (slide-callouts slide))
+      (let* ((s (callout-size c))
+             (lines
+              (run-lines (callout-run c) s
+               (- (callout-width c) (* 2 (+ (say-pad-x s) *say-border*))))))
+        (when (> lines 2)
+          (report :warning (format nil
+                                   "a callout takes ~d lines; keep each to 2"
+                                   lines)))))))
 
 ;;; --- theme contrast ------------------------------------------------------------
 
@@ -65,7 +81,7 @@
 ;;; WCAG AA ratio for normal text.
 (defparameter *contrast-pairs*
   '(("fg" "bg" "body text") ("muted" "bg" "captions") ("accent" "bg" "links")
-    ("fg" "head-bg" "table headers") ("fg" "mark" "marked text")
+    ("fg" "head-bg" "table headers and callouts") ("fg" "mark" "marked text")
     ("fg" "code-bg" "code") ("muted" "code-bg" "code comments")
     ("hl-str" "code-bg" "code strings") ("hl-kw" "code-bg" "code keywords")
     ("hl-def" "code-bg" "code forms") ("hl-const" "code-bg" "code constants")))
