@@ -1,6 +1,6 @@
 ;;;; cli.lisp -- the lispresen command.
 ;;;;
-;;;;   lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+;;;;   lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ;;;;
 ;;;; Reads DECK, writes its HTML, prints diagnostics to standard error. Exit status: 0
 ;;;; success, 1 errors (or warnings under --strict), 2 usage. Runs unchanged on every
@@ -20,11 +20,12 @@
 #-rontolisp (load (merge-pathnames "src/all.lisp" *load-truename*))
 
 (defparameter *usage*
-  "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+  "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
   DECK and OUT may be - for standard input / output; OUT defaults to DECK with .html.
   --theme NAME  light, dark or high-contrast, overriding the deck's :theme
   --runtime R   where runnable code loads the runtime from, overriding the deck's
                 :runtime: a directory URL, hosted (the project site) or none (static code)
+  --embed       inline images as data: URIs, so the HTML file stands alone
   --check       report diagnostics without writing HTML
   --strict      fail on warnings too")
 
@@ -53,6 +54,28 @@
       (read-standard-input)
       (handler-case (uiop:read-file-string deck) (error () nil))))
 
+(defun read-octets (path)
+  "The bytes of the file PATH, or nil when it cannot be read."
+  (handler-case (with-open-file (s path :element-type '(unsigned-byte 8))
+                  (let ((octets
+                         (make-array (file-length s)
+                                     :element-type '(unsigned-byte 8))))
+                    (read-sequence octets s)
+                    octets))
+    (error () nil)))
+
+(defun image-reader (deck)
+  "A function from an image path in DECK to its bytes; a relative path is relative to
+DECK's directory, or to the working directory when DECK is standard input."
+  (let* ((slash (position #\/ deck :from-end t))
+         (dir
+          (if (and slash (string/= deck "-")) (subseq deck 0 (1+ slash)) "")))
+    (lambda (src)
+      (read-octets
+       (if (and (> (length src) 0) (char= (char src 0) #\/))
+           src
+           (concatenate 'string dir src))))))
+
 (defun write-output (html target)
   (if (string= target "-")
       (progn
@@ -65,7 +88,13 @@
         (write-string html s))))
 
 (defun main (args)
-  (let ((deck nil) (out nil) (theme nil) (runtime nil) (check nil) (strict nil))
+  (let ((deck nil)
+        (out nil)
+        (theme nil)
+        (runtime nil)
+        (embed nil)
+        (check nil)
+        (strict nil))
     (loop while args
           do
             (let ((a (pop args)))
@@ -79,6 +108,7 @@
                      (unless args
                        (usage-error "--runtime needs a URL, hosted or none"))
                      (setf runtime (pop args)))
+                    ((string= a "--embed") (setf embed t))
                     ((string= a "--check") (setf check t))
                     ((string= a "--strict") (setf strict t))
                     ((string= a "--help")
@@ -94,8 +124,13 @@
         (format *error-output* "lispresen: cannot read ~a~%" deck)
         (finish-output *error-output*)
         (uiop:quit 1))
-      (multiple-value-bind (html diagnostics)
-          (lispresen:render source :theme theme :runtime runtime)
+      (multiple-value-bind (html diagnostics) (lispresen:render source
+                                                                :theme theme
+                                                                :runtime runtime
+                                                                :embed
+                                                                (and embed
+                                                                 (image-reader
+                                                                  deck)))
         (let ((name (if (string= deck "-") "<stdin>" deck))
               (errors 0)
               (warnings 0))

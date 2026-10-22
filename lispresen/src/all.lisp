@@ -11,7 +11,9 @@
 #+rontolisp (load "budoux-ja.lisp")
 #+rontolisp (load "phrase.lisp")
 #+rontolisp (load "metrics.lisp")
+#+rontolisp (load "template.lisp")
 #+rontolisp (load "model.lisp")
+#+rontolisp (load "embed.lisp")
 #+rontolisp (load "layout.lisp")
 #+rontolisp (load "lint.lisp")
 #+rontolisp (load "theme.lisp")
@@ -25,7 +27,8 @@
 #-rontolisp
 (with-compilation-unit ()
   (dolist (name
-           '("package" "reader" "budoux-ja" "phrase" "metrics" "model" "layout"
-             "lint" "theme" "player" "highlight" "html" "lispresen"))
+           '("package" "reader" "budoux-ja" "phrase" "metrics" "template"
+             "model" "embed" "layout" "lint" "theme" "player" "highlight" "html"
+             "lispresen"))
     (load
      (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))

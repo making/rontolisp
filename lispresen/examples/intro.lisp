@@ -24,6 +24,11 @@
       "最小でも収まらなければエラーとして報告する"
       (li "日本語は " (mark "文節") " で改行する")))
 
+(slide :title "全体像"
+  (image "pipeline.png"
+         :alt "read, parse, segment, layout, lint, emit の六段階"
+         :caption "デッキが HTML になるまで"))
+
 (slide :title "デッキの読み方"
   (p "トップレベルのフォームを一つずつ " (tt "read-from-string") " で読む。")
   (code :lang "lisp" :run nil "
@@ -48,9 +53,13 @@
     (println :squares)
     (map square (range 10))"))
 
+;; A template: a use is replaced by the body, &rest spliced where it appears.
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
 (slide :title "インタプリタとコンパイラ"
-  (column (p (b "インタプリタ")) (ul "起動が速い" "eval が完全"))
-  (column (p (b "コンパイラ")) (ul "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力")))
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力"))
 
 (slide :title "引用"
   (quote :cite "Alan Perlis" "A language that doesn't affect the way you think about programming is not worth knowing."))

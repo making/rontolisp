@@ -92,7 +92,7 @@ Elements:
 
 | Kind | Forms |
 |------|-------|
-| Slide-level | `deck`, `section`, `slide` (`:title`, `:layout`, `:class`) |
+| Top-level | `deck`, `section`, `slide` (`:title`, `:layout`, `:class`), `define` (below) |
 | Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes` |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark` |
 
@@ -105,8 +105,12 @@ Rules:
 - Tags are matched by `symbol-name`, not by symbol identity, so the package the runtime
   reader interns into does not matter. Options are keyword/value pairs at the start of
   a form; the first argument that is not a keyword starts the content.
-- The runtime reader does not support backquote, `#.`, `#+`/`#-`
-  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them.
+- The compiled runtime reader does not support backquote, `#.`, `#+`/`#-`
+  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them. The
+  interpreter's and SBCL's readers evaluate `#.`, so the deck is read under `*read-eval*`
+  nil, which every backend refuses alike. A form holding a dotted list or more conses
+  than characters (shared or circular structure from `#n=`, which SBCL reads) is reported
+  and skipped, so the parser and the template expansion only ever see proper trees.
   Characters are code points on every backend (`.kb/string-index-cost.md`), so Japanese
   strings measure and slice identically everywhere.
 - Top-level forms instead of one enclosing `(deck ...)`: each form is read separately,
@@ -116,17 +120,47 @@ Rules:
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
 - A slide with `column`s holds only columns; each column holds blocks, not columns.
-- Reuse within a deck (phase 3): `(define name (params...) body)` declares a template
-  that lispresen expands by substitution. This is lispresen's own expansion, not Lisp
-  macros, for the same reason as above.
+
+### Templates
+
+```lisp
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
+(slide :title "インタプリタとコンパイラ"
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ"))
+```
+
+A top-level `(define name (params...) body...)` declares a template; a use `(name
+arg...)` anywhere in a later top-level form is replaced by the body with each parameter
+replaced by its argument. This is substitution on the read forms (`template.lisp`), not
+Lisp macros, for the reason above: nothing is evaluated, so a template cannot compute.
+
+- The parameters are symbols, the last optionally after `&rest`, whose arguments are
+  spliced into the list where it appears. A body of several forms is spliced into the
+  list holding the use, so one use can stand for several slides, blocks or inlines.
+- Names match by `symbol-name`, like tags. Keywords are never substituted, so a
+  parameter `title` leaves `:title` alone. A template or parameter cannot take an
+  element's name (`slide`, `p`, `b`, ...): a parameter `p` would replace the tag too.
+- Uses expand after substitution, so arguments may hold uses, and a body may use a
+  template defined after it but before the use. A use with the wrong number of
+  arguments is reported and dropped.
+- Expansion is bounded, since a deck may come from an untrusted source: uses nest at
+  most 32 deep (a template using itself is reported), and a deck's templates produce at
+  most 200,000 list elements (a few uses can otherwise double a form each level). A
+  top-level form that hits a bound is reported once and dropped.
+- Diagnostics inside an expansion carry the line of the top-level form holding the use.
 
 ## Pipeline
 
 ```
 source string
   -> read      top-level forms + start offsets            (reader.lisp)
+  -> expand    template uses replaced by their bodies      (template.lisp)
   -> parse     validated model: deck / slide / block / inline structs,
                diagnostics for malformed or unknown forms  (model.lisp)
+  -> embed     image sources as data: URIs, with --embed   (embed.lisp)
   -> segment   Japanese phrase boundaries                  (phrase.lisp)
   -> layout    layout selection + fit solver -> per-slide geometry and sizes
                                                            (layout.lisp, metrics.lisp)
@@ -137,11 +171,13 @@ source string
 The core is a pure function from a string to a string:
 
 ```lisp
-(lispresen:render source &key theme runtime) ; => (values html diagnostics)
+(lispresen:render source &key theme runtime embed) ; => (values html diagnostics)
 ```
 
 It does no I/O, so every host (CLI, browser, a Java caller via `rontolisp:jvm-export`)
-is a thin shell over it. A diagnostic is `(severity line slide-number message)`.
+is a thin shell over it. `embed` is the one place a host reaches in: a function from an
+image path to the file's bytes, which the CLI passes under `--embed`. A diagnostic is
+`(severity line slide-number message)`.
 Diagnostic messages are in English.
 
 **All layout arithmetic is integer.** Widths are in milli-em, sizes and coordinates in
@@ -440,8 +476,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; overflow at the hard floor; a table row whose cell count (with `:colspan`) differs from the header's or the first row's |
-| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a theme text color below 4.5:1 against its background |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -529,8 +565,21 @@ Presenting is done in full screen; the windowed view is for preparation.
   is checked by hand.
 
 Images are referenced by their relative path, so the output is written next to the deck
-by default and the paths stay valid. Embedding them as data URIs (`--embed`) needs a
-binary read and base64 and is phase 3.
+by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
+the HTML file stands alone:
+
+- A relative path resolves against the deck's directory (the working directory when the
+  deck is standard input). The CLI reads the bytes with `:element-type '(unsigned-byte
+  8)`, `file-length` and `read-sequence`, which behave alike on every backend (checked
+  2026-10-22 on the interpreter, JVM, both WASM backends and SBCL, with bytes 0, 128 and
+  255); the WASM backends need the directory preopened (`wasmtime run --dir .`).
+- The MIME type comes from the extension: `png`, `jpg` / `jpeg`, `gif`, `webp`, `avif`,
+  `svg`. Another extension, or a file that cannot be read, is an error and leaves the
+  path in place.
+- The base64 is computed in `embed.lisp` with integer arithmetic, not by a host library,
+  so every backend writes the same characters.
+- A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
+  the file then does not stand alone.
 
 ## Hosts
 
@@ -547,10 +596,11 @@ binary read and base64 and is phase 3.
 CLI:
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ```
 
 - `DECK` and `OUT` accept `-` for stdin / stdout. `OUT` defaults to `DECK` with `.html`.
+- `--embed` inlines images (HTML output, above).
 - `--check` lints without writing output. `--strict` makes warnings fail.
 - Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
 - Diagnostics go to `*error-output*`.
@@ -559,7 +609,7 @@ The browser host is an editor page: the deck source on the left, the rendered de
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
 and a download button for the HTML. The reactor returns the HTML and the diagnostics in
 one string (a fixed separator line), since a reactor export returns a single value. The
-lispresen reactor (755 KB) renders; the preview's runnable code loads the playground
+lispresen reactor (766 KB) renders; the preview's runnable code loads the playground
 runtime like any other deck. The preview keeps its slide across re-renders through
 `window.lispresen` (`show`, `current`), which the player defines. The reactor's
 arguments and results are allocated by a bump allocator that is never reset (about 15 KB
@@ -578,7 +628,9 @@ lispresen/
     all.lisp             loads the sources below in order
     package.lisp         defpackage lispresen
     reader.lisp          top-level forms with offsets and line numbers
+    template.lisp        define templates: substitution on the read forms
     model.lisp           structs and parsing with diagnostics
+    embed.lisp           images as data: URIs, base64
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -597,7 +649,8 @@ lispresen/
     lispresen-test.lisp  rove: segmentation, metrics, solver, parser diagnostics
   examples/
     intro.lisp           a deck presenting lispresen itself
-    intro.html           its golden output
+    intro.html           its golden output, rendered with --embed
+    pipeline.png         the image intro.lisp shows
   tools/
     gen-budoux.py        regenerates src/budoux-ja.lisp from BudouX's model
     BUDOUX-LICENSE       BudouX's Apache License 2.0
@@ -618,16 +671,20 @@ before committing a change under `lispresen/`.
 - **Cross-backend identity**: `check.sh` builds the CLI for the interpreter, the JVM,
   WASM, the WASM component and a native executable (skipped when the jar carries no
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
-  renders `examples/intro.lisp` on each through stdin and
-  stdout, and requires each output to equal `examples/intro.html` byte for byte. The
-  golden deck has runnable Lisp and Clojure blocks, a columns slide and a quote, so the
-  highlighter and the emitted player are in the comparison.
+  renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
+  `examples/`, so its image resolves), and requires each output to equal
+  `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
+  blocks, a columns slide built from a `&rest` template, a quote and an embedded PNG, so
+  the highlighter, the emitted player, template expansion and the binary read and base64
+  are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the
   three table-width cases, numeric column detection, parser diagnostics with line
-  numbers. The golden deck covers emission, so HTML is not asserted piecewise.
+  numbers (`#.` and dotted lists among them), template expansion and its diagnostics and
+  bounds, base64 padding, and the embedding diagnostics. The golden deck covers
+  emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must
   report no paragraph where the model predicts fewer lines than the browser; a deck with
@@ -648,9 +705,9 @@ before committing a change under `lispresen/`.
    highlighting, theme overrides and the contrast lint, browser editor.
 3. `define` templates, `--embed` images.
 
-Phases 1 and 2 are implemented. The compiled CLI is 284 KB as a jar, 754 KB as a WASM
-module, 762 KB as a component and 6.4 MB as a native executable (macOS arm64); the BudouX
-weights are 17 KB of source.
+All three phases are implemented. The compiled CLI is 297 KB as a jar, 788 KB as a WASM
+module, 796 KB as a component and 6.7 MB as a native executable (macOS arm64, measured
+2026-10-22 after phase 3); the BudouX weights are 17 KB of source.
 
 ## Open points
 

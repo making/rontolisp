@@ -135,6 +135,78 @@
       (ok (contains html "<td class=\"right\">1,204</td>"))
       (ok (contains html "<td>x</td>")))))
 
+(deftest templates
+  (testing "a use is the body with its arguments substituted, &rest spliced"
+    ;; t2 is defined after t1 and before the use; :title is not the parameter title.
+    (ok
+     (equal (lispresen:render
+             "(define t1 (title &rest points)
+  (section title)
+  (slide :title title (ul points) (t2 title)))
+(define t2 (x) (p (b x)))
+(t1 \"a\" \"b\" \"c\")")
+            (lispresen:render
+             "(section \"a\")
+(slide :title \"a\" (ul \"b\" \"c\") (p (b \"a\")))"))))
+  (testing "malformed templates and uses are reported, the use dropped"
+    (ok
+     (equal
+      (render-diagnostics
+       "(define)
+(define ul (x) x)
+(define a (x x) x)
+(define g (p) p)
+(define c (x &rest) x)
+(define d (x) (slide x))
+(define d () (slide))
+(d)
+(define e () (e) (e))
+(e)
+(slide (define f () \"x\"))")
+      '((:error 1 "(define ...) takes a name, a parameter list and a body")
+        (:error 2 "ul is an element and cannot be a template")
+        (:error 3 "template a repeats a parameter")
+        (:error 4 "parameter p of g is an element name")
+        (:error 5
+         "the parameters of c must be symbols, the last optionally after &rest")
+        (:error 7 "template d is already defined")
+        (:error 8 "template d takes 1 argument, given 0")
+        (:error 10
+                "template e nests more than 32 uses deep; does it use itself?")
+        (:error 11 "(define ...) belongs at the top level")))))
+  (testing "the expansion of one deck is bounded"
+    (let ((lispresen::*expansion-limit* 10))
+      (ok
+       (equal (render-diagnostics
+               "(define w (x) (slide x x x x x x x x x x))
+(w \"a\")
+(w \"b\")") '((:error 2 "templates expand to more than 10 forms")))))))
+
+(deftest embedding
+  (testing "base64 pads the last group"
+    (ok
+     (equal (mapcar (lambda (s) (lispresen::base64 (map 'vector #'char-code s)))
+                    '("" "f" "fo" "foo" "foob"))
+            '("" "Zg==" "Zm8=" "Zm9v" "Zm9vYg=="))))
+  (testing "local images become data: URIs typed by extension, in columns too"
+    (multiple-value-bind (html diagnostics) (lispresen:render "(slide :title \"a\" (image \"a.bmp\" :alt \"x\"))
+(slide :title \"b\" (image \"b.png\" :alt \"x\"))
+(slide :title \"c\" (image \"https://example.com/c.png\" :alt \"x\"))
+(slide :title \"d\" (column (image \"d.SVG\" :alt \"x\")))"
+                                                              :embed
+                                                              (lambda (src)
+                                                                (and (string=
+                                                                      src
+                                                                      "d.SVG")
+                                                                     (vector 60
+                                                                      115 62))))
+      (ok (contains html "src=\"data:image/svg+xml;base64,PHM+\""))
+      (ok
+       (equal (mapcar #'lispresen::diagnostic-message diagnostics)
+              '("cannot embed image a.bmp: unknown type; use .png, .jpg, .jpeg, .gif, .webp, .avif, .svg"
+                "cannot embed image b.png: cannot read it"
+                "image https://example.com/c.png is a URL; only local files are embedded"))))))
+
 (deftest diagnostics
   (ok
    (equal (render-diagnostics
@@ -144,22 +216,28 @@
 
 (slide (table (\"a\" \"b\") (\"c\")))
 (other)
+(slide \"a\" . \"b\")
 (slide \"ok\"")
           '((:error 2 "unknown element frob")
             (:error 5 "a table row has 1 cells where the table has 2")
-            (:error 6 "expected (slide ...) or (section ...), found other")
-            (:error 7
+            (:error 6
+             "expected (slide ...), (section ...) or (define ...), found other")
+            (:error 7 "dotted lists and #n= labels are not deck syntax")
+            (:error 8
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (ok
    (equal (render-diagnostics
            "(deck :theme (theme :base :dark :muted \"#555555\" :accent \"blue\"))
-(slide :title \"s\" (column \"a\") \"b\")")
+(slide :title \"s\" (column \"a\") \"b\")
+(slide #.(+ 1 2))")
           '((:error 1 ":accent of theme must be a color like #1f2328")
             (:warning 1
                       "theme: captions (--muted on --bg) has contrast 2.3:1, below 4.5:1")
             (:warning 1
                       "theme: code comments (--muted on --code-bg) has contrast 2.0:1, below 4.5:1")
-            (:error 2 "a slide with columns holds only (column ...) blocks"))))
+            (:error 2 "a slide with columns holds only (column ...) blocks")
+            (:error 3
+             "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (testing "the built-in themes pass the contrast lint"
     (dolist (theme '("light" "dark" "high-contrast"))
       (ok
