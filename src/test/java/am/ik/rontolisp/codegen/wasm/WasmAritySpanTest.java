@@ -26,7 +26,11 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
  * sixteen bits above {@code ARITY_FUNC_ID_SHIFT}, which end at
  * {@code ARITY_MAX_NAMED_FUNC_ID}. Past it the callee reports as {@code Function} -- the
  * same silent-generic family as the JVM names budget (g49) -- and one over-limit miss
- * drops the names for its whole unpaged dispatcher.
+ * drops the names for its whole unpaged dispatcher. g51 keeps the ceiling as intended:
+ * the corpus sits near 30,500 dispatchable funcIds against the 65,535 ceiling, the
+ * over-limit text stays the same catchable {@code program-error} with the same counts,
+ * and widening the sixteen-bit shape would rework every report call site for no program
+ * in reach of it.
  */
 class WasmAritySpanTest {
 
@@ -114,6 +118,22 @@ class WasmAritySpanTest {
 	void aMissPastTheNamedCeilingReportsEveryMissGenerically() {
 		byte[] past = dispatcherBytes(70_000, true);
 		assertThat(contains(past, MESSAGE_CALL)).as("no named arm past the ceiling").isFalse();
+	}
+
+	/**
+	 * The eval runtime's unbacked {@code EVAL} id stops at the naming ceiling with
+	 * everything else: one past the largest named funcId while that id still fits the
+	 * sixteen bits a shape carries, and none past it -- the fourth gate of g51's ceiling,
+	 * documented as intended.
+	 */
+	@Test
+	void theUnbackedEvalIdIsNotIssuedPastTheNamedCeiling() {
+		int max = WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID;
+		assertThat(WasmLispCompiler.unbackedArityOperatorId(true, 42)).isEqualTo(43);
+		assertThat(WasmLispCompiler.unbackedArityOperatorId(true, max - 2)).isEqualTo(max - 1);
+		assertThat(WasmLispCompiler.unbackedArityOperatorId(true, max - 1)).isEqualTo(-1);
+		assertThat(WasmLispCompiler.unbackedArityOperatorId(true, -1)).isEqualTo(-1);
+		assertThat(WasmLispCompiler.unbackedArityOperatorId(false, 42)).isEqualTo(-1);
 	}
 
 	private static byte[] dispatcherBytes(int defunCount, boolean withReport) {

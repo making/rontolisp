@@ -6193,8 +6193,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		SortedMap<Integer, String> unbackedArityOperators = new TreeMap<>();
 		int lastNamedFuncId = Math.max(arityNamedFuncIds.isEmpty() ? -1 : arityNamedFuncIds.lastKey(),
 				arityDeclaredFuncIds.isEmpty() ? -1 : arityDeclaredFuncIds.lastKey());
-		if (usesEval && lastNamedFuncId >= 0 && lastNamedFuncId + 1 < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
-			unbackedArityOperators.put(lastNamedFuncId + 1, LispNames.EVAL);
+		int unbackedId = unbackedArityOperatorId(usesEval, lastNamedFuncId);
+		if (unbackedId >= 0) {
+			unbackedArityOperators.put(unbackedId, LispNames.EVAL);
 		}
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
 				ehMode && hasLandingPad && this.usesInstances
@@ -9888,6 +9889,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The id the eval runtime's own count checks report under: one past the largest named
+	 * funcId, which only the report's opening reads -- no dispatcher arm or spread case
+	 * names a callee by it, so it cannot collide with a function whose funcId it happens
+	 * to equal. Past the naming ceiling
+	 * ({@code WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID}) there is no id left to give:
+	 * the shape carries {@code funcId + 1} in sixteen bits, so the eval runtime reports
+	 * as {@code Function} there, like every other over-limit callee (g51, documented as
+	 * intended).
+	 * @param usesEval whether the module embeds the eval runtime
+	 * @param lastNamedFuncId the largest named funcId, or -1 when none is named
+	 * @return the unbacked id, or -1 when the runtime reports unnamed
+	 */
+	static int unbackedArityOperatorId(boolean usesEval, int lastNamedFuncId) {
+		return usesEval && lastNamedFuncId >= 0 && lastNamedFuncId + 1 < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID
+				? lastNamedFuncId + 1 : -1;
 	}
 
 	/**

@@ -66,6 +66,11 @@ A built-in operator's function value names the operator in place of `Function`.
 ; => "CONS expects 2 arguments, got 1"
 ```
 
+The name rides a sixteen-bit callee id on the WASM backend, so in a program with more
+than 65,535 functions an over-limit callee's report says `Function` instead of the
+operator -- the same catchable `program-error` with the same counts, only the name
+degraded.
+
 A direct call of a built-in operator with an argument count its lambda list rules out behaves the same way, and names the operator too.
 
 ```lisp

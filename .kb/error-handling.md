@@ -2727,6 +2727,14 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     walks the argument list and has no table at all. Past `MAX_EXTRA_CALL_ARITY` (4) wide
     funcalls reroute through the spread dispatcher with identical answers (pinned by
     `compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame`).
+    Kept as intended (g51, 2026-10-22): the ceiling sits at twice the clojure-spec
+    corpus (~30,500 dispatchable funcIds), the over-limit report stays the same catchable
+    `program-error` with the same counts -- only the operator degrades to `Function` --
+    and widening the sixteen-bit shape a report threads through `_arity_message`,
+    `_arity_chk` and every dispatcher arm would rework every report call site for no
+    program in reach of it. All four gates are pinned (`WasmAritySpanTest`: the shape
+    drop, both census caps, the unpaged whole-dispatcher name drop at 70,000 funcIds,
+    the unbacked `EVAL` id stopping at the ceiling).
 - **A DIRECT call of a built-in** (2026-09-26). **Invariant: `(op args...)` in call position,
   `op` a `BuiltinFunctionWrappers` name, with a count the operator's call shape rules out,
   evaluates its arguments and then signals `program-error` with ONE text on all four backends**
