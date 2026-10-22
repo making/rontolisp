@@ -9,6 +9,7 @@ agent のエラーモードを設定し、`nil` を返します。`:continue` �
 (set-error-mode! a :continue)
 (send a (fn [_] (throw (Exception. "boom"))))
 (send a inc)
+(await a)
 (println @a (agent-error a))
 ```
 

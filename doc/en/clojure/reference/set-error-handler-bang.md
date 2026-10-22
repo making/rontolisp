@@ -11,6 +11,7 @@ mode as it is (`set-error-mode!`). Works as a function value.
 (set-error-handler! a (fn [ag e] (println "failed:" (ex-message e))))
 (send a (fn [_] (throw (Exception. "boom"))))
 (send a inc)
+(await a)
 (println @a)
 ```
 
