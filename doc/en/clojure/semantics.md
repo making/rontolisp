@@ -374,8 +374,10 @@ the ref and keep its old
 value, and `ensure` answers its value -- every verb requiring a transaction.
 When the body returns, the `:validator` of every ref it wrote runs on the final
 value; when it signals, every ref it wrote gets its old value back. An `agent`
-runs the actions `send`/`send-off` queue one at a time, in order, on the
-sending thread when it is idle (there is no thread pool); a send made inside a
+runs the actions `send`/`send-off` queue one at a time, in order, on the shared
+pool where threads exist (the interpreter and the JVM, where `send` answers at
+once) and on the sending thread when it is idle on the single-threaded WASM legs;
+a send made inside a
 transaction or an action runs once that completes. `*agent*` is bound while an
 action runs, `await` runs or waits for the actions sent so far, and
 `shutdown-agents` answers `nil`. A [delay](reference/delay.md) runs its body once, on

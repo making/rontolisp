@@ -3,9 +3,11 @@
 `(agent v & options)`, options `:validator f`, `:error-handler h`, `:error-mode m`, `:meta m`
 
 An agent holds a value that the actions sent with `send`/`send-off` update one at a
-time, in the order sent; `deref`/`@` reads it. There is no thread pool: a send to an
-idle agent runs its action on the sender's thread before it returns, and one to an
-agent another thread is running joins that thread's queue. A `:validator` must accept
+time, in the order sent; `deref`/`@` reads it. On the interpreter and the JVM the actions
+run on a shared pool of worker threads: a send only queues its action and returns -- even
+an idle agent's action runs after `send` returns, so a slow action never blocks the sender
+-- while `await` waits for the actions sent so far. On the single-threaded WASM legs a send
+to an idle agent still runs its action on the sender's thread before it returns. A `:validator` must accept
 the initial value and every action's answer. A failing action fails the agent in the
 `:fail` mode, the default without an `:error-handler` (`agent-error`,
 `restart-agent`); with one the default is `:continue`. Options are read like the

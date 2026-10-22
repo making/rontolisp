@@ -13683,8 +13683,10 @@
 ;;
 ;; An agent runs its actions one at a time in the order they were sent. A send
 ;; queues the action under %clojure-atom-guard and, when no thread is running the
-;; agent, runs the queue on the sender's thread until it is empty (there is no
-;; thread pool: an idle agent's send runs at once). Actions run outside every
+;; agent, elects its thread the runner: on a host target the runner hands the
+;; agent to the shared pool ("The shared agent pool" below), so a slow action
+;; never blocks its sender; on wasm, single-threaded by construction, the runner
+;; runs the queue itself. Actions run outside every
 ;; lock, so a send never waits for another request's action. A send made while a
 ;; transaction or an action runs is held until it completes, and dropped when it
 ;; fails, like the oracle's. A failing action (a throw, a refusing validator)
@@ -14110,8 +14112,11 @@
 
 (defun rontolisp::%clojure-agent-drain (agent action)
   "ACTION (when not nil) queued on AGENT; then, unless another thread is
-   running the agent or it has failed, its queue run on this thread until it is
-   empty or an action fails."
+   running the agent or it has failed, its queue is handed to the shared pool,
+   which runs it until it is empty or an action fails. Where no thread exists
+   (wasm) this definition is replaced by the sender-thread one
+   (eval/ClojureLibrary, the host-arms stand-ins), so no pool reference -- and
+   no thread primitive -- reaches a module."
   (let* ((cell (car (cdr agent))) (state (aref cell 3)) (mine nil))
     (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
       (if action (setf (aref state 1) (append (aref state 1) (list action))))
@@ -14119,30 +14124,98 @@
           (progn
             (setf (aref state 0) t)
             (setq mine t))))
-    (if mine
-        (let ((done nil))
-          (unwind-protect (loop
-                            (let ((next
-                                   (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-                                     (if (and (aref state 1)
-                                              (not (aref state 2)))
-                                         (let ((first (car (aref state 1))))
-                                           (setf (aref state 1)
-                                                 (cdr (aref state 1)))
-                                           first)
-                                         (progn
-                                           (setf (aref state 0) nil)
-                                           nil)))))
-                              (if next
-                                  (rontolisp::%clojure-agent-act agent cell
-                                                                 next)
-                                  (progn
-                                    (setq done t)
-                                    (return nil)))))
-            (if done
-                nil
-                (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-                  (setf (aref state 0) nil))))))))
+    (if mine (rontolisp::%clojure-agent-pool-submit agent))))
+
+;;;; The shared agent pool.
+;;
+;; On a host target (the interpreter and the JVM, where threads exist), an
+;; elected runner hands its agent to the shared pool instead of running the
+;; queue itself: four worker threads, started on the first send that needs one,
+;; each pumping queued agents between sleeps of a millisecond. The pool is one
+;; for sends
+;; and send-offs alike (the oracle gives send-off its own unbounded pool; here
+;; a blocking action holds a worker like any other). A CPU-bound action
+;; therefore no longer blocks its sender -- or a request thread -- while await
+;; still blocks the caller until the queued actions complete. Where no thread
+;; exists (wasm, single-threaded by construction), this whole section is
+;; pruned: the drain the module splices instead runs the queue on the elected
+;; runner's own thread (eval/ClojureLibrary, the host-arms stand-ins).
+
+(defvar rontolisp::%clojure-agent-pool
+  nil
+  "The shared pool: #(queue workers) once started, nil before. The queue holds
+   the agents whose queue wants pumping, oldest first; the workers pump one
+   each. Stays nil where no thread exists, where the sender runs each queue
+   itself.")
+
+(defvar rontolisp::%clojure-agent-pool-guard (rontolisp:make-mutex))
+
+(defun rontolisp::%clojure-agent-pool-submit (agent)
+  "Queue AGENT for a pump on the shared pool, starting its crew on the first
+   call: one pump queued per election, like one inline run per election."
+  (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+    (if (null rontolisp::%clojure-agent-pool)
+        (setf rontolisp::%clojure-agent-pool (vector nil nil)))
+    (let ((pool rontolisp::%clojure-agent-pool))
+      (if (null (aref pool 1))
+          (setf (aref pool 1) (rontolisp::%clojure-agent-pool-start pool)))
+      (setf (aref pool 0) (append (aref pool 0) (list agent))))))
+
+(defun rontolisp::%clojure-agent-pool-start (pool)
+  "Start the shared pool's crew over POOL, answering its worker handles: each
+   loops taking the oldest queued agent and pumping it, sleeping between takes
+   of an empty queue, so a worker never holds a lock while an action runs.
+   Four workers, like the oracle's small fixed send pool."
+  (let ((crew nil))
+    (dotimes (i 4)
+      (setq crew
+            (cons (rontolisp:make-thread
+                   (lambda () (rontolisp::%clojure-agent-pool-work pool)))
+                  crew)))
+    crew))
+
+(defun rontolisp::%clojure-agent-pool-work (pool)
+  "One pool thread's loop over POOL: pump the oldest queued agent, else sleep
+   a millisecond. A pump that signals anyway (an action's own failure stays in
+   the agent, so only a bug can) is dropped and the loop goes on, so the crew
+   never shrinks."
+  (loop
+    (let ((agent
+           (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+             (if (aref pool 0)
+                 (let ((next (car (aref pool 0))))
+                   (setf (aref pool 0) (cdr (aref pool 0)))
+                   next)
+                 nil))))
+      (if agent
+          (handler-case (rontolisp::%clojure-agent-pump agent) (error () nil))
+          (sleep 0.001)))))
+
+(defun rontolisp::%clojure-agent-pump (agent)
+  "Run AGENT's queue until it is empty or an action fails, one action after
+   the other outside every lock: the elected runner's run, on its own thread
+   or a pool worker's. Each take elects under %clojure-atom-guard; the last
+   one clears the running flag, the unwind an abnormal exit."
+  (let* ((cell (car (cdr agent))) (state (aref cell 3)) (done nil))
+    (unwind-protect (loop
+                      (let ((next
+                             (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+                               (if (and (aref state 1) (not (aref state 2)))
+                                   (let ((first (car (aref state 1))))
+                                     (setf (aref state 1) (cdr (aref state 1)))
+                                     first)
+                                   (progn
+                                     (setf (aref state 0) nil)
+                                     nil)))))
+                        (if next
+                            (rontolisp::%clojure-agent-act agent cell next)
+                            (progn
+                              (setq done t)
+                              (return nil)))))
+      (if done
+          nil
+          (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+            (setf (aref state 0) nil))))))
 
 (defun rontolisp::%clojure-agent-act (agent cell action)
   "One action of AGENT, whose cell is CELL: its answer validated and stored,
@@ -14250,9 +14323,10 @@
 
 (defun rontolisp::%clojure-agent-restart (agent value options)
   "restart-agent: the failed AGENT's value set to VALUE, which its validator
-   must pass, its error cleared and its queue run on this thread -- or dropped
-   when OPTIONS, a key/value list, gives :clear-actions a true value; answers
-   VALUE. An agent that has not failed is the oracle's refusal."
+   must pass, its error cleared and its queue released to run (handed to the
+   shared pool where threads exist, run on this thread where they do not)
+   -- or dropped when OPTIONS, a key/value list, gives :clear-actions a true
+   value; answers VALUE. An agent that has not failed is the oracle's refusal."
   (let* ((clear (rontolisp::%clojure-agent-option options "clear-actions"))
          (cell (rontolisp::%clojure-agent-cell agent "restart-agent"))
          (state (aref cell 3))

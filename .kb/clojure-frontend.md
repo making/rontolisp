@@ -6936,8 +6936,11 @@ resolve var`.
   ((C%AGENT a) depth) (apply f old args)))` (f and args run at the send) through
   `%clojure-agent-send`; a send while `%clojure-agent-held` is bound (inside a transaction or
   an action) waits in that box, released on success, dropped on failure. `%clojure-agent-drain`
-  appends under `%clojure-atom-guard` and, when no thread runs the agent, runs the queue on
-  this thread (actions outside every lock, so no deadlock between agents). A failing action
+  appends under `%clojure-atom-guard` and, when no thread runs the agent, elects its thread
+  the runner: the runner hands the agent to the shared pool (`clojure.lisp` "The shared
+  agent pool", 2026-10-22, g38), which pumps the queue on one of its four worker threads
+  (actions outside every lock, so no deadlock between agents and a slow action never blocks
+  its sender). A failing action
   never signals (2026-10-11; before, it signalled on the draining thread and the agent stayed
   usable): `%clojure-agent-act` catches it, drops its held sends, calls the error handler
   (held unbound, so its sends dispatch; its own failure ignored) and, unless the mode is
@@ -6946,7 +6949,7 @@ resolve var`.
   `RuntimeException` whose cause is the error, built by `C%E-NEW`, so `send`/`await` set
   `usedExInfo`. A held send is released straight into the queue, unchecked, like the
   oracle's `releasePendingSends`. `restart-agent` validates, clears the error (and the queue
-  with `:clear-actions`) and drains on its own thread. Options of `agent` (and of
+  with `:clear-actions`) and drains again, onto the pool. Options of `agent` (and of
   `restart-agent`) are read at run time by `%clojure-agent-option`, the oracle's
   `(apply hash-map options)`: unknown keys ignored, a lone key `No value supplied for key`.
   A host `await` waits on through a failure until a restart runs its marker, like the
@@ -6954,7 +6957,15 @@ resolve var`.
   action (`C%AGENT`), queues a marker and runs the queue; a host target
   (`%clojure-agent-await`) then polls the marker between `(sleep 0.001)`s, wasm
   (`%clojure-agent-await-here`) never waits, so no `sleep` reaches a module. `C%AGENT` is the
-  only spliced `stmRuntime` form. Only transactions that write contend, and a
+  only spliced `stmRuntime` form. The pool is one for sends and send-offs alike (the oracle
+  gives send-off its own unbounded pool; here a blocking action holds a worker like any
+  other) and carries no bindings to the new thread (the oracle conveys none either; only
+  `bound-fn*` does). g35's futures have no pool to share (one thread per future through
+  the same `rontolisp:make-thread` seam), so the pool is the todo's fallback: a small
+  dedicated executor behind that seam. On wasm the host drain is replaced at the splice by the sender-thread
+  one (`eval/ClojureLibrary`, the host-arms stand-ins): the elected runner runs the queue
+  itself, the pool's defuns are pruned unreached, and no thread primitive reaches a module.
+  Only transactions that write contend, and a
   read-only transaction still validates (retrying past a concurrent commit), like the
   oracle's. Model choice: the shcloj4 corpus's refs and agents
   (`chat.clj`, `concurrency.clj`, `pi.clj`) are single-threaded `alter`/`commute`/`send-off`,
@@ -6963,7 +6974,11 @@ resolve var`.
   `commute-applies-at-commit-and-ensure-pins-the-read` (oracle-identical),
   `a-failing-action-fails-the-agent-until-restart-agent` (oracle-identical),
   `ClojureRefAgentConcurrentRequestsTest`, `ClojureStmConflictRetryTest` (g37: concurrent
-  bumps converge and an ensured ref's writer waits, on the interpreter and the JVM). `await-for` (2026-10-12) queues `await`'s markers and,
+  bumps converge and an ensured ref's writer waits, on the interpreter and the JVM),
+  `ClojureAgentPoolTest` (g38: sends return at once, FIFO order, error modes,
+  sender-thread wasm legs), clojure-spec
+  `agents-run-on-a-shared-pool-where-threads-exist` (oracle-identical; the WASM legs skip)
+  and `agents-run-queued-actions-in-send-order` (oracle-identical). `await-for` (2026-10-12) queues `await`'s markers and,
   on a host target, polls them until its deadline (`%clojure-agent-await-for`, `T`/`NIL` through
   `booleanAnswer`); on wasm (`%clojure-agent-await-for-here`) every marker has run but one queued
   behind a failure. `await` and `await-for` refuse inside a transaction first (`io!`'s

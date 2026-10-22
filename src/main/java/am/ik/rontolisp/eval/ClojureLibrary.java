@@ -109,9 +109,13 @@ public final class ClojureLibrary {
 	 * The bodies a target without the host (wasm) splices in place of the host arms a
 	 * value made there still reaches, on top of {@link #HOST_ARMS_WITHOUT_JAVA}:
 	 * {@code %clojure-host-string-new} ({@code (String. x)} of an {@code x} that is no
-	 * byte array) refuses by name, since the class has the constructor. A {@code java:}
-	 * operator is a call-time error there and makes no host object, so every other host
-	 * arm answers as it does in a program naming none.
+	 * byte array) refuses by name, since the class has the constructor, and
+	 * {@code %clojure-agent-drain} (the sender-thread run: a send to an idle agent runs
+	 * its queue on the sender's thread until it is empty, like the host drain before the
+	 * shared pool). The pool's own defuns go with it: nothing references them where the
+	 * stand-in stands, so the pruner drops them and no thread primitive reaches a module.
+	 * A {@code java:} operator is a call-time error there and makes no host object, so
+	 * every other host arm answers as it does in a program naming none.
 	 */
 	private static final String HOST_ARMS_WITHOUT_HOST = """
 			(defun rontolisp::%clojure-host-string-new (x more)
@@ -120,6 +124,16 @@ public final class ClojureLibrary {
 			   (format nil "Constructor java.lang.String taking ~A args is not supported for class "
 			           (+ 1 (length more)))
 			   "String."))
+			(defun rontolisp::%clojure-agent-drain (agent action)
+			  (let* ((cell (car (cdr agent))) (state (aref cell 3)) (mine nil))
+			    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+			      (if action (setf (aref state 1) (append (aref state 1) (list action))))
+			      (if (and (aref state 1) (not (aref state 0)) (not (aref state 2)))
+			          (progn
+			            (setf (aref state 0) t)
+			            (setq mine t))))
+			    (if mine
+			        (rontolisp::%clojure-agent-pump agent))))
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;

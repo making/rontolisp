@@ -5440,12 +5440,18 @@ cases:
     # send): a failing action leaves the agent failed in the default :fail mode -- send
     # answers the agent, agent-error answers the error, and send, await and a send inside
     # a transaction refuse with the error as the cause until restart-agent, which runs the
+    # queue on the pool again. The pool runs the failing action after send returns, so
+    # each failing send waits for the error to land (g38-wait-for-error, an await-for
+    # poll: the marker it queues waits behind the failure, so the wait ends exactly
+    # when the error does, on every backend).
     # queue kept behind the failure or drops it with :clear-actions. An error handler is
     # called with the agent and the error (its own failure ignored) and makes :continue
     # the default mode; options are read like the oracle's (apply hash-map options).
     source: |
+      (defn g38-wait-for-error [a] (loop [] (when-not (agent-error a) (try (await-for 10 a) (catch RuntimeException e nil)) (recur))))
       (def fa (agent 1 :validator pos?))
       (println (= fa (send fa dec)))
+      (g38-wait-for-error fa)
       (println @fa (instance? IllegalStateException (agent-error fa)) (ex-message (agent-error fa)))
       (println (try (send fa inc) (catch RuntimeException e [(ex-message e) (ex-message (ex-cause e))])))
       (println (try (await fa) (catch RuntimeException e (ex-message e))))
@@ -5458,12 +5464,14 @@ cases:
       (println @fa)
       (def fs (agent 0 :error-handler (fn [ag e] (send ag + 100)) :error-mode :fail))
       (send fs (fn [_] (throw (Exception. "f3"))))
+      (g38-wait-for-error fs)
       (println @fs (ex-message (agent-error fs)))
       (println (restart-agent fs 1))
       (await fs)
       (println @fs)
       (def fc (agent 0 :error-handler (fn [ag e] (send ag + 100)) :error-mode :fail))
       (send fc (fn [_] (throw (ex-info "boom" {:x 1}))))
+      (g38-wait-for-error fc)
       (println (ex-data (agent-error fc)) (restart-agent fc 7 :clear-actions true))
       (await fc)
       (println @fc)
@@ -5490,6 +5498,7 @@ cases:
       (println @fi)
       (def fq (agent 0))
       (send fq (fn [v] (send fq + 10) (throw (Exception. "f1"))))
+      (g38-wait-for-error fq)
       (println @fq (ex-message (agent-error fq)))
       (println (try (dosync (send fq inc)) (catch RuntimeException e (ex-message e))))
       (println (try (agent 1 :error-mode) (catch IllegalArgumentException e (ex-message e))))
@@ -5528,6 +5537,36 @@ cases:
       :not-an-agent
       (:fail :continue) 3
       No value supplied for key: :clear-actions
+  - name: agents-run-on-a-shared-pool-where-threads-exist
+    # Oracle-identical (clj 1.12.6): a send answers the agent at once and only queues
+    # the action -- a gate only the main thread delivers proves the sender was not
+    # blocked -- and one agent's actions run one at a time in send order, converging
+    # after await. The verb-by-verb matrix lives in ClojureAgentPoolTest; this row
+    # keeps one site per shape. The WASM legs keep the sender-thread run and skip
+    # this row, pinned by ClojureAgentPoolTest's sender-thread leg.
+    skip:
+      wasm: the sender runs each queue itself where no thread exists
+      wasm_component: the sender runs each queue itself where no thread exists
+    source: |
+      (def pa-gate (promise))
+      (def pa (agent 0))
+      (println (= pa (send pa (fn [v] @pa-gate 1))))
+      (println :sent)
+      (deliver pa-gate nil)
+      (await pa)
+      (println @pa)
+      (def pb (agent []))
+      (dotimes [i 5] (let [j i] (send pb (fn [v] (conj v j)))))
+      (await pb)
+      (println @pb (agent-error pb))
+      (shutdown-agents)
+      (println :down)
+    expected: |
+      true
+      :sent
+      1
+      [0 1 2 3 4] nil
+      :down
   - name: atom-options-and-validators-guard-every-store
     # Oracle-identical (clj 1.12.6, 2026-10-12): atom reads its options like the
     # oracle's (apply hash-map options) -- :meta first, then a :validator the initial
@@ -5821,8 +5860,9 @@ cases:
   - name: await-for-answers-whether-the-actions-ran-in-time
     # Oracle-identical (clj 1.12.6, 2026-10-12): await-for runs like await and answers
     # true when every agent's actions sent so far ran; await and await-for refuse
-    # inside a transaction (io!) and inside an action. Deviation: the oracle's
-    # (await-for 0 a) races its pool and may answer false; here the actions run first.
+    # inside a transaction (io!) and inside an action. (await-for 0 a) races the pool
+    # and may answer false, like the oracle's; on wasm the actions run first, so it
+    # answers true there.
     source: |
       (def af (agent 0))
       (send af + 5)
@@ -5974,10 +6014,11 @@ cases:
       (1 1)
       [1 6]
       [5 p]
-  - name: agents-send-synchronously
+  - name: agents-run-queued-actions-in-send-order
     # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
-    # and the estimate combines deterministically. A send to an idle agent runs at
-    # once (there is no thread pool); *agent* is bound while one runs.
+    # and the estimate combines deterministically. A send only queues the action --
+    # the pool runs it after send returns, so every read of an action's answer waits
+    # on await first; *agent* is bound while one runs.
     source: |
       (defn inside? [[x y]] (<= (+ (* x x) (* y y)) 1))
       (def left (agent 0))
@@ -5988,8 +6029,11 @@ cases:
       (println (list @left @right (/ (* 4 (+ @left @right)) 5)))
       (def agent-seen (atom nil))
       (def probe (agent 0))
-      (println @(send probe + 41))
+      (send probe + 41)
+      (await probe)
+      (println @probe)
       (send probe (fn [_] (reset! agent-seen *agent*) 1))
+      (await probe)
       (println (list @probe (if @agent-seen :bound :unbound) (= @agent-seen probe)))
       (println (list (await probe) (shutdown-agents)))
     expected: |

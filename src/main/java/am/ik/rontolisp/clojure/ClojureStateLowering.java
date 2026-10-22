@@ -1269,9 +1269,10 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (send agent fun args...)} and {@code (send-off ...)}: the action queued on
-	 * the agent, answering the agent. There is no thread pool on any backend: an idle
-	 * agent runs its queue on the sender's thread at once, a running one on the thread
-	 * already running it.
+	 * the agent, answering the agent. Where threads exist the queue runs on the shared
+	 * pool ({@code clojure.lisp} "The shared agent pool"), so a send never waits for an
+	 * action; on wasm, single-threaded by construction, an idle agent runs its queue on
+	 * the sender's thread at once, like a running one on the thread already running it.
 	 */
 	static LispVal sendOf(ClojureLowering ctx, List<LispVal> items) {
 		String op = ((LispSymbol) items.get(0)).name();
