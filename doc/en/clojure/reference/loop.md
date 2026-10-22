@@ -12,3 +12,10 @@ constant-stack.
            (if (= i 10) a (recur b (+ a b) (inc i))))) ; 55
 (println (loop [i 0] (if (= i 3) i (recur (inc i)))))  ; 3
 ```
+
+A closure the body creates captures its own iteration's value, like the oracle's --
+each `recur` is a fresh call with fresh parameters:
+
+```clojure
+(println (let [fns (atom [])] (loop [i 0] (when (< i 3) (swap! fns conj (fn [] i)) (recur (inc i)))) (mapv (fn [f] (f)) @fns))) ; [0 1 2]
+```

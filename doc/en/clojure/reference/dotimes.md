@@ -10,3 +10,9 @@ and a non-number signals.
 (println (dotimes [i 3] (print i))) ; 012nil
 (println (dotimes [i 0] :zero)) ; nil
 ```
+
+A closure the body creates captures its own iteration's value, like the oracle's:
+
+```clojure
+(println (let [fns (atom [])] (dotimes [i 3] (swap! fns conj (fn [] i))) (mapv (fn [f] (f)) @fns))) ; [0 1 2]
+```

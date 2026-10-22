@@ -9,3 +9,9 @@
            (if (= i 10) a (recur b (+ a b) (inc i))))) ; 55
 (println (loop [i 0] (if (= i 3) i (recur (inc i)))))  ; 3
 ```
+
+本体が作るクロージャは、その反復の値を捉えます（オラクルと同様）-- 各 `recur` は新しい引数での新しい呼び出しです:
+
+```clojure
+(println (let [fns (atom [])] (loop [i 0] (when (< i 3) (swap! fns conj (fn [] i)) (recur (inc i)))) (mapv (fn [f] (f)) @fns))) ; [0 1 2]
+```

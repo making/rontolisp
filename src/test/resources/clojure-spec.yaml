@@ -3850,6 +3850,26 @@ cases:
       [0 1 2 0 10 0 1]
       nil
       [0 1 2 0 10 0 1 [0 0] [0 1] [1 0] [1 1]]
+  - name: dotimes-and-loop-closures-capture-the-iteration
+    # Oracle-identical (clj 1.12.6, 2026-10-22): a closure a dotimes/loop/doseq body
+    # creates captures its own iteration's value, not the loop's final cell. dotimes
+    # runs its body behind a per-iteration rebinding of the variable to itself (g41);
+    # doseq binds each element afresh and loop recurs through fresh parameters, so
+    # both already capture per iteration on every backend.
+    source: |
+      (def fns [])
+      (dotimes [i 3] (def fns (conj fns (fn [] i))))
+      (println (mapv (fn [f] (f)) fns))
+      (def gns [])
+      (loop [i 0] (when (< i 3) (def gns (conj gns (fn [] i))) (recur (inc i))))
+      (println (mapv (fn [f] (f)) gns))
+      (def hns [])
+      (doseq [i [0 1 2]] (def hns (conj hns (fn [] i))))
+      (println (mapv (fn [f] (f)) hns))
+    expected: |
+      [0 1 2]
+      [0 1 2]
+      [0 1 2]
   - name: for-with-when-let-while
     # for answers the strict list of its body over every combination; :when skips,
     # :while ends its level (an outer one ends the whole comprehension), :let binds

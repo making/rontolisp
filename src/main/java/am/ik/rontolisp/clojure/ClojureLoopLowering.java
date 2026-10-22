@@ -353,7 +353,9 @@ final class ClojureLoopLowering {
 	 * nil -- the core {@code dotimes} the macro expander already shares. The count runs
 	 * through {@code truncate} first, the oracle's {@code intCast} cast in lowering form:
 	 * a float counts its truncation ({@code 2.5} runs {@code 0 1}), and a non-number
-	 * signals there instead of in the loop's comparison.
+	 * signals there instead of in the loop's comparison. The body runs behind a
+	 * per-iteration rebinding of the variable to itself, so a closure it creates captures
+	 * its own iteration's value the way the oracle's does (g41).
 	 */
 	static LispVal dotimesOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "dotimes takes a binding vector and a body");
@@ -365,8 +367,17 @@ final class ClojureLoopLowering {
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), ctx.lower(bindings.get(1)));
 		// the body answers nil through the loop, never the target: a recur inside
 		// one is not in tail position, like the oracle
-		return ctx.inScope(scope, () -> ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
-				ClojureLowerUtil.list(List.of(ctx.localSym(name), count)), ctx.nonTailBody(items, 2)));
+		return ctx.inScope(scope, () -> {
+			LispSymbol local = ctx.localSym(name);
+			// a per-iteration rebinding of the variable to itself: the core dotimes
+			// binds the cell once and steps it, so a closure the body creates would
+			// otherwise observe the final value; the inner cell is fresh per iteration,
+			// like the oracle (g41)
+			LispVal fresh = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(local, local))), ctx.nonTailBody(items, 2));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"), ClojureLowerUtil.list(List.of(local, count)),
+					fresh);
+		});
 	}
 
 	/**
