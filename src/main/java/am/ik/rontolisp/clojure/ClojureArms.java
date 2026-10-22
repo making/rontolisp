@@ -631,7 +631,11 @@ public final class ClojureArms {
 		 * one -- a literal of either ({@link Family#qualifiedIdents}), or one of the
 		 * library functions that build a keyword or symbol from a computed spelling, or
 		 * call one that does (the constructors, {@code find-keyword}, {@code intern} and
-		 * {@code loaded-libs} over the symbol constructor, and the reader).
+		 * {@code loaded-libs} over the symbol constructor, and the reader), or one of the
+		 * multimethod and protocol canon helpers that wrap a computed class spelling as a
+		 * keyword ({@code %clojure-dispatch-value} and its key fold, the
+		 * {@code %clojure-extends-*} key spellers and their {@code extends?} and
+		 * {@code extend} callers).
 		 */
 		NAMESPACE_MAP("namespace-map", Set.of("RONTOLISP::%CLOJURE-PRINT-NS-MAP-P"), Set.of(), Map.of(), Set.of(
 				"RONTOLISP::%CLOJURE-KEYWORD-1", "RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-SYMBOL-1",
@@ -655,7 +659,11 @@ public final class ClojureArms {
 				"RONTOLISP::%CLOJURE-RD-EDN-DISPATCH", "RONTOLISP::%CLOJURE-RD-EDN-TAGGED",
 				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
 				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
-				"RONTOLISP::%CLOJURE-EDN-READ-STRING-V", "RONTOLISP::%CLOJURE-EDN-READ-V"), Set.of(), true),
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING-V", "RONTOLISP::%CLOJURE-EDN-READ-V",
+				"RONTOLISP::%CLOJURE-DISPATCH-VALUE", "RONTOLISP::%CLOJURE-DISPATCH-KEY",
+				"RONTOLISP::%CLOJURE-EXTENDS-SPELLING", "RONTOLISP::%CLOJURE-EXTENDS-NAMED",
+				"RONTOLISP::%CLOJURE-EXTENDS-KEY", "RONTOLISP::%CLOJURE-EXTENDS-P", "RONTOLISP::%CLOJURE-EXTEND"),
+				Set.of(), true),
 
 		/**
 		 * An exception or a runtime error, which {@code class} reads the class of: only a
