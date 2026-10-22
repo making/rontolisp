@@ -157,7 +157,8 @@ answered `2 5 3` before).
 | `StackTraceElement->vec` | the oracle's `[class method file line]` vector of the host element over `%clojure-host-method` reads and `%clojure-symbol-1`, after a lower-time arity check in the oracle's wording; as a value a one-argument lambda over the same read | "Exceptions"; nil is the oracle's `NullPointerException`, anything else its `ClassCastException`; elements exist only where the host does (`.getStackTrace` answers `[]`). Pinned by clojure-spec `stack-trace-element-vec-refuses-nil-and-foreign-values` (all four backends) and `ClojureInteropTest#stackTraceElementVecAnswersTheOraclesVector` (interpreter and JVM) |
 | `EMPTY-NODE` | the empty vector: the value one vector shared program-wide, a call the empty vector applied (a key and an optional default through `nth`) | the oracle's persistent-vector node is `=` to no vector and unprintable as one; a call reads like `([])`. Pinned by clojure-spec `empty-node-is-the-empty-vector` (all four backends) |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (a double in the form pulls in the double printer's cost too) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `swap-vals!` `reset-vals!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!`/`-vals` through the guarded `%clojure-ref-*` helpers, each the plain `%clojure-atom-*` one where no reference can have a validator or watch (`.kb/concurrent-served-requests.md`; "State", validators and watches); `atom`'s options through `%clojure-atom-options` | answer the new value (`-vals` `[old new]`); `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `swap-vals!` `reset-vals!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!`/`-vals` through the guarded `%clojure-ref-*` helpers, each the plain `%clojure-atom-*` one where no reference can have a validator or watch (`.kb/concurrent-served-requests.md`; "State", validators and watches); `atom`'s options through `%clojure-atom-options` | answer the new value (`-vals` `[old new]`); `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), the rontolisp future the HTTP client answers ("HTTP client"), and a Clojure future or promise ("State") |
+| `future` `future-call` `promise` `deliver` | the host `FutureTask` around the conveyed function and the rendezvous cell under `clojure.lisp`'s `%clojure-future-*` (`ClojureFutureLowering.futureCallOf`/`promiseOf`/`deliverOf`, `future` behind `future-call`; as values a one-argument lambda over the same call, a nullary one, and a two-argument one) | the task does the oracle's work on the interpreter and the JVM -- done, cancelled, `cancel(true)` and `get`, the stored condition wrapped in `ExecutionException` at `deref`; on wasm the four calls refuse at call time, like every refused construct | "State" |
 | `ref` `dosync` `sync` `io!` `alter` `commute` `ref-set` `ensure` `with-loading-context` | the cell under `clojure.lisp`'s `%clojure-stm-*` (`sync` the same one-lock run with its flags dropped, `io!` its body behind the `%clojure-stm-log` check, `with-loading-context` its body as-is) | "State" |
 | `ref-history-count` `ref-min-history` `ref-max-history` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker (`-set` for the two-argument setters) after a lower-time arity check in the oracle's wording; as a value `#'...-v` | the count of committed transactions that wrote the ref (one per log entry, so several writes in one transaction count once), capped by its min history like the oracle's retained chain (`min(commits, min)`, never below zero); the bounds are the oracle's `intCast`. A `ref` names `:min-history`/`:max-history` options beside `:validator`, and registers beside its construction where the program names a history verb (the pre-scan's `usedRefHistory`, always in a session), through the `REF_HISTORY` family's views; anything else is the oracle's cast failure. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `ref-history-count-and-the-min-max-bounds` |
 | `agent` `send` `send-off` `await` `await-for` `shutdown-agents` `agent-error` `restart-agent` `set-error-handler!` `set-error-mode!` `error-handler` `error-mode` `agent-errors` `clear-agent-errors` | the cell under `clojure.lisp`'s `%clojure-agent-*` (`ClojureStateLowering.agentRow`) | "State" |
@@ -259,7 +260,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `future` `promise` `deliver` (no thread pool or rendezvous); `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `future-call` `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and `resolve` of a computed symbol refuse at run time ("Macros"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
+| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `tap>` `add-tap` `remove-tap`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and `resolve` of a computed symbol refuse at run time ("Macros"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
 
 ## Deviations
 
@@ -590,7 +591,7 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `ClojureArmsTest#theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage`.
 - Names no class: a refusal of a construct the oracle accepts (regex `\N{..}` of a pattern made
   at run time, a class under `(?c)`, `(partition 0 ...)`, a deftype literal, a named-but-refused
-  verb called (`future`, `enumeration-seq`, ... -- g30 lowers the call to the plain error of
+  verb called (`enumeration-seq`, ... -- g30 lowers the call to the plain error of
   the same words, so a defining library loads and only the call signals), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
   misuse a lower verb refuses first carries that verb's
@@ -1956,7 +1957,9 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `WaitForLibrary` splices it where `ClojureArms.sleepsOnAFuture` (a producer and the
   timed arm). `future?` T; `future-done?` is `%future-settled-p`; `future-cancelled?` and
   `future-cancel` false (cancel's "not possible"); `realized?` stays the
-  `ClassCastException` the oracle throws for a `CompletableFuture`.
+  `ClassCastException` the oracle throws for a `CompletableFuture`. A Clojure future
+  (`future`, `future-call`: "State") is a different kind: its host task does the
+  cancelling, so `future-cancel` wins and `realized?` reads its done flag.
 - **`:as :stream` is a `clojure.java.io` byte stream** (2026-10-09; before, fetch's body
   stream itself, which `.read` refused): `(:C%INPUT-STREAM #(body chunk i closed class))`,
   `%clojure-http-input-stream` over the (inflating) rontolisp stream, CLASS the oracle's
@@ -5237,6 +5240,17 @@ host alone answers ("Host arms where the host is not").
   `CompletableFuture/completedFuture`); one that does not call it is byte-identical.
   Pin: `ClojureInteropTest#theFuturePredicatesReadAHostFuture` (oracle-identical, interpreter
   and JVM).
+- A Clojure future under `deref` and the future verbs (2026-10-22, `.todo/g35`, oracle
+  clj 1.12.6): `future`/`future-call` answer `(:C%FUTURE task failure-cell)` and
+  `promise` `(:C%PROMISE cell)` ("State"). The task is the oracle's own work, so
+  `deref` (one argument or three) and the verbs read it like a host future's, except
+  the failure, which `deref` wraps in `ExecutionException` over the stored body
+  condition (the host's `get` would hand the converted crossing instead). `realized?`
+  reads the task's done flag and the promise's delivered flag. The arms fold where the
+  program makes neither (`ClojureArms.Family#FUTURE`), exactly like the host and fetch
+  ones, so every program naming no future or promise compiles as before. Pin:
+  `ClojureInteropTest#futuresPromisesAndDeliverMatchTheOracle` (oracle-identical,
+  interpreter and JVM).
 - Host collections under the printer (decided 2026-10-04, oracle clj 1.12.6): `print-method`
   under `*print-readably*` writes a `RandomAccess` as a vector, another `List` as a list, a
   `Map` as a map and a `Set` as a set, members readably, under `*print-length*`/`*print-level*`,
@@ -6925,6 +6939,35 @@ resolve var`.
   behind a failure. `await` and `await-for` refuse inside a transaction first (`io!`'s
   `IllegalStateException`, read off `%clojure-stm-log`), then inside an action. Deviation:
   `(await-for 0 a)` answers true (the oracle's races its pool).
+- **Futures and promises** (2026-10-22, `.todo/g35`; `clojure.lisp` "Futures and
+  promises"). `future` is `future-call` of `(fn [] body...)`, and `future-call` runs the
+  conveyed function (`bound-fn*`, so the creation-time bindings reach the new thread)
+  through the host `FutureTask` it starts on its own thread (`%clojure-future-start`),
+  answering `(:C%FUTURE task failure-cell)` (`ClojureFutureLowering`). The task does the
+  oracle's work -- done, cancelled, `cancel(true)` and `get` -- so the verbs read what
+  they read there; the guard (`%clojure-future-guard`) stores the body's condition in
+  the cell before it crosses the host call, and `deref` (one argument or three,
+  `%clojure-future-clojure-get` / `-within`) wraps the stored condition in the oracle's
+  `ExecutionException`, re-signalling a cancelled task's `CancellationException` as the
+  host's (a cancelled task stays cancelled whatever the runner stored while the
+  interrupt arrived, so the stale store never surfaces). `promise` is
+  `(:C%PROMISE #(value delivered lock))`: `deliver` stores once (a second delivery
+  keeps the first, answering the promise; anything but a promise the oracle's cast
+  failure), `deref` waits, polling between `(sleep 0.001)`s, the timed form answering
+  its default past the truncated deadline. `future?` is false of a promise; `realized?`
+  reads the task's done flag and the promise's delivered flag (`%clojure-is-realized`
+  arms). Every test of one is an arm of the FUTURE family
+  (`ClojureArms.Family#FUTURE`, producers the runner and the promise constructor), so a
+  program making neither compiles as before -- and on wasm, where no thread exists, the
+  four calls refuse at call time in the same shape as every other refusal of a construct
+  the oracle accepts. Pinned oracle-identical (clj 1.12.6, 2026-10-22) by clojure-spec
+  `futures-deliver-their-value-and-the-predicates-read-them`,
+  `promises-block-until-delivered-and-deref-takes-defaults` and
+  `cancelled-and-failed-futures-answer-like-the-oracle` (interpreter and JVM; the WASM
+  legs skip), `ClojureInteropTest#futuresPromisesAndDeliverMatchTheOracle` (interpreter
+  and JVM), `ClojureLoweringTest#futuresAndPromisesLowerToHostThreadsAndRefuseOnlyWithoutThem`
+  (+ `hostOnlyVarsAreRefusedWhenCalled`) and
+  `ClojureWasmInteropRefusalTest#futuresAndPromisesRefuseAtCallTimeOnBothBackends`.
 - **Ref histories** (2026-10-13, `.todo/f75`; `clojure.lisp` "Ref histories"). `ref` takes `:min-history`/`:max-history` options beside `:validator` (each lowered once, defaulting to 0 and 10), and every ref registers `#(count min max)` in the eql table `%clojure-ref-histories` where the program names a history verb (the pre-scan's `usedRefHistory`, always in a session) through the `REF_HISTORY` family's registration view; anywhere else the cell stays the atom's. A committed transaction bumps every tracked ref its log wrote once (`%clojure-ref-history-noted`, answering its first argument, ahead of the watches' `%clojure-stm-noted`, so a watch reads the new count), to `min(commits, min-history)` and never below zero -- the oracle's retained chain, field by field on clj 1.12.6 (several writes in one transaction count once, a rollback never, `max-history` never). The readers answer the slots and the setters store the oracle's `intCast`, answering the ref; anything but a ref is the oracle's cast failure. A program naming no history verb has both views folded and splices as before. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `ref-history-count-and-the-min-max-bounds`, `ClojureLoweringTest#refHistoryVerbsLowerToWorkersAndTrackRefs` and `ClojureArmsTest#theRefHistoryFamilyKeepsOnlyProgramsNamingAHistoryVerb`.
 - **Validators and watches** (2026-10-12; `clojure.lisp` "Validators and watches"). An atom, ref
   or agent keeps both in its cell, `#(value nil validator state watches)`; a var (interned, so one

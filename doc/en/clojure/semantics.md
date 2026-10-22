@@ -379,9 +379,14 @@ sending thread when it is idle (there is no thread pool); a send made inside a
 transaction or an action runs once that completes. `*agent*` is bound while an
 action runs, `await` runs or waits for the actions sent so far, and
 `shutdown-agents` answers `nil`. A [delay](reference/delay.md) runs its body once, on
-the first `force` or `deref`, under its own lock. `future`/`promise`/`deliver`
-stay refused by name, and so does `proxy-super` (proxy methods take no super
-handle).
+the first `force` or `deref`, under its own lock. [`future`](reference/future.md)
+and [`future-call`](reference/future-call.md) run the body on their own thread
+where threads exist (the interpreter and the JVM), conveying the creation-time
+bindings, and a failure surfaces at [`deref`](reference/deref.md) as the
+oracle's `ExecutionException` over the body's condition; [`promise`](reference/promise.md)
+blocks its `deref` until [`deliver`](reference/deliver.md) delivers it. On the
+WASM backends, single-threaded by construction, the call refuses instead -- and
+so does `proxy-super` (proxy methods take no super handle).
 
 `binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
 extent; anything else is refused. `bound-fn` is `bound-fn*` over `fn`: the
@@ -526,7 +531,7 @@ Each refusal names the missing design, never `unknown name`:
 | a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
 | an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
-| `future`, `promise`/`deliver` | by name | no thread pool or blocking rendezvous on any backend |
+| `future`, `future-call`, `promise`/`deliver` on a WASM backend | `... is not supported yet on this backend ...` | the WASM backends are single-threaded; the interpreter and the JVM run them on a host thread |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |
 | `toString`/`equals`/`hashCode` in an interface-only `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run (a class proxy runs it) |

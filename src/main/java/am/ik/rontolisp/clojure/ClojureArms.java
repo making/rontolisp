@@ -1021,6 +1021,17 @@ public final class ClojureArms {
 				Set.of(ClojureKernelLowering.HTTP_REQUEST, ClojureIoLowering.INSTALL_FETCH), Set.of()),
 
 		/**
+		 * A Clojure future or promise -- what {@code future} and {@code future-call}
+		 * spawn on their own thread, and what {@code promise} builds -- which the future
+		 * verbs and {@code deref} (with or without a timeout) read through the host task,
+		 * and {@code realized?} through its settled or delivered flag: only those three
+		 * verbs make one (on the interpreter and the JVM; the WASM backends refuse the
+		 * call), so a program making neither folds every arm.
+		 */
+		FUTURE("future-and-promise", Set.of(ClojureFutureLowering.WRAPPER_P, ClojureFutureLowering.PROMISE_P), Set.of(),
+				Map.of(), Set.of(ClojureFutureLowering.FUTURE_START, ClojureFutureLowering.PROMISE_MAKE), Set.of()),
+
+		/**
 		 * A reader over a fetched reply's body that decodes it as it arrives -- the
 		 * prelude's text pull stream, a Gray character stream, over the body's chunks --
 		 * which the io kernels open over a byte stream reading a reply

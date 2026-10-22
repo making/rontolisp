@@ -2312,6 +2312,74 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6): future/future-call run the body on another thread,
+	// conveying the creation-time bindings; deref blocks for the value and a
+	// failure surfaces as ExecutionException over the body's condition, a
+	// cancelled one as CancellationException; a promise blocks until delivered
+	// (deliver answers the promise and keeps the first value), and the timed
+	// deref answers its default while neither has settled.
+	@Test
+	void futuresPromisesAndDeliverMatchTheOracle() throws Exception {
+		assertBothEqual(
+				"""
+						(def ^:dynamic *g35-x* 1)
+						(println @(future (do 1 2)))
+						(binding [*g35-x* 5] (println @(future *g35-x*)))
+						(println @(future-call (fn [] 11)) (map deref [(future 1) (future 2)]))
+						(println @(future))
+						(println (try @(future-call 1) (catch java.util.concurrent.ExecutionException e :exec)))
+						(let [p (promise)]
+						  (println [(future? p) (realized? p)])
+						  (deliver p 7)
+						  (println [(realized? p) @p])
+						  (deliver p 8)
+						  (println @p))
+						(let [p (promise)] (println (deref p 100 :dflt)))
+						(let [p (promise)] (deliver p :v) (println [(deref p 100 :dflt) (deref p 0 :dflt2)]))
+						(let [p (promise)] (println (deref p -5 :d)))
+						(println (deref (future 5) 1000 :d) (deref (future 5) 10.9 :d))
+						(let [p (promise)] (future (do (Thread/sleep 100) (deliver p :late))) (println (deref p 5000 :early)))
+						(let [f (future 1)] (println [@f (future? f) (future-done? f) (future-cancelled? f) (future-cancel f) (realized? f)]))
+						(let [f (future 1)] (println [@f (future-cancel f) @f]))
+						(let [p (promise) f (future @p)]
+						  (println [(future-cancel f) (future-cancelled? f) (realized? f)])
+						  (println (try @f (catch java.util.concurrent.CancellationException e :cancelled)))
+						  (deliver p 9)
+						  (println (future-done? f)))
+						(let [f (future (throw (ex-info "boom" {:k 1})))]
+						  (println (try @f (catch java.util.concurrent.ExecutionException e [(ex-message (ex-cause e)) (ex-data (ex-cause e))]))))
+						(let [ps (repeatedly 2 promise)] (deliver (first ps) :a) (deliver (second ps) :b) (println (map deref ps)))
+						(let [d deliver p (promise)] (d p 5) (println @p))
+						(println (map deref (map future-call [(fn [] 21)])) @(apply future-call [(fn [] 22)]))
+						(println [(try (deliver 1 2) (catch ClassCastException e :cce)) (try (deliver nil 1) (catch NullPointerException e :npe))])
+						""",
+				"""
+						2
+						5
+						11 (1 2)
+						nil
+						:exec
+						[false false]
+						[true 7]
+						7
+						:dflt
+						[:v :v]
+						:d
+						5 5
+						:late
+						[1 true true false false true]
+						[1 false 1]
+						[true true true]
+						:cancelled
+						true
+						[boom {:k 1}]
+						(:a :b)
+						5
+						(21) 22
+						[:cce :npe]
+						""");
+	}
+
 	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a
 	// RandomAccess List as a vector, any other List as a list, a Map as a map and a Set
 	// as a set, each member readably and under *print-length* / *print-level*; another

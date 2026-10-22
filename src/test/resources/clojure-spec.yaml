@@ -9809,6 +9809,83 @@ cases:
     expected: |
       [:cce :npe :cce :cce :npe :cce :npe :cce]
       :cce :npe (false false)
+  - name: futures-deliver-their-value-and-the-predicates-read-them
+    # Oracle-identical (clj 1.12.6): future/future-call run the body on another
+    # thread, conveying the creation-time bindings; deref blocks for the value.
+    # The WASM legs refuse the call (single-threaded modules): skipped there,
+    # pinned by ClojureWasmInteropRefusalTest. The verb-by-verb matrix lives in
+    # ClojureInteropTest; this row keeps one site per shape so the corpus
+    # compiles within the JVM's per-method cap.
+    skip:
+      wasm: futures refuse the call where no thread exists
+      wasm_component: futures refuse the call where no thread exists
+    source: |
+      (def ^:dynamic *g35-x* 1)
+      (println @(future (do 1 2)))
+      (binding [*g35-x* 5] (println @(future *g35-x*)))
+      (let [f (future 1)] (println [@f (future? f) (future-done? f) (future-cancelled? f) (future-cancel f) (realized? f)]))
+      (println @(apply future-call [(fn [] 22)]))
+    expected: |
+      2
+      5
+      [1 true true false false true]
+      22
+  - name: promises-block-until-delivered-and-deref-takes-defaults
+    # Oracle-identical (clj 1.12.6): deref of a promise waits for its value;
+    # deliver answers the promise and keeps the first value; the timed deref
+    # answers its default while nothing was delivered. The WASM legs refuse the
+    # call (single-threaded modules): skipped there, pinned by
+    # ClojureWasmInteropRefusalTest.
+    skip:
+      wasm: promises refuse the call where no thread exists
+      wasm_component: promises refuse the call where no thread exists
+    source: |
+      (let [p (promise)]
+        (println [(future? p) (realized? p)])
+        (deliver p 7)
+        (println [(realized? p) @p])
+        (deliver p 8)
+        (println @p))
+      (let [p (promise)] (println (deref p 100 :dflt)))
+      (let [p (promise)] (deliver p :v) (println [(deref p 100 :dflt) (deref p 0 :dflt2)]))
+      (let [p (promise)] (println (deref p -5 :d)))
+      (let [p (promise)] (future (do (Thread/sleep 100) (deliver p :late))) (println (deref p 5000 :early)))
+      (let [ps (repeatedly 2 promise)] (deliver (first ps) :a) (deliver (second ps) :b) (println (map deref ps)))
+      (let [d deliver p (promise)] (d p 5) (println @p))
+      (println [(try (deliver 1 2) (catch ClassCastException e :cce)) (try (deliver nil 1) (catch NullPointerException e :npe))])
+    expected: |
+      [false false]
+      [true 7]
+      7
+      :dflt
+      [:v :v]
+      :d
+      :late
+      (:a :b)
+      5
+      [:cce :npe]
+  - name: cancelled-and-failed-futures-answer-like-the-oracle
+    # Oracle-identical (clj 1.12.6): cancelling a blocked future answers true
+    # and its deref throws CancellationException; a body that threw surfaces as
+    # ExecutionException over its condition. The WASM legs refuse the call
+    # (single-threaded modules): skipped there, pinned by
+    # ClojureWasmInteropRefusalTest.
+    skip:
+      wasm: futures refuse the call where no thread exists
+      wasm_component: futures refuse the call where no thread exists
+    source: |
+      (let [p (promise) f (future @p)]
+        (println [(future-cancel f) (future-cancelled? f) (realized? f)])
+        (println (try @f (catch java.util.concurrent.CancellationException e :cancelled)))
+        (deliver p 9)
+        (println (future-done? f)))
+      (let [f (future (throw (ex-info "boom" {:k 1})))]
+        (println (try @f (catch java.util.concurrent.ExecutionException e [(ex-message (ex-cause e)) (ex-data (ex-cause e))]))))
+    expected: |
+      [true true true]
+      :cancelled
+      true
+      [boom {:k 1}]
   - name: special-symbol-names-the-special-forms
     # Oracle-identical (clj 1.12.6).
     source: |
@@ -16043,12 +16120,14 @@ cases:
     # call signals, still refused, in the same words. The signal names no class
     # (a refusal of a construct the oracle accepts), so any catch but
     # clojure.lang.ExceptionInfo takes it; ex-message reads the words.
+    # future/future-call/promise/deliver left this row in g35: they run on the
+    # interpreter and the JVM now (the rows below), refusing only where no
+    # thread exists.
     source: |
       (defn g30-never-called [e] (enumeration-seq e))
       (def g30-es enumeration-seq)
       (println :defined-loads)
       (println (try (enumeration-seq nil) (catch Exception e (str "refused: " (ex-message e)))))
-      (println (try (future 1) (catch Exception e (str "refused: " (ex-message e)))))
       (println (try (bean 1) (catch Exception e (str "refused: " (ex-message e)))))
       (println (try (compile 'foo) (catch Exception e (str "refused: " (ex-message e)))))
       (println (try (g30-es nil) (catch Exception e (str "refused: " (ex-message e)))))
@@ -16056,7 +16135,6 @@ cases:
     expected: |
       :defined-loads
       refused: enumeration-seq is not supported yet: host enumerations stop at the host boundary
-      refused: future is not supported yet: there is no thread pool on any backend
       refused: bean is not supported yet: host classes are not answered on every backend
       refused: compile is not supported yet: namespaces compile ahead of time, never at run time
       refused: enumeration-seq is not supported yet: host enumerations stop at the host boundary

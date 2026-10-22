@@ -47,9 +47,17 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 /**
  * Runs the corpus of the EXPERIMENTAL Clojure front end ({@code clojure-spec.yaml}) on
  * the interpreter, the JVM, wasm and the component, and requires the same output of all
- * four. The {@code ci-spec.yaml} idea: the cases are concatenated into ONE {@code .clj}
- * program per backend (they share global state and run in order) and the output is sliced
- * back per case, so a failure names its case and its backend.
+ * four -- except the cases a leg skips. The {@code ci-spec.yaml} idea: the cases are
+ * concatenated into ONE {@code .clj} program per backend (they share global state and run
+ * in order) and the output is sliced back per case, so a failure names its case and its
+ * backend.
+ *
+ * <p>
+ * A case with a {@code skip:} map ({@code clojure-http-spec.yaml}'s shape: leg key to
+ * reason) does not run on those legs -- a per-backend difference the front end keeps
+ * (futures and promises refuse the call where no thread exists), pinned for the skipping
+ * legs where the deviation already is. A skipped case must be self-contained: the other
+ * legs never see the names it defines.
  *
  * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
@@ -62,7 +70,11 @@ class ClojureSpecE2eTest {
 
 	private static final String SPEC_RESOURCE = "/clojure-spec.yaml";
 
-	record Case(String name, String source, String expected) {
+	record Case(String name, String source, String expected, @Nullable Map<String, String> skip) {
+
+		boolean runsOn(String leg) {
+			return this.skip == null || !this.skip.containsKey(leg);
+		}
 
 		List<String> expectedLines() {
 			return splitLines(this.expected);
@@ -72,9 +84,13 @@ class ClojureSpecE2eTest {
 
 	record Spec(List<Case> cases) {
 
-		String program() {
+		List<Case> on(String leg) {
+			return this.cases.stream().filter(c -> c.runsOn(leg)).toList();
+		}
+
+		String program(String leg) {
 			StringBuilder program = new StringBuilder();
-			for (Case c : this.cases) {
+			for (Case c : on(leg)) {
 				program.append(c.source());
 			}
 			return program.toString();
@@ -88,27 +104,26 @@ class ClojureSpecE2eTest {
 	@TestFactory
 	Stream<DynamicNode> e2e() throws Exception {
 		Spec spec = loadSpec();
-		String program = spec.program();
 		boolean wasm = HostWasmtime.isAvailable();
-		Callable<String> interpreter = started(() -> interpret(program));
-		Callable<String> jvm = started(() -> runOnJvm(program));
-		Callable<String> wasmPreview1 = wasm ? started(() -> runOnWasm(program, false)) : null;
-		Callable<String> wasmComponent = wasm ? started(() -> runOnWasm(program, true)) : null;
+		Callable<String> interpreter = started(() -> interpret(spec.program("interpreter")));
+		Callable<String> jvm = started(() -> runOnJvm(spec.program("jvm")));
+		Callable<String> wasmPreview1 = wasm ? started(() -> runOnWasm(spec.program("wasm"), false)) : null;
+		Callable<String> wasmComponent = wasm ? started(() -> runOnWasm(spec.program("wasm_component"), true)) : null;
 		List<DynamicNode> backends = new ArrayList<>();
-		backends.add(backend("INTERPRETER", spec, interpreter));
-		backends.add(backend("JVM", spec, jvm));
-		backends.add(wasmBackend("WASM", spec, wasmPreview1));
-		backends.add(wasmBackend("WASM_COMPONENT", spec, wasmComponent));
+		backends.add(backend("INTERPRETER", spec.on("interpreter"), interpreter));
+		backends.add(backend("JVM", spec.on("jvm"), jvm));
+		backends.add(wasmBackend("WASM", spec.on("wasm"), wasmPreview1));
+		backends.add(wasmBackend("WASM_COMPONENT", spec.on("wasm_component"), wasmComponent));
 		return backends.stream();
 	}
 
 	// run is null when there is no wasmtime to run it on.
-	private static DynamicContainer wasmBackend(String leg, Spec spec, @Nullable Callable<String> run) {
+	private static DynamicContainer wasmBackend(String leg, List<Case> cases, @Nullable Callable<String> run) {
 		if (run == null) {
 			return dynamicContainer(leg,
 					Stream.of(dynamicTest("(skipped)", () -> abort("no usable wasmtime on PATH"))));
 		}
-		return backend(leg, spec, run);
+		return backend(leg, cases, run);
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.
@@ -131,7 +146,7 @@ class ClojureSpecE2eTest {
 		};
 	}
 
-	private static DynamicContainer backend(String leg, Spec spec, Callable<String> run) {
+	private static DynamicContainer backend(String leg, List<Case> cases, Callable<String> run) {
 		List<String> actual;
 		try {
 			actual = splitLines(run.call()).stream().map(ClojureSpecE2eTest::normalizeTestLocation).toList();
@@ -140,12 +155,12 @@ class ClojureSpecE2eTest {
 			return dynamicContainer(leg, Stream.of(dynamicTest("(execution failed)", () -> fail(leg + ": " + ex, ex))));
 		}
 		List<DynamicTest> tests = new ArrayList<>();
-		int expectedTotal = spec.cases().stream().mapToInt(c -> c.expectedLines().size()).sum();
+		int expectedTotal = cases.stream().mapToInt(c -> c.expectedLines().size()).sum();
 		tests.add(dynamicTest("total-line-count",
 				() -> assertThat(actual).as("%s produced a different number of output lines than the spec", leg)
 					.hasSize(expectedTotal)));
 		int offset = 0;
-		for (Case c : spec.cases()) {
+		for (Case c : cases) {
 			List<String> expected = c.expectedLines();
 			int start = Math.min(offset, actual.size());
 			List<String> slice = actual.subList(start, Math.min(offset + expected.size(), actual.size()));

@@ -3591,8 +3591,10 @@ class ClojureLoweringTest {
 			.contains("(ERROR \"clojure-version is not supported yet: no release of Clojure runs here\")");
 		assertThat(lowered("(let [x 1] (destructure x))"))
 			.contains("(ERROR \"destructure is not supported yet: the destructuring map has no lowering\")");
-		assertThat(lowered("(let [f inc] (future-call f))"))
-			.contains("(ERROR \"future-call is not supported yet: there is no thread pool on any backend\")");
+		assertThat(lowered("(let [f inc] (future-call f))")).contains("(RONTOLISP::%CLOJURE-FUTURE-START")
+			.contains("java.util.concurrent.FutureTask");
+		assertThat(wasmLowered("(let [f inc] (future-call f))"))
+			.contains("(ERROR \"future-call is not supported yet on this backend");
 		assertThat(lowered("(let [x 1] (seque x))"))
 			.contains("(ERROR \"seque is not supported yet: there is no thread pool on any backend\")");
 		assertThat(lowered("(let [x 1] (tap> x))"))
@@ -4450,17 +4452,42 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void futuresAndPromisesAreRefusedWhenCalled() {
-		// g30: naming future/promise/deliver compiles -- a library merely defining
-		// such a function loads -- and only the call signals, in the same words;
-		// the run-time signal is pinned by clojure-spec
-		// refused-verbs-signal-at-call-time.
-		assertThat(lowered("(defn g30-never-called-future [] (future 1))"))
-			.contains("(ERROR \"future is not supported yet: there is no thread pool on any backend\")");
-		assertThat(lowered("(promise)"))
-			.contains("(ERROR \"promise is not supported yet: blocking rendezvous needs a design\")");
-		assertThat(lowered("(let [p 1] (deliver p 1))"))
-			.contains("(ERROR \"deliver is not supported yet: blocking rendezvous needs a design\")");
+	void futuresAndPromisesLowerToHostThreadsAndRefuseOnlyWithoutThem() {
+		// g35: future/future-call/promise/deliver lower to the host-thread
+		// machinery (a host FutureTask around the conveyed function, a promise
+		// cell) where threads exist; on wasm, single-threaded by construction,
+		// only the call signals, in the same words (g30's naming shape)
+		assertThat(lowered("(future 1)")).contains("(RONTOLISP::%CLOJURE-FUTURE-START")
+			.contains("java.util.concurrent.FutureTask")
+			.contains("RONTOLISP::%CLOJURE-BOUND-FN*");
+		assertThat(lowered("(future-call inc)")).contains("(RONTOLISP::%CLOJURE-FUTURE-START")
+			.contains("java.util.concurrent.FutureTask");
+		assertThat(lowered("(promise)")).contains("(RONTOLISP::%CLOJURE-PROMISE)");
+		assertThat(lowered("(let [p 1] (deliver p 1))")).contains("(RONTOLISP::%CLOJURE-DELIVER")
+			.contains("deliver needs a promise");
+		// as values: the same constructors and stores over a lambda
+		assertThat(lowered("(map future-call [inc])")).contains("RONTOLISP::%CLOJURE-FUTURE-START");
+		assertThat(lowered("(map promise [1])")).contains("(RONTOLISP::%CLOJURE-PROMISE)");
+		assertThat(lowered("deliver")).contains("(RONTOLISP::%CLOJURE-DELIVER");
+		assertThat(wasmLowered("(future 1)")).contains("(ERROR \"future is not supported yet on this backend");
+		assertThat(wasmLowered("(future-call inc)"))
+			.contains("(ERROR \"future-call is not supported yet on this backend");
+		assertThat(wasmLowered("(promise)")).contains("(ERROR \"promise is not supported yet on this backend");
+		assertThat(wasmLowered("(let [p 1] (deliver p 1))"))
+			.contains("(ERROR \"deliver is not supported yet on this backend");
+		assertThat(wasmLowered("deliver")).contains("(ERROR \"deliver is not supported yet on this backend");
+		// arities still refuse at lower time, in the oracle's words
+		assertThatThrownBy(() -> Clojure.read("(future-call)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/future-call");
+		assertThatThrownBy(() -> Clojure.read("(promise 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/promise");
+		assertThatThrownBy(() -> Clojure.read("(deliver (promise))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/deliver");
+		// pcalls/seque/await1 stay refused everywhere: no thread pool for them
+		assertThat(lowered("(defn g35-never-called-pcalls [f] (pcalls f))"))
+			.contains("(ERROR \"pcalls is not supported yet: there is no thread pool on any backend\")");
+		assertThat(wasmLowered("(seque 1)"))
+			.contains("(ERROR \"seque is not supported yet: there is no thread pool on any backend\")");
 		// proxy-super lowers inside a proxy method body only.
 		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy-super outside a proxy method");

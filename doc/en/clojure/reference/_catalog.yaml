@@ -467,6 +467,10 @@ categories:
       - { slug: shutdown-agents, name: "shutdown-agents" }
       - { slug: delay, name: "delay" }
       - { slug: force, name: "force" }
+      - { slug: future, name: "future" }
+      - { slug: future-call, name: "future-call" }
+      - { slug: promise, name: "promise" }
+      - { slug: deliver, name: "deliver" }
       - { slug: future-cancel, name: "future-cancel" }
   - title: "Multimethods and hierarchies"
     index_page: clojure/reference/multimethods.md

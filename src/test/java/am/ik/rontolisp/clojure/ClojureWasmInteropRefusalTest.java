@@ -295,8 +295,40 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
-	void aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends() throws Exception {
-		// no value a wasm program makes has getBytes but a string, or a field s: the
+	void futuresAndPromisesRefuseAtCallTimeOnBothBackends() throws Exception {
+		// future/future-call/promise/deliver refuse the call where no thread
+		// exists (both wasm backends, single-threaded by construction); the
+		// interpreter and the JVM run them on a host thread (ClojureInteropTest)
+		String program = "(defn msg [f] (try (f) (catch Exception e (ex-message e))))"
+				+ " (println (msg #(future 1)) \"|\" (msg #(future-call inc)) \"|\" (msg #(promise)) \"|\" (msg #(deliver 1 2)))";
+		String expected = "future is not supported yet on this backend: the WebAssembly backends are single-threaded"
+				+ " | future-call is not supported yet on this backend: the WebAssembly backends are single-threaded"
+				+ " | promise is not supported yet on this backend: blocking rendezvous needs threads,"
+				+ " and the WebAssembly backends are single-threaded"
+				+ " | deliver is not supported yet on this backend: blocking rendezvous needs threads,"
+				+ " and the WebAssembly backends are single-threaded\n";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1").isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends() throws Exception { // no
+																						// value
+																						// a
+																						// wasm
+																						// program
+																						// makes
+																						// has
+																						// getBytes
+																						// but
+																						// a
+																						// string,
+																						// or
+																						// a
+																						// field
+																						// s:
+																						// the
 		// oracle's own refusal, where the host arm was a call-time error; a String
 		// construction of anything but a byte array is the host's, refused by name
 		String program = "(defn msg [f] (try (f) (catch Exception e (ex-message e))))"

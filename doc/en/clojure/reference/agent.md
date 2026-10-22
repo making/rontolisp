@@ -11,7 +11,7 @@ the initial value and every action's answer. A failing action fails the agent in
 `restart-agent`); with one the default is `:continue`. Options are read like the
 oracle's `(apply hash-map options)`: an unknown key is ignored, a key without a value
 is refused. `*agent*` is bound to the acting agent while an action runs, `nil` outside
-one. `future`/`promise` stay refused by name instead.
+one. [`future`](future.md) and [`promise`](promise.md) do run where threads exist instead: a future runs its body on its own thread.
 
 ```clojure
 (def a (agent 0))
