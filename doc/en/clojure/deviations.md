@@ -634,11 +634,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   reduced; `println` prints it as that seq where the oracle prints the object. An input
   reducing through its own `CollReduce` row is reduced at the `eduction`, so its `seq`
   answers where the oracle's refuses. A `reduced` value prints as its wrapper list.
-- Transactions run one at a time: `dosync` holds one lock for every transaction
-  of the process, so a body never retries and its side effects run once
-  (`commute` runs its function once; the oracle may run it twice). `sync` is the
-  same one-lock run with its flags dropped unevaluated (a nested `sync` joins the
-  running transaction like a nested `dosync`); `io!` refuses inside one with the
+- Transactions detect conflicts by version: `dosync` runs its body without holding
+  any lock, tracking every deref, `alter` read and `ensure` in a read set, and at
+  the commit point retries the body when another transaction committed a write to
+  a read ref -- so a body may run more than once and its side effects may repeat,
+  like the oracle's. Writes only log until commit, so a concurrent body never
+  reads an uncommitted write. `commute` applies at commit, running its function
+  twice uncontended, like the oracle's; an `alter` or a `ref-set` after a
+  `commute` of the same ref in the same transaction is the oracle's "Can't set
+  after commute" refusal. `sync` is the same run with its flags dropped
+  unevaluated (a nested `sync` joins the running transaction like a nested
+  `dosync`); `io!` refuses inside one with the
   oracle's `IllegalStateException` (`I/O in transaction`); `with-loading-context`
   is its body as-is. A body that
   waits for another thread's transaction never finishes, and a read outside a

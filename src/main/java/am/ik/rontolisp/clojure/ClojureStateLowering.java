@@ -273,13 +273,16 @@ final class ClojureStateLowering {
 	 * The value inside the lowered atom; anything else goes to the spliced
 	 * {@code rontolisp::%clojure-deref-other}, which answers a reduced value's content
 	 * (the oracle's {@code Reduced} is an {@code IDeref}), a var's root or a host
-	 * {@code Future}'s result, and signals otherwise.
+	 * {@code Future}'s result, and signals otherwise. The atom's read goes through the
+	 * tracking worker, which records the read set entry a conflicting commit retries on
+	 * (outside a transaction it answers the cell directly).
 	 */
 	static LispVal derefForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol cell = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), atomGet(cell),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell),
+						ClojureLowerUtil.list(STM_DEREF, cell),
 						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEREF-OTHER"), cell)));
 	}
 
@@ -772,6 +775,15 @@ final class ClojureStateLowering {
 	/** {@code alter}/{@code commute}/{@code ref-set}'s logged write. */
 	static final LispSymbol STM_WRITE = new LispSymbol("RONTOLISP::%CLOJURE-STM-WRITE");
 
+	/** {@code deref} of a reference read in a transaction. */
+	static final LispSymbol STM_DEREF = new LispSymbol("RONTOLISP::%CLOJURE-STM-DEREF");
+
+	/** {@code ensure}'s read: recorded and pinned to the transaction. */
+	static final LispSymbol STM_ENSURE = new LispSymbol("RONTOLISP::%CLOJURE-STM-ENSURE");
+
+	/** {@code commute}'s deferred application. */
+	static final LispSymbol STM_COMMUTE = new LispSymbol("RONTOLISP::%CLOJURE-STM-COMMUTE");
+
 	/** A ref with a validator. */
 	static final LispSymbol REF_MAKE = new LispSymbol("RONTOLISP::%CLOJURE-REF-MAKE");
 
@@ -943,9 +955,10 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (dosync body...)}: the body's thunk, which the spliced {@link #STM_RUN} runs
-	 * as one transaction under the one lock every transaction takes (a nested
-	 * {@code dosync} joins the running one). The thunk is the body's own zero-arity
-	 * {@code recur} target, like the oracle's {@code (fn [] body)}.
+	 * as one transaction (a nested {@code dosync} joins the running one). The body runs
+	 * without holding any lock; the commit point validates the read set a conflicting
+	 * commit retries, and the thunk is the body's own zero-arity {@code recur} target,
+	 * like the oracle's {@code (fn [] body)}.
 	 */
 	static LispVal dosyncOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(ctx.freshRecurName(), true);
@@ -965,9 +978,10 @@ final class ClojureStateLowering {
 	/**
 	 * {@code (sync flags body...)}: the flags dropped unevaluated (the oracle's
 	 * {@code flags-ignored-for-now}, never spliced into its expansion) and the body run
-	 * as one transaction under the same one lock {@code dosync} takes -- a nested
-	 * {@code sync} joins the running transaction, and nothing ever retries, so the body's
-	 * side effects run once. At least the flags are required, like the oracle's arity.
+	 * as one transaction under the same commit lock {@code dosync} takes -- a nested
+	 * {@code sync} joins the running transaction, and a conflicting commit retries, so
+	 * the body's side effects may run more than once. At least the flags are required,
+	 * like the oracle's arity.
 	 */
 	static LispVal syncOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureCoreLowering.arity("sync", items.size() - 1, 1, -1);
@@ -1058,10 +1072,12 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (alter ref fun args...)} and {@code (commute ref fun args...)}: the function
-	 * applied to the old value and the arguments, written through the transaction's log.
-	 * Transactions run one at a time, so the two commute identically (the oracle may run
-	 * a commute's function twice); both require a transaction.
+	 * {@code (alter ref fun args...)}: the function applied to the old value and the
+	 * arguments, written through the transaction's log, the read recorded first so a
+	 * conflicting commit retries. {@code (commute ref fun args...)}: the function logged
+	 * for the commit's re-application onto the latest value (running twice uncontended,
+	 * like the oracle's), answering the eager application; a later {@code alter} or
+	 * {@code ref-set} of the ref refuses, like the oracle's. Both require a transaction.
 	 */
 	static LispVal alterOf(ClojureLowering ctx, List<LispVal> items, String op) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, op + " takes a ref, a function and arguments");
@@ -1071,11 +1087,17 @@ final class ClojureStateLowering {
 
 	/**
 	 * An {@code alter}/{@code commute} over already-lowered forms: the guard, the
-	 * application and the logged write, answering the new value.
+	 * application and the logged write, answering the new value. The read goes through
+	 * the tracking read, so a concurrent commit between it and the write retries instead
+	 * of losing the update; {@code commute} defers to the commit instead.
 	 */
 	static LispVal alterBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
+		if (op.equals("commute")) {
+			return withAtom(ctx, cell, op, bound -> txnGuard(ClojureLowerUtil.list(STM_COMMUTE, bound, fun, argList)));
+		}
 		return withAtom(ctx, cell, op, bound -> {
-			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(bound), argList);
+			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
+					ClojureLowerUtil.list(STM_DEREF, bound), argList);
 			return txnGuard(ClojureLowerUtil.list(STM_WRITE, bound,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)));
 		});
@@ -1112,12 +1134,20 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (ensure ref)}: the ref's value, requiring a transaction like the oracle's.
-	 * Transactions run one at a time, so no other one writes the ref meanwhile.
+	 * {@code (ensure ref)}: the ref's value, requiring a transaction. The read is
+	 * recorded and pinned to the transaction, so a writer of the ref waits until it
+	 * commits, like the oracle's.
 	 */
 	static LispVal ensureOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "ensure takes one ref");
-		return withAtom(ctx, ctx.lower(items.get(1)), "ensure", bound -> txnGuard(atomGet(bound)));
+		return withAtom(ctx, ctx.lower(items.get(1)), "ensure", bound -> txnGuard(ensureRead(ctx, bound)));
+	}
+
+	/**
+	 * An {@code ensure} read over an already-bound cell: the recorded and pinned read.
+	 */
+	static LispVal ensureRead(ClojureLowering ctx, LispVal bound) {
+		return ClojureLowerUtil.list(STM_ENSURE, bound);
 	}
 
 	/**
@@ -1374,7 +1404,7 @@ final class ClojureStateLowering {
 	static LispVal ensureValue(ClojureLowering ctx) {
 		LispSymbol ref = new LispSymbol(ClojureLowering.mangle("ensure-ref"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ref),
-				withAtom(ctx, ref, "ensure", bound -> txnGuard(atomGet(bound))));
+				withAtom(ctx, ref, "ensure", bound -> txnGuard(ensureRead(ctx, bound))));
 	}
 
 	/**

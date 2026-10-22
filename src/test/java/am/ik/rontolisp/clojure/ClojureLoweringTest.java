@@ -1939,7 +1939,7 @@ class ClojureLoweringTest {
 		// the aware helpers, which a program giving no reference a validator or a watch
 		// has renamed to the plain ones (ClojureArms.Family.WATCH)
 		assertThat(lowered("(atom 1)")).contains(":C%ATOM").contains("(RONTOLISP::%CLOJURE-REF-CELL 1)");
-		assertThat(lowered("(def a (atom 1)) @a")).contains("AREF");
+		assertThat(lowered("(def a (atom 1)) @a")).contains("RONTOLISP::%CLOJURE-STM-DEREF");
 		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("RONTOLISP::%CLOJURE-REF-SWAP");
 		assertThat(lowered("(def a (volatile! 1)) (vswap! a inc)")).contains("APPLY")
 			.doesNotContain("%CLOJURE-ATOM-")
@@ -4371,10 +4371,10 @@ class ClojureLoweringTest {
 	void stmVerbsLowerOverTheAtomCell() {
 		assertThat(lowered("(ref 0)")).contains(":C%ATOM");
 		assertThat(lowered("(ref 0 :validator odd?)")).contains("(RONTOLISP::%CLOJURE-REF-MAKE 0");
-		// a transaction is its body's thunk run by the one-lock runtime, the thunk its
+		// a transaction is its body's thunk run by the STM runtime, the thunk its
 		// own zero-arity recur target like the oracle's (fn [] body)
 		assertThat(lowered("(dosync 1)")).contains("(RONTOLISP::%CLOJURE-STM-RUN (LAMBDA NIL 1))");
-		// sync is the same one-lock transaction with its flags dropped unevaluated, a
+		// sync is the same transaction with its flags dropped unevaluated, a
 		// nested sync joining the running one like a nested dosync
 		assertThat(lowered("(sync nil 1)")).contains("(RONTOLISP::%CLOJURE-STM-RUN (LAMBDA NIL 1))");
 		assertThatThrownBy(() -> Clojure.read("(sync)", null)).isInstanceOf(LispReadException.class)
@@ -4388,9 +4388,21 @@ class ClojureLoweringTest {
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 0, got 1");
 		assertThat(lowered("(def r (ref 0)) (alter r inc)")).contains("(RONTOLISP::%CLOJURE-STM-REQUIRE)")
 			.contains("RONTOLISP::%CLOJURE-STM-WRITE");
-		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
+		// commute defers to commit (g37), so it names the commute worker, not the write
+		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("RONTOLISP::%CLOJURE-STM-COMMUTE")
+			.doesNotContain("RONTOLISP::%CLOJURE-STM-WRITE");
 		assertThat(lowered("(def r (ref 0)) (ref-set r 1)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
 		assertThat(lowered("(def r (ref 0)) (ensure r)")).contains("(RONTOLISP::%CLOJURE-STM-REQUIRE)");
+		// reads go through the tracking worker and commute defers to commit (g37)
+		assertThat(lowered("(dosync 1) (def r (ref 0)) (dosync @r)")).contains("RONTOLISP::%CLOJURE-STM-DEREF");
+		assertThat(lowered("(dosync 1) (def r (ref 0)) (dosync (alter r inc))"))
+			.contains("RONTOLISP::%CLOJURE-STM-DEREF")
+			.contains("RONTOLISP::%CLOJURE-STM-WRITE");
+		assertThat(lowered("(dosync 1) (def r (ref 0)) (dosync (ensure r))"))
+			.contains("RONTOLISP::%CLOJURE-STM-ENSURE");
+		assertThat(lowered("(dosync 1) (def r (ref 0)) (dosync (commute r inc))"))
+			.contains("RONTOLISP::%CLOJURE-STM-COMMUTE")
+			.doesNotContain("RONTOLISP::%CLOJURE-STM-WRITE");
 		assertThat(lowered("(agent 0)")).contains("(RONTOLISP::%CLOJURE-AGENT-MAKE 0 NIL NIL NIL)");
 		// options are read at run time, like the oracle's (apply hash-map options)
 		assertThat(lowered("(agent 0 :error-mode :continue)")).contains("(RONTOLISP::%CLOJURE-AGENT-V 0");

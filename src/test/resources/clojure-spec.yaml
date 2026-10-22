@@ -5272,14 +5272,18 @@ cases:
       nil
   - name: refs-transact-singly
     # The chat.clj slice: a validated ref altered and commuted in transactions,
-    # ref-set and ensure inside one, every verb refused outside one. Commute runs
-    # once here (the oracle may run its function twice): transactions run one at a
-    # time under one lock and never retry -- the documented deviation.
+    # ref-set and ensure inside one, every verb refused outside one. Commute
+    # applies at commit (running its function twice); an alter or ref-set after
+    # a commute in the same transaction is the oracle's "Can't set after
+    # commute" refusal. Oracle-identical (clj 1.12.6, 2026-10-22).
     source: |
       (def room (ref [] :validator (fn [msgs] (<= (count msgs) 3))))
       (dosync (alter room (fn [m x] (conj m x)) :hi))
       (println @room)
-      (dosync (commute room (fn [m x] (conj m x)) :yo) (alter room (fn [m x] (conj m x)) :bye))
+      (dosync (commute room (fn [m x] (conj m x)) :yo))
+      (dosync (alter room (fn [m x] (conj m x)) :bye))
+      (println @room)
+      (println (try (dosync (commute room (fn [m x] (conj m x)) :yoyo) (alter room (fn [m x] (conj m x)) :bye2)) (catch IllegalStateException e :cant-set-after-commute)))
       (println @room)
       (println (try (dosync (alter room (fn [m x] (conj m x)) :full)) (catch Exception e :rejected)))
       (println @room)
@@ -5293,6 +5297,8 @@ cases:
     expected: |
       [:hi]
       [:hi :yo :bye]
+      :cant-set-after-commute
+      [:hi :yo :bye]
       :rejected
       [:hi :yo :bye]
       41
@@ -5302,10 +5308,8 @@ cases:
       :ok
   - name: sync-runs-the-body-in-one-transaction
     # Oracle-identical (clj 1.12.6): sync drops its flags unevaluated and runs the
-    # body as one transaction under the one lock dosync takes -- answering its last
-    # value, joining a running transaction, and never retrying. Transactions run one
-    # at a time under one lock, so a body never retries and its side effects run once
-    # (the documented deviation, shared with dosync).
+    # body as one transaction like dosync -- answering its last value, joining a
+    # running transaction, and retrying on a read conflict like it.
     source: |
       (def sior (ref 0))
       (println (sync nil 41))
@@ -5394,6 +5398,43 @@ cases:
       :not-an-agent
       Can't await in agent action
       nil 0
+  - name: commute-applies-at-commit-and-ensure-pins-the-read
+    # Oracle-identical (clj 1.12.6, 2026-10-22): commute answers the eager
+    # application, then applies its function again at commit onto the latest
+    # value -- a counted function runs twice uncontended -- and a later alter
+    # or ref-set of the ref in the same transaction is the oracle's "Can't set
+    # after commute". Alter-then-commute chains, commute's extra arguments reach
+    # the function, and ensure answers the value. (Concurrent invalidation and
+    # writer-blocking are pinned by ClojureStmConflictRetryTest on the
+    # interpreter and the JVM, where threads exist.)
+    source: |
+      (def c37-counter (atom 0))
+      (def c37-r (ref 100))
+      (println (dosync (commute c37-r (fn [x] (swap! c37-counter inc) (+ x 1)))))
+      (println @c37-counter @c37-r)
+      (println (dosync (alter c37-r + 10) (commute c37-r + 1) @c37-r))
+      (println @c37-r)
+      (println (dosync (commute c37-r + 1) (commute c37-r + 10) @c37-r))
+      (println @c37-r)
+      (println (dosync (commute c37-r + 1 2) @c37-r))
+      (println (dosync (ensure c37-r)))
+      (println (dosync (alter c37-r + 100) (ensure c37-r)))
+      (println (try (dosync (commute c37-r + 1) (alter c37-r + 1)) (catch IllegalStateException e (.getMessage e))))
+      (println (try (dosync (commute c37-r + 1) (ref-set c37-r 5)) (catch IllegalStateException e (.getMessage e))))
+      (println @c37-r)
+    expected: |
+      101
+      2 101
+      112
+      112
+      123
+      123
+      126
+      126
+      226
+      Can't set after commute
+      Can't set after commute
+      226
   - name: a-failing-action-fails-the-agent-until-restart-agent
     # Oracle-identical (clj 1.12.6, measured 2026-10-11 with a sleep after each failing
     # send): a failing action leaves the agent failed in the default :fail mode -- send

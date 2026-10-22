@@ -13659,14 +13659,18 @@
 
 ;;;; Refs and agents across request threads.
 ;;
-;; A transaction (dosync) runs its body holding %clojure-stm-guard, one lock for
-;; every transaction of the process: transactions run one at a time and never
-;; retry, so a body's side effects run once. alter, commute and ref-set write the
-;; ref in place and log its value from before the transaction; when the body
-;; returns, the validators of the written refs run on their final values, and a
-;; body that signals (a refusing validator included) puts every logged value
-;; back. A nested dosync joins the running transaction. A read outside any
-;; transaction takes no lock, so it may see a running transaction's write.
+;; A transaction (dosync) runs its body without holding any lock, tracking the
+;; refs it reads with the commit count each held when read; at the commit point
+;; it waits for the ensures of refs it wrote, then under %clojure-stm-guard it
+;; retries the body when another committed transaction wrote a read ref and
+;; otherwise installs the pending writes: the body re-runs, so its side effects
+;; may run more than once, like the oracle's. alter and ref-set stage their
+;; writes in the transaction, logging the before-value; commute logs its function
+;; and arguments and applies them at commit to the latest value (running twice
+;; uncontended, like the oracle's); ensure answers the value and pins the read
+;; until commit, which blocks writers of the ref. A nested dosync joins the
+;; running transaction. Validators run on the final values, and a body that
+;; signals (a refusing validator included) drops its pending writes.
 ;;
 ;; An agent runs its actions one at a time in the order they were sent. A send
 ;; queues the action under %clojure-atom-guard and, when no thread is running the
@@ -13689,9 +13693,34 @@
 
 (defvar rontolisp::%clojure-stm-guard (rontolisp:make-mutex))
 
-;; The running transaction's log, a box holding (cell . value before the
+;; The running transaction's log, a box holding (ref . value before the
 ;; transaction) entries; nil outside a transaction.
 (defvar rontolisp::%clojure-stm-log nil)
+
+;; The running transaction's read set, a box holding (ref . commit count)
+;; entries, newest first; nil outside a transaction.
+(defvar rontolisp::%clojure-stm-reads nil)
+
+;; The running transaction's commutes, a box holding (ref fun args eager)
+;; entries, newest first; nil outside a transaction.
+(defvar rontolisp::%clojure-stm-commutes nil)
+
+;; The running transaction's pending writes, a box holding (ref . value)
+;; entries, newest first; installed at commit, discarded otherwise.
+(defvar rontolisp::%clojure-stm-pending nil)
+
+;; Every ref a transaction read or wrote, to its commit count, bumped on every
+;; commit that wrote it; a ref read before any write reads 0. An eql table: the
+;; wrapper is one object per ref, so identity is equality.
+(defvar rontolisp::%clojure-stm-versions (make-hash-table :test 'eql))
+
+;; Refs an ensure pins, to the log of the transaction holding them; a writer of
+;; one waits until its holder commits, aborts or fails, like the oracle's.
+(defvar rontolisp::%clojure-stm-pins (make-hash-table :test 'eql))
+
+;; The guard of the two tables above: taken briefly, never while user code runs
+;; and never while waiting on a pin, so no lock order exists.
+(defvar rontolisp::%clojure-stm-table-guard (rontolisp:make-mutex))
 
 ;; Where a send waits while a transaction or an action runs on this thread: a
 ;; box holding (agent . action) entries, newest first; nil where it runs at once.
@@ -13762,68 +13791,276 @@
       (rontolisp::%clojure-illegal-state-exception "No transaction running")))
 
 (defun rontolisp::%clojure-stm-write (ref value)
-  "alter, commute and ref-set inside the running transaction: VALUE stored in
-   REF, whose value from before the transaction is logged on its first write;
-   answers VALUE."
-  (let ((log rontolisp::%clojure-stm-log) (cell (car (cdr ref))))
+  "alter, commute and ref-set inside the running transaction: VALUE logged as
+   REF's pending write (installed at commit), with its value from before the
+   transaction on its first write; answers VALUE. A write past a commute of REF
+   in this transaction is the oracle's refusal."
+  (let ((log rontolisp::%clojure-stm-log)
+        (pending rontolisp::%clojure-stm-pending))
+    (if (assoc ref (car rontolisp::%clojure-stm-commutes))
+        (rontolisp::%clojure-illegal-state-exception "Can't set after commute"))
     (if (assoc ref (car log))
         nil
-        (setf (car log) (cons (cons ref (aref cell 0)) (car log))))
-    (setf (aref cell 0) value)))
+        (setf (car log) (cons (cons ref (aref (car (cdr ref)) 0)) (car log))))
+    (rontolisp::%clojure-stm-read ref)
+    (setf (car pending) (cons (cons ref value) (car pending)))
+    value))
+
+(defun rontolisp::%clojure-stm-version-of (ref)
+  "REF's commit count, 0 where no transaction ever wrote it."
+  (rontolisp:with-mutex (rontolisp::%clojure-stm-table-guard)
+    (or (gethash ref rontolisp::%clojure-stm-versions) 0)))
+
+(defun rontolisp::%clojure-stm-bump (refs)
+  "Bump every ref of REFS past its commit: a transaction that read an older
+   count retries."
+  (rontolisp:with-mutex (rontolisp::%clojure-stm-table-guard)
+    (dolist (ref refs)
+      (setf (gethash ref rontolisp::%clojure-stm-versions)
+            (1+ (or (gethash ref rontolisp::%clojure-stm-versions) 0))))))
+
+(defun rontolisp::%clojure-stm-read (ref)
+  "Record REF and its commit count in the running transaction's read set, unless
+   recorded; nil outside one. Answers nil."
+  (let ((reads rontolisp::%clojure-stm-reads))
+    (if (and reads (not (assoc ref (car reads))))
+        (setf (car reads)
+              (cons (cons ref (rontolisp::%clojure-stm-version-of ref))
+                    (car reads)))))
+  nil)
+
+(defun rontolisp::%clojure-stm-peek (ref)
+  "REF's in-transaction value: the latest commute's application, else the
+   latest pending write, else the cell's. Reads see no uncommitted write but
+   the transaction's own, so no commit builds on a value no commit made."
+  (let ((commuted (assoc ref (car rontolisp::%clojure-stm-commutes))))
+    (if commuted
+        (car (cdr (cdr (cdr commuted))))
+        (let ((wrote (assoc ref (car rontolisp::%clojure-stm-pending))))
+          (if wrote (cdr wrote) (aref (car (cdr ref)) 0))))))
+
+(defun rontolisp::%clojure-stm-deref (ref)
+  "deref's read inside a transaction: recorded in the read set, answering the
+   in-transaction value; outside one the cell's value."
+  (if rontolisp::%clojure-stm-log
+      (progn
+        (rontolisp::%clojure-stm-read ref)
+        (rontolisp::%clojure-stm-peek ref))
+      (aref (car (cdr ref)) 0)))
+
+(defun rontolisp::%clojure-stm-ensure (ref)
+  "ensure's read: the ref recorded and pinned to this transaction, answering
+   its in-transaction value."
+  (rontolisp::%clojure-stm-read ref)
+  (rontolisp:with-mutex (rontolisp::%clojure-stm-table-guard)
+    (setf (gethash ref rontolisp::%clojure-stm-pins)
+          rontolisp::%clojure-stm-log))
+  (rontolisp::%clojure-stm-peek ref))
+
+(defun rontolisp::%clojure-stm-commute (ref fun args)
+  "commute's application: FUN of the in-transaction value and ARGS, logged for
+   the commit's re-application onto the latest value, answering it. Later reads
+   in this transaction see it. The eager application writes nothing in place,
+   so a conflicting commit retries before it could build on it."
+  (let* ((commutes rontolisp::%clojure-stm-commutes)
+         (base (rontolisp::%clojure-stm-peek ref))
+         (eager (apply fun (cons base args))))
+    (setf (car commutes) (cons (list ref fun args eager) (car commutes)))
+    eager))
+
+(defun rontolisp::%clojure-stm-valid-p (reads)
+  "Whether the running transaction may commit: every (ref . version) of READS
+   still holds its count. A committed writer of one since retries the
+   transaction; nothing uncommitted is ever visible, so nothing else can."
+  (dolist (entry (car reads) t)
+    (if (not (eql (cdr entry) (rontolisp::%clojure-stm-version-of (car entry))))
+        (return nil))))
+
+(defun rontolisp::%clojure-stm-pinned (log commutes)
+  "Whether a writer of the running transaction must wait: a written ref pinned
+   to another transaction's log."
+  (rontolisp:with-mutex (rontolisp::%clojure-stm-table-guard)
+    (dolist (ref (append (mapcar #'car (car log)) (mapcar #'car (car commutes)))
+                 nil)
+      (let ((owner (gethash ref rontolisp::%clojure-stm-pins nil)))
+        (if (and owner (not (eq owner log))) (return t))))))
+
+(defun rontolisp::%clojure-stm-release-pins (log)
+  "Forget the ensures the transaction LOG holds."
+  (rontolisp:with-mutex (rontolisp::%clojure-stm-table-guard)
+    (let ((out nil))
+      (maphash
+       (lambda (ref owner) (if (eq owner log) (setq out (cons ref out))))
+       rontolisp::%clojure-stm-pins)
+      (dolist (ref out) (remhash ref rontolisp::%clojure-stm-pins)))))
+
+(defun rontolisp::%clojure-stm-commit-check (log commutes)
+  "Whether the running transaction may commit: writers of ensured refs wait
+   for their holder first, like the oracle's. The wait re-checks without
+   sleeping -- a sleep needs the component wait shim, and there is nothing to
+   wait for where no other thread exists."
+  (loop (if (rontolisp::%clojure-stm-pinned log commutes) nil (return nil)))
+  t)
+
+(defun rontolisp::%clojure-stm-abort (log reads commutes pending held)
+  "Drop the running transaction: its pending writes never reach a cell, its
+   ensures are forgotten and its held sends dropped. Answered nil; nothing was
+   ever visible, so no versions bump and no values move."
+  (rontolisp::%clojure-stm-release-pins log)
+  (setf (car log) nil)
+  (setf (car reads) nil)
+  (setf (car commutes) nil)
+  (setf (car pending) nil)
+  (setf (car held) nil)
+  nil)
 
 (defun rontolisp::%clojure-stm-run (body)
-  "dosync: the thunk BODY run as one transaction, answering its value. The
-   watches of the refs it wrote are called once it committed, then the sends it
-   made are dispatched."
+  "dosync: the thunk BODY run as one transaction, answering its value. The body
+   runs without holding any lock; at the commit point writers of ensured refs
+   wait for their holder, then under one lock a read conflict retries the body
+   and otherwise the commute entries apply onto the latest values, the
+   validators run on the final values and the versions bump. The watches of the
+   refs it wrote are called once it committed, then the sends it made are
+   dispatched. A nested dosync joins the running transaction."
   (if rontolisp::%clojure-stm-log
       (funcall body)
-      (let* ((log (list nil))
-             (held (list nil))
-             (value
-              (rontolisp::%clojure-stm-notified (rontolisp:with-mutex (rontolisp::%clojure-stm-guard)
-                                                  (let ((done nil))
-                                                    (unwind-protect (let ((answer
-                                                                           (let ((rontolisp::%clojure-stm-log
-                                                                                  log)
-                                                                                 (rontolisp::%clojure-agent-held
-                                                                                  held))
-                                                                             (funcall
-                                                                              body))))
-                                                                      (dolist (entry
-                                                                               (car
-                                                                                log))
-                                                                        (let ((cell
-                                                                               (car
-                                                                                (cdr
-                                                                                 (car
-                                                                                  entry)))))
-                                                                          (rontolisp::%clojure-stm-validate
-                                                                           (aref
-                                                                            cell
+      (let ((log (list nil))
+            (held (list nil))
+            (reads (list nil))
+            (commutes (list nil))
+            (pending (list nil)))
+        (loop
+          (let ((answer nil) (committed nil))
+            (unwind-protect (progn
+                              (setq answer
+                                    (let ((rontolisp::%clojure-stm-log log)
+                                          (rontolisp::%clojure-agent-held held)
+                                          (rontolisp::%clojure-stm-reads reads)
+                                          (rontolisp::%clojure-stm-commutes
+                                           commutes)
+                                          (rontolisp::%clojure-stm-pending
+                                           pending))
+                                      (funcall body)))
+                              ;; writers of ensured refs wait for their holder
+                              ;; outside the commit lock: the holder needs it
+                              ;; to finish
+                              (rontolisp::%clojure-stm-commit-check log
+                                                                    commutes)
+                              (setq committed
+                                    (rontolisp:with-mutex (rontolisp::%clojure-stm-guard)
+                                      (if (not
+                                           (rontolisp::%clojure-stm-valid-p
+                                            reads))
+                                          nil
+                                          (let ((clean nil))
+                                            (unwind-protect (progn
+                                                              ;; install the pending writes, oldest first
+                                                              (dolist (entry
+                                                                       (reverse
+                                                                        (car
+                                                                         pending)))
+                                                                (setf
+                                                                 (aref
+                                                                  (car
+                                                                   (cdr
+                                                                    (car
+                                                                     entry))) 0)
+                                                                 (cdr entry)))
+                                                              ;; commute entries apply to the latest
+                                                              ;; value, in order
+                                                              (dolist (entry
+                                                                       (reverse
+                                                                        (car
+                                                                         commutes)))
+                                                                (let* ((ref
+                                                                        (car
+                                                                         entry))
+                                                                       (fun
+                                                                        (car
+                                                                         (cdr
+                                                                          entry)))
+                                                                       (args
+                                                                        (car
+                                                                         (cdr
+                                                                          (cdr
+                                                                           entry))))
+                                                                       (cell
+                                                                        (car
+                                                                         (cdr
+                                                                          ref))))
+                                                                  (if (not
+                                                                       (assoc
+                                                                        ref
+                                                                        (car
+                                                                         log)))
+                                                                      (setf
+                                                                       (car log)
+                                                                       (cons
+                                                                        (cons
+                                                                         ref
+                                                                         (aref
+                                                                          cell
+                                                                          0))
+                                                                        (car
+                                                                         log))))
+                                                                  (setf
+                                                                   (aref cell 0)
+                                                                   (rontolisp::%clojure-stm-validate
+                                                                    (apply fun
+                                                                     (cons
+                                                                      (aref cell
                                                                             0)
-                                                                           (rontolisp::%clojure-cell-validator
-                                                                            cell))))
-                                                                      (setq done
-                                                                            t)
-                                                                      (rontolisp::%clojure-stm-noted
-                                                                       (rontolisp::%clojure-ref-history-noted
-                                                                        answer
-                                                                        log)
-                                                                       log))
-                                                      (if done
-                                                          nil
-                                                          (dolist (entry
-                                                                   (car log))
-                                                            (setf
-                                                             (aref (car
-                                                                    (cdr
-                                                                     (car
-                                                                      entry)))
-                                                                   0)
-                                                             (cdr entry)))))))
-                                                log)))
-        (rontolisp::%clojure-agent-release held)
-        value)))
+                                                                      args))
+                                                                    (rontolisp::%clojure-cell-validator
+                                                                     cell)))))
+                                                              ;; validators run on the final values,
+                                                              ;; as before
+                                                              (dolist (entry
+                                                                       (car
+                                                                        log))
+                                                                (let ((cell
+                                                                       (car
+                                                                        (cdr
+                                                                         (car
+                                                                          entry)))))
+                                                                  (rontolisp::%clojure-stm-validate
+                                                                   (aref cell 0)
+                                                                   (rontolisp::%clojure-cell-validator
+                                                                    cell))))
+                                                              (rontolisp::%clojure-stm-bump
+                                                               (mapcar #'car
+                                                                (car log)))
+                                                              (rontolisp::%clojure-stm-noted
+                                                               (rontolisp::%clojure-ref-history-noted
+                                                                answer log) log)
+                                                              (rontolisp::%clojure-stm-notified
+                                                               answer log)
+                                                              (rontolisp::%clojure-stm-release-pins
+                                                               log)
+                                                              (setq clean t)
+                                                              t)
+                                              (if clean
+                                                  nil
+                                                  ;; a failure mid-commit puts back and
+                                                  ;; bumps, still under the guard
+                                                  (progn
+                                                    (dolist (entry (car log))
+                                                      (setf (aref (car
+                                                                   (cdr
+                                                                    (car
+                                                                     entry))) 0)
+                                                            (cdr entry)))
+                                                    (rontolisp::%clojure-stm-bump
+                                                     (mapcar #'car
+                                                             (car log)))))))))))
+              (if committed
+                  nil
+                  (rontolisp::%clojure-stm-abort log reads commutes pending
+                                                 held)))
+            (if committed
+                (progn
+                  (rontolisp::%clojure-agent-release held)
+                  (return answer))))))))
 
 (defun rontolisp::%clojure-agent-release (held)
   "The sends the box HELD kept, queued in the order they were made: enqueued

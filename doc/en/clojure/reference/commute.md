@@ -2,9 +2,10 @@
 
 `(commute r f args...)`
 
-Like `alter`, but the oracle may run `f` twice on a conflict and take the
-commutative answer. Transactions here run one at a time and never conflict, so the
-function runs exactly once and the two verbs are indistinguishable. Requires
+Like `alter`, but `f` applies at commit onto the latest value (running twice
+uncontested, like the oracle's) and never makes the transaction retry. An
+`alter` or a `ref-set` of the same ref later in the same transaction is the
+oracle's "Can't set after commute" refusal. Requires
 `dosync`, like `alter`.
 
 ```clojure

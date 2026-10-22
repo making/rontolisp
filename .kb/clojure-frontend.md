@@ -6893,17 +6893,30 @@ resolve var`.
   `set!` of any other local is `Cannot assign to non-mutable`. The oracle compiles
   `fn`/`#()`/`letfn`/`reify`/`lazy-seq`/`for`/`dosync`/`proxy` to classes that copy the
   fields they read, so `capturingMutableFields` rebinds those as plain locals around them.
-- STM (`clojure.lisp` "Refs and agents across request threads", 2026-10-11): `dosync` is
+- STM (`clojure.lisp` "Refs and agents across request threads", 2026-10-11, redone
+  2026-10-22, g37): `dosync` is
   `(%clojure-stm-run (lambda () body))`, the thunk its own zero-arity `recur` target (the
-  oracle's `(fn [] body)`). The outermost one holds `%clojure-stm-guard` (one lock for every
-  transaction) and binds `%clojure-stm-log`; a nested one joins. `sync` (g23) is its flags
-  dropped unevaluated and the same one-lock run (a nested `sync` joins like a nested
+  oracle's `(fn [] body)`). The body runs without holding any lock. Every deref,
+  `alter` read and `ensure` in one records the ref and its commit count in the
+  transaction's read set (`%clojure-stm-read`, over the `eql` table
+  `%clojure-stm-versions`, which a committing transaction bumps for every ref it
+  wrote); writes only log (`%clojure-stm-write` logs the before-value and stages
+  the new one in the pending list -- nothing is in place until commit, so a
+  concurrent body never reads an uncommitted write). At the commit point writers
+  of ensured refs wait for their holder (`%clojure-stm-pinned`, re-checking without
+  sleeping, since a sleep needs the component wait shim and there is nothing to
+  wait for where no other thread exists), then under `%clojure-stm-guard` a version
+  mismatch retries the body (its side effects may run more than once, like the
+  oracle's), else the pending writes install, each `commute` entry re-applies its
+  function onto the latest value (running twice uncontended, like the oracle's),
+  the validators run on the final values, the versions bump, the watches are called
+  and the ensures unpin. A nested `dosync` joins. `sync` (g23) is its flags
+  dropped unevaluated and the same run (a nested `sync` joins like a nested
   `dosync`); `io!` is its body behind the `%clojure-stm-log` read refusing the oracle's
-  `IllegalStateException` (`I/O in transaction`); `with-loading-context` is its body as-is. `alter`/`commute`/`ref-set`
-  store in place through `%clojure-stm-write`, logging the ref's pre-transaction value on its
-  first write; at the body's end every written ref's validator runs on its final value, and a
-  non-local exit restores the log. Never retries, so `commute` runs once (the oracle may
-  twice). Every verb outside one is `%clojure-stm-require`'s `No transaction running`;
+  `IllegalStateException` (`I/O in transaction`); `with-loading-context` is its body as-is.
+  `alter`/`commute`/`ref-set` apply through the log, so an `alter` or a `ref-set`
+  after a `commute` of the same ref in the same transaction is the oracle's "Can't
+  set after commute"; every verb outside one is `%clojure-stm-require`'s `No transaction running`;
   `ensure` answers the value. A validator rides in the cell (`%clojure-ref-make`, also
   validating the initial value), not a registry. Agents: `send` queues `(lambda (old) (let
   ((C%AGENT a) depth) (apply f old args)))` (f and args run at the send) through
@@ -6927,14 +6940,16 @@ resolve var`.
   action (`C%AGENT`), queues a marker and runs the queue; a host target
   (`%clojure-agent-await`) then polls the marker between `(sleep 0.001)`s, wasm
   (`%clojure-agent-await-here`) never waits, so no `sleep` reaches a module. `C%AGENT` is the
-  only spliced `stmRuntime` form. Model choice: the shcloj4 corpus's refs and agents
+  only spliced `stmRuntime` form. Only transactions that write contend, and a
+  read-only transaction still validates (retrying past a concurrent commit), like the
+  oracle's. Model choice: the shcloj4 corpus's refs and agents
   (`chat.clj`, `concurrency.clj`, `pi.clj`) are single-threaded `alter`/`commute`/`send-off`,
-  none relying on a retry or on a deref-after-write seeing another transaction, so the one
-  lock suffices; a per-ref read/write set would need `deref` to tell a ref from an atom (they
-  share the cell) and to read the transaction. Pins: clojure-spec
+  none relying on a retry, so the single-threaded output is byte-identical to before. Pins: clojure-spec
   `transactions-commit-whole-and-agents-hold-sends` (oracle-identical),
+  `commute-applies-at-commit-and-ensure-pins-the-read` (oracle-identical),
   `a-failing-action-fails-the-agent-until-restart-agent` (oracle-identical),
-  `ClojureRefAgentConcurrentRequestsTest`. `await-for` (2026-10-12) queues `await`'s markers and,
+  `ClojureRefAgentConcurrentRequestsTest`, `ClojureStmConflictRetryTest` (g37: concurrent
+  bumps converge and an ensured ref's writer waits, on the interpreter and the JVM). `await-for` (2026-10-12) queues `await`'s markers and,
   on a host target, polls them until its deadline (`%clojure-agent-await-for`, `T`/`NIL` through
   `booleanAnswer`); on wasm (`%clojure-agent-await-for-here`) every marker has run but one queued
   behind a failure. `await` and `await-for` refuse inside a transaction first (`io!`'s
