@@ -2586,7 +2586,10 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   dispatchable ids -- the shape the dispatchers themselves use -- is the wrong structure here: ~15
   bytes per callable in ONE method, and the cl-postgres corpus overflowed the signed 16-bit branch
   offset on it. The table is one byte per funcId and three instructions, whatever the program's
-  size. `JvmHandlerCaseCompiler.emitRawFailureTest` recovers `program-error` from the exception's
+  size -- past a 30,000-funcId span in chunks of 20,000, each chunk its own constants with a
+  range check ahead (g46: the clojure-spec corpus at 30,568 funcIds dropped the table entirely
+  and every value-path arity miss answered nil on the JVM leg; small programs stay byte for
+  byte). `JvmHandlerCaseCompiler.emitRawFailureTest` recovers `program-error` from the exception's
   CLASS (`JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS`, the sixth entry in
   `LispMacroExpander.rawFailureConditionClasses()`). It used to recover it from the `Function
   expects ` prefix of the TEXT (the unbound-variable precedent), which a named report does not
@@ -2703,7 +2706,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     lambda's report comes from its body (`buildArityMethods`, `renderSpreadCase`). Past nine bits
     of operator index (a Clojure program names every dispatchable fn) `_arityErr`'s indices move
     to a second char-per-funcId table (`compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords`);
-    an entry whose joined names would not fit a constant-pool entry is not registered
+    past a 30,000-funcId span both tables move in 20,000-id chunks (`JvmArityTableTest`,
+    g46); an entry whose joined names would not fit a constant-pool entry is not registered
     and its callee reports as `Function`, rather than the class failing to build.
   - wasm-GC: `ArityReport.declaredFuncIds` (defuns and lambdas, dispatchable or guarded) rides
     the same funcId shape; `_arity_message`'s case for one answers `prefix + got + suffix` and
