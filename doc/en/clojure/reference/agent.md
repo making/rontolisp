@@ -18,5 +18,6 @@ one. [`future`](future.md) and [`promise`](promise.md) do run where threads exis
 ```clojure
 (def a (agent 0))
 (send a + 40 2)
+(await a)
 (println @a) ; 42
 ```

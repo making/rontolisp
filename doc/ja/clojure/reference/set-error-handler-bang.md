@@ -9,6 +9,7 @@ agent のエラーハンドラを設定し、`nil` を返します。ハンド�
 (set-error-handler! a (fn [ag e] (println "failed:" (ex-message e))))
 (send a (fn [_] (throw (Exception. "boom"))))
 (send a inc)
+(await a)
 (println @a)
 ```
 

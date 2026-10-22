@@ -607,8 +607,7 @@ final class ClojureCoreLowering {
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "pmap":
 				arity(name, n, 2, -1);
-				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
-						ctx.lowers(items, 2));
+				return ClojureFutureLowering.pmapOf(ctx, items);
 			case "with-meta":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
@@ -716,7 +715,7 @@ final class ClojureCoreLowering {
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
-			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
+			case "pmap" -> ClojureFutureLowering.pmapValue(ctx);
 			case "with-bindings*" -> ClojureStateLowering.withBindingsStarValue(ctx);
 			case "bound-fn*" -> ClojureStateLowering.boundFnStarValue(ctx);
 			case "find-var" -> ClojureVarLowering.findVarValue();

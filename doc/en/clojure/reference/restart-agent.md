@@ -11,9 +11,12 @@ own value. Works as a function value.
 ```clojure
 (def a (agent 0))
 (send a (fn [_] (throw (Exception. "boom"))))
+;; the pool runs the action after send returns: wait until the failure lands
+(loop [] (when-not (agent-error a) (try (await-for 10 a) (catch RuntimeException e nil)) (recur)))
 (println (try (send a inc) (catch RuntimeException e (ex-message e))))
 (println (restart-agent a 10))
 (send a inc)
+(await a)
 (println @a (agent-error a))
 ```
 

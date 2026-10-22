@@ -1136,10 +1136,14 @@ class ClojureLoweringTest {
 			.hasMessageContaining("with-local-vars requires an even number of forms in binding vector");
 		assertThatThrownBy(() -> Clojure.read("(with-local-vars \"x\" a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("with-local-vars takes its bindings in a vector");
-		// pvalues is a list of the expressions in order: a seq, evaluated
-		// sequentially on the calling thread
-		assertThat(lowered("(pvalues 1 2)")).isEqualTo(FALSE_BINDING + "(LIST 1 2)");
-		assertThat(lowered("(pvalues)")).isEqualTo(FALSE_BINDING + "(LIST)");
+		// pvalues is one future per expression, dereferenced in order: the
+		// values answer in order like the oracle's, a failure surfacing at the
+		// deref; on wasm each expression runs in order on the calling thread
+		assertThat(lowered("(pvalues 1 2)")).contains("RONTOLISP::%CLOJURE-FUTURE-START")
+			.contains("RONTOLISP::%CLOJURE-DEREF-OTHER");
+		assertThat(wasmLowered("(pvalues 1 2)")).isEqualTo(FALSE_BINDING + "(LIST 1 2)");
+		assertThat(lowered("(pvalues)")).contains("(LIST)").doesNotContain("FUTURE-START");
+		assertThat(wasmLowered("(pvalues)")).isEqualTo(FALSE_BINDING + "(LIST)");
 		// g16's values: the three macros answer the run-time once-expansion
 		// delegate, while bound-fn* answers its function, capturing where the
 		// value is called
@@ -4606,8 +4610,13 @@ class ClojureLoweringTest {
 		// a two-argument partition-all evaluates its size once, as size and step
 		assertThat(lowered("(partition-all (inc 1) [1 2 3])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-+ 1 1)")
 			.contains("RONTOLISP::%CLOJURE-PARTITION-ALL");
-		// pmap is map: single-threaded, the same printed seq
-		assertThat(lowered("(pmap inc [1])")).contains("RONTOLISP::%CLOJURE-MAP").doesNotContain("PMAP");
+		// pmap runs one future per element, dereferenced in order with the
+		// oracle's lookahead, so the printed seq is the sequential one's; on
+		// wasm it stays the sequential map
+		assertThat(lowered("(pmap inc [1])")).contains("RONTOLISP::%CLOJURE-FUTURE-START")
+			.contains("RONTOLISP::%CLOJURE-PMAP-WINDOW")
+			.contains("RONTOLISP::%CLOJURE-DOALL");
+		assertThat(wasmLowered("(pmap inc [1])")).contains("RONTOLISP::%CLOJURE-MAP").doesNotContain("PMAP");
 		// as values: the -v entries, which check the count with the oracle's wording
 		assertThat(lowered("(map peek [[1]])")).contains("#'RONTOLISP::%CLOJURE-PEEK-V");
 	}

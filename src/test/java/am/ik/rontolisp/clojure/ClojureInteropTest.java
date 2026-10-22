@@ -2380,6 +2380,71 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6): pmap runs one future per element and pvalues one per
+	// expression, so sleep-backed branches finish in less than their sum; the
+	// values keep order and print like the sequential forms (realized? stays
+	// false for pmap, like the oracle's lazy seq), and a failure surfaces at
+	// the deref in order.
+	@Test
+	void pmapAndPvaluesRunBranchesConcurrentlyInOrder() throws Exception {
+		assertBothEqual(
+				"""
+						(println (pmap inc [1 2 3]))
+						(println (pmap + [1 2] [10 20 30]))
+						(println (pmap inc nil))
+						(println (pmap inc []))
+						(def ^:dynamic *g36-pm* 1)
+						(binding [*g36-pm* 20] (println (pmap (fn [x] (+ x *g36-pm*)) [1 2])))
+						(println (take 3 (pmap inc (iterate inc 1))))
+						(println (realized? (pmap inc [1 2])))
+						(println (try (doall (pmap (fn [x] (if (= x 2) (throw (ex-info "pmap-boom" {})) x)) [1 2 3])) (catch Exception e (ex-message (ex-cause e)))))
+						(let [order (atom [])]
+						  (println (pvalues (do (swap! order conj :a) 1) (do (swap! order conj :b) 2)))
+						  (println (sort @order)))
+						(println (pvalues 1 (+ 1 2) "x"))
+						(println (pvalues))
+						(println (seq? (pvalues 1 2)) (= (pvalues 1 2) '(1 2)))
+						(println (with-local-vars [a 5] (pvalues @a @a @a)))
+						(def ^:dynamic *g36-pv* 1)
+						(binding [*g36-pv* 7] (println (pvalues *g36-pv* *g36-pv*)))
+						(println ((fn [f] (f inc [1 2])) pmap))
+						""",
+				"""
+						(2 3 4)
+						(11 22)
+						nil
+						nil
+						(21 22)
+						(2 3 4)
+						false
+						pmap-boom
+						(1 2)
+						(:a :b)
+						(1 3 x)
+						nil
+						true true
+						(5 5 5)
+						(7 7)
+						(2 3)
+						""");
+		assertOverlapsEach("pmap-over-four-sleeps",
+				"(println (let [t0 (System/nanoTime)] (doall (pmap (fn [x] (Thread/sleep 300) x) [1 2 3 4])) (quot (- (System/nanoTime) t0) 1000000)))",
+				1200);
+		assertOverlapsEach("pvalues-over-two-sleeps",
+				"(println (let [t0 (System/nanoTime)] (pvalues (do (Thread/sleep 300) :a) (do (Thread/sleep 300) :b)) (quot (- (System/nanoTime) t0) 1000000)))",
+				600);
+	}
+
+	/**
+	 * The program's elapsed milliseconds on the interpreter and the JVM stay under
+	 * {@code limit}: sleep-backed branches overlap instead of running in order. No
+	 * wall-clock assertions on the WASM legs, which stay sequential.
+	 */
+	private static void assertOverlapsEach(String what, String program, int limit) throws Exception {
+		assertThat(Integer.parseInt(interpret(program).trim())).as(what + " on the interpreter").isLessThan(limit);
+		assertThat(Integer.parseInt(runOnJvm(program).trim())).as(what + " on the JVM").isLessThan(limit);
+	}
+
 	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a
 	// RandomAccess List as a vector, any other List as a list, a Map as a map and a Set
 	// as a set, each member readably and under *print-length* / *print-level*; another

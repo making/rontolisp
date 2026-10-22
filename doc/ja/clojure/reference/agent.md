@@ -7,5 +7,6 @@ agent は値を保持し、`send`/`send-off` で送ったアクションが送�
 ```clojure
 (def a (agent 0))
 (send a + 40 2)
+(await a)
 (println @a) ; 42
 ```

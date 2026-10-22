@@ -11,6 +11,7 @@ agent until `restart-agent`. Works as a function value.
 (set-error-mode! a :continue)
 (send a (fn [_] (throw (Exception. "boom"))))
 (send a inc)
+(await a)
 (println @a (agent-error a))
 ```
 
