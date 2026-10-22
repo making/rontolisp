@@ -723,6 +723,7 @@ final class ClojureProtocolLowering {
 	static List<LispVal> defprotocolForms(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defprotocol takes a name and methods");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defprotocol");
+		String key = ClojureLowering.varKey(ctx.currentNs, name);
 		ClojureLowering.ProtocolDef def = declareProtocol(ctx, items);
 		List<LispVal> forms = new ArrayList<>();
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.methodsVar(),
@@ -740,25 +741,31 @@ final class ClojureProtocolLowering {
 		ctx.usedProtocols = true;
 		// the value arms resolve the protocol's tables through the registry: the
 		// record holds getters over the globals (a re-executed defprotocol rebinds
-		// them, and the getters read the new ones like the calls do) and an
-		// ensurer over the default, the walk flag and the guard the final pass
-		// settled, the method names an extend entry must keyword-name and the
-		// reducing row writer, so a captured old table reads what it reads like
-		// the calls do; the store answers the table (what the protocol's setq
-		// answers), so the definition answers what it answered before the
-		// registry existed
-		forms.add(registerProtocol(ctx, def));
+		// them, and the getters read the new ones like the calls do), an ensurer
+		// and a clearer over the default, the walk flag and the guard the final
+		// pass settled, the method names an extend entry must keyword-name, the
+		// reducing method's keyword a typed row filters on, and the var key and
+		// interface name a body-implementation refusal reports, so a captured old
+		// table reads what it reads like the calls do; the store answers the table
+		// (what the protocol's setq answers), so the definition answers what it
+		// answered before the registry existed
+		forms.add(registerProtocol(ctx, def, key));
 		return forms;
 	}
 
 	/**
 	 * The registry store of a {@code defprotocol}: the record beside the protocol's
-	 * methods table, answering the table.
+	 * methods table, answering the table. The record carries the reducing method's
+	 * keyword (g43: the keyword a typed row filters on, never the row writer itself, so
+	 * loading a reducing protocol names no arm producer), the protocol's var key and
+	 * interface name (what the run-time {@code extend}'s body-implementation refusal
+	 * reports), and a setter over the default (what a run-time extend writes).
 	 * @param ctx the hub
 	 * @param def the protocol
+	 * @param key the protocol's var key
 	 * @return the register call
 	 */
-	static LispVal registerProtocol(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
+	static LispVal registerProtocol(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String key) {
 		List<LispVal> names = new ArrayList<>();
 		// sorted: the emitted program is the same on every lowering
 		for (String name : new TreeSet<>(def.methods())) {
@@ -769,7 +776,27 @@ final class ClojureProtocolLowering {
 				def.inlineVar() == null ? ClojureLowering.NIL_CONST : getter(def.inlineVar()), getter(def.defaultVar()),
 				ensurer(def.defaultVar()), walks(ctx, def) ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST,
 				guard == null ? ClojureLowering.NIL_CONST : guard, ctx.quote(ClojureLowerUtil.list(names)),
-				def.reducerRow() == null ? ClojureLowering.NIL_CONST : new LispSymbol(def.reducerRow()));
+				reducerKeyword(def), LispString.literal(key), LispString.literal(interfaceName(key)),
+				clearer(def.defaultVar()));
+	}
+
+	/**
+	 * The reducing method's keyword a typed {@code extend} row filters on (g43): the
+	 * keyword of {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce},
+	 * nil for any other protocol. The registry carries the keyword rather than the row
+	 * writer ({@link ClojureLowering.ProtocolDef#reducerRow}), so registering such a
+	 * protocol -- loading {@code clojure.core.protocols} -- names no
+	 * {@link ClojureArms.Family#REDUCIBLE} producer and a program extending one to no
+	 * typed row keeps every arm folded.
+	 */
+	private static LispVal reducerKeyword(ClojureLowering.ProtocolDef def) {
+		if (def.reducerRow() == null) {
+			return ClojureLowering.NIL_CONST;
+		}
+		if (def.reducerRow().equals("RONTOLISP::%CLOJURE-KV-REDUCER-ROW")) {
+			return ClojureCollectionLowering.keywordForm("kv-reduce");
+		}
+		return ClojureCollectionLowering.keywordForm("coll-reduce");
 	}
 
 	/**
@@ -793,6 +820,21 @@ final class ClojureProtocolLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), ClojureLowerUtil.list(
 				ClojureLowerUtil.sym("or"), global,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), global, ClojureCollectionLowering.makeTable())));
+	}
+
+	/**
+	 * A setter over a protocol's default global: the rest-args closure the registry
+	 * record sets the {@code Object} row through -- nil (dropped on a nil method map) or
+	 * the fresh table or raw map a run-time {@code extend} replaces it with (g43).
+	 * @param global the default global
+	 * @return the setter
+	 */
+	private static LispVal clearer(LispSymbol global) {
+		LispSymbol fresh = new LispSymbol("fresh");
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, fresh)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), global,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), fresh)));
 	}
 
 	/**
@@ -842,11 +884,19 @@ final class ClojureProtocolLowering {
 		LispSymbol inner = ctx.freshTemp();
 		LispSymbol found = ctx.freshTemp();
 		LispSymbol chosen = ctx.freshTemp();
-		// the tag's row, else the Object row of this method, else the miss
-		LispVal objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()), miss,
+		// the tag's row, else the Object row of this method, else the miss; nil
+		// never consults the Object row (g43: the oracle guards its default
+		// behind the value's class), and a non-table default -- a non-map method
+		// map an extend stored as-is, like the oracle's assoc-in -- holds no
+		// method either
+		LispVal target = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args);
+		LispVal defaultRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), def.defaultVar()),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method),
-						def.defaultVar(), miss));
+						def.defaultVar(), miss),
+				miss);
+		LispVal objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), target), miss, defaultRow);
 		if (walks(ctx, def)) {
 			// a walked class's row ahead of the Object row, like the oracle's
 			// superclass chain and interfaces
@@ -933,12 +983,15 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * The method lambda a tag's row holds, or {@code miss}: {@code row} is the tag's
-	 * inner table (or {@code miss} when the tag has none).
+	 * inner table (or {@code miss} when the tag has none). A non-table row -- a non-map
+	 * method map an {@code extend} stored as-is, like the oracle's {@code assoc-in} --
+	 * holds no method, like the oracle (g43).
 	 */
 	private static LispVal rowMethod(LispSymbol row, LispSymbol miss, String method) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), row, miss), miss, ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method), row, miss));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), row), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method), row, miss),
+				miss);
 	}
 
 	/**
@@ -1682,8 +1735,16 @@ final class ClojureProtocolLowering {
 		// the value arms read a run-time type back as a typed key through the
 		// tag registry: the tag beside the constructors, answering the tag
 		// (what the constructors' defuns answer), so the definition answers
-		// what it answered before the registry existed
-		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(name)));
+		// what it answered before the registry existed. Beside the tag the
+		// registry holds the host class name and the var keys of the protocols
+		// the body names, so a run-time extend to a type whose body already
+		// implements the protocol refuses like the head call does (g43).
+		List<LispVal> bodyProtocols = new ArrayList<>();
+		for (String protocolKey : new TreeSet<>(def.protocols())) {
+			bodyProtocols.add(LispString.literal(protocolKey));
+		}
+		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(name),
+				LispString.literal(def.className()), ctx.quote(ClojureLowerUtil.list(bodyProtocols))));
 		forms.add(positionalCtor(ctx, name, def));
 		if (record) {
 			forms.add(mapCtor(ctx, name, def));
@@ -2332,6 +2393,97 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The fresh row an {@code extend} replaces the target's with before storing its
+	 * entries: like the oracle's {@code assoc-in} of the method map, a later extend
+	 * replaces the type's whole map instead of merging into it (g43). A nil target is
+	 * {@code extendKeyForm}'s nil keyword, {@code Object} the default table, made fresh;
+	 * the walked second key too, where one applies.
+	 */
+	static LispVal clearRowForm(ClojureLowering ctx, ClojureLowering.ProtocolDef def, @Nullable LispVal key,
+			@Nullable LispVal walkKey) {
+		if (key == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(),
+					ClojureCollectionLowering.makeTable());
+		}
+		if (walkKey == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, def.methodsVar()),
+					ClojureCollectionLowering.makeTable());
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, def.methodsVar()),
+						ClojureCollectionLowering.makeTable()),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), walkKey, def.methodsVar()),
+						ClojureCollectionLowering.makeTable()));
+	}
+
+	/**
+	 * Drops the target's whole row, like the oracle's {@code extend} of a nil method map
+	 * (g43): the tag's entry (and the walked second key's), or the {@code Object}
+	 * default, so the type satisfies nothing again.
+	 */
+	static LispVal removeRowForm(ClojureLowering.ProtocolDef def, @Nullable LispVal key, @Nullable LispVal walkKey) {
+		if (key == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(), ClojureLowering.NIL_CONST);
+		}
+		if (walkKey == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), key, def.methodsVar());
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), key, def.methodsVar()),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), walkKey, def.methodsVar()));
+	}
+
+	/**
+	 * Stores the computed method map as-is under the target's tag, replacing the whole
+	 * row like the oracle's {@code assoc-in} does (g43): a non-map method map satisfies
+	 * and extends (its row is present) but dispatches nothing, and a nil one drops the
+	 * row instead ({@link #removeRowForm}).
+	 */
+	static LispVal rawStoreForm(ClojureLowering.ProtocolDef def, @Nullable LispVal key, @Nullable LispVal walkKey,
+			LispVal mmap) {
+		if (key == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(), mmap);
+		}
+		if (walkKey == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, def.methodsVar()), mmap);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, def.methodsVar()), mmap),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), walkKey, def.methodsVar()), mmap));
+	}
+
+	/**
+	 * The var key of the protocol a name resolves to, or null when it names none.
+	 */
+	static @Nullable String protocolKeyOf(ClojureLowering ctx, String protocol) {
+		return ctx.isLocal(protocol) ? null : ctx.resolveVar(protocol);
+	}
+
+	/**
+	 * Refuses an {@code extend} of a record or deftype to a protocol its own body already
+	 * implements, like the oracle's {@code class X already directly
+	 * implements interface I for protocol:#'ns/P} (g43). Only a body implementation
+	 * counts: a type with no body for the protocol extends and re-extends freely.
+	 */
+	static void refuseBodyImpl(ClojureLowering ctx, String protocol, String target) {
+		ClojureLowering.TypeDef type = ctx.typeDefOf(target);
+		if (type == null) {
+			return;
+		}
+		String key = protocolKeyOf(ctx, protocol);
+		if (key != null && type.protocols().contains(key)) {
+			throw new LispReadException("class " + type.className() + " already directly implements interface "
+					+ interfaceName(key) + " for protocol:#'" + key);
+		}
+	}
+
+	/**
 	 * The rows of an {@code extend-protocol}, {@code extend-type} or {@code extend},
 	 * answering nil like the oracle rather than the last row's stored lambda.
 	 */
@@ -2363,6 +2515,7 @@ final class ClojureProtocolLowering {
 		while (at < items.size()) {
 			ClojureLowerUtil.isTrue(items.get(at) instanceof LispSymbol, "extend-protocol takes a type name");
 			String target = ((LispSymbol) items.get(at)).name();
+			refuseBodyImpl(ctx, protocol, target);
 			LispVal key = extendKeyForm(ctx, target, "extend-protocol");
 			LispVal walkKey = interfaceWalkKey(ctx, target);
 			boolean typed = isTypedTarget(ctx, target);
@@ -2373,6 +2526,9 @@ final class ClojureProtocolLowering {
 					noteInterfaceWalk(ctx, def, target);
 				}
 			}
+			// a later extend replaces the type's whole row, like the oracle (g43):
+			// the clear answers the group's rows, even a bare type's
+			rows.add(clearRowForm(ctx, def, key, walkKey));
 			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
 				List<LispVal> impl = ClojureLowerUtil.items(items.get(at));
 				if (impl == null || impl.size() < 2
@@ -2404,6 +2560,11 @@ final class ClojureProtocolLowering {
 		List<ClojureLowering.ImplGroup> groups = implGroups(ctx, items.subList(2, items.size()), "extend-type");
 		List<LispVal> rows = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : groups) {
+			refuseBodyImpl(ctx, group.protocol(), target);
+			ClojureLowering.ProtocolDef groupDef = protocolOf(ctx, group.protocol());
+			if (groupDef != null) {
+				rows.add(clearRowForm(ctx, groupDef, key, walkKey));
+			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				rows.add(extendRow(ctx, group.protocol(), key, walkKey, impl, typed));
 			}
@@ -2446,6 +2607,8 @@ final class ClojureProtocolLowering {
 		List<LispVal> rows = new ArrayList<>();
 		for (int p = 2; p < items.size(); p += 2) {
 			ClojureLowering.ProtocolDef def = defs.get(p / 2 - 1);
+			String protocol = ((LispSymbol) items.get(p)).name();
+			refuseBodyImpl(ctx, protocol, target);
 			List<LispVal> entries = ClojureLowerUtil.items(items.get(p + 1));
 			if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")) {
 				noteWalk(ctx, def, target);
@@ -2461,6 +2624,8 @@ final class ClojureProtocolLowering {
 					noteInterfaceWalk(ctx, def, target);
 				}
 			}
+			// a later extend replaces the type's whole row, like the oracle (g43)
+			rows.add(clearRowForm(ctx, def, key, walkKey));
 			for (int i = 1; i < entries.size(); i += 2) {
 				ClojureLowerUtil.isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
 						"extend takes keyword method names, not " + entries.get(i).print());
@@ -2490,39 +2655,48 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * The rows of a map of method functions the program computes, stored when it runs:
-	 * {@code (%clojure-extend-rows (lambda (method fn) store) map methods)} calls the
-	 * store -- the row a literal map's entry takes, under the entry's keyword (and under
-	 * {@code walkKey} too when it is not null, {@link #interfaceWalkKey}) -- for each
-	 * entry naming one of the protocol's methods; any other entry is never looked up, as
-	 * in the oracle, so none is stored.
+	 * {@code (%clojure-extend-rows entry raw remove fresh map methods)} replaces the
+	 * target's whole row like the oracle's {@code assoc-in} does (g43): nil removes it
+	 * ({@code remove}), a map (or record, or sorted) replaces it with a fresh row holding
+	 * {@code entry} of each entry naming one of the protocol's methods (any other entry
+	 * is never looked up, as in the oracle, so none is stored), and anything else
+	 * replaces it as-is ({@code raw}) -- satisfying and extending, but dispatching
+	 * nothing, like the oracle.
 	 */
 	private static LispVal computedRows(ClojureLowering ctx, ClojureLowering.ProtocolDef def, @Nullable LispVal key,
 			@Nullable LispVal walkKey, boolean typed, LispVal map) {
 		LispSymbol method = ctx.freshTemp();
 		LispSymbol fun = ctx.freshTemp();
-		LispVal store;
+		LispVal entry;
 		if (key == null) {
-			store = objectStoreForm(def, method, fun);
+			entry = objectStoreForm(def, method, fun);
 		}
 		else if (typed && def.reducerRow() != null) {
-			store = ClojureLowerUtil.list(new LispSymbol(def.reducerRow()), def.methodsVar(), key, fun);
+			entry = ClojureLowerUtil.list(new LispSymbol(def.reducerRow()), def.methodsVar(), key, fun);
 		}
 		else if (walkKey == null) {
-			store = methodStoreForm(ctx, def.methodsVar(), key, method, fun);
+			entry = methodStoreForm(ctx, def.methodsVar(), key, method, fun);
 		}
 		else {
-			store = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+			entry = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 					methodStoreForm(ctx, def.methodsVar(), key, method, fun),
 					methodStoreForm(ctx, def.methodsVar(), walkKey, method, fun));
 		}
+		LispSymbol mmap = ctx.freshTemp();
 		List<LispVal> names = new ArrayList<>();
 		// sorted: the emitted program is the same on every lowering
 		for (String name : new TreeSet<>(def.methods())) {
 			names.add(LispString.literal(name));
 		}
-		return ClojureLowerUtil.list(
-				new LispSymbol(EXTEND_ROWS), ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(List.of(method, fun)), store),
+		return ClojureLowerUtil.list(new LispSymbol(EXTEND_ROWS),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(method, fun)),
+						entry),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(mmap)),
+						rawStoreForm(def, key, walkKey, mmap)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of()),
+						removeRowForm(def, key, walkKey)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of()),
+						clearRowForm(ctx, def, key, walkKey)),
 				map, ctx.quote(ClojureLowerUtil.list(names)));
 	}
 
@@ -2596,12 +2770,13 @@ final class ClojureProtocolLowering {
 		LispSymbol tag = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
 		LispSymbol inner = ctx.freshTemp();
+		LispSymbol value = ctx.freshTemp();
+		LispVal lowered = ctx.lower(items.get(2));
 		LispVal hit = ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), inner, miss));
-		LispVal answer = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), hit, ClojureLowering.TRUE_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()), ctx.falseVariable,
-						ClojureLowering.TRUE_CONST));
+		// nil never consults the Object row (g43: the oracle guards its default
+		// behind the value's class); an explicit nil row still satisfies, like
+		// the oracle (the answer reads the bound target of each path below)
 		ctx.usedProtocols = true;
 		LispVal row = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.methodsVar(), miss);
 		if (def.inlineVar() != null) {
@@ -2614,17 +2789,16 @@ final class ClojureProtocolLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), direct, miss), row, direct));
 		}
-		LispVal lowered = ctx.lower(items.get(2));
 		LispSymbol guarded = new LispSymbol(GUARDED_VALUE);
 		LispVal guard = interfaceGuard(ctx, def, guarded);
 		if (!walks(ctx, def) && guard == null) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-					ClojureLowerUtil.list(List.of(
-							ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), lowered)),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, lowered),
+							ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), value)),
 							ClojureLowerUtil.list(miss,
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 							ClojureLowerUtil.list(inner, row))),
-					answer);
+					satisfiesAnswer(ctx, hit, value, def.defaultVar()));
 		}
 		if (guard != null) {
 			// a typed value implementing an interface extended under a core kind
@@ -2647,10 +2821,9 @@ final class ClojureProtocolLowering {
 							ClojureLowerUtil.list(miss,
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 							ClojureLowerUtil.list(inner, walked))),
-					answer);
+					satisfiesAnswer(ctx, hit, guarded, def.defaultVar()));
 		}
 		// a walked class's row satisfies too, like the oracle's
-		LispSymbol value = ctx.freshTemp();
 		LispSymbol exact = ctx.freshTemp();
 		LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(exact, row))),
@@ -2665,7 +2838,21 @@ final class ClojureProtocolLowering {
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 						ClojureLowerUtil.list(inner, walked))),
-				answer);
+				satisfiesAnswer(ctx, hit, value, def.defaultVar()));
+	}
+
+	/**
+	 * A {@code satisfies?} answer over the tag-row hit: true on a row, else the
+	 * {@code Object} default where the target is not nil and the protocol has one (g43:
+	 * nil never consults the default, like the oracle).
+	 */
+	private static LispVal satisfiesAnswer(ClojureLowering ctx, LispVal hit, LispVal target, LispSymbol defaultVar) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), hit, ClojureLowering.TRUE_CONST,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), target),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), defaultVar)),
+						ctx.falseVariable, ClojureLowering.TRUE_CONST));
 	}
 
 	/**

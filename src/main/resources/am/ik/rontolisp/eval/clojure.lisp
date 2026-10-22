@@ -10029,17 +10029,25 @@
   (rontolisp::%clojure-reduce-kv (rontolisp::%clojure-as-fn (car args))
                                  (car (cdr args)) (car (cdr (cdr args)))))
 
-(defun rontolisp::%clojure-extend-rows (store mmap methods)
-  "extend's rows from MMAP, a map of method functions the program computed:
-   STORE called with each entry whose key is the keyword of one of METHODS (the
-   protocol's method names) and its function; any other entry is never looked
-   up, as in the oracle, so none is stored. Answers nil, like the oracle's
+(defun rontolisp::%clojure-extend-rows (entry raw remove fresh map methods)
+  "extend's run-time rows from the computed method map MAP: nil removes the
+   target's row (REMOVE), a map (or record, or sorted) replaces it with a
+   fresh row (FRESH) holding ENTRY of each entry whose key is the keyword
+   of one of METHODS (the protocol's method names) and its function, and
+   anything else replaces the row as-is (RAW) -- the oracle's assoc-in of
+   the map, like the head call (g43). Any other entry is never looked up,
+   as in the oracle, so none is stored. Answers nil, like the oracle's
    extend."
-  (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
-    (let ((k (car e)))
-      (if (and (rontolisp::%clojure-keyword-p k)
-               (member (car (cdr k)) methods :test #'equal))
-          (funcall store k (rontolisp::%clojure-as-fn (cdr e))))))
+  (cond ((null map) (funcall remove))
+        ((or (hash-table-p map) (rontolisp::%clojure-record-p map)
+             (rontolisp::%clojure-sorted-p map))
+         (funcall fresh)
+         (dolist (e (rontolisp::%clojure-kv-pairs map "extend"))
+           (let ((k (car e)))
+             (if (and (rontolisp::%clojure-keyword-p k)
+                      (member (car (cdr k)) methods :test #'equal))
+                 (funcall entry k (rontolisp::%clojure-as-fn (cdr e)))))))
+        (t (funcall raw map)))
   nil)
 
 ;; update-keys and update-vals of an M reducing through its own IKVReduce row
@@ -10261,41 +10269,54 @@
 ;; calls do. Beside the getters the record carries the walk flag the final
 ;; lowering pass settled, the guard closure over the interfaces' own tests
 ;; (nil where the head asks none), the protocol's method names (what an
-;; extend entry must keyword-name to store) and the reducing row writer
-;; (nil except for clojure.core.protocols/CollReduce and IKVReduce).
+;; extend entry must keyword-name to store), the reducing method's keyword
+;; (nil except for clojure.core.protocols/CollReduce and IKVReduce), the
+;; var key and interface name, and the default's setter (g43).
 ;; A defrecord or deftype registers its dispatch tag beside its
-;; constructors, so an extend of (class value) stores under a typed key
-;; with the reducing row where one applies.
+;; constructors, with the host class name and the var keys of the protocols
+;; its body names, so an extend of (class value) stores under a typed key
+;; with the reducing row where one applies, and one to a type whose body
+;; already implements the protocol refuses like the oracle's (g43).
 
 (defvar rontolisp::%clojure-protocols
   (make-hash-table :test 'eq)
   "A protocol's methods table to its (methods-getter inline-getter
-   default-getter default-ensurer walks-p guard methods reducer) record,
-   made by every defprotocol beside its tables.")
+   default-getter default-ensurer walks-p guard methods reducer pkey iface
+   clearer) record, made by every defprotocol beside its tables: the
+   reducing method's keyword a typed row filters on (nil for any other
+   protocol), the protocol's var key and interface name (what the run-time
+   extend's body-implementation refusal reports), and the closure dropping
+   the Object row.")
 
 (defvar rontolisp::%clojure-protocol-type-tags
   (make-hash-table :test 'equal)
-  "A record's or deftype's dispatch-tag keyword to T, made beside its
-   constructors, so a run-time type value reads back as a typed key.")
+  "A record's or deftype's dispatch-tag keyword to its (class . protocols)
+   entry -- the host class name and the var keys of the protocols its body
+   names -- made beside its constructors, so a run-time type value reads
+   back as a typed key and a run-time extend to a type whose body already
+   implements the protocol refuses like the oracle's.")
 
 (defun rontolisp::%clojure-register-protocol (methods methods-getter
                                                       inline-getter
                                                       default-getter
                                                       default-ensurer walks
-                                                      guard names reducer)
+                                                      guard names reducer
+                                                      pkey iface clearer)
   "Register METHODS' record beside the methods table, answering the table
    (what the protocol's setq answers, so a defprotocol answers what it
    answered before the registry existed)."
   (setf (gethash methods rontolisp::%clojure-protocols)
         (list methods-getter inline-getter default-getter default-ensurer walks
-              guard names reducer))
+              guard names reducer pkey iface clearer))
   methods)
 
-(defun rontolisp::%clojure-register-type-tag (tag)
-  "Register the record or deftype dispatch-tag keyword TAG, answering it
-   (what the constructors' defun answers, so a definition answers what it
-   answered before the registry existed)."
-  (setf (gethash tag rontolisp::%clojure-protocol-type-tags) t)
+(defun rontolisp::%clojure-register-type-tag (tag class protocols)
+  "Register the record or deftype dispatch-tag keyword TAG beside its CLASS
+   name and the var keys of the protocols its body names (PROTOCOLS),
+   answering TAG (what the constructors' defun answers, so a definition
+   answers what it answered before the registry existed)."
+  (setf (gethash tag rontolisp::%clojure-protocol-type-tags)
+        (cons class protocols))
   tag)
 
 ;; The class spellings an extend target resolves to, by kind (clojure/
@@ -10457,7 +10478,8 @@
   "satisfies? of the run-time protocol value P over X: the tag's row, the
    inline table's first where the protocol is extend-via-metadata, the
    walk behind the flag or the guard the registry settled, else the
-   Object default -- what the head call runs. A value the registry holds
+   Object default -- what the head call runs. Nil never consults the
+   default, like the oracle (g43). A value the registry holds
    no protocol for is the oracle's NullPointerException."
   (let ((record (gethash p rontolisp::%clojure-protocols)))
     (if (null record)
@@ -10474,10 +10496,11 @@
           (if inline-getter
               (let ((direct (gethash tag (funcall inline-getter) miss)))
                 (if (eq direct miss) nil (setq inner direct))))
-          (if (and (eq inner miss) (or walks (and guard (funcall guard x))))
+          (if (and (eq inner miss) (not (null x))
+                   (or walks (and guard (funcall guard x))))
               (setq inner (c%protocol-super x methods nil miss)))
           (if (eq inner miss)
-              (if (null default) rontolisp::%clojure-false t)
+              (if (or (null x) (null default)) rontolisp::%clojure-false t)
               t)))))
 
 (defun rontolisp::%clojure-extends-p (p x)
@@ -10503,9 +10526,13 @@
 
 (defun rontolisp::%clojure-extend-method (methods key method fn reducer typed)
   "Stores FN under METHOD of KEY's row in the methods TABLE, through the
-   reducing row where TYPED names one -- the row a literal extend stores."
+   reducing row where TYPED names one -- the row a literal extend stores.
+   REDUCER is the reducing method's keyword (nil for any other protocol)."
   (if (and typed reducer)
-      (funcall reducer methods key fn)
+      (funcall (if (equal reducer '(:c%keyword "coll-reduce"))
+                   #'rontolisp::%clojure-coll-reducer-row
+                   #'rontolisp::%clojure-kv-reducer-row)
+               methods key fn)
       (let* ((miss (list nil)) (inner (gethash key methods miss)))
         (if (eq inner miss)
             (progn
@@ -10517,9 +10544,12 @@
   "extend of the run-time type over ARGS' protocol and method-map pairs:
    each pair in order, a trailing odd entry dropped -- what the head call
    runs. A pair whose protocol the registry holds none of is the oracle's
-   IllegalArgumentException, a method map that is no map ignored, and an
-   entry naming no method of the protocol never stored; anything else
-   stores its row, answering nil like the oracle."
+   IllegalArgumentException. Nil removes the type's row, a map replaces it
+   with a fresh row holding each entry naming a method of the protocol, and
+   anything else replaces it as-is: the oracle's assoc-in of the map,
+   replacing the type's map, like the head call (g43). A type whose body
+   already implements the protocol refuses like the oracle's. Answers nil
+   like the oracle."
   (if (null args)
       (rontolisp::%clojure-fn-arity-error 0 "clojure.core/extend")
       (let ((key (rontolisp::%clojure-extends-key (car args)))
@@ -10533,27 +10563,60 @@
                 (rontolisp::%clojure-illegal-argument-exception
                  (concatenate 'string (rontolisp::%clojure-str-of proto "" nil)
                               " is not a protocol"))
-                (if (or (hash-table-p mmap) (rontolisp::%clojure-record-p mmap)
-                        (rontolisp::%clojure-sorted-p mmap))
-                    (let ((methods (funcall (car record)))
-                          (ensurer (car (cdr (cdr (cdr record)))))
-                          (names
-                           (car (cdr (cdr (cdr (cdr (cdr (cdr record))))))))
-                          (reducer
-                           (car
-                            (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))
-                          (typed
-                           (and (consp key)
-                                (gethash key
-                                 rontolisp::%clojure-protocol-type-tags))))
-                      (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
-                        (let ((k (car e)))
-                          (if (and (rontolisp::%clojure-keyword-p k)
-                                   (member (car (cdr k)) names :test #'equal))
-                              (if (eq key :default)
-                                  (setf (gethash k (funcall ensurer)) (cdr e))
-                                  (rontolisp::%clojure-extend-method methods key
-                                   k (cdr e) reducer typed)))))))))))))
+                (let* ((methods (funcall (car record)))
+                       (ensurer (car (cdr (cdr (cdr record)))))
+                       (names
+                        (car (cdr (cdr (cdr (cdr (cdr (cdr record))))))))
+                       (reducer
+                        (car
+                         (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))
+                       (pkey
+                        (car
+                         (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))
+                       (iface
+                        (car
+                         (cdr
+                          (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))))
+                       (clearer
+                        (car
+                         (cdr
+                          (cdr
+                           (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))))
+                       (typed
+                        (and (consp key)
+                             (gethash key
+                              rontolisp::%clojure-protocol-type-tags))))
+                  ;; a body implementation holds the protocol's interface
+                  ;; already: extending one refuses, like the oracle (g43)
+                  (if (and typed (member pkey (cdr typed) :test #'equal))
+                      (rontolisp::%clojure-illegal-argument-exception
+                       (concatenate 'string "class " (car typed)
+                                    " already directly implements interface "
+                                    iface " for protocol:#'" pkey))
+                      (if (eq key :default)
+                          (cond ((null mmap) (funcall clearer))
+                                ((or (hash-table-p mmap)
+                                     (rontolisp::%clojure-record-p mmap)
+                                     (rontolisp::%clojure-sorted-p mmap))
+                                 (funcall clearer (make-hash-table :test 'equal))
+                                 (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+                                   (let ((k (car e)))
+                                     (if (and (rontolisp::%clojure-keyword-p k)
+                                              (member (car (cdr k)) names :test #'equal))
+                                         (setf (gethash k (funcall ensurer)) (cdr e))))))
+                                (t (funcall clearer mmap)))
+                          (cond ((null mmap) (remhash key methods))
+                                ((or (hash-table-p mmap)
+                                     (rontolisp::%clojure-record-p mmap)
+                                     (rontolisp::%clojure-sorted-p mmap))
+                                 (setf (gethash key methods) (make-hash-table :test 'equal))
+                                 (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+                                   (let ((k (car e)))
+                                     (if (and (rontolisp::%clojure-keyword-p k)
+                                              (member (car (cdr k)) names :test #'equal))
+                                         (rontolisp::%clojure-extend-method methods key
+                                          k (cdr e) reducer typed)))))
+                                (t (setf (gethash key methods) mmap))))))))))))
 
 ;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
 ;;

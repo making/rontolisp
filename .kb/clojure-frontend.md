@@ -2410,10 +2410,14 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
     and an `eduction`'s. Producers `%clojure-coll-reducer-row`/`-kv-reducer-row`: the
     lowering stores a typed row of the two protocols through them
     (`ProtocolDef.reducerRow`, `ClojureProtocolLowering.rowStoreForm`: inline bodies,
-    reify, an extension whose target is a record or deftype), and they keep the
+    reify, an extension whose target is a record or deftype, and the value arm's
+    typed store), and they keep the
     protocol's table in a library global the tests read -- no mangled program name in the
     library. The namespace's own nil/`Object` rows and a core-kind extension are no
-    producer, so a datafy program folds the arms. Verified 2026-10-08: a program reducing,
+    producer, so a datafy program folds the arms. The run-time registry carries the
+    reducing method's keyword, never the row writer, so loading
+    `clojure.core.protocols` (whose `defprotocol` registers both) names no producer
+    and such a program keeps every arm folded (g43). Verified 2026-10-08: a program reducing,
     `reduce-kv`ing, `into`/`transduce`/`mapv`/`filterv`/`group-by`/`frequencies`/
     `update-vals`/`eduction`/`run!` with a protocol record, and `examples/clojure/demo.clj`,
     byte-identical as wasm P1 and JVM class.
@@ -3392,10 +3396,12 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   http: refusal's words and the URL-spelling check, the response-stream words moved behind
   the fetch arm. Reading a URL costs more than reading a file, as does the client's minimal GET.
 - **`extend` of a computed map** (2026-10-08, needed for `default-streams-impl`):
-  `ClojureProtocolLowering.computedRows` -> `%clojure-extend-rows (lambda (method fn)
-  store) map '(methods)`, the store the literal map's row takes, an entry naming no method
-  skipped (the oracle stores it but never reads it); `extend` takes several protocol/map
-  pairs. Answers nil (a literal map's `extend` still answers the last lambda, e72).
+  `ClojureProtocolLowering.computedRows` -> `%clojure-extend-rows entry raw remove
+  fresh map '(methods)`: nil removes the row, a map replaces it with a fresh row
+  holding `entry` of each entry naming one of the protocol's methods (an entry naming
+  no method skipped -- the oracle stores it but never reads it), anything else replaces
+  it as-is (g43, like the head call's oracle `assoc-in`); `extend` takes several
+  protocol/map pairs. Answers nil (a literal map's `extend` still answers the last lambda, e72).
 - **Cost of a java.io-naming program** (2026-10-08): a `spit` of a computed file is level
   with before; `.write` on a `StringWriter` pays the instance call's io arm.
 - **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
@@ -3862,7 +3868,17 @@ constructor and consumer, and a regex `replace` with a function replacement.
   instants and the UUID ("Instants and UUIDs"), `clojure.lang.BigInt` (a `1N` literal
   reads as the integer 1 here, so an extension to it reads every integer through the
   number's row), and any other class `instance?` resolves
-  (a name no class has is its `unknown name: X`). The three answer nil like the oracle
+  (a name no class has is its `unknown name: X`). Each `extend` replaces the target's
+  whole row, like the oracle's `assoc-in` (g43): a later `extend` replaces the type's
+  map instead of merging into it (an empty map replaces with an empty row, `nil`
+  removes the row, so the type satisfies nothing again); a non-map method map stores
+  as-is, satisfying and extending but dispatching nothing (a miss with no `Object`
+  row signals, like the oracle). `nil` never consults the `Object` default, like the
+  oracle's guarded lookup -- neither a call nor `satisfies?` reads it for nil, while
+  an explicit `nil` row still satisfies and dispatches. Extending a record or deftype
+  to a protocol its own body already implements refuses at lowering with the oracle's
+  `class X already directly implements interface I for protocol:#'ns/P` (g43; a value
+  arm's refuses when it runs, over the tag registry). The three answer nil like the oracle
   (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
   last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
   and `ClojureSessionTest.theExtendFormsEchoNil`.
@@ -3878,14 +3894,18 @@ constructor and consumer, and a regex `replace` with a function replacement.
   itself, which holds no `Object` default. As values `satisfies?`/`extends?`/`extend`
   check the count in the oracle's words, then read the run-time registry the `defprotocol`
   populates beside the methods table (`%clojure-protocols`, an `eq` table from the table
-  to getters over its methods, inline and default tables plus the walk flag, the guard,
-  the method names and the reducing row writer, so a re-executed `defprotocol` reads the
+  to getters over its methods, inline and default tables plus a setter over the default,
+  the walk flag, the guard, the method names, the reducing method's keyword and the var
+  key and interface name, so a re-executed `defprotocol` reads the
   new tables like the calls do; a record or deftype registers its tag beside its
-  constructors in `%clojure-protocol-type-tags`): `satisfies?` reads the tag's row, the
-  inline table's first, the walk behind the flag or guard, else the `Object` default;
-  `extends?` reads the key's row, the inline table's too, else the default; `extend`
-  installs each pair's rows in order, answering nil. A value the registry holds no
-  protocol for is the oracle's `NullPointerException`, a type that is no class its
+  constructors in `%clojure-protocol-type-tags`, with the host class name and the var keys
+  of the protocols its body names): `satisfies?` reads the tag's row, the
+  inline table's first, the walk behind the flag or guard (never for nil, like the oracle),
+  else the `Object` default where the target is not nil; `extends?` reads the key's row,
+  the inline table's too, else the default; `extend` replaces each pair's row in order
+  (g43: nil removes it, a map replaces with a fresh row of the entries naming a method,
+  anything else as-is; a body-implemented type refuses like the oracle), answering nil.
+  A value the registry holds no protocol for is the oracle's `NullPointerException`, a type that is no class its
   `ClassCastException`, a pair whose protocol is none its `IllegalArgumentException`
   (g42, `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`). Programs naming
   no `defprotocol`, record or deftype and none of the three verbs compile byte-identically;

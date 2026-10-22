@@ -257,11 +257,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   order (a trailing odd entry dropped), answering nil. A value the registry holds no
   protocol for is the oracle's `NullPointerException`, a type that is no class its
   `ClassCastException` (without the JVM's module tail), a pair whose protocol is none
-  its `IllegalArgumentException`. Where the head already deviates, the value mirrors
-  the head: `nil` answers the `Object` default where the oracle answers false, an
-  `extend` installs its rows merged with the existing ones where the oracle replaces
-  the type's map, and non-map method maps and entries naming no method are ignored;
-  an interface-walk second row needs a literal `extend`.
+  its `IllegalArgumentException`. `nil` never consults the `Object` default, like
+  the oracle (an explicit `nil` row still satisfies); an `extend` replaces the
+  type's whole row like the oracle's `assoc-in` (an empty map replaces with an
+  empty row, `nil` removes it); a non-map method map stores as-is, satisfying and
+  extending but dispatching nothing, like the oracle (a computed map, and a value
+  arm's, still skips an entry naming no method of the protocol, where the oracle
+  stores it; a literal map refuses a non-method key at lowering). Extending a
+  record or deftype to a protocol its own body already implements refuses like the
+  oracle's (`class X already directly implements interface I for protocol:#'ns/P`),
+  at lowering for the head forms and when it runs for a value's. An
+  interface-walk second row needs a literal `extend`.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry

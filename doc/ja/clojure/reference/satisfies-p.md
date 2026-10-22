@@ -13,5 +13,7 @@
 (defprotocol P (m [x]))
 (extend-protocol P Object (m [_] :other))
 (println (satisfies? P 1))   ; true
-(println (satisfies? P nil)) ; true
+(println (satisfies? P nil)) ; false: nil が Object 行を参照することは決してありません（オラクル同様）
+(extend nil P {:m (fn [_] :nil)})
+(println (satisfies? P nil) (m nil)) ; true :nil
 ```

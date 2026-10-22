@@ -1575,12 +1575,40 @@ class ClojureLoweringTest {
 		assertThat(record).contains(
 				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%KEYWORD \"R\")");
 		// the namespace's own nil and Object rows, a core kind and any other protocol
-		// store as before (the defprotocol registration names the reducing row
-		// writer, so only the store calls are asserted)
+		// store without the writer (the defprotocol registration carries the
+		// reducing method's keyword, never the row writer, so a program
+		// extending one to no typed row keeps the reducible arms folded)
 		String core = lowered("(require '[clojure.core.protocols :as p])"
 				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
 				+ " (defprotocol Q (m [x])) (reify Q (m [_] 1))");
 		assertThat(core).doesNotContain("(%CLOJURE-COLL-REDUCER-ROW").doesNotContain("(%CLOJURE-KV-REDUCER-ROW");
+		assertThat(core).contains("(RONTOLISP::%CLOJURE-REGISTER-PROTOCOL")
+			.doesNotContain("CLOJURE-COLL-REDUCER-ROW")
+			.doesNotContain("CLOJURE-KV-REDUCER-ROW");
+	}
+
+	@Test
+	void anExtendToATypeWhoseBodyImplementsTheProtocolIsRefusedLikeTheOracles() {
+		// the oracle's class-already-implements refusal, at lowering for the head
+		// calls (the value arm refuses when it runs, over the tag registry)
+		for (String form : List.of("(defprotocol W (m [x])) (deftype T [] W (m [_] 1)) (extend T W {:m (fn [_] 2)})",
+				"(defprotocol W (m [x])) (deftype T [] W (m [_] 1)) (extend-protocol W T (m [_] 2))",
+				"(defprotocol W (m [x])) (deftype T [] W (m [_] 1)) (extend-type T W (m [_] 2))",
+				"(defprotocol W (m [x])) (defrecord R [a] W (m [_] 1)) (extend R W {:m (fn [_] 2)})")) {
+			assertThatThrownBy(() -> Clojure.read(form, null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("already directly implements interface user.W for protocol:#'user/W");
+		}
+		// a type with no body for the protocol, or another protocol's body,
+		// extends and re-extends freely; a later extend replaces the row
+		assertThat(lowered("(defprotocol W (m [x])) (deftype T []) (extend T W {:m (fn [_] 1)})"))
+			.contains("|c%W%methods|");
+		assertThat(lowered("(defprotocol W (m [x])) (defprotocol V (v [x])) (deftype T [] V (v [_] 1))"
+				+ " (extend-protocol W T (m [_] 2))"))
+			.contains("|c%W%methods|");
+		assertThat(lowered("(defprotocol W (m [x])) (extend-protocol W String (m [_] 1))"))
+			.contains("(SETF (GETHASH (LIST :C%KEYWORD \"string\") |c%W%methods|) (MAKE-HASH-TABLE");
+		assertThat(lowered("(defprotocol W (m [x])) (extend-protocol W Object (m [_] 1))"))
+			.contains("(SETQ |c%W%default| (MAKE-HASH-TABLE");
 	}
 
 	@Test

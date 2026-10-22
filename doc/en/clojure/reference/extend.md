@@ -2,14 +2,18 @@
 
 `(extend Type Protocol {method fn ...} ...)`
 
-Adds rows to each protocol's table from its map of method functions: the same
-rows `extend-protocol` stores, for use when the implementations already exist as
-values. A map literal's rows are stored as written; a map the program computes
+Replaces each protocol's row for the type from its map of method functions:
+a later `extend` replaces the type's whole map, like the oracle (an empty map
+replaces with an empty row, `nil` removes the row). A map literal's rows are
+stored as written; a map the program computes
 (`(assoc clojure.java.io/default-streams-impl ...)`, a var holding one) is stored entry
 by entry when the form runs, an entry naming no method of the protocol left out, like
-the oracle. `Object` as the type installs the miss default, like `extend-protocol`. As
+the oracle; a non-map replaces the row as-is, satisfying and extending but
+dispatching nothing, like the oracle. `Object` as the type installs the miss default,
+like `extend-protocol`. Extending a record or deftype to a protocol its own body
+already implements refuses like the oracle's. As
 a value (`(def e extend)` applied, or higher-order) the run-time type and its protocol
-and method-map pairs install the same rows in order, answering nil.
+and method-map pairs replace the same rows in order, answering nil.
 
 ```clojure
 (defprotocol P (m [x]))
