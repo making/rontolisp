@@ -188,11 +188,12 @@ into AVAIL px."
   "The lines RUN takes at SIZE px, wrapped greedily into AVAIL px."
   (length (wrap-run run size avail)))
 
-(defun run-span-width (run start end size)
+(defun run-span-width (run start end size &optional spaces)
   "The milli-px width of RUN's characters from START below END at SIZE, trailing spaces
-excluded."
+excluded unless SPACES is true."
   (let ((text (run-text run)) (widths (run-widths run)) (m 0))
-    (loop while (and (> end start) (char= (char text (1- end)) #\Space))
+    (loop while (and (not spaces) (> end start)
+                     (char= (char text (1- end)) #\Space))
           do (decf end))
     (loop for j from start below end do (incf m (px (svref widths j) size)))
     m))

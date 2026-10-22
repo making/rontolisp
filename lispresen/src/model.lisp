@@ -31,7 +31,9 @@
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
 ;;; CALLOUTS lists the slide's callouts in source order. KICKER is the label above the
 ;;; title, :deck until the deck's :kicker decides it. META lists the (TEXT RUN) of each
-;;; line under the title of the title slide: the author, the date and the URL.
+;;; line under the title of the title slide: the author, the date and the URL. STEPS
+;;; lists what a page advance reveals, in source order (stepped items, code blocks with
+;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS).
 (defstruct slide
   number
   line
@@ -46,16 +48,30 @@
   callouts
   kicker
   kicker-run
-  meta)
+  meta
+  steps
+  (step-count 0))
 
 ;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
 (defstruct para inlines run lead)
 ;;; AGENDA is true for the list of an agenda slide that highlights its CURRENT item.
 (defstruct bullets ordered items agenda)
-(defstruct item inlines sublist run current)
+;;; STEP is the page advance that reveals the item of a (ul :step t ...), or nil.
+(defstruct item inlines sublist run current step)
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
 ;;; fitted, from the language, RUN and the deck's runtime.
-(defstruct code-block lang lines (run t) runnable timeout fresh stdin)
+;;; STEPS lists, for each step of :steps, the 0-based indices of the lines it brings
+;;; forward; STEP-NUMBERS the page advance of each.
+(defstruct code-block
+  lang
+  lines
+  (run t)
+  runnable
+  timeout
+  fresh
+  stdin
+  steps
+  step-numbers)
 ;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
 (defstruct figure src alt caption caption-run strip)
 (defstruct table-block
@@ -78,7 +94,8 @@
 ;;; A comment in a speech bubble pointing at its anchor. TARGET is the block it points
 ;;; at, nil for an inline anchor (the run holding it lists it among its ANCHORS); AT is
 ;;; the text that names the anchor inside a code block; STEP is the :step option, :deck
-;;; when the deck's :callouts decides whether a page advance shows the bubble. The rest
+;;; when the deck's :callouts decides whether a page advance shows the bubble, and
+;;; STEP-NUMBER that advance, nil for a bubble shown with the slide. The rest
 ;;; is set when the slide
 ;;; is fitted (layout.lisp): RUN is the comment's text run, FRAGMENTS the anchor's
 ;;; rectangles (one per line), and SIZE, SIDE, X, Y, WIDTH, HEIGHT and TAIL place the
@@ -88,6 +105,7 @@
   text
   at
   step
+  step-number
   target
   run
   fragments
@@ -101,6 +119,7 @@
   overflow)
 
 (defvar *callouts* nil "The callouts of the slide being parsed, newest first.")
+(defvar *steps* nil "The STEPS of the slide being parsed, newest first.")
 
 ;;; --- form helpers ------------------------------------------------------------
 
@@ -250,6 +269,8 @@ in *CALLOUTS*; nil after reporting a malformed one."
              (let ((c (parse-say x)) (nodes (parse-inlines (say-content x))))
                (cond ((null c) nodes)
                      (t
+                      ;; A callout's step follows the steps of what it wraps.
+                      (push c *steps*)
                       (when (callout-at c)
                         (report
                          :error ":at belongs to a callout around a code block")
@@ -293,20 +314,31 @@ in *CALLOUTS*; nil after reporting a malformed one."
     (make-item :inlines (nreverse inlines) :sublist sublist)))
 
 (defun parse-list (form)
-  "A bullets from (ul ...) or (ol ...). A list directly inside a list nests under the
-item before it."
-  (let ((items nil))
-    (dolist (x (cdr form))
-      (cond ((equal (form-tag x) "LI") (push (parse-li (cdr x)) items))
-            ((list-tag-p x)
-             (cond
-              ((null items) (report :error "a nested list must follow an item"))
-              ((item-sublist (car items))
-               (report :error "an item holds one nested list at most"))
-              (t (setf (item-sublist (car items)) (parse-list x)))))
-            (t (push (make-item :inlines (parse-inline x)) items))))
-    (make-bullets :ordered (equal (form-tag form) "OL")
-                  :items (nreverse items))))
+  "A bullets from (ul [:step t] ...) or (ol ...). A list directly inside a list nests under
+the item before it. Under :step each item is a step of its own, its nested list
+revealed with it."
+  (multiple-value-bind (opts body)
+      (split-options (cdr form) '("STEP") (string-downcase (form-tag form)))
+    (let ((items nil) (step (opt opts "STEP")))
+      (dolist (x body)
+        (if (list-tag-p x)
+            (cond
+             ((null items) (report :error "a nested list must follow an item"))
+             ((item-sublist (car items))
+              (report :error "an item holds one nested list at most"))
+             (t (setf (item-sublist (car items)) (parse-list x))))
+            ;; The item's place among the steps is taken before its content is
+            ;; parsed, so a step callout inside it comes after it.
+            (let ((place (and step (list :item))))
+              (when place (push place *steps*))
+              (let ((it
+                     (if (equal (form-tag x) "LI")
+                         (parse-li (cdr x))
+                         (make-item :inlines (parse-inline x)))))
+                (when place (setf (cdr place) (list it)))
+                (push it items)))))
+      (make-bullets :ordered (equal (form-tag form) "OL")
+                    :items (nreverse items)))))
 
 (defun split-lines (s)
   (let ((lines nil) (start 0))
@@ -359,7 +391,8 @@ and the common indentation removed."
 (defun parse-code (form)
   (multiple-value-bind (opts body)
       (split-options (cdr form)
-                     '("LANG" "FILE" "LINES" "RUN" "TIMEOUT" "FRESH" "STDIN")
+                     '("LANG" "FILE" "LINES" "RUN" "TIMEOUT" "FRESH" "STDIN"
+                       "STEPS")
                      "code")
     (let ((file (raw-string-option opts "FILE" "code")) (range (opt opts "LINES")))
       (cond ((notevery #'stringp body)
@@ -383,13 +416,53 @@ and the common indentation removed."
                  (code-file-text file range)
                  (and body (apply #'concatenate 'string body)))))
         (and text
-             (make-code-block :lang (or (string-option opts "LANG" "code")
-                                        (and file (code-file-lang file)))
-                              :lines (dedent text)
-                              :run (opt opts "RUN" t)
-                              :timeout (positive-option opts "TIMEOUT" 10)
-                              :fresh (opt opts "FRESH")
-                              :stdin (raw-string-option opts "STDIN" "code")))))))
+             (let* ((lines (dedent text))
+                    (b
+                     (make-code-block :lang (or (string-option opts "LANG" "code")
+                                                (and file (code-file-lang file)))
+                                      :lines lines
+                                      :run (opt opts "RUN" t)
+                                      :timeout (positive-option opts "TIMEOUT" 10)
+                                      :fresh (opt opts "FRESH")
+                                      :stdin (raw-string-option opts "STDIN" "code")
+                                      :steps (code-steps (opt opts "STEPS") lines))))
+               (when (code-block-steps b) (push b *steps*))
+               b))))))
+
+(defun code-steps (steps lines)
+  "The line indices each step of a code block's :steps brings forward. A step is a
+string, the first line holding it; (FIRST LAST), lines of the block from 1; or a list of
+those. Nil after reporting a malformed one."
+  (labels ((fail (message)
+             (report :error message)
+             (return-from code-steps nil))
+           (range-p (x)
+             (and (consp x) (= (length x) 2) (every #'integerp x)))
+           (part (x)
+             (cond ((stringp x)
+                    (let ((i (position-if (lambda (l) (search x l)) lines)))
+                      (if (and i (string/= x ""))
+                          (list i)
+                          (fail (format nil
+                                        "the :steps text ~s is not on a line of the code"
+                                        x)))))
+                   ((range-p x)
+                    (destructuring-bind (first last) x
+                      (unless (<= 1 first last (length lines))
+                        (fail (format nil
+                                      ":steps lines ~d-~d are not within the ~d line~:p of the code"
+                                      first last (length lines))))
+                      (loop for i from (1- first) below last collect i)))
+                   (t
+                    (fail
+                     ":steps of code must list steps: a string, (FIRST LAST) or a list of them")))))
+    (unless (listp steps)
+      (fail ":steps of code must list steps: a string, (FIRST LAST) or a list of them"))
+    (mapcar (lambda (step)
+              (if (and (consp step) (not (range-p step)))
+                  (sort (remove-duplicates (mapcan #'part step)) #'<)
+                  (part step)))
+            steps)))
 
 (defun parse-image (form)
   (let ((src (cadr form)))
@@ -514,7 +587,9 @@ callout points at, or else a paragraph holding it as inline content."
                                           "the :at text ~s is not on a line of the code"
                                           (callout-at c)))
                    (setf (callout-at c) nil)))
-            (setf (callout-target c) b))
+            (when b
+              (setf (callout-target c) b)
+              (push c *steps*)))
           b))))
 
 (defun parse-block (x &optional in-column)
@@ -571,6 +646,7 @@ callout points at, or else a paragraph holding it as inline content."
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
            (*callouts* nil)
+           (*steps* nil)
            (blocks nil)
            (notes nil))
       (dolist (x body)
@@ -590,11 +666,28 @@ callout points at, or else a paragraph holding it as inline content."
                    (string-option opts "KICKER" "slide")
                    :deck)
        :callouts (reverse *callouts*)
+       :steps (reverse *steps*)
        :layout (let ((l (opt opts "LAYOUT")))
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
        :blocks (group-columns (nreverse blocks))
        :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
+
+(defun number-steps (slide callouts)
+  "Numbers the page advances of SLIDE in source order: one per stepped item, one per step
+of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, the deck's
+:callouts, when it has none)."
+  (let ((n 0))
+    (dolist (s (slide-steps slide))
+      (cond ((consp s) (setf (item-step (second s)) (incf n)))
+            ((code-block-p s)
+             (setf (code-block-step-numbers s)
+                   (loop repeat (length (code-block-steps s)) collect (incf n))))
+            ((if (eq (callout-step s) :deck)
+                 (eq callouts :step)
+                 (callout-step s))
+             (setf (callout-step-number s) (incf n)))))
+    (setf (slide-step-count slide) n)))
 
 (defun parse-section (form number line)
   (let ((title (cadr form)))
@@ -759,6 +852,7 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                   (*slide-title* nil))
               (cond ((equal tag "SLIDE")
                      (let ((slide (parse-slide form (incf number) line)))
+                       (number-steps slide (deck-callouts deck))
                        (when (eq (slide-kicker slide) :deck)
                          (setf (slide-kicker slide)
                                (and (eq (deck-kicker deck) :section)

@@ -170,11 +170,15 @@
 
 (deftest callouts
   (testing "a bubble goes right of an anchor ending its line, below one inside it"
+    ;; The anchor of the second slide follows a space, which its place must count for
+    ;; the tail to clear its own line; below and above it are other items.
     (let ((html
            (lispresen:render
-            "(slide :title \"t\" (ul (say \"c\" \"短い項目\") (li \"日本語は \" (say \"d\" (mark \"文節\")) \" で改行する\")))")))
+            "(slide :title \"t\" (ul (say \"c\" \"短い項目\") (li \"日本語は \" (say \"d\" (mark \"文節\")) \" で改行する\")))
+(slide :title \"t\" (ul \"一つ目\" (li \"二つ目に \" (say \"e\" (mark \"吹き出し\"))) \"三つ目\" (ul \"入れ子\")))")))
       (ok (equal (callout-side html "s1c1") "right"))
       (ok (equal (callout-side html "s1c2") "below"))
+      (ok (equal (callout-side html "s2c1") "right"))
       (ok
        (contains html
                  "<span aria-describedby=\"s1c2\"><mark>文節</mark></span>"))))
@@ -206,24 +210,44 @@
           (ok
            (member message (mapcar #'lispresen::diagnostic-message diagnostics)
                    :test #'equal))))))
-  (testing "a page advance shows a step bubble, by its :step or the deck's :callouts"
+  (testing "page advances reveal in source order: stepped items, the lines of code :steps,
+then step bubbles (by :step or the deck's :callouts) after what they wrap"
     (let ((html
            (lispresen:render
             "(deck :callouts :step)
-(slide :title \"t\" (ul (say \"a\" \"x\") (say \"b\" :step nil \"y\")))")))
-      (ok (contains html "class=\"say step\" id=\"s1c1\""))
-      (ok (contains html "class=\"say\" id=\"s1c2\""))))
+(slide :title \"t\"
+  (ul :step t \"x\" (li \"y \" (say \"a\" \"z\")))
+  (say \"b\" :step nil \"w\")
+  (say \"c\" (code :lang \"lisp\" :run nil :steps (\"q\" (1 2)) \"(p \\\"s
+t\\\")
+q\")))")))
+      (ok (contains html "id=\"s1\" data-steps=\"6\""))
+      (ok (contains html "<li data-step=\"1\">x</li><li data-step=\"2\">"))
+      (ok (contains html "class=\"say step\" id=\"s1c1\" role=\"note\" data-side=\"right\" data-step=\"3\""))
+      (ok (contains html "class=\"say\" id=\"s1c2\""))
+      (ok (contains html "data-step=\"6\""))
+      ;; A string running across a line end is closed and opened again in each line.
+      (ok
+       (contains html
+        "data-focus=\"4 5\"><code><span class=\"ln\" data-hot=\"5\">(p <span class=\"hl-s\">&quot;s</span></span>
+<span class=\"ln\" data-hot=\"5\"><span class=\"hl-s\">t&quot;</span>)</span>
+<span class=\"ln\" data-hot=\"4\">q</span></code></pre>"))))
   (testing "malformed callouts"
     (ok
      (equal (render-diagnostics
              "(deck :callouts :later)
 (slide :title \"t\" (say \"a\" :at \"y\" (code \"x\")) (say \"b\" :at \"x\" (p \"x\")))
-(slide :title \"t\" (p (say 1 \"x\") (say \"c\")))")
+(slide :title \"t\" (p (say 1 \"x\") (say \"c\")))
+(slide :title \"t\" (code :steps (\"r\") \"p\") (code :steps ((1 3)) \"p\") (code :steps 3 \"p\"))")
             '((:error 1 ":callouts must be :shown or :step")
               (:error 2 "the :at text \"y\" is not on a line of the code")
               (:error 2 ":at belongs to a callout around a code block")
               (:error 3 "(say ...) takes the comment string first")
-              (:error 3 "(say ...) needs the content it points at"))))))
+              (:error 3 "(say ...) needs the content it points at")
+              (:error 4 "the :steps text \"r\" is not on a line of the code")
+              (:error 4 ":steps lines 1-3 are not within the 1 line of the code")
+              (:error 4
+               ":steps of code must list steps: a string, (FIRST LAST) or a list of them"))))))
 
 (deftest templates
   (testing "a use is the body with its arguments substituted, &rest spliced"

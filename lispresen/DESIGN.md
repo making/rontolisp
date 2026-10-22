@@ -39,8 +39,8 @@ Goals:
 - One HTML file. Without runnable code it has no network dependency at all.
 
 Non-goals: WYSIWYG editing, animations/transitions, free-form positioning, PowerPoint
-export. The one build step is a callout shown by a page advance (Callouts, below); it
-appears at once, without a transition.
+export. Builds are page advances that reveal list items, bring code lines forward and show
+callouts (Page advances, below); each takes effect at once, without a transition.
 
 ## Deck format
 
@@ -100,7 +100,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul`, `ol`, `li`, `code` (`:lang`, `:file`, `:lines`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -476,6 +476,38 @@ use the same `<wbr>` phrase breaks as body text, so the browser wraps each cell 
 the model did. The header row is bold on a tinted background, and each body row has a
 1 px rule drawn as an inset shadow, which takes no layout space.
 
+### Page advances
+
+```lisp
+(ul :step t "一つ目" "二つ目")
+(code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))
+```
+
+A slide's steps are what its page advances reveal: each item of a `(ul :step t ...)` or
+`(ol :step t ...)` (a nested list comes with its item, unless it has `:step` of its own),
+each step of a code block's `:steps`, and each step callout. They are numbered in the
+order they are written, a callout after the steps of what it wraps, since a comment
+follows what it is about; the parser records them as it reads (`number-steps`).
+
+- `:steps` lists steps of a code block; a step is a string, naming the first line that
+  holds it as `:at` does, `(FIRST LAST)`, lines of the block as shown counted from 1, or
+  a list of those. A step brings its lines forward and fades the others to 35%; the last
+  step reached stays until the slide is left. Lines are named by text first for the same
+  reason `:at` is: a line added above does not shift them.
+- The HTML carries the numbers: `data-steps` on the slide, `data-step` on an item or a
+  bubble, `data-focus` on a stepped code block and, on each of its lines (a `<span
+  class="ln">`, the highlight spans closed and opened again at a line end), `data-hot`
+  with the steps that bring it forward.
+- The player hides every step of a slide entered forward; each page advance (→, ↓,
+  space, PageDown, Enter, a swipe) reveals the next, the slide's last moves on, and going
+  back undoes the last one revealed before it moves to the previous slide, which it
+  enters with every step taken. Hidden items keep their room (`visibility: hidden`), so
+  nothing moves.
+- The presenter window and the audience window share the step with the slide number;
+  the presenter's views show what is still hidden faded. The overview, print and the
+  page without JavaScript show every step and no faded line. Editing a block ends its
+  fading: its text is highlighted anew, without line spans.
+
 ### Callouts
 
 ```lisp
@@ -516,9 +548,9 @@ the geometry the fit solver computed, in canvas px:
 - a bubble already placed, with its tail.
 
 Backgrounds and rules are not obstacles: a bubble may sit over the empty part of a code
-panel or a table. An inline anchor is the part of each line its text takes, one fragment
-per line; a block anchor is the block's box (code, table, image) or the rectangle around
-its lines (text). The width model over-estimates Latin text, so a static tail can land a
+panel or a table. An inline anchor is the part of each line its text takes, after the
+text before it with its spaces, one fragment per line; a block anchor is the block's box
+(code, table, image) or the rectangle around its lines (text). The width model over-estimates Latin text, so a static tail can land a
 few px to the right of where the browser draws the anchor; the runtime check corrects it.
 
 **The bubble.** Text at the callout size, line height 1.4, padding s/4 by s/2, a 3 px
@@ -558,14 +590,9 @@ that has no room even then is emitted at its centered position below the anchor 
 smallest size, outlined like an overflow, and reported as an error.
 
 **Visibility.** A callout is shown with the slide, unless it is a step: `:step t`, or every
-callout of a deck with `:callouts :step` (`:step nil` opts one out). The player hides the
-step bubbles of a slide when it is entered forward; each page advance (→, ↓, space,
-PageDown, Enter, a swipe) shows the next in source order before the next one moves to
-the next slide, and going back hides the last one shown before it moves to the previous
-slide, which it enters with all its bubbles shown. Every step bubble is placed when the
-slide is laid out, so showing one moves nothing. The presenter window and the audience
-window share the step with the slide number; the presenter's views show a hidden bubble
-faded. The overview, print and the page without JavaScript show every bubble. While a
+callout of a deck with `:callouts :step` (`:step nil` opts one out), revealed by a page
+advance (Page advances, above). Every step bubble is placed when the slide is laid out,
+so showing one moves nothing. While a
 code block of the slide is edited, its bubbles are hidden, since the edited text may run
 under them, and placed again on every change. An open output panel moves below the bubbles of its code. Of
 any other bubble and the panel, the one shown last is on top: a bubble shown by an
@@ -948,8 +975,9 @@ before committing a change under `lispresen/`.
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
   console column and a list column, dark code panels (`:code :dark`), section kickers, an
   agenda, a title slide with an embedded SVG logo and a QR code, a
-  quote, an embedded PNG and two callouts (an inline one, and a step one named by `:at` in
-  runnable code read from a file by `:lines`), so the
+  quote, an embedded PNG, a list revealed by steps, and two callouts (an inline one, and a
+  step one named by `:at` in runnable code read from a file by `:lines`, which `:steps`
+  brings forward line by line), so the
   highlighter, the emitted player, template expansion, callout placement and the binary
   read, UTF-8 decoding and base64 are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
@@ -962,8 +990,9 @@ before committing a change under `lispresen/`.
   numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
   expansion and its diagnostics and
-  bounds, the side each kind of callout anchor gets, an unplaceable callout, step
-  callouts and the callout diagnostics, the kicker diagnostics, base64 padding, the
+  bounds, the side each kind of callout anchor gets, an unplaceable callout, the
+  order of a slide's page advances (items, code lines, a bubble after what it wraps) and
+  a highlight string across a line end, the callout and `:steps` diagnostics, the kicker diagnostics, base64 padding, the
   embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics). The golden deck covers
   emission, so HTML is not asserted piecewise.
@@ -972,7 +1001,7 @@ before committing a change under `lispresen/`.
   report no paragraph where the model predicts fewer lines than the browser; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout; the
-  presenter window must follow navigation both ways, step callouts included, show edits
+  presenter window must follow navigation both ways, every kind of step included, show edits
   and outputs, and forward Run; a callout must sit beside its anchor after the runtime
   check; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The

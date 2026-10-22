@@ -39,9 +39,10 @@ The design is in [DESIGN.md](DESIGN.md).
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
-| `(ul item...)`, `(ol item...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it |
+| `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
 | `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge |
 | `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj` and their variants) |
+| `(code :steps ("(defun" (3 4) ("x" "y")) ...)` | brings lines forward one page advance at a time and fades the rest: a string names the first line holding it, `(3 4)` lines 3 to 4 of the block as shown, a list several of them |
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
@@ -110,10 +111,24 @@ that still finds none is outlined in red and reported as an error. A bubble on a
 gets a strip on the image's right.
 
 A bubble is shown with its slide. With `:step t` (or `(deck :callouts :step)` for every
-bubble, `:step nil` to opt one out) it appears on the next page advance instead: each
-advance shows the next bubble of the slide before moving on, and going back hides them
-again. Print and the overview show every bubble; the presenter window shows the ones
-still to come faded.
+bubble, `:step nil` to opt one out) it appears on a page advance instead.
+
+## Page advances
+
+A slide can reveal itself over several page advances: the items of a `(ul :step t ...)`,
+the lines of a `(code :steps ...)`, and step bubbles. Each advance takes the next step of
+the slide in the order they are written, a bubble after the steps of what it wraps,
+before moving on to the next slide; going back undoes them one at a time.
+
+```lisp
+(slide :title "その場で動かす"
+  (say "Run で 6765 が出る" :at "(fib 20)" :step t
+    (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))))
+```
+
+Here the first advance brings the definition forward, the second the call, the third the
+bubble. Nothing moves when a step is revealed: hidden items keep their room. Print and the
+overview show the whole slide; the presenter window shows what is still to come faded.
 
 ## Running
 

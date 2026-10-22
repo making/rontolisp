@@ -826,7 +826,9 @@ the fragments of the callouts anchored in it. Returns the rectangle around its l
                     for w = (if (< lo hi) (run-span-width run lo hi s) 0)
                     when (> w 0)
                     collect
-                      (let ((before (run-span-width run start lo s)))
+                      ;; The text before the anchor keeps its spaces: they
+                      ;; stand between it and the anchor.
+                      (let ((before (run-span-width run start lo s t)))
                         (list (+ lx (floor before 1000)) top
                               (+ lx (milli-px->px (+ before w)))
                               (+ top lh)))))))

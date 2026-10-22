@@ -128,9 +128,11 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 .say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .say.front{z-index:6}
-.slide.editing .say,.say.pending{visibility:hidden}
-#ov .say.pending{visibility:visible}
-#pv .say.pending{visibility:visible;opacity:.35}
+.slide.editing .say,.pending{visibility:hidden}
+#ov .pending{visibility:visible}
+#pv .pending{visibility:visible;opacity:.35}
+.ln.dim{opacity:.35}
+.slide.editing .ln.dim{opacity:1}
 figure.pointed{align-items:flex-end}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
@@ -182,7 +184,7 @@ html:not(.js) #fs{display:none}
             *margin-x* content)
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.say.pending{visibility:visible}}~%"
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
             width *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
@@ -267,7 +269,9 @@ block B, which the player also finds the anchor by; nothing when there are none.
     (write-described-by b out)
     (write-string ">" out)
     (dolist (it (bullets-items b))
-      (write-string (if (item-current it) "<li class=\"current\">" "<li>") out)
+      (write-string (if (item-current it) "<li class=\"current\"" "<li") out)
+      (when (item-step it) (format out " data-step=\"~d\"" (item-step it)))
+      (write-string ">" out)
       (write-inlines (item-inlines it) (item-run it) out)
       (when (item-sublist it) (write-list (item-sublist it) out))
       (write-string "</li>" out))
@@ -275,9 +279,51 @@ block B, which the player also finds the anchor by; nothing when there are none.
 
 (defun write-code-text (b out)
   (let ((text (format nil "~{~a~^~%~}" (code-block-lines b))))
-    (cond ((highlighted-p b) (write-highlighted text out))
+    (cond ((code-block-steps b)
+           (write-stepped-lines (with-output-to-string (s)
+                                  (write-code-text (copy-code-block-plain b) s))
+                                b out))
+          ((highlighted-p b) (write-highlighted text out))
           ((console-p b) (write-console (code-block-lines b) out))
           (t (write-escaped text out)))))
+
+(defun copy-code-block-plain (b)
+  (let ((c (copy-code-block b))) (setf (code-block-steps c) nil) c))
+
+(defun write-stepped-lines (html b out)
+  "HTML, the code text of B, with each line in a <span class=\"ln\"> naming the page
+advances that bring it forward (data-hot). The highlight spans never nest, so one that
+runs across a line end is closed there and opened again on the next line."
+  (let ((line 0) (open nil) (i 0) (n (length html)))
+    (flet ((start-line ()
+             (let ((hot
+                    (loop for lines in (code-block-steps b)
+                          for k in (code-block-step-numbers b)
+                          when (member line lines)
+                          collect k)))
+               (format out "<span class=\"ln\"~@[ data-hot=\"~{~d~^ ~}\"~]>" hot))
+             (when open (write-string open out))))
+      (start-line)
+      (loop while (< i n)
+            do
+              (let ((c (char html i)))
+                (cond ((char= c #\Newline)
+                       (when open (write-string "</span>" out))
+                       (write-string "</span>" out)
+                       (terpri out)
+                       (incf line)
+                       (start-line)
+                       (incf i))
+                      ((char= c #\<)
+                       (let* ((end (1+ (position #\> html :start i)))
+                              (tag (subseq html i end)))
+                         (setf open (if (char= (char tag 1) #\/) nil tag))
+                         (write-string tag out)
+                         (setf i end)))
+                      (t
+                       (write-char c out)
+                       (incf i)))))
+      (write-string "</span>" out))))
 
 (defun write-attribute (name value out)
   (format out " ~a=\"" name)
@@ -301,6 +347,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
     (write-described-by b out)
+    (when (code-block-step-numbers b)
+      (format out " data-focus=\"~{~d~^ ~}\"" (code-block-step-numbers b)))
     (write-string "><code>" out)
     (write-code-text b out)
     (write-string "</code></pre>" out)
@@ -424,18 +472,15 @@ takes a share of the room the other blocks leave, as the image does."
       (format s "--stmt:~dpx;--stmt-lh:~dpx;" (fit-stmt-size fit)
               (statement-lh (fit-stmt-size fit))))))
 
-(defun write-callout (deck c out)
+(defun write-callout (c out)
   "The bubble of the callout C, placed where the fit solver found room for it. Its tail
 is drawn by the stylesheet at --tail along the side facing the anchor. A step bubble is
 shown here; the player hides it until a page advance."
-  (let ((s (callout-size c))
-        (step
-         (if (eq (callout-step c) :deck)
-             (eq (deck-callouts deck) :step)
-             (callout-step c))))
+  (let ((s (callout-size c)) (step (callout-step-number c)))
     (format out
             "<div class=\"say~:[~; step~]~:[~; overflow~]\" id=\"~a\" role=\"note\" data-side=\"~a\""
             step (callout-overflow c) (callout-id c) (callout-side c))
+    (when step (format out " data-step=\"~d\"" step))
     (when (callout-at c) (write-attribute "data-at" (callout-at c) out))
     (format out
             " style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;--say:~dpx;--say-lh:~dpx;--say-x:~dpx;--say-y:~dpx;--tail:~dpx\"><p>"
@@ -485,8 +530,10 @@ corner the fit solver chose."
       (write-char #\Space out)
       (write-escaped (slide-class slide) out))
     (when (fit-overflow fit) (write-string " overflow" out))
-    (format out "\" id=\"s~d\" style=\"~a\">~%" (slide-number slide)
-            (slide-style fit))
+    (format out "\" id=\"s~d\"" (slide-number slide))
+    (when (> (slide-step-count slide) 0)
+      (format out " data-steps=\"~d\"" (slide-step-count slide)))
+    (format out " style=\"~a\">~%" (slide-style fit))
     (cond ((equal layout "title") (write-title-slide deck slide out))
           ((equal layout "section")
            (write-string "<div class=\"centered\"><h1 class=\"section-title\">"
@@ -513,7 +560,7 @@ corner the fit solver chose."
                    (fit-body-top fit) (fit-body-height fit))
            (dolist (b (slide-blocks slide)) (write-block b out))
            (format out "</div>~%")
-           (dolist (c (slide-callouts slide)) (write-callout deck c out))))
+           (dolist (c (slide-callouts slide)) (write-callout c out))))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)

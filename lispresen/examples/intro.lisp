@@ -13,7 +13,7 @@
 (section "なぜS式で書くのか")
 
 (slide :title "スライドはデータ"
-  (ul "差分をコードと同じようにレビューできる"
+  (ul :step t "差分をコードと同じようにレビューできる"
       (li "構造が明示される"
           (ul "インデントに意味を持たせない"
               "見えないスタイルがない"))
@@ -43,11 +43,11 @@
       (push (list form line) forms)
       (setf pos end))"))
 
-;; A callout on a piece of code, shown by the next page advance; the code is lines of a
-;; file beside the deck, its language from the extension.
+;; Page advances bring the definition forward, then the call, then the callout on it; the
+;; code is lines of a file beside the deck, its language from the extension.
 (slide :title "その場で動かす"
   (say "Run で 6765 が出る" :at "(fib 20)" :step t
-    (code :file "fib.lisp" :lines (4 6))))
+    (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))))
 
 (slide :title "前のスライドの定義を使う"
   (p "同じ言語のコードは一つの環境を共有する。")

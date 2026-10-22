@@ -121,9 +121,11 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 .say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .say.front{z-index:6}
-.slide.editing .say,.say.pending{visibility:hidden}
-#ov .say.pending{visibility:visible}
-#pv .say.pending{visibility:visible;opacity:.35}
+.slide.editing .say,.pending{visibility:hidden}
+#ov .pending{visibility:visible}
+#pv .pending{visibility:visible;opacity:.35}
+.ln.dim{opacity:.35}
+.slide.editing .ln.dim{opacity:1}
 figure.pointed{align-items:flex-end}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
@@ -137,7 +139,7 @@ html:not(.js) #fs{display:none}
 .centered{height:928px}
 .page{right:112px}.out{left:112px;width:1696px}
 .thumb{aspect-ratio:1920/1080}
-@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.say.pending{visibility:visible}}
+@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
 </style>
 </head>
 <body>
@@ -161,12 +163,12 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">3</div>
 </section>
-<section class="slide layout-standard" id="s4" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s4" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">なぜ<wbr>S式で<wbr>書くのか</p>
 <h1 class="title">スライドは<wbr>データ</h1>
 <div class="body" style="top:232px;height:776px">
-<ul><li>差分を<wbr>コードと<wbr>同じように<wbr>レビューできる</li><li>構造が<wbr>明示される<ul><li>インデントに<wbr>意味を<wbr>持たせない</li><li>見えない<wbr>スタイルが<wbr>ない</li></ul>
-</li><li>生成した<wbr>デッキも<wbr>ただの<wbr>リスト</li></ul>
+<ul><li data-step="1">差分を<wbr>コードと<wbr>同じように<wbr>レビューできる</li><li data-step="2">構造が<wbr>明示される<ul><li>インデントに<wbr>意味を<wbr>持たせない</li><li>見えない<wbr>スタイルが<wbr>ない</li></ul>
+</li><li data-step="3">生成した<wbr>デッキも<wbr>ただの<wbr>リスト</li></ul>
 </div>
 <div class="page">4</div>
 <aside class="notes">デッキは read するだけで評価しないことに触れる。</aside>
@@ -189,7 +191,7 @@ html:not(.js) #fs{display:none}
 <p>スライドごとに、<wbr>収まる<wbr>最大の<wbr>段を <strong>段階表</strong> から<wbr>選ぶ。</p>
 <ol><li>本文は 56px から 40px まで</li><li>最小でも<wbr>収まらなければ<wbr>エラーと<wbr>して<wbr>報告する</li><li>日本語は <span aria-describedby="s7c1"><mark>文節</mark></span> で<wbr>改行する</li></ol>
 </div>
-<div class="say" id="s7c1" role="note" data-side="below" style="left:161px;top:665px;width:599px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:296px"><p>BudouX の<wbr>モデルで<wbr>区切る</p></div>
+<div class="say" id="s7c1" role="note" data-side="below" style="left:180px;top:665px;width:599px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:296px"><p>BudouX の<wbr>モデルで<wbr>区切る</p></div>
 <div class="page">7</div>
 </section>
 <section class="slide layout-image" id="s8" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -212,15 +214,15 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">9</div>
 </section>
-<section class="slide layout-code" id="s10" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-code" id="s10" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">その<wbr>場で<wbr>動かす</h1>
 <div class="body" style="top:232px;height:776px">
-<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s10c1"><code>(<span class="hl-d">defun</span> fib (n)
-  (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) n (+ (fib (- n <span class="hl-n">1</span>)) (fib (- n <span class="hl-n">2</span>)))))
-(fib <span class="hl-n">20</span>)</code></pre></div>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s10c1" data-focus="1 2"><code><span class="ln" data-hot="1">(<span class="hl-d">defun</span> fib (n)</span>
+<span class="ln" data-hot="1">  (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) n (+ (fib (- n <span class="hl-n">1</span>)) (fib (- n <span class="hl-n">2</span>)))))</span>
+<span class="ln" data-hot="2">(fib <span class="hl-n">20</span>)</span></code></pre></div>
 </div>
-<div class="say step" id="s10c1" role="note" data-side="below" data-at="(fib 20)" style="left:112px;top:476px;width:482px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:127px"><p>Run で 6765 が<wbr>出る</p></div>
+<div class="say step" id="s10c1" role="note" data-side="below" data-step="3" data-at="(fib 20)" style="left:112px;top:476px;width:482px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:127px"><p>Run で 6765 が<wbr>出る</p></div>
 <div class="page">10</div>
 </section>
 <section class="slide layout-standard" id="s11" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -319,14 +321,18 @@ var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}cat
 function send(m){if(chan)chan.postMessage(m);}
 function fit(){var s=Math.min(innerWidth/W,innerHeight/H);
 deck.style.transform='translate('+(innerWidth-W*s)/2+'px,'+(innerHeight-H*s)/2+'px) scale('+s+')';}
-function steps(i){return slides[i].querySelectorAll(':scope>.say.step');}
+function steps(i){return +slides[i].dataset.steps||0;}
+function focus(sl,k){sl.querySelectorAll('pre[data-focus]').forEach(function(p){var c=0;
+p.dataset.focus.split(' ').forEach(function(x){if(+x<=k&&+x>c)c=+x;});
+p.querySelectorAll('.ln').forEach(function(l){l.classList.toggle('dim',c>0&&(' '+(l.dataset.hot||'')+' ').indexOf(' '+c+' ')<0);});});}
 function show(i,quiet,k){if(!slides.length)return;i=Math.max(0,Math.min(slides.length-1,i));
-var n=steps(i).length;k=k===undefined?0:k<0?n:Math.min(k,n);if(i===cur&&k===shown)return;
+var n=steps(i);k=k===undefined?0:k<0?n:Math.min(k,n);if(i===cur&&k===shown)return;
 var same=i===cur;if(!same){if(cur>=0)slides[cur].classList.remove('active');cur=i;slides[cur].classList.add('active');
 try{if(location.hash!=='#'+(cur+1))history.replaceState(null,'','#'+(cur+1));}catch(e){}}
-steps(cur).forEach(function(c,j){c.classList.toggle('pending',j>=k);if(same&&j>=shown&&j<k)c.classList.add('front');});shown=k;
+slides[cur].querySelectorAll('[data-step]').forEach(function(e){var s=+e.dataset.step;e.classList.toggle('pending',s>k);
+if(same&&s>shown&&s<=k&&e.classList.contains('say'))e.classList.add('front');});focus(slides[cur],k);shown=k;
 if(!quiet)send({t:'go',i:cur,k:shown});hooks.go.forEach(function(f){f(cur);});}
-function move(dir){var n=steps(cur).length;if(dir>0&&shown<n)show(cur,false,shown+1);else if(dir<0&&shown>0)show(cur,false,shown-1);
+function move(dir){var n=steps(cur);if(dir>0&&shown<n)show(cur,false,shown+1);else if(dir<0&&shown>0)show(cur,false,shown-1);
 else if(cur+dir>=0&&cur+dir<slides.length)show(cur+dir,false,dir<0?-1:0);}
 function fromHash(){var n=parseInt(location.hash.slice(1),10);return n>0?n-1:0;}
 function toggleFull(){if(d.fullscreenElement){d.exitFullscreen();}else if(stage.requestFullscreen){stage.requestFullscreen();}}
@@ -585,7 +591,7 @@ stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.chang
 if(Math.abs(dx)>50)move(dx<0?1:-1);});
 window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
 if(presenter)buildPresenter();
-deck.querySelectorAll('.say.step').forEach(function(c){c.classList.add('pending');});
+deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});
 fit();show(fromHash(),presenter);
 if(d.fonts&&d.fonts.ready)d.fonts.ready.then(check);else check();
 })();</script>
