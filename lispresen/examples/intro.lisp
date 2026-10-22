@@ -5,6 +5,7 @@
       :date "2026-10-22"
       :theme (theme :base :light :code :dark)
       :kicker :section
+      :agenda t
       :page-numbers t)
 
 (section "なぜS式で書くのか")

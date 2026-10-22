@@ -22,6 +22,7 @@
   page-numbers
   callouts
   kicker
+  agenda
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -45,8 +46,9 @@
 
 ;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
 (defstruct para inlines run lead)
-(defstruct bullets ordered items)
-(defstruct item inlines sublist run)
+;;; AGENDA is true for the list of an agenda slide that highlights its CURRENT item.
+(defstruct bullets ordered items agenda)
+(defstruct item inlines sublist run current)
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
 ;;; fitted, from the language, RUN and the deck's runtime.
 (defstruct code-block lang lines (run t) runnable timeout fresh stdin)
@@ -594,7 +596,7 @@ callout points at, or else a paragraph holding it as inline content."
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
                                                     "PAGE-NUMBERS" "CALLOUTS"
-                                                    "KICKER") "deck")
+                                                    "KICKER" "AGENDA") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -604,7 +606,14 @@ callout points at, or else a paragraph holding it as inline content."
                :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS")
                :callouts (parse-callouts-option (opt opts "CALLOUTS"))
-               :kicker (parse-kicker-option (opt opts "KICKER")))))
+               :kicker (parse-kicker-option (opt opts "KICKER"))
+               :agenda (let ((a (opt opts "AGENDA")))
+                         (cond ((or (null a) (eq a t) (stringp a)) a)
+                               (t
+                                (report
+                                 :error
+                                 ":agenda of deck must be t or a title string")
+                                nil))))))
 
 (defun parse-kicker-option (x)
   "The deck's :kicker: :section (each slide's kicker is its section's title) or nil."
@@ -623,9 +632,45 @@ callout points at, or else a paragraph holding it as inline content."
          (report :error ":callouts must be :shown or :step")
          :shown)))
 
+(defparameter *agenda-title*
+  "目次"
+  "The title of the agenda slides of (deck :agenda t).")
+
+(defun agenda-list (titles current)
+  "The list of the section TITLES on an agenda slide, the CURRENTth highlighted when it
+is not nil."
+  (make-bullets :ordered t
+                :agenda (and current t)
+                :items (loop for title in titles
+                             for i from 0
+                             collect
+                               (make-item :inlines (list title)
+                                          :current (eql i current)))))
+
+(defun add-agendas (deck agenda sections)
+  "Fills the AGENDA slide with the deck's SECTIONS, and turns each section slide into the
+same list with its own section highlighted."
+  (let* ((title
+          (if (stringp (deck-agenda deck)) (deck-agenda deck) *agenda-title*))
+         (titles (mapcar #'slide-title sections)))
+    (setf (slide-title agenda) title (slide-blocks agenda)
+          (list (agenda-list titles nil)))
+    (loop for s in sections
+          for i from 0
+          do
+            (setf (slide-kind s)
+                  :slide (slide-title s) title (slide-blocks s)
+                  (list (agenda-list titles i))))))
+
 (defun parse-deck (forms)
-  "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers."
-  (let ((deck nil) (slides nil) (number 0) (section nil))
+  "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers. Template uses are
+expanded first, so the sections an agenda lists are known before any slide is parsed."
+  (let ((deck nil)
+        (slides nil)
+        (number 0)
+        (section nil)
+        (expanded nil)
+        (agenda nil))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
         (setf deck (parse-deck-header (car (car forms))))
@@ -637,36 +682,65 @@ callout points at, or else a paragraph holding it as inline content."
                         :line 1
                         :kind :title
                         :title (deck-title deck)) slides))
-    (let ((*templates* nil) (*expansion-budget* *expansion-limit*))
+    (let ((*templates* nil)
+          (*expansion-budget* *expansion-limit*)
+          (count number))
       (dolist (entry forms)
         (let ((*line* (second entry)) (*slide* nil) (*slide-title* nil))
           (if (equal (form-tag (first entry)) "DEFINE")
               (define-template (first entry))
               (dolist (form
-                       (let ((*slide* (1+ number)))
+                       (let ((*slide* (1+ count)))
                          (expand-top-level (first entry))))
-                (let ((tag (form-tag form)) (*slide* (1+ number)))
-                  (cond ((equal tag "SLIDE")
-                         (let ((slide (parse-slide form (incf number) *line*)))
-                           (when (eq (slide-kicker slide) :deck)
-                             (setf (slide-kicker slide)
-                                   (and (eq (deck-kicker deck) :section)
-                                        (slide-title slide) section)))
-                           (push slide slides)))
-                        ((equal tag "SECTION")
-                         (let ((slide
-                                (parse-section form (incf number) *line*)))
-                           (setf section (slide-title slide))
-                           (push slide slides)))
-                        ((equal tag "DECK")
-                         (report :error "(deck ...) must be the first form"))
-                        (t (let ((*slide* nil))
-                             (report :error
-                                     (format nil
-                                             "expected (slide ...), (section ...) or (define ...), found ~a"
-                                             (if tag
-                                                 (string-downcase tag)
-                                                 (prin1-to-string
-                                                  form)))))))))))))
+                (push (list form *line*) expanded)
+                (when (member (form-tag form) '("SLIDE" "SECTION")
+                              :test #'equal)
+                  (incf count)))))))
+    (setf expanded (nreverse expanded))
+    (when (deck-agenda deck)
+      (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) expanded)
+          (progn
+            ;; The expansion counted the slides without the agenda slide placed here.
+            (dolist (d *diagnostics*)
+              (when (and (diagnostic-slide d) (> (diagnostic-slide d) number))
+                (incf (diagnostic-slide d))))
+            (push (setf agenda
+                        (make-slide :number (incf number)
+                                    :line (deck-line deck)
+                                    :kind :slide)) slides))
+          (let ((*line* (deck-line deck)))
+            (report
+             :warning ":agenda lists the sections, and this deck has none"))))
+    (loop for (form line) in expanded
+          do
+            (let ((tag (form-tag form))
+                  (*line* line)
+                  (*slide* (1+ number))
+                  (*slide-title* nil))
+              (cond ((equal tag "SLIDE")
+                     (let ((slide (parse-slide form (incf number) line)))
+                       (when (eq (slide-kicker slide) :deck)
+                         (setf (slide-kicker slide)
+                               (and (eq (deck-kicker deck) :section)
+                                    (slide-title slide) section)))
+                       (push slide slides)))
+                    ((equal tag "SECTION")
+                     (let ((slide (parse-section form (incf number) line)))
+                       (setf section (slide-title slide))
+                       (push slide slides)))
+                    ((equal tag "DECK")
+                     (report :error "(deck ...) must be the first form"))
+                    (t
+                     (let ((*slide* nil))
+                       (report :error (format nil
+                                              "expected (slide ...), (section ...) or (define ...), found ~a"
+                                              (if tag
+                                                  (string-downcase tag)
+                                                  (prin1-to-string form)))))))))
     (setf (deck-slides deck) (nreverse slides))
+    (when agenda
+      (add-agendas deck agenda
+                   (remove-if-not (lambda (s)
+                                    (and (eq (slide-kind s) :section)
+                                         (slide-title s))) (deck-slides deck))))
     deck))

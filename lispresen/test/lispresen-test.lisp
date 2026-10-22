@@ -330,6 +330,25 @@
             (:warning 3 "a kicker stands above a title; this slide has none")
             (:error 4
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
+  (testing "an agenda lists the sections; each section is the list with its own highlighted"
+    (multiple-value-bind (html diagnostics) (lispresen:render
+                                             "(deck :agenda t)
+(define s (x) (section x))
+(s \"a\")
+(slide :title \"t\" (s))
+(s \"b\")")
+      (ok (contains html "id=\"s1\"")) ; the agenda slide
+      (ok
+       (contains html
+        "<ol class=\"agenda\"><li>a</li><li class=\"current\">b</li></ol>"))
+      ;; Slide numbers count the agenda slide, in the expansion's diagnostics too.
+      (ok (equal (mapcar #'lispresen::diagnostic-slide diagnostics) '(3)))
+      (ok
+       (equal
+        (render-diagnostics
+         "(deck :agenda t)
+(slide \"x\")")
+        '((:warning 1 ":agenda lists the sections, and this deck has none"))))))
   (testing "the built-in themes pass the contrast lint"
     (dolist (theme '("light" "dark" "high-contrast"))
       (ok

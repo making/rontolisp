@@ -34,7 +34,7 @@ The design is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :theme :aspect :runtime :callouts :kicker :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title |
+| `(deck :title :author :date :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
 | `"text"`, `(p inline...)` | a paragraph |

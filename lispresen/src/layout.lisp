@@ -68,7 +68,8 @@
 
 (defun prepare-list (b)
   (dolist (it (bullets-items b))
-    (setf (item-run it) (make-text-run (item-inlines it)))
+    (setf (item-run it)
+          (make-text-run (item-inlines it) :bold (item-current it)))
     (when (item-sublist it) (prepare-list (item-sublist it)))))
 
 (defparameter *runnable-langs* '("lisp" "scheme" "clojure"))

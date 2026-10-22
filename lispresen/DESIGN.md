@@ -56,6 +56,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :runtime :hosted         ; :hosted | "runtime/" | :none
       :callouts :shown         ; :shown | :step, below
       :kicker :section         ; each titled slide's kicker is its section's title
+      :agenda t                ; a list of the sections, repeated at each section
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -133,6 +134,14 @@ Rules:
   with `(deck :kicker :section)` (`:kicker nil` opts a slide out). It sits in the top
   margin, so the title keeps its position. It is a label like the page number, outside
   the body type scale; one longer than a line is cut with an ellipsis and reported.
+- `(deck :agenda t)` adds an agenda: a slide after the title slide listing the section
+  titles as an ordered list, and in place of each section divider the same list with
+  that section highlighted (bold, in the accent color, the others muted), so each
+  section opens by showing where the talk is. `:agenda "title"` names the slides
+  (default 目次). They are ordinary standard slides, fitted and linted like any list.
+  Template uses are expanded before any slide is parsed, so the sections are known when
+  the agenda slide takes its number, and slide numbers in diagnostics count it. A deck
+  without sections gets no agenda and a warning.
 
 ### Templates
 
@@ -299,7 +308,7 @@ phrases (文節), not between arbitrary characters.
 | Shape | Layout |
 |-------|--------|
 | Deck header (generated first slide) | `title` |
-| `section` | `section` (large, centered) |
+| `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
 | Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
@@ -647,7 +656,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 | Severity | Condition |
 |----------|-----------|
 | error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| warning | `:agenda` in a deck without sections; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -860,7 +869,8 @@ before committing a change under `lispresen/`.
   `examples/`, so its image resolves), and requires each output to equal
   `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
-  console column and a list column, dark code panels (`:code :dark`), section kickers, a
+  console column and a list column, dark code panels (`:code :dark`), section kickers, an
+  agenda, a
   quote, an embedded PNG and two callouts (an inline one, and a step one named by `:at` in
   runnable code), so the
   highlighter, the emitted player, template expansion, callout placement and the binary
@@ -871,7 +881,8 @@ before committing a change under `lispresen/`.
   line breaking at their exact boundaries, step selection, the hard-floor error, the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   numeric column detection, parser diagnostics with line
-  numbers (`#.` and dotted lists among them), template expansion and its diagnostics and
+  numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
+  expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, step
   callouts and the callout diagnostics, the kicker diagnostics, base64 padding, and the
   embedding diagnostics. The golden deck covers

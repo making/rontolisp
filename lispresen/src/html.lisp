@@ -38,6 +38,8 @@ strong{font-weight:700}
 mark{background:var(--mark);color:inherit}
 .accent{color:var(--accent)}
 .lead{color:var(--muted)}
+.agenda>li{color:var(--muted)}
+.agenda>li.current{color:var(--accent);font-weight:700}
 .kicker{position:absolute;font-size:KICKER;line-height:KICKER-LH;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
@@ -251,10 +253,11 @@ block B, which the player also finds the anchor by; nothing when there are none.
 (defun write-list (b out)
   (let ((tag (if (bullets-ordered b) "ol" "ul")))
     (format out "<~a" tag)
+    (when (bullets-agenda b) (write-string " class=\"agenda\"" out))
     (write-described-by b out)
     (write-string ">" out)
     (dolist (it (bullets-items b))
-      (write-string "<li>" out)
+      (write-string (if (item-current it) "<li class=\"current\">" "<li>") out)
       (write-inlines (item-inlines it) (item-run it) out)
       (when (item-sublist it) (write-list (item-sublist it) out))
       (write-string "</li>" out))
