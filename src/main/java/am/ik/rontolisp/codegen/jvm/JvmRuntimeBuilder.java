@@ -744,9 +744,16 @@ final class JvmRuntimeBuilder {
 		MethodRefEntry exCtor = cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		MethodRefEntry msgRef = cp.methodRef(thisClass, ARITY_MSG_NAME, ARITY_MSG_DESC);
 		List<String> operatorNames = operators.freeze();
+		List<String> nameChunks = arityNameChunks(operatorNames);
+		boolean declared = operatorNames.stream().anyMatch(JvmArityOperators::isDeclared);
+		MethodRefEntry opRef = nameChunks.size() > 1 ? cp.methodRef(thisClass, ARITY_OP_NAME, ARITY_OP_DESC) : null;
 		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
 		methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_MSG_NAME), cp.utf8Entry(ARITY_MSG_DESC),
-				buildArityMsgBody(cp, stringClass, operatorNames)));
+				buildArityMsgBody(cp, stringClass, nameChunks, declared, opRef)));
+		if (opRef != null) {
+			methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_OP_NAME), cp.utf8Entry(ARITY_OP_DESC),
+					buildArityOpBody(nameChunks, cp, stringClass)));
+		}
 		if (withErr) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_ERR_NAME), cp.utf8Entry(ARITY_ERR_DESC),
 					buildArityErrBody(shapes, cp, stringClass, runtimeEx, exCtor, msgRef)));
@@ -857,19 +864,22 @@ final class JvmRuntimeBuilder {
 	/**
 	 * {@code _arityMsg(shape, got)}: the text, assembled out of the very constants
 	 * {@link ClosRegistry#arityMessage} composes, so the compiled wording cannot drift
-	 * from the interpreter's. With {@code operatorNames} the shape may carry an operator
+	 * from the interpreter's. With {@code nameChunks} the shape may carry an operator
 	 * ({@link JvmArityOperators}), whose name is read out of the newline-joined names and
 	 * stands where {@code Function} would; without, the body is the one a build that
-	 * named nothing emitted, byte for byte.
+	 * named nothing emitted, byte for byte. One chunk reads its joined constant as
+	 * before; past one chunk the names ride a constant each and {@code _arityOp} answers
+	 * the entry, so the single-chunk emission stays byte for byte.
 	 */
-	private static MethodCode buildArityMsgBody(ConstantPool cp, ClassEntry stringClass, List<String> operatorNames) {
+	private static MethodCode buildArityMsgBody(ConstantPool cp, ClassEntry stringClass, List<String> nameChunks,
+			boolean declared, @org.jspecify.annotations.Nullable MethodRefEntry opRef) {
 		ClassEntry sb = cp.classEntry("java/lang/StringBuilder");
 		MethodRefEntry sbInit = cp.methodRef(sb, "<init>", "()V");
 		MethodRefEntry appendStr = cp.methodRef(sb, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
 		MethodRefEntry appendInt = cp.methodRef(sb, "append", "(I)Ljava/lang/StringBuilder;");
 		MethodRefEntry toString = cp.methodRef(sb, "toString", "()Ljava/lang/String;");
 		MethodCode code = new MethodCode();
-		boolean named = !operatorNames.isEmpty();
+		boolean named = !nameChunks.isEmpty();
 		// required = shape >>> 1, the operator bits shifted out first when there are any
 		code.iload(0);
 		if (named) {
@@ -900,14 +910,17 @@ final class JvmRuntimeBuilder {
 			MethodCode.Label toJoin = code.newLabel();
 			code.goto_(toJoin);
 			code.labelBinding(ifNamed);
-			if (operatorNames.stream().anyMatch(JvmArityOperators::isDeclared)) {
-				emitDeclaredArityMessage(code, cp, stringClass, appendStr, appendInt, toString, operatorNames,
+			if (opRef != null) {
+				emitChunkedArityName(code, cp, stringClass, appendStr, appendInt, toString, operator, declared, opRef);
+			}
+			else if (declared) {
+				emitDeclaredArityMessage(code, cp, stringClass, appendStr, appendInt, toString, nameChunks.get(0),
 						operator);
 			}
 			else {
 				// sb.append(NAMES.split("\n")[operator - 1]).append(" expects ")
 				code.aload(2);
-				code.ldc(cp.stringEntry(String.join(ARITY_OPERATOR_SEPARATOR, operatorNames)));
+				code.ldc(cp.stringEntry(nameChunks.get(0)));
 				code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
 				code.invokevirtual(cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;"));
 				code.iload(operator);
@@ -961,11 +974,10 @@ final class JvmRuntimeBuilder {
 	 * Locals: 5 = the split names, 6 = the entry.
 	 */
 	private static void emitDeclaredArityMessage(MethodCode code, ConstantPool cp, ClassEntry stringClass,
-			MethodRefEntry appendStr, MethodRefEntry appendInt, MethodRefEntry toString, List<String> operatorNames,
-			int operator) {
+			MethodRefEntry appendStr, MethodRefEntry appendInt, MethodRefEntry toString, String joined, int operator) {
 		int names = 5, entry = 6;
 		MethodRefEntry charAt = cp.methodRef(stringClass, "charAt", "(I)C");
-		code.ldc(cp.stringEntry(String.join(ARITY_OPERATOR_SEPARATOR, operatorNames)));
+		code.ldc(cp.stringEntry(joined));
 		code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
 		code.invokevirtual(cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;"));
 		code.astore(names);
@@ -1021,6 +1033,176 @@ final class JvmRuntimeBuilder {
 		code.ldc(cp.stringEntry(text));
 		code.invokevirtual(appendStr);
 		code.pop();
+	}
+
+	/**
+	 * The named arm of {@code _arityMsg} for a registry past one joined constant: the
+	 * entry is {@code _arityOp(operator)} however many constants the names ride. Shaped
+	 * exactly like the single-chunk arm, so the operand-stack discipline matches it: the
+	 * entry load leaves nothing behind, and an operator name is appended for the
+	 * {@code " expects "} tail the caller emits. Locals: 6 = the entry.
+	 */
+	private static void emitChunkedArityName(MethodCode code, ConstantPool cp, ClassEntry stringClass,
+			MethodRefEntry appendStr, MethodRefEntry appendInt, MethodRefEntry toString, int operator, boolean declared,
+			MethodRefEntry opRef) {
+		int entry = 6;
+		MethodRefEntry charAt = cp.methodRef(stringClass, "charAt", "(I)C");
+		// entry = _arityOp(operator)
+		code.iload(operator);
+		code.invokestatic(opRef);
+		code.astore(entry);
+		if (!declared) {
+			code.aload(2);
+			code.aload(entry);
+			code.invokevirtual(appendStr);
+			code.pop();
+			return;
+		}
+		// if (entry.charAt(0) == DECLARED_MARK)
+		// return
+		// sb.append(_arityOp(entry.charAt(1))).append(got).append(entry.substring(2))
+		MethodCode.Label operatorName = code.newLabel();
+		code.aload(entry);
+		code.loadConstant(0);
+		code.invokevirtual(charAt);
+		code.loadConstant(JvmArityOperators.DECLARED_MARK);
+		code.if_icmpne(operatorName);
+		code.aload(2);
+		code.aload(entry);
+		code.iconst_1();
+		code.invokevirtual(charAt);
+		code.invokestatic(opRef);
+		code.invokevirtual(appendStr);
+		code.iload(1);
+		code.invokevirtual(appendInt);
+		code.aload(entry);
+		code.loadConstant(2);
+		code.invokevirtual(cp.methodRef(stringClass, "substring", "(I)Ljava/lang/String;"));
+		code.invokevirtual(appendStr);
+		code.invokevirtual(toString);
+		code.areturn();
+		code.labelBinding(operatorName);
+		code.aload(2);
+		code.aload(entry);
+		code.invokevirtual(appendStr);
+		code.pop();
+	}
+
+	/** {@code _arityOp(int index)}: the 1-based operator name the index names. */
+	static final String ARITY_OP_NAME = "_arityOp";
+
+	static final String ARITY_OP_DESC = "(I)Ljava/lang/String;";
+
+	/**
+	 * The most modified UTF-8 bytes one newline-joined operator-names chunk holds: one
+	 * {@code CONSTANT_Utf8} holds 65,535, so every chunk stays under it with headroom to
+	 * spare, whatever the program's size (the {@code _arityErr} tables chunk the same
+	 * way).
+	 */
+	static final int ARITY_NAMES_CHUNK_UTF8 = 60_000;
+
+	/**
+	 * The operator names split into chunks of at most {@link #ARITY_NAMES_CHUNK_UTF8}
+	 * joined bytes each: every chunk's constant stays under one {@code CONSTANT_Utf8} by
+	 * construction, and the single chunk of a registry one joined constant holds is that
+	 * join, so the single-chunk {@code _arityMsg} emission stays byte for byte. No entry
+	 * holds a newline (declared reports are {@code encodable}, operator names are
+	 * built-in names), so joining on {@link #ARITY_OPERATOR_SEPARATOR} and splitting it
+	 * back recovers every entry exactly.
+	 * @param operatorNames the registry's names in index order
+	 * @return the chunks, covering the names contiguously in order
+	 */
+	static List<String> arityNameChunks(List<String> operatorNames) {
+		List<String> chunks = new ArrayList<>();
+		StringBuilder current = new StringBuilder();
+		int length = 0;
+		for (String entry : operatorNames) {
+			int grown = current.isEmpty() ? modifiedUtf8Length(entry)
+					: length + modifiedUtf8Length(ARITY_OPERATOR_SEPARATOR) + modifiedUtf8Length(entry);
+			if (!current.isEmpty() && grown > ARITY_NAMES_CHUNK_UTF8) {
+				chunks.add(current.toString());
+				current = new StringBuilder();
+				length = 0;
+				grown = modifiedUtf8Length(entry);
+			}
+			if (!current.isEmpty()) {
+				current.append(ARITY_OPERATOR_SEPARATOR);
+			}
+			current.append(entry);
+			length = grown;
+		}
+		if (!current.isEmpty()) {
+			chunks.add(current.toString());
+		}
+		return chunks;
+	}
+
+	/**
+	 * {@code _arityOp(index)}: the name the 1-based operator index names, reading it out
+	 * of whichever chunk's range holds it. Emitted only past one chunk; the refusal path
+	 * alone calls it, so a call with the right count costs nothing.
+	 * @param chunks the {@link #arityNameChunks} chunks
+	 * @param cp the constant pool
+	 * @param stringClass the {@code String} class constant
+	 * @return the helper body
+	 */
+	private static MethodCode buildArityOpBody(List<String> chunks, ConstantPool cp, ClassEntry stringClass) {
+		MethodRefEntry split = cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;");
+		// The 1-based global index each chunk starts at.
+		List<Integer> starts = new ArrayList<>();
+		int start = 1;
+		for (String chunk : chunks) {
+			starts.add(start);
+			start += countChunkEntries(chunk);
+		}
+		MethodCode code = new MethodCode();
+		for (int k = 0; k + 1 < chunks.size(); k++) {
+			MethodCode.Label next = code.newLabel();
+			code.iload(0);
+			emitArityInt(code, cp, starts.get(k + 1) - 1);
+			code.if_icmpgt(next);
+			emitArityOpLookup(code, chunks.get(k), starts.get(k), cp, stringClass, split);
+			code.labelBinding(next);
+		}
+		emitArityOpLookup(code, chunks.get(chunks.size() - 1), starts.get(chunks.size() - 1), cp, stringClass, split);
+		return code;
+	}
+
+	/**
+	 * One {@code _arityOp} lookup: the chunk's split names indexed by the global 1-based
+	 * index in local 0 less the chunk's start, and a return of the entry.
+	 * @param code the body under construction
+	 * @param chunk the joined chunk
+	 * @param start the chunk's 1-based global first index
+	 * @param cp the constant pool
+	 * @param stringClass the {@code String} class constant
+	 * @param split the {@code String.split} reference
+	 */
+	private static void emitArityOpLookup(MethodCode code, String chunk, int start, ConstantPool cp,
+			ClassEntry stringClass, MethodRefEntry split) {
+		code.ldc(cp.stringEntry(chunk));
+		code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
+		code.invokevirtual(split);
+		code.iload(0);
+		if (start != 1) {
+			emitArityInt(code, cp, start - 1);
+			code.isub();
+		}
+		code.iconst_1();
+		code.isub();
+		code.aaload();
+		code.areturn();
+	}
+
+	/** The entries one joined chunk holds: its separators plus one. */
+	private static int countChunkEntries(String chunk) {
+		int count = 1;
+		for (int i = 0; i < chunk.length(); i++) {
+			if (chunk.charAt(i) == '\n') {
+				count++;
+			}
+		}
+		return count;
 	}
 
 	/**

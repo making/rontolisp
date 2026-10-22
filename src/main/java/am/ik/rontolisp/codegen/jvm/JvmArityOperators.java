@@ -25,7 +25,10 @@ import org.jspecify.annotations.Nullable;
  * table) asks {@link #shape} for it, and {@code _arityMsg} reads the names back in index
  * order once {@link #freeze} closes the registry. A site that registers a name after that
  * is a compiler bug, and fails loudly rather than reporting under a name the message
- * builder never learned.
+ * builder never learned. Past one joined constant's bytes the names ride a second
+ * constant ({@code JvmRuntimeBuilder.arityNameChunks}), so no entry is ever dropped: a
+ * late callee reports in its words, as the interpreter and the wasm-GC backends (which
+ * never had the budget) do.
  *
  * <p>
  * A callee whose body declares its own report ({@link DeclaredArityReport}) rides the
@@ -52,9 +55,6 @@ final class JvmArityOperators {
 	private final Map<String, DeclaredArityReport> declared = new HashMap<>();
 
 	private boolean frozen;
-
-	/** The modified UTF-8 length of the entries joined, separators included. */
-	private int utf8Length;
 
 	/**
 	 * The shape of a callee that reports as {@code Function}: the required count doubled,
@@ -91,41 +91,16 @@ final class JvmArityOperators {
 	 */
 	int shape(int required, boolean variadic, @Nullable String functionName, @Nullable DeclaredArityReport report) {
 		DeclaredArityReport declaredReport = report != null ? report : declared(functionName);
-		if (declaredReport != null && encodable(declaredReport) && plainShape(required, variadic) < 1 << OPERATOR_SHIFT
-				&& fits(declaredReport.prefix())) {
+		if (declaredReport != null && encodable(declaredReport)
+				&& plainShape(required, variadic) < 1 << OPERATOR_SHIFT) {
 			// the prefix is an entry of its own, which every report sharing it points at
 			int prefix = index(declaredReport.prefix());
 			String entry = DECLARED_MARK + String.valueOf((char) prefix) + declaredReport.suffix();
-			if (prefix <= Character.MAX_VALUE && fits(entry)) {
+			if (prefix <= Character.MAX_VALUE) {
 				return namedShape(required, variadic, entry);
 			}
 		}
 		return namedShape(required, variadic, BuiltinFunctionWrappers.arityOperator(functionName));
-	}
-
-	/**
-	 * Whether the entry is registered already or still fits the one string constant
-	 * {@code _arityMsg} reads the entries from. Past it a declared report is dropped
-	 * rather than the class: the callee reports as {@code Function}.
-	 */
-	private boolean fits(String entry) {
-		return this.indices.containsKey(entry) || this.utf8Length + modifiedUtf8Length(entry) + 1 <= MAX_NAMES_UTF8;
-	}
-
-	/**
-	 * The most modified UTF-8 bytes the joined entries may take: one
-	 * {@code CONSTANT_Utf8} holds 65,535, and the operator names a program registers
-	 * besides take a few hundred.
-	 */
-	private static final int MAX_NAMES_UTF8 = 60_000;
-
-	private static int modifiedUtf8Length(String text) {
-		int length = 0;
-		for (int i = 0; i < text.length(); i++) {
-			char c = text.charAt(i);
-			length += c != 0 && c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
-		}
-		return length;
 	}
 
 	/**
@@ -190,7 +165,6 @@ final class JvmArityOperators {
 			}
 			index = this.indices.size() + 1;
 			this.indices.put(entry, index);
-			this.utf8Length += modifiedUtf8Length(entry) + 1;
 		}
 		return index;
 	}

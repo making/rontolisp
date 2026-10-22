@@ -12,7 +12,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The {@code _arityErr} table chunks ({@link JvmRuntimeBuilder#arityErrChunks}): any
  * funcId span tables in chunks of at most one constant each, every chunk covering its
- * range contiguously and every cell reading back the shape it was built from.
+ * range contiguously and every cell reading back the shape it was built from. And the
+ * operator-names chunks ({@link JvmRuntimeBuilder#arityNameChunks}): names past one
+ * joined constant ride a chunk each, every chunk under one {@code CONSTANT_Utf8}, and the
+ * chunks joined recover every entry in order.
  */
 class JvmArityTableTest {
 
@@ -112,6 +115,45 @@ class JvmArityTableTest {
 	@Test
 	void anEmptySpanHasNoChunks() {
 		assertThat(JvmRuntimeBuilder.arityErrChunks(new TreeMap<>(), 0, 0)).isEmpty();
+	}
+
+	/**
+	 * More operator names than one joined constant holds (g49: 60,000 bytes, past which
+	 * late callees reported as {@code Function}): every chunk's joined bytes stay under
+	 * one {@code CONSTANT_Utf8}, and the chunks joined recover every entry in order.
+	 */
+	@Test
+	void namesPastOneConstantRideAChunkEach() {
+		// Built through a real registry, as buildArityMethods builds them: 1,200
+		// declared reports, each with its own prefix, past the 60,000-byte budget
+		// past which late callees reported as Function.
+		JvmArityOperators operators = new JvmArityOperators();
+		for (int i = 1; i <= 1200; i++) {
+			operators.declare("bp-" + i, new am.ik.rontolisp.DeclaredArityReport(
+					"BUDGET-" + i + "-0123456789-0123456789", ") tail-" + i + "-0123456789"));
+		}
+		for (int i = 1; i <= 1200; i++) {
+			operators.shape(1, false, "bp-" + i);
+		}
+		List<String> names = operators.freeze();
+		List<String> chunks = JvmRuntimeBuilder.arityNameChunks(names);
+		assertThat(chunks.size()).isGreaterThan(1);
+		for (String chunk : chunks) {
+			assertThat(utf8Length(chunk)).isLessThanOrEqualTo(60_000);
+		}
+		assertThat(String.join("\n", chunks).split("\n", -1)).containsExactlyElementsOf(names);
+	}
+
+	/**
+	 * Names one joined constant holds stay one chunk holding that join, so the
+	 * single-chunk {@code _arityMsg} emission is the one it always was; no names is no
+	 * chunks.
+	 */
+	@Test
+	void namesWithinOneConstantStayOneChunk() {
+		List<String> names = List.of("CONS", "" + 'W' + "(0) wd-600");
+		assertThat(JvmRuntimeBuilder.arityNameChunks(names)).containsExactly(String.join("\n", names));
+		assertThat(JvmRuntimeBuilder.arityNameChunks(List.of())).isEmpty();
 	}
 
 	/** The class file's modified UTF-8 length, as the constant-pool writer counts it. */

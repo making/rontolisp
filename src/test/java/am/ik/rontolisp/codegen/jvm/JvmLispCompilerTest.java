@@ -5009,6 +5009,47 @@ class JvmLispCompilerTest {
 				7""");
 	}
 
+	// More distinct declared reports than the operator-names budget holds (60,000
+	// joined bytes, g49): every function still refuses in its words, the names
+	// riding a second constant past the budget rather than the late callees
+	// reporting as Function. Every one of the 1,200 is probed: the registry
+	// iterates in hash order, so which entries the budget drops is not the
+	// definition order.
+	@Test
+	void compileAndRunDeclaredReportsPastTheOperatorNamesBudgetRefuseInTheirWords() throws Exception {
+		int count = 1200;
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *bp* (list");
+		StringBuilder expected = new StringBuilder();
+		for (int i = 1; i <= count; i++) {
+			program.append("(defun bp-")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"BUDGET-")
+				.append(i)
+				.append("-0123456789-0123456789\" \") tail-")
+				.append(i)
+				.append("-0123456789\")) x)\n");
+			values.append(" #'bp-").append(i);
+			expected.append("\"BUDGET-")
+				.append(i)
+				.append("-0123456789-01234567890) tail-")
+				.append(i)
+				.append("-0123456789\"\n");
+		}
+		program.append(values).append("))\n");
+		for (int i = 1; i <= count; i++) {
+			program.append("(print (handler-case (funcall (nth ")
+				.append(i - 1)
+				.append(" *bp*)) (program-error (c) (princ-to-string c))))\n");
+		}
+		program.append("(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (funcall (nth 599 *bp*) 7))\n");
+		expected.append("""
+				"CONS expects 2 arguments, got 1"
+				7""");
+		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
+	}
+
 	// A native built-in outside the wrapper catalog (compiler/NativeCallShapes) called
 	// with a wrong count is the same run-time report: its lowering used to fail the
 	// compile ((boundp)), answer ((export 'x p 3) was T) or, for a prelude defun, say

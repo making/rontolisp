@@ -2707,8 +2707,10 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     of operator index (a Clojure program names every dispatchable fn) `_arityErr`'s indices move
     to a second char-per-funcId table (`compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords`);
     past a 30,000-funcId span both tables move in 20,000-id chunks (`JvmArityTableTest`,
-    g46); an entry whose joined names would not fit a constant-pool entry is not registered
-    and its callee reports as `Function`, rather than the class failing to build.
+    g46); past one joined constant's 60,000 bytes the names ride a constant each and
+    `_arityOp` answers the entry (`compileAndRunDeclaredReportsPastTheOperatorNamesBudgetRefuseInTheirWords`,
+    g49) -- no entry is ever dropped for not fitting, so a late callee still reports
+    in its words.
   - wasm-GC: `ArityReport.declaredFuncIds` (defuns and lambdas, dispatchable or guarded) rides
     the same funcId shape; `_arity_message`'s case for one answers `prefix + got + suffix` and
     branches past the CL tail. `emitsArityMessage` also turns on for a program spelling
