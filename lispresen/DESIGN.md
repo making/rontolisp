@@ -50,7 +50,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
 (deck :title "lispresen"
       :author "Toshiaki Maki"
       :date "2026-10-22"
-      :theme :light            ; :light | :dark | :high-contrast | (theme ...)
+      :theme :light            ; :light | :dark | :high-contrast | (theme ...), below
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
       :page-numbers t)
@@ -68,7 +68,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
 (slide "一文だけのスライドは画面いっぱいに表示する。")   ; no title -> statement layout
 
 (slide :title "その場で動かす"
-  (code :lang "clojure" :output-lines 2 "
+  (code :lang "clojure" "
     (defn fib [n]
       (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
     (map fib (range 10))"))
@@ -93,7 +93,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Slide-level | `deck`, `section`, `slide` (`:title`, `:layout`, `:class`) |
-| Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code`, `image`, `quote` (`:cite`), `column`, `table`, `notes` |
+| Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes` |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark` |
 
 Rules:
@@ -115,6 +115,7 @@ Rules:
 - `code` content is dedented (the common leading whitespace removed, a leading blank
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
+- A slide with `column`s holds only columns; each column holds blocks, not columns.
 - Reuse within a deck (phase 3): `(define name (params...) body)` declares a template
   that lispresen expands by substitution. This is lispresen's own expansion, not Lisp
   macros, for the same reason as above.
@@ -212,7 +213,8 @@ browser does.
 
 Measured with `tools/calibrate.lisp` in Chrome on 2026-10-22 (84 paragraphs: Japanese,
 Latin, mixed, bold, inline code, brackets; 40-120 px; 700-1696 px wide): the model never
-predicted fewer lines than Chrome rendered, and predicted one more in 9.
+predicted fewer lines than Chrome rendered, and predicted one more in 9. Safari 26.3, same
+day and page: never fewer, one more in 1.
 
 ### Line breaking
 
@@ -268,12 +270,17 @@ For each slide:
 3. For each region (one for `standard`, one per column for `columns`), compute the
    content height at each body step: lines x line height, plus block gaps, list
    indentation reducing the available width per nesting level, code sized by both its
-   longest line and its line count plus the output box of runnable code, a table by the
-   column widths and row heights below. Height is monotonic in size, so the chosen size
-   is the largest step that fits.
-4. Columns share the smallest size any of them needs, so side-by-side text matches.
+   longest line and its line count (runnable code too: its output is an overlay,
+   below), a table by the column widths and row heights below. Height is monotonic in
+   size, so the chosen size is the largest step that fits.
+4. Columns share the smallest size any of them needs, and one code size, so
+   side-by-side text matches. Each column is `(1696 - 80 (n - 1)) / n` px wide; the 80 px
+   gap is fixed so the width is known before the size is.
 5. If even the hard floor overflows, the slide is emitted at the hard floor, marked, and
    reported as an error: lispresen does not make text unreadable to make it fit.
+
+A `quote` is its text at the body size, indented by the list indent (an accent rule in
+it), and its `:cite` below as `— cite`; the `quote` layout places it as `standard` does.
 
 The result is written per slide as CSS custom properties (`--title`, `--body`,
 `--code`, `--table`, `--body-box-height`), so the stylesheet stays fixed and every
@@ -327,9 +334,16 @@ the model did. The header row is bold on a tinted background, and each body row 
 ### Runtime check
 
 The static estimate cannot see the font the presenting machine actually has. After
-`document.fonts.ready`, the player measures each region; on overflow it moves the region
-one step down the same scale (never below the hard floor) and logs a warning. Opening
-the deck with `?check` shows these corrections as an overlay. JavaScript is a correction
+`document.fonts.ready`, the player measures each slide: a title taller than the room above
+the body steps the title down; a region (the body, or each column) whose content is taller
+than it steps the slide's body, code and table sizes down together; a centered text taller
+than the safe area steps the statement scale down. Never below the hard floor; a region
+still overflowing there is marked like a build-time overflow. Each step is logged with
+`console.warn`, and opening the deck with `?check` lists them in an overlay and outlines
+the corrected slides. The player derives the line heights, gaps and padding of a step with
+the formulas of `layout.lisp`, multiplying before dividing so they round as the integer
+arithmetic does; the type scale itself comes from the JSON the emitter writes
+(`<script type="application/json" id="lp">`). JavaScript is a correction
 on top of the static result, not a replacement for it, so the deck still lays out
 correctly with JavaScript disabled and when printed.
 
@@ -365,16 +379,24 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   long computation does not freeze slide navigation, and a runaway program can be
   stopped: after `:timeout` (default 10 s) the player terminates the worker and starts a
   new one, and the output says that earlier definitions are gone. A Worker cannot be
-  constructed from a cross-origin URL, so the player builds it from a Blob whose script
-  `importScripts` the runtime by absolute URL and sets `config.wasm_path` to the
-  absolute `.wasm` URL.
+  constructed from a cross-origin URL, so the player builds it from a Blob. That worker
+  `fetch`es `rontoplayground.js`, imports it from a Blob URL and sets `config.wasm_path`
+  to the absolute `.wasm` URL. `importScripts` of the hosted URL itself fails in Chrome
+  with a bare `NetworkError` (measured 2026-10-22, Chrome 155; the cross-origin script's
+  error is muted, so the cause is not visible), while the same text imported from a Blob
+  URL runs; the `fetch` needs the CORS header the hosted files carry.
+- One run at a time: Run on another block while one runs queues it, and a run started
+  before the runtime is ready waits for it.
 - When the deck contains runnable code, the worker starts loading as soon as the deck
   opens. Downloading 35 MB on the first Run click in the middle of a talk would stall
-  it. The load state (loading / ready / failed) shows in the presenter window and as a
-  small marker on code slides.
+  it. The load state shows in the presenter window and, on the slides, only as the Run
+  button's label (Loading / Run / Failed), so it takes no room on the slide; a run
+  pressed while loading waits, and Run after a failure loads again.
 - Each language has one persistent environment (`rontoSetLanguage`, then `rontoEval`),
   so a function defined on one slide can be called on a later one, as the
-  documentation site's Lisp cells share one interpreter. `:fresh t` runs the block as a
+  documentation site's Lisp cells share one interpreter. Verified 2026-10-22 on the
+  hosted runtime for all three languages: a definition in one `rontoEval` is callable in
+  the next. `:fresh t` runs the block as a
   whole program on a new interpreter instead (`rontoRunProgram`, with `:stdin "..."` as
   its standard input). The presenter window has a runtime reset.
 - What is shown is what the playground shows: the printed output, then the echoed
@@ -382,29 +404,68 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 ### Editing and output
 
-- Code is editable in place: click it, or press `E` on the slide. While editing, keys go
-  to the editor instead of navigation, `Ctrl/Cmd+Enter` runs, `Esc` leaves (see Full
-  screen for `Esc` in full screen), and a reset button restores the deck's text.
-- The fit solver reserves an output box below the code, `:output-lines` lines (default
-  3) at the code size, so running never pushes content off the slide; longer output
-  scrolls inside the box. `:output "..."` pre-fills the box, which is also what print
-  and PDF show.
+- Code is editable in place: click it, or press `E` on the slide. The editor is a
+  transparent `textarea` over the highlighted `pre`, sharing its font, padding and line
+  height, so the caret and selection land on the highlighted text, which is re-rendered on
+  every input. While editing, keys go to the editor instead of navigation,
+  `Ctrl/Cmd+Enter` runs, `Tab` inserts two spaces, `Esc` leaves (see Full screen for
+  `Esc` in full screen), and Reset restores the deck's text and closes the output. Run
+  and Reset sit in the block's top-right corner; the player adds them, so print and the
+  no-script view show none.
+- The output takes no room on the slide. A first version reserved an output box below
+  the code in the fit solver; on a full slide that stepped the code down a size or two,
+  which costs more legibility than an output shown only while it matters. The output is
+  a panel over the slide, at the code size, as wide as the body: directly below the code
+  when at least three lines fit there, otherwise anchored to the bottom of the safe area
+  (at most 45% of the canvas high) over whatever it covers. It opens when a run starts
+  and closes with its × button or `Esc` (when not editing); it stays open across
+  navigation. Output longer than the panel scrolls: by wheel or drag on an always-visible
+  scrollbar (macOS hides overlay scrollbars, which would hide that there is more), and
+  by `↑` / `↓`, three lines at a time, which move between slides again once the panel
+  is at its end; `←` / `→`, space and the clicker keys always move between slides. The panel belongs to the slide, so it
+  scales with the canvas and is cloned into the presenter window; print shows no output.
 - Runs execute in the audience window. Edits and outputs are broadcast to the presenter
   window over the same `BroadcastChannel` as navigation, and Run pressed in the
   presenter window is forwarded.
-- Highlighting uses one tokenizer for the three languages (strings, comments,
-  keywords, `[]`/`{}`/`#{}`, `#t`/`#f`), applied at build time; the editor re-highlights
-  on input with the same rules ported to the player script.
+- Highlighting uses one tokenizer for the three languages (`highlight.lisp`): comments
+  (`;`, `#|...|#`), strings and characters (`"..."`, `#\x`, Clojure `\x`), keywords
+  (`:name`), numbers and constants (`nil`, `t`, `true`, `false`, `#t`, `#f`), and the head
+  of a defining or binding form (`def...`, `let`, `lambda`, `fn`, `if`, ...). `[]`, `{}`
+  and `#{}` are delimiters like `()`. It runs at build time on every `lisp` / `scheme` /
+  `clojure` block, runnable or not; the editor re-highlights on input with the same rules
+  ported to the player script, which produce the same markup (checked on a sample of all
+  three languages, 2026-10-22). The colors are theme variables.
 
 ## Readability lint
 
 | Severity | Condition |
 |----------|-----------|
 | error | malformed or unknown form; overflow at the hard floor; a table row whose cell count (with `:colspan`) differs from the header's or the first row's |
-| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; theme contrast below 4.5:1 for body text or 3:1 for titles |
+| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a theme text color below 4.5:1 against its background |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
+
+The contrast lint checks every text color against the background it is set on: `fg`,
+`muted` and `accent` on `bg`, `fg` on `head-bg` and `mark`, and `fg`, `muted` and the four
+highlight colors on `code-bg`. Every one of them carries body-size text somewhere (the
+accent colors links, the muted color captions and code comments), so each needs WCAG AA
+for normal text, 4.5:1; a separate 3:1 for large titles would only matter for a title
+color, and titles use `fg`.
+
+## Themes
+
+A theme is twelve colors: `bg`, `fg`, `muted`, `accent`, `code-bg`, `head-bg`, `rule`,
+`mark` and the highlight colors `hl-str`, `hl-kw`, `hl-def`, `hl-const`, written as
+custom properties of the same names. `:theme` names a built-in theme (`:light`, `:dark`,
+`:high-contrast`) or overrides one:
+
+```lisp
+(deck :theme (theme :base :dark :accent "#ff9f43" :mark "#4a3b00"))
+```
+
+`:base` defaults to light; a color is `#rgb` or `#rrggbb`. `--theme` on the command line
+names a built-in theme and replaces the deck's choice.
 
 ## HTML output
 
@@ -419,10 +480,22 @@ One file containing:
 - The player script: canvas scaling, navigation (arrow keys, space, PageUp/PageDown for
   clickers, Home/End, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
   below),
-  the runtime check, a presenter window (`P`: current and next slide, notes, timer,
-  runtime state, synchronized over `BroadcastChannel`), and the runnable-code worker,
+  the runtime check, a presenter window (`P`, below), and the runnable-code worker,
   included only when the deck has runnable code.
 - Speaker notes in `<aside class="notes">`, hidden in the audience view.
+
+### Overview and presenter window
+
+`O` shows every slide as a grid of scaled copies; arrow keys move the selection, `Enter`
+or a click opens a slide, `O` or `Esc` closes it. The copies are made when it opens, so
+edited code and outputs appear as they are.
+
+`P` opens the presenter window: the same file with `?presenter`, showing the current slide,
+the next one, the notes, a timer (click to reset), Start, and with runnable code the runtime
+state and a runtime reset. Navigation in either window moves the other; the windows talk
+over a `BroadcastChannel` named after the file's path. The presenter's copy of the current
+slide shows the audience window's edits and outputs, and its Run and Reset act in the
+audience window, where the code runs.
 
 ### Full screen
 
@@ -440,10 +513,20 @@ Presenting is done in full screen; the windowed view is for preparation.
   player locks `Escape` while in full screen, so `Esc` leaves the editor and a held `Esc`
   exits full screen (the browser's own behavior under the lock). Elsewhere `Esc` does
   both; clicking outside the editor also leaves it.
-- From the presenter window (phase 2), "Start" puts the audience window in full screen
-  on the external display through the Window Management API (`getScreenDetails`,
-  `requestFullscreen({screen})`, Chromium); without it the audience window is moved to
-  the projector by hand and `F` pressed there.
+- From the presenter window, Start puts the audience window in full screen on the other
+  display through the Window Management API (`getScreenDetails`,
+  `requestFullscreen({screen})`, Chromium). The click is in the presenter window, and full
+  screen needs a user gesture in the window that enters it, so the presenter delegates its
+  activation with `postMessage(..., {targetOrigin, delegate: 'fullscreen'})` (Capability
+  Delegation). Delegation is refused for `targetOrigin: '*'`, so it needs a real origin:
+  a deck opened from `file://` gets no delegation, and `F` is pressed in
+  the audience window. The first Start asks for the window-management permission and
+  does not wait for the answer, so it goes full screen on the audience window's own
+  display; once the permission is granted, Start picks the other display. Without the
+  API the audience window is moved to the projector by hand. Measured 2026-10-22 in
+  Chrome 155: the delegated message arrives with `navigator.userActivation.isActive`
+  true; full screen itself is refused under browser automation (as `F` is there), so it
+  is checked by hand.
 
 Images are referenced by their relative path, so the output is written next to the deck
 by default and the paths stay valid. Embedding them as data URIs (`--embed`) needs a
@@ -459,12 +542,12 @@ binary read and base64 and is phase 3.
 | WASM component | `cli.lisp` | `rontolisp lispresen/cli.lisp --component -o lispresen.wasm && wasmtime run --dir . lispresen.wasm talk.lisp` |
 | Native executable | `cli.lisp` | `rontolisp lispresen/cli.lisp --native -o lispresen && ./lispresen talk.lisp` |
 | SBCL | `cli.lisp` | `sbcl --script lispresen/cli.lisp talk.lisp` |
-| Browser | `web/lispresen-web.lisp` | `--no-wasi` reactor exporting `render` (`:params '(:string) :returns :string`) |
+| Browser | `web/lispresen-web.lisp` | `web/build.sh` (`--no-wasi --optimize`): a reactor exporting `render` (`:params '(:string) :returns :string`) |
 
 CLI:
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|none] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
 ```
 
 - `DECK` and `OUT` accept `-` for stdin / stdout. `OUT` defaults to `DECK` with `.html`.
@@ -476,8 +559,12 @@ The browser host is an editor page: the deck source on the left, the rendered de
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
 and a download button for the HTML. The reactor returns the HTML and the diagnostics in
 one string (a fixed separator line), since a reactor export returns a single value. The
-lispresen reactor (a few hundred KB) renders; the preview's runnable code loads the
-playground runtime like any other deck.
+lispresen reactor (755 KB) renders; the preview's runnable code loads the playground
+runtime like any other deck. The preview keeps its slide across re-renders through
+`window.lispresen` (`show`, `current`), which the player defines. The reactor's
+arguments and results are allocated by a bump allocator that is never reset (about 15 KB
+per render of the golden deck), so the page instantiates the compiled module again once
+its memory passes 64 MB. `lispresen.wasm` is built, not committed.
 
 ## Directory layout
 
@@ -505,7 +592,7 @@ lispresen/
   web/
     lispresen-web.lisp   browser reactor
     index.html           editor page
-    build.sh
+    build.sh             compiles the reactor to lispresen.wasm
   test/
     lispresen-test.lisp  rove: segmentation, metrics, solver, parser diagnostics
   examples/
@@ -532,7 +619,9 @@ before committing a change under `lispresen/`.
   WASM, the WASM component and a native executable (skipped when the jar carries no
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
   renders `examples/intro.lisp` on each through stdin and
-  stdout, and requires each output to equal `examples/intro.html` byte for byte.
+  stdout, and requires each output to equal `examples/intro.html` byte for byte. The
+  golden deck has runnable Lisp and Clojure blocks, a columns slide and a quote, so the
+  highlighter and the emitted player are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
@@ -543,7 +632,10 @@ before committing a change under `lispresen/`.
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must
   report no paragraph where the model predicts fewer lines than the browser; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
-  share definitions across slides, and recover from an infinite loop by timeout. The
+  share definitions across slides, and recover from an infinite loop by timeout; the
+  presenter window must follow navigation both ways, show edits and outputs, and
+  forward Run; Start must put the audience window in full screen on the other display,
+  and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.
 
@@ -556,17 +648,21 @@ before committing a change under `lispresen/`.
    highlighting, theme overrides and the contrast lint, browser editor.
 3. `define` templates, `--embed` images.
 
-Phase 1 is implemented. The compiled CLI is 256 KB as a jar, 695 KB as a WASM module,
-704 KB as a component and 6.3 MB as a native executable (macOS arm64); the BudouX weights are 17 KB of source.
+Phases 1 and 2 are implemented. The compiled CLI is 284 KB as a jar, 754 KB as a WASM
+module, 762 KB as a component and 6.4 MB as a native executable (macOS arm64); the BudouX
+weights are 17 KB of source.
 
 ## Open points
 
 Verified in phase 1: a literal `load` of files holding `defpackage` / `in-package`,
 nested two levels (`cli.lisp` -> `src/all.lisp` -> `src/*.lisp`), inlines on every
 compiled backend, and the compiled runtime reader reads Japanese decks as the interpreter
-does (the golden check). Still open:
+does (the golden check). Verified in phase 2 (Chrome 155, 2026-10-22): the hosted runtime
+loads in a Blob worker (through `fetch`, above) in about 2 s from the HTTP cache, and keeps
+Lisp, Scheme and Clojure definitions across `rontoEval` calls. Safari 26.3 (2026-10-22,
+through `safaridriver`): the calibration page reports 0 paragraphs under the browser and
+1 over; the golden deck loads the hosted runtime, runs, shares definitions, recovers from
+a timeout, and the editor keys, overview and presenter window behave as in Chrome.
 
-- The playground runtime loads in a Blob worker from the hosted origin, and
-  `rontoSetLanguage("clojure")` followed by `rontoEval` keeps Clojure definitions across
-  calls as it does for Lisp (`PlaygroundRepl.eval` keeps one session per language).
-- Safari's line breaking against the model (the calibration so far ran in Chrome).
+Checked by hand only, since browser automation refuses full screen: Start placing the
+audience window on another display, and `Esc` under the Keyboard Lock.

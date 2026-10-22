@@ -55,6 +55,51 @@ th{font-weight:700}
 .page{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
+.slide.measure{display:block;visibility:hidden}
+html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
+#chk{position:fixed;right:8px;top:8px;max-width:60%;max-height:60%;overflow:auto;z-index:20;padding:8px 12px;background:rgba(0,0,0,.8);color:#fff;font:14px/1.5 MONO;white-space:pre-wrap}
+.hl-c{color:var(--muted)}
+.hl-s{color:var(--hl-str)}
+.hl-k{color:var(--hl-kw)}
+.hl-d{color:var(--hl-def)}
+.hl-n{color:var(--hl-const)}
+.codebox{flex:none;position:relative}
+.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
+.out.open{display:flex;flex-direction:column}
+.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.out pre::-webkit-scrollbar{width:20px}
+.out pre::-webkit-scrollbar-thumb{background:var(--muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
+.out.err pre{color:var(--hl-def)}
+.out.busy pre{color:var(--muted)}
+.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--muted);font:400 48px/1 FONTS;cursor:pointer}
+.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
+.codebox textarea::selection{background:var(--mark)}
+.runnable pre.code{cursor:text}
+.tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
+.tools button{font:700 28px/1 FONTS;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:var(--bg);cursor:pointer;opacity:.85}
+.tools button+button{background:var(--rule);color:var(--fg)}
+.tools .run[data-state=loading]{background:var(--rule);color:var(--muted)}
+.tools .run[data-state=failed]{background:var(--hl-def)}
+.pv-bar .rt{color:var(--muted)}
+.pv-bar .rt[data-state=failed]{color:var(--hl-def)}
+.quote{flex:none;display:block;border-left:8px solid var(--accent);padding-left:calc(var(--indent) - 8px)}
+.quote figcaption{margin-top:var(--item-gap);text-align:left}
+.body.columns{flex-direction:row;column-gap:COLUMN-GAP}
+.column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
+#ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
+.thumb{position:relative;overflow:hidden;outline:1px solid var(--rule);cursor:pointer}
+.thumb.sel{outline:4px solid var(--accent)}
+.thumb>.slide{transform-origin:0 0}
+.thumb>.slide .page,#ov .tools,#ov .out{display:none}
+html.ov #stage,html.presenter #stage{visibility:hidden}
+#pv{position:fixed;inset:0;display:grid;grid-template-columns:60% 1fr;grid-template-rows:auto auto 1fr;gap:16px;padding:16px;font-size:18px;line-height:1.5}
+.pv-bar{grid-column:1/3;display:flex;gap:16px;align-items:center}
+.pv-timer{font:700 32px MONO;cursor:pointer}
+.pv-bar button{font:inherit;padding:4px 14px}
+.pv-cur{grid-row:2/4}
+.pv-cur>.thumb{cursor:default}
+.pv-next>.thumb{opacity:.85}
+.pv-notes{overflow:auto;font-size:24px;line-height:1.6;white-space:pre-wrap}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
 #stage.pointer #fs{opacity:1}
 #stage.idle{cursor:none}
@@ -83,7 +128,8 @@ html:not(.js) #fs{display:none}
                    (list (list "FONTS" *font-stack*) (list "MONO" *mono-stack*)
                          (list "META-LH" (px-string (body-lh *meta-size*)))
                          (list "META" (px-string *meta-size*))
-                         (list "PAGE" (px-string *page-number-size*)))
+                         (list "PAGE" (px-string *page-number-size*))
+                         (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
     ;; The canvas-dependent geometry.
     (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
@@ -91,9 +137,11 @@ html:not(.js) #fs{display:none}
             content)
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
-    (format out ".page{right:~dpx}~%" *margin-x*)
+    (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
+            *margin-x* content)
+    (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs{display:none}}~%"
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}}~%"
             width *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
@@ -157,19 +205,52 @@ html:not(.js) #fs{display:none}
       (write-string "</li>" out))
     (format out "</~a>~%" tag)))
 
+(defun write-code-text (b out)
+  (let ((text (format nil "~{~a~^~%~}" (code-block-lines b))))
+    (if (highlighted-p b)
+        (write-highlighted text out)
+        (write-escaped text out))))
+
+(defun write-attribute (name value out)
+  (format out " ~a=\"" name)
+  (write-escaped value out)
+  (write-string "\"" out))
+
 (defun write-code (b out)
-  (write-string "<pre class=\"code\"" out)
-  (when (code-block-lang b)
-    (write-string " data-lang=\"" out)
-    (write-escaped (code-block-lang b) out)
-    (write-string "\"" out))
-  (write-string "><code>" out)
-  (let ((first t))
-    (dolist (line (code-block-lines b))
-      (unless first (write-char #\Newline out))
-      (setf first nil)
-      (write-escaped line out)))
-  (format out "</code></pre>~%"))
+  "A code block; runnable code is wrapped in a .codebox carrying what the player needs
+to run it. Its output is an overlay the player adds, so it takes no room on the slide."
+  (let ((run (code-block-runnable b)))
+    (when run
+      (write-string "<div class=\"codebox runnable\"" out)
+      (write-attribute "data-lang" (string-downcase (code-block-lang b)) out)
+      (format out " data-timeout=\"~d\"" (code-block-timeout b))
+      (when (code-block-fresh b) (write-string " data-fresh" out))
+      (when (code-block-stdin b)
+        (write-attribute "data-stdin" (code-block-stdin b) out))
+      (write-string ">" out))
+    (write-string "<pre class=\"code\"" out)
+    (when (and (code-block-lang b) (not run))
+      (write-attribute "data-lang" (code-block-lang b) out))
+    (write-string "><code>" out)
+    (write-code-text b out)
+    (write-string "</code></pre>" out)
+    (when run (write-string "</div>" out))
+    (terpri out)))
+
+(defun write-quote (q out)
+  (write-string "<figure class=\"quote\"><blockquote><p>" out)
+  (write-inlines (quotation-inlines q) (quotation-run q) out)
+  (write-string "</p></blockquote>" out)
+  (when (quotation-cite q)
+    (write-string "<figcaption>" out)
+    (write-text (cite-text q) (quotation-cite-run q) out)
+    (write-string "</figcaption>" out))
+  (format out "</figure>~%"))
+
+(defun write-column (c width out)
+  (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
+  (dolist (b (column-blocks c)) (write-block b out))
+  (format out "</div>~%"))
 
 (defun write-figure (b out)
   (write-string "<figure><img src=\"" out)
@@ -235,6 +316,7 @@ html:not(.js) #fs{display:none}
         ((bullets-p b) (write-list b out))
         ((code-block-p b) (write-code b out))
         ((figure-p b) (write-figure b out))
+        ((quotation-p b) (write-quote b out))
         ((table-block-p b) (write-table b out))))
 
 ;;; --- slides ------------------------------------------------------------------------
@@ -291,9 +373,13 @@ html:not(.js) #fs{display:none}
              (write-string "<h1 class=\"title\">" out)
              (write-text (slide-title slide) (slide-title-run slide) out)
              (format out "</h1>~%"))
-           (format out "<div class=\"body\" style=\"top:~dpx;height:~dpx\">~%"
+           (format out "<div class=\"body~a\" style=\"top:~dpx;height:~dpx\">~%"
+                   (if (equal layout "columns") " columns" "")
                    (fit-body-top fit) (fit-body-height fit))
-           (dolist (b (slide-blocks slide)) (write-block b out))
+           (dolist (b (slide-blocks slide))
+             (if (column-p b)
+                 (write-column b (fit-region-width fit) out)
+                 (write-block b out)))
            (format out "</div>~%")))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
@@ -322,4 +408,44 @@ html:not(.js) #fs{display:none}
   (format out
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)
-  (format out "<script>~a</script>~%</body>~%</html>~%" *player-script*))
+  (write-config deck out)
+  (format out "<script>(function(){~a~a~a})();</script>~%</body>~%</html>~%"
+          *player-script* (if (deck-runnable-p deck) *runner-script* "")
+          *start-script*))
+
+(defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
+
+(defun deck-runnable-p (deck)
+  (some (lambda (slide)
+          (some (lambda (b) (and (code-block-p b) (code-block-runnable b)))
+                (region-blocks (slide-blocks slide)))) (deck-slides deck)))
+
+(defun write-config (deck out)
+  "The numbers the player needs: the type scale for the runtime check, and where the
+runtime is when the deck has runnable code."
+  (write-string "<script type=\"application/json\" id=\"lp\">{\"runtime\":" out)
+  (if (deck-runnable-p deck)
+      (let ((r (deck-runtime deck)))
+        (write-char (code-char 34) out)
+        (write-json-chars (if (stringp r) r *hosted-runtime*) out)
+        (write-char (code-char 34) out))
+      (write-string "null" out))
+  (format out ",\"top\":~d,\"bottom\":~d,\"gap\":~d,\"steps\":{" *margin-top*
+          *margin-bottom* *title-gap*)
+  (format out
+          "\"title\":[~{~d~^,~}],\"body\":[~{~d~^,~}],\"code\":[~{~d~^,~}],\"table\":[~{~d~^,~}],\"stmt\":[~{~d~^,~}]}}"
+          *title-steps* *body-steps* *code-steps* *table-steps*
+          *statement-steps*)
+  (format out "</script>~%"))
+
+(defun write-json-chars (s out)
+  "S inside a JSON string in a script element: quotes, backslashes, control characters
+and < escaped."
+  (loop for c across s
+        do
+          (let ((code (char-code c)))
+            (cond ((or (= code 34) (= code 92))
+                   (write-char (code-char 92) out)
+                   (write-char c out))
+                  ((or (< code 32) (= code 60)) (format out "\\u~4,'0x" code))
+                  (t (write-char c out))))))

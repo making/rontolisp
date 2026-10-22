@@ -25,6 +25,7 @@
 (defparameter *margin-top* 80)
 (defparameter *margin-bottom* 72)
 (defparameter *title-gap* 48)
+(defparameter *column-gap* 80)
 (defparameter *meta-size* 40)
 (defparameter *page-number-size* 24)
 
@@ -39,6 +40,7 @@
 (defun code-pad (c) (floor c 2))
 (defun cell-pad-x (s) (floor (* s 3) 5))
 (defun cell-pad-y (s) (floor s 4))
+(defun quote-indent (s) (ceiling (* s 12) 10))
 
 (defun canvas-width (deck)
   (if (equal (symbol-value-name (deck-aspect deck)) "4X3") 1440 1920))
@@ -48,9 +50,11 @@
 (defun safe-height () (- *canvas-height* *margin-top* *margin-bottom*))
 
 ;;; The layout result of one slide. BODY-TOP and BODY-HEIGHT place the body box; the
-;;; sizes are px. OVERFLOW is true when the slide does not fit even at the hard floor.
+;;; sizes are px; REGION-WIDTH is the width of one column. OVERFLOW is true when the
+;;; slide does not fit even at the hard floor.
 (defstruct fit
   layout
+  region-width
   title-size
   title-lines
   body-top
@@ -67,14 +71,28 @@
     (setf (item-run it) (make-text-run (item-inlines it)))
     (when (item-sublist it) (prepare-list (item-sublist it)))))
 
-(defun prepare-runs (slide)
-  "Attach a run to every piece of text on SLIDE."
-  (when (slide-title slide)
-    (setf (slide-title-run slide)
-          (make-text-run (list (slide-title slide)) :bold t)))
-  (dolist (b (slide-blocks slide))
+(defparameter *runnable-langs* '("lisp" "scheme" "clojure"))
+
+(defun highlighted-p (b)
+  (and (code-block-lang b)
+       (member (string-downcase (code-block-lang b)) *runnable-langs*
+               :test #'string=)))
+
+(defun prepare-blocks (blocks runtime)
+  "Attach a run to every piece of text in BLOCKS, and mark the code RUNTIME runs."
+  (dolist (b blocks)
     (cond ((para-p b) (setf (para-run b) (make-text-run (para-inlines b))))
           ((bullets-p b) (prepare-list b))
+          ((column-p b) (prepare-blocks (column-blocks b) runtime))
+          ((code-block-p b)
+           (setf (code-block-runnable b)
+                 (and (highlighted-p b) (code-block-run b)
+                      (not (eq runtime :none)) t)))
+          ((quotation-p b)
+           (setf (quotation-run b) (make-text-run (quotation-inlines b)))
+           (when (quotation-cite b)
+             (setf (quotation-cite-run b)
+                   (make-text-run (list (cite-text b))))))
           ((figure-p b)
            (when (figure-caption b)
              (setf (figure-caption-run b)
@@ -93,18 +111,35 @@
                         :bold (and first (table-block-row-header b))))
                  (setf first nil))))))))
 
+(defun cite-text (q)
+  (concatenate 'string (string (code-char #x2014)) " " (quotation-cite q)))
+
+(defun prepare-runs (deck slide)
+  (when (slide-title slide)
+    (setf (slide-title-run slide)
+          (make-text-run (list (slide-title slide)) :bold t)))
+  (prepare-blocks (slide-blocks slide) (deck-runtime deck)))
+
+(defun region-blocks (blocks)
+  "BLOCKS with every column replaced by its blocks."
+  (mapcan (lambda (b) (if (column-p b) (copy-list (column-blocks b)) (list b)))
+          blocks))
+
 ;;; --- layout selection --------------------------------------------------------------
 
-(defparameter *layouts* '("standard" "statement" "code" "image" "table"))
+(defparameter *layouts*
+  '("standard" "statement" "code" "image" "table" "quote" "columns"))
 
 (defun automatic-layout (slide)
   (let ((blocks (slide-blocks slide)))
     (cond ((and (null (slide-title slide)) (= (length blocks) 1)
                 (para-p (car blocks)))
            "statement")
+          ((and blocks (every #'column-p blocks)) "columns")
           ((/= (length blocks) 1) "standard")
           ((figure-p (car blocks)) "image")
           ((code-block-p (car blocks)) "code")
+          ((quotation-p (car blocks)) "quote")
           ((table-block-p (car blocks)) "table")
           (t "standard"))))
 
@@ -112,16 +147,18 @@
   (let ((requested (slide-layout slide)) (automatic (automatic-layout slide)))
     (cond ((eq (slide-kind slide) :title) "title")
           ((eq (slide-kind slide) :section) "section")
-          ((null requested) automatic)
+          ((or (null requested) (equal requested automatic)) automatic)
           ((not (member requested *layouts* :test #'equal))
            (report :warning (format nil "unknown layout :~a; using :~a"
                                     requested automatic))
            automatic)
-          ((and (equal requested "statement")
-                (not (equal automatic "statement")))
+          ((member "statement" (list requested automatic) :test #'equal)
            (report
             :warning
             "the statement layout needs exactly one paragraph and no title")
+           automatic)
+          ((member "columns" (list requested automatic) :test #'equal)
+           (report :warning "the columns layout needs (column ...) blocks only")
            automatic)
           (t requested))))
 
@@ -284,15 +321,24 @@ do not fit; nil when none does."
             (when widths
               (return (values s widths (table-height tb s widths)))))))
 
-(defun blocks-height (blocks k width body-height)
-  "The height of BLOCKS at step K, and whether every block fits its width."
+(defun quote-height (q s width)
+  (let ((w (- width (quote-indent s))))
+    (+ (* (run-lines (quotation-run q) s w) (body-lh s))
+       (if (quotation-cite-run q)
+           (+ (item-gap s)
+              (* (run-lines (quotation-cite-run q) s w) (body-lh s)))
+           0))))
+
+(defun blocks-height (blocks k c width body-height)
+  "The height of BLOCKS at body step K and code size C (nil when no code size fits),
+and whether every block fits its width."
   (let* ((s (step-at *body-steps* k))
-         (c (code-size-at blocks k width))
          (h (* (block-gap s) (max 0 (1- (length blocks)))))
          (ok t))
     (dolist (b blocks)
       (cond
        ((para-p b) (incf h (* (run-lines (para-run b) s width) (body-lh s))))
+       ((quotation-p b) (incf h (quote-height b s width)))
        ((bullets-p b) (incf h (bullets-height b s width)))
        ((code-block-p b) (if c (incf h (code-height b c)) (setf ok nil)))
        ((figure-p b)
@@ -339,25 +385,45 @@ fits the safe area. The second value is true on overflow."
                                    lines s))
           (values s nil)))))
 
+(defun regions (slide width)
+  "The regions of SLIDE as (BLOCKS WIDTH) lists: one per column, else the body."
+  (let ((columns (remove-if-not #'column-p (slide-blocks slide))))
+    (if columns
+        (let ((w
+               (floor (- width (* (1- (length columns)) *column-gap*))
+                      (length columns))))
+          (mapcar (lambda (col) (list (column-blocks col) w)) columns))
+        (list (list (slide-blocks slide) width)))))
+
 (defun fit-body (slide fit width)
-  (let* ((blocks (slide-blocks slide))
+  "Choose the largest body step at which every region fits. Columns share it, and the
+code size, so side-by-side text matches."
+  (let* ((regions (regions slide width))
+         (rwidth (second (car regions)))
+         (all (region-blocks (slide-blocks slide)))
          (body-height (fit-body-height fit))
          (k
           (loop for k from 0 below (length *body-steps*)
                 do
-                  (multiple-value-bind (h ok)
-                      (blocks-height blocks k width body-height)
-                    (when (and ok (<= h body-height)) (return k))))))
+                  (let ((c (code-size-at all k rwidth)))
+                    (when (every (lambda (r)
+                                   (multiple-value-bind (h ok) (blocks-height
+                                                                (first r) k c
+                                                                rwidth
+                                                                body-height)
+                                     (and ok (<= h body-height)))) regions)
+                      (return k))))))
     (unless k
       (report :error
               "the content does not fit the slide even at the smallest sizes; split the slide")
       (setf (fit-overflow fit) t)
       (setf k (1- (length *body-steps*))))
-    (setf (fit-body-size fit) (step-at *body-steps* k) (fit-code-size fit)
-          (or (code-size-at blocks k width) (car (last *code-steps*))))
-    (dolist (b blocks)
+    (setf (fit-region-width fit) rwidth (fit-body-size fit)
+          (step-at *body-steps* k) (fit-code-size fit)
+          (or (code-size-at all k rwidth) (car (last *code-steps*))))
+    (dolist (b all)
       (when (table-block-p b)
-        (multiple-value-bind (s widths) (table-fit b k width)
+        (multiple-value-bind (s widths) (table-fit b k rwidth)
           (let ((s (or s (car (last *table-steps*)))))
             (setf (table-block-size b) s (table-block-widths b)
                   (or widths
@@ -367,7 +433,7 @@ fits the safe area. The second value is true on overflow."
 
 (defun fit-slide (deck slide)
   "Lay out SLIDE and store the result in its FIT slot."
-  (prepare-runs slide)
+  (prepare-runs deck slide)
   (let* ((width (content-width deck))
          (layout (choose-layout slide))
          (fit (make-fit :layout layout)))

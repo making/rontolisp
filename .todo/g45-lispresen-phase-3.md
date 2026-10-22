@@ -3,8 +3,8 @@
 Difficulty: Medium
 
 lispresen (`lispresen/`) renders an S-expression deck to one HTML file;
-`lispresen/DESIGN.md` is its spec. Phase 3 of `DESIGN.md` "Phases", after
-`.todo/g44-lispresen-phase-2.md`:
+`lispresen/DESIGN.md` is its spec; phases 1 and 2 are done. Phase 3 of `DESIGN.md`
+"Phases":
 
 - **`define` templates**: `(define name (params...) body)` in a deck, expanded by
   substitution in the parser. Not Lisp macros: the deck is read, never evaluated
