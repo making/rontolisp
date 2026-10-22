@@ -1323,6 +1323,151 @@ final class ClojureStateLowering {
 	static final LispSymbol AGENT_AWAIT_FOR_HERE = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-AWAIT-FOR-HERE");
 
 	/**
+	 * {@code await} as a value: over any number of agents, like the call -- including
+	 * none, which runs nothing and answers nil, like the call.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal awaitValue(ClojureLowering ctx) {
+		ctx.usedStm = true;
+		ctx.usedExInfo = true; // a failed agent's refusal carries its error as the cause
+		LispSymbol agents = new LispSymbol(ClojureLowering.mangle("await-agents"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, agents), awaitGuard("await"),
+				ClojureLowerUtil.list(ctx.hostTarget ? AGENT_AWAIT : AGENT_AWAIT_HERE, agents),
+				ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * {@code await-for} as a value: over a timeout and any agents after it, like the
+	 * call. Of none at all, the call's arity refusal -- the same words, through the
+	 * run-time arity worker.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal awaitForValue(ClojureLowering ctx) {
+		ctx.usedStm = true;
+		ctx.usedExInfo = true; // a failed agent's refusal carries its error as the cause
+		LispSymbol all = new LispSymbol(ClojureLowering.mangle("await-for-args"));
+		LispSymbol timeout = new LispSymbol(ClojureLowering.mangle("await-for-timeout"));
+		LispSymbol agents = new LispSymbol(ClojureLowering.mangle("await-for-agents"));
+		LispVal ran = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(
+							ClojureLowerUtil.list(timeout, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all)),
+							ClojureLowerUtil.list(agents, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)))),
+					awaitGuard("await-for"), ctx.booleanAnswer(ClojureLowerUtil
+						.list(ctx.hostTarget ? AGENT_AWAIT_FOR : AGENT_AWAIT_FOR_HERE, timeout, agents)));
+		LispVal arity = ClojureLowerUtil.list(new LispSymbol(ClojureBindingLowering.FN_ARITY_ERROR), new LispInteger(0),
+				LispString.literal("clojure.core/await-for"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, all),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), all), arity, ran));
+	}
+
+	/**
+	 * {@code ensure} as a value: over one ref, like the call.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal ensureValue(ClojureLowering ctx) {
+		LispSymbol ref = new LispSymbol(ClojureLowering.mangle("ensure-ref"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ref),
+				withAtom(ctx, ref, "ensure", bound -> txnGuard(atomGet(bound))));
+	}
+
+	/**
+	 * {@code shutdown-agents} as a value: no arguments, answering nil like the call.
+	 * There is no thread pool on any backend, so there is nothing to shut down.
+	 * @return the value form
+	 */
+	static LispVal shutdownAgentsValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+				ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * {@code push-thread-bindings}/{@code pop-thread-bindings} as a value: the pairing
+	 * the body takes never exists around a value, so any application refuses with the
+	 * pairing's words.
+	 * @param name {@code push-thread-bindings} or {@code pop-thread-bindings}
+	 * @return the value form
+	 */
+	static LispVal threadBindingsValue(String name) {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("thread-bindings-args"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
+						LispString.literal(name + " is supported only as push-thread-bindings followed by a try"
+								+ " whose finally calls pop-thread-bindings (what binding expands to)")));
+	}
+
+	/**
+	 * {@code struct} as a value: over a struct and any values, like the call. Of none at
+	 * all, the call's arity refusal.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal structValue(ClojureLowering ctx) {
+		LispSymbol all = new LispSymbol(ClojureLowering.mangle("struct-args"));
+		LispVal build = structBuild(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all), "struct");
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("struct takes a struct and values"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, all),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), all), arity, build));
+	}
+
+	/**
+	 * {@code struct-map} as a value: over a struct and key/value pairs, like the call. Of
+	 * none at all, the call's arity refusal; of an odd pair count, the call's key/value
+	 * refusal.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal structMapValue(ClojureLowering ctx) {
+		LispSymbol all = new LispSymbol(ClojureLowering.mangle("struct-map-args"));
+		LispSymbol slots = ctx.freshTemp();
+		LispSymbol table = ctx.freshTemp();
+		LispSymbol index = ctx.freshTemp();
+		LispSymbol pairs = ctx.freshTemp();
+		LispSymbol rest = ctx.freshTemp();
+		LispVal fill = ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
+				ClojureLowerUtil.list(List.of(index, ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), slots))),
+				ClojureCollectionLowering.tablePut(table,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots, index), ClojureLowering.NIL_CONST));
+		LispVal overlay = ClojureLowerUtil.list(ClojureLowerUtil.sym("do"),
+				ClojureLowerUtil.list(List
+					.of(ClojureLowerUtil.list(rest, pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("cddr"), rest)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+						ClojureCollectionLowering.tablePut(table,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), rest))));
+		LispVal build = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil
+					.list(List.of(ClojureLowerUtil.list(slots, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all)),
+							ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()))),
+				fill, overlay, table);
+		LispVal odd = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("struct-map takes key/value pairs"));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("struct-map takes a struct and key/value pairs"));
+		LispVal even = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(
+						List.of(ClojureLowerUtil.list(pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)), odd, build));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, all),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), all), arity, even));
+	}
+
+	/**
 	 * The oracle's refusals of an {@code await} or {@code await-for} named {@code op}:
 	 * inside a transaction ({@code io!}'s {@code IllegalStateException}), then inside an
 	 * action.

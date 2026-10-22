@@ -122,6 +122,83 @@ final class ClojureDispatchLowering {
 	static final String CLASS_INSTANCE_P = "RONTOLISP::%CLOJURE-CLASS-INSTANCE-P";
 
 	/**
+	 * {@code instance?} as a value: over a class and a value, like the call -- the class
+	 * always read at run time, like the call's computed-class shape. A class no value
+	 * here has answers false, like the call.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal instanceValue(ClojureLowering ctx) {
+		LispSymbol cls = new LispSymbol(ClojureLowering.mangle("instance-class"));
+		LispSymbol value = new LispSymbol(ClojureLowering.mangle("instance-value"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cls, value)),
+				classValueInstance(ctx, cls, value));
+	}
+
+	/**
+	 * {@code get-method} as a value: the multimethod arrives as a run-time value, but its
+	 * method table lives under the literal name the call names, so only the call's shape
+	 * runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @return the value form
+	 */
+	static LispVal getMethodValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("get-method-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("get-method of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name reads, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("get-method takes a multimethod and a dispatch value"))));
+	}
+
+	/**
+	 * {@code remove-method} as a value: the multimethod arrives as a run-time value, but
+	 * its method table lives under the literal name the call names, so only the call's
+	 * shape runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @return the value form
+	 */
+	static LispVal removeMethodValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("remove-method-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("remove-method of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name removes, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("remove-method takes a multimethod and a dispatch value"))));
+	}
+
+	/**
+	 * {@code methods} as a value: the multimethod arrives as a run-time value, but its
+	 * method table lives under the literal name the call names, so only the call's shape
+	 * runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @return the value form
+	 */
+	static LispVal methodsValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("methods-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(1)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("methods of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name reads, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("methods takes a multimethod"))));
+	}
+
+	/**
 	 * The test of {@code instance?} of the named class over a variable, as a generalized
 	 * boolean (no {@code T}-or-false answer): what a protocol dispatcher walking the
 	 * classes of its target asks ({@link ClojureProtocolLowering#walkTargetOf}). A class

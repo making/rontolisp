@@ -946,6 +946,50 @@ final class ClojureCoreLowering {
 	}
 
 	/**
+	 * {@code prefers} as a value: the multimethod arrives as a run-time value, but its
+	 * preference table lives under the literal name the call names, so only the call's
+	 * shape runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @param name {@code prefers}
+	 * @return the value form
+	 */
+	static LispVal prefersValue(String name) {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle(name + "-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(1)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("prefers of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name reads, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("prefers takes a multimethod"))));
+	}
+
+	/**
+	 * {@code remove-all-methods} as a value: the multimethod arrives as a run-time value,
+	 * but its tables live under the literal name the call names, so only the call's shape
+	 * runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @param name {@code remove-all-methods}
+	 * @return the value form
+	 */
+	static LispVal removeAllMethodsValue(String name) {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle(name + "-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(1)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("remove-all-methods of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name removes, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("remove-all-methods takes a multimethod"))));
+	}
+
+	/**
 	 * {@code (prefers multifn)}: each dispatch value to the set preferred over it, like
 	 * the oracle's map. The multimethod's name, like {@code methods}: a local bound to
 	 * one is refused at lowering.

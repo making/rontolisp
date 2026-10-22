@@ -2387,6 +2387,105 @@ cases:
       miss
       x
       amb
+  - name: core-functions-resolve-as-values
+    # g39: the head-only core functions name values too -- a higher-order use
+    # runs what a direct call runs ((map isa? ...), (def x await) applied,
+    # higher-order list*/struct). Oracle-identical (clj 1.12.6, 2026-10-22)
+    # except the two arity wordings the head already customizes: a value
+    # applied to the wrong count reports the head call's words, so isa? of one
+    # and aget of one answer "takes ..." here where the oracle answers
+    # "Wrong number of args (N) passed to: ...".
+    source: |
+      (derive :user/v39-circle :user/v39-shape)
+      (derive :user/v39-square :user/v39-shape)
+      (println (map isa? [:user/v39-circle :user/v39-square :user/v39-tri] [:user/v39-shape :user/v39-shape :user/v39-shape]))
+      (def v39-isa isa?)
+      (println (v39-isa :user/v39-circle :user/v39-shape))
+      (println ((fn [f c p] (f c p)) isa? :user/v39-circle :user/v39-shape))
+      (def v39-h (make-hierarchy))
+      (def v39-h2 (derive v39-h :user/v39-a :user/v39-b))
+      (println (isa? v39-h2 :user/v39-a :user/v39-b))
+      (println (parents v39-h2 :user/v39-a))
+      (def v39-parents parents)
+      (println (v39-parents v39-h2 :user/v39-a))
+      (println ((fn [f h c] (f h c)) ancestors v39-h2 :user/v39-a))
+      (println (map descendants [v39-h2] [:user/v39-b]))
+      (def v39-aw await)
+      (println (v39-aw (agent 1) (agent 2)))
+      (println ((fn [f a] (f a)) await (agent 3)))
+      (def v39-af await-for)
+      (println (v39-af 100 (agent 4)))
+      (def v39-ls list*)
+      (println (v39-ls 1 [2 3]))
+      (println (map v39-ls [[1 2] [3]]))
+      (println (v39-ls [1 2]))
+      (defstruct v39-sdef :a :b)
+      (def v39-st struct)
+      (println (v39-st v39-sdef 1 2))
+      (println (map v39-st [v39-sdef] [[3 4]]))
+      (def v39-sm struct-map)
+      (println (v39-sm v39-sdef :a 1))
+      (println (v39-sm v39-sdef))
+      (println (dosync ((fn [f r] (f r)) ensure (ref 5))))
+      (def v39-al alength)
+      (def v39-arr (make-array String 3))
+      (println (v39-al v39-arr))
+      (println (map v39-al [v39-arr v39-arr]))
+      (def v39-ag aget)
+      (println (v39-ag v39-arr 1))
+      (aset v39-arr 1 "x")
+      (def v39-as aset)
+      (println (v39-as v39-arr 2 "y"))
+      (println (v39-ag v39-arr 1) (v39-ag v39-arr 2))
+      (def v39-mk make-array)
+      (println (alength (v39-mk String 2)))
+      (println (alength (v39-mk Byte 2)))
+      (def v39-nl newline)
+      (v39-nl)
+      (println :user/v39-after-newline)
+      (def v39-sa shutdown-agents)
+      (println (v39-sa))
+      (def v39-ii instance?)
+      (println (v39-ii String "x"))
+      (println (map v39-ii [String String] ["x" 1]))
+      (println (try ((fn [f] (f :a)) isa?) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try ((fn [f] (f)) await-for) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try ((fn [f a] (f a)) aget v39-arr) (catch clojure.lang.ArityException e (.getMessage e))))
+    expected: |
+      (true true false)
+      true
+      true
+      true
+      #{:user/v39-b}
+      #{:user/v39-b}
+      #{:user/v39-b}
+      (#{:user/v39-a})
+      nil
+      nil
+      true
+      (1 2 3)
+      ((1 2) (3))
+      (1 2)
+      {:a 1, :b 2}
+      ({:a [3 4], :b nil})
+      {:a 1, :b nil}
+      {:a nil, :b nil}
+      5
+      3
+      (3 3)
+      nil
+      y
+      x y
+      2
+      2
+
+      :user/v39-after-newline
+      nil
+      true
+      (true false)
+      isa? takes a child and a parent, or a hierarchy and both
+      Wrong number of args (0) passed to: clojure.core/await-for
+      aget takes an array and subscripts
   - name: auto-resolved-keywords-use-the-file-ns
     # ::kw resolves against the file's ns name, ::alias/kw against the alias;
     # :a/b stays opaque. The corpus shapes: interest-rate/account-level over :tag,

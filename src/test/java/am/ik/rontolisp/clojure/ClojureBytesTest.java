@@ -144,4 +144,19 @@ class ClojureBytesTest {
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
+	@Test
+	void makeArrayAsAValueBuildsByteArraysOfTheByteClass() throws Exception {
+		// g39: make-array as a value takes the class evaluated -- of the byte
+		// class a byte array, like the call, so aget/aset read and store bytes
+		// through it; of any other class the general array. Oracle-identical
+		// (clj 1.12.6, 2026-10-22): (aset ... (byte 42)) answers 42 on both.
+		// Where no host is, no class object names the primitive byte, so only
+		// the call spells one there (clojure-spec pins the portable shapes).
+		String program = "(def bmv make-array)\n" + "(def bav (bmv Byte/TYPE 3))\n" + "(def bag aget)\n"
+				+ "(def bas aset)\n" + "(prn (alength bav))\n" + "(prn (bag bav 0))\n" + "(prn (bas bav 1 (byte 42)))\n"
+				+ "(prn (bag bav 1))\n" + "(prn (bytes? bav))\n" + "(prn (alength (bmv String 2)))\n"
+				+ "(prn (bytes? (bmv String 2)))\n";
+		assertThat(interpret(program).lines().toList()).containsExactly("3", "0", "42", "42", "true", "2", "false");
+	}
+
 }

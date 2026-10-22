@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -323,6 +324,8 @@ final class ClojurePredicateLowering {
 			}
 			case "distinct?":
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-DISTINCT-V"));
+			case "extends?":
+				return extendsValue(ctx);
 			case "bound?":
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-BOUND-V"));
 			case "thread-bound?":
@@ -330,6 +333,29 @@ final class ClojurePredicateLowering {
 			default:
 				return null;
 		}
+	}
+
+	/**
+	 * {@code extends?} as a value: the protocol and the type arrive as run-time values,
+	 * but only the literal names the call names read their tables, so only the call's
+	 * shape runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words -- the call uses the oracle's arity wording, so the value reports the
+	 * same through the run-time arity worker.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	private static LispVal extendsValue(ClojureLowering ctx) {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("extends-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(2)),
+						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
+								LispString.literal("extends? of a computed protocol and type is not supported"
+										+ " at run time: only literal names extend, where the call stands")),
+						ClojureLowerUtil.list(new LispSymbol(ClojureBindingLowering.FN_ARITY_ERROR), count,
+								LispString.literal("clojure.core/extends?"))));
 	}
 
 	/**

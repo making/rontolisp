@@ -204,6 +204,37 @@ final class ClojureLoopLowering {
 	}
 
 	/**
+	 * {@code list*} as a value: over a value and more collections -- of one argument its
+	 * seq, otherwise the right fold of {@code cons} the call lowers to. Any other count
+	 * signals, like a call's arity refusal.
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal listStarValue(ClojureLowering ctx) {
+		LispSymbol all = new LispSymbol(ClojureLowering.mangle("list-star-all"));
+		LispSymbol items = new LispSymbol(ClojureLowering.mangle("list-star-items"));
+		LispSymbol fold = new LispSymbol(ClojureLowering.mangle("list-star-fold"));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("list* takes a value and more collections"));
+		LispVal single = ClojureSeqLowering.seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), items)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), items),
+				consForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), items),
+						ClojureLowerUtil.list(fold, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), items))));
+		LispVal folded = ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fold, ClojureLowerUtil.list(items), step))),
+				ClojureLowerUtil.list(fold, all));
+		LispVal more = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("null"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)), single, folded);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, all),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), all), arity, more));
+	}
+
+	/**
 	 * {@code (amap a idx ret expr)}: the oracle's array map -- the array evaluated once,
 	 * cloned, each element of the clone set to the expression's value by index, answering
 	 * the clone. Lowers the oracle's own macroexpansion as datums, so {@code let},

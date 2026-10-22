@@ -1264,6 +1264,73 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void hierarchyVerbsNameValues() {
+		// g39: the hierarchy family resolves as a value, over the same runtime as
+		// the call -- including the class-chain flags the call sets, so a class
+		// keyword still walks. Wrong counts signal in the call's words.
+		assertThat(lowered("(def x isa?)")).contains("C%H-ISA?").contains("%CLOJURE-SHARED-VALUE");
+		assertThat(lowered("(def x derive)")).contains("C%H-DERIVE");
+		assertThat(lowered("(def x underive)")).contains("C%H-UNDERIVE");
+		assertThat(lowered("(def x parents)")).contains("C%H-PARENTS").contains("C%H-GLOBAL");
+		assertThat(lowered("(def x ancestors)")).contains("C%H-ANCESTORS");
+		assertThat(lowered("(map descendants [1])")).contains("C%H-DESCENDANTS");
+		assertThat(lowered("(def x make-hierarchy)")).contains("(C%H-EMPTY)");
+		assertThatThrownBy(() -> Clojure.read("(def x (isa? :a))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("isa? takes a child and a parent, or a hierarchy and both");
+	}
+
+	@Test
+	void coreFunctionValueArmsForArraysAndStructs() {
+		// g39: aget/alength/aset/make-array, struct/struct-map and list* resolve as
+		// values, over the same runtime as the call. Wrong counts signal in the
+		// call's words.
+		assertThat(lowered("(def x alength)")).contains("RONTOLISP::%CLOJURE-ALENGTH");
+		assertThat(lowered("(def x aget)")).contains("RONTOLISP::%CLOJURE-AGET");
+		assertThat(lowered("(def x aset)")).contains("RONTOLISP::%CLOJURE-ASET");
+		assertThat(lowered("(def x make-array)")).contains("RONTOLISP::%CLOJURE-BYTE-ARRAY");
+		assertThat(lowered("(def x struct)")).contains("Too many arguments to struct constructor");
+		assertThat(lowered("(def x struct-map)")).contains("struct-map takes key/value pairs");
+		assertThat(lowered("(def x list*)")).contains("RONTOLISP::%CLOJURE-CONS");
+		assertThat(lowered("(def x newline)")).contains("(PRINC \"\n\")");
+		assertThat(lowered("(def x shutdown-agents)")).contains("(LAMBDA NIL NIL)");
+		assertThat(lowered("(def x ensure)")).contains("RONTOLISP::%CLOJURE-STM-REQUIRE");
+		assertThat(lowered("(def x await)")).contains("RONTOLISP::%CLOJURE-AGENT-AWAIT");
+		assertThat(lowered("(def x await-for)")).contains("RONTOLISP::%CLOJURE-AGENT-AWAIT-FOR");
+		assertThat(lowered("(def x instance?)")).contains("RONTOLISP::%CLOJURE-CLASS-INSTANCE-P");
+		assertThatThrownBy(() -> Clojure.read("(alength)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("alength takes an array");
+		assertThatThrownBy(() -> Clojure.read("(make-array String)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("make-array takes a class and dimensions");
+		assertThatThrownBy(() -> Clojure.read("(await-for)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/await-for");
+	}
+
+	@Test
+	void lowerTimeOnlyVerbsRefuseAtRunTimeAsValues() {
+		// g39: the verbs whose head meaning is lower-time-only (the multimethod
+		// name, the literal protocol, the literal load path, the paired thread
+		// bindings) still resolve as values -- like the g30 call-time refusals --
+		// with the count checked first in the call's words, then the run-time
+		// refusal.
+		assertThat(lowered("(def x get-method)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x remove-method)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x methods)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x prefer-method)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x prefers)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x remove-all-methods)")).contains("of a computed multimethod");
+		assertThat(lowered("(def x satisfies?)")).contains("of a computed protocol");
+		assertThat(lowered("(def x extends?)")).contains("of a computed protocol and type");
+		assertThat(lowered("(def x extend)")).contains("of a computed type or protocol");
+		assertThat(lowered("(def x load)")).contains("of a computed path");
+		assertThat(lowered("(def x push-thread-bindings)")).contains("what binding expands to");
+		assertThat(lowered("(def x pop-thread-bindings)")).contains("what binding expands to");
+		assertThatThrownBy(() -> Clojure.read("(get-method m)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("get-method takes a multimethod and a dispatch value");
+		assertThatThrownBy(() -> Clojure.read("(extends? p)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/extends?");
+	}
+
+	@Test
 	void theClassWalkTakesTheDescendantsRefusalAndTheHostOnlyWhereTheProgramNeedsThem() {
 		// descendants' refusal is an exception of the exception runtime, so it is in
 		// the walk only where descendants is read (before, a program reading none
@@ -4716,8 +4783,7 @@ class ClojureLoweringTest {
 			assertThatThrownBy(() -> Clojure.read("(" + name + " 1 2)", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/" + name);
 		}
-		assertThatThrownBy(() -> Clojure.read("(map extends? [])", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: extends?");
+		assertThat(lowered("(map extends? [])")).contains("of a computed protocol and type");
 	}
 
 	@Test

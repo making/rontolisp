@@ -173,6 +173,117 @@ final class ClojureBytesLowering {
 	}
 
 	/**
+	 * {@code aget}/{@code alength}/{@code aset} as a value, or null for any other name:
+	 * over the same arguments as the call, so a higher-order use runs what a call runs.
+	 * Of several subscripts the flat index walks {@code row-major-aref}, the call's
+	 * nested {@code aref} over a dynamic count; any other count signals, like a call's
+	 * arity refusal.
+	 * @param ctx the hub
+	 * @param name {@code aget}, {@code alength} or {@code aset}
+	 * @return the value form, or null
+	 */
+	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
+		return switch (name) {
+			case "alength" -> {
+				LispSymbol array = new LispSymbol(ClojureLowering.mangle("alength-array"));
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(array),
+						ClojureLowerUtil.list(new LispSymbol(ALENGTH), array, new LispInteger(0)));
+			}
+			case "aget" -> agetValue();
+			case "aset" -> asetValue();
+			default -> null;
+		};
+	}
+
+	/**
+	 * The flat row-major index of the subscript list over the dimension list: the call's
+	 * nested {@code aref} over a dynamic subscript count.
+	 * @param subs the subscript list form
+	 * @param dims the dimension list form
+	 * @return the index form
+	 */
+	private static LispVal flatIndex(LispVal subs, LispVal dims) {
+		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("row-major-rest"));
+		LispSymbol left = new LispSymbol(ClojureLowering.mangle("row-major-dims"));
+		LispSymbol flat = new LispSymbol(ClojureLowering.mangle("row-major-flat"));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("+"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("*"), flat,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest));
+		List<LispVal> bindings = List.of(
+				ClojureLowerUtil.list(rest, subs, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest)),
+				ClojureLowerUtil.list(left, dims, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left)),
+				ClojureLowerUtil.list(flat, new LispInteger(0), step));
+		LispVal end = ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), flat);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("do"), ClojureLowerUtil.list(bindings), end);
+	}
+
+	/**
+	 * {@code aget} as a value: over an array and subscripts -- of one the family's read,
+	 * of several the flat row-major read, like the call.
+	 * @return the value form
+	 */
+	private static LispVal agetValue() {
+		LispSymbol array = new LispSymbol(ClojureLowering.mangle("aget-array"));
+		LispSymbol subs = new LispSymbol(ClojureLowering.mangle("aget-subs"));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("aget takes an array and subscripts"));
+		LispVal one = ClojureLowerUtil.list(new LispSymbol(AGET), array,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), subs));
+		LispVal many = ClojureLowerUtil.list(ClojureLowerUtil.sym("row-major-aref"), array,
+				flatIndex(subs, ClojureLowerUtil.list(ClojureLowerUtil.sym("array-dimensions"), array)));
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("null"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), subs)), one, many);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(array, ClojureLowering.AMPERSAND_REST, subs)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), subs), arity, read));
+	}
+
+	/**
+	 * {@code aset} as a value: over an array, subscripts and a value -- of one subscript
+	 * the family's store, of several the flat row-major store, like the call. Anything
+	 * shorter signals, like a call's arity refusal.
+	 * @return the value form
+	 */
+	private static LispVal asetValue() {
+		LispSymbol array = new LispSymbol(ClojureLowering.mangle("aset-array"));
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("aset-args"));
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("aset takes an array, subscripts and a value"));
+		LispVal one = ClojureLowerUtil.list(new LispSymbol(ASET), array,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+		LispSymbol value = new LispSymbol(ClojureLowering.mangle("aset-value"));
+		LispSymbol subs = new LispSymbol(ClojureLowering.mangle("aset-subs"));
+		LispVal many = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(
+						ClojureLowerUtil.list(value,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("last"), args))),
+						ClojureLowerUtil.list(subs, ClojureLowerUtil.list(ClojureLowerUtil.sym("butlast"), args)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("row-major-aref"), array,
+								flatIndex(subs,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("array-dimensions"), array))),
+						value));
+		LispVal store = ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+				one, many);
+		return ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(List.of(array, ClojureLowering.AMPERSAND_REST, args)),
+					ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+								arity, store));
+	}
+
+	/**
 	 * Whether a {@code make-array} class spelling names the primitive {@code byte}:
 	 * {@code Byte/TYPE}, the class object of {@code byte}, through any spelling of
 	 * {@code java.lang.Byte}.

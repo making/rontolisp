@@ -2406,6 +2406,50 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * {@code satisfies?} as a value: the protocol arrives as a run-time value, but only
+	 * the literal name the call names reads its tables, so only the call's shape runs --
+	 * anything else refuses at run time. The count is checked first, in the call's words.
+	 * @return the value form
+	 */
+	static LispVal satisfiesValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("satisfies-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("satisfies? of a computed protocol is not supported"
+									+ " at run time: only a literal protocol name satisfies, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY,
+								LispString.literal("satisfies? takes a protocol and a value"))));
+	}
+
+	/**
+	 * {@code extend} as a value: the type and the protocols arrive as run-time values,
+	 * but only the literal names the call names extend their tables, so only the call's
+	 * shape runs -- anything else refuses at run time. The count is checked first, in the
+	 * call's words.
+	 * @return the value form
+	 */
+	static LispVal extendValue() {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("extend-args"));
+		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
+		LispVal odd = ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("mod"), count, new LispInteger(2)), new LispInteger(1));
+		LispVal shape = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(3)), odd);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), shape, ClojureRefusals.refusal(
+						ClojureRefusals.UNSUPPORTED_OPERATION,
+						LispString.literal("extend of a computed type or protocol is not supported"
+								+ " at run time: only literal type and protocol names extend, where the call stands")),
+						ClojureRefusals.refusal(ClojureRefusals.ARITY, LispString.literal(
+								"extend takes a type, then a protocol and a map of methods, any number of times"))));
+	}
+
+	/**
 	 * {@code (satisfies? Protocol x)}: table membership -- the tag's row, or the
 	 * {@code Object} row an extension installed, like the oracle. The protocol is a
 	 * literal name, like {@code defmethod}'s multimethod.
