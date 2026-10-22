@@ -92,8 +92,8 @@ class ClojureJavaIoTest {
 	@Test
 	void directoriesAreMadeListedWalkedAndDeletedOnBothWasmBackends() throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-		assertThat(runOnWasm(rooted(DIRECTORIES, "w"), null, false, this.dir)).isEqualTo(DIRECTORIES_OUT);
-		assertThat(runOnWasm(rooted(DIRECTORIES, "c"), null, true, this.dir)).isEqualTo(DIRECTORIES_OUT);
+		assertThat(runOnWasm(rooted(DIRECTORIES, "w"), null, false)).isEqualTo(DIRECTORIES_OUT);
+		assertThat(runOnWasm(rooted(DIRECTORIES, "c"), null, true)).isEqualTo(DIRECTORIES_OUT);
 	}
 
 	/**
@@ -126,8 +126,8 @@ class ClojureJavaIoTest {
 		assertThat(interpret(rooted(EMPTY_DIRECTORY, "ei"), null)).isEqualTo(EMPTY_DIRECTORY_OUT);
 		assertThat(runOnJvm(rooted(EMPTY_DIRECTORY, "ej"), null, "JioEmpty")).isEqualTo(EMPTY_DIRECTORY_OUT);
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ew"), null, false, this.dir)).isEqualTo(EMPTY_DIRECTORY_OUT);
-		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ec"), null, true, this.dir)).isEqualTo(EMPTY_DIRECTORY_OUT);
+		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ew"), null, false)).isEqualTo(EMPTY_DIRECTORY_OUT);
+		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ec"), null, true)).isEqualTo(EMPTY_DIRECTORY_OUT);
 	}
 
 	/**
@@ -315,11 +315,8 @@ class ClojureJavaIoTest {
 	void resourcesComeFromTheSourcePathOnBothWasmBackends() throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
 		Path main = resourceProject(RESOURCES);
-		// the computed lookup reads the resources directory and the jar beside the
-		// project, which the preopen covers
-		Path root = this.dir.toRealPath();
-		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(resourcesOut());
-		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(resourcesOut());
+		assertThat(runOnWasm(Files.readString(main), main, false)).isEqualTo(resourcesOut());
+		assertThat(runOnWasm(Files.readString(main), main, true)).isEqualTo(resourcesOut());
 	}
 
 	/**
@@ -344,9 +341,8 @@ class ClojureJavaIoTest {
 		assertThat(interpret(Files.readString(main), main)).isEqualTo(KEPT_AT_START_OUT);
 		assertThat(runOnJvm(Files.readString(main), main, "JioKeptAtStart")).isEqualTo(KEPT_AT_START_OUT);
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-		Path root = this.dir.toRealPath();
-		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(KEPT_AT_START_OUT);
-		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(KEPT_AT_START_OUT);
+		assertThat(runOnWasm(Files.readString(main), main, false)).isEqualTo(KEPT_AT_START_OUT);
+		assertThat(runOnWasm(Files.readString(main), main, true)).isEqualTo(KEPT_AT_START_OUT);
 	}
 
 	/**
@@ -394,9 +390,8 @@ class ClojureJavaIoTest {
 	void aJarsEntriesAreFoundAndReadWhenTheProgramRunsOnBothWasmBackends() throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
 		Path main = resourceProject(JAR_ENTRIES);
-		Path root = this.dir.toRealPath();
-		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(jarEntriesOut());
-		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(jarEntriesOut());
+		assertThat(runOnWasm(Files.readString(main), main, false)).isEqualTo(jarEntriesOut());
+		assertThat(runOnWasm(Files.readString(main), main, true)).isEqualTo(jarEntriesOut());
 	}
 
 	/**
@@ -470,7 +465,12 @@ class ClojureJavaIoTest {
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
-	private String runOnWasm(String program, @Nullable Path entry, boolean component, Path preopen) throws Exception {
+	/**
+	 * Runs the program on wasmtime with the test's directory preopened by its physical
+	 * path: the roots and the paths the programs compute are physical, and a guest path
+	 * outside a preopen's spelling names nothing.
+	 */
+	private String runOnWasm(String program, @Nullable Path entry, boolean component) throws Exception {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program,
 				entry == null ? null : entry.toString(), true, component);
 		byte[] module = WasmLispCompiler.builder()
@@ -481,7 +481,7 @@ class ClojureJavaIoTest {
 		Path path = Files.createTempFile(this.dir, "jio", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
 		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
-				"exceptions=y", "--dir", preopen.toString(), path.toString());
+				"exceptions=y", "--dir", this.dir.toRealPath().toString(), path.toString());
 		assertThat(run.exitCode()).as("wasmtime exit code; stderr: %s", run.stderr()).isZero();
 		return run.stdout();
 	}

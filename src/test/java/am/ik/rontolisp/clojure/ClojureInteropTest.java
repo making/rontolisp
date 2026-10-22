@@ -1187,11 +1187,12 @@ class ClojureInteropTest {
 		// from :out-enc or as a byte array, the error output, :in as a string, a File, a
 		// reader, a byte array and a byte stream, :dir, :env and the two binding macros;
 		// the error output of 100,000 bytes goes to a file, so a full pipe never stalls
-		// the process
+		// the process. Host-neutral: :dir names no link (macOS's /tmp is one, which pwd
+		// prints resolved) and the octets come back as bytes, not through od's layout
 		assertBothEqual("(require '[clojure.java.shell :refer [sh with-sh-dir with-sh-env]] '[clojure.java.io :as io])"
 				+ " (defn show [m] (prn (:exit m) (:out m) (:err m)))" + " (show (sh \"echo\" \"hello\"))"
 				+ " (show (sh \"sh\" \"-c\" \"echo out; echo err 1>&2; exit 3\"))"
-				+ " (show (sh \"cat\" :in \"x\\u25bax\\n\"))" + " (show (sh \"pwd\" :dir \"/tmp\"))"
+				+ " (show (sh \"cat\" :in \"x\\u25bax\\n\"))" + " (show (sh \"pwd\" :dir \"/usr\"))"
 				+ " (show (with-sh-dir \"/\" (sh \"pwd\")))"
 				+ " (show (sh \"sh\" \"-c\" \"echo $FOO-$HOME\" :env {\"FOO\" \"bar\"}))"
 				+ " (show (with-sh-env {:FOO \"baz\"} (sh \"sh\" \"-c\" \"echo $FOO\")))"
@@ -1206,13 +1207,14 @@ class ClojureInteropTest {
 				+ " (let [m (sh \"printf\" \"\\\\377\\\\000A\" :out-enc :bytes)]"
 				+ " (prn (:exit m) (bytes? (:out m)) (vec (:out m)) (:err m)))"
 				+ " (prn (vec (:out (sh \"true\" :out-enc :bytes))))"
-				+ " (show (sh \"od\" \"-An\" \"-tx1\" :in (byte-array [-1 0 65 -61 -87]) :in-enc \"ISO-8859-1\"))"
-				+ " (show (sh \"od\" \"-An\" \"-tx1\" :in (java.io.ByteArrayInputStream. (byte-array [-1 0 65]))))"
+				+ " (defn octets [m] (prn (:exit m) (vec (:out m)) (:err m)))"
+				+ " (octets (sh \"cat\" :in (byte-array [-1 0 65 -61 -87]) :in-enc \"ISO-8859-1\" :out-enc :bytes))"
+				+ " (octets (sh \"cat\" :in (java.io.ByteArrayInputStream. (byte-array [-1 0 65])) :out-enc :bytes))"
 				+ " (prn (try (sh \"no-such-command-rontolisp\") (catch java.io.IOException e :io-exception)))", """
 						0 "hello\\n" ""
 						3 "out\\n" "err\\n"
 						0 "x\u25bax\\n" ""
-						0 "/tmp\\n" ""
+						0 "/usr\\n" ""
 						0 "/\\n" ""
 						0 "bar-\\n" ""
 						0 "baz\\n" ""
@@ -1223,8 +1225,8 @@ class ClojureInteropTest {
 						0 "\u00e9" ""
 						0 true [-1 0 65] ""
 						[]
-						0 " ff 00 41 c3 a9\\n" ""
-						0 " ff 00 41\\n" ""
+						0 [-1 0 65 -61 -87] ""
+						0 [-1 0 65] ""
 						:io-exception
 						""");
 	}

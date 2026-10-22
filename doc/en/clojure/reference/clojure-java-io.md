@@ -180,9 +180,11 @@ the program compiles, and the contents found travel with the program octet for o
 read the same wherever the program runs, a WASM module included. They are in place before the
 program starts, so every read of that URL takes them, one of a URL spelled by hand included. A
 name the program computes is looked up when it runs, in each root of the source path in order, a
-jar's entries included; reading the `jar:` URL it answers opens the entry from the jar. On WASM
-those directories and jars need a `--dir` preopen. A program naming `resource` only with string
-literals carries no lookup.
+jar's entries included; reading the `jar:` URL it answers opens the entry from the jar. A root
+is named by its physical path: the project's directory has every symbolic link resolved, as the
+oracle's working directory has (on macOS a project under `/tmp` is under `/private/tmp`). On WASM
+those directories and jars need a `--dir` preopen of that path. A program naming `resource` only
+with string literals carries no lookup.
 
 ```console
 $ cat resources/config.edn

@@ -460,6 +460,13 @@ final class ClojureSourcePath {
 		if (dir == null) {
 			dir = "";
 		}
+		else if (!dir.isEmpty()) {
+			// the oracle runs in its project's directory, which the JVM knows by its
+			// physical path (getcwd): the entry's directory every link resolved, so a
+			// project reached through a link (macOS's /var -> /private/var) puts the
+			// roots the oracle's file: URLs name on the source path
+			dir = this.files.canonical(dir);
+		}
 		out.add(new Root(inferredRoot(dir), false));
 		if (this.files == ClojureFiles.NONE) {
 			out.add(new Root("src", false));

@@ -244,7 +244,8 @@ class ClojureDataReadersTest {
 	@Test
 	void theDataReadersFilesAreRefusedLikeTheOraclesStartup() throws Exception {
 		// the oracle throws these as it starts: an ex-info of a URL where a file is named
-		// here, the cast refusals with no file at all
+		// here (its physical path, as the oracle's working directory is), the cast
+		// refusals with no file at all
 		write("shapes/deps.edn", "{:paths [\"src\"]}\n");
 		Path main = write("shapes/main.clj", "(println 1)\n");
 		Path readers = write("shapes/src/data_readers.clj", "");
@@ -262,7 +263,7 @@ class ClojureDataReadersTest {
 			Files.writeString(readers, file.getKey() + "\n");
 			assertThatThrownBy(() -> read(main)).as(file.getKey())
 				.isInstanceOf(LispReadException.class)
-				.hasMessage(readers + ":" + file.getValue());
+				.hasMessage(readers.toRealPath() + ":" + file.getValue());
 		}
 		// a tag without a namespace is the program's to read, only the first form counts
 		Files.writeString(readers, "{x a.b/c} {y/z d/e}\n");
@@ -276,7 +277,7 @@ class ClojureDataReadersTest {
 		Path conflict = write("conflict/main.clj", "(println 1)\n");
 		assertThatThrownBy(() -> read(conflict)).isInstanceOf(LispReadException.class)
 			.hasMessage(lib.toRealPath() + ":1:10: Conflicting data-reader mapping: t/x is #'b/f here and #'a/f in "
-					+ dir.resolve("conflict/src/data_readers.clj"));
+					+ dir.toRealPath().resolve("conflict/src/data_readers.clj"));
 	}
 
 	@Test

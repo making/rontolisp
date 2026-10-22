@@ -5564,6 +5564,8 @@ class JvmLispCompilerTest {
 		String dir = root.toString().replace("\\", "\\\\");
 		java.nio.file.Files.writeString(root.resolve("p.txt"), "p\n");
 		String d = root + "/";
+		// a truename resolves the links above the directory too (macOS's /var)
+		String real = root.toRealPath() + "/";
 		assertThat(compileAndRun("""
 					(print (uiop:probe-file* "%1$s/p.txt"))
 					(print (uiop:probe-file* "%1$s/p.txt" :truename t))
@@ -5594,9 +5596,9 @@ class JvmLispCompilerTest {
 				         (uiop:not-implemented-error () :signalled)))
 				""".formatted(dir))).isEqualTo("""
 				#P"%1$sp.txt"
-				#P"%1$sp.txt"
+				#P"%2$sp.txt"
 				NIL
-				#P"%1$sp.txt"
+				#P"%2$sp.txt"
 				NIL
 				(#P"%1$sp.txt")
 				DATED
@@ -5610,7 +5612,7 @@ class JvmLispCompilerTest {
 				MADE
 				NIL
 				:HERE
-				:SIGNALLED""".formatted(d));
+				:SIGNALLED""".formatted(d, real));
 	}
 
 	@Test

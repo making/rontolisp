@@ -130,7 +130,7 @@ class ClojureDepsProjectTest {
 				+ "(a git coordinate, not fetched), the dependencies the pom.xml in " + real("withpom.jar")
 				+ " declares (a jar's pom.xml is not read), org.clojure/data.json 2.5.1 (a Maven coordinate, not "
 				+ "fetched)";
-		String roots = dir.resolve("unfetched") + ", " + dir.resolve("unfetched/src") + ", " + real("withpom.jar");
+		String roots = real("unfetched") + ", " + real("unfetched") + "/src, " + real("withpom.jar");
 		// a contrib clojure.* library is a library like any other
 		Path json = write("unfetched/main.clj", "(require '[clojure.data.json :as json])\n");
 		assertThatThrownBy(() -> read(json, SourceStandards.DEFAULT)).isInstanceOf(LispReadException.class)

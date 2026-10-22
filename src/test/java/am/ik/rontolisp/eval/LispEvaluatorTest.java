@@ -26059,14 +26059,16 @@ class LispEvaluatorTest {
 		// nil-tolerant truename, directory* is directory, and safe-file-write-date
 		// swallows the missing-file error. The write side below it is real here
 		// (the interpreter's %make-directories / %delete-file / %rename-file).
+		// (the truenames resolve the links above the directory too: macOS's /var)
 		Files.writeString(tempDir.resolve("p.txt"), "p\n");
 		String dir = tempDir.toString().replace("\\", "\\\\");
+		Path real = tempDir.toRealPath();
 		assertThat(eval("(uiop:probe-file* \"" + dir + "/p.txt\")").print()).isEqualTo("#P\"" + tempDir + "/p.txt\"");
 		assertThat(eval("(uiop:probe-file* \"" + dir + "/p.txt\" :truename t)").print())
-			.isEqualTo("#P\"" + tempDir + "/p.txt\"");
+			.isEqualTo("#P\"" + real + "/p.txt\"");
 		assertThat(eval("(uiop:probe-file* \"" + dir + "/missing\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(uiop:probe-file* \"" + dir + "/*.txt\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(uiop:truename* \"" + dir + "/p.txt\")").print()).isEqualTo("#P\"" + tempDir + "/p.txt\"");
+		assertThat(eval("(uiop:truename* \"" + dir + "/p.txt\")").print()).isEqualTo("#P\"" + real + "/p.txt\"");
 		assertThat(eval("(uiop:truename* \"" + dir + "/missing\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(uiop:truename* nil)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(uiop:directory* \"" + dir + "/*.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/p.txt\")");

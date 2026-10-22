@@ -3218,7 +3218,12 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `resolveVar` would load the part), naming the var through `namesPartVar`, which loads
   nothing, so a program naming `resource` only with literals carries no lookup. Lookup as a
   class loader's, root by root: a directory root's file or directory (`file:` + the root's
-  absolute path, `ClojureFiles.absolute`, link not resolved, then the name with its `.`/`..`
+  absolute path, `ClojureFiles.absolute`, link not resolved -- but the entry file's directory,
+  which the roots and the `deps.edn` search start from, is made canonical first
+  (`ClojureSourcePath.computeRoots`): the oracle runs in its project directory, which the JVM
+  knows by its physical path, so on macOS a project under `/var` names `/private/var` (clj
+  1.12.6, 2026-10-23; before, the roots kept the entry's spelling and a wasm preopen of the
+  physical path missed them) -- then the name with its `.`/`..`
   segments resolved as `java.net.URL` resolves them, `resourcePath`; a `..` leading out of
   the root finds nothing there, `../resources/x` from `src` is found below `resources`; the
   empty name the first root, slash kept), a jar's entry of the name or a directory entry of
