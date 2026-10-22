@@ -5050,6 +5050,36 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
 	}
 
+	// A declared entry embedding a newline (g53: one built-in operator name registering
+	// first flips the parity and a prefix lands on index 10, so the entry holds a raw
+	// (char) 10 and the newline-joined names would split in two): its chunk joins on a
+	// separator no entry holds, and every one of twelve still refuses in its words.
+	@Test
+	void compileAndRunDeclaredReportsWithANewlineHoldingEntryRefuseInTheirWords() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *g53-fns* (list");
+		for (int i = 1; i <= 12; i++) {
+			program.append("(defun g53-a")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"G53-A")
+				.append(i)
+				.append("(\" \")\")) x)\n");
+			values.append(" #'g53-a").append(i);
+		}
+		program.append(values).append("))\n");
+		program
+			.append("(defun g53-try (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))\n");
+		StringBuilder expected = new StringBuilder();
+		for (int i = 0; i < 12; i++) {
+			program.append("(print (g53-try (lambda () (funcall (nth ").append(i).append(" *g53-fns*)))))\n");
+			expected.append("\"G53-A").append(i + 1).append("(0)\"\n");
+		}
+		program.append("(print (g53-try (lambda () (funcall (nth 0 *g53-fns*) 1 2))))\n")
+			.append("(print (g53-try (lambda () (funcall #'cons 1))))\n");
+		expected.append("\"G53-A1(2)\"\n\"CONS expects 2 arguments, got 1\"");
+		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
+	}
+
 	// A native built-in outside the wrapper catalog (compiler/NativeCallShapes) called
 	// with a wrong count is the same run-time report: its lowering used to fail the
 	// compile ((boundp)), answer ((export 'x p 3) was T) or, for a prelude defun, say

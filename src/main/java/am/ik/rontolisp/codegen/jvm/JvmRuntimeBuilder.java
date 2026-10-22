@@ -744,15 +744,17 @@ final class JvmRuntimeBuilder {
 		MethodRefEntry exCtor = cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		MethodRefEntry msgRef = cp.methodRef(thisClass, ARITY_MSG_NAME, ARITY_MSG_DESC);
 		List<String> operatorNames = operators.freeze();
-		List<String> nameChunks = arityNameChunks(operatorNames);
+		ArityNameChunks nameData = arityNameChunkData(operatorNames);
+		List<String> nameChunks = nameData.chunks();
+		List<String> nameSeparators = nameData.separators();
 		boolean declared = operatorNames.stream().anyMatch(JvmArityOperators::isDeclared);
 		MethodRefEntry opRef = nameChunks.size() > 1 ? cp.methodRef(thisClass, ARITY_OP_NAME, ARITY_OP_DESC) : null;
 		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
 		methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_MSG_NAME), cp.utf8Entry(ARITY_MSG_DESC),
-				buildArityMsgBody(cp, stringClass, nameChunks, declared, opRef)));
+				buildArityMsgBody(cp, stringClass, nameChunks, nameSeparators, declared, opRef)));
 		if (opRef != null) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_OP_NAME), cp.utf8Entry(ARITY_OP_DESC),
-					buildArityOpBody(nameChunks, cp, stringClass)));
+					buildArityOpBody(nameChunks, nameSeparators, cp, stringClass)));
 		}
 		if (withErr) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_ERR_NAME), cp.utf8Entry(ARITY_ERR_DESC),
@@ -868,11 +870,12 @@ final class JvmRuntimeBuilder {
 	 * ({@link JvmArityOperators}), whose name is read out of the newline-joined names and
 	 * stands where {@code Function} would; without, the body is the one a build that
 	 * named nothing emitted, byte for byte. One chunk reads its joined constant as
-	 * before; past one chunk the names ride a constant each and {@code _arityOp} answers
+	 * before, on its chunk's separator (the newline it always was unless an entry holds
+	 * one); past one chunk the names ride a constant each and {@code _arityOp} answers
 	 * the entry, so the single-chunk emission stays byte for byte.
 	 */
 	private static MethodCode buildArityMsgBody(ConstantPool cp, ClassEntry stringClass, List<String> nameChunks,
-			boolean declared, @org.jspecify.annotations.Nullable MethodRefEntry opRef) {
+			List<String> nameSeparators, boolean declared, @org.jspecify.annotations.Nullable MethodRefEntry opRef) {
 		ClassEntry sb = cp.classEntry("java/lang/StringBuilder");
 		MethodRefEntry sbInit = cp.methodRef(sb, "<init>", "()V");
 		MethodRefEntry appendStr = cp.methodRef(sb, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
@@ -915,13 +918,13 @@ final class JvmRuntimeBuilder {
 			}
 			else if (declared) {
 				emitDeclaredArityMessage(code, cp, stringClass, appendStr, appendInt, toString, nameChunks.get(0),
-						operator);
+						nameSeparators.get(0), operator);
 			}
 			else {
-				// sb.append(NAMES.split("\n")[operator - 1]).append(" expects ")
+				// sb.append(NAMES.split(sep)[operator - 1]).append(" expects ")
 				code.aload(2);
 				code.ldc(cp.stringEntry(nameChunks.get(0)));
-				code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
+				code.ldc(cp.stringEntry(nameSeparators.get(0)));
 				code.invokevirtual(cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;"));
 				code.iload(operator);
 				code.iconst_1();
@@ -974,11 +977,12 @@ final class JvmRuntimeBuilder {
 	 * Locals: 5 = the split names, 6 = the entry.
 	 */
 	private static void emitDeclaredArityMessage(MethodCode code, ConstantPool cp, ClassEntry stringClass,
-			MethodRefEntry appendStr, MethodRefEntry appendInt, MethodRefEntry toString, String joined, int operator) {
+			MethodRefEntry appendStr, MethodRefEntry appendInt, MethodRefEntry toString, String joined,
+			String separator, int operator) {
 		int names = 5, entry = 6;
 		MethodRefEntry charAt = cp.methodRef(stringClass, "charAt", "(I)C");
 		code.ldc(cp.stringEntry(joined));
-		code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
+		code.ldc(cp.stringEntry(separator));
 		code.invokevirtual(cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;"));
 		code.astore(names);
 		code.aload(names);
@@ -1021,9 +1025,12 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * What joins the operator names {@code _arityMsg} splits: no operator name contains a
+	 * What joins the operator names {@code _arityMsg} splits: no operator name holds a
 	 * newline, and a one-character non-metacharacter pattern is {@code String.split}'s
-	 * regex-free path.
+	 * regex-free path. A chunk with an entry holding one joins on the separator
+	 * {@link #chooseAritySeparator} picks instead (g53: a declared entry embeds its
+	 * prefix's index as one {@code char}, so the 10th distinct string to register puts a
+	 * raw newline in the entry).
 	 */
 	private static final String ARITY_OPERATOR_SEPARATOR = "\n";
 
@@ -1102,58 +1109,158 @@ final class JvmRuntimeBuilder {
 	static final int ARITY_NAMES_CHUNK_UTF8 = 60_000;
 
 	/**
+	 * One chunk of joined operator names with the separator it joins on: a chunk whose
+	 * entries hold no newline joins on {@link #ARITY_OPERATOR_SEPARATOR}, a chunk with an
+	 * entry holding one (g53: a declared entry embeds its prefix's index as one
+	 * {@code char}) on a separator no entry of it holds, so the split still recovers
+	 * every entry exactly.
+	 *
+	 * @param chunks the joined chunk constants, covering the names contiguously in order
+	 * @param separators the separator each chunk joins on, parallel to {@code chunks}
+	 */
+	static record ArityNameChunks(List<String> chunks, List<String> separators) {
+	}
+
+	/**
 	 * The operator names split into chunks of at most {@link #ARITY_NAMES_CHUNK_UTF8}
 	 * joined bytes each: every chunk's constant stays under one {@code CONSTANT_Utf8} by
 	 * construction, and the single chunk of a registry one joined constant holds is that
-	 * join, so the single-chunk {@code _arityMsg} emission stays byte for byte. No entry
-	 * holds a newline (declared reports are {@code encodable}, operator names are
-	 * built-in names), so joining on {@link #ARITY_OPERATOR_SEPARATOR} and splitting it
-	 * back recovers every entry exactly.
+	 * join on {@link #ARITY_OPERATOR_SEPARATOR} (no entry holds one), so the single-chunk
+	 * {@code _arityMsg} emission stays byte for byte.
 	 * @param operatorNames the registry's names in index order
 	 * @return the chunks, covering the names contiguously in order
 	 */
 	static List<String> arityNameChunks(List<String> operatorNames) {
-		List<String> chunks = new ArrayList<>();
-		StringBuilder current = new StringBuilder();
+		return arityNameChunkData(operatorNames).chunks();
+	}
+
+	/**
+	 * {@link #arityNameChunks} with the separator each chunk joins on. The split points
+	 * are budgeted on a one-byte gap, which every separator chosen here takes unless a
+	 * chunk holds every one-byte candidate: a wider separator re-splits its chunk's
+	 * entries on its true width, so its constants still fit.
+	 * @param operatorNames the registry's names in index order
+	 * @return the chunks with their separators
+	 */
+	static ArityNameChunks arityNameChunkData(List<String> operatorNames) {
+		List<List<String>> entryChunks = new ArrayList<>();
+		List<String> current = new ArrayList<>();
 		int length = 0;
 		for (String entry : operatorNames) {
-			int grown = current.isEmpty() ? modifiedUtf8Length(entry)
-					: length + modifiedUtf8Length(ARITY_OPERATOR_SEPARATOR) + modifiedUtf8Length(entry);
+			int grown = current.isEmpty() ? modifiedUtf8Length(entry) : length + 1 + modifiedUtf8Length(entry);
 			if (!current.isEmpty() && grown > ARITY_NAMES_CHUNK_UTF8) {
-				chunks.add(current.toString());
-				current = new StringBuilder();
+				entryChunks.add(current);
+				current = new ArrayList<>();
 				length = 0;
 				grown = modifiedUtf8Length(entry);
 			}
-			if (!current.isEmpty()) {
-				current.append(ARITY_OPERATOR_SEPARATOR);
-			}
-			current.append(entry);
+			current.add(entry);
 			length = grown;
 		}
 		if (!current.isEmpty()) {
-			chunks.add(current.toString());
+			entryChunks.add(current);
+		}
+		List<String> chunks = new ArrayList<>();
+		List<String> separators = new ArrayList<>();
+		for (List<String> entries : entryChunks) {
+			String separator = chooseAritySeparator(entries);
+			int width = modifiedUtf8Length(separator);
+			if (width == 1) {
+				chunks.add(String.join(separator, entries));
+				separators.add(separator);
+				continue;
+			}
+			for (List<String> sub : splitArityEntries(entries, width)) {
+				chunks.add(String.join(separator, sub));
+				separators.add(separator);
+			}
+		}
+		return new ArityNameChunks(List.copyOf(chunks), List.copyOf(separators));
+	}
+
+	/**
+	 * The entries split into chunks of at most {@link #ARITY_NAMES_CHUNK_UTF8} joined
+	 * bytes each.
+	 */
+	private static List<List<String>> splitArityEntries(List<String> entries, int separatorWidth) {
+		List<List<String>> chunks = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		int length = 0;
+		for (String entry : entries) {
+			int grown = current.isEmpty() ? modifiedUtf8Length(entry)
+					: length + separatorWidth + modifiedUtf8Length(entry);
+			if (!current.isEmpty() && grown > ARITY_NAMES_CHUNK_UTF8) {
+				chunks.add(current);
+				current = new ArrayList<>();
+				length = 0;
+				grown = modifiedUtf8Length(entry);
+			}
+			current.add(entry);
+			length = grown;
+		}
+		if (!current.isEmpty()) {
+			chunks.add(current);
 		}
 		return chunks;
 	}
 
 	/**
+	 * The separator a names chunk joins on: {@link #ARITY_OPERATOR_SEPARATOR} when no
+	 * entry holds one, so every registry that always split back joins exactly as before;
+	 * else the first single-character {@code String.split} pattern no entry holds,
+	 * control characters first so the refusal path keeps a regex-free split. Never NUL (a
+	 * leading one splits off an empty head and shifts every index), never a regex
+	 * metacharacter, never a surrogate half. A chunk holds
+	 * {@link #ARITY_NAMES_CHUNK_UTF8} bytes at most, fewer characters than the candidate
+	 * pool, so one is always absent.
+	 * @param entries the chunk's entries in order
+	 * @return the separator joining them
+	 */
+	private static String chooseAritySeparator(List<String> entries) {
+		if (entries.stream().noneMatch(entry -> entry.indexOf('\n') >= 0)) {
+			return ARITY_OPERATOR_SEPARATOR;
+		}
+		for (int c = 1; c < 0x80; c++) {
+			if (".$|()[{^?*+\\".indexOf(c) >= 0) {
+				continue;
+			}
+			char candidate = (char) c;
+			if (entries.stream().noneMatch(entry -> entry.indexOf(candidate) >= 0)) {
+				return String.valueOf(candidate);
+			}
+		}
+		for (int c = 0x80; c <= 0xFFFF; c++) {
+			if (c >= 0xD800 && c <= 0xDFFF) {
+				continue;
+			}
+			char candidate = (char) c;
+			if (entries.stream().noneMatch(entry -> entry.indexOf(candidate) >= 0)) {
+				return String.valueOf(candidate);
+			}
+		}
+		throw new IllegalStateException("arity names chunk holds every separator candidate");
+	}
+
+	/**
 	 * {@code _arityOp(index)}: the name the 1-based operator index names, reading it out
-	 * of whichever chunk's range holds it. Emitted only past one chunk; the refusal path
-	 * alone calls it, so a call with the right count costs nothing.
+	 * of whichever chunk's range holds it, each chunk split on its own separator. Emitted
+	 * only past one chunk; the refusal path alone calls it, so a call with the right
+	 * count costs nothing.
 	 * @param chunks the {@link #arityNameChunks} chunks
+	 * @param separators the separator each chunk joins on, parallel to {@code chunks}
 	 * @param cp the constant pool
 	 * @param stringClass the {@code String} class constant
 	 * @return the helper body
 	 */
-	private static MethodCode buildArityOpBody(List<String> chunks, ConstantPool cp, ClassEntry stringClass) {
+	private static MethodCode buildArityOpBody(List<String> chunks, List<String> separators, ConstantPool cp,
+			ClassEntry stringClass) {
 		MethodRefEntry split = cp.methodRef(stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;");
 		// The 1-based global index each chunk starts at.
 		List<Integer> starts = new ArrayList<>();
 		int start = 1;
-		for (String chunk : chunks) {
+		for (int k = 0; k < chunks.size(); k++) {
 			starts.add(start);
-			start += countChunkEntries(chunk);
+			start += countChunkEntries(chunks.get(k), separators.get(k));
 		}
 		MethodCode code = new MethodCode();
 		for (int k = 0; k + 1 < chunks.size(); k++) {
@@ -1161,10 +1268,11 @@ final class JvmRuntimeBuilder {
 			code.iload(0);
 			emitArityInt(code, cp, starts.get(k + 1) - 1);
 			code.if_icmpgt(next);
-			emitArityOpLookup(code, chunks.get(k), starts.get(k), cp, stringClass, split);
+			emitArityOpLookup(code, chunks.get(k), separators.get(k), starts.get(k), cp, stringClass, split);
 			code.labelBinding(next);
 		}
-		emitArityOpLookup(code, chunks.get(chunks.size() - 1), starts.get(chunks.size() - 1), cp, stringClass, split);
+		emitArityOpLookup(code, chunks.get(chunks.size() - 1), separators.get(chunks.size() - 1),
+				starts.get(chunks.size() - 1), cp, stringClass, split);
 		return code;
 	}
 
@@ -1173,15 +1281,16 @@ final class JvmRuntimeBuilder {
 	 * index in local 0 less the chunk's start, and a return of the entry.
 	 * @param code the body under construction
 	 * @param chunk the joined chunk
+	 * @param separator the separator the chunk joins on
 	 * @param start the chunk's 1-based global first index
 	 * @param cp the constant pool
 	 * @param stringClass the {@code String} class constant
 	 * @param split the {@code String.split} reference
 	 */
-	private static void emitArityOpLookup(MethodCode code, String chunk, int start, ConstantPool cp,
+	private static void emitArityOpLookup(MethodCode code, String chunk, String separator, int start, ConstantPool cp,
 			ClassEntry stringClass, MethodRefEntry split) {
 		code.ldc(cp.stringEntry(chunk));
-		code.ldc(cp.stringEntry(ARITY_OPERATOR_SEPARATOR));
+		code.ldc(cp.stringEntry(separator));
 		code.invokevirtual(split);
 		code.iload(0);
 		if (start != 1) {
@@ -1195,10 +1304,11 @@ final class JvmRuntimeBuilder {
 	}
 
 	/** The entries one joined chunk holds: its separators plus one. */
-	private static int countChunkEntries(String chunk) {
+	private static int countChunkEntries(String chunk, String separator) {
+		char sep = separator.charAt(0);
 		int count = 1;
 		for (int i = 0; i < chunk.length(); i++) {
-			if (chunk.charAt(i) == '\n') {
+			if (chunk.charAt(i) == sep) {
 				count++;
 			}
 		}

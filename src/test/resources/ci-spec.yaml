@@ -21797,6 +21797,36 @@ cases:
       :PLAIN
       ((1 . 2) (3 . 4) 5 ((1 . 2)))
 
+  # Twelve distinct declared wrong-count reports in one program (g53: on the JVM leg
+  # a prefix landing on the 10th registry index embeds a raw newline in its entry, so
+  # the newline-joined names would split in two and every name past it shift -- its
+  # chunk joins on a separator no entry holds instead): every one still refuses in
+  # its declared words, on all four backends, which share the declaration but not
+  # the join.
+  - name: twelve-distinct-declared-arity-reports
+    source: |
+      (defun g53d1 (x) (declare (rontolisp::%arity-report "D1(" ")")) x)
+      (defun g53d2 (x) (declare (rontolisp::%arity-report "D2(" ")")) x)
+      (defun g53d3 (x) (declare (rontolisp::%arity-report "D3(" ")")) x)
+      (defun g53d4 (x) (declare (rontolisp::%arity-report "D4(" ")")) x)
+      (defun g53d5 (x) (declare (rontolisp::%arity-report "D5(" ")")) x)
+      (defun g53d6 (x) (declare (rontolisp::%arity-report "D6(" ")")) x)
+      (defun g53d7 (x) (declare (rontolisp::%arity-report "D7(" ")")) x)
+      (defun g53d8 (x) (declare (rontolisp::%arity-report "D8(" ")")) x)
+      (defun g53d9 (x) (declare (rontolisp::%arity-report "D9(" ")")) x)
+      (defun g53d10 (x) (declare (rontolisp::%arity-report "D10(" ")")) x)
+      (defun g53d11 (x) (declare (rontolisp::%arity-report "D11(" ")")) x)
+      (defun g53d12 (x) (declare (rontolisp::%arity-report "D12(" ")")) x)
+      (defun g53d-try (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (list (g53d-try (lambda () (funcall #'g53d1))) (g53d-try (lambda () (funcall #'g53d2)))
+                   (g53d-try (lambda () (funcall #'g53d3))) (g53d-try (lambda () (funcall #'g53d4)))
+                   (g53d-try (lambda () (funcall #'g53d5))) (g53d-try (lambda () (funcall #'g53d6)))
+                   (g53d-try (lambda () (funcall #'g53d7))) (g53d-try (lambda () (funcall #'g53d8)))
+                   (g53d-try (lambda () (funcall #'g53d9))) (g53d-try (lambda () (funcall #'g53d10)))
+                   (g53d-try (lambda () (funcall #'g53d11))) (g53d-try (lambda () (funcall #'g53d12)))))
+    expected: |
+      ("D1(0)" "D2(0)" "D3(0)" "D4(0)" "D5(0)" "D6(0)" "D7(0)" "D8(0)" "D9(0)" "D10(0)" "D11(0)" "D12(0)")
+
   # The same count inside a compiled eval (.kb/eval-runtime.md): a registered
   # function gets every argument form evaluated and the dispatcher judges the count
   # (the runtime used to evaluate exactly the registered arity, so (car 1 2) raised a

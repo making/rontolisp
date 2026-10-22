@@ -156,6 +156,63 @@ class JvmArityTableTest {
 		assertThat(JvmRuntimeBuilder.arityNameChunks(List.of())).isEmpty();
 	}
 
+	/**
+	 * A declared entry embedding a newline (g53: one built-in operator name registering
+	 * first flips the parity and a prefix lands on index 10, so the entry holds a raw
+	 * {@code (char) 10}): its chunk joins on a separator no entry holds, and splitting
+	 * every chunk on its own separator recovers every entry exactly.
+	 */
+	@Test
+	void aNewlineHoldingEntryMovesItsChunkOffTheNewlineSeparator() {
+		JvmArityOperators operators = new JvmArityOperators();
+		operators.namedShape(2, false, "CONS");
+		for (int i = 1; i <= 12; i++) {
+			operators.declare("g53-" + i, new am.ik.rontolisp.DeclaredArityReport("P" + i + "(", ") f" + i));
+		}
+		for (int i = 1; i <= 12; i++) {
+			operators.shape(1, false, "g53-" + i);
+		}
+		List<String> names = operators.freeze();
+		assertThat(names.stream().anyMatch(entry -> entry.indexOf('\n') >= 0)).isTrue();
+		JvmRuntimeBuilder.ArityNameChunks data = JvmRuntimeBuilder.arityNameChunkData(names);
+		assertThat(data.chunks()).hasSize(1);
+		assertThat(data.separators()).hasSize(1);
+		String separator = data.separators().get(0);
+		assertThat(separator).isNotEqualTo("\n");
+		assertThat(names.stream().allMatch(entry -> entry.indexOf(separator) < 0)).isTrue();
+		assertThat(data.chunks().get(0).split(separator, -1)).containsExactlyElementsOf(names);
+		assertThat(utf8Length(data.chunks().get(0))).isLessThanOrEqualTo(60_000);
+	}
+
+	/**
+	 * Registries without a newline-holding entry keep the newline separator on every
+	 * chunk, so the emission stays the one it always was.
+	 */
+	@Test
+	void registriesWithoutANewlineHoldingEntryKeepTheNewlineSeparator() {
+		List<String> names = List.of("CONS", "P1(", "" + '\0' + (char) 2 + ") f1");
+		JvmRuntimeBuilder.ArityNameChunks data = JvmRuntimeBuilder.arityNameChunkData(names);
+		assertThat(data.chunks()).containsExactly(String.join("\n", names));
+		assertThat(data.separators()).containsExactly("\n");
+	}
+
+	/**
+	 * A chunk holding every one-byte separator candidate still finds one past the
+	 * controls, and splits back exactly.
+	 */
+	@Test
+	void aChunkHoldingEveryOneByteCandidateStillFindsASeparator() {
+		StringBuilder every = new StringBuilder();
+		for (int c = 1; c < 0x80; c++) {
+			every.append((char) c);
+		}
+		List<String> names = List.of(every.toString(), "TAIL");
+		JvmRuntimeBuilder.ArityNameChunks data = JvmRuntimeBuilder.arityNameChunkData(names);
+		assertThat(data.chunks()).hasSize(1);
+		assertThat(data.separators().get(0)).isEqualTo("\u0080");
+		assertThat(data.chunks().get(0).split(data.separators().get(0), -1)).containsExactlyElementsOf(names);
+	}
+
 	/** The class file's modified UTF-8 length, as the constant-pool writer counts it. */
 	private static int utf8Length(CharSequence text) {
 		int length = 0;
