@@ -2,8 +2,8 @@
 
 `(extend-protocol Protocol Type (method [target & args] body...) ...)`
 
-型を再定義せずにプロトコルの表へ行を足します。型・メソッドごとに1つの格納ラムダ
-（`defmethod` 行同様。繰り返した型は後の行が勝ちます。オラクル同様）。対象は
+型を再定義せずにプロトコルの型の行を置換します。型・メソッドごとに1つの格納ラムダ
+（`defmethod` 行同様。繰り返した型は後のグループが先の行を置換します。オラクル同様）。対象は
 `class` が答える種類（`String`、`Number`、`Boolean`、`Keyword`、`Symbol`、
 `Character`、`Map`、`Vector`、`Set`、`List`/`Seq`、それに外れ既定としての `nil`
 と `Object`。`java.lang.String`、`clojure.lang.IPersistentMap` のようなパッケージ修飾の綴りも可）、既知の record/deftype 名、それに値がインスタンスでありうる他のクラスです。

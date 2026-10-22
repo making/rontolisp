@@ -15672,10 +15672,10 @@ cases:
     # reify, mutations both directions (a value install a head call and
     # satisfies? see, a head install the value arms read).
     # Oracle-identical (clj 1.12.6, 2026-10-26, all four backends) except
-    # three wordings the head already customizes: nil answers the Object
-    # default here where the oracle answers false (the head call, which
-    # the value mirrors, reads it too), and a non-class type is refused
-    # without the JVM's module tail (like instance? of one).
+    # one wording the head already customizes: a non-class type is refused
+    # without the JVM's module tail (like instance? of one). g43: nil no
+    # longer answers the Object default (the head call, which the value
+    # mirrors, guards it behind the value's class, like the oracle).
     source: |
       (defprotocol G42 (g42-m [x]))
       (defrecord G42R [a] G42 (g42-m [_] :rec))
@@ -15727,7 +15727,7 @@ cases:
       true
       true
       true
-      true
+      false
       true true
       true true
       (true true true)
@@ -15758,6 +15758,62 @@ cases:
       java.lang.ClassCastException|class java.lang.String cannot be cast to class java.lang.Class
       java.lang.IllegalArgumentException|42 is not a protocol
       Wrong number of args (1) passed to: clojure.core/extends?
+  - name: protocol-head-divergences-match-the-oracle
+    # g43: the four head-vs-oracle divergences g42 proved and left alone.
+    # nil never consults the Object default (an explicit nil row still
+    # satisfies); a non-map method map stores as-is, satisfying and
+    # extending but dispatching nothing; a later extend replaces the type's
+    # whole row (an empty map replaces with an empty row, nil removes it);
+    # and extending a type whose body implements the protocol refuses (a
+    # lowering refusal, pinned by ClojureLoweringTest). Every line matches
+    # the oracle (clj 1.12.6, 2026-10-26, all four backends).
+    source: |
+      (defprotocol G43 (g43-m [x]))
+      (extend-protocol G43 Object (g43-m [_] :obj))
+      (println (satisfies? G43 nil))
+      (println (try (g43-m nil) (catch IllegalArgumentException e "IAE")))
+      (extend nil G43 {:g43-m (fn [_] :nilx)})
+      (println (satisfies? G43 nil) (g43-m nil))
+      (defprotocol G43R (g43-a [x]) (g43-b [x]))
+      (println (extend String G43R "sto"))
+      (println (satisfies? G43R "s") (extends? G43R String))
+      (println (try (g43-a "s") (catch IllegalArgumentException e "IAE")))
+      (extend String G43R {:g43-a (fn [_] :a1) :g43-b (fn [_] :b1)})
+      (println (g43-a "k") (g43-b "k"))
+      (extend String G43R {:g43-a (fn [_] :a2)})
+      (println (g43-a "k") (try (g43-b "k") (catch IllegalArgumentException e "IAE")))
+      (extend String G43R {})
+      (println (satisfies? G43R "k") (try (g43-a "k") (catch IllegalArgumentException e "IAE")))
+      (extend String G43R nil)
+      (println (satisfies? G43R "k") (extends? G43R String))
+      (extend Object G43R {:g43-a (fn [_] :o)})
+      (println (g43-a 5))
+      (extend Object G43R nil)
+      (println (satisfies? G43R 5) (extends? G43R Object))
+      (def g43-e extend)
+      (println (g43-e String G43R [:p :q]) (satisfies? G43R "v"))
+      (println (try (g43-a "v") (catch IllegalArgumentException e "IAE")))
+      (println (g43-e String G43R {:g43-a (fn [_] :va)}) (g43-a "v"))
+      (println (g43-e Object G43R "raw") (satisfies? G43R 1))
+      (println (try (g43-a 1) (catch IllegalArgumentException e "IAE")))
+    expected: |
+      false
+      IAE
+      true :nilx
+      nil
+      true true
+      IAE
+      :a1 :b1
+      :a2 IAE
+      true IAE
+      false false
+      :o
+      false false
+      nil true
+      IAE
+      nil :va
+      nil true
+      IAE
   - name: function-values-compare-by-identity
     # = over functions is identity on every backend, like the oracle's
     # Util.equiv: two references to one defn or defmulti are =, two
