@@ -6,10 +6,12 @@
 ;;;;
 ;;;; Inline content is a list of nodes: a string, (:b nodes), (:i nodes), (:mark nodes),
 ;;;; (:tt "string") or (:link "url" nodes).
+;;;;
+;;;; A deck can be rendered from an untrusted source, so nothing here evaluates a form.
 
 (in-package :lispresen)
 
-(defstruct deck title author date theme aspect page-numbers slides)
+(defstruct deck line title author date theme aspect runtime page-numbers slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
@@ -18,7 +20,9 @@
 (defstruct para inlines run)
 (defstruct bullets ordered items)
 (defstruct item inlines sublist run)
-(defstruct code-block lang lines)
+;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
+;;; fitted, from the language, RUN and the deck's runtime.
+(defstruct code-block lang lines (run t) runnable timeout fresh stdin)
 (defstruct figure src alt caption caption-run)
 (defstruct table-block
   header
@@ -31,6 +35,8 @@
   widths
   aligns)
 (defstruct cell inlines colspan run)
+(defstruct quotation inlines cite run cite-run)
+(defstruct column blocks)
 
 ;;; --- form helpers ------------------------------------------------------------
 
@@ -67,15 +73,20 @@ name, and the remaining arguments. An option not in ALLOWED is reported."
   "The upper-case name of a symbol option value such as :light, or nil."
   (and x (symbolp x) (string-upcase (symbol-name x))))
 
-(defun string-option (opts name context)
+(defun raw-string-option (opts name context)
+  "The string value of option NAME as written, or nil."
   (let ((v (opt opts name)))
     (cond ((null v) nil)
-          ((stringp v) (text-leaf v))
+          ((stringp v) v)
           (t
            (report :error (format nil "~a of ~a must be a string"
                            (concatenate 'string ":" (string-downcase name))
                            context))
            nil))))
+
+(defun string-option (opts name context)
+  "The string value of option NAME as text: whitespace collapsed, or nil."
+  (let ((v (raw-string-option opts name context))) (and v (text-leaf v))))
 
 ;;; --- text --------------------------------------------------------------------
 
@@ -230,11 +241,26 @@ and the common indentation removed."
           (setf indent (if indent (min indent k) k)))))
     (mapcar (lambda (l) (if (string= l "") l (subseq l (or indent 0)))) lines)))
 
+(defun positive-option (opts name default)
+  (let ((v (opt opts name default)))
+    (if (and (integerp v) (> v 0))
+        v
+        (progn
+          (report :error (format nil "~a of code must be a positive integer"
+                          (concatenate 'string ":" (string-downcase name))))
+          default))))
+
 (defun parse-code (form)
-  (multiple-value-bind (opts body) (split-options (cdr form) '("LANG") "code")
+  (multiple-value-bind (opts body) (split-options (cdr form)
+                                    '("LANG" "RUN" "TIMEOUT" "FRESH" "STDIN")
+                                    "code")
     (if (every #'stringp body)
-        (make-code-block :lang (opt opts "LANG")
-                         :lines (dedent (apply #'concatenate 'string body)))
+        (make-code-block :lang (string-option opts "LANG" "code")
+                         :lines (dedent (apply #'concatenate 'string body))
+                         :run (opt opts "RUN" t)
+                         :timeout (positive-option opts "TIMEOUT" 10)
+                         :fresh (opt opts "FRESH")
+                         :stdin (raw-string-option opts "STDIN" "code"))
         (progn
           (report :error "(code ...) takes strings only")
           nil))))
@@ -317,8 +343,27 @@ and the common indentation removed."
                              :caption (string-option opts "CAPTION" "table")
                              :row-header (opt opts "ROW-HEADER"))))))
 
-(defun parse-block (x)
-  "The block X stands for, or nil after reporting."
+(defun parse-quote (form)
+  (multiple-value-bind (opts body) (split-options (cdr form) '("CITE") "quote")
+    (let ((inlines (parse-inlines body)))
+      (if inlines
+          (make-quotation :inlines inlines
+                          :cite (string-option opts "CITE" "quote"))
+          (progn
+            (report :error "(quote ...) needs text")
+            nil)))))
+
+(defun parse-column (form in-column)
+  (if in-column
+      (progn
+        (report :error "a column cannot hold another column")
+        nil)
+      (make-column :blocks (remove nil
+                                   (mapcar (lambda (x) (parse-block x t))
+                                           (cdr form))))))
+
+(defun parse-block (x &optional in-column)
+  "The block X stands for, or nil after reporting. IN-COLUMN is true inside a column."
   (cond ((stringp x) (make-para :inlines (list (text-leaf x))))
         ((consp x)
          (let ((tag (form-tag x)))
@@ -327,6 +372,8 @@ and the common indentation removed."
                  ((equal tag "CODE") (parse-code x))
                  ((equal tag "IMAGE") (parse-image x))
                  ((equal tag "TABLE") (parse-table x))
+                 ((equal tag "QUOTE") (parse-quote x))
+                 ((equal tag "COLUMN") (parse-column x in-column))
                  ((inline-tag-p tag) (make-para :inlines (parse-inline x)))
                  ((equal tag "LI")
                   (report :error "(li ...) belongs in (ul ...) or (ol ...)")
@@ -355,6 +402,9 @@ and the common indentation removed."
                 (push (apply #'concatenate 'string (cdr x)) notes)
                 (report :error "(notes ...) takes strings only"))
             (let ((b (parse-block x))) (when b (push b blocks)))))
+      (when (and (some #'column-p blocks) (notevery #'column-p blocks))
+        (report :error "a slide with columns holds only (column ...) blocks")
+        (setf blocks (remove-if-not #'column-p blocks)))
       (make-slide :number number
        :line line
        :kind :slide
@@ -374,10 +424,20 @@ and the common indentation removed."
                 :kind :section
                 :title (and (stringp title) (text-leaf title)))))
 
+(defun parse-runtime (x)
+  "The runtime option as :hosted, :none or a URL string; nil when absent."
+  (cond ((null x) nil)
+   ((stringp x) (if (string= x "") :hosted x))
+   ((equal (symbol-value-name x) "HOSTED") :hosted)
+   ((equal (symbol-value-name x) "NONE") :none)
+   (t
+    (report :error ":runtime must be :hosted, :none or a URL string")
+    nil)))
+
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
-                                                    "THEME" "ASPECT"
+                                                    "THEME" "ASPECT" "RUNTIME"
                                                     "PAGE-NUMBERS") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
@@ -385,6 +445,7 @@ and the common indentation removed."
                :date (string-option opts "DATE" "deck")
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
+               :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS"))))
 
 (defun parse-deck (forms)
@@ -392,7 +453,8 @@ and the common indentation removed."
   (let ((deck nil) (slides nil) (number 0))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
-        (setf deck (parse-deck-header (car (car forms)))))
+        (setf deck (parse-deck-header (car (car forms))))
+        (setf (deck-line deck) *line*))
       (setf forms (cdr forms)))
     (unless deck (setf deck (make-deck)))
     (when (deck-title deck)

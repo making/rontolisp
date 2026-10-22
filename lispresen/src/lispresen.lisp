@@ -2,12 +2,22 @@
 
 (in-package :lispresen)
 
-(defun render (source &key theme)
+(defun runtime-option (x)
+  "The runtime a command line names: none, hosted, or a URL."
+  (cond ((string-equal x "none") :none)
+        ((string-equal x "hosted") :hosted)
+        (t x)))
+
+(defun render (source &key theme runtime)
   "The HTML of the deck SOURCE, and its diagnostics ordered by line. THEME, a theme name,
-overrides the deck's :theme."
+overrides the deck's :theme; RUNTIME (none, hosted or a URL) its :runtime."
   (let ((*diagnostics* nil) (*line* nil) (*slide* nil) (*slide-title* nil))
     (let* ((deck (parse-deck (read-forms source)))
-           (theme (find-theme (or theme (deck-theme deck)))))
+           (theme
+            (let ((*line* (deck-line deck)))
+              (find-theme (or theme (deck-theme deck))))))
+      (when runtime (setf (deck-runtime deck) (runtime-option runtime)))
+      (let ((*line* (deck-line deck))) (lint-theme theme))
       (dolist (slide (deck-slides deck))
         (let ((*line* (slide-line slide))
               (*slide* (slide-number slide))

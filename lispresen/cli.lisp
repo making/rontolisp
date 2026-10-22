@@ -1,6 +1,6 @@
 ;;;; cli.lisp -- the lispresen command.
 ;;;;
-;;;;   lispresen DECK [-o OUT] [--theme NAME] [--check] [--strict]
+;;;;   lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
 ;;;;
 ;;;; Reads DECK, writes its HTML, prints diagnostics to standard error. Exit status: 0
 ;;;; success, 1 errors (or warnings under --strict), 2 usage. Runs unchanged on every
@@ -20,9 +20,11 @@
 #-rontolisp (load (merge-pathnames "src/all.lisp" *load-truename*))
 
 (defparameter *usage*
-  "usage: lispresen DECK [-o OUT] [--theme NAME] [--check] [--strict]
+  "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
   DECK and OUT may be - for standard input / output; OUT defaults to DECK with .html.
   --theme NAME  light, dark or high-contrast, overriding the deck's :theme
+  --runtime R   where runnable code loads the runtime from, overriding the deck's
+                :runtime: a directory URL, hosted (the project site) or none (static code)
   --check       report diagnostics without writing HTML
   --strict      fail on warnings too")
 
@@ -63,7 +65,7 @@
         (write-string html s))))
 
 (defun main (args)
-  (let ((deck nil) (out nil) (theme nil) (check nil) (strict nil))
+  (let ((deck nil) (out nil) (theme nil) (runtime nil) (check nil) (strict nil))
     (loop while args
           do
             (let ((a (pop args)))
@@ -73,6 +75,10 @@
                     ((string= a "--theme")
                      (unless args (usage-error "--theme needs a name"))
                      (setf theme (pop args)))
+                    ((string= a "--runtime")
+                     (unless args
+                       (usage-error "--runtime needs a URL, hosted or none"))
+                     (setf runtime (pop args)))
                     ((string= a "--check") (setf check t))
                     ((string= a "--strict") (setf strict t))
                     ((string= a "--help")
@@ -89,7 +95,7 @@
         (finish-output *error-output*)
         (uiop:quit 1))
       (multiple-value-bind (html diagnostics)
-          (lispresen:render source :theme theme)
+          (lispresen:render source :theme theme :runtime runtime)
         (let ((name (if (string= deck "-") "<stdin>" deck))
               (errors 0)
               (warnings 0))

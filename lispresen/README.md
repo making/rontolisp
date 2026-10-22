@@ -34,12 +34,14 @@ The design, and what is still to come, is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :theme :aspect :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark` or `:high-contrast`, `:aspect` `:16x9` or `:4x3` |
+| `(deck :title :author :date :theme :aspect :runtime :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)`, `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below) |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:layout name] [:class "c"] block...)` | a slide |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(ul item...)`, `(ol item...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it |
-| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed |
+| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below) |
+| `(quote [:cite "who"] inline...)` | a quotation |
+| `(column block...)` | a column; a slide of columns lays them side by side at one text size |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
@@ -74,7 +76,7 @@ sbcl --script lispresen/cli.lisp talk.lisp
 ```
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
@@ -86,8 +88,52 @@ errors (or warnings under `--strict`), 2 usage.
 
 Open the HTML file in a browser. Arrow keys, space, PageUp/PageDown (clickers),
 Home/End and swiping move between slides; `#N` in the URL opens slide N. `F`, a double
-click or the button in the bottom-right corner toggles full screen. Printing to PDF puts
-one slide on each page.
+click or the button in the bottom-right corner toggles full screen. `O` shows all slides.
+Printing to PDF puts one slide on each page.
+
+`P` opens the presenter window: the current and next slide, the notes, a timer (click it
+to reset) and Start, which puts the slides in full screen on the other display (Chrome or
+Edge, the deck served over HTTP; the first Start asks for permission to use the
+displays). Moving in either window moves the other.
+
+If the fonts on the presenting machine set text wider than lispresen measured, the deck
+steps the affected slides down a size when it opens; `?check` in the URL lists what it
+changed.
+
+## Runnable code
+
+A `code` block in `lisp`, `scheme` or `clojure` runs in the deck: click it (or press `E`)
+to edit, `Ctrl+Enter` or Run to run, Reset to restore it. The output opens in a panel over
+the slide, so running code takes no room from it; long output scrolls (wheel, or `↑` /
+`↓`), and × or `Esc` closes the panel. Blocks of
+one language share definitions, so a function defined on one slide can be called on the
+next.
+
+```lisp
+(code :lang "clojure" :timeout 5 "
+  (defn square [x] (* x x))
+  (map square (range 10))")
+```
+
+| Option | Meaning |
+|--------|---------|
+| `:run nil` | show the code without running it |
+| `:timeout s` | stop a run after s seconds (default 10); the runtime restarts and earlier definitions are gone |
+| `:fresh t` | run as a whole program on a new interpreter |
+| `:stdin "text"` | standard input of a `:fresh` run |
+
+The runtime is rontolisp's browser build, about 35 MB. By default it loads from
+`https://making.github.io/rontolisp/` when the deck opens, so presenting needs the
+network. To present offline, build it and put it beside the deck:
+
+```bash
+./mvnw -Pweb -DskipTests package                 # needs GraalVM with Web Image (web/README.md)
+mkdir -p talk/runtime && cp web/dist/rontoplayground.js* talk/runtime/
+java -jar $JAR lispresen/cli.lisp -- talk/talk.lisp --runtime runtime/
+jwebserver -d "$PWD/talk"                        # the runtime is fetched, so not from file://
+```
+
+`--runtime none` (or `:runtime :none`) renders the code as static text.
 
 ## Layout
 
@@ -105,6 +151,9 @@ where lispresen measured them.
 lispresen/check.sh            # every backend against the golden deck, then the unit tests
 lispresen/check.sh --update   # regenerate examples/intro.html first
 ```
+
+`web/` is a browser editor: `web/build.sh` compiles lispresen to a WebAssembly reactor,
+and `web/index.html`, served over HTTP, re-renders the deck as you type.
 
 `tools/calibrate.lisp` writes a page that compares the width model with the browser it
 is opened in. `tools/gen-budoux.py` regenerates `src/budoux-ja.lisp` from BudouX's

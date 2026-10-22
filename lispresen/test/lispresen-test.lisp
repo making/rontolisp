@@ -74,6 +74,27 @@
      (find-if
       (lambda (d) (and (eq (first d) :error) (search "does not fit" (third d))))
       (render-diagnostics (slide-with-items 12)))))
+  (testing "columns share the size their fullest column needs"
+    (flet ((columns (a b)
+             (format nil "(slide :title \"t\" (column ~a) (column ~a))" a b)))
+      (let ((long
+             (format nil "(ul~{ ~a~})" (loop repeat 4 collect *long-item*))))
+        (ok
+         (contains (lispresen:render (columns "\"x\"" "\"y\"")) "--body:56px"))
+        (ok (contains (lispresen:render (columns long "\"y\"")) "--body:40px"))
+        (ok (contains (lispresen:render (columns long long)) "--body:40px")))))
+  (testing "runnable code takes no more room than static code"
+    ;; 11 lines at 44px are 726px of the 776px body: the output is an overlay.
+    (let ((slide
+           (format nil
+            "(slide :title \"t\" (code :lang \"lisp\" \"~{(a ~d)~^~%~}\"))"
+            (loop for i from 1 to 11 collect i))))
+      (ok (contains (lispresen:render slide) "--code:44px"))
+      (ok (contains (lispresen:render slide) "class=\"codebox"))
+      (ok
+       (not
+        (contains (lispresen:render slide :runtime "none")
+                  "class=\"codebox")))))
   (testing "a short untitled paragraph is a statement at the statement scale"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")
@@ -129,6 +150,20 @@
             (:error 6 "expected (slide ...) or (section ...), found other")
             (:error 7
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
+  (ok
+   (equal (render-diagnostics
+           "(deck :theme (theme :base :dark :muted \"#555555\" :accent \"blue\"))
+(slide :title \"s\" (column \"a\") \"b\")")
+          '((:error 1 ":accent of theme must be a color like #1f2328")
+            (:warning 1
+                      "theme: captions (--muted on --bg) has contrast 2.3:1, below 4.5:1")
+            (:warning 1
+                      "theme: code comments (--muted on --code-bg) has contrast 2.0:1, below 4.5:1")
+            (:error 2 "a slide with columns holds only (column ...) blocks"))))
+  (testing "the built-in themes pass the contrast lint"
+    (dolist (theme '("light" "dark" "high-contrast"))
+      (ok
+       (null (nth-value 1 (lispresen:render "(slide \"x\")" :theme theme))))))
   (ok
    (equal (lispresen:format-diagnostic "t.lisp"
                                        (lispresen::make-diagnostic

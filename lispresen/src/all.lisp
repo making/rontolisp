@@ -16,6 +16,7 @@
 #+rontolisp (load "lint.lisp")
 #+rontolisp (load "theme.lisp")
 #+rontolisp (load "player.lisp")
+#+rontolisp (load "highlight.lisp")
 #+rontolisp (load "html.lisp")
 #+rontolisp (load "lispresen.lisp")
 
@@ -25,6 +26,6 @@
 (with-compilation-unit ()
   (dolist (name
            '("package" "reader" "budoux-ja" "phrase" "metrics" "model" "layout"
-             "lint" "theme" "player" "html" "lispresen"))
+             "lint" "theme" "player" "highlight" "html" "lispresen"))
     (load
      (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))

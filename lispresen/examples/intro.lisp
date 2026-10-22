@@ -26,11 +26,34 @@
 
 (slide :title "デッキの読み方"
   (p "トップレベルのフォームを一つずつ " (tt "read-from-string") " で読む。")
-  (code :lang "lisp" "
+  (code :lang "lisp" :run nil "
     (multiple-value-bind (form end)
         (read-from-string source t nil :start pos)
       (push (list form line) forms)
       (setf pos end))"))
+
+(slide :title "その場で動かす"
+  (code :lang "lisp" "
+    (defun fib (n)
+      (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+    (fib 20)"))
+
+(slide :title "前のスライドの定義を使う"
+  (p "同じ言語のコードは一つの環境を共有する。")
+  (code :lang "lisp" "(mapcar #'fib '(1 2 3 4 5 6 7 8 9 10))"))
+
+(slide :title "Clojure も動く"
+  (code :lang "clojure" :timeout 5 "
+    (defn square [x] (* x x)) ; a comment
+    (println :squares)
+    (map square (range 10))"))
+
+(slide :title "インタプリタとコンパイラ"
+  (column (p (b "インタプリタ")) (ul "起動が速い" "eval が完全"))
+  (column (p (b "コンパイラ")) (ul "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力")))
+
+(slide :title "引用"
+  (quote :cite "Alan Perlis" "A language that doesn't affect the way you think about programming is not worth knowing."))
 
 (slide :title "バックエンドの比較"
   (table :header ("バックエンド" "起動" "成果物" "コマンド")
