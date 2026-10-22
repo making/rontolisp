@@ -227,13 +227,14 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * The three-argument {@code deref}: only a rontolisp future (the
-	 * {@code rontolisp.http-client} answer under {@code :async true}) and a host
+	 * The three-argument {@code deref}: a Clojure future or promise, a rontolisp future
+	 * (the {@code rontolisp.http-client} answer under {@code :async true}) and a host
 	 * {@code Future} are an {@code IBlockingDeref} here, so every other value, once the
 	 * timeout and the timeout value have run like the oracle's arguments, is its
 	 * {@code ClassCastException} (nil a {@code NullPointerException}). A program that can
-	 * make neither folds both arms away ({@link ClojureArms.Family#FETCH},
-	 * {@link ClojureArms.Family#HOST}), leaving the refusal.
+	 * make neither kind folds every arm away ({@link ClojureArms.Family#FUTURE},
+	 * {@link ClojureArms.Family#FETCH}, {@link ClojureArms.Family#HOST}), leaving the
+	 * refusal.
 	 */
 	private static LispVal timedDerefForm(ClojureLowering ctx, LispVal future, LispVal timeout, LispVal timeoutValue) {
 		LispSymbol cell = ctx.freshTemp();
@@ -245,13 +246,22 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-FUTURE-GET-WITHIN"), cell, ms, dflt),
 				ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
 						LispString.literal("deref with a timeout needs a future"), cell));
+		LispVal promised = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureFutureLowering.promiseTest(cell),
+				ClojureLowerUtil.list(new LispSymbol(ClojureFutureLowering.PROMISE_GET_WITHIN), cell, ms, dflt), host);
 		// a rontolisp future (rontolisp.http-client's :async answer) waits through the
 		// await runtime: an arm a program that fetches nothing folds
+		LispVal fetched = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(FUTURE_P), cell),
+				ClojureLowerUtil.list(new LispSymbol(ClojureArms.FUTURE_GET_WITHIN), cell, ms, dflt), promised);
+		// a Clojure future (future, future-call) waits on its host task, wrapping
+		// the stored condition like the one-argument deref
+		LispVal wrapped = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureFutureLowering.wrapperTest(cell),
+				ClojureLowerUtil.list(new LispSymbol(ClojureFutureLowering.FUTURE_CLOJURE_GET_WITHIN), cell, ms, dflt),
+				fetched);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, future), ClojureLowerUtil.list(ms, timeout),
 						ClojureLowerUtil.list(dflt, timeoutValue))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(FUTURE_P), cell),
-						ClojureLowerUtil.list(new LispSymbol(ClojureArms.FUTURE_GET_WITHIN), cell, ms, dflt), host));
+				wrapped);
 	}
 
 	/** The host class {@code deref} reads through its {@code get}. */

@@ -368,8 +368,13 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 内側での送信は、それが終わってから走ります。アクションの実行中 `*agent*` が束縛され、
 `await` はそれまでに送られたアクションを走らせるか待ち、`shutdown-agents` は
 `nil` を答えます。[delay](reference/delay.md) は最初の `force` か `deref` で、自身の
-ロックの下で本体を一度だけ実行します。`future`/`promise`/`deliver` は名前で拒否された
-ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
+ロックの下で本体を一度だけ実行します。[future](reference/future.md) と
+[future-call](reference/future-call.md) はスレッドが存在する場所（インタプリタと JVM）
+では本体を独自のスレッドで走らせ、生成時の束縛を引き継ぎ、失敗はオラクルの
+ExecutionException として [deref](reference/deref.md) に現れます。[promise](reference/promise.md)
+は [deliver](reference/deliver.md) されるまで `deref` をブロックします。シングルスレッドの
+WASM バックエンドでは呼び出しが代わりに拒否されます。`proxy-super`
+も同様に拒否されます（proxy メソッドに super ハンドルはありません）。
 
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
 再束縛します。それ以外は拒否されます。`bound-fn` は `fn` に対する `bound-fn*`
@@ -520,7 +525,7 @@ var はエクスポートより下で定義してかまいません。
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |
 | 本体が書かなかった `java.util` の default メソッドのインスタンス呼び出し | `the default method ... is not supported yet` | default メソッドの本体は Java で、どのバックエンドもそれを実行しない |
 | 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
-| `future`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・ブロッキング待ち合わせがない |
+| WASM バックエンドでの `future`、`future-call`、`promise`/`deliver` | `... is not supported yet on this backend ...` | WASM バックエンドはシングルスレッド。インタプリタと JVM はホストスレッドで実行する |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
 | インターフェースだけの proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない（クラスの proxy は実行する） |

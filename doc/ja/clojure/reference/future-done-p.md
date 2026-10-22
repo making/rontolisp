@@ -2,7 +2,7 @@
 
 `(future-done? f)`
 
-`clojure.core/future-done?`: ホストの `java.util.concurrent.Future`（interop でしか作れない。インタプリタと JVM）には `isDone` を、[HTTP クライアント](http-client.md)が `:async true` で返すフューチャー（すべてのバックエンド）にはレスポンスが届いたかを返します。それ以外の値には `ClassCastException`（`nil` は `NullPointerException`）を投げます。オラクルのキャストと同じです。値としては1引数の関数です。
+`clojure.core/future-done?`: ホストの `java.util.concurrent.Future`（interop でしか作れない。インタプリタと JVM）には `isDone` を、[HTTP クライアント](http-client.md)が `:async true` で返すフューチャー（すべてのバックエンド）にはレスポンスが届いたかを、[future](future.md) のフューチャーには本体が settled したかを（インタプリタと JVM）返します。それ以外の値には `ClassCastException`（`nil` は `NullPointerException`）を投げます。オラクルのキャストと同じです。値としては1引数の関数です。
 
 ```clojure
 (import '(java.util.concurrent CompletableFuture))

@@ -10474,7 +10474,8 @@
 ;; A type implementing IPending answers its isRealized: an arm of the
 ;; pending-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-is-realized (x)
-  "realized?: whether the lazy seq or delay X has run its body. A list (what
+  "realized?: whether the lazy seq, delay, future or promise X has run its
+   body. A list (what
    the seq verbs answer over a strict input) is realized; anything else signals,
    like the oracle's cast."
   (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
@@ -10482,6 +10483,14 @@
         ;; a delay whose body has run (or signalled): an arm a program making
         ;; none folds
         ((rontolisp::%clojure-delay-p x) (null (aref (car (cdr x)) 0)))
+        ;; a Clojure future (future, future-call): done once its task is, like
+        ;; the oracle's isRealized -- an arm a program making none folds
+        ((rontolisp::%clojure-future-wrapper-p x)
+         (rontolisp::%clojure-host-future-done-p
+          (rontolisp::%clojure-future-task x)))
+        ;; a Clojure promise (promise): whether it was delivered -- an arm a
+        ;; program making none folds
+        ((rontolisp::%clojure-promise-p x) (aref (car (cdr x)) 1))
         ((rontolisp::%clojure-ipending-p x)
          (rontolisp::%clojure-ipending-realized x))
         (t (rontolisp::%clojure-class-cast-exception-of
@@ -15700,6 +15709,12 @@
   (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
    ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
    ((rontolisp::%clojure-future-p x) (rontolisp::%clojure-future-get x))
+   ;; a Clojure future (future, future-call): an arm a program making none
+   ;; folds (clojure/ClojureArms, the FUTURE family)
+   ((rontolisp::%clojure-future-wrapper-p x)
+    (rontolisp::%clojure-future-clojure-get x))
+   ;; a Clojure promise (promise): an arm a program making none folds
+   ((rontolisp::%clojure-promise-p x) (rontolisp::%clojure-promise-get x))
    ;; a delay forces: an arm a program making none folds
    ((rontolisp::%clojure-delay-p x) (rontolisp::%clojure-delay-force x))
    ((rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
@@ -15718,7 +15733,10 @@
 
 ;; future?: T for a host Future, NO (the false object) for anything else.
 (defun rontolisp::%clojure-host-future-p (x no)
-  (if (rontolisp::%clojure-host-object-p x "java.util.concurrent.Future") t no))
+  (if (or (rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
+          (rontolisp::%clojure-future-wrapper-p x))
+      t
+      no))
 
 ;; The host Future verbs (future-done?, future-cancelled?, future-cancel): the
 ;; host's isDone, isCancelled and cancel(true).
@@ -15800,6 +15818,134 @@
         (loop
           (if (rontolisp::%future-settled-p f)
               (return (rontolisp::%clojure-future-get f)))
+          (if (>= (get-internal-real-time) deadline) (return default))
+          (sleep 0.001)))
+      (rontolisp::%clojure-class-cast-exception-of
+       "deref needs a number as its timeout" ms)))
+
+;;;; Futures and promises: future, future-call, promise, deliver, future?,
+;;;; future-done?, future-cancelled?, future-cancel and realized? over them,
+;;;; and deref (with or without a timeout) of them.
+;;
+;; A Clojure future is (:C%FUTURE task cell), TASK the host FutureTask running
+;; its body on its own thread (made by future or future-call on the
+;; interpreter and the JVM, where threads exist; on wasm the call refuses) and
+;; CELL a one-vector holding the body's condition once it has signalled. The
+;; task does the oracle's work -- done, cancelled, cancel(true) and get -- so
+;; the verbs answer what they answer there, while deref wraps the stored
+;; condition in the oracle's ExecutionException. A promise is
+;; (:C%PROMISE cell), CELL #(value delivered lock): deliver stores once (a
+;; second delivery keeps the first value, like the oracle's) and deref waits,
+;; polling between sleeps of a millisecond like the timed deref above, so it
+;; runs on the interpreter and the JVM. Neither answers future? (the oracle's
+;; false), but both answer realized? and deref, with or without a timeout.
+;; Every test of one is an arm of the FUTURE family
+;; (clojure/ClojureArms): a program making neither compiles as before.
+
+(defun rontolisp::%clojure-future-wrapper-p (x)
+  "Whether X is the (:C%FUTURE task) wrapper a Clojure future is."
+  (and (consp x) (eq (car x) :C%FUTURE)))
+
+(defun rontolisp::%clojure-future-task (f)
+  "The host task of the Clojure future F."
+  (car (cdr f)))
+
+(defun rontolisp::%clojure-future-start (task cell)
+  "Spawn the runner thread for the host FutureTask TASK and answer the Clojure
+   future wrapping it: TASK runs on its own thread, like the oracle's pool
+   thread. CELL is the wrapper's failure cell, holding the body's condition
+   once it has signalled, so deref answers the oracle's ExecutionException over
+   it however the condition crossed the host call."
+  (rontolisp:make-thread (lambda () (java:call task "run")))
+  (list :C%FUTURE task cell))
+
+(defun rontolisp::%clojure-future-guard (cell thunk)
+  "The value of the zero-argument THUNK, storing its condition in the failure
+   cell CELL when it signals, then signalling it again: the task still
+   completes exceptionally, like the oracle's, while deref keeps the original
+   condition to wrap."
+  (handler-case (funcall thunk) (error (c) (setf (aref cell 0) c) (error c))))
+
+(defun rontolisp::%clojure-future-clojure-get (f)
+  "deref of the Clojure future F: its task's value, a failure the oracle's
+   ExecutionException over the body's condition (a cancelled one the host's
+   CancellationException, like a host future's get)."
+  (let ((task (rontolisp::%clojure-future-task f)))
+    (handler-case (rontolisp::%clojure-host-future-get task)
+      (error (e)
+        ;; a cancelled task stays cancelled: its deref is the host's
+        ;; CancellationException, whatever the runner stored while the
+        ;; interrupt arrived. Otherwise the stored condition is the failure.
+        (if (rontolisp::%clojure-host-future-cancelled-p task)
+            (error e)
+            (let ((failed (aref (car (cdr (cdr f))) 0)))
+              (if failed
+                  (error
+                   (c%e-new '("java.util.concurrent.ExecutionException"
+                              "java.lang.Exception" "java.lang.Throwable")
+                            (rontolisp::%clojure-http-text failed) nil failed))
+                  (error e))))))))
+
+(defun rontolisp::%clojure-future-clojure-get-within (f ms default)
+  "deref of the Clojure future F within MS milliseconds, truncated like the
+   oracle's long coercion: its task's value once it settles, DEFAULT when MS
+   pass first, a failure the oracle's ExecutionException over the body's
+   condition; a timeout that is no number the oracle's cast failure."
+  (let ((task (rontolisp::%clojure-future-task f)))
+    (handler-case (rontolisp::%clojure-host-future-get-within task ms default)
+      (error (e)
+        (if (rontolisp::%clojure-host-future-cancelled-p task)
+            (error e)
+            (let ((failed (aref (car (cdr (cdr f))) 0)))
+              (if failed
+                  (error
+                   (c%e-new '("java.util.concurrent.ExecutionException"
+                              "java.lang.Exception" "java.lang.Throwable")
+                            (rontolisp::%clojure-http-text failed) nil failed))
+                  (error e))))))))
+
+(defun rontolisp::%clojure-promise-p (x)
+  "Whether X is the (:C%PROMISE cell) wrapper a Clojure promise is."
+  (and (consp x) (eq (car x) :C%PROMISE)))
+
+(defun rontolisp::%clojure-promise ()
+  "A promise: an undelivered (:C%PROMISE #(value delivered lock)) cell."
+  (list :C%PROMISE (vector nil nil (rontolisp:make-mutex))))
+
+(defun rontolisp::%clojure-deliver (p v)
+  "Deliver V to the promise P, answering P; a second delivery keeps the first
+   value, like the oracle's. P must be a promise (the call checks)."
+  (let ((cell (car (cdr p))))
+    (rontolisp:with-mutex ((aref cell 2))
+      (unless (aref cell 1)
+        (setf (aref cell 0) v)
+        (setf (aref cell 1) t))))
+  p)
+
+(defun rontolisp::%clojure-promise-get (p)
+  "deref of the promise P: its value once delivered, waiting if it must."
+  (loop
+    (let ((value nil) (done nil))
+      (rontolisp:with-mutex ((aref (car (cdr p)) 2))
+        (setq value (aref (car (cdr p)) 0))
+        (setq done (aref (car (cdr p)) 1)))
+      (if done (return value) (sleep 0.001)))))
+
+(defun rontolisp::%clojure-promise-get-within (p ms default)
+  "deref of the promise P within MS milliseconds, truncated like the oracle's
+   long coercion: its value once delivered, DEFAULT when MS pass first; a
+   timeout that is no number the oracle's cast failure."
+  (if (realp ms)
+      (let ((deadline
+             (+ (get-internal-real-time)
+                (truncate (* (truncate ms) internal-time-units-per-second)
+                          1000))))
+        (loop
+          (let ((value nil) (done nil))
+            (rontolisp:with-mutex ((aref (car (cdr p)) 2))
+              (setq value (aref (car (cdr p)) 0))
+              (setq done (aref (car (cdr p)) 1)))
+            (if done (return value)))
           (if (>= (get-internal-real-time) deadline) (return default))
           (sleep 0.001)))
       (rontolisp::%clojure-class-cast-exception-of

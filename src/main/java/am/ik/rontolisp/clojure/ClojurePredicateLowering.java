@@ -20,9 +20,10 @@ import org.jspecify.annotations.Nullable;
  * {@code (if test T false)}; as a value it is a one-argument lambda over the same test. A
  * predicate whose kind no value here can have ({@code delay?}, {@code decimal?}, ...)
  * answers false after evaluating its argument; {@code future?} and the future verbs
- * ({@code future-done?}, {@code future-cancelled?}, {@code future-cancel}) know the two
- * kinds that exist, a host {@code java.util.concurrent.Future} and the rontolisp future
- * {@code rontolisp.http-client} answers under {@code :async true}. {@code set?} and
+ * ({@code future-done?}, {@code future-cancelled?}, {@code future-cancel}) know the three
+ * kinds that exist, a host {@code java.util.concurrent.Future}, the rontolisp future
+ * {@code rontolisp.http-client} answers under {@code :async true}, and the Clojure
+ * futures {@code future} and {@code future-call} make. {@code set?} and
  * {@code reversible?} name the sorted-aware helpers, which a program building no sorted
  * collection calls as the plain ones ({@link ClojureArms.Family#SORTED}).
  *
@@ -378,13 +379,15 @@ final class ClojurePredicateLowering {
 	static final String FUTURE_OR_HOST_P = "RONTOLISP::%CLOJURE-FUTURE-OR-HOST-P";
 
 	/**
-	 * A verb of a future: over a rontolisp future, whether it has settled
+	 * A verb of a future: over a Clojure future (a {@code future} or {@code future-call}
+	 * wrapper), the task's own answer; over a rontolisp future, whether it has settled
 	 * ({@code future-done?}) or false (it is never cancelled); over a host
 	 * {@code Future}, the library function, answering a Clojure boolean; else the
-	 * oracle's cast failure (nil a {@code NullPointerException}). A program that fetches
-	 * nothing folds the first test away ({@link ClojureArms.Family#FETCH}), and one
-	 * naming no {@code java:} operator the host test ({@link ClojureArms.Family#HOST}),
-	 * leaving the refusal.
+	 * oracle's cast failure (nil a {@code NullPointerException}). A program that makes no
+	 * Clojure future folds the first test away ({@link ClojureArms.Family#FUTURE}), one
+	 * that fetches nothing the second ({@link ClojureArms.Family#FETCH}), and one naming
+	 * no {@code java:} operator the host test ({@link ClojureArms.Family#HOST}), leaving
+	 * the refusal.
 	 */
 	private static LispVal futureVerb(ClojureLowering ctx, String name, String function, LispVal lowered) {
 		LispSymbol cell = ctx.freshTemp();
@@ -399,10 +402,15 @@ final class ClojurePredicateLowering {
 		LispVal fetched = name.equals("future-done?")
 				? ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol(LispNames.FUTURE_SETTLED_QUALIFIED), cell))
 				: ctx.falseVariable;
+		LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.FUTURE_P), cell), fetched, host);
+		// a Clojure future answers through its host task, which does the oracle's
+		// work (done, cancelled, cancel(true))
+		LispVal wrapped = ctx
+			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol(function), ClojureFutureLowering.taskOf(cell)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.FUTURE_P), cell), fetched, host));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("if"), ClojureFutureLowering.wrapperTest(cell), wrapped, inner));
 	}
 
 	/**

@@ -21,10 +21,12 @@ public final class YamlResources {
 
 	/**
 	 * One {@code ci-spec.yaml} case as the shaker/corpus tests need it: name, source, and
-	 * the expected output (single string or per-backend map).
+	 * the expected output (single string or per-backend map). A {@code skip} map, when
+	 * present, names the legs the case must not run on with why (a per-leg divergence the
+	 * corpus driver honors).
 	 */
 	public record Case(String name, String source, @Nullable String expected,
-			@Nullable Map<String, String> expectedByBackend) {
+			@Nullable Map<String, String> expectedByBackend, @Nullable Map<String, String> skip) {
 	}
 
 	/** The {@code ci-spec.yaml} shape the shaker/corpus tests parse. */

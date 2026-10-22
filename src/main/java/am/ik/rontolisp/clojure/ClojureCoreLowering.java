@@ -492,7 +492,9 @@ final class ClojureCoreLowering {
 						name + " is not supported yet: construction of clojure.lang internals is not supported");
 			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!":
 				return refusedCall(ctx, items, name + " is not supported yet: streaming reduction has no lowering");
-			case "future-call", "pcalls", "seque", "await1":
+			case "future-call":
+				return ClojureFutureLowering.futureCallOf(ctx, items);
+			case "pcalls", "seque", "await1":
 				return refusedCall(ctx, items, name + " is not supported yet: there is no thread pool on any backend");
 			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!":
 				return refusedCall(ctx, items,
@@ -766,7 +768,13 @@ final class ClojureCoreLowering {
 				refusedValue(name + " is not supported yet: construction of clojure.lang internals is not supported");
 			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!" ->
 				refusedValue(name + " is not supported yet: streaming reduction has no lowering");
-			case "future-call", "pcalls", "seque", "await1" ->
+			case "future-call" -> ctx.hostTarget ? ClojureFutureLowering.futureCallValue(ctx)
+					: ClojureFutureLowering.refusedFutureValue(name);
+			case "promise" ->
+				ctx.hostTarget ? ClojureFutureLowering.promiseValue() : ClojureFutureLowering.refusedFutureValue(name);
+			case "deliver" -> ctx.hostTarget ? ClojureFutureLowering.deliverValue(ctx)
+					: ClojureFutureLowering.refusedFutureValue(name);
+			case "pcalls", "seque", "await1" ->
 				refusedValue(name + " is not supported yet: there is no thread pool on any backend");
 			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!" ->
 				refusedValue(name + " is not supported yet: agents take no custom executor on any backend");
