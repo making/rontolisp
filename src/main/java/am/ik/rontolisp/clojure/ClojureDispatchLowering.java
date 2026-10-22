@@ -122,6 +122,43 @@ final class ClojureDispatchLowering {
 	static final String CLASS_INSTANCE_P = "RONTOLISP::%CLOJURE-CLASS-INSTANCE-P";
 
 	/**
+	 * The run-time registry a {@code defmulti} registers its tables beside its dispatch
+	 * function in ({@code clojure.lisp}): an {@code eq} table from the function to its
+	 * {@code (methods-getter prefers-getter clearer)} record. The six multimethod value
+	 * arms resolve the function they are handed through it, running what the call runs
+	 * (g40).
+	 */
+	static final String MULTI_REGISTRY = "RONTOLISP::%CLOJURE-MULTIMETHODS";
+
+	/** The registry store ({@code clojure.lisp}), answering the registered name. */
+	static final String REGISTER_MULTI = "RONTOLISP::%CLOJURE-REGISTER-MULTIMETHOD";
+
+	/** The run-time dispatch-value canon ({@code clojure.lisp}). */
+	static final String DISPATCH_VALUE = "RONTOLISP::%CLOJURE-DISPATCH-VALUE";
+
+	/** The canon through the structural-key runtime ({@code clojure.lisp}). */
+	static final String DISPATCH_KEY = "RONTOLISP::%CLOJURE-DISPATCH-KEY";
+
+	/** The host class name a dispatch value names, or nil ({@code clojure.lisp}). */
+	static final String DISPATCH_NAME = "RONTOLISP::%CLOJURE-DISPATCH-NAME";
+
+	/** The map a {@code methods} call or value answers ({@code clojure.lisp}). */
+	static final String MULTI_METHODS = "RONTOLISP::%CLOJURE-METHODS";
+
+	/**
+	 * One of the registry record's getters called: the record holds closures over the
+	 * globals (never the tables), so the arm reads what the calls read.
+	 * @param record the record variable
+	 * @param accessor {@code car} (methods), {@code cadr} (prefers) or {@code caddr}
+	 * (clearer)
+	 * @return the getter call
+	 */
+	static LispVal recordGetter(LispVal record, String accessor) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym(accessor), record));
+	}
+
+	/**
 	 * {@code instance?} as a value: over a class and a value, like the call -- the class
 	 * always read at run time, like the call's computed-class shape. A class no value
 	 * here has answers false, like the call.
@@ -136,64 +173,122 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * {@code get-method} as a value: the multimethod arrives as a run-time value, but its
-	 * method table lives under the literal name the call names, so only the call's shape
-	 * runs -- anything else refuses at run time. The count is checked first, in the
-	 * call's words.
+	 * {@code get-method} as a value: over a multimethod and a dispatch value, like the
+	 * call -- the method table the registry holds for the dispatch function, read under
+	 * the same key the call's shape reads (nil to the marker, a class object or
+	 * designator to the keyword a class spelling stores). A function the registry holds
+	 * no tables for -- anything but a defined multimethod's dispatch function -- refuses
+	 * at run time, like before. The count is checked first, in the call's words.
 	 * @return the value form
 	 */
 	static LispVal getMethodValue() {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("get-method-args"));
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+		LispSymbol multi = new LispSymbol(ClojureLowering.mangle("get-method-multi"));
+		LispSymbol record = new LispSymbol(ClojureLowering.mangle("get-method-record"));
+		LispVal methods = recordGetter(record, "car");
+		LispVal key = ClojureLowerUtil.list(new LispSymbol(DISPATCH_KEY),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args), methods);
+		LispVal found = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, methods);
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(record,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), multi, new LispSymbol(MULTI_REGISTRY)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
+					.sym("null"), record), ClojureRefusals.refusal(
 							ClojureRefusals.UNSUPPORTED_OPERATION,
 							LispString.literal("get-method of a computed multimethod is not supported"
 									+ " at run time: only a literal multimethod name reads, where the call stands")),
+						found));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(2)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+								ClojureLowerUtil.list(ClojureLowerUtil.list(multi,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
+								read),
 						ClojureRefusals.refusal(ClojureRefusals.ARITY,
 								LispString.literal("get-method takes a multimethod and a dispatch value"))));
 	}
 
 	/**
-	 * {@code remove-method} as a value: the multimethod arrives as a run-time value, but
-	 * its method table lives under the literal name the call names, so only the call's
-	 * shape runs -- anything else refuses at run time. The count is checked first, in the
-	 * call's words.
+	 * {@code remove-method} as a value: over a multimethod and a dispatch value, like the
+	 * call -- the row gone (and the {@code Object} slot cleared for the {@code Object}
+	 * class, like the call of the {@code Object} name), answering the multimethod. A
+	 * function the registry holds no tables for refuses at run time, like before. The
+	 * count is checked first, in the call's words.
 	 * @return the value form
 	 */
 	static LispVal removeMethodValue() {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("remove-method-args"));
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+		LispSymbol multi = new LispSymbol(ClojureLowering.mangle("remove-method-multi"));
+		LispSymbol record = new LispSymbol(ClojureLowering.mangle("remove-method-record"));
+		LispSymbol value = new LispSymbol(ClojureLowering.mangle("remove-method-value"));
+		LispSymbol methods = new LispSymbol(ClojureLowering.mangle("remove-method-methods"));
+		LispVal key = ClojureLowerUtil.list(new LispSymbol(DISPATCH_KEY), value, methods);
+		LispVal objectName = ClojureLowerUtil.list(new LispSymbol(DISPATCH_NAME), value);
+		LispVal removed = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(methods, recordGetter(record, "car")),
+						ClojureLowerUtil.list(value, ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), key, methods),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), objectName,
+										LispString.literal("java.lang.Object")),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"), record))),
+						multi));
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(record,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), multi, new LispSymbol(MULTI_REGISTRY)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-					.sym("="), count, new LispInteger(2)), ClojureRefusals.refusal(
+					.sym("null"), record), ClojureRefusals.refusal(
 							ClojureRefusals.UNSUPPORTED_OPERATION,
 							LispString.literal("remove-method of a computed multimethod is not supported"
 									+ " at run time: only a literal multimethod name removes, where the call stands")),
+						removed));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(2)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+								ClojureLowerUtil.list(ClojureLowerUtil.list(multi,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
+								read),
 						ClojureRefusals.refusal(ClojureRefusals.ARITY,
 								LispString.literal("remove-method takes a multimethod and a dispatch value"))));
 	}
 
 	/**
-	 * {@code methods} as a value: the multimethod arrives as a run-time value, but its
-	 * method table lives under the literal name the call names, so only the call's shape
-	 * runs -- anything else refuses at run time. The count is checked first, in the
-	 * call's words.
+	 * {@code methods} as a value: the multimethod's table as a map, like the call -- a
+	 * copy through {@code rontolisp::%clojure-methods} over the registry's table. A
+	 * function the registry holds no tables for refuses at run time, like before. The
+	 * count is checked first, in the call's words.
 	 * @return the value form
 	 */
 	static LispVal methodsValue() {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("methods-args"));
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+		LispSymbol multi = new LispSymbol(ClojureLowering.mangle("methods-multi"));
+		LispSymbol record = new LispSymbol(ClojureLowering.mangle("methods-record"));
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(record,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), multi, new LispSymbol(MULTI_REGISTRY)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-					.sym("="), count, new LispInteger(1)), ClojureRefusals.refusal(
+					.sym("null"), record), ClojureRefusals.refusal(
 							ClojureRefusals.UNSUPPORTED_OPERATION,
 							LispString.literal("methods of a computed multimethod is not supported"
 									+ " at run time: only a literal multimethod name reads, where the call stands")),
+						ClojureLowerUtil.list(new LispSymbol(MULTI_METHODS), recordGetter(record, "car"))));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(1)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+								ClojureLowerUtil.list(ClojureLowerUtil.list(multi,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
+								read),
 						ClojureRefusals.refusal(ClojureRefusals.ARITY,
 								LispString.literal("methods takes a multimethod"))));
 	}
@@ -1153,6 +1248,18 @@ final class ClojureDispatchLowering {
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), dispatch));
+		// the value arms resolve the dispatch function through the registry: the
+		// record holds getters over the globals (a re-executed defmulti rebinds
+		// them, and the getters read the new ones like the calls do), and the
+		// store answers the name (what defun answers), so the definition answers
+		// what it answered before the registry existed
+		LispVal clearer = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST));
+		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_MULTI),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), fn),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), methods),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), prefers), clearer));
 		ctx.usedHierarchy = true;
 		return forms;
 	}
@@ -1376,7 +1483,7 @@ final class ClojureDispatchLowering {
 		if (!ctx.multimethods.contains(key)) {
 			throw new LispReadException("No such multimethod: " + name);
 		}
-		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-METHODS"), tableGlobal(key, "%methods"));
+		return ClojureLowerUtil.list(new LispSymbol(MULTI_METHODS), tableGlobal(key, "%methods"));
 	}
 
 	// protocols/records: defprotocol/defrecord/deftype/reify/extend/satisfies? over the

@@ -15545,6 +15545,103 @@ cases:
       :no-method
       {} {}
       :no-method
+  - name: multimethod-value-arms-run-where-calls-run
+    # g40: the six multimethod verbs run as values what the calls run --
+    # get-method, methods, remove-method, prefer-method, prefers and
+    # remove-all-methods over the run-time registry the defmulti populates
+    # beside the dispatch function. Higher-order and (def x NAME) application,
+    # keyword, nil, class-spelling and vector dispatch values, mutations in
+    # both directions (a value removal and a head call sees it, a head prefers
+    # a value reads it). Oracle-identical (clj 1.12.6, 2026-10-26) except the
+    # two wordings the head already customizes: a value applied to the wrong
+    # count reports the head call's words (like g39's isa?/aget), and a
+    # non-multimethod reports the value's refusal where the oracle throws
+    # ClassCastException.
+    source: |
+      (defmulti g40-m (fn [x] (:tag x)))
+      (defmethod g40-m :a [_] :A!)
+      (defmethod g40-m :b [_] :B!)
+      (defmethod g40-m nil [_] :NIL!)
+      (defmulti g40-n :tag)
+      (defmethod g40-n :a [_] :NA!)
+      (def g40-gm get-method)
+      (println (map #(if (g40-gm % :a) :y :n) [g40-m g40-n]))
+      (println ((g40-gm g40-m :a) {:tag :a}))
+      (println ((g40-gm g40-n :a) {:tag :a}))
+      (println (if (g40-gm g40-m :zzz) :found :missing))
+      (println ((g40-gm g40-m nil) {:tag nil}))
+      (def g40-mm methods)
+      (println (= (set (keys (g40-mm g40-m))) #{:a :b nil}))
+      (defmulti g40-c class)
+      (defmethod g40-c String [_] :S!)
+      (println ((g40-gm g40-c String) "x"))
+      (defmethod g40-c Object [_] :O!)
+      (println ((g40-gm g40-c Object) 42))
+      (def g40-rm remove-method)
+      (println (= (g40-rm g40-c Object) g40-c))
+      (println ((g40-gm g40-c String) "z"))
+      (println (try (g40-c 42) (catch IllegalArgumentException e :no-method)))
+      (def g40-pm prefer-method)
+      (derive ::g40-child ::g40-parent)
+      (defmulti g40-h :tag)
+      (defmethod g40-h ::g40-parent [_] :P!)
+      (defmethod g40-h ::g40-child [_] :C!)
+      (println (= (g40-pm g40-h ::g40-child ::g40-parent) g40-h))
+      (println (g40-h {:tag ::g40-child}))
+      (println (= (get-method g40-h ::g40-child) (g40-gm g40-h ::g40-child)))
+      (def g40-pf prefers)
+      (println (= (g40-pf g40-h) (prefers g40-h)))
+      (println (= (g40-pm g40-m :x :y) g40-m))
+      (println (= (g40-pf g40-m) {:x #{:y}}))
+      (println (= (prefers g40-m) (g40-pf g40-m)))
+      (println (= (g40-rm g40-m :a) g40-m))
+      (println (if (g40-gm g40-m :a) :found :missing))
+      (println ((g40-gm g40-m :b) {:tag :b}))
+      (println ((fn [f m] ((f m :b) {:tag :b})) g40-gm g40-m))
+      (defmulti g40-v (fn [x] (:tag x)))
+      (defmethod g40-v [:x :y] [_] :XY!)
+      (println ((g40-gm g40-v [:x :y]) {:tag [:x :y]}))
+      (println (if (g40-gm g40-v [:x :z]) :found :missing))
+      (println (= (g40-rm g40-v [:x :y]) g40-v))
+      (println (if (g40-gm g40-v [:x :y]) :found :missing))
+      (def g40-ram remove-all-methods)
+      (println (= (g40-ram g40-m) g40-m))
+      (println (g40-mm g40-m) (g40-pf g40-m))
+      (println (try (g40-m {:tag :b}) (catch IllegalArgumentException e :no-method)))
+      (println (try ((fn [f m] (f m)) g40-gm g40-m) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try ((fn [f] (f 42 :a)) g40-gm) (catch UnsupportedOperationException e (.getMessage e))))
+    expected: |
+      (:y :y)
+      :A!
+      :NA!
+      :missing
+      :NIL!
+      true
+      :S!
+      :O!
+      true
+      :S!
+      :no-method
+      true
+      :C!
+      true
+      true
+      true
+      true
+      true
+      true
+      :missing
+      :B!
+      :B!
+      :XY!
+      :missing
+      true
+      :missing
+      true
+      {} {}
+      :no-method
+      get-method takes a multimethod and a dispatch value
+      get-method of a computed multimethod is not supported at run time: only a literal multimethod name reads, where the call stands
   - name: function-values-compare-by-identity
     # = over functions is identity on every backend, like the oracle's
     # Util.equiv: two references to one defn or defmulti are =, two

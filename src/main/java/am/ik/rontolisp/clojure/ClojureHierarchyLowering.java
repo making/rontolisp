@@ -706,22 +706,47 @@ final class ClojureHierarchyLowering {
 	}
 
 	/**
-	 * {@code prefer-method} as a value: the multimethod arrives as a run-time value, but
-	 * its preference table lives under the literal name the call names, so only the
-	 * call's shape runs -- anything else refuses at run time. The count is checked first,
-	 * in the call's words.
+	 * {@code prefer-method} as a value: over a multimethod and two dispatch values, like
+	 * the call -- the preference stored under the same key the call's shape stores (nil
+	 * to the marker, a class object or designator to the keyword a class spelling
+	 * stores), answering the multimethod. A function the registry holds no tables for
+	 * refuses at run time, like before. The count is checked first, in the call's words.
 	 * @return the value form
 	 */
 	static LispVal preferMethodValue() {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("prefer-method-args"));
+		LispSymbol multi = new LispSymbol(ClojureLowering.mangle("prefer-method-multi"));
+		LispSymbol record = new LispSymbol(ClojureLowering.mangle("prefer-method-record"));
+		LispVal prefers = ClojureDispatchLowering.recordGetter(record, "cadr");
+		LispVal pair = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.DISPATCH_VALUE),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args)),
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.DISPATCH_VALUE),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"), args)));
+		LispVal store = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), pair, prefers),
+						ClojureLowering.TRUE_CONST),
+				multi);
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(record,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), multi,
+								new LispSymbol(ClojureDispatchLowering.MULTI_REGISTRY)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+					.sym("null"), record), ClojureRefusals.refusal(
+							ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal("prefer-method of a computed multimethod is not supported"
+									+ " at run time: only a literal multimethod name prefers, where the call stands")),
+						store));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args), new LispInteger(3)),
-						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString
-							.literal("prefer-method of a computed multimethod is not supported"
-									+ " at run time: only a literal multimethod name prefers, where the call stands")),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+								ClojureLowerUtil.list(ClojureLowerUtil.list(multi,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
+								read),
 						ClojureRefusals.refusal(ClojureRefusals.ARITY,
 								LispString.literal("prefer-method takes a multimethod and two dispatch values"))));
 	}

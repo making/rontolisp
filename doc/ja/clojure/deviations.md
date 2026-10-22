@@ -227,8 +227,12 @@
   優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
   multimethod を返します。どちらも名前の取り方は同じです。値としては（`methods`・
   `get-method`・`remove-method`・`prefer-method`・`prefers`・`remove-all-methods`）
-  呼び出しと同じ文言で引数の個数を確認してから実行時に拒否します。呼び出し位置で
-  綴られたリテラルの multimethod 名だけが読めます。
+  呼び出しと同じ文言で引数の個数を確認してから、`defmulti` がディスパッチ関数と
+  共に登録する実行時レジストリを読み、呼び出しと等価に動作します。
+  `get-method`・`remove-method` は呼び出しと同じキーの読み取りを行い、`Object` クラスの
+  `remove-method` と `remove-all-methods` はスロットをクリアして呼び出し同様
+  multimethod を返します。登録されていない関数値は従来どおり拒否され、階層や
+  既定値のフォールバックを読まない `get-method` の振る舞いは呼び出し位置と共通です。
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは

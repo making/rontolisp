@@ -1324,6 +1324,26 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x load)")).contains("of a computed path");
 		assertThat(lowered("(def x push-thread-bindings)")).contains("what binding expands to");
 		assertThat(lowered("(def x pop-thread-bindings)")).contains("what binding expands to");
+		// g40: the six multimethod arms keep the refusal only for a function the
+		// registry holds no tables for -- anything but a defined multimethod's
+		// dispatch function -- and otherwise read the registry's tables
+		assertThat(lowered("(def x get-method)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("RONTOLISP::%CLOJURE-DISPATCH-KEY");
+		assertThat(lowered("(def x remove-method)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("RONTOLISP::%CLOJURE-DISPATCH-KEY")
+			.contains("RONTOLISP::%CLOJURE-DISPATCH-NAME");
+		assertThat(lowered("(def x methods)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("RONTOLISP::%CLOJURE-METHODS");
+		assertThat(lowered("(def x prefer-method)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("RONTOLISP::%CLOJURE-DISPATCH-VALUE");
+		assertThat(lowered("(def x prefers)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("RONTOLISP::%CLOJURE-PREFERS");
+		assertThat(lowered("(def x remove-all-methods)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
+			.contains("CLRHASH");
+		// g40: a defmulti registers its tables beside the dispatch function, and
+		// answers the defined name (what the bare defun answers)
+		assertThat(lowered("(defmulti area :shape)")).contains("RONTOLISP::%CLOJURE-REGISTER-MULTIMETHOD")
+			.contains("(DEFUN |c%area|");
 		assertThatThrownBy(() -> Clojure.read("(get-method m)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("get-method takes a multimethod and a dispatch value");
 		assertThatThrownBy(() -> Clojure.read("(extends? p)", null)).isInstanceOf(LispReadException.class)

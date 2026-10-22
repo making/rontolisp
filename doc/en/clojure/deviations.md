@@ -239,8 +239,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   multimethod; both take the name the same way. As values (`methods`,
   `get-method`, `remove-method`, `prefer-method`, `prefers`,
   `remove-all-methods`) they check the argument count in the call's words, then
-  refuse at run time -- only a literal multimethod name reads, where the call
-  stands.
+  read the run-time registry the `defmulti` populates beside the dispatch
+  function, running what the call runs: `get-method`/`remove-method` read under
+  the same key the call's shape reads, `remove-method` of the `Object` class
+  and `remove-all-methods` clear the slot, answering the multimethod like the
+  calls. A function holding no registered multimethod still refuses there, and
+  a hierarchy or default fallback `get-method` skips stays shared with the head
+  call.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry

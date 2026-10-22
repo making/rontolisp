@@ -10150,6 +10150,98 @@
         (setf (gethash x out)
               (rontolisp::%clojure-set-of (reverse (gethash x buckets))))))))
 
+;;;; Multimethod values: the run-time registry behind the six value arms.
+;;
+;; A multimethod's tables live under the literal name the call names, so a
+;; value holding only the dispatch function reaches none of them. Every
+;; defmulti registers its tables beside the dispatch function here, and the
+;; value arms of get-method, methods, remove-method, prefer-method, prefers
+;; and remove-all-methods read through the registry, running what the call
+;; runs (g40). The registry is keyed by the function itself: (function name)
+;; answers the canonical box every site naming it shares, so eq finds it on
+;; every backend. The record holds getters over the globals, never the tables
+;; themselves: every mutation edits the tables in place (only a re-executed
+;; defmulti rebinds them, and the getters then read the new ones, like the
+;; calls do), so a captured old function introspects what it calls, like the
+;; oracle's old multimethod object answering its own tables. The Object slot
+;; is rebound (never edited), so the record carries only a clearer closure
+;; over it.
+
+(defvar rontolisp::%clojure-multimethods (make-hash-table :test 'eq)
+  "A dispatch function to its (methods-getter prefers-getter clearer), made
+   by every defmulti beside its tables.")
+
+(defun rontolisp::%clojure-register-multimethod (name fn methods prefers clearer)
+  "Register FN's table getters, answering NAME (what defun answers, so a
+   defmulti answers what it answered before the registry existed). METHODS and
+   PREFERS are zero-argument closures over the method and prefers globals,
+   CLEARER one zeroing the Object slot."
+  (setf (gethash fn rontolisp::%clojure-multimethods)
+        (list methods prefers clearer))
+  name)
+
+;; Simple class names to the kind keyword spelling a class spelling stores
+;; under (clojure/ClojureDispatchLowering, DISPATCH_CLASS_KEYWORDS): a
+;; run-time class object or class designator reads back as the same keyword,
+;; so a value arm finds the row the literal spelling stored. java.lang.Object
+;; is not in the map (the lowering special-cases it to :object) and is tested
+;; by its full name below.
+(defvar rontolisp::%clojure-dispatch-class-names
+  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
+    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
+    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
+    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
+    ("Character" . "char") ("Char" . "char") ("Map" . "map")
+    ("IPersistentMap" . "map") ("Vector" . "vector")
+    ("IPersistentVector" . "vector") ("Set" . "set")
+    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
+    ("Sequential" . "list") ("Collection" . "list")
+    ("IPersistentList" . "list") ("IPersistentCollection" . "list")
+    ("Fn" . "function") ("IFn" . "function") ("Function" . "function")
+    ("Atom" . "atom"))
+  "Simple class names to the kind keyword spelling dispatch stores.")
+
+(defun rontolisp::%clojure-dispatch-name (dv)
+  "The host class name DV names, or nil: a class designator's name, else a
+   host class object's (nil where no host object can exist, so the designator
+   alone decides there)."
+  (if (and (consp dv) (eq (car dv) :C%CLASS) (consp (cdr dv))
+           (stringp (car (cdr dv))))
+      (car (cdr dv))
+      (rontolisp::%clojure-host-class-name dv)))
+
+(defun rontolisp::%clojure-dispatch-simple-name (name)
+  "NAME past its last dot: the simple name a host class object or class
+   designator spells."
+  (let ((dot (position #\. name :from-end t)))
+    (if dot (subseq name (+ dot 1)) name)))
+
+(defun rontolisp::%clojure-dispatch-value (dv)
+  "The methods-table key a run-time dispatch value DV reads: nil to the
+   (:C%NIL) marker (no table keys on nil, like the dispatcher's own mapping),
+   a class object or designator to the kind keyword a class spelling stores
+   (the full name's keyword where no kind answers, which is the row a spelled
+   chained class keeps), anything else itself."
+  (if (null dv)
+      (list :C%NIL)
+      (let ((name (rontolisp::%clojure-dispatch-name dv)))
+        (if (null name)
+            dv
+            (let ((kind (cdr (assoc (rontolisp::%clojure-dispatch-simple-name name)
+                                    rontolisp::%clojure-dispatch-class-names
+                                    :test #'equal))))
+              (if kind
+                  (list :c%keyword kind)
+                  (if (equal name "java.lang.Object")
+                      (list :c%keyword "object")
+                      (list :c%keyword name))))))))
+
+(defun rontolisp::%clojure-dispatch-key (dv table)
+  "The key TABLE holds DV's row under: the run-time dispatch value through
+   the structural-key runtime, like a computed head call's lookup."
+  (rontolisp::%clojure-table-key (rontolisp::%clojure-dispatch-value dv)
+                                 table))
+
 ;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
 ;;
 ;; A protocol var holds its method table (a tag to its row of method keyword
