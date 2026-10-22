@@ -15,9 +15,27 @@ Run against the develop jar built at `fb2133d4f`
 Result: 624/679 head-ok, 17 unsupported in both positions (the g15 todo list);
 136/136 non-core names resolvable, all listed namespaces `require`-able.
 
-Rerun: build the jar, then `python3 -I probe4.py` and `python3 -I probe5.py`
+Rerun: rebuild the jar, then `python3 -I probe4.py` and `python3 -I probe5.py`
 from this directory (each run needs the jar path inside the script to point at
-the fresh build; threads write per-thread temp `.clj` files into the cwd).
+the fresh build; threads write per-thread temp `_[pq]-*.clj` files into the
+cwd -- delete them afterwards, they are not artefacts).
+
+## Re-run (2026-10-22, jar rebuilt at HEAD `5a61be256`)
+
+- core: value-ok 638, head-ok 637; counted ok **675 of 677** (2 exempt);
+  `NEITHER (counted)` is exactly `Inst add-classpath`. Fixed since baseline:
+  `EMPTY-NODE`, `StackTraceElement->vec`, `amap`, `areduce`, `bound-fn`,
+  `definline`, `io!`, `pvalues`, `refer-clojure`, `sync`,
+  `with-loading-context`, `with-local-vars`, `with-precision` (13 of 17;
+  g16 turned 118 macro names from head-only to both: 469 -> 600).
+- Newly visible: 37 head-only names (all already head-only in the baseline;
+  the baseline counted head position only). Of those: `unquote`,
+  `unquote-splicing` (reader syntax); `deliver`, `promise` (refused until
+  g35); `require`, `use`, `in-ns` (ns-wiring, head-only by design); 30 real
+  functions missing value arms -- see `.todo/g39-core-function-value-arms.md`.
+  Value-only (38 vars) unchanged.
+- non-core: 136/136, unchanged (`others-probe.json` byte-identical, so only
+  `core-probe.json` changed in this re-run).
 
 ## g26 dispositions of the deprecated/internal six (2026-10-20)
 
