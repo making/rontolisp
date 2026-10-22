@@ -2714,6 +2714,19 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     branches past the CL tail. `emitsArityMessage` also turns on for a program spelling
     `%ARITY-REPORT` (the lambdas are not known in the pre-pass). The eval runtime's unbacked
     `EVAL` id sits past both maps' largest funcId.
+    No span cliff (g48, 2026-10-22): a per-arity dispatcher's miss arms are one report arm
+    per distinct callee SHAPE, the funcIds selected the way the dispatcher selects its cases
+    (plain/biased `br_table` or comparison chain), and bodies past
+    `DISPATCH_PAGE_BUDGET_BYTES` page into 256-case leaves -- no table scales with the funcId
+    span, so a 32,000-defun program still reports past the JVM's old 30,568 cliff
+    (`WasmAritySpanTest`, `anArityMissPastThirtyThousandFuncIdsStillReportsInWords`). The one
+    ceiling is NAMING: a shape carries `funcId + 1` in sixteen bits
+    (`ARITY_MAX_NAMED_FUNC_ID` = 65,535); at and past it `arityShape`, both `...FuncIds`
+    censuses and the dispatcher's named-arms gate drop the name and the callee reports as
+    `Function` -- silent generic text, the g49 family. `_arity_chk` (the spread/apply route)
+    walks the argument list and has no table at all. Past `MAX_EXTRA_CALL_ARITY` (4) wide
+    funcalls reroute through the spread dispatcher with identical answers (pinned by
+    `compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame`).
 - **A DIRECT call of a built-in** (2026-09-26). **Invariant: `(op args...)` in call position,
   `op` a `BuiltinFunctionWrappers` name, with a count the operator's call shape rules out,
   evaluates its arguments and then signals `program-error` with ONE text on all four backends**
