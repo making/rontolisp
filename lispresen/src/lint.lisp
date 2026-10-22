@@ -27,18 +27,31 @@
 (defun lint-blocks (blocks fit width)
   (dolist (b blocks)
     (cond ((bullets-p b) (lint-list b (fit-body-size fit) width 1))
-     ((column-p b) (lint-blocks (column-blocks b) fit (fit-region-width fit)))
-     ((and (code-block-p b) (> (length (code-block-lines b)) 15))
-      (report :warning (format nil
-                               "a code block of ~d lines is hard to read; keep it to 15"
-                               (length (code-block-lines b)))))
-     ((and (table-block-p b) (< (table-block-size b) *table-floor*))
-      (report :warning (format nil
-                               "table text at ~dpx (floor ~dpx); reduce its rows or columns"
-                               (table-block-size b) *table-floor*))))))
+          ((column-row-p b)
+           (loop for col in (column-row-columns b)
+                 for w in (column-row-widths b)
+                 do (lint-blocks (column-blocks col) fit w)))
+          ((and (code-block-p b) (> (length (code-block-lines b)) 15))
+           (report :warning (format nil
+                                    "a code block of ~d lines is hard to read; keep it to 15"
+                                    (length (code-block-lines b)))))
+          ((and (table-block-p b) (< (table-block-size b) *table-floor*))
+           (report
+            :warning (format nil
+                             "table text at ~dpx (floor ~dpx); reduce its rows or columns"
+                             (table-block-size b) *table-floor*))))))
 
 (defun lint-slide (deck slide)
   (let ((fit (slide-fit slide)))
+    (when (slide-kicker-run slide)
+      (cond ((null (fit-title-size fit))
+             (report
+              :warning "a kicker stands above a title; this slide has none"))
+            ((> (run-lines (slide-kicker-run slide) *kicker-size*
+                           (content-width deck)) 1)
+             (report
+              :warning
+              "the kicker does not fit on one line and is cut; shorten it"))))
     (when (and (fit-title-size fit) (< (fit-title-size fit) *title-floor*))
       (report :warning (format nil
                         "title text at ~dpx (floor ~dpx); shorten the title"
@@ -56,17 +69,33 @@
           (report :warning (format nil
                                    "code at ~dpx (floor ~dpx); shorten the lines or the block"
                                    (fit-code-size fit) *code-floor*))))
-      (lint-blocks (slide-blocks slide) fit (content-width deck)))))
+      (lint-blocks (slide-blocks slide) fit (content-width deck)))
+    ;; The callouts of a slide share one size.
+    (let ((c (car (slide-callouts slide))))
+      (when (and c (< (callout-size c) *say-floor*))
+        (report
+         :warning (format nil
+                          "callout text at ~dpx (floor ~dpx); shorten the callouts or make room"
+                          (callout-size c) *say-floor*))))
+    (dolist (c (slide-callouts slide))
+      (let* ((s (callout-size c))
+             (lines
+              (run-lines (callout-run c) s
+               (- (callout-width c) (* 2 (+ (say-pad-x s) *say-border*))))))
+        (when (> lines 2)
+          (report :warning (format nil
+                                   "a callout takes ~d lines; keep each to 2"
+                                   lines)))))))
 
 ;;; --- theme contrast ------------------------------------------------------------
 
 ;;; Text color, background, what is set in it. Every text color carries body-size text
-;;; somewhere (the accent colors links, the muted color captions), so each needs the
-;;; WCAG AA ratio for normal text.
+;;; somewhere (the accent colors links and accented text, the muted color captions and
+;;; leads), so each needs the WCAG AA ratio for normal text.
 (defparameter *contrast-pairs*
   '(("fg" "bg" "body text") ("muted" "bg" "captions") ("accent" "bg" "links")
-    ("fg" "head-bg" "table headers") ("fg" "mark" "marked text")
-    ("fg" "code-bg" "code") ("muted" "code-bg" "code comments")
+    ("fg" "head-bg" "table headers and callouts") ("fg" "mark" "marked text")
+    ("code-fg" "code-bg" "code") ("code-muted" "code-bg" "code comments")
     ("hl-str" "code-bg" "code strings") ("hl-kw" "code-bg" "code keywords")
     ("hl-def" "code-bg" "code forms") ("hl-const" "code-bg" "code constants")))
 

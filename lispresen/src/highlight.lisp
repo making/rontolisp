@@ -5,6 +5,9 @@
 ;;;; constants (nil, t, true, false, #t, #f). [], {} and #{} are delimiters like (). The
 ;;;; player's editor re-highlights with the same rules (HIGHLIGHT in player.lisp), so an
 ;;;; edited block looks like the deck's.
+;;;;
+;;;; A console transcript is highlighted by line: the $ of a command line as hl-k, every
+;;;; other line, the output, as hl-c.
 
 (in-package :lispresen)
 
@@ -76,3 +79,17 @@
                  ((delimiter-p c) (emit nil (1+ i)))
                  (t (let ((j (token-end text i)))
                       (emit (token-class text i j) j)))))))))
+
+(defun write-console (lines out)
+  "The lines of a console transcript as HTML: the prompt of a command line marked, the
+output lines muted."
+  (loop for (line . more) on lines
+        do
+          (cond ((prompt-line-p line)
+                 (write-string "<span class=\"hl-k\">$</span>" out)
+                 (write-escaped (subseq line 1) out))
+                ((string= line ""))
+                (t
+                 (write-string "<span class=\"hl-c\">" out)
+                 (write-escaped line out)
+                 (write-string "</span>" out))) (when more (terpri out))))

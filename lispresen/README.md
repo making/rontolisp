@@ -5,7 +5,7 @@ one HTML file, with font sizes and placement chosen by lispresen so every slide 
 readable. The same program runs on the interpreter, the JVM, WASM and SBCL, and
 produces the same bytes on each. Decks are written in Japanese; lines break between phrases.
 
-The design, and what is still to come, is in [DESIGN.md](DESIGN.md).
+The design is in [DESIGN.md](DESIGN.md).
 
 ## A deck
 
@@ -34,20 +34,84 @@ The design, and what is still to come, is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :theme :aspect :runtime :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)`, `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below) |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
 | `(section "title")` | a section divider |
-| `(slide [:title "t"] [:layout name] [:class "c"] block...)` | a slide |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
 | `"text"`, `(p inline...)` | a paragraph |
+| `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul item...)`, `(ol item...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it |
-| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below) |
+| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge |
+| `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj` and their variants) |
 | `(quote [:cite "who"] inline...)` | a quotation |
-| `(column block...)` | a column; a slide of columns lays them side by side at one text size |
+| `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
-| `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(link "url" ...)` | inline content |
+| `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(accent ...)`, `(link "url" ...)` | inline content; `accent` is text in the accent color |
+| `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
+| `(define name (param... [&rest rest]) body...)` | a template (below) |
 
-The deck is read, never evaluated: no macros, no backquote, no reader conditionals.
+The deck is read, never evaluated: no macros, no backquote, no reader conditionals, no
+`#.`.
+
+A template is reused by substitution: a later `(name arg...)` anywhere in the deck is
+replaced by the body, each parameter by its argument, the `&rest` arguments spliced where
+the rest parameter appears. A body of several forms stands for several slides, blocks or
+inlines.
+
+```lisp
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
+(slide :title "インタプリタとコンパイラ"
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ"))
+```
+
+Keywords are not substituted (a parameter `title` leaves `:title` alone), and a template
+or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
+
+A theme is the page's colors and the code's (`code-bg`, `code-fg`, `code-muted` and the
+highlight colors). `(theme :base :light :code :dark)` sets code on dark panels in a light
+deck; any color can be replaced by name, and every text color is checked for contrast.
+
+```lisp
+(slide :title "列の幅は内容で決まる"
+  (lead (b "問題") " 等幅の列ではコードが収まらない → " (b (accent "解決")) " 列ごとに幅を測る")
+  (column
+    (code :lang "lisp" :run nil "(row-widths row k c width)")
+    (code :lang "console" "
+      $ lispresen/check.sh
+      ok   interpreter"))
+  (column (ul "コードの列は最長の行の幅を取る" "残りを文章の列が使う")))
+```
+
+## Callouts
+
+`say` puts a short comment in a speech bubble whose tail points at what it wraps: a
+phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
+block named by its text.
+
+```lisp
+(li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")
+
+(say "Run で 6765 が出る" :at "(fib 20)"
+  (code :lang "lisp" "
+    (defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+    (fib 20)"))
+```
+
+lispresen places the bubble beside its target where it covers no text: right of it,
+below, above or left, in that order. A bubble takes no room from the slide; when there is
+no free space for it, the bubble text and then the body text get smaller, and a bubble
+that still finds none is outlined in red and reported as an error. A bubble on an image
+gets a strip on the image's right.
+
+A bubble is shown with its slide. With `:step t` (or `(deck :callouts :step)` for every
+bubble, `:step nil` to opt one out) it appears on the next page advance instead: each
+advance shows the next bubble of the slide before moving on, and going back hides them
+again. Print and the overview show every bubble; the presenter window shows the ones
+still to come faded.
 
 ## Running
 
@@ -76,13 +140,16 @@ sbcl --script lispresen/cli.lisp talk.lisp
 ```
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
-`.html`. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title": warning:
-...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0 success, 1
-errors (or warnings under `--strict`), 2 usage.
+`.html`. Code files are read into the HTML. Images are referenced by their path, relative to the deck; `--embed` puts them in
+the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
+alone is the whole deck. A WASM build reads code files and images only from a directory
+`wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
+warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
+success, 1 errors (or warnings under `--strict`), 2 usage.
 
 ## Presenting
 

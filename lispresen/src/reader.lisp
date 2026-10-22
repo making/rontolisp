@@ -1,7 +1,8 @@
 ;;;; reader.lisp -- top-level forms of a deck with their line numbers, and diagnostics.
 ;;;;
-;;;; A deck is read, never evaluated. Each top-level form is read on its own so that its
-;;;; start offset, hence its line, is known for every diagnostic about it.
+;;;; A deck is read, never evaluated, and #. is refused, so reading cannot run code from
+;;;; it either. Each top-level form is read on its own so that its start offset, hence its
+;;;; line, is known for every diagnostic about it.
 
 (in-package :lispresen)
 
@@ -58,9 +59,20 @@
                  (setf pos (if end (+ end 2) n))))
               (t (return pos)))))))
 
+(defun well-formed-p (form limit)
+  "True when every list in FORM is a proper list and FORM holds at most LIMIT conses; a
+form read from LIMIT characters holds more only through shared or circular structure."
+  (labels ((walk (x)
+             (loop while (consp x)
+                   do (when (< (decf limit) 0) (return-from well-formed-p nil))
+                     (when (consp (car x)) (walk (car x))) (setf x (cdr x)))
+             (when x (return-from well-formed-p nil))))
+    (walk form)
+    t))
+
 (defun read-forms (source)
   "The top-level forms of SOURCE as (FORM LINE) lists. A form that cannot be read is
-reported and ends the read."
+reported and ends the read; a dotted, shared or circular one is reported and skipped."
   (let ((pos 0) (line 1) (counted 0) (forms nil) (n (length source)))
     (loop
       (setf pos (skip-blank source pos))
@@ -68,10 +80,14 @@ reported and ends the read."
       (loop while (< counted pos)
             do (when (char= (char source counted) #\Newline) (incf line))
               (incf counted))
-      (let ((*line* line) (next nil))
+      (let ((*line* line) (*read-eval* nil) (next nil))
         (handler-case (multiple-value-bind (form end)
                           (read-from-string source t nil :start pos)
-                        (push (list form line) forms)
+                        (if (well-formed-p form (- end pos))
+                            (push (list form line) forms)
+                            (report
+                             :error
+                             "dotted lists and #n= labels are not deck syntax"))
                         (setf next end))
           (error ()
             (report

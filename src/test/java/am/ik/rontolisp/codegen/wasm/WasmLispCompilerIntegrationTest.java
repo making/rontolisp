@@ -25018,6 +25018,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anArityMissPastThirtyThousandFuncIdsStillReportsInWords() throws Exception {
+		// g48: the JVM leg lost every value-path arity message past a 30,568-funcId
+		// span (g46) because its report rode one constant-pool table with a hard
+		// ceiling. The wasm report rides no such table -- one report arm per distinct
+		// callee shape, the funcIds selected as the dispatcher selects its cases --
+		// so this probe reuses that scale here: 32,000 one-parameter defuns, every
+		// one a function value (so every one is a miss of the arity-0 and arity-2
+		// dispatchers), one declaring its own report, then a miss, a hit, a declared
+		// miss and a spread-route miss. A single-backend method rather than a
+		// ci-spec.yaml row: the row would compile and run the 32,000-defun program
+		// on all four backends times two --simd legs in CI's native job for a fact
+		// only the wasm legs can state.
+		int count = 32_000;
+		StringBuilder program = new StringBuilder();
+		for (int i = 0; i < count; i++) {
+			program.append("(defun wf").append(i).append(" (x) x)\n");
+		}
+		// One form per reference: a single 32,000-argument (list ...) would be one
+		// top-level FORM, which the chunker cannot cut, so the module would carry a
+		// 1 MB body that wasmtime cold-compiles for minutes (the one-long-run gap
+		// of .kb/wasm-function-body-size.md). Per-form references chunk at 40 KB.
+		// The references prepend, so the declared defun ends up at index 0.
+		program.append("(defun wf-declared (x) (declare (rontolisp::%arity-report \"Declared got (\" \")\")) x)\n");
+		program.append("(defparameter *fns* nil)\n");
+		for (int i = 0; i < count; i++) {
+			program.append("(setq *fns* (cons #'wf").append(i).append(" *fns*))\n");
+		}
+		program.append("(setq *fns* (cons #'wf-declared *fns*))\n");
+		program.append("""
+				(print (handler-case (funcall (nth 7 *fns*) 1 2) (program-error (c) (princ-to-string c))))
+				(print (funcall (nth 7 *fns*) 41))
+				(print (handler-case (funcall (nth 0 *fns*)) (program-error (c) (princ-to-string c))))
+				(print (handler-case (apply (nth 7 *fns*) '(1 2)) (program-error (c) (princ-to-string c))))
+				""");
+		assertThat(compileAndRunEh(program.toString())).isEqualTo("""
+				"Function expects 1 argument, got 2"
+				41
+				"Declared got (0)"
+				"Function expects 1 argument, got 2\"""");
+	}
+
+	@Test
 	void compileSubseqOfAPackedFloatArrayKeepsTheWidth() throws Exception {
 		// %array-alike over a packed float array: the copy comes back a TYPE_FARRAY at
 		// the SAME width. It used to come back a general simple-vector -- the alike

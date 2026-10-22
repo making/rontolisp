@@ -39,7 +39,8 @@ Goals:
 - One HTML file. Without runnable code it has no network dependency at all.
 
 Non-goals: WYSIWYG editing, animations/transitions, free-form positioning, PowerPoint
-export.
+export. The one build step is a callout shown by a page advance (Callouts, below); it
+appears at once, without a transition.
 
 ## Deck format
 
@@ -53,6 +54,11 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :theme :light            ; :light | :dark | :high-contrast | (theme ...), below
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
+      :callouts :shown         ; :shown | :step, below
+      :kicker :section         ; each titled slide's kicker is its section's title
+      :agenda t                ; a list of the sections, repeated at each section
+      :logo (image "logo.png" :alt "rontolisp")   ; on the title slide
+      :url "https://example.com/talk"             ; a QR code of it on the title slide
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -77,6 +83,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
   (image "img/arch.png" :alt "リーダからHTMLまでのパイプライン" :caption "四つの段階"))
 
 (slide :title "インタプリタとコンパイラ" :layout :columns
+  (lead (b "違い") " 起動の速さと " (b (accent "実行の速さ")))
   (column (p (b "インタプリタ")) (ul "起動が速い" "eval が完全"))
   (column (p (b "コンパイラ")) (ul "実行が速い" "成果物が一つ")))
 
@@ -92,9 +99,9 @@ Elements:
 
 | Kind | Forms |
 |------|-------|
-| Slide-level | `deck`, `section`, `slide` (`:title`, `:layout`, `:class`) |
-| Block | bare string (= `p`), `p`, `ul`, `ol`, `li`, `code` (`:lang`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes` |
-| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark` |
+| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`), `define` (below) |
+| Block | bare string (= `p`), `p`, `lead`, `ul`, `ol`, `li`, `code` (`:lang`, `:file`, `:lines`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
+| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
 
@@ -105,8 +112,12 @@ Rules:
 - Tags are matched by `symbol-name`, not by symbol identity, so the package the runtime
   reader interns into does not matter. Options are keyword/value pairs at the start of
   a form; the first argument that is not a keyword starts the content.
-- The runtime reader does not support backquote, `#.`, `#+`/`#-`
-  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them.
+- The compiled runtime reader does not support backquote, `#.`, `#+`/`#-`
+  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them. The
+  interpreter's and SBCL's readers evaluate `#.`, so the deck is read under `*read-eval*`
+  nil, which every backend refuses alike. A form holding a dotted list or more conses
+  than characters (shared or circular structure from `#n=`, which SBCL reads) is reported
+  and skipped, so the parser and the template expansion only ever see proper trees.
   Characters are code points on every backend (`.kb/string-index-cost.md`), so Japanese
   strings measure and slice identically everywhere.
 - Top-level forms instead of one enclosing `(deck ...)`: each form is read separately,
@@ -115,18 +126,75 @@ Rules:
 - `code` content is dedented (the common leading whitespace removed, a leading blank
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
-- A slide with `column`s holds only columns; each column holds blocks, not columns.
-- Reuse within a deck (phase 3): `(define name (params...) body)` declares a template
-  that lispresen expands by substitution. This is lispresen's own expansion, not Lisp
-  macros, for the same reason as above.
+- `(code :file "src/fib.lisp" [:lines (4 6)])` takes its text from a UTF-8 file (a
+  leading byte order mark dropped) instead, lines FIRST to LAST when `:lines` is given,
+  dedented the same way. A relative path resolves against the deck's directory, as an
+  image's does (Images, below). `:lang` defaults by extension: `lisp` / `lsp` / `cl`
+  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, none otherwise. The file is read
+  while the deck is parsed, with or without `--embed` (the code is part of the page), so
+  `:at` and every lint see its lines. A deck can name any file the host can read, so an
+  untrusted deck is rendered where it reads nothing else: the browser host, or WASM with
+  only its directory preopened.
+- Consecutive `column`s form one row of columns; full-width blocks may stand before,
+  between and after rows. A column holds blocks, not columns.
+- Text roles are named, never colored: `lead` is a paragraph in the muted color (an
+  introduction such as `問題 ... → 解決 ...`), `accent` inline text in the accent color,
+  `mark` a highlighter background. Each is a theme color the contrast lint checks.
+- A kicker is a one-line label in the accent color above the title, such as the title of
+  the enclosing section: `(slide :kicker "text")`, or every titled slide's section title
+  with `(deck :kicker :section)` (`:kicker nil` opts a slide out). It sits in the top
+  margin, so the title keeps its position. It is a label like the page number, outside
+  the body type scale; one longer than a line is cut with an ellipsis and reported.
+- `(deck :agenda t)` adds an agenda: a slide after the title slide listing the section
+  titles as an ordered list, and in place of each section divider the same list with
+  that section highlighted (bold, in the accent color, the others muted), so each
+  section opens by showing where the talk is. `:agenda "title"` names the slides
+  (default 目次). They are ordinary standard slides, fitted and linted like any list.
+  Template uses are expanded before any slide is parsed, so the sections are known when
+  the agenda slide takes its number, and slide numbers in diagnostics count it. A deck
+  without sections gets no agenda and a warning.
+
+### Templates
+
+```lisp
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
+(slide :title "インタプリタとコンパイラ"
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ"))
+```
+
+A top-level `(define name (params...) body...)` declares a template; a use `(name
+arg...)` anywhere in a later top-level form is replaced by the body with each parameter
+replaced by its argument. This is substitution on the read forms (`template.lisp`), not
+Lisp macros, for the reason above: nothing is evaluated, so a template cannot compute.
+
+- The parameters are symbols, the last optionally after `&rest`, whose arguments are
+  spliced into the list where it appears. A body of several forms is spliced into the
+  list holding the use, so one use can stand for several slides, blocks or inlines.
+- Names match by `symbol-name`, like tags. Keywords are never substituted, so a
+  parameter `title` leaves `:title` alone. A template or parameter cannot take an
+  element's name (`slide`, `p`, `b`, ...): a parameter `p` would replace the tag too.
+- Uses expand after substitution, so arguments may hold uses, and a body may use a
+  template defined after it but before the use. A use with the wrong number of
+  arguments is reported and dropped.
+- Expansion is bounded, since a deck may come from an untrusted source: uses nest at
+  most 32 deep (a template using itself is reported), and a deck's templates produce at
+  most 200,000 list elements (a few uses can otherwise double a form each level). A
+  top-level form that hits a bound is reported once and dropped.
+- Diagnostics inside an expansion carry the line of the top-level form holding the use.
 
 ## Pipeline
 
 ```
 source string
   -> read      top-level forms + start offsets            (reader.lisp)
+  -> expand    template uses replaced by their bodies      (template.lisp)
   -> parse     validated model: deck / slide / block / inline structs,
-               diagnostics for malformed or unknown forms  (model.lisp)
+               code files read, diagnostics for malformed
+               or unknown forms                            (model.lisp, embed.lisp)
+  -> embed     image sources as data: URIs, with --embed   (embed.lisp)
   -> segment   Japanese phrase boundaries                  (phrase.lisp)
   -> layout    layout selection + fit solver -> per-slide geometry and sizes
                                                            (layout.lisp, metrics.lisp)
@@ -137,11 +205,15 @@ source string
 The core is a pure function from a string to a string:
 
 ```lisp
-(lispresen:render source &key theme runtime) ; => (values html diagnostics)
+(lispresen:render source &key theme runtime read-file embed) ; => (values html diagnostics)
 ```
 
 It does no I/O, so every host (CLI, browser, a Java caller via `rontolisp:jvm-export`)
-is a thin shell over it. A diagnostic is `(severity line slide-number message)`.
+is a thin shell over it. `read-file` is the one place a host reaches in: a function from a
+path the deck names to the file's bytes, nil when it cannot be read. Code files are read
+with it, and under `embed` (the CLI's `--embed`) images too. The browser host passes none,
+so a `:file` there is an error. A diagnostic is
+`(severity line slide-number message)`.
 Diagnostic messages are in English.
 
 **All layout arithmetic is integer.** Widths are in milli-em, sizes and coordinates in
@@ -175,8 +247,11 @@ in the 1696 px body box.
 | Code | 44 | 40, 36, 32 | 32 | 28 | 1.4 | 64 (half-width) |
 | Table | 48 | 44, 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
 | Statement | 120 | 104, 88, 72 | -- | 56 | 1.35 | 14 |
+| Callout | 44 | 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
+| Kicker | 32 | -- | -- | -- | 40 px | -- |
 
-Sizes only step down from the default, never up. A sparse slide keeps the default size
+A callout is never larger than the slide's body text. Sizes only step down from the
+default, never up. A sparse slide keeps the default size
 rather than inflating, so text size stays consistent across the deck; only the statement,
 section and title layouts have their own larger scale. Line heights are those of
 Japanese body text (1.5 and up); the Latin-oriented 1.2-1.4 crowds kanji.
@@ -198,7 +273,7 @@ Width of a code point, in milli-em:
 | Characters | Width |
 |------------|-------|
 | Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
-| Printable ASCII | per character, measured on Hiragino Sans W3 (bold: W6), plus 2% |
+| Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Other proportional characters | 800 (bold 840), plus 2% |
 
@@ -215,6 +290,17 @@ Measured with `tools/calibrate.lisp` in Chrome on 2026-10-22 (84 paragraphs: Jap
 Latin, mixed, bold, inline code, brackets; 40-120 px; 700-1696 px wide): the model never
 predicted fewer lines than Chrome rendered, and predicted one more in 9. Safari 26.3, same
 day and page: never fewer, one more in 1.
+
+That table was measured in Chrome alone, and Safari sets Hiragino's Latin wider at every
+size: 2.7% on average at weight 400, 4.4% at 700, single characters up to 15% (measured
+2026-10-22, Safari 26.3 against Chrome 155, each character set twenty times). The 2%
+margin hid it in the paragraphs, which meet a line boundary only by chance, until a bold
+title the model set in two lines took three in Safari, 0.05 px over its width. The table
+now holds the wider of the two browsers per character, and the calibration page also sets
+every ASCII character in both weights and reports any wider than the model, which does
+not depend on chance. Same day, 96 paragraphs (a bold title among them): never fewer
+lines in either browser, one more in 18 (Chrome) and 11 (Safari); no character wider
+than the model in either.
 
 ### Line breaking
 
@@ -246,15 +332,28 @@ phrases (文節), not between arbitrary characters.
 
 | Shape | Layout |
 |-------|--------|
-| Deck header (generated first slide) | `title` |
-| `section` | `section` (large, centered) |
-| No title, one short paragraph | `statement` (centered, statement scale) |
+| Deck header (generated first slide) | `title` (below) |
+| `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
+| No title, one short `p`, no callout | `statement` (centered, statement scale) |
 | Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
 | Title + one `table` | `table` |
-| Title + `column`s | `columns` |
+| Title + `column`s, with or without full-width blocks | `columns` |
 | Anything else | `standard` (title on top, blocks stacked) |
+
+The title slide centers the deck's `:logo` (160 px high, the image's own width), its
+title at the statement scale (at most 2 lines) and the author and date in the safe area,
+the title stepping down when the logo and those lines leave it too little height. A
+deck's `:url` adds a QR code of the URL with the URL under it in a corner, so the slide's
+address can be scanned or typed. The corner never moves the text: the text is laid out as
+without the URL, and the QR code takes the largest of 320, 280, 240 and 200 px and the
+first corner of bottom right, bottom left, top right and top left where it and the URL
+under it, 24 px clear, cover none of the text. The logo counts as the full width (its own
+width is unknown) and each title line as wide as the widest, since `text-wrap: balance`
+evens the lines. When no corner is free, the smallest size goes to the bottom right and
+the slide is reported. A first version narrowed the text column to make room for the code
+on the right, which moved the title.
 
 Placement rules: the title sits at the same position on every content slide, and the
 body is top-aligned under it, so the audience's eye does not search for the start of
@@ -267,20 +366,60 @@ For each slide:
 
 1. Fit the title: the largest title step at which it takes at most 2 lines.
 2. The body box is what remains of the safe area below the title and a fixed gap.
-3. For each region (one for `standard`, one per column for `columns`), compute the
-   content height at each body step: lines x line height, plus block gaps, list
-   indentation reducing the available width per nesting level, code sized by both its
-   longest line and its line count (runnable code too: its output is an overlay,
-   below), a table by the column widths and row heights below. Height is monotonic in
-   size, so the chosen size is the largest step that fits.
-4. Columns share the smallest size any of them needs, and one code size, so
-   side-by-side text matches. Each column is `(1696 - 80 (n - 1)) / n` px wide; the 80 px
-   gap is fixed so the width is known before the size is.
+3. The body is a vertical stack of full-width blocks and rows of columns. Compute its
+   height at each body step: lines x line height, plus block gaps, list indentation
+   reducing the available width per nesting level, code sized by both its longest line
+   and its line count (runnable code too: its output is an overlay, below), a table by
+   the column widths and row heights below, a row of columns as its tallest column at
+   the widths below. Height is monotonic in size, so the chosen size is the largest step
+   that fits.
+4. Columns share the slide's body and code size, so side-by-side text matches. The code
+   size at a body step is that step's, or a smaller one when a code line does not fit
+   its block (full width, or its column's minimum below).
 5. If even the hard floor overflows, the slide is emitted at the hard floor, marked, and
    reported as an error: lispresen does not make text unreadable to make it fit.
 
 A `quote` is its text at the body size, indented by the list indent (an accent rule in
 it), and its `:cite` below as `— cite`; the `quote` layout places it as `standard` does.
+
+An image takes a share of the height the other blocks leave (`flex: 1 1 0`), and a row
+of columns holding an image takes one too; every other block and row is as tall as its
+content.
+
+### Columns
+
+Column widths come from content, as table widths do, and for the same reason: a code
+column needs the width of its longest line, which an even split does not give it. At a
+body step and code size, each column has a minimum, the widest of its blocks' minima,
+and a maximum, the widest of their unwrapped widths:
+
+| Block | Minimum | Maximum |
+|-------|---------|---------|
+| text, list, quote | the widest unbreakable unit, plus the indent | the text set on one line, plus the indent |
+| code | the longest line, plus padding | the same |
+| console transcript | the longest command line, plus padding | the longest line, plus padding |
+| table | the sum of its columns' minima | the sum of their maxima |
+| image | its caption's widest unit | none: it takes what it gets |
+
+With 80 px between columns, `1696 - 80 (n - 1)` px are shared:
+
+1. If the maxima fit, every column gets at least its maximum and the rest is spread
+   evenly, the narrowest raised first, as in a table: columns of short text stay an even
+   split.
+2. Otherwise a column whose maximum is below an even share takes only its maximum, a
+   column whose minimum is above it takes its minimum, and the others share the rest
+   evenly. A code column keeps its lines on one line, and the text beside it takes what
+   is left, which wraps it.
+3. If the minima do not fit, the code steps down, then the body; at the hard floor the
+   columns are set at their minima and the slide is an error.
+
+Both cases are one function, `level-widths`: the largest level L such that each width
+`clamp(L, floor, cap)` sums to at most the room, the 1 px remainders to the leftmost
+columns at L. Tables use it for their first case.
+
+There is no author hint for widths. Every case met so far (code beside a list, a short
+column beside a long one, an image beside text) comes out of the content; a hint would
+be geometry in the deck, the first thing the goals rule out.
 
 The result is written per slide as CSS custom properties (`--title`, `--body`,
 `--code`, `--table`, `--body-box-height`), so the stylesheet stays fixed and every
@@ -312,16 +451,22 @@ computed number is visible in the output.
 
 Column widths are decided by lispresen, not by the browser, for the same reason line
 breaks are: the browser's automatic table layout depends on the font it has, and the
-solver must know each row's height. Per column, the minimum width is the widest
+solver must know each row's height. A table spans its region (the body box, or its
+column), like the text around it. Per column, the minimum width is the widest
 unbreakable unit (phrase or Latin word) in any of its cells and the maximum is the widest
 cell set on one line, both plus horizontal padding. Then:
 
-1. If the maxima sum to at most the body box width, every column gets its maximum: no
-   cell wraps, and the table keeps its natural width.
+1. If the maxima sum to at most the region width, no cell wraps, and the table fills
+   it: every column gets at least its maximum, and the remaining width raises
+   the narrowest columns first to one common width, as far as the remainder reaches.
+   The columns end up as even as their content allows, so numbers right-aligned in them
+   stand at regular intervals. A first version kept each column at its maximum: a
+   short table then sat in the left half of the slide with uneven gaps between its
+   columns.
 2. Otherwise each column gets its minimum plus a share of the remaining width
    proportional to its maximum minus its minimum (the CSS automatic layout rule), so a
    column of long text wraps before a column of short labels does.
-3. If the minima alone exceed the box, the table steps down a size; at the hard floor
+3. If the minima alone exceed the region width, the table steps down a size; at the hard floor
    that is an error.
 
 A row is as tall as its tallest cell (lines x line height plus vertical padding), and
@@ -331,21 +476,136 @@ use the same `<wbr>` phrase breaks as body text, so the browser wraps each cell 
 the model did. The header row is bold on a tinted background, and each body row has a
 1 px rule drawn as an inset shadow, which takes no layout space.
 
+### Callouts
+
+```lisp
+(li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")
+
+(say "Run で 6765 が出る" :at "(fib 20)" :step t
+  (code :lang "lisp" "..."))
+
+(say "四つの段階を順に通る" (image "img/arch.png" :alt "..."))
+```
+
+A callout is a short comment in a speech bubble whose tail points at what it is about,
+its anchor. The deck names the anchor, never a position; lispresen places the bubble.
+
+- Inline, `(say "comment" inline...)` wraps its anchor: a phrase, a whole list item, a
+  table cell's text. It goes wherever inline content goes, inside `b` or `mark` too.
+- Around a block, `(say "comment" block)` points at one `p`, `ul`, `ol`, `code`, `image`,
+  `table` or `quote` as a whole. In block position a `say` whose content is one such form
+  is this kind; anything else is a paragraph holding an inline callout.
+- `:at "text"` on a callout around `code` points at the first occurrence of the text,
+  which must lie within one line. Code is one string, so the anchor is named by its text
+  rather than wrapped; a line number would go stale when a line is added above.
+- The comment is a string. Titles, captions and notes take no callouts, and a slide with
+  one never takes the statement layout: its centered, balanced lines are not where the
+  model puts them.
+
+**Room.** A bubble is an overlay, like the runnable-code output: it takes no room in the
+flow, so a comment never re-wraps the text it is about. It is placed in the free space of
+the geometry the fit solver computed, in canvas px:
+
+- a text line is a rectangle as wide as its text (the model's widths, trailing spaces
+  excluded) and as tall as its line height, offset by its alignment (right or centered
+  in table cells, centered in figure captions); a list item's first line reaches left
+  over its marker;
+- a code line is its monospace width inside the panel's padding, and runnable code adds
+  its Run and Reset buttons (320 x 48 px, 12 px inside the top right corner);
+- an image is its whole picture area, since its own size is not known at build time;
+- a bubble already placed, with its tail.
+
+Backgrounds and rules are not obstacles: a bubble may sit over the empty part of a code
+panel or a table. An inline anchor is the part of each line its text takes, one fragment
+per line; a block anchor is the block's box (code, table, image) or the rectangle around
+its lines (text). The width model over-estimates Latin text, so a static tail can land a
+few px to the right of where the browser draws the anchor; the runtime check corrects it.
+
+**The bubble.** Text at the callout size, line height 1.4, padding s/4 by s/2, a 3 px
+accent border with a 16 px radius on the `head-bg` color, at most half the content width
+wide. The tail is 32 px long on a 36 px base and stops 4 px short of the anchor, so the
+bubble's edge is 36 px from it, and its middle stays 34 px (the radius and half the base)
+from a corner.
+
+**Candidates**, tried in order:
+
+1. right of the anchor's last fragment, centered on it vertically, then running down
+   from it, then up;
+2. below the last fragment, centered on it, then running right, then left;
+3. above the first fragment, likewise;
+4. left of the first fragment, as right.
+
+Each is moved into the body box along its side as long as the tail stays on that side. A
+candidate fails when the bubble leaves the body box, when the bubble grown by 12 px on
+every side meets an obstacle, or when the box the tail spans (the 36 px reach by its
+base) meets one. The anchor's own lines are obstacles, so a bubble never covers its
+anchor. Right comes first because it covers no following line: it holds when the anchor
+ends its line (a list item, the last phrase of a line) and the lines beside it are
+shorter. Below suits the last line of the content, above a line after a short one, and
+left a right-aligned table cell, whose neighbors stand at the far ends of their columns.
+
+**Images.** An image fills the room the other blocks leave, so there is no free space
+around it. A callout on one reserves a strip on the figure's right, as wide as the bubble
+plus its reach, and sets the image against the strip (`align-items: flex-end`). The
+middle of the image box's right edge is then on the picture whatever its aspect ratio
+(narrower: the picture fills the box's height at its right edge; wider: it fills the
+width at mid height), and the bubble sits in the strip, its tail at that point.
+
+**Sizes.** Callouts are placed in source order, each an obstacle for the next, at one size
+per slide: the largest callout step at which every one finds room. When none does, the
+body steps down too (shorter lines leave more room), down to the hard floor. A callout
+that has no room even then is emitted at its centered position below the anchor at the
+smallest size, outlined like an overflow, and reported as an error.
+
+**Visibility.** A callout is shown with the slide, unless it is a step: `:step t`, or every
+callout of a deck with `:callouts :step` (`:step nil` opts one out). The player hides the
+step bubbles of a slide when it is entered forward; each page advance (→, ↓, space,
+PageDown, Enter, a swipe) shows the next in source order before the next one moves to
+the next slide, and going back hides the last one shown before it moves to the previous
+slide, which it enters with all its bubbles shown. Every step bubble is placed when the
+slide is laid out, so showing one moves nothing. The presenter window and the audience
+window share the step with the slide number; the presenter's views show a hidden bubble
+faded. The overview, print and the page without JavaScript show every bubble. While a
+code block of the slide is edited, its bubbles are hidden, since the edited text may run
+under them, and placed again on every change. An open output panel moves below the bubbles of its code. Of
+any other bubble and the panel, the one shown last is on top: a bubble shown by an
+advance covers the panel, and a run brings the panel back over it.
+
 ### Runtime check
 
 The static estimate cannot see the font the presenting machine actually has. After
 `document.fonts.ready`, the player measures each slide: a title taller than the room above
-the body steps the title down; a region (the body, or each column) whose content is taller
+the body steps the title down; a region (the body and each column) whose content is taller
 than it steps the slide's body, code and table sizes down together; a centered text taller
-than the safe area steps the statement scale down. Never below the hard floor; a region
+than the safe area steps the statement scale down. Column widths stay as written: a
+smaller size only needs less of them. Never below the hard floor; a region
 still overflowing there is marked like a build-time overflow. Each step is logged with
 `console.warn`, and opening the deck with `?check` lists them in an overlay and outlines
 the corrected slides. The player derives the line heights, gaps and padding of a step with
 the formulas of `layout.lisp`, multiplying before dividing so they round as the integer
 arithmetic does; the type scale itself comes from the JSON the emitter writes
-(`<script type="application/json" id="lp">`). JavaScript is a correction
-on top of the static result, not a replacement for it, so the deck still lays out
-correctly with JavaScript disabled and when printed.
+(`<script type="application/json" id="lp">`). After the size
+corrections, the player places every callout of the slide again, with the candidates
+above, on measured geometry: the anchor's client rects (the `:at` text through a
+`Range`), the client rects of every text node, the picture areas and the Run and Reset
+buttons; the bubble keeps its size. So the tail lands on the anchor the browser drew. A
+callout that changes side is listed like a step, and one that finds no room keeps its
+static place and is outlined. JavaScript is a correction on top of the static result,
+not a replacement for it, so the deck still lays out correctly with JavaScript disabled
+and when printed.
+
+### QR codes
+
+`qr.lisp` encodes the URL itself, so the code cannot drift from the URL and no tool or
+service is needed: ISO/IEC 18004 byte mode (the URL's UTF-8), error correction level M,
+versions 1 to 10, up to 213 bytes (a longer URL is an error and gets no code). Reed-Solomon
+over GF(256) runs on log tables and the mask is the lowest penalty of the eight, all
+integer arithmetic, so every backend writes the same modules. The code is an SVG path of
+the dark modules, black on a white square with the four-module quiet zone whatever the
+theme, since many scanners do not read an inverted code. Checked 2026-10-22: the
+Reed-Solomon codewords, format and version bits equal the standard's examples (unit
+tests), and Chrome's `BarcodeDetector` reads back the text of a code of every version 1
+to 10, and of a Japanese text.
 
 ## Runnable code
 
@@ -415,8 +675,9 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 - The output takes no room on the slide. A first version reserved an output box below
   the code in the fit solver; on a full slide that stepped the code down a size or two,
   which costs more legibility than an output shown only while it matters. The output is
-  a panel over the slide, at the code size, as wide as the body: directly below the code
-  when at least three lines fit there, otherwise anchored to the bottom of the safe area
+  a panel over the slide, at the code size and in the code colors, as wide as the body:
+  directly below the code and the code's shown bubbles (it moves as a step shows or
+  hides one) when at least three lines fit there, otherwise anchored to the bottom of the safe area
   (at most 45% of the canvas high) over whatever it covers. It opens when a run starts
   and closes with its × button or `Esc` (when not editing); it stays open across
   navigation. Output longer than the panel scrolls: by wheel or drag on an always-visible
@@ -435,36 +696,51 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   `clojure` block, runnable or not; the editor re-highlights on input with the same rules
   ported to the player script, which produce the same markup (checked on a sample of all
   three languages, 2026-10-22). The colors are theme variables.
+- A `console` block is a shell transcript: a line starting with `$ ` is a command, its
+  `$` in the keyword color, and every other line is output, in the comment color. It is
+  never runnable. A command line is set on one line like code; an output line longer
+  than the panel wraps at the panel's edge between any two characters, as a terminal
+  wraps it (`white-space: pre-wrap; line-break: anywhere`), instead of stepping every
+  code block of the slide down. The model wraps it greedily with the monospace widths,
+  which over-estimate Menlo by 2%, so the browser never needs more rows than counted.
 
 ## Readability lint
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; overflow at the hard floor; a table row whose cell count (with `:colspan`) differs from the header's or the first row's |
-| warning | a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a theme text color below 4.5:1 against its background |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
 
 The contrast lint checks every text color against the background it is set on: `fg`,
-`muted` and `accent` on `bg`, `fg` on `head-bg` and `mark`, and `fg`, `muted` and the four
-highlight colors on `code-bg`. Every one of them carries body-size text somewhere (the
-accent colors links, the muted color captions and code comments), so each needs WCAG AA
+`muted` and `accent` on `bg`, `fg` on `head-bg` (table headers and callouts) and `mark`,
+and `code-fg`, `code-muted` and the four highlight colors on `code-bg` (code panels,
+inline code and the output panel). Every one of them carries body-size text somewhere
+(the accent colors links, kickers and accented text, the muted color captions and leads,
+the code muted color comments and console output), so each needs WCAG AA
 for normal text, 4.5:1; a separate 3:1 for large titles would only matter for a title
 color, and titles use `fg`.
 
 ## Themes
 
-A theme is twelve colors: `bg`, `fg`, `muted`, `accent`, `code-bg`, `head-bg`, `rule`,
-`mark` and the highlight colors `hl-str`, `hl-kw`, `hl-def`, `hl-const`, written as
-custom properties of the same names. `:theme` names a built-in theme (`:light`, `:dark`,
-`:high-contrast`) or overrides one:
+A theme is fourteen colors: the page's `bg`, `fg`, `muted`, `accent`, `head-bg`, `rule`
+and `mark`, and the code's `code-bg`, `code-fg`, `code-muted` and highlight colors
+`hl-str`, `hl-kw`, `hl-def`, `hl-const`, written as custom properties of the same names.
+`:theme` names a built-in theme (`:light`, `:dark`, `:high-contrast`) or overrides one:
 
 ```lisp
 (deck :theme (theme :base :dark :accent "#ff9f43" :mark "#4a3b00"))
+(deck :theme (theme :base :light :code :dark))   ; dark code panels on a light page
 ```
 
-`:base` defaults to light; a color is `#rgb` or `#rrggbb`. `--theme` on the command line
+`:base` defaults to light; `:code` takes the seven code colors from another built-in
+theme, then the named colors replace theirs. The code colors are a group of their own
+because a code panel is a background of its own: a first theme set code text in `fg` and
+tuned the highlight colors to `bg`, so a dark `code-bg` on a light theme made every code
+pair unreadable. Code panels, inline `tt`, the editor's caret and the output panel all
+use the code group. A color is `#rgb` or `#rrggbb`. `--theme` on the command line
 names a built-in theme and replaces the deck's choice.
 
 ## HTML output
@@ -473,7 +749,9 @@ One file containing:
 
 - `<html lang="ja">` and the slides as `<section class="slide layout-standard"
   style="--body:52px ...">` elements with semantic markup (`h1`, `ul`, `pre><code`,
-  `figure`, `blockquote`).
+  `figure`, `blockquote`). A kicker is a `<p class="kicker">` before the `h1`, a row of
+  columns a `<div class="columns">` in the body holding `<div class="column"
+  style="width:...px">`s, and `grow` when it takes a share of the height.
 - The theme stylesheet: colors as custom properties (`--fg`, `--bg`, `--accent`,
   `--muted`), font stacks, the layout classes, and print CSS (`@page` sized to the
   canvas, one slide per page) for PDF export through the browser's print dialog.
@@ -482,6 +760,11 @@ One file containing:
   below),
   the runtime check, a presenter window (`P`, below), and the runnable-code worker,
   included only when the deck has runnable code.
+- Callouts as `<div class="say" role="note" data-side="below" style="left:...;top:...">`
+  after the body, each named by its anchor's `aria-describedby` (an inline anchor is a
+  `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
+  triangles of the border and the fill color, and the bubble prints with its colors
+  (`print-color-adjust: exact`).
 - Speaker notes in `<aside class="notes">`, hidden in the audience view.
 
 ### Overview and presenter window
@@ -529,8 +812,21 @@ Presenting is done in full screen; the windowed view is for preparation.
   is checked by hand.
 
 Images are referenced by their relative path, so the output is written next to the deck
-by default and the paths stay valid. Embedding them as data URIs (`--embed`) needs a
-binary read and base64 and is phase 3.
+by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
+the HTML file stands alone:
+
+- A relative path resolves against the deck's directory (the working directory when the
+  deck is standard input). The CLI reads the bytes with `:element-type '(unsigned-byte
+  8)`, `file-length` and `read-sequence`, which behave alike on every backend (checked
+  2026-10-22 on the interpreter, JVM, both WASM backends and SBCL, with bytes 0, 128 and
+  255); the WASM backends need the directory preopened (`wasmtime run --dir .`).
+- The MIME type comes from the extension: `png`, `jpg` / `jpeg`, `gif`, `webp`, `avif`,
+  `svg`. Another extension, or a file that cannot be read, is an error and leaves the
+  path in place.
+- The base64 is computed in `embed.lisp` with integer arithmetic, not by a host library,
+  so every backend writes the same characters.
+- A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
+  the file then does not stand alone.
 
 ## Hosts
 
@@ -547,10 +843,11 @@ binary read and base64 and is phase 3.
 CLI:
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ```
 
 - `DECK` and `OUT` accept `-` for stdin / stdout. `OUT` defaults to `DECK` with `.html`.
+- `--embed` inlines images (HTML output, above).
 - `--check` lints without writing output. `--strict` makes warnings fail.
 - Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
 - Diagnostics go to `*error-output*`.
@@ -559,7 +856,7 @@ The browser host is an editor page: the deck source on the left, the rendered de
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
 and a download button for the HTML. The reactor returns the HTML and the diagnostics in
 one string (a fixed separator line), since a reactor export returns a single value. The
-lispresen reactor (755 KB) renders; the preview's runnable code loads the playground
+lispresen reactor (887 KB) renders; the preview's runnable code loads the playground
 runtime like any other deck. The preview keeps its slide across re-renders through
 `window.lispresen` (`show`, `current`), which the player defines. The reactor's
 arguments and results are allocated by a bump allocator that is never reset (about 15 KB
@@ -578,7 +875,10 @@ lispresen/
     all.lisp             loads the sources below in order
     package.lisp         defpackage lispresen
     reader.lisp          top-level forms with offsets and line numbers
+    template.lisp        define templates: substitution on the read forms
     model.lisp           structs and parsing with diagnostics
+    embed.lisp           code files as text (UTF-8), images as data: URIs (base64)
+    qr.lisp              QR codes of the deck's URL as SVG
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -597,7 +897,10 @@ lispresen/
     lispresen-test.lisp  rove: segmentation, metrics, solver, parser diagnostics
   examples/
     intro.lisp           a deck presenting lispresen itself
-    intro.html           its golden output
+    intro.html           its golden output, rendered with --embed
+    pipeline.png         the image intro.lisp shows
+    logo.svg             its title slide's logo
+    fib.lisp             the code file one of its slides shows lines of
   tools/
     gen-budoux.py        regenerates src/budoux-ja.lisp from BudouX's model
     BUDOUX-LICENSE       BudouX's Apache License 2.0
@@ -618,23 +921,39 @@ before committing a change under `lispresen/`.
 - **Cross-backend identity**: `check.sh` builds the CLI for the interpreter, the JVM,
   WASM, the WASM component and a native executable (skipped when the jar carries no
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
-  renders `examples/intro.lisp` on each through stdin and
-  stdout, and requires each output to equal `examples/intro.html` byte for byte. The
-  golden deck has runnable Lisp and Clojure blocks, a columns slide and a quote, so the
-  highlighter and the emitted player are in the comparison.
+  renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
+  `examples/`, so its files resolve), and requires each output to equal
+  `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
+  blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
+  console column and a list column, dark code panels (`:code :dark`), section kickers, an
+  agenda, a title slide with an embedded SVG logo and a QR code, a
+  quote, an embedded PNG and two callouts (an inline one, and a step one named by `:at` in
+  runnable code read from a file by `:lines`), so the
+  highlighter, the emitted player, template expansion, callout placement and the binary
+  read, UTF-8 decoding and base64 are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the
-  three table-width cases, numeric column detection, parser diagnostics with line
-  numbers. The golden deck covers emission, so HTML is not asserted piecewise.
+  three table-width cases, column widths beside a full-width block, a wrapping console,
+  the QR encoder against the standard's examples and its version boundaries, the title
+  slide's logo and QR code,
+  numeric column detection, parser diagnostics with line
+  numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
+  expansion and its diagnostics and
+  bounds, the side each kind of callout anchor gets, an unplaceable callout, step
+  callouts and the callout diagnostics, the kicker diagnostics, base64 padding, the
+  embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
+  extension, their diagnostics). The golden deck covers
+  emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must
   report no paragraph where the model predicts fewer lines than the browser; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout; the
-  presenter window must follow navigation both ways, show edits and outputs, and
-  forward Run; Start must put the audience window in full screen on the other display,
+  presenter window must follow navigation both ways, step callouts included, show edits
+  and outputs, and forward Run; a callout must sit beside its anchor after the runtime
+  check; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.
@@ -648,9 +967,9 @@ before committing a change under `lispresen/`.
    highlighting, theme overrides and the contrast lint, browser editor.
 3. `define` templates, `--embed` images.
 
-Phases 1 and 2 are implemented. The compiled CLI is 284 KB as a jar, 754 KB as a WASM
-module, 762 KB as a component and 6.4 MB as a native executable (macOS arm64); the BudouX
-weights are 17 KB of source.
+All three phases are implemented, and callouts after them. The compiled CLI is 297 KB as a jar, 788 KB as a WASM
+module, 796 KB as a component and 6.7 MB as a native executable (macOS arm64, measured
+2026-10-22 after phase 3); the BudouX weights are 17 KB of source.
 
 ## Open points
 
@@ -663,6 +982,24 @@ Lisp, Scheme and Clojure definitions across `rontoEval` calls. Safari 26.3 (2026
 through `safaridriver`): the calibration page reports 0 paragraphs under the browser and
 1 over; the golden deck loads the hosted runtime, runs, shares definitions, recovers from
 a timeout, and the editor keys, overview and presenter window behave as in Chrome.
+
+Callouts (2026-10-22, Chrome 155 through DevTools and Safari 26.3 through `safaridriver`):
+the golden deck and a deck with a callout on an image, a right-aligned table cell, a
+column, a list item and a long paragraph place every bubble on the side the static layout
+chose, the runtime check moving it only so the tail meets the measured anchor (by up to
+18 px: the glyph box against the line box, and the Latin over-estimate), with the same
+coordinates in both browsers. A step bubble shows on an advance, hides on going back, and
+is shown when its slide is entered backward; the presenter window follows steps both ways
+(over HTTP, as `BroadcastChannel` needs an origin) and shows the hidden ones faded; the
+overview and print (headless Chrome `--print-to-pdf`) show all; editing the code hides
+the bubble, and the next placement follows the moved `:at` text.
+
+Columns beside blocks (2026-10-22, Chrome 155 through DevTools and Safari 26.3 through
+`safaridriver`): the golden deck and a deck with a lead above a code and console column
+and a list column, a callout on a list item and one with `:at` on a wrapped console row,
+are laid out with the runtime check making no correction in either browser; every column
+has the width written, and each console panel is as tall as the rows the model counted
+(the output wrapped at the same character in both browsers).
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.

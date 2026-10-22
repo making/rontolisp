@@ -28,6 +28,16 @@
 (defparameter *column-gap* 80)
 (defparameter *meta-size* 40)
 (defparameter *page-number-size* 24)
+(defparameter *kicker-size* 32)
+(defparameter *kicker-lh* 40)
+(defparameter *logo-height* 160)
+(defparameter *qr-steps* '(320 280 240 200))
+(defparameter *qr-caption-size* 24)
+(defparameter *qr-caption-gap* 8)
+(defparameter *qr-clearance* 24 "The free margin around the QR code.")
+(defparameter *title-block-gap*
+  48
+  "Between the logo, the title and the lines under it.")
 
 (defun title-lh (s) (ceiling (* s 13) 10))
 (defun body-lh (s) (ceiling (* s 15) 10))
@@ -50,11 +60,11 @@
 (defun safe-height () (- *canvas-height* *margin-top* *margin-bottom*))
 
 ;;; The layout result of one slide. BODY-TOP and BODY-HEIGHT place the body box; the
-;;; sizes are px; REGION-WIDTH is the width of one column. OVERFLOW is true when the
-;;; slide does not fit even at the hard floor.
+;;; sizes are px. QR places the title slide's QR code and the URL under it as (LEFT TOP
+;;; SIZE WIDTH ALIGN), WIDTH being the wider of the two. OVERFLOW is true
+;;; when the slide does not fit even at the hard floor.
 (defstruct fit
   layout
-  region-width
   title-size
   title-lines
   body-top
@@ -62,13 +72,15 @@
   body-size
   code-size
   stmt-size
+  qr
   overflow)
 
 ;;; --- runs ------------------------------------------------------------------------
 
 (defun prepare-list (b)
   (dolist (it (bullets-items b))
-    (setf (item-run it) (make-text-run (item-inlines it)))
+    (setf (item-run it)
+          (make-text-run (item-inlines it) :bold (item-current it)))
     (when (item-sublist it) (prepare-list (item-sublist it)))))
 
 (defparameter *runnable-langs* '("lisp" "scheme" "clojure"))
@@ -83,7 +95,9 @@
   (dolist (b blocks)
     (cond ((para-p b) (setf (para-run b) (make-text-run (para-inlines b))))
           ((bullets-p b) (prepare-list b))
-          ((column-p b) (prepare-blocks (column-blocks b) runtime))
+          ((column-row-p b)
+           (dolist (col (column-row-columns b))
+             (prepare-blocks (column-blocks col) runtime)))
           ((code-block-p b)
            (setf (code-block-runnable b)
                  (and (highlighted-p b) (code-block-run b)
@@ -118,12 +132,17 @@
   (when (slide-title slide)
     (setf (slide-title-run slide)
           (make-text-run (list (slide-title slide)) :bold t)))
-  (prepare-blocks (slide-blocks slide) (deck-runtime deck)))
-
-(defun region-blocks (blocks)
-  "BLOCKS with every column replaced by its blocks."
-  (mapcan (lambda (b) (if (column-p b) (copy-list (column-blocks b)) (list b)))
-          blocks))
+  (when (eq (slide-kind slide) :title)
+    (setf (slide-meta slide)
+          (loop for text in (list (deck-author deck) (deck-date deck))
+                when text
+                collect (list text (make-text-run (list text))))))
+  (when (stringp (slide-kicker slide))
+    (setf (slide-kicker-run slide)
+          (make-text-run (list (slide-kicker slide)) :bold t)))
+  (prepare-blocks (slide-blocks slide) (deck-runtime deck))
+  (dolist (c (slide-callouts slide))
+    (setf (callout-run c) (make-text-run (list (callout-text c))))))
 
 ;;; --- layout selection --------------------------------------------------------------
 
@@ -131,11 +150,14 @@
   '("standard" "statement" "code" "image" "table" "quote" "columns"))
 
 (defun automatic-layout (slide)
+  "The layout SLIDE's shape asks for. A statement's centered, balanced lines are not where
+the model puts them, so a slide with callouts never takes it."
   (let ((blocks (slide-blocks slide)))
     (cond ((and (null (slide-title slide)) (= (length blocks) 1)
-                (para-p (car blocks)))
+                (para-p (car blocks)) (not (para-lead (car blocks)))
+                (null (slide-callouts slide)))
            "statement")
-          ((and blocks (every #'column-p blocks)) "columns")
+          ((some #'column-row-p blocks) "columns")
           ((/= (length blocks) 1) "standard")
           ((figure-p (car blocks)) "image")
           ((code-block-p (car blocks)) "code")
@@ -153,12 +175,11 @@
                                     requested automatic))
            automatic)
           ((member "statement" (list requested automatic) :test #'equal)
-           (report
-            :warning
-            "the statement layout needs exactly one paragraph and no title")
+           (report :warning
+                   "the statement layout needs exactly one (p ...), no title and no callouts")
            automatic)
           ((member "columns" (list requested automatic) :test #'equal)
-           (report :warning "the columns layout needs (column ...) blocks only")
+           (report :warning "the columns layout needs (column ...) blocks")
            automatic)
           (t requested))))
 
@@ -176,23 +197,55 @@
         (incf h
               (+ gap (bullets-height (item-sublist it) s (- width indent))))))))
 
-(defun code-fits-p (b c width)
-  (let ((inner (- width (* 2 (code-pad c)))))
-    (every (lambda (line) (<= (mono-width line c) inner))
-           (code-block-lines b))))
+(defun console-p (b)
+  (equal (and (code-block-lang b) (string-downcase (code-block-lang b)))
+         "console"))
 
-(defun code-height (b c)
-  (+ (* (max 1 (length (code-block-lines b))) (code-lh c)) (* 2 (code-pad c))))
+(defun prompt-line-p (line)
+  "True for a command line of a console transcript: a $ prompt, then the command."
+  (and (> (length line) 0) (char= (char line 0) #\$)
+       (or (= (length line) 1) (char= (char line 1) #\Space))))
+
+(defun wrapping-line-p (b line)
+  "True for a line of B that wraps at the panel's edge: the output in a console
+transcript, as a terminal wraps it. Every other line of code is set on one line."
+  (and (console-p b) (not (prompt-line-p line))))
+
+(defun fixed-lines (b)
+  (remove-if (lambda (line) (wrapping-line-p b line)) (code-block-lines b)))
+
+(defun lines-width (lines c)
+  (reduce #'max (mapcar (lambda (line) (mono-width line c)) lines)
+          :initial-value 0))
+
+(defun code-fits-p (b c width)
+  (<= (lines-width (fixed-lines b) c) (- width (* 2 (code-pad c)))))
+
+(defun line-starts (b line c width)
+  "The index of the first character of each row LINE of the code block B takes at C px
+in a panel WIDTH px wide."
+  (if (wrapping-line-p b line)
+      (mono-wrap line c (- width (* 2 (code-pad c))))
+      (list 0)))
+
+(defun code-height (b c width)
+  (+ (* (max 1
+             (loop for line in (code-block-lines b)
+                   sum (length (line-starts b line c width)))) (code-lh c))
+     (* 2 (code-pad c))))
 
 (defun code-size-at (blocks k width)
-  "The code size at step K: the step's size, or a smaller one when a line is too wide;
-nil when no step fits."
-  (let ((codes (remove-if-not #'code-block-p blocks)))
-    (loop for j from k below (length *code-steps*)
-          do
-            (let ((c (nth j *code-steps*)))
-              (when (every (lambda (b) (code-fits-p b c width)) codes)
-                (return c))))))
+  "The code size at body step K: the step's size, or a smaller one when a line is too
+wide for its block or column; nil when no step fits."
+  (loop for j from k below (length *code-steps*)
+        do
+          (let ((c (nth j *code-steps*)))
+            (when (every (lambda (b)
+                           (cond ((code-block-p b) (code-fits-p b c width))
+                                 ((column-row-p b)
+                                  (nth-value 1 (row-widths b k c width)))
+                                 (t t))) blocks)
+              (return c)))))
 
 (defun numeric-text-p (s)
   "True when S reads as a number: an optional sign, digits with commas, an optional
@@ -265,13 +318,42 @@ fraction and an optional percent sign."
           (when (> hi hi-sum) (incf (svref maxs last) (- hi hi-sum))))))
     (values mins maxs)))
 
+(defun level-widths (floors caps avail)
+  "Widths summing to AVAIL, each at least its floor and at most its cap (nil for none),
+as even as that allows: the columns not held by a bound share one level. The rounding
+remainder goes 1 px each to the leftmost columns at the level. The floors must sum to at
+most AVAIL."
+  (flet ((at (level)
+           (loop for lo in floors
+                 for hi in caps
+                 collect (let ((w (max lo level))) (if hi (min hi w) w)))))
+    (let ((level 0) (top avail))
+      ;; The largest level whose widths sum to at most AVAIL.
+      (loop while (< level top)
+            do
+              (let ((mid (ceiling (+ level top) 2)))
+                (if (<= (reduce #'+ (at mid)) avail)
+                    (setf level mid)
+                    (setf top (1- mid)))))
+      (let ((rest (- avail (reduce #'+ (at level)))))
+        (loop for lo in floors
+              for hi in caps
+              for w in (at level)
+              collect
+                (if (and (> rest 0) (<= lo level) (or (null hi) (< level hi)))
+                    (progn
+                      (decf rest)
+                      (1+ w))
+                    w))))))
+
 (defun column-widths (tb s avail)
-  "Column widths in px at size S within AVAIL px, or nil when the minima exceed it."
+  "Column widths in px at size S filling AVAIL px, or nil when the minima exceed it."
   (multiple-value-bind (mins maxs) (column-bounds tb s)
     (let* ((ncol (length mins))
            (sum-min (reduce #'+ mins))
            (sum-max (reduce #'+ maxs)))
-      (cond ((<= sum-max avail) (coerce maxs 'list))
+      (cond ((<= sum-max avail)
+             (level-widths (coerce maxs 'list) (make-list ncol) avail))
             ((> sum-min avail) nil)
             (t
              (let* ((extra (- avail sum-min))
@@ -329,26 +411,114 @@ do not fit; nil when none does."
               (* (run-lines (quotation-cite-run q) s w) (body-lh s)))
            0))))
 
+(defun caption-height (b s width)
+  (if (figure-caption-run b)
+      (* (run-lines (figure-caption-run b) s width) (body-lh s))
+      0))
+
+(defun run-bounds (run s) (values (run-min-width run s) (run-full-width run s)))
+
+(defun list-bounds (b s)
+  (let ((indent (list-indent s)) (lo 0) (hi 0))
+    (dolist (it (bullets-items b) (values lo hi))
+      (multiple-value-bind (ilo ihi) (run-bounds (item-run it) s)
+        (setf lo (max lo (+ indent ilo)) hi (max hi (+ indent ihi))))
+      (when (item-sublist it)
+        (multiple-value-bind (slo shi) (list-bounds (item-sublist it) s)
+          (setf lo (max lo (+ indent slo)) hi (max hi (+ indent shi))))))))
+
+(defun block-bounds (b k c)
+  "The narrowest width the block B can take at body step K and code size C, breaking
+neither a unit of text nor a line of code, and the width it takes set unwrapped; nil for
+the second of an image, which takes whatever width it is given."
+  (let ((s (step-at *body-steps* k)))
+    (cond ((para-p b) (run-bounds (para-run b) s))
+          ((bullets-p b) (list-bounds b s))
+          ((quotation-p b)
+           (multiple-value-bind (lo hi) (run-bounds (quotation-run b) s)
+             (when (quotation-cite-run b)
+               (multiple-value-bind (clo chi)
+                   (run-bounds (quotation-cite-run b) s)
+                 (setf lo (max lo clo) hi (max hi chi))))
+             (values (+ lo (quote-indent s)) (+ hi (quote-indent s)))))
+          ((code-block-p b)
+           (let ((pad (* 2 (code-pad c))))
+             (values (+ pad (lines-width (fixed-lines b) c))
+                     (+ pad (lines-width (code-block-lines b) c)))))
+          ((figure-p b)
+           (values (if (figure-caption-run b)
+                       (run-min-width (figure-caption-run b) s)
+                       0) nil))
+          ((table-block-p b)
+           (multiple-value-bind (mins maxs)
+               (column-bounds b (step-at *table-steps* k))
+             (values (reduce #'+ mins) (reduce #'+ maxs))))
+          (t (values 0 0)))))
+
+(defun row-widths (row k c width)
+  "The widths of the columns of ROW at body step K and code size C in WIDTH px, and
+whether they fit. Each column is at least as wide as its blocks need (BLOCK-BOUNDS).
+When every column fits unwrapped, each gets at least that and the rest is spread evenly,
+as a table's columns are; otherwise a column that fits unwrapped in less than an even
+share takes only that, and the others share the rest evenly. When the minima exceed
+WIDTH, the minima."
+  (let* ((cols (column-row-columns row))
+         (avail (- width (* *column-gap* (1- (length cols)))))
+         (mins nil)
+         (maxs nil))
+    (dolist (col cols)
+      (let ((lo 0) (hi 0))
+        (dolist (b (column-blocks col))
+          (multiple-value-bind (blo bhi) (block-bounds b k c)
+            (setf lo (max lo blo) hi (and hi bhi (max hi bhi)))))
+        (push lo mins)
+        (push hi maxs)))
+    (setf mins (nreverse mins) maxs (nreverse maxs))
+    (cond ((> (reduce #'+ mins) avail) (values mins nil))
+          ((and (every #'identity maxs) (<= (reduce #'+ maxs) avail))
+           (values (level-widths maxs (make-list (length maxs)) avail) t))
+          (t (values (level-widths mins maxs avail) t)))))
+
+(defun block-height (b k c width body-height)
+  "The height of the block B at body step K and code size C (nil when no code size
+fits), and whether it fits its width. An image is counted at a third of the body, a row
+of columns as its tallest column."
+  (let ((s (step-at *body-steps* k)) (h 0) (ok t))
+    (cond ((para-p b) (setf h (* (run-lines (para-run b) s width) (body-lh s))))
+          ((quotation-p b) (setf h (quote-height b s width)))
+          ((bullets-p b) (setf h (bullets-height b s width)))
+          ((code-block-p b)
+           (if (and c (code-fits-p b c width))
+               (setf h (code-height b c width))
+               (setf ok nil)))
+          ((column-row-p b)
+           (if c
+               (loop for col in (column-row-columns b)
+                     for w in (row-widths b k c width)
+                     do
+                       (multiple-value-bind (ch cok)
+                           (blocks-height (column-blocks col) k c w body-height)
+                         (setf h (max h ch))
+                         (unless cok (setf ok nil))))
+               (setf ok nil)))
+          ((figure-p b)
+           (setf h (+ (floor body-height 3) (caption-height b s width))))
+          ((table-block-p b)
+           (multiple-value-bind (ts widths th) (table-fit b k width)
+             (declare (ignore widths))
+             (if ts (setf h th) (setf ok nil)))))
+    (values h ok)))
+
 (defun blocks-height (blocks k c width body-height)
   "The height of BLOCKS at body step K and code size C (nil when no code size fits),
 and whether every block fits its width."
-  (let* ((s (step-at *body-steps* k))
-         (h (* (block-gap s) (max 0 (1- (length blocks)))))
-         (ok t))
+  (let ((h
+         (* (block-gap (step-at *body-steps* k)) (max 0 (1- (length blocks)))))
+        (ok t))
     (dolist (b blocks)
-      (cond
-       ((para-p b) (incf h (* (run-lines (para-run b) s width) (body-lh s))))
-       ((quotation-p b) (incf h (quote-height b s width)))
-       ((bullets-p b) (incf h (bullets-height b s width)))
-       ((code-block-p b) (if c (incf h (code-height b c)) (setf ok nil)))
-       ((figure-p b)
-        (incf h (floor body-height 3))
-        (when (figure-caption-run b)
-          (incf h (* (run-lines (figure-caption-run b) s width) (body-lh s)))))
-       ((table-block-p b)
-        (multiple-value-bind (ts widths th) (table-fit b k width)
-          (declare (ignore widths))
-          (if ts (incf h th) (setf ok nil))))))
+      (multiple-value-bind (bh fits) (block-height b k c width body-height)
+        (incf h bh)
+        (unless fits (setf ok nil))))
     (values h ok)))
 
 ;;; --- fitting slides --------------------------------------------------------------------
@@ -365,16 +535,15 @@ and whether every block fits its width."
                                lines s))
       (values s lines))))
 
-(defun fit-centered (run width max-lines)
+(defun fit-centered (run width max-lines &optional (height (safe-height)))
   "The statement-scale size for RUN: the largest step with at most MAX-LINES lines that
-fits the safe area. The second value is true on overflow."
+fits HEIGHT px, the safe area by default. The second value is true on overflow."
   (dolist (s *statement-steps*)
     (let ((lines (run-lines run s width)))
-      (when (and (<= lines max-lines)
-                 (<= (* lines (statement-lh s)) (safe-height)))
+      (when (and (<= lines max-lines) (<= (* lines (statement-lh s)) height))
         (return-from fit-centered (values s nil)))))
   (let* ((s (car (last *statement-steps*))) (lines (run-lines run s width)))
-    (if (> (* lines (statement-lh s)) (safe-height))
+    (if (> (* lines (statement-lh s)) height)
         (progn
           (report
            :error "the text does not fit the slide even at the smallest size")
@@ -385,51 +554,159 @@ fits the safe area. The second value is true on overflow."
                                    lines s))
           (values s nil)))))
 
-(defun regions (slide width)
-  "The regions of SLIDE as (BLOCKS WIDTH) lists: one per column, else the body."
-  (let ((columns (remove-if-not #'column-p (slide-blocks slide))))
-    (if columns
-        (let ((w
-               (floor (- width (* (1- (length columns)) *column-gap*))
-                      (length columns))))
-          (mapcar (lambda (col) (list (column-blocks col) w)) columns))
-        (list (list (slide-blocks slide) width)))))
+(defun regions (blocks k c width)
+  "The regions of a body of BLOCKS WIDTH px wide at body step K and code size C, as
+(BLOCKS WIDTH) lists: the body itself, then each column of its rows."
+  (cons (list blocks width)
+        (loop for b in blocks
+              when (column-row-p b)
+              nconc
+                (loop for col in (column-row-columns b)
+                      for w in (row-widths b k c width)
+                      collect (list (column-blocks col) w)))))
 
 (defun fit-body (slide fit width)
-  "Choose the largest body step at which every region fits. Columns share it, and the
-code size, so side-by-side text matches."
-  (let* ((regions (regions slide width))
-         (rwidth (second (car regions)))
-         (all (region-blocks (slide-blocks slide)))
+  "Choose the largest body step at which the body fits, its rows of columns included.
+Columns share the slide's sizes, so side-by-side text matches."
+  (let* ((blocks (slide-blocks slide))
          (body-height (fit-body-height fit))
          (k
           (loop for k from 0 below (length *body-steps*)
                 do
-                  (let ((c (code-size-at all k rwidth)))
-                    (when (every (lambda (r)
-                                   (multiple-value-bind (h ok) (blocks-height
-                                                                (first r) k c
-                                                                rwidth
-                                                                body-height)
-                                     (and ok (<= h body-height)))) regions)
-                      (return k))))))
+                  (multiple-value-bind (h ok) (blocks-height blocks k
+                                               (code-size-at blocks k width)
+                                               width body-height)
+                    (when (and ok (<= h body-height)) (return k))))))
     (unless k
       (report :error
               "the content does not fit the slide even at the smallest sizes; split the slide")
       (setf (fit-overflow fit) t)
       (setf k (1- (length *body-steps*))))
-    (setf (fit-region-width fit) rwidth (fit-body-size fit)
-          (step-at *body-steps* k) (fit-code-size fit)
-          (or (code-size-at all k rwidth) (car (last *code-steps*))))
-    (dolist (b all)
-      (when (table-block-p b)
-        (multiple-value-bind (s widths) (table-fit b k rwidth)
-          (let ((s (or s (car (last *table-steps*)))))
-            (setf (table-block-size b) s (table-block-widths b)
-                  (or widths
-                      (multiple-value-bind (mins) (column-bounds b s)
-                        (coerce mins 'list))) (table-block-aligns b)
-                  (column-aligns b (table-columns b)))))))))
+    (setf k (fit-callouts slide fit k width))
+    (let ((c (body-code-size blocks k width)))
+      (setf (fit-body-size fit) (step-at *body-steps* k) (fit-code-size fit) c)
+      (dolist (b blocks)
+        (when (column-row-p b)
+          (setf (column-row-widths b) (row-widths b k c width))))
+      (loop for (rblocks rwidth) in (regions blocks k c width)
+            do
+              (dolist (b rblocks)
+                (when (table-block-p b)
+                  (multiple-value-bind (s widths) (table-layout b k rwidth)
+                    (setf (table-block-size b) s (table-block-widths b) widths
+                          (table-block-aligns b)
+                          (column-aligns b (table-columns b))))))))))
+
+(defun body-code-size (blocks k width)
+  (or (code-size-at blocks k width) (car (last *code-steps*))))
+
+(defun table-layout (tb k width)
+  "The size and column widths TB is set at for body step K: the smallest size and the
+columns' minimum widths when nothing fits."
+  (multiple-value-bind (s widths) (table-fit tb k width)
+    (if s
+        (values s widths)
+        (let ((s (car (last *table-steps*))))
+          (values s
+                  (multiple-value-bind (mins) (column-bounds tb s)
+                    (coerce mins 'list)))))))
+
+(defun title-extras-height (deck slide width)
+  "The height the title slide's logo and the lines under its title take in WIDTH px."
+  (+ (if (deck-logo deck) (+ *logo-height* *title-block-gap*) 0)
+     (if (slide-meta slide)
+         (+ *title-block-gap*
+            (loop for (nil run) in (slide-meta slide)
+                  sum
+                    (* (run-lines run *meta-size* width)
+                       (body-lh *meta-size*))))
+         0)))
+
+(defun title-rects (deck slide s)
+  "The rectangles the title slide's logo, title and lines under it take at statement size
+S, set as the centered column sets them. The logo counts as the full width, its own
+being unknown, and each title line as wide as the widest, which text-wrap: balance may
+even the others up to."
+  (let* ((width (content-width deck))
+         (run (slide-title-run slide))
+         (starts (wrap-run run s width))
+         (widest
+          (loop for (a b) on starts
+                maximize
+                  (milli-px->px
+                   (run-span-width run a (or b (length (run-text run))) s))))
+         (rows nil))
+    ;; Rows as (WIDTH HEIGHT), nil for a gap, top to bottom.
+    (when (deck-logo deck)
+      (push (list width *logo-height*) rows)
+      (push (list 0 *title-block-gap*) rows))
+    (dolist (a starts)
+      (declare (ignorable a))
+      (push (list widest (statement-lh s)) rows))
+    (when (slide-meta slide)
+      (push (list 0 *title-block-gap*) rows)
+      (loop for (nil mrun) in (slide-meta slide)
+            do
+              (let ((mstarts (wrap-run mrun *meta-size* width)))
+                (loop for (a b) on mstarts
+                      do
+                        (push (list (milli-px->px
+                                     (run-span-width mrun a
+                                      (or b (length (run-text mrun)))
+                                      *meta-size*)) (body-lh *meta-size*))
+                              rows)))))
+    (setf rows (nreverse rows))
+    (let* ((cx (+ *margin-x* (floor width 2)))
+           (y
+            (+ *margin-top*
+             (floor (- (safe-height) (reduce #'+ (mapcar #'second rows))) 2))))
+      (loop for (w h) in rows
+            when (> w 0)
+            collect (list (- cx (ceiling w 2)) y (+ cx (ceiling w 2)) (+ y h))
+            do (incf y h)))))
+
+(defun qr-lh () (ceiling (* *qr-caption-size* 14) 10))
+
+(defun qr-corner (deck slide s)
+  "The place of the title slide's QR code and the URL under it, as FIT-QR holds it: the
+largest step and the first corner of the safe area, of bottom right, bottom left, top
+right and top left, where the two cover none of the text at statement size S. The text
+keeps its place whatever the corner. The smallest step at the bottom right, reported,
+when every corner is taken."
+  (let* ((cw
+          (run-full-width (make-text-run (list (deck-url deck)))
+                          *qr-caption-size*))
+         (rects (title-rects deck slide s))
+         (c *qr-clearance*)
+         (lo *margin-x*)
+         (hi (+ *margin-x* (content-width deck)))
+         (bottom (+ *margin-top* (safe-height))))
+    (flet ((place (q corner)
+             (let* ((right (member corner '(:bottom-right :top-right)))
+                    (w (max q cw))
+                    (h (+ q *qr-caption-gap* (qr-lh)))
+                    (x (if right (- hi w) lo))
+                    (y
+                     (if (member corner '(:bottom-right :bottom-left))
+                         (- bottom h)
+                         *margin-top*))
+                    (qx (if right (- hi q) lo))
+                    (cx (if right (- hi cw) lo))
+                    (cy (+ y q *qr-caption-gap*)))
+               (list x y q w (if right "right" "left")
+                     ;; The code and the caption, each with its clearance.
+                     (list (list (- qx c) (- y c) (+ qx q c) (+ y q c))
+                      (list (- cx c) (- cy c) (+ cx cw c) (+ cy (qr-lh) c)))))))
+      (dolist (q *qr-steps*)
+        (dolist (corner '(:bottom-right :bottom-left :top-right :top-left))
+          (let ((p (place q corner)))
+            (when (notany (lambda (r)
+                            (some (lambda (box) (rects-meet-p box r))
+                                  (sixth p))) rects)
+              (return-from qr-corner (subseq p 0 5))))))
+      (report :warning
+              "the QR code covers text of the title slide in every corner; shorten the title")
+      (subseq (place (car (last *qr-steps*)) :bottom-right) 0 5))))
 
 (defun fit-slide (deck slide)
   "Lay out SLIDE and store the result in its FIT slot."
@@ -438,7 +715,21 @@ code size, so side-by-side text matches."
          (layout (choose-layout slide))
          (fit (make-fit :layout layout)))
     (setf (slide-fit slide) fit)
-    (cond ((member layout '("title" "section") :test #'equal)
+    (cond ((equal layout "title")
+           (multiple-value-bind (s overflow) (fit-centered
+                                              (slide-title-run slide) width 2
+                                              (- (safe-height)
+                                                 (title-extras-height deck slide
+                                                                      width)))
+             (setf (fit-stmt-size fit) s (fit-overflow fit) overflow)
+             (when (deck-url deck)
+               (if (qr-version (utf-8-octets (deck-url deck)))
+                   (setf (fit-qr fit) (qr-corner deck slide s))
+                   (report :error (format nil
+                                   "the :url is ~d bytes; a QR code holds ~d at most"
+                                   (length (utf-8-octets (deck-url deck)))
+                                   *qr-max-bytes*))))))
+          ((equal layout "section")
            (when (slide-title-run slide)
              (setf (fit-stmt-size fit)
                    (fit-centered (slide-title-run slide) width 2))))
@@ -458,3 +749,418 @@ code size, so side-by-side text matches."
                      (- *canvas-height* *margin-bottom* top))
                (fit-body slide fit width))))
     fit))
+
+;;; --- callouts ----------------------------------------------------------------------
+;;;
+;;; A callout's bubble is an overlay: it takes no room in the flow. It is placed in the
+;;; free space of the body's geometry, the rectangles where the fit solver put text, so
+;;; that it covers neither its anchor nor other text. Rectangles are (LEFT TOP RIGHT
+;;; BOTTOM) in canvas px.
+
+(defparameter *say-steps* '(44 40 36))
+(defparameter *say-floor* 40)
+(defparameter *say-border* 3)
+(defparameter *tail-reach*
+  36
+  "From the anchor to the bubble's edge: the 32 px tail and a 4 px gap.")
+(defparameter *tail-half* 18 "Half the tail's base.")
+(defparameter *tail-inset*
+  34
+  "The least distance from the tail's middle to a corner: the 16 px radius and half
+the base.")
+(defparameter *say-clearance* 12 "The free margin around a bubble.")
+(defparameter *tools-box*
+  '(320 48 12)
+  "Width, height and inset of the Run and Reset buttons in a runnable code block's
+top right corner.")
+
+(defun say-lh (s) (ceiling (* s 14) 10))
+(defun say-pad-x (s) (floor s 2))
+(defun say-pad-y (s) (floor s 4))
+
+(defvar *obstacles* nil "The rectangles a bubble must not meet.")
+(defvar *slide-callouts* nil "The callouts of the slide being laid out.")
+
+(defun obstacle (r) (push r *obstacles*))
+
+(defun rect-union (a b)
+  (list (min (first a) (first b)) (min (second a) (second b))
+        (max (third a) (third b)) (max (fourth a) (fourth b))))
+
+(defun rects-meet-p (a b)
+  (and (< (first a) (third b)) (< (first b) (third a)) (< (second a) (fourth b))
+       (< (second b) (fourth a))))
+
+(defun line-offset (lw width align)
+  (cond ((equal align "right") (- width lw))
+        ((equal align "center") (floor (- width lw) 2))
+        (t 0)))
+
+(defun run-geometry (run s width lh x y &optional align)
+  "Records each line of RUN, set at S px into WIDTH px from X, Y, as an obstacle, and
+the fragments of the callouts anchored in it. Returns the rectangle around its lines."
+  (let* ((n (length (run-text run)))
+         (starts (wrap-run run s width))
+         (lines
+          (loop for (start next) on starts
+                for top from y by lh
+                collect
+                  (let* ((end (or next n))
+                         (lw (milli-px->px (run-span-width run start end s))))
+                    (list start end top (+ x (line-offset lw width align))
+                          lw))))
+         (box nil))
+    (dolist (line lines)
+      (destructuring-bind (start end top lx lw) line
+        (declare (ignore start end))
+        (when (> lw 0)
+          (let ((r (list lx top (+ lx lw) (+ top lh))))
+            (obstacle r)
+            (setf box (if box (rect-union box r) r))))))
+    (dolist (anchor (run-anchors run))
+      (destructuring-bind (c a e) anchor
+        (setf (callout-fragments c)
+              (loop for (start end top lx) in lines
+                    for lo = (max a start)
+                    for hi = (min e end)
+                    for w = (if (< lo hi) (run-span-width run lo hi s) 0)
+                    when (> w 0)
+                    collect
+                      (let ((before (run-span-width run start lo s)))
+                        (list (+ lx (floor before 1000)) top
+                              (+ lx (milli-px->px (+ before w)))
+                              (+ top lh)))))))
+    box))
+
+(defun list-geometry (b s x y width)
+  "Records the list B set at S px from X, Y; returns its height, as BULLETS-HEIGHT."
+  (let ((indent (list-indent s))
+        (gap (item-gap s))
+        (lh (body-lh s))
+        (h 0)
+        (first t))
+    (dolist (it (bullets-items b) h)
+      (unless first (incf h gap))
+      (setf first nil)
+      ;; The marker sits in the indent, beside the item's first line.
+      (obstacle (list x (+ y h) (+ x indent) (+ y h lh)))
+      (run-geometry (item-run it) s (- width indent) lh (+ x indent) (+ y h))
+      (incf h (* (run-lines (item-run it) s (- width indent)) lh))
+      (when (item-sublist it)
+        (incf h gap)
+        (incf h
+              (list-geometry (item-sublist it) s (+ x indent) (+ y h)
+                             (- width indent)))))))
+
+(defun quote-geometry (q s x y width)
+  (let* ((indent (quote-indent s)) (lh (body-lh s)))
+    (run-geometry (quotation-run q) s (- width indent) lh (+ x indent) y)
+    (when (quotation-cite-run q)
+      (run-geometry (quotation-cite-run q) s (- width indent) lh (+ x indent)
+                    (+ y (* (run-lines (quotation-run q) s (- width indent)) lh)
+                       (item-gap s))))
+    (quote-height q s width)))
+
+(defun code-rows (b c width)
+  "The rows of the code block B at C px in a panel WIDTH px wide, as (LINE START END)
+lists: a line wrapping at the panel's edge takes several."
+  (loop for line in (code-block-lines b)
+        nconc
+          (loop for (start next) on (line-starts b line c width)
+                collect (list line start (or next (length line))))))
+
+(defun code-geometry (b c x y width)
+  "Records the rows of the code block B at C px from X, Y, its Run and Reset buttons,
+and the fragments of a callout naming a piece of it with :at; returns its height."
+  (let ((pad (code-pad c)) (lh (code-lh c)) (rows (code-rows b c width)))
+    (loop for (line start end) in rows
+          for top from (+ y pad) by lh
+          do
+            (let ((w (mono-width (subseq line start end) c)))
+              (when (> w 0)
+                (obstacle (list (+ x pad) top (+ x pad w) (+ top lh))))))
+    (when (code-block-runnable b)
+      (destructuring-bind (tw th inset) *tools-box*
+        (obstacle
+         (list (- (+ x width) inset tw) (+ y inset) (- (+ x width) inset)
+               (+ y inset th)))))
+    (dolist (co *slide-callouts*)
+      (when (and (eq (callout-target co) b) (callout-at co))
+        (let* ((at (callout-at co))
+               (line (find-if (lambda (l) (search at l)) (code-block-lines b)))
+               (a (search at line))
+               (e (+ a (length at))))
+          ;; One fragment per row the text takes.
+          (setf (callout-fragments co)
+                (loop for (l start end) in rows
+                      for top from (+ y pad) by lh
+                      when (and (eq l line) (< (max a start) (min e end)))
+                      collect
+                        (list
+                         (+ x pad (mono-width (subseq l start (max a start)) c))
+                         top
+                         (+ x pad (mono-width (subseq l start (min e end)) c))
+                         (+ top lh)))))))
+    (code-height b c width)))
+
+(defun table-geometry (tb k x y width)
+  "Records the caption and cells of TB at body step K from X, Y; returns its height and
+its box."
+  (multiple-value-bind (s widths) (table-layout tb k width)
+    (let ((lh (table-lh s))
+          (px (cell-pad-x s))
+          (py (cell-pad-y s))
+          (aligns (column-aligns tb (table-columns tb)))
+          (total (reduce #'+ widths))
+          (top y))
+      (when (table-block-caption-run tb)
+        (run-geometry (table-block-caption-run tb) s total lh x top)
+        (incf top
+              (+ (* (run-lines (table-block-caption-run tb) s total) lh) py)))
+      (dolist (row (table-rows-with-header tb))
+        (let ((col 0) (cx x) (tallest 0))
+          (dolist (c row)
+            (let ((w
+                   (reduce #'+
+                           (subseq widths (min col (length widths))
+                            (min (+ col (cell-colspan c)) (length widths))))))
+              (run-geometry (cell-run c) s (- w (* 2 px)) lh (+ cx px)
+                            (+ top py) (nth col aligns))
+              (setf tallest
+                    (max tallest (run-lines (cell-run c) s (- w (* 2 px)))))
+              (incf cx w)
+              (incf col (cell-colspan c))))
+          (incf top (+ (* tallest lh) (* 2 py)))))
+      (values (- top y) (list x y (+ x total) top)))))
+
+(defun figure-geometry (b s x y width height)
+  "Records the image B given HEIGHT px from X, Y: its picture area, whose size the
+image's own is unknown within, and its caption. Returns the picture area."
+  (let* ((w (- width (or (figure-strip b) 0)))
+         (cap (caption-height b s w))
+         (img (list x y (+ x w) (+ y (- height cap)))))
+    (obstacle img)
+    (when (figure-caption-run b)
+      (run-geometry (figure-caption-run b) s w (body-lh s) x (fourth img)
+                    "center"))
+    img))
+
+(defun grows-p (b)
+  "True for a block that takes a share of the room the others leave: an image, or a row
+of columns holding one."
+  (or (figure-p b)
+      (and (column-row-p b)
+           (some (lambda (col) (some #'figure-p (column-blocks col)))
+                 (column-row-columns b)))))
+
+(defun blocks-geometry (blocks k c x y width height)
+  "Records the geometry of BLOCKS, a region WIDTH x HEIGHT px from X, Y at body step K
+and code size C, and the fragments of the callouts pointing at its blocks. Images, and
+rows of columns holding one, share what the other blocks leave, as the stylesheet's flex
+layout gives it to them."
+  (let* ((s (step-at *body-steps* k))
+         (gap (block-gap s))
+         (growing (count-if #'grows-p blocks))
+         (rest
+          (- height (* gap (max 0 (1- (length blocks))))
+             (loop for b in blocks
+                   unless (grows-p b)
+                   sum (block-height b k c width height))))
+         (top y))
+    (dolist (b blocks)
+      (let ((before *obstacles*) (h 0) (box nil))
+        (cond ((para-p b)
+               (setf h (* (run-lines (para-run b) s width) (body-lh s)))
+               (run-geometry (para-run b) s width (body-lh s) x top))
+              ((bullets-p b) (setf h (list-geometry b s x top width)))
+              ((quotation-p b) (setf h (quote-geometry b s x top width)))
+              ((code-block-p b)
+               (setf h (code-geometry b c x top width) box
+                     (list x top (+ x width) (+ top h))))
+              ((table-block-p b)
+               (multiple-value-bind (th tbox) (table-geometry b k x top width)
+                 (setf h th box tbox)))
+              ((figure-p b)
+               (setf h (floor rest growing) box
+                     (figure-geometry b s x top width h)))
+              ((column-row-p b)
+               (setf h
+                     (if (grows-p b)
+                         (floor rest growing)
+                         (block-height b k c width height)))
+               (let ((cx x))
+                 (loop for col in (column-row-columns b)
+                       for w in (row-widths b k c width)
+                       do (blocks-geometry (column-blocks col) k c cx top w h)
+                         (incf cx (+ w *column-gap*))))))
+        ;; A text block's anchor is the rectangle around its lines.
+        (unless box
+          (loop for r on *obstacles*
+                until (eq r before)
+                do (setf box (if box (rect-union box (car r)) (car r)))))
+        (dolist (co *slide-callouts*)
+          (when (and box (eq (callout-target co) b) (null (callout-at co)))
+            (setf (callout-fragments co) (list box))))
+        (incf top (+ h gap))))))
+
+(defun say-max-width (c content-width region-width)
+  "The widest C's bubble may be: half the content width, and on an image half the
+image's region less the tail, so the image keeps the other half."
+  (let ((m (floor content-width 2)))
+    (if (figure-p (callout-target c))
+        (min m (- (floor region-width 2) *tail-reach*))
+        m)))
+
+(defun bubble-size (c s max)
+  "The width, height and line count of C's bubble at S px when at most MAX px wide."
+  (let* ((frame (* 2 (+ (say-pad-x s) *say-border*)))
+         (lines (run-lines (callout-run c) s (- max frame))))
+    (values (if (> lines 1) max (+ frame (run-full-width (callout-run c) s)))
+            (+ (* lines (say-lh s)) (* 2 (+ (say-pad-y s) *say-border*)))
+            lines)))
+
+(defun say-candidates (frags w h bounds)
+  "The places tried for a W x H bubble pointing at FRAGS, in order, as (SIDE X Y TAIL
+TAIL-BOX): right of the last fragment, below it, above the first, left of it. Each
+side is tried
+centered on the anchor, then running on past it, then back, moved inside BOUNDS along
+the side. TAIL is the tail's position along the side from the bubble's corner."
+  (let ((f1 (car frags))
+        (fl (car (last frags)))
+        (reach *tail-reach*)
+        (inset *tail-inset*)
+        (half *tail-half*)
+        (out nil))
+    (destructuring-bind (left top right bottom) bounds
+      (flet ((along (a extent lo hi)
+               (mapcar (lambda (p) (max lo (min (- hi extent) p)))
+                       (list (- a (floor extent 2)) (- a inset)
+                             (+ (- a extent) inset)))))
+        (let ((ax (third fl)) (ay (floor (+ (second fl) (fourth fl)) 2)))
+          (dolist (y (along ay h top bottom))
+            (push (list "right" (+ ax reach) y (- ay y)
+                        (list ax (- ay half) (+ ax reach) (+ ay half))) out)))
+        (let ((ax (floor (+ (first fl) (third fl)) 2)) (ay (fourth fl)))
+          (dolist (x (along ax w left right))
+            (push (list "below" x (+ ay reach) (- ax x)
+                        (list (- ax half) ay (+ ax half) (+ ay reach))) out)))
+        (let ((ax (floor (+ (first f1) (third f1)) 2)) (ay (second f1)))
+          (dolist (x (along ax w left right))
+            (push (list "above" x (- ay reach h) (- ax x)
+                        (list (- ax half) (- ay reach) (+ ax half) ay)) out)))
+        (let ((ax (first f1)) (ay (floor (+ (second f1) (fourth f1)) 2)))
+          (dolist (y (along ay h top bottom))
+            (push (list "left" (- ax reach w) y (- ay y)
+                        (list (- ax reach) (- ay half) ax (+ ay half))) out)))))
+    (nreverse out)))
+
+(defun candidate-free-p (candidate w h obstacles bounds)
+  "True when the bubble CANDIDATE places stays in BOUNDS, keeps its tail off its
+corners, and meets no obstacle, its clearance included."
+  (destructuring-bind (side x y tail tail-box) candidate
+    (let ((r (list x y (+ x w) (+ y h))) (c *say-clearance*))
+      (and (<= (first bounds) x) (<= (+ x w) (third bounds))
+           (<= (second bounds) y) (<= (+ y h) (fourth bounds))
+           (<= *tail-inset* tail
+               (- (if (member side '("right" "left") :test #'equal) h w)
+                  *tail-inset*))
+           (notany (lambda (o)
+                     (or (rects-meet-p (list (- x c) (- y c) (+ (third r) c)
+                                             (+ (fourth r) c)) o)
+                         (rects-meet-p tail-box o))) obstacles)))))
+
+(defun place-callouts (callouts bounds final)
+  "Places CALLOUTS in turn among *OBSTACLES*, each an obstacle for the next; true when
+every one found room. On the FINAL attempt one without room is put below its anchor
+inside BOUNDS, marked and reported."
+  (let ((ok t))
+    (dolist (c callouts ok)
+      (let* ((w (callout-width c))
+             (h (callout-height c))
+             (candidates (say-candidates (callout-fragments c) w h bounds))
+             (spot
+              (find-if (lambda (p) (candidate-free-p p w h *obstacles* bounds))
+                       candidates)))
+        (setf (callout-overflow c) (null spot))
+        (unless spot
+          (setf ok nil)
+          (when final
+            (report :error (format nil
+                                   "the callout ~s has no room beside its anchor; shorten it or the slide"
+                                   (callout-text c)))
+            (destructuring-bind (side x y tail tail-box) (nth 3 candidates)
+              (setf spot
+                    (list side x
+                          (max (second bounds) (min (- (fourth bounds) h) y))
+                          tail tail-box)))))
+        (when spot
+          (destructuring-bind (side x y tail tail-box) spot
+            (setf (callout-side c) side (callout-x c) x (callout-y c) y
+                  (callout-tail c) tail)
+            (obstacle (list x y (+ x w) (+ y h)))
+            (obstacle tail-box)))))))
+
+(defun say-steps (k)
+  "The callout sizes tried at body step K: none larger than the body text."
+  (let ((body (step-at *body-steps* k)))
+    (remove-if (lambda (s) (> s body)) *say-steps*)))
+
+(defun place-at (slide fit k s width final)
+  "Lays out SLIDE's body at step K and places its callouts at S px; true when every one
+found room."
+  (let* ((blocks (slide-blocks slide))
+         (c (body-code-size blocks k width))
+         (top (fit-body-top fit))
+         (height (fit-body-height fit))
+         (callouts (slide-callouts slide))
+         (figure-widths
+          (loop for (rblocks rwidth) in (regions blocks k c width)
+                nconc
+                  (loop for b in rblocks
+                        when (figure-p b)
+                        collect (cons b rwidth))))
+         (*slide-callouts* callouts)
+         (*obstacles* nil))
+    (dolist (co callouts)
+      (multiple-value-bind (w h) (bubble-size co s
+                                              (say-max-width co width
+                                                             (or
+                                                              (cdr
+                                                               (assoc
+                                                                (callout-target
+                                                                 co)
+                                                                figure-widths))
+                                                              width)))
+        (setf (callout-size co) s (callout-width co) w (callout-height co) h
+              (callout-fragments co) nil)))
+    ;; An image gives up a strip on its right to its bubbles.
+    (dolist (b (region-blocks blocks))
+      (when (figure-p b)
+        (let ((widths
+               (loop for co in callouts
+                     when (eq (callout-target co) b)
+                     collect (callout-width co))))
+          (setf (figure-strip b)
+                (and widths (+ (reduce #'max widths) *tail-reach*))))))
+    (blocks-geometry blocks k c *margin-x* top width height)
+    (place-callouts (remove-if-not #'callout-fragments callouts)
+                    (list *margin-x* top (+ *margin-x* width) (+ top height))
+                    final)))
+
+(defun fit-callouts (slide fit k width)
+  "The body step at which SLIDE's callouts all find room: K, or a smaller size when
+they need the room shorter lines leave, at the largest callout size that does. When
+none does, K, with the callouts placed at the smallest size and the ones without room
+reported. Leaves the callouts placed; one whose anchor is not laid out is dropped."
+  (when (slide-callouts slide)
+    (setf k
+          (or (loop for j from k below (length *body-steps*)
+                    thereis
+                      (and (some (lambda (s) (place-at slide fit j s width nil))
+                                 (say-steps j)) j))
+              (progn
+                (place-at slide fit k (car (last (say-steps k))) width t)
+                k)))
+    (setf (slide-callouts slide)
+          (remove-if-not #'callout-fragments (slide-callouts slide))))
+  k)

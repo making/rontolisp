@@ -5,25 +5,59 @@
 ;;;; of an IMAGE, the URL of a LINK).
 ;;;;
 ;;;; Inline content is a list of nodes: a string, (:b nodes), (:i nodes), (:mark nodes),
-;;;; (:tt "string") or (:link "url" nodes).
+;;;; (:accent nodes), (:tt "string"), (:link "url" nodes) or (:say callout nodes).
 ;;;;
 ;;;; A deck can be rendered from an untrusted source, so nothing here evaluates a form.
 
 (in-package :lispresen)
 
-(defstruct deck line title author date theme aspect runtime page-numbers slides)
+(defstruct deck
+  line
+  title
+  author
+  date
+  theme
+  aspect
+  runtime
+  page-numbers
+  callouts
+  kicker
+  agenda
+  logo
+  url
+  slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
-(defstruct slide number line kind title layout class blocks notes title-run fit)
+;;; CALLOUTS lists the slide's callouts in source order. KICKER is the label above the
+;;; title, :deck until the deck's :kicker decides it. META lists the (TEXT RUN) of each
+;;; line under the title of the title slide: the author, the date and the URL.
+(defstruct slide
+  number
+  line
+  kind
+  title
+  layout
+  class
+  blocks
+  notes
+  title-run
+  fit
+  callouts
+  kicker
+  kicker-run
+  meta)
 
-(defstruct para inlines run)
-(defstruct bullets ordered items)
-(defstruct item inlines sublist run)
+;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
+(defstruct para inlines run lead)
+;;; AGENDA is true for the list of an agenda slide that highlights its CURRENT item.
+(defstruct bullets ordered items agenda)
+(defstruct item inlines sublist run current)
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
 ;;; fitted, from the language, RUN and the deck's runtime.
 (defstruct code-block lang lines (run t) runnable timeout fresh stdin)
-(defstruct figure src alt caption caption-run)
+;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
+(defstruct figure src alt caption caption-run strip)
 (defstruct table-block
   header
   rows
@@ -37,6 +71,36 @@
 (defstruct cell inlines colspan run)
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
+;;; Consecutive columns of a slide, side by side in one row; WIDTHS is set when the slide
+;;; is fitted.
+(defstruct column-row columns widths)
+
+;;; A comment in a speech bubble pointing at its anchor. TARGET is the block it points
+;;; at, nil for an inline anchor (the run holding it lists it among its ANCHORS); AT is
+;;; the text that names the anchor inside a code block; STEP is the :step option, :deck
+;;; when the deck's :callouts decides whether a page advance shows the bubble. The rest
+;;; is set when the slide
+;;; is fitted (layout.lisp): RUN is the comment's text run, FRAGMENTS the anchor's
+;;; rectangles (one per line), and SIZE, SIDE, X, Y, WIDTH, HEIGHT and TAIL place the
+;;; bubble.
+(defstruct callout
+  id
+  text
+  at
+  step
+  target
+  run
+  fragments
+  size
+  side
+  x
+  y
+  width
+  height
+  tail
+  overflow)
+
+(defvar *callouts* nil "The callouts of the slide being parsed, newest first.")
 
 ;;; --- form helpers ------------------------------------------------------------
 
@@ -130,7 +194,39 @@ a line break between two wide characters, one space otherwise."
 ;;; --- inline content ----------------------------------------------------------
 
 (defun inline-tag-p (tag)
-  (member tag '("B" "I" "MARK" "TT" "LINK") :test #'equal))
+  (member tag '("B" "I" "MARK" "ACCENT" "TT" "LINK" "SAY") :test #'equal))
+
+(defun say-content (form)
+  "The arguments of (say \"comment\" [:at \"text\"] content...) after the comment and
+the options."
+  (let ((args (cddr form)))
+    (loop while (and args (keywordp (car args))) do (setf args (cddr args)))
+    args))
+
+(defun parse-say (form)
+  "A new callout for (say \"comment\" [:at \"text\"] [:step t] content...), registered
+in *CALLOUTS*; nil after reporting a malformed one."
+  (let ((text (cadr form)))
+    (multiple-value-bind (opts content)
+        (split-options (cddr form) '("AT" "STEP") "say")
+      (cond ((not (stringp text))
+             (report :error "(say ...) takes the comment string first")
+             nil)
+            ((null content)
+             (report :error "(say ...) needs the content it points at")
+             nil)
+            (t
+             (let ((c
+                    (make-callout :text (text-leaf text)
+                                  :at (raw-string-option opts "AT" "say")
+                                  :step (if (assoc "STEP" opts :test #'string=)
+                                            (and (opt opts "STEP") t)
+                                            :deck))))
+               (when (equal (callout-at c) "")
+                 (report :error ":at of say must not be empty")
+                 (setf (callout-at c) nil))
+               (push c *callouts*)
+               c))))))
 
 (defun parse-inline (x)
   "The inline nodes X stands for; an unknown form is reported and dropped."
@@ -141,6 +237,7 @@ a line break between two wide characters, one space otherwise."
            (cond ((equal tag "B") (list (list :b (parse-inlines (cdr x)))))
             ((equal tag "I") (list (list :i (parse-inlines (cdr x)))))
             ((equal tag "MARK") (list (list :mark (parse-inlines (cdr x)))))
+            ((equal tag "ACCENT") (list (list :accent (parse-inlines (cdr x)))))
             ((equal tag "TT")
              (if (every #'stringp (cdr x))
                  (list
@@ -149,6 +246,15 @@ a line break between two wide characters, one space otherwise."
                  (progn
                    (report :error "(tt ...) takes strings only")
                    nil)))
+            ((equal tag "SAY")
+             (let ((c (parse-say x)) (nodes (parse-inlines (say-content x))))
+               (cond ((null c) nodes)
+                     (t
+                      (when (callout-at c)
+                        (report
+                         :error ":at belongs to a callout around a code block")
+                        (setf (callout-at c) nil))
+                      (list (list :say c nodes))))))
             ((equal tag "LINK")
              (if (stringp (cadr x))
                  (list
@@ -251,19 +357,39 @@ and the common indentation removed."
           default))))
 
 (defun parse-code (form)
-  (multiple-value-bind (opts body) (split-options (cdr form)
-                                    '("LANG" "RUN" "TIMEOUT" "FRESH" "STDIN")
-                                    "code")
-    (if (every #'stringp body)
-        (make-code-block :lang (string-option opts "LANG" "code")
-                         :lines (dedent (apply #'concatenate 'string body))
-                         :run (opt opts "RUN" t)
-                         :timeout (positive-option opts "TIMEOUT" 10)
-                         :fresh (opt opts "FRESH")
-                         :stdin (raw-string-option opts "STDIN" "code"))
-        (progn
-          (report :error "(code ...) takes strings only")
-          nil))))
+  (multiple-value-bind (opts body)
+      (split-options (cdr form)
+                     '("LANG" "FILE" "LINES" "RUN" "TIMEOUT" "FRESH" "STDIN")
+                     "code")
+    (let ((file (raw-string-option opts "FILE" "code")) (range (opt opts "LINES")))
+      (cond ((notevery #'stringp body)
+             (report :error "(code ...) takes strings only")
+             (setf file nil body nil))
+            ((and file body)
+             (report :error "(code :file ...) takes no text")
+             (setf body nil)))
+      (when range
+        (cond ((null file)
+               (report :error ":lines belongs to (code :file ...)")
+               (setf range nil))
+              ((not (and (listp range) (= (length range) 2)
+                         (every #'integerp range)
+                         (<= 1 (first range) (second range))))
+               (report :error
+                       ":lines must be (FIRST LAST), line numbers with FIRST <= LAST")
+               (setf range nil))))
+      (let ((text
+             (if file
+                 (code-file-text file range)
+                 (and body (apply #'concatenate 'string body)))))
+        (and text
+             (make-code-block :lang (or (string-option opts "LANG" "code")
+                                        (and file (code-file-lang file)))
+                              :lines (dedent text)
+                              :run (opt opts "RUN" t)
+                              :timeout (positive-option opts "TIMEOUT" 10)
+                              :fresh (opt opts "FRESH")
+                              :stdin (raw-string-option opts "STDIN" "code")))))))
 
 (defun parse-image (form)
   (let ((src (cadr form)))
@@ -362,12 +488,44 @@ and the common indentation removed."
                                    (mapcar (lambda (x) (parse-block x t))
                                            (cdr form))))))
 
+(defparameter *anchor-blocks*
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE")
+  "The blocks a callout can point at as a whole.")
+
+(defun parse-block-say (form in-column)
+  "The block (say ...) stands for in block position: the one block it wraps, which its
+callout points at, or else a paragraph holding it as inline content."
+  (let ((content (say-content form)))
+    (if (not
+         (and (= (length content) 1)
+              (member (form-tag (car content)) *anchor-blocks* :test #'equal)))
+        (make-para :inlines (parse-inline form))
+        (let* ((c (parse-say form)) (b (parse-block (car content) in-column)))
+          (when c
+            (cond ((null b) (setf *callouts* (remove c *callouts*)))
+                  ((and (callout-at c) (not (code-block-p b)))
+                   (report
+                    :error ":at belongs to a callout around a code block")
+                   (setf (callout-at c) nil))
+                  ((and (callout-at c)
+                        (notany (lambda (l) (search (callout-at c) l))
+                                (code-block-lines b)))
+                   (report :error (format nil
+                                          "the :at text ~s is not on a line of the code"
+                                          (callout-at c)))
+                   (setf (callout-at c) nil)))
+            (setf (callout-target c) b))
+          b))))
+
 (defun parse-block (x &optional in-column)
   "The block X stands for, or nil after reporting. IN-COLUMN is true inside a column."
   (cond ((stringp x) (make-para :inlines (list (text-leaf x))))
         ((consp x)
          (let ((tag (form-tag x)))
            (cond ((equal tag "P") (make-para :inlines (parse-inlines (cdr x))))
+                 ((equal tag "LEAD")
+                  (make-para :inlines (parse-inlines (cdr x)) :lead t))
+                 ((equal tag "SAY") (parse-block-say x in-column))
                  ((list-tag-p x) (parse-list x))
                  ((equal tag "CODE") (parse-code x))
                  ((equal tag "IMAGE") (parse-image x))
@@ -389,11 +547,30 @@ and the common indentation removed."
 
 ;;; --- slides and the deck -----------------------------------------------------
 
+(defun region-blocks (blocks)
+  "BLOCKS with every column row replaced by the blocks of its columns."
+  (mapcan (lambda (b)
+            (if (column-row-p b)
+                (mapcan (lambda (col) (copy-list (column-blocks col)))
+                        (column-row-columns b))
+                (list b))) blocks))
+
+(defun group-columns (blocks)
+  "BLOCKS with each run of consecutive columns gathered into one column row."
+  (let ((out nil))
+    (dolist (b blocks (nreverse out))
+      (cond ((not (column-p b)) (push b out))
+            ((column-row-p (car out))
+             (setf (column-row-columns (car out))
+                   (append (column-row-columns (car out)) (list b))))
+            (t (push (make-column-row :columns (list b)) out))))))
+
 (defun parse-slide (form number line)
   (multiple-value-bind (opts body)
-      (split-options (cdr form) '("TITLE" "LAYOUT" "CLASS") "slide")
+      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS") "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
+           (*callouts* nil)
            (blocks nil)
            (notes nil))
       (dolist (x body)
@@ -402,17 +579,21 @@ and the common indentation removed."
                 (push (apply #'concatenate 'string (cdr x)) notes)
                 (report :error "(notes ...) takes strings only"))
             (let ((b (parse-block x))) (when b (push b blocks)))))
-      (when (and (some #'column-p blocks) (notevery #'column-p blocks))
-        (report :error "a slide with columns holds only (column ...) blocks")
-        (setf blocks (remove-if-not #'column-p blocks)))
+      (let ((i 0))
+        (dolist (c (reverse *callouts*))
+          (setf (callout-id c) (format nil "s~dc~d" number (incf i)))))
       (make-slide :number number
        :line line
        :kind :slide
        :title title
+       :kicker (if (assoc "KICKER" opts :test #'string=)
+                   (string-option opts "KICKER" "slide")
+                   :deck)
+       :callouts (reverse *callouts*)
        :layout (let ((l (opt opts "LAYOUT")))
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
-       :blocks (nreverse blocks)
+       :blocks (group-columns (nreverse blocks))
        :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
 
 (defun parse-section (form number line)
@@ -438,7 +619,9 @@ and the common indentation removed."
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
-                                                    "PAGE-NUMBERS") "deck")
+                                                    "PAGE-NUMBERS" "CALLOUTS"
+                                                    "KICKER" "AGENDA" "LOGO"
+                                                    "URL") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -446,39 +629,158 @@ and the common indentation removed."
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
-               :page-numbers (opt opts "PAGE-NUMBERS"))))
+               :page-numbers (opt opts "PAGE-NUMBERS")
+               :callouts (parse-callouts-option (opt opts "CALLOUTS"))
+               :kicker (parse-kicker-option (opt opts "KICKER"))
+               :logo (let ((l (opt opts "LOGO")))
+                       (cond ((null l) nil)
+                        ((stringp l) (parse-image (list 'image l)))
+                        ((equal (form-tag l) "IMAGE") (parse-image l))
+                        (t
+                         (report
+                          :error
+                          ":logo of deck must be an image path or (image ...)")
+                         nil)))
+               :url (string-option opts "URL" "deck")
+               :agenda (let ((a (opt opts "AGENDA")))
+                         (cond ((or (null a) (eq a t) (stringp a)) a)
+                               (t
+                                (report
+                                 :error
+                                 ":agenda of deck must be t or a title string")
+                                nil))))))
+
+(defun parse-kicker-option (x)
+  "The deck's :kicker: :section (each slide's kicker is its section's title) or nil."
+  (cond ((null x) nil)
+        ((equal (symbol-value-name x) "SECTION") :section)
+        (t
+         (report :error ":kicker of deck must be :section")
+         nil)))
+
+(defun parse-callouts-option (x)
+  "The deck's :callouts as :step (a page advance shows each bubble) or :shown."
+  (cond ((null x) :shown)
+        ((equal (symbol-value-name x) "STEP") :step)
+        ((equal (symbol-value-name x) "SHOWN") :shown)
+        (t
+         (report :error ":callouts must be :shown or :step")
+         :shown)))
+
+(defparameter *agenda-title*
+  "目次"
+  "The title of the agenda slides of (deck :agenda t).")
+
+(defun agenda-list (titles current)
+  "The list of the section TITLES on an agenda slide, the CURRENTth highlighted when it
+is not nil."
+  (make-bullets :ordered t
+                :agenda (and current t)
+                :items (loop for title in titles
+                             for i from 0
+                             collect
+                               (make-item :inlines (list title)
+                                          :current (eql i current)))))
+
+(defun add-agendas (deck agenda sections)
+  "Fills the AGENDA slide with the deck's SECTIONS, and turns each section slide into the
+same list with its own section highlighted."
+  (let* ((title
+          (if (stringp (deck-agenda deck)) (deck-agenda deck) *agenda-title*))
+         (titles (mapcar #'slide-title sections)))
+    (setf (slide-title agenda) title (slide-blocks agenda)
+          (list (agenda-list titles nil)))
+    (loop for s in sections
+          for i from 0
+          do
+            (setf (slide-kind s)
+                  :slide (slide-title s) title (slide-blocks s)
+                  (list (agenda-list titles i))))))
 
 (defun parse-deck (forms)
-  "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers."
-  (let ((deck nil) (slides nil) (number 0))
+  "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers. Template uses are
+expanded first, so the sections an agenda lists are known before any slide is parsed."
+  (let ((deck nil)
+        (slides nil)
+        (number 0)
+        (section nil)
+        (expanded nil)
+        (agenda nil))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
         (setf deck (parse-deck-header (car (car forms))))
         (setf (deck-line deck) *line*))
       (setf forms (cdr forms)))
     (unless deck (setf deck (make-deck)))
+    (when (and (or (deck-logo deck) (deck-url deck)) (null (deck-title deck)))
+      (let ((*line* (deck-line deck)))
+        (report
+         :warning
+         ":logo and :url are shown on the title slide, which needs a :title")))
     (when (deck-title deck)
       (push (make-slide :number (incf number)
                         :line 1
                         :kind :title
                         :title (deck-title deck)) slides))
-    (dolist (entry forms)
-      (let* ((form (first entry))
-             (*line* (second entry))
-             (tag (form-tag form))
-             (*slide* (1+ number))
-             (*slide-title* nil))
-        (cond ((equal tag "SLIDE")
-               (push (parse-slide form (incf number) *line*) slides))
-              ((equal tag "SECTION")
-               (push (parse-section form (incf number) *line*) slides))
-              ((equal tag "DECK")
-               (report :error "(deck ...) must be the first form"))
-              (t (let ((*slide* nil))
-                   (report :error (format nil
-                                          "expected (slide ...) or (section ...), found ~a"
-                                          (if tag
-                                              (string-downcase tag)
-                                              (prin1-to-string form)))))))))
+    (let ((*templates* nil)
+          (*expansion-budget* *expansion-limit*)
+          (count number))
+      (dolist (entry forms)
+        (let ((*line* (second entry)) (*slide* nil) (*slide-title* nil))
+          (if (equal (form-tag (first entry)) "DEFINE")
+              (define-template (first entry))
+              (dolist (form
+                       (let ((*slide* (1+ count)))
+                         (expand-top-level (first entry))))
+                (push (list form *line*) expanded)
+                (when (member (form-tag form) '("SLIDE" "SECTION")
+                              :test #'equal)
+                  (incf count)))))))
+    (setf expanded (nreverse expanded))
+    (when (deck-agenda deck)
+      (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) expanded)
+          (progn
+            ;; The expansion counted the slides without the agenda slide placed here.
+            (dolist (d *diagnostics*)
+              (when (and (diagnostic-slide d) (> (diagnostic-slide d) number))
+                (incf (diagnostic-slide d))))
+            (push (setf agenda
+                        (make-slide :number (incf number)
+                                    :line (deck-line deck)
+                                    :kind :slide)) slides))
+          (let ((*line* (deck-line deck)))
+            (report
+             :warning ":agenda lists the sections, and this deck has none"))))
+    (loop for (form line) in expanded
+          do
+            (let ((tag (form-tag form))
+                  (*line* line)
+                  (*slide* (1+ number))
+                  (*slide-title* nil))
+              (cond ((equal tag "SLIDE")
+                     (let ((slide (parse-slide form (incf number) line)))
+                       (when (eq (slide-kicker slide) :deck)
+                         (setf (slide-kicker slide)
+                               (and (eq (deck-kicker deck) :section)
+                                    (slide-title slide) section)))
+                       (push slide slides)))
+                    ((equal tag "SECTION")
+                     (let ((slide (parse-section form (incf number) line)))
+                       (setf section (slide-title slide))
+                       (push slide slides)))
+                    ((equal tag "DECK")
+                     (report :error "(deck ...) must be the first form"))
+                    (t
+                     (let ((*slide* nil))
+                       (report :error (format nil
+                                              "expected (slide ...), (section ...) or (define ...), found ~a"
+                                              (if tag
+                                                  (string-downcase tag)
+                                                  (prin1-to-string form)))))))))
     (setf (deck-slides deck) (nreverse slides))
+    (when agenda
+      (add-agendas deck agenda
+                   (remove-if-not (lambda (s)
+                                    (and (eq (slide-kind s) :section)
+                                         (slide-title s))) (deck-slides deck))))
     deck))

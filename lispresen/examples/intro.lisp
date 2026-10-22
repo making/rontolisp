@@ -3,7 +3,11 @@
 (deck :title "lispresen: S式で書くプレゼンテーション"
       :author "rontolisp"
       :date "2026-10-22"
-      :theme :light
+      :logo (image "logo.svg" :alt "rontolisp")
+      :url "https://github.com/making/rontolisp/tree/develop/lispresen"
+      :theme (theme :base :light :code :dark)
+      :kicker :section
+      :agenda t
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -18,11 +22,18 @@
 
 (slide "読みやすさは、書き手ではなくツールが守る。")
 
+(section "レイアウトはツールが決める")
+
 (slide :title "文字の大きさは自動で決まる"
   (p "スライドごとに、収まる最大の段を " (b "段階表") " から選ぶ。")
   (ol "本文は 56px から 40px まで"
       "最小でも収まらなければエラーとして報告する"
-      (li "日本語は " (mark "文節") " で改行する")))
+      (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")))
+
+(slide :title "全体像"
+  (image "pipeline.png"
+         :alt "read, parse, segment, layout, lint, emit の六段階"
+         :caption "デッキが HTML になるまで"))
 
 (slide :title "デッキの読み方"
   (p "トップレベルのフォームを一つずつ " (tt "read-from-string") " で読む。")
@@ -32,11 +43,11 @@
       (push (list form line) forms)
       (setf pos end))"))
 
+;; A callout on a piece of code, shown by the next page advance; the code is lines of a
+;; file beside the deck, its language from the extension.
 (slide :title "その場で動かす"
-  (code :lang "lisp" "
-    (defun fib (n)
-      (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-    (fib 20)"))
+  (say "Run で 6765 が出る" :at "(fib 20)" :step t
+    (code :file "fib.lisp" :lines (4 6))))
 
 (slide :title "前のスライドの定義を使う"
   (p "同じ言語のコードは一つの環境を共有する。")
@@ -48,9 +59,30 @@
     (println :squares)
     (map square (range 10))"))
 
+;; A template: a use is replaced by the body, &rest spliced where it appears.
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
 (slide :title "インタプリタとコンパイラ"
-  (column (p (b "インタプリタ")) (ul "起動が速い" "eval が完全"))
-  (column (p (b "コンパイラ")) (ul "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力")))
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力"))
+
+;; A lead above a row of columns; the columns' widths come from their content.
+(slide :title "列の幅は内容で決まる"
+  (lead (b "問題") " 等幅の列ではコードの行が収まらない → "
+        (b (accent "解決")) " 列ごとに必要な幅を測って配分する")
+  (column
+    (code :lang "lisp" :run nil "
+      (row-widths row k c (- 1920 224))")
+    (code :lang "console" "
+      $ lispresen/check.sh
+      ok   interpreter
+      ok   jvm
+      skip native: the jar carries no precompiler for this platform (linux-x86_64)"))
+  (column
+    (ul "コードの列は最長の行が収まる幅を取る"
+        "残りを文章の列が使う"
+        "出力の長い行は端末のように折り返す")))
 
 (slide :title "引用"
   (quote :cite "Alan Perlis" "A language that doesn't affect the way you think about programming is not worth knowing."))

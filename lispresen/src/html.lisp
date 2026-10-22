@@ -30,11 +30,17 @@ ul,ol{padding-left:var(--indent)}
 li+li,li>ul,li>ol{margin-top:var(--item-gap)}
 li::marker{color:var(--accent)}
 code{font-family:MONO;font-size:1em;line-height:1}
-p code,li code,th code,td code{background:var(--code-bg);border-radius:.2em}
-pre{flex:none;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);border-radius:12px;white-space:pre;overflow:hidden}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg);border-radius:.2em}
+pre{flex:none;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
+pre.console{white-space:pre-wrap;line-break:anywhere}
 pre code{line-height:inherit}
 strong{font-weight:700}
 mark{background:var(--mark);color:inherit}
+.accent{color:var(--accent)}
+.lead{color:var(--muted)}
+.agenda>li{color:var(--muted)}
+.agenda>li.current{color:var(--accent);font-weight:700}
+.kicker{position:absolute;font-size:KICKER;line-height:KICKER-LH;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
@@ -52,27 +58,31 @@ th{font-weight:700}
 .section-title{color:var(--accent)}
 .deck-meta{font-size:META;line-height:META-LH;color:var(--muted)}
 .deck-title+.deck-meta{margin-top:48px}
+.logo{height:LOGOpx;max-width:100%;object-fit:contain;margin-bottom:48px}
+.qr{position:absolute;display:flex;flex-direction:column;gap:QR-GAP;font-size:QR-SIZE;line-height:QR-LH;white-space:nowrap}
+.qr.right{align-items:flex-end}
+.qr a{color:var(--muted)}
 .page{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
 .slide.measure{display:block;visibility:hidden}
 html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 #chk{position:fixed;right:8px;top:8px;max-width:60%;max-height:60%;overflow:auto;z-index:20;padding:8px 12px;background:rgba(0,0,0,.8);color:#fff;font:14px/1.5 MONO;white-space:pre-wrap}
-.hl-c{color:var(--muted)}
+.hl-c{color:var(--code-muted)}
 .hl-s{color:var(--hl-str)}
 .hl-k{color:var(--hl-kw)}
 .hl-d{color:var(--hl-def)}
 .hl-n{color:var(--hl-const)}
 .codebox{flex:none;position:relative}
-.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
+.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--code-bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
 .out.open{display:flex;flex-direction:column}
-.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);color:var(--code-fg);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
 .out pre::-webkit-scrollbar{width:20px}
-.out pre::-webkit-scrollbar-thumb{background:var(--muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
+.out pre::-webkit-scrollbar-thumb{background:var(--code-muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
 .out.err pre{color:var(--hl-def)}
-.out.busy pre{color:var(--muted)}
-.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--muted);font:400 48px/1 FONTS;cursor:pointer}
-.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
+.out.busy pre{color:var(--code-muted)}
+.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--code-muted);font:400 48px/1 FONTS;cursor:pointer}
+.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--code-fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
 .codebox textarea::selection{background:var(--mark)}
 .runnable pre.code{cursor:text}
 .tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
@@ -84,7 +94,8 @@ html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 .pv-bar .rt[data-state=failed]{color:var(--hl-def)}
 .quote{flex:none;display:block;border-left:8px solid var(--accent);padding-left:calc(var(--indent) - 8px)}
 .quote figcaption{margin-top:var(--item-gap);text-align:left}
-.body.columns{flex-direction:row;column-gap:COLUMN-GAP}
+.columns{flex:none;display:flex;column-gap:COLUMN-GAP}
+.columns.grow{flex:1 1 0;min-height:0}
 .column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
 #ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
 .thumb{position:relative;overflow:hidden;outline:1px solid var(--rule);cursor:pointer}
@@ -100,6 +111,28 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 .pv-cur>.thumb{cursor:default}
 .pv-next>.thumb{opacity:.85}
 .pv-notes{overflow:auto;font-size:24px;line-height:1.6;white-space:pre-wrap}
+.say{position:absolute;z-index:4;display:flex;flex-direction:column;justify-content:center;border:3px solid var(--accent);border-radius:16px;background:var(--head-bg);padding:var(--say-y) var(--say-x);font-size:var(--say);line-height:var(--say-lh);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.say::before,.say::after{content:'';position:absolute}
+.say::before{background:var(--accent)}
+.say::after{background:var(--head-bg)}
+.say[data-side=below]::before,.say[data-side=above]::before{left:calc(var(--tail) - 18px);width:36px;height:32px}
+.say[data-side=below]::after,.say[data-side=above]::after{left:calc(var(--tail) - 16px);width:32px;height:29px}
+.say[data-side=below]::before{top:-35px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=below]::after{top:-29px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=above]::before{bottom:-35px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=above]::after{bottom:-29px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=right]::before,.say[data-side=left]::before{top:calc(var(--tail) - 18px);width:32px;height:36px}
+.say[data-side=right]::after,.say[data-side=left]::after{top:calc(var(--tail) - 16px);width:29px;height:32px}
+.say[data-side=right]::before{left:-35px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=right]::after{left:-29px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say.front{z-index:6}
+.slide.editing .say,.say.pending{visibility:hidden}
+#ov .say.pending{visibility:visible}
+#pv .say.pending{visibility:visible;opacity:.35}
+figure.pointed{align-items:flex-end}
+figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
 #stage.pointer #fs{opacity:1}
 #stage.idle{cursor:none}
@@ -129,19 +162,26 @@ html:not(.js) #fs{display:none}
                          (list "META-LH" (px-string (body-lh *meta-size*)))
                          (list "META" (px-string *meta-size*))
                          (list "PAGE" (px-string *page-number-size*))
+                         (list "KICKER-LH" (px-string *kicker-lh*))
+                         (list "LOGO" (princ-to-string *logo-height*))
+                         (list "QR-GAP" (px-string *qr-caption-gap*))
+                         (list "QR-SIZE" (px-string *qr-caption-size*))
+                         (list "QR-LH" (px-string (qr-lh)))
+                         (list "KICKER" (px-string *kicker-size*))
                          (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
     ;; The canvas-dependent geometry.
     (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
-    (format out ".title,.body,.centered{left:~dpx;width:~dpx}~%" *margin-x*
-            content)
+    (format out ".kicker,.title,.body,.centered{left:~dpx;width:~dpx}~%"
+            *margin-x* content)
+    (format out ".kicker{top:~dpx}~%" (- *margin-top* *kicker-lh* 8))
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
     (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
             *margin-x* content)
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}}~%"
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk{display:none}.say.pending{visibility:visible}}~%"
             width *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
@@ -179,6 +219,20 @@ html:not(.js) #fs{display:none}
                        ((eq (car n) :b) (wrap "strong" (second n)))
                        ((eq (car n) :i) (wrap "em" (second n)))
                        ((eq (car n) :mark) (wrap "mark" (second n)))
+                       ((eq (car n) :accent)
+                        (write-string "<span class=\"accent\">" out)
+                        (walk (second n))
+                        (write-string "</span>" out))
+                       ((eq (car n) :say)
+                        (if (callout-side (second n))
+                            (progn
+                              (write-string "<span" out)
+                              (write-attribute "aria-describedby"
+                                               (callout-id (second n)) out)
+                              (write-string ">" out)
+                              (walk (third n))
+                              (write-string "</span>" out))
+                            (walk (third n))))
                        ((eq (car n) :tt)
                         (write-string "<code>" out)
                         (chars (second n))
@@ -195,11 +249,24 @@ html:not(.js) #fs{display:none}
 
 ;;; --- blocks ------------------------------------------------------------------------
 
+(defun write-described-by (b out)
+  "The aria-describedby attribute naming the bubbles of the callouts pointing at the
+block B, which the player also finds the anchor by; nothing when there are none."
+  (let ((ids
+         (loop for c in *slide-callouts*
+               when (and (eq (callout-target c) b) (callout-side c))
+               collect (callout-id c))))
+    (when ids
+      (write-attribute "aria-describedby" (format nil "~{~a~^ ~}" ids) out))))
+
 (defun write-list (b out)
   (let ((tag (if (bullets-ordered b) "ol" "ul")))
-    (format out "<~a>" tag)
+    (format out "<~a" tag)
+    (when (bullets-agenda b) (write-string " class=\"agenda\"" out))
+    (write-described-by b out)
+    (write-string ">" out)
     (dolist (it (bullets-items b))
-      (write-string "<li>" out)
+      (write-string (if (item-current it) "<li class=\"current\">" "<li>") out)
       (write-inlines (item-inlines it) (item-run it) out)
       (when (item-sublist it) (write-list (item-sublist it) out))
       (write-string "</li>" out))
@@ -207,9 +274,9 @@ html:not(.js) #fs{display:none}
 
 (defun write-code-text (b out)
   (let ((text (format nil "~{~a~^~%~}" (code-block-lines b))))
-    (if (highlighted-p b)
-        (write-highlighted text out)
-        (write-escaped text out))))
+    (cond ((highlighted-p b) (write-highlighted text out))
+          ((console-p b) (write-console (code-block-lines b) out))
+          (t (write-escaped text out)))))
 
 (defun write-attribute (name value out)
   (format out " ~a=\"" name)
@@ -228,9 +295,11 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (when (code-block-stdin b)
         (write-attribute "data-stdin" (code-block-stdin b) out))
       (write-string ">" out))
-    (write-string "<pre class=\"code\"" out)
+    (write-string
+     (if (console-p b) "<pre class=\"code console\"" "<pre class=\"code\"") out)
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
+    (write-described-by b out)
     (write-string "><code>" out)
     (write-code-text b out)
     (write-string "</code></pre>" out)
@@ -238,7 +307,9 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (terpri out)))
 
 (defun write-quote (q out)
-  (write-string "<figure class=\"quote\"><blockquote><p>" out)
+  (write-string "<figure class=\"quote\"" out)
+  (write-described-by q out)
+  (write-string "><blockquote><p>" out)
   (write-inlines (quotation-inlines q) (quotation-run q) out)
   (write-string "</p></blockquote>" out)
   (when (quotation-cite q)
@@ -247,13 +318,24 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (write-string "</figcaption>" out))
   (format out "</figure>~%"))
 
-(defun write-column (c width out)
-  (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
-  (dolist (b (column-blocks c)) (write-block b out))
+(defun write-columns (r out)
+  "A row of columns, each at the width the fit solver gave it. A row holding an image
+takes a share of the room the other blocks leave, as the image does."
+  (format out "<div class=\"columns~:[~; grow~]\">~%" (grows-p r))
+  (loop for c in (column-row-columns r)
+        for width in (column-row-widths r)
+        do (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
+          (dolist (b (column-blocks c)) (write-block b out))
+          (format out "</div>~%"))
   (format out "</div>~%"))
 
 (defun write-figure (b out)
-  (write-string "<figure><img src=\"" out)
+  (write-string "<figure" out)
+  (when (figure-strip b)
+    (format out " class=\"pointed\" style=\"margin-right:~dpx\""
+            (figure-strip b)))
+  (write-described-by b out)
+  (write-string "><img src=\"" out)
   (write-escaped (figure-src b) out)
   (write-string "\" alt=\"" out)
   (write-escaped (or (figure-alt b) "") out)
@@ -289,9 +371,11 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 (defun write-table (b out)
   (let ((s (table-block-size b)))
     (format out
-            "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\">"
+            "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\""
             s (table-lh s) (cell-pad-x s) (cell-pad-y s)
             (reduce #'+ (table-block-widths b)))
+    (write-described-by b out)
+    (write-string ">" out)
     (when (table-block-caption b)
       (write-string "<caption>" out)
       (write-text (table-block-caption b) (table-block-caption-run b) out)
@@ -310,14 +394,17 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 
 (defun write-block (b out)
   (cond ((para-p b)
-         (write-string "<p>" out)
+         (write-string (if (para-lead b) "<p class=\"lead\"" "<p") out)
+         (write-described-by b out)
+         (write-string ">" out)
          (write-inlines (para-inlines b) (para-run b) out)
          (format out "</p>~%"))
         ((bullets-p b) (write-list b out))
         ((code-block-p b) (write-code b out))
         ((figure-p b) (write-figure b out))
         ((quotation-p b) (write-quote b out))
-        ((table-block-p b) (write-table b out))))
+        ((table-block-p b) (write-table b out))
+        ((column-row-p b) (write-columns b out))))
 
 ;;; --- slides ------------------------------------------------------------------------
 
@@ -336,8 +423,62 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (format s "--stmt:~dpx;--stmt-lh:~dpx;" (fit-stmt-size fit)
               (statement-lh (fit-stmt-size fit))))))
 
+(defun write-callout (deck c out)
+  "The bubble of the callout C, placed where the fit solver found room for it. Its tail
+is drawn by the stylesheet at --tail along the side facing the anchor. A step bubble is
+shown here; the player hides it until a page advance."
+  (let ((s (callout-size c))
+        (step
+         (if (eq (callout-step c) :deck)
+             (eq (deck-callouts deck) :step)
+             (callout-step c))))
+    (format out
+            "<div class=\"say~:[~; step~]~:[~; overflow~]\" id=\"~a\" role=\"note\" data-side=\"~a\""
+            step (callout-overflow c) (callout-id c) (callout-side c))
+    (when (callout-at c) (write-attribute "data-at" (callout-at c) out))
+    (format out
+            " style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;--say:~dpx;--say-lh:~dpx;--say-x:~dpx;--say-y:~dpx;--tail:~dpx\"><p>"
+            (callout-x c) (callout-y c) (callout-width c) (callout-height c) s
+            (say-lh s) (say-pad-x s) (say-pad-y s)
+            (- (callout-tail c) *say-border*))
+    (write-text (callout-text c) (callout-run c) out)
+    (format out "</p></div>~%")))
+
+(defun write-title-slide (deck slide out)
+  "The centered logo, title and lines under it, and the QR code of the deck's URL in the
+corner the fit solver chose."
+  (let ((logo (deck-logo deck))
+        (url (deck-url deck))
+        (qr (fit-qr (slide-fit slide))))
+    (write-string "<div class=\"centered\">" out)
+    (when logo
+      (write-string "<img class=\"logo\"" out)
+      (write-attribute "src" (figure-src logo) out)
+      (write-attribute "alt" (or (figure-alt logo) "") out)
+      (write-string ">" out))
+    (write-string "<h1 class=\"deck-title\">" out)
+    (write-text (slide-title slide) (slide-title-run slide) out)
+    (write-string "</h1>" out)
+    (loop for (text run) in (slide-meta slide)
+          do (write-string "<p class=\"deck-meta\">" out)
+            (write-text text run out) (write-string "</p>" out))
+    (format out "</div>~%")
+    (when qr
+      (destructuring-bind (x y size width align) qr
+        (format out
+                "<div class=\"qr ~a\" style=\"left:~dpx;top:~dpx;width:~dpx\">"
+                align x y width)
+        (write-qr-svg url size out)
+        (write-string "<p><a" out)
+        (write-attribute "href" url out)
+        (write-string ">" out)
+        (write-escaped url out)
+        (format out "</a></p></div>~%")))))
+
 (defun write-slide (deck slide out)
-  (let* ((fit (slide-fit slide)) (layout (fit-layout fit)))
+  (let* ((fit (slide-fit slide))
+         (layout (fit-layout fit))
+         (*slide-callouts* (slide-callouts slide)))
     (format out "<section class=\"slide layout-~a" layout)
     (when (stringp (slide-class slide))
       (write-char #\Space out)
@@ -345,17 +486,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (when (fit-overflow fit) (write-string " overflow" out))
     (format out "\" id=\"s~d\" style=\"~a\">~%" (slide-number slide)
             (slide-style fit))
-    (cond ((equal layout "title")
-           (write-string "<div class=\"centered\"><h1 class=\"deck-title\">"
-                         out)
-           (write-text (slide-title slide) (slide-title-run slide) out)
-           (write-string "</h1>" out)
-           (dolist (meta (list (deck-author deck) (deck-date deck)))
-             (when meta
-               (write-string "<p class=\"deck-meta\">" out)
-               (write-escaped meta out)
-               (write-string "</p>" out)))
-           (format out "</div>~%"))
+    (cond ((equal layout "title") (write-title-slide deck slide out))
           ((equal layout "section")
            (write-string "<div class=\"centered\"><h1 class=\"section-title\">"
                          out)
@@ -369,18 +500,19 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
              (write-inlines (para-inlines p) (para-run p) out)
              (format out "</p></div>~%")))
           (t
+           (when (and (slide-kicker-run slide) (slide-title slide))
+             (write-string "<p class=\"kicker\">" out)
+             (write-text (slide-kicker slide) (slide-kicker-run slide) out)
+             (format out "</p>~%"))
            (when (slide-title slide)
              (write-string "<h1 class=\"title\">" out)
              (write-text (slide-title slide) (slide-title-run slide) out)
              (format out "</h1>~%"))
-           (format out "<div class=\"body~a\" style=\"top:~dpx;height:~dpx\">~%"
-                   (if (equal layout "columns") " columns" "")
+           (format out "<div class=\"body\" style=\"top:~dpx;height:~dpx\">~%"
                    (fit-body-top fit) (fit-body-height fit))
-           (dolist (b (slide-blocks slide))
-             (if (column-p b)
-                 (write-column b (fit-region-width fit) out)
-                 (write-block b out)))
-           (format out "</div>~%")))
+           (dolist (b (slide-blocks slide)) (write-block b out))
+           (format out "</div>~%")
+           (dolist (c (slide-callouts slide)) (write-callout deck c out))))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
@@ -409,8 +541,9 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)
   (write-config deck out)
-  (format out "<script>(function(){~a~a~a})();</script>~%</body>~%</html>~%"
+  (format out "<script>(function(){~a~a~a~a})();</script>~%</body>~%</html>~%"
           *player-script* (if (deck-runnable-p deck) *runner-script* "")
+          (if (some #'slide-callouts (deck-slides deck)) *say-script* "")
           *start-script*))
 
 (defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
@@ -421,8 +554,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
                 (region-blocks (slide-blocks slide)))) (deck-slides deck)))
 
 (defun write-config (deck out)
-  "The numbers the player needs: the type scale for the runtime check, and where the
-runtime is when the deck has runnable code."
+  "The numbers the player needs: the type scale for the runtime check, the geometry of a
+callout's bubble, and where the runtime is when the deck has runnable code."
   (write-string "<script type=\"application/json\" id=\"lp\">{\"runtime\":" out)
   (if (deck-runnable-p deck)
       (let ((r (deck-runtime deck)))
@@ -433,9 +566,12 @@ runtime is when the deck has runnable code."
   (format out ",\"top\":~d,\"bottom\":~d,\"gap\":~d,\"steps\":{" *margin-top*
           *margin-bottom* *title-gap*)
   (format out
-          "\"title\":[~{~d~^,~}],\"body\":[~{~d~^,~}],\"code\":[~{~d~^,~}],\"table\":[~{~d~^,~}],\"stmt\":[~{~d~^,~}]}}"
+          "\"title\":[~{~d~^,~}],\"body\":[~{~d~^,~}],\"code\":[~{~d~^,~}],\"table\":[~{~d~^,~}],\"stmt\":[~{~d~^,~}]},"
           *title-steps* *body-steps* *code-steps* *table-steps*
           *statement-steps*)
+  (format out
+   "\"say\":{\"reach\":~d,\"half\":~d,\"inset\":~d,\"clear\":~d,\"border\":~d}}"
+   *tail-reach* *tail-half* *tail-inset* *say-clearance* *say-border*)
   (format out "</script>~%"))
 
 (defun write-json-chars (s out)
