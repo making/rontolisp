@@ -100,7 +100,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `notes`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `notes`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -117,7 +117,10 @@ Rules:
   interpreter's and SBCL's readers evaluate `#.`, so the deck is read under `*read-eval*`
   nil, which every backend refuses alike. A form holding a dotted list or more conses
   than characters (shared or circular structure from `#n=`, which SBCL reads) is reported
-  and skipped, so the parser and the template expansion only ever see proper trees.
+  and skipped, so the parser and the template expansion only ever see proper trees. The
+  one exception is the datum of `(cells ...)` (Diagrams, below), whose dotted pairs are
+  what it draws; the template substitution walks a dotted tail, and nothing else reads
+  the datum but the drawing.
   Characters are code points on every backend (`.kb/string-index-cost.md`), so Japanese
   strings measure and slice identically everywhere.
 - Top-level forms instead of one enclosing `(deck ...)`: each form is read separately,
@@ -177,7 +180,9 @@ Lisp macros, for the reason above: nothing is evaluated, so a template cannot co
   parameter `title` leaves `:title` alone. A template or parameter cannot take an
   element's name (`slide`, `p`, `b`, ...): a parameter `p` would replace the tag too.
 - Uses expand after substitution, so arguments may hold uses, and a body may use a
-  template defined after it but before the use. A use with the wrong number of
+  template defined after it but before the use. The datum of `(cells ...)` is data: a
+  list in it whose head names a template is drawn, not expanded, while a parameter in it
+  is substituted, which is how a template passes a list to draw. A use with the wrong number of
   arguments is reported and dropped.
 - Expansion is bounded, since a deck may come from an untrusted source: uses nest at
   most 32 deep (a template using itself is reported), and a deck's templates produce at
@@ -197,7 +202,8 @@ source string
   -> embed     image sources as data: URIs, with --embed   (embed.lisp)
   -> segment   Japanese phrase boundaries                  (phrase.lisp)
   -> layout    layout selection + fit solver -> per-slide geometry and sizes
-                                                           (layout.lisp, metrics.lisp)
+                                                           (layout.lisp, diagram.lisp,
+                                                            metrics.lisp)
   -> lint      readability diagnostics                     (lint.lisp)
   -> emit      HTML + CSS + player JS as one string        (html.lisp, player.lisp)
 ```
@@ -248,6 +254,7 @@ in the 1696 px body box.
 | Table | 48 | 44, 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
 | Statement | 120 | 104, 88, 72 | -- | 56 | 1.35 | 14 |
 | Callout | 44 | 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
+| Diagram label | 48 | 44, 40, 36 | 40 (20 pt) | 36 (18 pt) | 1.4 | -- |
 | Kicker | 32 | -- | -- | -- | 40 px | -- |
 
 A callout is never larger than the slide's body text. Sizes only step down from the
@@ -400,6 +407,8 @@ and a maximum, the widest of their unwrapped widths:
 | console transcript | the longest command line, plus padding | the longest line, plus padding |
 | table | the sum of its columns' minima | the sum of their maxima |
 | image | its caption's widest unit | none: it takes what it gets |
+| flow | its widest box, labels wrapped at their widest unit | its boxes on one row |
+| cells | its drawing | the same |
 
 With 80 px between columns, `1696 - 80 (n - 1)` px are shared:
 
@@ -476,6 +485,63 @@ use the same `<wbr>` phrase breaks as body text, so the browser wraps each cell 
 the model did. The header row is bold on a tinted background, and each body row has a
 1 px rule drawn as an inset shadow, which takes no layout space.
 
+### Diagrams
+
+```lisp
+(flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
+(cells '(slide :title "t" (p "x")))
+(cells '((a . 1) (b . 2)))
+```
+
+A picture of a structure belongs in the deck as text for the reasons the rest of the
+deck does: an image file does not follow the theme, cannot be reviewed as a diff, and its
+labels are neither phrase-wrapped nor sized with the slide. A diagram is drawn by
+lispresen from an S-expression, as an inline SVG, its labels HTML over it.
+
+- **Shapes.** Every shape is a filled area in integer canvas px: a border is a rectangle
+  under a face 4 px smaller on each side, a line a 4 px rectangle, an arrowhead a
+  triangle. No stroke means no half-pixel coordinate and no stroke to leave out of a
+  bounding box, so the box the browser reports for a shape (`getBoundingClientRect`) is
+  the box the static layout used, and the callout placement agrees on both sides. Borders
+  are `--accent`, faces `--head-bg`, arrows `--fg`, labels `--fg` on `--head-bg` or `--bg`,
+  pairs the contrast lint already checks, so every theme draws them.
+- **Size.** Every measure derives from the label size s, which starts at 48 px and steps
+  down with the body, further while the drawing is wider than its region, as a table's
+  does: line height 1.4 s, box padding 0.6 s by s/3, 1.5 s between boxes, 2 s between rows,
+  arrowheads 0.4 s long. Below 40 px is a warning, and a drawing wider than its region at
+  36 px is an error naming its width, besides the slide's overflow. A diagram is
+  centered in its region (`align-self: center`); it is fixed geometry, so the runtime
+  check leaves it as written.
+- **flow.** A label is inline content (`b`, `tt`, an inline callout ...): a string, an
+  inline form, or a list of them for mixed content. It is set on one line, or wrapped at
+  its phrases when wider than a third of the flow (less the gaps), so long labels do not
+  push the row into one box per row. Every box has the height of the tallest label and is
+  no narrower than it is tall. Boxes fill as few rows as the region holds, and then the
+  narrowest row limit that needs no more rows (a binary search over the greedy fill)
+  evens them: six equal boxes of which four fit a row go three and three, not four and
+  two. Rows are left-aligned; the arrow from a row's last box drops below it, runs back
+  along the gap and drops into the next row's first box, so the reading order stays left
+  to right. More than 8 boxes is a warning. The boxes are an `<ol>` of `<li>`s, each as
+  large as its box, its label's top padding the half of the height its lines leave.
+- **cells.** The classic box-and-pointer drawing. The cdr chain of a list stands in one
+  row of cells (a square half for the car, one for the cdr, a divider between); each
+  car's drawing hangs below its cell, an atom as its label (monospace, the `tt` widths)
+  and a list as its own row; `nil` is a slash across its half; a dotted pair's cdr points
+  right to its atom. A pointer is a dot and an arrow. A cell moves right past the one
+  before it, and past the drawings below the cells before it by s (each drawing taken as
+  its bounding box, not its outline per row: simpler, and a slide-sized list does not
+  need the packing). The datum is the one argument, quoted or not, a list of at most 32
+  conses, its atoms symbols (lower case unless written with lower case, keywords with
+  their colon), integers, ratios, strings and characters. A float is refused because its
+  printing is the one thing the backends may not share. The figure is `role="img"` named by
+  the list as Lisp prints it, the atoms as spans.
+- **Callouts.** A `say` around a diagram points at its whole drawing; with `:at` at the
+  first label equal to the text, else the first holding it: a box of a flow, an atom of
+  cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
+  whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
+
+No diagram has steps of its own yet; a step callout on one works as on any block.
+
 ### Page advances
 
 ```lisp
@@ -525,11 +591,12 @@ its anchor. The deck names the anchor, never a position; lispresen places the bu
 - Inline, `(say "comment" inline...)` wraps its anchor: a phrase, a whole list item, a
   table cell's text. It goes wherever inline content goes, inside `b` or `mark` too.
 - Around a block, `(say "comment" block)` points at one `p`, `ul`, `ol`, `code`, `image`,
-  `table` or `quote` as a whole. In block position a `say` whose content is one such form
+  `table`, `quote`, `flow` or `cells` as a whole. In block position a `say` whose content is one such form
   is this kind; anything else is a paragraph holding an inline callout.
 - `:at "text"` on a callout around `code` points at the first occurrence of the text,
   which must lie within one line. Code is one string, so the anchor is named by its text
-  rather than wrapped; a line number would go stale when a line is added above.
+  rather than wrapped; a line number would go stale when a line is added above. On a
+  diagram, `:at` names a label instead (Diagrams, above).
 - The comment is a string. Titles, captions and notes take no callouts, and a slide with
   one never takes the statement layout: its centered, balanced lines are not where the
   model puts them.
@@ -735,8 +802,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -813,6 +880,11 @@ One file containing:
   `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
   triangles of the border and the fill color, and the bubble prints with its colors
   (`print-color-adjust: exact`).
+- A diagram as `<figure class="dg" style="width:...;height:...;--dg:48px ...">` holding
+  `<svg class="dg-art">` (`rect`, `polygon` and `circle` elements, classed `dg-b`, `dg-f`
+  and `dg-e` for their colors) and, over it, its labels at the places the solver gave
+  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, `<span
+  class="dg-l">` atoms for cells.
 - Speaker notes in `<aside class="notes">`, hidden in the audience view.
 
 ### Overview and presenter window
@@ -927,6 +999,7 @@ lispresen/
     model.lisp           structs and parsing with diagnostics
     embed.lisp           code files as text (UTF-8), images as data: URIs (base64)
     qr.lisp              QR codes of the deck's URL as SVG
+    diagram.lisp         the drawings of flow and cells
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -946,7 +1019,7 @@ lispresen/
   examples/
     intro.lisp           a deck presenting lispresen itself
     intro.html           its golden output, rendered with --embed
-    pipeline.png         the image intro.lisp shows
+    pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
     logo.svg             its title slide's logo
     fib.lisp             the code file one of its slides shows lines of
   tools/
@@ -975,10 +1048,12 @@ before committing a change under `lispresen/`.
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
   console column and a list column, dark code panels (`:code :dark`), section kickers, an
   agenda, a title slide with an embedded SVG logo and a QR code, a
-  quote, an embedded PNG, a list revealed by steps, and two callouts (an inline one, and a
-  step one named by `:at` in runnable code read from a file by `:lines`, which `:steps`
-  brings forward line by line), so the
-  highlighter, the emitted player, template expansion, callout placement and the binary
+  quote, an embedded PNG, a list revealed by steps, a flow, two cells drawings in columns
+  (one with dotted pairs), and three callouts (an inline one, one naming a box of the flow
+  by `:at`, and a step one named by `:at` in runnable code read from a file by `:lines`,
+  which `:steps` brings forward line by line), so the
+  highlighter, the emitted player, template expansion, diagram drawing, callout placement
+  and the binary
   read, UTF-8 decoding and base64 are in the comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
@@ -988,7 +1063,9 @@ before committing a change under `lispresen/`.
   the QR encoder against the standard's examples and its version boundaries, the title
   slide's logo and QR code,
   numeric column detection, parser diagnostics with line
-  numbers (`#.` and dotted lists among them), the agenda and its slide numbers, template
+  numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
+  with dotted pairs and a list that looks like a template use, the callout sides on a flow
+  box and a cells atom, the diagram diagnostics, the agenda and its slide numbers, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
   order of a slide's page advances (items, code lines, a bubble after what it wraps) and
@@ -1050,6 +1127,13 @@ and a list column, a callout on a list item and one with `:at` on a wrapped cons
 are laid out with the runtime check making no correction in either browser; every column
 has the width written, and each console panel is as tall as the rows the model counted
 (the output wrapped at the same character in both browsers).
+
+Diagrams (2026-10-22, Chrome 155 through DevTools and Safari 26.3 through
+`safaridriver`): the golden deck's flow and cells slides, and a deck with a flow wrapped
+into two rows, labels in bold and inline code, an alist, a list deeper than the slide is
+wide and diagrams in columns, render as laid out in all four built-in themes; the runtime
+check makes no correction, and the bubble naming a flow box stays on the side the static
+layout chose, 1 px off (the half pixel of centering).
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.

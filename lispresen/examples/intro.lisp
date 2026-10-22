@@ -30,10 +30,21 @@
       "最小でも収まらなければエラーとして報告する"
       (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")))
 
+;; A diagram from an S-expression; the callout names one of its boxes.
 (slide :title "全体像"
+  (say "テンプレートもここで展開する" :at "parse"
+    (flow "read" "parse" "segment" "layout" "lint" "emit")))
+
+;; The cdr chain on one row, each car below its cell, a dotted pair's cdr to its right.
+(slide :title "リストは箱と矢印になる"
+  (lead (tt "cells") " はリストのコンスセルをそのまま描く")
+  (column (cells '(slide :title "t" (p "x"))))
+  (column (cells '((a . 1) (b . 2)))))
+
+(slide :title "画像も置ける"
   (image "pipeline.png"
          :alt "read, parse, segment, layout, lint, emit の六段階"
-         :caption "デッキが HTML になるまで"))
+         :caption "同じ流れを画像で描いたもの。テーマの色には従わない"))
 
 (slide :title "デッキの読み方"
   (p "トップレベルのフォームを一つずつ " (tt "read-from-string") " で読む。")

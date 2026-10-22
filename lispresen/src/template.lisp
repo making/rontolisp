@@ -12,7 +12,7 @@
 (defparameter *element-names*
   '("DECK" "SECTION" "SLIDE" "DEFINE" "P" "UL" "OL" "LI" "CODE" "IMAGE" "QUOTE"
     "COLUMN" "TABLE" "CELL" "NOTES" "THEME" "LEAD" "B" "I" "MARK" "ACCENT" "TT"
-    "LINK" "SAY")
+    "LINK" "SAY" "FLOW" "CELLS")
   "The tags lispresen gives a meaning to; a template or parameter cannot take one.")
 
 (defparameter *template-depth* 32 "How deeply template uses may nest.")
@@ -96,13 +96,22 @@
                              *templates*)))))))))
 
 (defun substitute-params (forms bindings rest rest-args)
-  "FORMS with each parameter replaced by its binding in BINDINGS and REST spliced."
+  "FORMS with each parameter replaced by its binding in BINDINGS and REST spliced. FORMS
+may end in a dotted pair inside a (cells ...) datum; its tail is substituted too."
   (let ((out nil))
-    (dolist (x forms)
-      (if (and rest (name-symbol-p x) (string= (symbol-name x) rest))
-          (dolist (a rest-args) (push a out))
-          (push (substitute-param x bindings rest rest-args) out)))
-    (nreverse out)))
+    (loop while (consp forms)
+          do
+            (let ((x (pop forms)))
+              (if (and rest (name-symbol-p x) (string= (symbol-name x) rest))
+                  (dolist (a rest-args) (push a out))
+                  (push (substitute-param x bindings rest rest-args) out))))
+    (let ((head (nreverse out))
+          (tail (substitute-param forms bindings rest rest-args)))
+      (cond ((null tail) head)
+            ((null head) tail)
+            (t
+             (setf (cdr (last head)) tail)
+             head)))))
 
 (defun substitute-param (x bindings rest rest-args)
   (cond ((consp x) (substitute-params x bindings rest rest-args))
@@ -157,6 +166,8 @@ of FORM when it is a use."
           ((equal (form-tag form) "DEFINE")
            (report :error "(define ...) belongs at the top level")
            nil)
+          ;; A cells datum is data: a list in it that looks like a use is drawn as is.
+          ((cells-form-p form) (list form))
           ((consp form) (list (expand-forms form depth)))
           (t (list form)))))
 

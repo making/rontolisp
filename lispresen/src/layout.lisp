@@ -111,6 +111,8 @@
            (when (figure-caption b)
              (setf (figure-caption-run b)
                    (make-text-run (list (figure-caption b))))))
+          ((diagram-p b)
+           (setf (diagram-runs b) (mapcar #'make-text-run (diagram-labels b))))
           ((table-block-p b)
            (when (table-block-caption b)
              (setf (table-block-caption-run b)
@@ -403,6 +405,24 @@ do not fit; nil when none does."
             (when widths
               (return (values s widths (table-height tb s widths)))))))
 
+(defun diagram-fit (b k width)
+  "The label size and drawing of the diagram B at step K, stepping further down while it
+is wider than WIDTH; nil when no step fits."
+  (loop for j from (min k (1- (length *diagram-steps*))) below
+          (length *diagram-steps*)
+        do
+          (let* ((s (nth j *diagram-steps*)) (d (draw-diagram b s width)))
+            (when (<= (drawing-width d) width) (return (values s d))))))
+
+(defun diagram-layout (b k width)
+  "The label size and drawing B is set at for body step K: the smallest size when nothing
+fits."
+  (multiple-value-bind (s d) (diagram-fit b k width)
+    (if s
+        (values s d)
+        (let ((s (car (last *diagram-steps*))))
+          (values s (draw-diagram b s width))))))
+
 (defun quote-height (q s width)
   (let ((w (- width (quote-indent s))))
     (+ (* (run-lines (quotation-run q) s w) (body-lh s))
@@ -453,6 +473,7 @@ the second of an image, which takes whatever width it is given."
            (multiple-value-bind (mins maxs)
                (column-bounds b (step-at *table-steps* k))
              (values (reduce #'+ mins) (reduce #'+ maxs))))
+          ((diagram-p b) (diagram-bounds b (step-at *diagram-steps* k)))
           (t (values 0 0)))))
 
 (defun row-widths (row k c width)
@@ -506,7 +527,10 @@ of columns as its tallest column."
           ((table-block-p b)
            (multiple-value-bind (ts widths th) (table-fit b k width)
              (declare (ignore widths))
-             (if ts (setf h th) (setf ok nil)))))
+             (if ts (setf h th) (setf ok nil))))
+          ((diagram-p b)
+           (multiple-value-bind (ds d) (diagram-fit b k width)
+             (if ds (setf h (drawing-height d)) (setf ok nil)))))
     (values h ok)))
 
 (defun blocks-height (blocks k c width body-height)
@@ -595,7 +619,10 @@ Columns share the slide's sizes, so side-by-side text matches."
                   (multiple-value-bind (s widths) (table-layout b k rwidth)
                     (setf (table-block-size b) s (table-block-widths b) widths
                           (table-block-aligns b)
-                          (column-aligns b (table-columns b))))))))))
+                          (column-aligns b (table-columns b)))))
+                (when (diagram-p b)
+                  (multiple-value-bind (s d) (diagram-layout b k rwidth)
+                    (setf (diagram-size b) s (diagram-drawing b) d))))))))
 
 (defun body-code-size (blocks k width)
   (or (code-size-at blocks k width) (car (last *code-steps*))))
@@ -947,6 +974,29 @@ image's own is unknown within, and its caption. Returns the picture area."
                     "center"))
     img))
 
+(defun diagram-geometry (b s d x y)
+  "Records the drawing D of the diagram B, set at S px from X, Y: every shape, and the
+lines of every flow label, which hold its inline callouts' anchors. A callout naming a
+label with :at points at that label's box, or its atom."
+  (let ((labels nil) (px (dg-pad-x s)))
+    (dolist (shape (drawing-shapes d))
+      (destructuring-bind (l top r bottom) (shape-box shape)
+        (let ((box (list (+ x l) (+ y top) (+ x r) (+ y bottom))))
+          (obstacle box)
+          (case (car shape)
+            (:box
+             (destructuring-bind (bx by w h i pad) (cdr shape)
+               (declare (ignore h))
+               (run-geometry (nth i (diagram-runs b)) s (- w (* 2 px)) (dg-lh s)
+                             (+ x bx px) (+ y by pad) "center"))
+             (push box labels))
+            (:atom (push box labels))))))
+    (setf labels (nreverse labels))
+    (dolist (co *slide-callouts*)
+      (when (and (eq (callout-target co) b) (callout-at co))
+        (let ((i (label-index (diagram-label-texts b) (callout-at co))))
+          (when i (setf (callout-fragments co) (list (nth i labels)))))))))
+
 (defun grows-p (b)
   "True for a block that takes a share of the room the others leave: an image, or a row
 of columns holding one."
@@ -982,6 +1032,14 @@ layout gives it to them."
               ((table-block-p b)
                (multiple-value-bind (th tbox) (table-geometry b k x top width)
                  (setf h th box tbox)))
+              ((diagram-p b)
+               ;; Centered in its region, as the stylesheet centers it.
+               (multiple-value-bind (ds d) (diagram-layout b k width)
+                 (let ((dx (+ x (floor (- width (drawing-width d)) 2))))
+                   (diagram-geometry b ds d dx top)
+                   (setf h (drawing-height d) box
+                         (list dx top (+ dx (drawing-width d))
+                               (+ top (drawing-height d)))))))
               ((figure-p b)
                (setf h (floor rest growing) box
                      (figure-geometry b s x top width h)))

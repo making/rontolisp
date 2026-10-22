@@ -15,6 +15,7 @@
 #+rontolisp (load "model.lisp")
 #+rontolisp (load "embed.lisp")
 #+rontolisp (load "qr.lisp")
+#+rontolisp (load "diagram.lisp")
 #+rontolisp (load "layout.lisp")
 #+rontolisp (load "lint.lisp")
 #+rontolisp (load "theme.lisp")
@@ -29,7 +30,7 @@
 (with-compilation-unit ()
   (dolist (name
            '("package" "reader" "budoux-ja" "phrase" "metrics" "template"
-             "model" "embed" "qr" "layout" "lint" "theme" "player" "highlight"
-             "html" "lispresen"))
+             "model" "embed" "qr" "diagram" "layout" "lint" "theme" "player"
+             "highlight" "html" "lispresen"))
     (load
      (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))

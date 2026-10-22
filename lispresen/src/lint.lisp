@@ -39,7 +39,21 @@
            (report
             :warning (format nil
                              "table text at ~dpx (floor ~dpx); reduce its rows or columns"
-                             (table-block-size b) *table-floor*))))))
+                             (table-block-size b) *table-floor*)))
+          ((and (diagram-p b) (> (drawing-width (diagram-drawing b)) width))
+           (report :error (format nil
+                                  "the ~a is ~dpx wide at its smallest size, wider than the ~dpx it has; ~a"
+                                  (if (eq (diagram-kind b) :flow)
+                                      "flow"
+                                      "cells drawing")
+                                  (drawing-width (diagram-drawing b)) width
+                                  (if (eq (diagram-kind b) :flow)
+                                      "shorten its widest label"
+                                      "draw a shorter list"))))
+          ((and (diagram-p b) (< (diagram-size b) *diagram-floor*))
+           (report :warning (format nil
+                                    "diagram labels at ~dpx (floor ~dpx); draw fewer boxes or a shorter list"
+                                    (diagram-size b) *diagram-floor*))))))
 
 (defun lint-slide (deck slide)
   (let ((fit (slide-fit slide)))

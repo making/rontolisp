@@ -241,13 +241,67 @@ q\")))")))
 (slide :title \"t\" (code :steps (\"r\") \"p\") (code :steps ((1 3)) \"p\") (code :steps 3 \"p\"))")
             '((:error 1 ":callouts must be :shown or :step")
               (:error 2 "the :at text \"y\" is not on a line of the code")
-              (:error 2 ":at belongs to a callout around a code block")
+              (:error 2
+               ":at belongs to a callout around a code block or a diagram")
               (:error 3 "(say ...) takes the comment string first")
               (:error 3 "(say ...) needs the content it points at")
               (:error 4 "the :steps text \"r\" is not on a line of the code")
               (:error 4 ":steps lines 1-3 are not within the 1 line of the code")
               (:error 4
                ":steps of code must list steps: a string, (FIRST LAST) or a list of them"))))))
+
+(deftest diagrams
+  (testing "flow boxes take as few rows as fit, as even as that allows"
+    (ok
+     (equal (lispresen::flow-rows (make-list 6 :initial-element 300) 72 1696)
+            '(3 3)))
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (flow \"a\" (b \"b\") (\"c \" (tt \"d\"))))")))
+      (ok (contains html "<ol class=\"dg-flow\"><li class=\"dg-l\""))
+      (ok (contains html "<strong>b</strong></li>"))
+      (ok (contains html "c <code>d</code></li>"))
+      (ok (contains html "--dg:48px"))))
+  (testing "cells draws the datum, dotted pairs and lists that look like uses included"
+    (let ((html
+           (lispresen:render
+            "(define u () \"x\")
+(slide :title \"t\" (cells '(1 (u) (#\\a . \"b\") :k 1/2)))")))
+      (ok
+       (contains html
+        "role=\"img\" aria-label=\"(1 (u) (#\\a . &quot;b&quot;) :k 1/2)\""))
+      (ok (contains html ">#\\a</span>"))))
+  (testing "a callout names a box or an atom with :at"
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" \"c\")))
+(slide :title \"t\" (say \"c\" :at \"2\" (cells '(1 2))))")))
+      (ok (equal (callout-side html "s1c1") "below"))
+      (ok (contains html "data-at=\"b\""))
+      (ok (equal (callout-side html "s2c1") "right"))))
+  (testing "malformed, too large and too wide diagrams"
+    (ok
+     (equal (render-diagnostics
+             (format nil
+                     "(slide :title \"t\" (flow) (cells 1) (cells '(1.5)) (cells '~a))
+(slide :title \"t\" (flow~{ ~s~}))
+(slide :title \"t\" (cells '~a))
+(slide :title \"t\" (say \"c\" :at \"z\" (flow \"a\")))"
+                     (make-list 33 :initial-element 1)
+                     (make-list 9 :initial-element "x")
+                     (loop for i from 1 to 16 collect (list i))))
+            '((:error 1 "(flow ...) needs at least one box")
+              (:error 1 "(cells ...) draws a list, such as '(1 (2 3))")
+              (:error 1
+                      "(cells ...) draws symbols, integers, ratios, strings and characters; a float is not one")
+              (:error 1
+                      "(cells ...) draws at most 32 conses; this list has more")
+              (:warning 2 "a flow of 9 boxes is hard to follow; keep it to 8")
+              (:error 3
+                      "the content does not fit the slide even at the smallest sizes; split the slide")
+              (:error 3
+                      "the cells drawing is 2172px wide at its smallest size, wider than the 1696px it has; draw a shorter list")
+              (:error 4 "the :at text \"z\" is not a label of the flow"))))))
 
 (deftest templates
   (testing "a use is the body with its arguments substituted, &rest spliced"
@@ -393,7 +447,7 @@ q\")))")))
             (:error 5 "a table row has 1 cells where the table has 2")
             (:error 6
              "expected (slide ...), (section ...) or (define ...), found other")
-            (:error 7 "dotted lists and #n= labels are not deck syntax")
+            (:error 7 "dotted lists outside (cells ...) and #n= labels are not deck syntax")
             (:error 8
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (ok

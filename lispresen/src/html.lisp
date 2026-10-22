@@ -133,6 +133,15 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 #pv .pending{visibility:visible;opacity:.35}
 .ln.dim{opacity:.35}
 .slide.editing .ln.dim{opacity:1}
+figure.dg{flex:none;display:block;position:relative;align-self:center}
+.dg-art{position:absolute;left:0;top:0;overflow:visible}
+.dg-b{fill:var(--accent)}
+.dg-f{fill:var(--head-bg)}
+.dg-e{fill:var(--fg)}
+.dg-flow{padding:0}
+.dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
+.dg-flow>.dg-l{padding:0 var(--dg-x)}
+span.dg-l{font-family:MONO;white-space:pre}
 figure.pointed{align-items:flex-end}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
@@ -395,6 +404,62 @@ takes a share of the room the other blocks leave, as the image does."
     (write-string "</figcaption>" out))
   (format out "</figure>~%"))
 
+(defun write-diagram (b out)
+  "A diagram as an SVG of filled shapes in the theme's colors, with its labels as HTML
+over it where the fit solver put them: a flow's boxes as an ordered list, the atoms of
+cells as spans, the whole of cells named by the list it draws."
+  (let* ((d (diagram-drawing b))
+         (s (diagram-size b))
+         (w (drawing-width d))
+         (h (drawing-height d))
+         (flow (eq (diagram-kind b) :flow))
+         (shapes (drawing-shapes d)))
+    (write-string "<figure class=\"dg\"" out)
+    (unless flow
+      (write-string " role=\"img\"" out)
+      (write-attribute "aria-label" (print-datum (diagram-datum b)) out))
+    (format out
+     " style=\"width:~dpx;height:~dpx;--dg:~dpx;--dg-lh:~dpx;--dg-x:~dpx\"" w h
+     s (dg-lh s) (dg-pad-x s))
+    (write-described-by b out)
+    (format out
+     ">~%<svg class=\"dg-art\" width=\"~d\" height=\"~d\" aria-hidden=\"true\">"
+     w h)
+    (dolist (shape shapes)
+      (case (car shape)
+        (:rect
+         (destructuring-bind (x y sw sh class rx) (cdr shape)
+           (format out
+            "<rect class=\"~a\" x=\"~d\" y=\"~d\" width=\"~d\" height=\"~d\""
+            class x y sw sh)
+           (when (> rx 0) (format out " rx=\"~d\"" rx))
+           (write-string "/>" out)))
+        (:poly (format out "<polygon class=\"~a\" points=\"~{~d,~d~^ ~}\"/>"
+                       (second shape) (cddr shape)))
+        (:dot
+         (destructuring-bind (x y r) (cdr shape)
+           (format out "<circle class=\"dg-e\" cx=\"~d\" cy=\"~d\" r=\"~d\"/>" x
+                   y r)))))
+    (format out "</svg>~%")
+    (when flow (write-string "<ol class=\"dg-flow\">" out))
+    (dolist (shape shapes)
+      (case (car shape)
+        (:box (destructuring-bind (x y bw bh i pad) (cdr shape)
+                (format out
+                        "<li class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;padding-top:~dpx\">"
+                        x y bw bh pad)
+                (write-inlines (nth i (diagram-labels b))
+                               (nth i (diagram-runs b)) out)
+                (write-string "</li>" out)))
+        (:atom (destructuring-bind (x y aw ah text) (cdr shape)
+                 (format out
+                         "<span class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                         x y aw ah)
+                 (write-escaped text out)
+                 (write-string "</span>" out)))))
+    (when flow (write-string "</ol>" out))
+    (format out "~%</figure>~%")))
+
 (defun write-cell (c tag align scope out)
   (format out "<~a" tag)
   (when scope (format out " scope=\"~a\"" scope))
@@ -453,6 +518,7 @@ takes a share of the room the other blocks leave, as the image does."
         ((figure-p b) (write-figure b out))
         ((quotation-p b) (write-quote b out))
         ((table-block-p b) (write-table b out))
+        ((diagram-p b) (write-diagram b out))
         ((column-row-p b) (write-columns b out))))
 
 ;;; --- slides ------------------------------------------------------------------------

@@ -46,6 +46,8 @@ The design is in [DESIGN.md](DESIGN.md).
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
+| `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
+| `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
 | `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(accent ...)`, `(link "url" ...)` | inline content; `accent` is text in the accent color |
@@ -89,11 +91,36 @@ slides, and its tables, code and lists are drawn in fine lines.
   (column (ul "コードの列は最長の行の幅を取る" "残りを文章の列が使う")))
 ```
 
+## Diagrams
+
+A diagram is drawn from an S-expression as SVG in the theme's colors, so it follows the
+theme, reads as text in a review, and its labels are measured, wrapped between phrases
+and sized like the rest of the slide.
+
+```lisp
+(flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
+
+(cells '((a . 1) (b . 2)))
+```
+
+`flow` sets its boxes left to right, joined by arrows, one height for all; when they do
+not fit one row it takes as few rows as fit, as even as it can, and the arrow turns back
+below each row. `cells` draws a list as cons cells: the cdr chain on one row, each car
+below its cell (an atom as its label, a list as its own row), `nil` as a slash and a dotted
+pair's cdr to its right. The datum is quoted or not; a dotted pair is deck syntax only
+inside `cells`, and a template use inside it is drawn, not expanded. It holds at most 32
+conses; atoms are symbols (lower case unless written otherwise), integers, ratios,
+strings and characters.
+
+Labels start at 48 px and step down to 36 px with the slide; a diagram wider than its
+room at 36 px is an error. A diagram is centered in its column or the body.
+
 ## Callouts
 
 `say` puts a short comment in a speech bubble whose tail points at what it wraps: a
 phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
-block named by its text.
+block named by its text, a box of a `flow` or an atom of `cells` named by its label (the
+first equal to the text, else the first holding it).
 
 ```lisp
 (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")

@@ -87,6 +87,11 @@
 (defstruct cell inlines colspan run)
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
+;;; A diagram drawn from an S-expression. KIND is :flow, boxes joined by arrows, whose
+;;; LABELS hold each box's inline content and RUNS their runs; or :cells, the
+;;; box-and-pointer drawing of the list DATUM. SIZE is the label size and DRAWING the
+;;; shapes (diagram.lisp), both set when the slide is fitted.
+(defstruct diagram kind labels runs datum size drawing)
 ;;; Consecutive columns of a slide, side by side in one row; WIDTHS is set when the slide
 ;;; is fitted.
 (defstruct column-row columns widths)
@@ -272,8 +277,8 @@ in *CALLOUTS*; nil after reporting a malformed one."
                       ;; A callout's step follows the steps of what it wraps.
                       (push c *steps*)
                       (when (callout-at c)
-                        (report
-                         :error ":at belongs to a callout around a code block")
+                        (report :error
+                                ":at belongs to a callout around a code block or a diagram")
                         (setf (callout-at c) nil))
                       (list (list :say c nodes))))))
             ((equal tag "LINK")
@@ -561,8 +566,96 @@ those. Nil after reporting a malformed one."
                                    (mapcar (lambda (x) (parse-block x t))
                                            (cdr form))))))
 
+(defparameter *flow-boxes* 8 "A flow of more boxes than this is reported.")
+(defparameter *cells-limit*
+  32
+  "The most conses a cells drawing holds; more are not legible on a slide.")
+
+(defun parse-flow (form)
+  "A diagram from (flow label...). A label is a string, an inline form, or a list of
+them for a box of mixed inline content."
+  (multiple-value-bind (opts body) (split-options (cdr form) nil "flow")
+    (declare (ignore opts))
+    (let ((labels
+           (loop for x in body
+                 for nodes =
+                   (if (and (consp x) (not (form-tag x)))
+                       (parse-inlines x)
+                       (parse-inline x))
+                 when nodes
+                 collect nodes)))
+      (cond
+       ((null labels)
+        (report :error "(flow ...) needs at least one box")
+        nil)
+       (t
+        (when (> (length labels) *flow-boxes*)
+          (report :warning (format nil
+                                   "a flow of ~d boxes is hard to follow; keep it to ~d"
+                                   (length labels) *flow-boxes*)))
+        (make-diagram :kind :flow :labels labels))))))
+
+(defun conses-within-p (x limit)
+  "True when X holds at most LIMIT conses."
+  (let ((n 0))
+    (labels ((walk (x)
+               (loop while (consp x)
+                     do
+                       (when (> (incf n) limit)
+                         (return-from conses-within-p nil)) (walk (car x))
+                       (setf x (cdr x)))))
+      (walk x)
+      t)))
+
+(defun bad-atom (x)
+  "A description of the first atom in the datum X that cells cannot draw, or nil."
+  (cond ((consp x) (or (bad-atom (car x)) (bad-atom (cdr x))))
+        ((or (null x) (atom-label x)) nil)
+        ((floatp x) "a float")
+        ((vectorp x) "a vector")
+        (t "this value")))
+
+(defun parse-cells (form)
+  "A diagram from (cells 'list): the list's box-and-pointer drawing. The datum may be
+quoted or not."
+  (let* ((args (cdr form)) (datum (and (consp args) (car args))))
+    (when (and (equal (form-tag datum) "QUOTE") (consp (cdr datum))
+               (null (cddr datum)))
+      (setf datum (cadr datum)))
+    (cond ((not (and (consp args) (null (cdr args))))
+           (report :error "(cells ...) takes one list, such as '(1 (2 3))")
+           nil)
+          ((not (consp datum))
+           (report :error "(cells ...) draws a list, such as '(1 (2 3))")
+           nil)
+          ((not (conses-within-p datum *cells-limit*))
+           (report :error (format nil
+                                  "(cells ...) draws at most ~d conses; this list has more"
+                                  *cells-limit*))
+           nil)
+          ((bad-atom datum)
+           (report :error (format nil
+                                  "(cells ...) draws symbols, integers, ratios, strings and characters; ~a is not one"
+                                  (bad-atom datum)))
+           nil)
+          (t (make-diagram :kind :cells :datum datum)))))
+
+(defun diagram-label-texts (b)
+  "The text of each label of the diagram B, in the order :at searches them: the boxes of
+a flow, the atoms of cells as printed."
+  (if (eq (diagram-kind b) :flow)
+      (mapcar (lambda (nodes) (values (flatten-inlines nodes nil)))
+              (diagram-labels b))
+      (datum-atoms (diagram-datum b))))
+
+(defun label-index (texts at)
+  "The index of the label AT names among TEXTS: the first equal to it, else the first
+holding it; nil when none does."
+  (or (position at texts :test #'string=)
+      (position-if (lambda (s) (search at s)) texts)))
+
 (defparameter *anchor-blocks*
-  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE" "FLOW" "CELLS")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -576,16 +669,27 @@ callout points at, or else a paragraph holding it as inline content."
         (let* ((c (parse-say form)) (b (parse-block (car content) in-column)))
           (when c
             (cond ((null b) (setf *callouts* (remove c *callouts*)))
-                  ((and (callout-at c) (not (code-block-p b)))
-                   (report
-                    :error ":at belongs to a callout around a code block")
-                   (setf (callout-at c) nil))
                   ((and (callout-at c)
+                        (not (or (code-block-p b) (diagram-p b))))
+                   (report
+                    :error
+                    ":at belongs to a callout around a code block or a diagram")
+                   (setf (callout-at c) nil))
+                  ((and (callout-at c) (code-block-p b)
                         (notany (lambda (l) (search (callout-at c) l))
                                 (code-block-lines b)))
                    (report :error (format nil
                                           "the :at text ~s is not on a line of the code"
                                           (callout-at c)))
+                   (setf (callout-at c) nil))
+                  ((and (callout-at c) (diagram-p b)
+                    (null (label-index (diagram-label-texts b) (callout-at c))))
+                   (report :error (format nil
+                                   "the :at text ~s is not a label of the ~a"
+                                   (callout-at c)
+                                   (if (eq (diagram-kind b) :flow)
+                                       "flow"
+                                       "cells")))
                    (setf (callout-at c) nil)))
             (when b
               (setf (callout-target c) b)
@@ -607,6 +711,8 @@ callout points at, or else a paragraph holding it as inline content."
                  ((equal tag "TABLE") (parse-table x))
                  ((equal tag "QUOTE") (parse-quote x))
                  ((equal tag "COLUMN") (parse-column x in-column))
+                 ((equal tag "FLOW") (parse-flow x))
+                 ((equal tag "CELLS") (parse-cells x))
                  ((inline-tag-p tag) (make-para :inlines (parse-inline x)))
                  ((equal tag "LI")
                   (report :error "(li ...) belongs in (ul ...) or (ol ...)")

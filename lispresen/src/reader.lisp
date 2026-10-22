@@ -59,15 +59,24 @@
                  (setf pos (if end (+ end 2) n))))
               (t (return pos)))))))
 
+(defun cells-form-p (x)
+  "True for a (cells ...) form, whose argument is a datum that may hold dotted pairs."
+  (and (consp x) (car x) (symbolp (car x))
+       (string-equal (symbol-name (car x)) "CELLS")))
+
 (defun well-formed-p (form limit)
-  "True when every list in FORM is a proper list and FORM holds at most LIMIT conses; a
-form read from LIMIT characters holds more only through shared or circular structure."
-  (labels ((walk (x)
-             (loop while (consp x)
-                   do (when (< (decf limit) 0) (return-from well-formed-p nil))
-                     (when (consp (car x)) (walk (car x))) (setf x (cdr x)))
-             (when x (return-from well-formed-p nil))))
-    (walk form)
+  "True when every list in FORM is a proper list, but for the dotted pairs of a (cells
+...) datum, and FORM holds at most LIMIT conses; a form read from LIMIT characters holds
+more only through shared or circular structure."
+  (labels ((walk (x data)
+             (let ((args (and (not data) (cells-form-p x))))
+               (loop while (consp x)
+                     do
+                       (when (< (decf limit) 0) (return-from well-formed-p nil))
+                       (when (consp (car x)) (walk (car x) (or data args)))
+                       (setf x (cdr x)))
+               (when (and x (not data)) (return-from well-formed-p nil)))))
+    (walk form nil)
     t))
 
 (defun read-forms (source)
@@ -85,9 +94,8 @@ reported and ends the read; a dotted, shared or circular one is reported and ski
                           (read-from-string source t nil :start pos)
                         (if (well-formed-p form (- end pos))
                             (push (list form line) forms)
-                            (report
-                             :error
-                             "dotted lists and #n= labels are not deck syntax"))
+                            (report :error
+                                    "dotted lists outside (cells ...) and #n= labels are not deck syntax"))
                         (setf next end))
           (error ()
             (report
