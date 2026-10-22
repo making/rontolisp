@@ -116,9 +116,11 @@
   (let ((tb
          (parsed-table
           "(table :header (\"項目\" \"説明\") (\"短い\" \"表の列幅は最小幅を確保した上で残りを比例配分する\"))")))
-    (testing "columns that fit keep their natural widths"
+    (testing "columns that fit fill the box, the narrow one raised toward the wide one"
+      ;; The long column's one-line width is 24 x 48 + 56: it keeps it, the short column
+      ;; takes the rest.
       (let ((widths (lispresen::column-widths tb 48 1696)))
-        (ok (< (reduce #'+ widths) 1696))
+        (ok (equal widths '(488 1208)))
         (ok (= (lispresen::table-height tb 48 widths) (* 2 (+ 68 24))))))
     (testing "otherwise the long column takes the slack and wraps"
       (let ((widths (lispresen::column-widths tb 48 900)))

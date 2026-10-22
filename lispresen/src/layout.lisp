@@ -265,13 +265,43 @@ fraction and an optional percent sign."
           (when (> hi hi-sum) (incf (svref maxs last) (- hi hi-sum))))))
     (values mins maxs)))
 
+(defun even-widths (maxs avail)
+  "Widths of at least MAXS summing to AVAIL, the narrowest raised first to one level, so
+the columns are as even as their content allows. The rounding remainder goes 1 px each
+to the leftmost raised columns."
+  (let ((raised (loop for j from 0 below (length maxs) collect j)) (level 0))
+    ;; Fix every column wider than the level at its maximum, until none is.
+    (loop
+      (setf level
+            (floor (- avail
+                      (loop for j from 0 below (length maxs)
+                            unless (member j raised)
+                            sum (svref maxs j))) (length raised)))
+      (let ((wide (remove-if (lambda (j) (<= (svref maxs j) level)) raised)))
+        (if wide (setf raised (set-difference raised wide)) (return))))
+    (let ((rest
+           (- avail (* level (length raised))
+              (loop for j from 0 below (length maxs)
+                    unless (member j raised)
+                    sum (svref maxs j)))))
+      (loop for j from 0 below (length maxs)
+            collect
+              (if (member j raised)
+                  (+ level
+                     (if (> rest 0)
+                         (progn
+                           (decf rest)
+                           1)
+                         0))
+                  (svref maxs j))))))
+
 (defun column-widths (tb s avail)
-  "Column widths in px at size S within AVAIL px, or nil when the minima exceed it."
+  "Column widths in px at size S filling AVAIL px, or nil when the minima exceed it."
   (multiple-value-bind (mins maxs) (column-bounds tb s)
     (let* ((ncol (length mins))
            (sum-min (reduce #'+ mins))
            (sum-max (reduce #'+ maxs)))
-      (cond ((<= sum-max avail) (coerce maxs 'list))
+      (cond ((<= sum-max avail) (even-widths maxs avail))
             ((> sum-min avail) nil)
             (t
              (let* ((extra (- avail sum-min))

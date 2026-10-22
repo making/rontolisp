@@ -348,16 +348,22 @@ computed number is visible in the output.
 
 Column widths are decided by lispresen, not by the browser, for the same reason line
 breaks are: the browser's automatic table layout depends on the font it has, and the
-solver must know each row's height. Per column, the minimum width is the widest
+solver must know each row's height. A table spans its region (the body box, or its
+column), like the text around it. Per column, the minimum width is the widest
 unbreakable unit (phrase or Latin word) in any of its cells and the maximum is the widest
 cell set on one line, both plus horizontal padding. Then:
 
-1. If the maxima sum to at most the body box width, every column gets its maximum: no
-   cell wraps, and the table keeps its natural width.
+1. If the maxima sum to at most the region width, no cell wraps, and the table fills
+   it: every column gets at least its maximum, and the remaining width raises
+   the narrowest columns first to one common width, as far as the remainder reaches.
+   The columns end up as even as their content allows, so numbers right-aligned in them
+   stand at regular intervals. A first version kept each column at its maximum: a
+   short table then sat in the left half of the slide with uneven gaps between its
+   columns.
 2. Otherwise each column gets its minimum plus a share of the remaining width
    proportional to its maximum minus its minimum (the CSS automatic layout rule), so a
    column of long text wraps before a column of short labels does.
-3. If the minima alone exceed the box, the table steps down a size; at the hard floor
+3. If the minima alone exceed the region width, the table steps down a size; at the hard floor
    that is an error.
 
 A row is as tall as its tallest cell (lines x line height plus vertical padding), and
