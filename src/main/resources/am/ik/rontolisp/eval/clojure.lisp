@@ -10300,8 +10300,8 @@
                                                       inline-getter
                                                       default-getter
                                                       default-ensurer walks
-                                                      guard names reducer
-                                                      pkey iface clearer)
+                                                      guard names reducer pkey
+                                                      iface clearer)
   "Register METHODS' record beside the methods table, answering the table
    (what the protocol's setq answers, so a defprotocol answers what it
    answered before the registry existed)."
@@ -10531,8 +10531,7 @@
   (if (and typed reducer)
       (funcall (if (equal reducer '(:c%keyword "coll-reduce"))
                    #'rontolisp::%clojure-coll-reducer-row
-                   #'rontolisp::%clojure-kv-reducer-row)
-               methods key fn)
+                   #'rontolisp::%clojure-kv-reducer-row) methods key fn)
       (let* ((miss (list nil)) (inner (gethash key methods miss)))
         (if (eq inner miss)
             (progn
@@ -10565,27 +10564,28 @@
                               " is not a protocol"))
                 (let* ((methods (funcall (car record)))
                        (ensurer (car (cdr (cdr (cdr record)))))
-                       (names
-                        (car (cdr (cdr (cdr (cdr (cdr (cdr record))))))))
+                       (names (car (cdr (cdr (cdr (cdr (cdr (cdr record))))))))
                        (reducer
-                        (car
-                         (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))
+                        (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))
                        (pkey
                         (car
-                         (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))
+                         (cdr
+                          (cdr (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))
                        (iface
                         (car
                          (cdr
-                          (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))))
+                          (cdr
+                           (cdr (cdr (cdr (cdr (cdr (cdr (cdr record)))))))))))
                        (clearer
                         (car
                          (cdr
                           (cdr
-                           (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))))
+                           (cdr
+                            (cdr
+                             (cdr (cdr (cdr (cdr (cdr (cdr record))))))))))))
                        (typed
                         (and (consp key)
-                             (gethash key
-                              rontolisp::%clojure-protocol-type-tags))))
+                         (gethash key rontolisp::%clojure-protocol-type-tags))))
                   ;; a body implementation holds the protocol's interface
                   ;; already: extending one refuses, like the oracle (g43)
                   (if (and typed (member pkey (cdr typed) :test #'equal))
@@ -10598,24 +10598,34 @@
                                 ((or (hash-table-p mmap)
                                      (rontolisp::%clojure-record-p mmap)
                                      (rontolisp::%clojure-sorted-p mmap))
-                                 (funcall clearer (make-hash-table :test 'equal))
-                                 (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+                                 (funcall clearer
+                                          (make-hash-table :test 'equal))
+                                 (dolist (e
+                                          (rontolisp::%clojure-kv-pairs mmap
+                                           "extend"))
                                    (let ((k (car e)))
                                      (if (and (rontolisp::%clojure-keyword-p k)
-                                              (member (car (cdr k)) names :test #'equal))
-                                         (setf (gethash k (funcall ensurer)) (cdr e))))))
+                                              (member (car (cdr k)) names
+                                                      :test #'equal))
+                                         (setf (gethash k (funcall ensurer))
+                                               (cdr e))))))
                                 (t (funcall clearer mmap)))
                           (cond ((null mmap) (remhash key methods))
                                 ((or (hash-table-p mmap)
                                      (rontolisp::%clojure-record-p mmap)
                                      (rontolisp::%clojure-sorted-p mmap))
-                                 (setf (gethash key methods) (make-hash-table :test 'equal))
-                                 (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+                                 (setf (gethash key methods)
+                                       (make-hash-table :test 'equal))
+                                 (dolist (e
+                                          (rontolisp::%clojure-kv-pairs mmap
+                                           "extend"))
                                    (let ((k (car e)))
                                      (if (and (rontolisp::%clojure-keyword-p k)
-                                              (member (car (cdr k)) names :test #'equal))
-                                         (rontolisp::%clojure-extend-method methods key
-                                          k (cdr e) reducer typed)))))
+                                              (member (car (cdr k)) names
+                                                      :test #'equal))
+                                         (rontolisp::%clojure-extend-method
+                                          methods key k (cdr e) reducer
+                                          typed)))))
                                 (t (setf (gethash key methods) mmap))))))))))))
 
 ;;;; Protocol introspection: extenders, find-protocol-impl, find-protocol-method.
