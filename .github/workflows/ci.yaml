@@ -528,7 +528,7 @@ jobs:
     # `publishingServerId` in pom.xml and rontolisp-maven-plugin/pom.xml
     # (.kb/session-workflow.md, "The deploy job").
     - name: Generates Maven Settings
-      uses: s4u/maven-settings-action@v4.0.0
+      uses: s4u/maven-settings-action@v4.1.0
       with:
         servers: |
           [{
