@@ -71,8 +71,5 @@
 
 (defun embed-images (slide read)
   "Embeds every image of SLIDE, inside columns too."
-  (dolist (b (slide-blocks slide))
-    (cond ((figure-p b) (embed-figure b read))
-          ((column-p b)
-           (dolist (c (column-blocks b))
-             (when (figure-p c) (embed-figure c read)))))))
+  (dolist (b (region-blocks (slide-blocks slide)))
+    (when (figure-p b) (embed-figure b read))))

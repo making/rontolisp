@@ -81,8 +81,24 @@
              (format nil "(ul~{ ~a~})" (loop repeat 4 collect *long-item*))))
         (ok
          (contains (lispresen:render (columns "\"x\"" "\"y\"")) "--body:56px"))
-        (ok (contains (lispresen:render (columns long "\"y\"")) "--body:40px"))
-        (ok (contains (lispresen:render (columns long long)) "--body:40px")))))
+        ;; A short column takes only its width, which leaves the long one room at 56px.
+        (ok (contains (lispresen:render (columns long "\"y\"")) "--body:56px"))
+        (ok (contains (lispresen:render (columns long long)) "--body:40px"))))
+    (testing "a block above the columns spans them, a code column is as wide as its lines"
+      ;; 40 characters at 44px are 1083px, with the padding 1127px; the other column takes
+      ;; the rest of the 1616px the 80px gap leaves.
+      (let ((html
+             (lispresen:render
+              (format nil
+                      "(slide :title \"t\" (lead \"x\") (column (code \"~a\")) (column \"y\"))"
+                      (make-string 40 :initial-element #\a)))))
+        (ok
+         (contains html
+                   "<p class=\"lead\">x</p>
+<div class=\"columns\">
+<div class=\"column\" style=\"width:1127px\">"))
+        (ok (contains html "<div class=\"column\" style=\"width:489px\">"))
+        (ok (contains html "--code:44px")))))
   (testing "runnable code takes no more room than static code"
     ;; 11 lines at 44px are 726px of the 776px body: the output is an overlay.
     (let ((slide
@@ -91,6 +107,15 @@
             (loop for i from 1 to 11 collect i))))
       (ok (contains (lispresen:render slide) "--code:44px"))
       (ok (contains (lispresen:render slide) "class=\"codebox"))
+      ;; A console's output wraps at the panel's edge instead of stepping the code down:
+      ;; 300 characters at 44px take 5 rows of 61.
+      (let ((html
+             (lispresen:render
+              (format nil
+               "(slide :title \"t\" (code :lang \"console\" \"$ ls~%~a\"))"
+               (make-string 300 :initial-element #\a)))))
+        (ok (contains html "--code:44px"))
+        (ok (contains html "<pre class=\"code console\"")))
       (ok
        (not
         (contains (lispresen:render slide :runtime "none")
@@ -292,16 +317,18 @@
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (ok
    (equal (render-diagnostics
-           "(deck :theme (theme :base :dark :muted \"#555555\" :accent \"blue\"))
-(slide :title \"s\" (column \"a\") \"b\")
+           "(deck :kicker :later
+      :theme (theme :base :dark :muted \"#555555\" :code-muted \"#555555\" :accent \"blue\"))
+(slide :kicker \"k\" \"b\")
 (slide #.(+ 1 2))")
-          '((:error 1 ":accent of theme must be a color like #1f2328")
+          '((:error 1 ":kicker of deck must be :section")
+            (:error 1 ":accent of theme must be a color like #1f2328")
             (:warning 1
                       "theme: captions (--muted on --bg) has contrast 2.3:1, below 4.5:1")
             (:warning 1
-                      "theme: code comments (--muted on --code-bg) has contrast 2.0:1, below 4.5:1")
-            (:error 2 "a slide with columns holds only (column ...) blocks")
-            (:error 3
+                      "theme: code comments (--code-muted on --code-bg) has contrast 2.0:1, below 4.5:1")
+            (:warning 3 "a kicker stands above a title; this slide has none")
+            (:error 4
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (testing "the built-in themes pass the contrast lint"
     (dolist (theme '("light" "dark" "high-contrast"))

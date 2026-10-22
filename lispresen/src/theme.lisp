@@ -1,22 +1,30 @@
 ;;;; theme.lisp -- the built-in color themes and theme overrides.
 ;;;;
 ;;;; A theme is (NAME value...) with one value per *THEME-VARIABLES* entry. A deck's
-;;;; :theme is a built-in name or (theme [:base name] [:variable "#rrggbb"]...), which
-;;;; starts from the base (light by default) and replaces the named colors.
+;;;; :theme is a built-in name or (theme [:base name] [:code name] [:variable "#rrggbb"]...),
+;;;; which starts from the base (light by default), takes the code colors of the :code
+;;;; theme, and replaces the named colors.
 
 (in-package :lispresen)
 
 (defparameter *theme-variables*
-  '("bg" "fg" "muted" "accent" "code-bg" "head-bg" "rule" "mark" "hl-str"
-    "hl-kw" "hl-def" "hl-const"))
+  '("bg" "fg" "muted" "accent" "code-bg" "code-fg" "code-muted" "head-bg" "rule"
+    "mark" "hl-str" "hl-kw" "hl-def" "hl-const"))
+
+(defparameter *code-variables*
+  '("code-bg" "code-fg" "code-muted" "hl-str" "hl-kw" "hl-def" "hl-const")
+  "The colors of code, which (theme :code name) takes from another theme.")
 
 (defparameter *themes*
-  '(("LIGHT" "#ffffff" "#1f2328" "#59636e" "#0b5cad" "#f3f4f6" "#e3ebf6"
-     "#d0d7de" "#fff0a0" "#0a3069" "#0550ae" "#b3261e" "#7a3fc4")
-    ("DARK" "#15181d" "#e6e8eb" "#9aa3ad" "#6cb6ff" "#22272e" "#253041"
-     "#3d444d" "#5c4a00" "#96d0ff" "#6cb6ff" "#f47067" "#dcbdfb")
-    ("HIGH-CONTRAST" "#000000" "#ffffff" "#d0d0d0" "#ffd400" "#1a1a1a" "#333333"
-     "#8a8a8a" "#6b5800" "#a5ff90" "#7fdbff" "#ff9090" "#e8b8ff")))
+  '(("LIGHT" "#ffffff" "#1f2328" "#59636e" "#0b5cad" "#f3f4f6" "#1f2328"
+     "#59636e" "#e3ebf6" "#d0d7de" "#fff0a0" "#0a3069" "#0550ae" "#b3261e"
+     "#7a3fc4")
+    ("DARK" "#15181d" "#e6e8eb" "#9aa3ad" "#6cb6ff" "#22272e" "#e6e8eb"
+     "#9aa3ad" "#253041" "#3d444d" "#5c4a00" "#96d0ff" "#6cb6ff" "#f47067"
+     "#dcbdfb")
+    ("HIGH-CONTRAST" "#000000" "#ffffff" "#d0d0d0" "#ffd400" "#1a1a1a" "#ffffff"
+     "#d0d0d0" "#333333" "#8a8a8a" "#6b5800" "#a5ff90" "#7fdbff" "#ff9090"
+     "#e8b8ff")))
 
 (defun theme-name (x)
   (cond ((stringp x) (string-upcase x)) (t (symbol-value-name x))))
@@ -35,14 +43,21 @@
        (every (lambda (c) (digit-char-p c 16)) (subseq s 1))))
 
 (defun theme-override (form)
-  "The theme (theme [:base name] [:variable color]...) describes."
+  "The theme (theme [:base name] [:code name] [:variable color]...) describes."
   (multiple-value-bind (opts rest) (split-options (cdr form)
-                                                  (cons "BASE"
-                                                        (mapcar #'string-upcase
-                                                         *theme-variables*))
+                                                  (list* "BASE" "CODE"
+                                                         (mapcar #'string-upcase
+                                                          *theme-variables*))
                                                   "theme")
     (when rest (report :error "(theme ...) takes options only"))
     (let ((values (copy-list (cdr (builtin-theme (opt opts "BASE" :light))))))
+      (when (opt opts "CODE")
+        (let ((code (builtin-theme (opt opts "CODE"))))
+          (loop for name in *theme-variables*
+                for i from 0
+                do
+                  (when (member name *code-variables* :test #'string=)
+                    (setf (nth i values) (theme-color code name))))))
       (loop for name in *theme-variables*
             for i from 0
             do

@@ -3,7 +3,8 @@
 (deck :title "lispresen: S式で書くプレゼンテーション"
       :author "rontolisp"
       :date "2026-10-22"
-      :theme :light
+      :theme (theme :base :light :code :dark)
+      :kicker :section
       :page-numbers t)
 
 (section "なぜS式で書くのか")
@@ -17,6 +18,8 @@
   (notes "デッキは read するだけで評価しないことに触れる。"))
 
 (slide "読みやすさは、書き手ではなくツールが守る。")
+
+(section "レイアウトはツールが決める")
 
 (slide :title "文字の大きさは自動で決まる"
   (p "スライドごとに、収まる最大の段を " (b "段階表") " から選ぶ。")
@@ -62,6 +65,23 @@
 (slide :title "インタプリタとコンパイラ"
   (side "インタプリタ" "起動が速い" "eval が完全")
   (side "コンパイラ" "実行が速い" "成果物が一つ" "どのバックエンドでも同じ出力"))
+
+;; A lead above a row of columns; the columns' widths come from their content.
+(slide :title "列の幅は内容で決まる"
+  (lead (b "問題") " 等幅の列ではコードの行が収まらない → "
+        (b (accent "解決")) " 列ごとに必要な幅を測って配分する")
+  (column
+    (code :lang "lisp" :run nil "
+      (row-widths row k c (- 1920 224))")
+    (code :lang "console" "
+      $ lispresen/check.sh
+      ok   interpreter
+      ok   jvm
+      skip native: the jar carries no precompiler for this platform (linux-x86_64)"))
+  (column
+    (ul "コードの列は最長の行が収まる幅を取る"
+        "残りを文章の列が使う"
+        "出力の長い行は端末のように折り返す")))
 
 (slide :title "引用"
   (quote :cite "Alan Perlis" "A language that doesn't affect the way you think about programming is not worth knowing."))

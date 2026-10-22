@@ -214,3 +214,17 @@ excluded."
   (let ((m 0))
     (loop for c across line do (incf m (char-width (char-code c) :mono)))
     (milli-px->px (px m size))))
+
+(defun mono-wrap (line size avail)
+  "The index of the first character of each row a line of code takes at SIZE px when it
+wraps between any two characters into AVAIL px, as a terminal wraps it."
+  (let ((limit (* avail 1000)) (starts (list 0)) (cur 0))
+    (loop for c across line
+          for i from 0
+          do
+            (let ((w (px (char-width (char-code c) :mono) size)))
+              (when (and (> cur 0) (> (+ cur w) limit))
+                (push i starts)
+                (setf cur 0))
+              (incf cur w)))
+    (nreverse starts)))

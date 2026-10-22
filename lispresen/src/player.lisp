@@ -110,7 +110,7 @@ var t=sl.querySelector(':scope>.title'),b=sl.querySelector(':scope>.body'),c=sl.
 if(t&&b){var room=parseInt(b.style.top,10)-cfg.top-cfg.gap;
 while(t.offsetHeight>room+1&&(s=next(cfg.steps.title,px(st,'--title')))){notes.push('title '+px(st,'--title')+'px -> '+s+'px');
 setVars(st,{'title':s,'title-lh':Math.ceil(s*13/10)});}}
-if(b){var regions=b.classList.contains('columns')?Array.prototype.slice.call(b.children):[b];
+if(b){var regions=[b].concat(Array.prototype.slice.call(b.querySelectorAll('.column')));
 while(regions.some(over)){var moved=false;
 if((s=next(cfg.steps.body,px(st,'--body')))){notes.push('body '+px(st,'--body')+'px -> '+s+'px');setVars(st,bodyVars(s));moved=true;}
 if(b.querySelector('pre')&&(s=next(cfg.steps.code,px(st,'--code')))){notes.push('code '+px(st,'--code')+'px -> '+s+'px');setVars(st,codeVars(s));moved=true;}

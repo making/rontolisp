@@ -34,18 +34,19 @@ The design is in [DESIGN.md](DESIGN.md).
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :theme :aspect :runtime :callouts :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)`, `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below) |
+| `(deck :title :author :date :theme :aspect :runtime :callouts :kicker :page-numbers)` | the header; a `:title` adds a title slide. `:theme` is `:light`, `:dark`, `:high-contrast` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title |
 | `(section "title")` | a section divider |
-| `(slide [:title "t"] [:layout name] [:class "c"] block...)` | a slide |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
 | `"text"`, `(p inline...)` | a paragraph |
+| `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul item...)`, `(ol item...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it |
-| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below) |
+| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge |
 | `(quote [:cite "who"] inline...)` | a quotation |
-| `(column block...)` | a column; a slide of columns lays them side by side at one text size |
+| `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
-| `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(link "url" ...)` | inline content |
+| `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(accent ...)`, `(link "url" ...)` | inline content; `accent` is text in the accent color |
 | `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
 | `(define name (param... [&rest rest]) body...)` | a template (below) |
 
@@ -68,6 +69,21 @@ inlines.
 
 Keywords are not substituted (a parameter `title` leaves `:title` alone), and a template
 or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
+
+A theme is the page's colors and the code's (`code-bg`, `code-fg`, `code-muted` and the
+highlight colors). `(theme :base :light :code :dark)` sets code on dark panels in a light
+deck; any color can be replaced by name, and every text color is checked for contrast.
+
+```lisp
+(slide :title "列の幅は内容で決まる"
+  (lead (b "問題") " 等幅の列ではコードが収まらない → " (b (accent "解決")) " 列ごとに幅を測る")
+  (column
+    (code :lang "lisp" :run nil "(row-widths row k c width)")
+    (code :lang "console" "
+      $ lispresen/check.sh
+      ok   interpreter"))
+  (column (ul "コードの列は最長の行の幅を取る" "残りを文章の列が使う")))
+```
 
 ## Callouts
 

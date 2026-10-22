@@ -30,11 +30,15 @@ ul,ol{padding-left:var(--indent)}
 li+li,li>ul,li>ol{margin-top:var(--item-gap)}
 li::marker{color:var(--accent)}
 code{font-family:MONO;font-size:1em;line-height:1}
-p code,li code,th code,td code{background:var(--code-bg);border-radius:.2em}
-pre{flex:none;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);border-radius:12px;white-space:pre;overflow:hidden}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg);border-radius:.2em}
+pre{flex:none;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
+pre.console{white-space:pre-wrap;line-break:anywhere}
 pre code{line-height:inherit}
 strong{font-weight:700}
 mark{background:var(--mark);color:inherit}
+.accent{color:var(--accent)}
+.lead{color:var(--muted)}
+.kicker{position:absolute;font-size:KICKER;line-height:KICKER-LH;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
@@ -58,21 +62,21 @@ th{font-weight:700}
 .slide.measure{display:block;visibility:hidden}
 html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 #chk{position:fixed;right:8px;top:8px;max-width:60%;max-height:60%;overflow:auto;z-index:20;padding:8px 12px;background:rgba(0,0,0,.8);color:#fff;font:14px/1.5 MONO;white-space:pre-wrap}
-.hl-c{color:var(--muted)}
+.hl-c{color:var(--code-muted)}
 .hl-s{color:var(--hl-str)}
 .hl-k{color:var(--hl-kw)}
 .hl-d{color:var(--hl-def)}
 .hl-n{color:var(--hl-const)}
 .codebox{flex:none;position:relative}
-.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
+.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--code-bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
 .out.open{display:flex;flex-direction:column}
-.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);color:var(--code-fg);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
 .out pre::-webkit-scrollbar{width:20px}
-.out pre::-webkit-scrollbar-thumb{background:var(--muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
+.out pre::-webkit-scrollbar-thumb{background:var(--code-muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
 .out.err pre{color:var(--hl-def)}
-.out.busy pre{color:var(--muted)}
-.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--muted);font:400 48px/1 FONTS;cursor:pointer}
-.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
+.out.busy pre{color:var(--code-muted)}
+.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--code-muted);font:400 48px/1 FONTS;cursor:pointer}
+.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--code-fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
 .codebox textarea::selection{background:var(--mark)}
 .runnable pre.code{cursor:text}
 .tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
@@ -84,7 +88,8 @@ html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 .pv-bar .rt[data-state=failed]{color:var(--hl-def)}
 .quote{flex:none;display:block;border-left:8px solid var(--accent);padding-left:calc(var(--indent) - 8px)}
 .quote figcaption{margin-top:var(--item-gap);text-align:left}
-.body.columns{flex-direction:row;column-gap:COLUMN-GAP}
+.columns{flex:none;display:flex;column-gap:COLUMN-GAP}
+.columns.grow{flex:1 1 0;min-height:0}
 .column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
 #ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
 .thumb{position:relative;overflow:hidden;outline:1px solid var(--rule);cursor:pointer}
@@ -150,12 +155,15 @@ html:not(.js) #fs{display:none}
                          (list "META-LH" (px-string (body-lh *meta-size*)))
                          (list "META" (px-string *meta-size*))
                          (list "PAGE" (px-string *page-number-size*))
+                         (list "KICKER-LH" (px-string *kicker-lh*))
+                         (list "KICKER" (px-string *kicker-size*))
                          (list "COLUMN-GAP" (px-string *column-gap*)))
                    :initial-value *stylesheet*) out)
     ;; The canvas-dependent geometry.
     (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
-    (format out ".title,.body,.centered{left:~dpx;width:~dpx}~%" *margin-x*
-            content)
+    (format out ".kicker,.title,.body,.centered{left:~dpx;width:~dpx}~%"
+            *margin-x* content)
+    (format out ".kicker{top:~dpx}~%" (- *margin-top* *kicker-lh* 8))
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
     (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
@@ -200,6 +208,10 @@ html:not(.js) #fs{display:none}
                        ((eq (car n) :b) (wrap "strong" (second n)))
                        ((eq (car n) :i) (wrap "em" (second n)))
                        ((eq (car n) :mark) (wrap "mark" (second n)))
+                       ((eq (car n) :accent)
+                        (write-string "<span class=\"accent\">" out)
+                        (walk (second n))
+                        (write-string "</span>" out))
                        ((eq (car n) :say)
                         (if (callout-side (second n))
                             (progn
@@ -250,9 +262,9 @@ block B, which the player also finds the anchor by; nothing when there are none.
 
 (defun write-code-text (b out)
   (let ((text (format nil "~{~a~^~%~}" (code-block-lines b))))
-    (if (highlighted-p b)
-        (write-highlighted text out)
-        (write-escaped text out))))
+    (cond ((highlighted-p b) (write-highlighted text out))
+          ((console-p b) (write-console (code-block-lines b) out))
+          (t (write-escaped text out)))))
 
 (defun write-attribute (name value out)
   (format out " ~a=\"" name)
@@ -271,7 +283,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (when (code-block-stdin b)
         (write-attribute "data-stdin" (code-block-stdin b) out))
       (write-string ">" out))
-    (write-string "<pre class=\"code\"" out)
+    (write-string
+     (if (console-p b) "<pre class=\"code console\"" "<pre class=\"code\"") out)
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
     (write-described-by b out)
@@ -293,9 +306,15 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (write-string "</figcaption>" out))
   (format out "</figure>~%"))
 
-(defun write-column (c width out)
-  (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
-  (dolist (b (column-blocks c)) (write-block b out))
+(defun write-columns (r out)
+  "A row of columns, each at the width the fit solver gave it. A row holding an image
+takes a share of the room the other blocks leave, as the image does."
+  (format out "<div class=\"columns~:[~; grow~]\">~%" (grows-p r))
+  (loop for c in (column-row-columns r)
+        for width in (column-row-widths r)
+        do (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
+          (dolist (b (column-blocks c)) (write-block b out))
+          (format out "</div>~%"))
   (format out "</div>~%"))
 
 (defun write-figure (b out)
@@ -363,7 +382,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 
 (defun write-block (b out)
   (cond ((para-p b)
-         (write-string "<p" out)
+         (write-string (if (para-lead b) "<p class=\"lead\"" "<p") out)
          (write-described-by b out)
          (write-string ">" out)
          (write-inlines (para-inlines b) (para-run b) out)
@@ -372,7 +391,8 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
         ((code-block-p b) (write-code b out))
         ((figure-p b) (write-figure b out))
         ((quotation-p b) (write-quote b out))
-        ((table-block-p b) (write-table b out))))
+        ((table-block-p b) (write-table b out))
+        ((column-row-p b) (write-columns b out))))
 
 ;;; --- slides ------------------------------------------------------------------------
 
@@ -447,17 +467,17 @@ shown here; the player hides it until a page advance."
              (write-inlines (para-inlines p) (para-run p) out)
              (format out "</p></div>~%")))
           (t
+           (when (and (slide-kicker-run slide) (slide-title slide))
+             (write-string "<p class=\"kicker\">" out)
+             (write-text (slide-kicker slide) (slide-kicker-run slide) out)
+             (format out "</p>~%"))
            (when (slide-title slide)
              (write-string "<h1 class=\"title\">" out)
              (write-text (slide-title slide) (slide-title-run slide) out)
              (format out "</h1>~%"))
-           (format out "<div class=\"body~a\" style=\"top:~dpx;height:~dpx\">~%"
-                   (if (equal layout "columns") " columns" "")
+           (format out "<div class=\"body\" style=\"top:~dpx;height:~dpx\">~%"
                    (fit-body-top fit) (fit-body-height fit))
-           (dolist (b (slide-blocks slide))
-             (if (column-p b)
-                 (write-column b (fit-region-width fit) out)
-                 (write-block b out)))
+           (dolist (b (slide-blocks slide)) (write-block b out))
            (format out "</div>~%")
            (dolist (c (slide-callouts slide)) (write-callout deck c out))))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))

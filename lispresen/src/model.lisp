@@ -5,7 +5,7 @@
 ;;;; of an IMAGE, the URL of a LINK).
 ;;;;
 ;;;; Inline content is a list of nodes: a string, (:b nodes), (:i nodes), (:mark nodes),
-;;;; (:tt "string"), (:link "url" nodes) or (:say callout nodes).
+;;;; (:accent nodes), (:tt "string"), (:link "url" nodes) or (:say callout nodes).
 ;;;;
 ;;;; A deck can be rendered from an untrusted source, so nothing here evaluates a form.
 
@@ -21,11 +21,13 @@
   runtime
   page-numbers
   callouts
+  kicker
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
 ;;; requested layout name or nil; FIT is the layout result (layout.lisp).
-;;; CALLOUTS lists the slide's callouts in source order.
+;;; CALLOUTS lists the slide's callouts in source order. KICKER is the label above the
+;;; title, :deck until the deck's :kicker decides it.
 (defstruct slide
   number
   line
@@ -37,9 +39,12 @@
   notes
   title-run
   fit
-  callouts)
+  callouts
+  kicker
+  kicker-run)
 
-(defstruct para inlines run)
+;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
+(defstruct para inlines run lead)
 (defstruct bullets ordered items)
 (defstruct item inlines sublist run)
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
@@ -60,6 +65,9 @@
 (defstruct cell inlines colspan run)
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
+;;; Consecutive columns of a slide, side by side in one row; WIDTHS is set when the slide
+;;; is fitted.
+(defstruct column-row columns widths)
 
 ;;; A comment in a speech bubble pointing at its anchor. TARGET is the block it points
 ;;; at, nil for an inline anchor (the run holding it lists it among its ANCHORS); AT is
@@ -180,7 +188,7 @@ a line break between two wide characters, one space otherwise."
 ;;; --- inline content ----------------------------------------------------------
 
 (defun inline-tag-p (tag)
-  (member tag '("B" "I" "MARK" "TT" "LINK" "SAY") :test #'equal))
+  (member tag '("B" "I" "MARK" "ACCENT" "TT" "LINK" "SAY") :test #'equal))
 
 (defun say-content (form)
   "The arguments of (say \"comment\" [:at \"text\"] content...) after the comment and
@@ -223,6 +231,7 @@ in *CALLOUTS*; nil after reporting a malformed one."
            (cond ((equal tag "B") (list (list :b (parse-inlines (cdr x)))))
             ((equal tag "I") (list (list :i (parse-inlines (cdr x)))))
             ((equal tag "MARK") (list (list :mark (parse-inlines (cdr x)))))
+            ((equal tag "ACCENT") (list (list :accent (parse-inlines (cdr x)))))
             ((equal tag "TT")
              (if (every #'stringp (cdr x))
                  (list
@@ -454,7 +463,7 @@ and the common indentation removed."
                                            (cdr form))))))
 
 (defparameter *anchor-blocks*
-  '("P" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -488,6 +497,8 @@ callout points at, or else a paragraph holding it as inline content."
         ((consp x)
          (let ((tag (form-tag x)))
            (cond ((equal tag "P") (make-para :inlines (parse-inlines (cdr x))))
+                 ((equal tag "LEAD")
+                  (make-para :inlines (parse-inlines (cdr x)) :lead t))
                  ((equal tag "SAY") (parse-block-say x in-column))
                  ((list-tag-p x) (parse-list x))
                  ((equal tag "CODE") (parse-code x))
@@ -510,9 +521,27 @@ callout points at, or else a paragraph holding it as inline content."
 
 ;;; --- slides and the deck -----------------------------------------------------
 
+(defun region-blocks (blocks)
+  "BLOCKS with every column row replaced by the blocks of its columns."
+  (mapcan (lambda (b)
+            (if (column-row-p b)
+                (mapcan (lambda (col) (copy-list (column-blocks col)))
+                        (column-row-columns b))
+                (list b))) blocks))
+
+(defun group-columns (blocks)
+  "BLOCKS with each run of consecutive columns gathered into one column row."
+  (let ((out nil))
+    (dolist (b blocks (nreverse out))
+      (cond ((not (column-p b)) (push b out))
+            ((column-row-p (car out))
+             (setf (column-row-columns (car out))
+                   (append (column-row-columns (car out)) (list b))))
+            (t (push (make-column-row :columns (list b)) out))))))
+
 (defun parse-slide (form number line)
   (multiple-value-bind (opts body)
-      (split-options (cdr form) '("TITLE" "LAYOUT" "CLASS") "slide")
+      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS") "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
            (*callouts* nil)
@@ -524,9 +553,6 @@ callout points at, or else a paragraph holding it as inline content."
                 (push (apply #'concatenate 'string (cdr x)) notes)
                 (report :error "(notes ...) takes strings only"))
             (let ((b (parse-block x))) (when b (push b blocks)))))
-      (when (and (some #'column-p blocks) (notevery #'column-p blocks))
-        (report :error "a slide with columns holds only (column ...) blocks")
-        (setf blocks (remove-if-not #'column-p blocks)))
       (let ((i 0))
         (dolist (c (reverse *callouts*))
           (setf (callout-id c) (format nil "s~dc~d" number (incf i)))))
@@ -534,11 +560,14 @@ callout points at, or else a paragraph holding it as inline content."
        :line line
        :kind :slide
        :title title
+       :kicker (if (assoc "KICKER" opts :test #'string=)
+                   (string-option opts "KICKER" "slide")
+                   :deck)
        :callouts (reverse *callouts*)
        :layout (let ((l (opt opts "LAYOUT")))
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
-       :blocks (nreverse blocks)
+       :blocks (group-columns (nreverse blocks))
        :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
 
 (defun parse-section (form number line)
@@ -564,8 +593,8 @@ callout points at, or else a paragraph holding it as inline content."
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
-                                                    "PAGE-NUMBERS" "CALLOUTS")
-                                                  "deck")
+                                                    "PAGE-NUMBERS" "CALLOUTS"
+                                                    "KICKER") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -574,7 +603,16 @@ callout points at, or else a paragraph holding it as inline content."
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS")
-               :callouts (parse-callouts-option (opt opts "CALLOUTS")))))
+               :callouts (parse-callouts-option (opt opts "CALLOUTS"))
+               :kicker (parse-kicker-option (opt opts "KICKER")))))
+
+(defun parse-kicker-option (x)
+  "The deck's :kicker: :section (each slide's kicker is its section's title) or nil."
+  (cond ((null x) nil)
+        ((equal (symbol-value-name x) "SECTION") :section)
+        (t
+         (report :error ":kicker of deck must be :section")
+         nil)))
 
 (defun parse-callouts-option (x)
   "The deck's :callouts as :step (a page advance shows each bubble) or :shown."
@@ -587,7 +625,7 @@ callout points at, or else a paragraph holding it as inline content."
 
 (defun parse-deck (forms)
   "The deck model of FORMS, the (FORM LINE) lists READ-FORMS answers."
-  (let ((deck nil) (slides nil) (number 0))
+  (let ((deck nil) (slides nil) (number 0) (section nil))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
         (setf deck (parse-deck-header (car (car forms))))
@@ -609,10 +647,17 @@ callout points at, or else a paragraph holding it as inline content."
                          (expand-top-level (first entry))))
                 (let ((tag (form-tag form)) (*slide* (1+ number)))
                   (cond ((equal tag "SLIDE")
-                         (push (parse-slide form (incf number) *line*) slides))
+                         (let ((slide (parse-slide form (incf number) *line*)))
+                           (when (eq (slide-kicker slide) :deck)
+                             (setf (slide-kicker slide)
+                                   (and (eq (deck-kicker deck) :section)
+                                        (slide-title slide) section)))
+                           (push slide slides)))
                         ((equal tag "SECTION")
-                         (push (parse-section form (incf number) *line*)
-                               slides))
+                         (let ((slide
+                                (parse-section form (incf number) *line*)))
+                           (setf section (slide-title slide))
+                           (push slide slides)))
                         ((equal tag "DECK")
                          (report :error "(deck ...) must be the first form"))
                         (t (let ((*slide* nil))
