@@ -404,7 +404,7 @@ sl.insertBefore(bg,sl.firstChild);mo.push(bg);B.pre.classList.add('mo');last=run
 B.toks.forEach(function(t,j){var s=L[j]>=0?A.toks[L[j]]:null;if(!s){run(t.e,[{opacity:0},{opacity:0,offset:.4},{opacity:1}]);return;}used[L[j]]=1;
 run(t.e,[{transform:'translate('+(s.r.l-t.r.l)+'px,'+(s.r.t-t.r.t)+'px) scale('+(t.r.w?s.r.w/t.r.w:1)+')',opacity:Math.min(1,s.o/t.o)},{transform:'none',opacity:1}]);});
 A.toks.forEach(function(s,j){if(used[j])return;var x=d.createElement('span');x.className='mg';x.textContent=s.e.textContent;
-x.style.cssText='left:'+s.r.l+'px;top:'+s.r.t+'px;font-size:'+A.fs+';line-height:'+A.lh+';color:'+getComputedStyle(s.e).color;
+x.style.cssText='left:'+s.r.l+'px;top:'+s.r.t+'px;font-size:'+A.fs+';line-height:'+A.lh+';opacity:0;color:'+getComputedStyle(s.e).color;
 sl.appendChild(x);mo.push(x);run(x,[{opacity:s.o},{opacity:0,offset:.6},{opacity:0}]);});
 last.finished.then(function(){if(g===mgen)unmorph();},function(){});}
 function show(i,quiet,k,dir){if(!slides.length)return;i=Math.max(0,Math.min(slides.length-1,i));

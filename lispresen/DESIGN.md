@@ -1201,5 +1201,17 @@ wide and diagrams in columns, render as laid out in all four built-in themes; th
 check makes no correction, and the bubble naming a flow box stays on the side the static
 layout chose, 1 px off (the half pixel of centering).
 
+Code morph (2026-10-23, Chrome 155 through DevTools and Safari 26.3 through
+`safaridriver`): a deck of three versions of a function (a memo table added, then a loop,
+the last with `:steps`) morphs stepping forward and back, also when driven from the
+presenter window; a jump (`#N`, the overview, Home), `prefers-reduced-motion` (emulated
+in Chrome, `matchMedia` answering reduce in Safari) and an edited block switch at once,
+and Reset brings the morph back. Tokens as `inline-block` leave every panel's size as it
+was. In Safari the screen was locked, which freezes a page's animation timeline, so the
+playback was checked by seeking the animations: a paired token at 0, 300 and 600 ms sits
+at its old place, halfway (ease-in-out) and its new place, the panel's box likewise, and
+finishing removes everything the morph added. A copy of a removed token rests at opacity
+0, so one the cleanup has not reached yet shows nothing.
+
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.
