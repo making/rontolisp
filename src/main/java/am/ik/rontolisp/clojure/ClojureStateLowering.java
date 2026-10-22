@@ -1940,8 +1940,15 @@ final class ClojureStateLowering {
 		return boundFnStarCall(ctx, ctx.lower(items.get(1)));
 	}
 
-	/** A function value wrapped to call it with its creation-time bindings pushed. */
-	private static LispVal boundFnStarCall(ClojureLowering ctx, LispVal fun) {
+	/**
+	 * A function value wrapped to call it with its creation-time bindings pushed, over an
+	 * already-lowered function: what {@code bound-fn*} calls and what a future body needs
+	 * where the function value is already in hand.
+	 * @param ctx the hub
+	 * @param fun the lowered function
+	 * @return the wrapper form
+	 */
+	static LispVal boundFnStarCall(ClojureLowering ctx, LispVal fun) {
 		ctx.boundFnUsed = true;
 		ctx.needThreadBinders();
 		LispSymbol f = ctx.freshTemp();
@@ -2096,17 +2103,50 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (pvalues expr...)}: each expression in order on the calling thread,
-	 * answering a seq of the values. There is no thread pool on any backend (like
-	 * {@code pmap}, which is {@code map}), so a sequential in-order evaluation is the
-	 * documented deviation; an expression throwing stops the later ones, and a
-	 * thread-local write stays visible where the oracle's pool thread would refuse it.
+	 * {@code (pvalues expr...)}: one future per expression on the interpreter and the
+	 * JVM, dereferenced in order, so the values answer in order like the oracle's; a
+	 * failure surfaces at the deref after every branch was started. On wasm,
+	 * single-threaded by construction, each expression runs in order on the calling
+	 * thread, the documented sequential shape with the same printed seq. An empty
+	 * `pvalues` answers nil, where the oracle's empty lazy seq prints ().
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
 	 */
 	static LispVal pvaluesOf(ClojureLowering ctx, List<LispVal> items) {
-		List<LispVal> out = new ArrayList<>();
-		out.add(ClojureLowerUtil.sym("list"));
-		out.addAll(ctx.lowers(items, 1));
-		return ClojureLowerUtil.list(out);
+		List<LispVal> lowered = ctx.lowers(items, 1);
+		if (!ctx.hostTarget || lowered.isEmpty()) {
+			List<LispVal> out = new ArrayList<>();
+			out.add(ClojureLowerUtil.sym("list"));
+			out.addAll(lowered);
+			return ClojureLowerUtil.list(out);
+		}
+		// one conveyed applier for the whole call: each expression runs on its
+		// own thread with the same creation-time bindings, dereferenced in order
+		LispSymbol thunkParam = ctx.freshTemp();
+		LispVal applier = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(thunkParam),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), thunkParam));
+		LispSymbol conveyedVar = ctx.freshTemp();
+		LispVal conveyedForm = ClojureStateLowering.boundFnStarCall(ctx, applier);
+		LispSymbol runnerVar = ctx.freshTemp();
+		LispSymbol runnerArg = ctx.freshTemp();
+		LispVal runner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(runnerArg),
+				ClojureFutureLowering.futureSpawnForm(ctx,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), conveyedVar, runnerArg))));
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(conveyedVar, conveyedForm));
+		bindings.add(ClojureLowerUtil.list(runnerVar, runner));
+		List<LispVal> reads = new ArrayList<>();
+		for (LispVal expr : lowered) {
+			LispSymbol futureVar = ctx.freshTemp();
+			LispVal thunk = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), expr);
+			bindings.add(ClojureLowerUtil.list(futureVar,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), runnerVar, thunk)));
+			reads.add(ClojureStateLowering.derefForm(ctx, futureVar));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), reads));
 	}
 
 	/**

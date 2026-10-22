@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -37,6 +38,9 @@ final class ClojureFutureLowering {
 
 	/** The timed deref of a Clojure future, wrapping the stored condition. */
 	static final String FUTURE_CLOJURE_GET_WITHIN = "RONTOLISP::%CLOJURE-FUTURE-CLOJURE-GET-WITHIN";
+
+	/** The windowed in-order deref behind parallel `pmap`. */
+	static final String PMAP_WINDOW = "RONTOLISP::%CLOJURE-PMAP-WINDOW";
 
 	/** The promise constructor (the FUTURE producer beside the runner). */
 	static final String PROMISE_MAKE = "RONTOLISP::%CLOJURE-PROMISE";
@@ -109,9 +113,22 @@ final class ClojureFutureLowering {
 	 * @return the lowered call
 	 */
 	private static LispVal futureCallForm(ClojureLowering ctx, LispVal fun) {
+		LispVal conveyed = ClojureStateLowering.boundFnStarOf(ctx, List.of(new LispSymbol("bound-fn*"), fun));
+		return futureSpawnForm(ctx, conveyed);
+	}
+
+	/**
+	 * The spawned task over an already-lowered zero-argument thunk: the failure cell, the
+	 * guard running it on the new thread, the host {@code FutureTask} and the runner
+	 * answering the Clojure future. The thunk is a value where the form runs -- evaluated
+	 * on the calling thread for a call, run on a fresh one for a spawned body.
+	 * @param ctx the hub
+	 * @param thunk the lowered zero-argument thunk
+	 * @return the lowered spawn
+	 */
+	static LispVal futureSpawnForm(ClojureLowering ctx, LispVal thunk) {
 		LispSymbol cell = ctx.freshTemp();
 		LispSymbol worker = ctx.freshTemp();
-		LispVal conveyed = ClojureStateLowering.boundFnStarOf(ctx, List.of(new LispSymbol("bound-fn*"), fun));
 		LispVal guarded = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
 				ClojureLowerUtil.list(new LispSymbol(FUTURE_GUARD), cell, worker));
 		LispVal task = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_NEW,
@@ -120,7 +137,7 @@ final class ClojureFutureLowering {
 				ClojureLowerUtil.list(List.of(
 						ClojureLowerUtil.list(cell,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), ClojureLowering.NIL_CONST)),
-						ClojureLowerUtil.list(worker, conveyed))),
+						ClojureLowerUtil.list(worker, thunk))),
 				ClojureLowerUtil.list(new LispSymbol(FUTURE_START), task, cell));
 	}
 
@@ -183,6 +200,83 @@ final class ClojureFutureLowering {
 		LispVal form = ctx.inScope(Map.of(fun.name(), ClojureLowering.Kind.VARIABLE), () -> futureCallForm(ctx, fun));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ctx.localSym(fun.name())),
 				form);
+	}
+
+	/**
+	 * {@code pmap} as a value: over a function and any number of collections, the same
+	 * parallel map a call answers (sequential where no thread exists).
+	 * @param ctx the hub
+	 * @return the value form
+	 */
+	static LispVal pmapValue(ClojureLowering ctx) {
+		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("pmap-fn"));
+		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("pmap-colls"));
+		LispVal body = ctx.hostTarget ? pmapParallel(ctx, ClojureLowering.realFun(fun), colls)
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), ClojureLowering.realFun(fun), colls);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(fun, ClojureLowering.AMPERSAND_REST, colls)), body);
+	}
+
+	/**
+	 * {@code (pmap f colls...)} on the interpreter and the JVM: one future per element,
+	 * started eagerly and dereferenced in order with the oracle's lookahead, so the
+	 * printed seq is the sequential one's; a lazy input stays lazy and sequential, like
+	 * `%CLOJURE-MAP` (nothing hangs that did not hang). A failure surfaces at the deref
+	 * in order, after every branch was started.
+	 * @param ctx the hub
+	 * @param fun the already-lowered real function
+	 * @param colls the already-lowered collections, as a list value
+	 * @return the lowered parallel map
+	 */
+	static LispVal pmapParallel(ClojureLowering ctx, LispVal fun, LispVal colls) {
+		LispSymbol funVar = ctx.freshTemp();
+		LispSymbol conveyedVar = ctx.freshTemp();
+		LispSymbol collsVar = ctx.freshTemp();
+		LispSymbol argsVar = ctx.freshTemp();
+		LispVal conveyed = ClojureStateLowering.boundFnStarCall(ctx, funVar);
+		LispVal thunk = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), conveyedVar, argsVar));
+		LispVal spawner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, argsVar)), futureSpawnForm(ctx, thunk));
+		LispVal futures = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), spawner, collsVar);
+		LispVal staged = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DOALL"), futures);
+		LispVal windowed = ClojureLowerUtil.list(new LispSymbol(PMAP_WINDOW), staged, lookaheadForm(ctx));
+		LispVal sequential = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), funVar, collsVar);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(funVar, fun),
+						ClojureLowerUtil.list(conveyedVar, conveyed), ClojureLowerUtil.list(collsVar, colls))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ANY-LAZY-P"), collsVar), sequential,
+						windowed));
+	}
+
+	/**
+	 * The oracle's pmap lookahead: two futures plus one per processor, so at most that
+	 * many branches run ahead of the consumption.
+	 * @param ctx the hub
+	 * @return the lowered lookahead count
+	 */
+	private static LispVal lookaheadForm(ClojureLowering ctx) {
+		LispVal procs = ClojureLowerUtil.list(new LispSymbol(".availableProcessors"),
+				ClojureLowerUtil.list(new LispSymbol("Runtime/getRuntime")));
+		return ctx.lower(ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), new LispInteger(2), procs));
+	}
+
+	/**
+	 * {@code (pmap f colls...)}: the parallel map where threads exist, the sequential map
+	 * where they do not.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal pmapOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureCoreLowering.arity("pmap", items.size() - 1, 2, -1);
+		LispVal fun = ClojureBindingLowering.realFnValue(ctx, items.get(1));
+		LispVal colls = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2));
+		if (!ctx.hostTarget) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fun, colls);
+		}
+		return pmapParallel(ctx, fun, colls);
 	}
 
 	/**

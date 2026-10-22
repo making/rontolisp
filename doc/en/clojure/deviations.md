@@ -622,11 +622,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position
   of `rest`), so it carries no metadata, and of a map entry `[]` (the oracle `nil`).
 - `partition-all` with a non-positive size or step signals,
-  where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
-  calling thread. `pvalues` evaluates its expressions in order on the calling
-  thread and answers a realized seq (`nil` when empty, where the oracle's empty
-  lazy seq prints `()`); a thread-local write stays visible where the oracle's
-  pool thread refuses it, and a throwing expression stops the later ones. `take-nth` with a zero step signals, and its seq arity steps by the
+  where the oracle answers an endless seq of `()`. `pmap` runs one future per element
+  on the interpreter and the JVM, dereferenced in order with the oracle's lookahead,
+  so the printed seq is the sequential one's (sequential `map` on the single-threaded
+  WASM legs). `pvalues` runs one future per expression, dereferenced in order (`nil`
+  when empty, where the oracle's empty lazy seq prints `()`; sequential in order on
+  the WASM legs); a failure in either surfaces at the `deref` in order, wrapped in
+  the oracle's `ExecutionException` (the sequential legs throw the raw condition).
+  `take-nth` with a zero step signals, and its seq arity steps by the
   magnitude of a negative one, where the oracle's repeats the first member forever.
 - Transducers are the oracle's functions over reducing functions, but an `eduction` is
   the `sequence` of its input through them, computed once (strictly over a strict input,

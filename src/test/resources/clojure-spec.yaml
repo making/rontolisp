@@ -7713,11 +7713,14 @@ cases:
       3 [0 1] 0
       [[:a 7]]
       :signalled :signalled
-  - name: backlog-verbs-as-values-and-pmap
+  - name: backlog-verbs-as-values
     # every backlog verb is a function value with the oracle's arity check
     # (the message is the oracle's, the count included); the transducer arities
-    # answer transducers; pmap is map (single-threaded, the same printed
-    # seq); = and not= as values compare the Clojure way (1 and 1.0 differ, maps
+    # answer transducers; pmap's parallel shape (one future per element,
+    # dereferenced in order, sequential on the WASM legs) lives in
+    # pmap-and-pvalues-run-branches-concurrently-in-order, ClojureInteropTest
+    # pinning the value call; = and not= as
+    # values compare the Clojure way (1 and 1.0 differ, maps
     # and sets structurally). Every line matches the oracle (clj 1.12,
     # 2026-10-02) except the fnil/fn message (the oracle suffixes a compiled
     # class number) and the empty seqs printing nil where it prints ().
@@ -7735,7 +7738,6 @@ cases:
       (println (try ((fnil (fn [] 1) 0)) (catch Exception e (ex-message e))))
       (prn ((fn [f] (f {:a 1} inc)) update-vals) ((fn [f] (f {:a 1} name)) update-keys) ((fn [f] (f + 0 [5 6])) reduce-kv))
       (println (try ((fn [f] (f + 0)) reduce-kv) (catch Exception e (ex-message e))))
-      (prn (pmap inc [1 2 3]) (pmap + [1 2] [10 20 30]) (pmap inc nil) ((fn [f] (f inc [1 2])) pmap))
       (prn (map = [1 {:a 1} #{1} 1] [1 {:a 1} #{1} 1.0]) (map not= [1 2] [1 3]) (apply = [1 1 1]))
     expected: |
       ((1) (3 4)) (1 2) (2 3)
@@ -7751,7 +7753,6 @@ cases:
       Wrong number of args (0) passed to: clojure.core/fnil/fn
       {:a 2} {"a" 1} 12
       Wrong number of args (2) passed to: clojure.core/reduce-kv
-      (2 3 4) (11 22) nil (2 3)
       (true true true false) (false true) true
   - name: a-keyword-or-symbol-called-dynamically-checks-its-argument-count
     # a keyword or symbol reaching the call dispatcher (a local, a parameter,
@@ -16149,31 +16150,42 @@ cases:
       [#'g24-with-local-vars/a true 1]
       boom
       [#<Unbound: #'g24-with-local-vars/a> false]
-  - name: pvalues-evaluates-in-order-sequentially
-    # pvalues has no thread pool behind it (pmap is map here), so each expression
-    # runs in order on the calling thread and the values answer as a seq: a
-    # thread-local write stays visible where the oracle's pool thread refuses it,
-    # and a throwing expression stops the later ones with its own exception. An
-    # empty pvalues answers nil, where the oracle's empty lazy seq prints ().
+  - name: pmap-and-pvalues-run-branches-concurrently-in-order
+    # g36 (2026-10-22, oracle clj 1.12.6): pmap runs one future per element and
+    # pvalues one per expression (each conveying the creation-time bindings),
+    # dereferenced in order, so sleep-backed branches overlap while the printed
+    # seq stays the sequential one's on all four backends (sequential map/list
+    # on the single-threaded WASM legs). An empty pvalues answers nil, where
+    # the oracle's empty lazy seq prints (). One site per construct: the wider
+    # matrix (multi-coll, laziness, effect sets, with-local-vars, error
+    # identity) lives in ClojureInteropTest, keeping this row small enough for
+    # the JVM's per-method cap.
     source: |
-      (ns g24-pvalues)
-      (println (pvalues 1 (+ 1 2) "x"))
+      (ns g36-par)
+      (def ^:dynamic *g36-pm* 1)
+      (println (binding [*g36-pm* 20] (pmap (fn [x] (+ x *g36-pm*)) [1 2 3])))
       (println (pvalues))
-      (println (seq? (pvalues 1 2)) (= (pvalues 1 2) '(1 2)))
-      (let [order (atom [])]
-        (println (pvalues (swap! order conj :a) (swap! order conj :b) (swap! order conj :c)))
-        (println @order))
-      (println (with-local-vars [a 5] (pvalues @a (do (var-set a 6) @a) @a)))
-      (println (try (pvalues 1 (throw (ex-info "pboom" {})) 3) (catch Exception e (ex-message e))))
+      (def ^:dynamic *g36-pv* 1)
+      (println (binding [*g36-pv* 7] (pvalues 1 *g36-pv* (+ 1 2))))
       (in-ns 'user)
     expected: |
-      (1 3 x)
+      (21 22 23)
       nil
-      true true
-      ([:a] [:a :b] [:a :b :c])
-      [:a :b :c]
-      (5 6 6)
-      pboom
+      (1 7 3)
+  - name: pmap-and-pvalues-errors-surface-at-the-deref-in-order
+    # A failure surfaces at the deref in order, after the other branches were
+    # started, wrapped in the oracle's ExecutionException over its condition.
+    # The WASM legs stay sequential and throw the raw condition, so they skip
+    # this row. One site per construct, as above.
+    skip:
+      wasm: the sequential fallback throws the raw condition, not the oracle's ExecutionException
+      wasm_component: the sequential fallback throws the raw condition, not the oracle's ExecutionException
+    source: |
+      (println (try (doall (pmap (fn [x] (if (= x 2) (throw (ex-info "pmap-boom" {})) x)) [1 2 3])) (catch Exception e (ex-message (ex-cause e)))))
+      (println (try (pvalues 1 (throw (ex-info "pboom" {})) 3) (catch Exception e [(ex-message (ex-cause e)) (ex-data (ex-cause e))])))
+    expected: |
+      pmap-boom
+      [pboom {}]
   - name: bound-fn-and-friends-answer-values
     # g16's values reach the three macros: a bare bound-fn, with-local-vars or
     # pvalues answers the run-time once-expansion delegate, so calling it answers

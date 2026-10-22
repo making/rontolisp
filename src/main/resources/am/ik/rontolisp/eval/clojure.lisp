@@ -16025,6 +16025,40 @@
       (rontolisp::%clojure-class-cast-exception-of
        "deref needs a number as its timeout" ms)))
 
+;;;; Parallel map: one future per element, dereferenced in order with the
+;;;; oracle's lookahead.
+;;
+;; `pmap` maps like `%clojure-map` but each element runs on its own thread: the
+;; futures start as the seq realizes (strict inputs all at once, behind
+;; `%clojure-doall`), and `%clojure-pmap-window` dereferences them in order
+;; keeping N started ahead, like the oracle's `step` over `(drop n rets)`
+;; (n = 2 + the processor count). The printed seq is the sequential one's on
+;; every backend; a failure surfaces at the deref in order, after the other
+;; branches were started.
+
+(defun rontolisp::%clojure-pmap-window (futures n)
+  "Deref the future seq FUTURES in order, keeping N started ahead, lazily --
+   nil for none, like the sequential map."
+  (if (null (rontolisp::%clojure-seq futures))
+      nil
+      (rontolisp::%clojure-make-lazy
+       (lambda ()
+         (rontolisp::%clojure-pmap-step futures
+          (rontolisp::%clojure-drop n futures))))))
+
+(defun rontolisp::%clojure-pmap-step (vs fs)
+  "One dereferenced head over the future seqs VS and FS, or nil past the end."
+  (let ((s (rontolisp::%clojure-seq vs)))
+    (if (null s)
+        nil
+        (cons (rontolisp::%clojure-deref-other (car s))
+              (rontolisp::%clojure-make-lazy
+               (lambda ()
+                 (rontolisp::%clojure-pmap-step (rontolisp::%clojure-seq-rest s)
+                                                (rontolisp::%clojure-seq-rest
+                                                 (rontolisp::%clojure-seq
+                                                  fs)))))))))
+
 (defun rontolisp::%clojure-seq-rest (s)
   "The seq past the head of the realized seq S: its tail, realized one level
    when it is a lazy wrapper (a strict tail is already a seq)."
