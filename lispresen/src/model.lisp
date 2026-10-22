@@ -462,23 +462,29 @@ and the common indentation removed."
                         :line 1
                         :kind :title
                         :title (deck-title deck)) slides))
-    (dolist (entry forms)
-      (let* ((form (first entry))
-             (*line* (second entry))
-             (tag (form-tag form))
-             (*slide* (1+ number))
-             (*slide-title* nil))
-        (cond ((equal tag "SLIDE")
-               (push (parse-slide form (incf number) *line*) slides))
-              ((equal tag "SECTION")
-               (push (parse-section form (incf number) *line*) slides))
-              ((equal tag "DECK")
-               (report :error "(deck ...) must be the first form"))
-              (t (let ((*slide* nil))
-                   (report :error (format nil
-                                          "expected (slide ...) or (section ...), found ~a"
-                                          (if tag
-                                              (string-downcase tag)
-                                              (prin1-to-string form)))))))))
+    (let ((*templates* nil) (*expansion-budget* *expansion-limit*))
+      (dolist (entry forms)
+        (let ((*line* (second entry)) (*slide* nil) (*slide-title* nil))
+          (if (equal (form-tag (first entry)) "DEFINE")
+              (define-template (first entry))
+              (dolist (form
+                       (let ((*slide* (1+ number)))
+                         (expand-top-level (first entry))))
+                (let ((tag (form-tag form)) (*slide* (1+ number)))
+                  (cond ((equal tag "SLIDE")
+                         (push (parse-slide form (incf number) *line*) slides))
+                        ((equal tag "SECTION")
+                         (push (parse-section form (incf number) *line*)
+                               slides))
+                        ((equal tag "DECK")
+                         (report :error "(deck ...) must be the first form"))
+                        (t (let ((*slide* nil))
+                             (report :error
+                                     (format nil
+                                             "expected (slide ...), (section ...) or (define ...), found ~a"
+                                             (if tag
+                                                 (string-downcase tag)
+                                                 (prin1-to-string
+                                                  form)))))))))))))
     (setf (deck-slides deck) (nreverse slides))
     deck))

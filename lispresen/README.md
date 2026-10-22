@@ -5,7 +5,7 @@ one HTML file, with font sizes and placement chosen by lispresen so every slide 
 readable. The same program runs on the interpreter, the JVM, WASM and SBCL, and
 produces the same bytes on each. Decks are written in Japanese; lines break between phrases.
 
-The design, and what is still to come, is in [DESIGN.md](DESIGN.md).
+The design is in [DESIGN.md](DESIGN.md).
 
 ## A deck
 
@@ -46,8 +46,27 @@ The design, and what is still to come, is in [DESIGN.md](DESIGN.md).
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
 | `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)`, `(link "url" ...)` | inline content |
+| `(define name (param... [&rest rest]) body...)` | a template (below) |
 
-The deck is read, never evaluated: no macros, no backquote, no reader conditionals.
+The deck is read, never evaluated: no macros, no backquote, no reader conditionals, no
+`#.`.
+
+A template is reused by substitution: a later `(name arg...)` anywhere in the deck is
+replaced by the body, each parameter by its argument, the `&rest` arguments spliced where
+the rest parameter appears. A body of several forms stands for several slides, blocks or
+inlines.
+
+```lisp
+(define side (head &rest points)
+  (column (p (b head)) (ul points)))
+
+(slide :title "インタプリタとコンパイラ"
+  (side "インタプリタ" "起動が速い" "eval が完全")
+  (side "コンパイラ" "実行が速い" "成果物が一つ"))
+```
+
+Keywords are not substituted (a parameter `title` leaves `:title` alone), and a template
+or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
 
 ## Running
 
@@ -76,13 +95,16 @@ sbcl --script lispresen/cli.lisp talk.lisp
 ```
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
-`.html`. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title": warning:
-...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0 success, 1
-errors (or warnings under `--strict`), 2 usage.
+`.html`. Images are referenced by their path, relative to the deck; `--embed` puts them in
+the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
+alone is the whole deck. A WASM build reads them only from a directory `wasmtime run
+--dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
+warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
+success, 1 errors (or warnings under `--strict`), 2 usage.
 
 ## Presenting
 
