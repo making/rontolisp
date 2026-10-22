@@ -127,6 +127,7 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 .say[data-side=right]::after{left:-29px;clip-path:polygon(0 50%,100% 0,100% 100%)}
 .say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
 .say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say.front{z-index:6}
 .slide.editing .say,.say.pending{visibility:hidden}
 #ov .say.pending{visibility:visible}
 #pv .say.pending{visibility:visible;opacity:.35}

@@ -555,7 +555,9 @@ slide is laid out, so showing one moves nothing. The presenter window and the au
 window share the step with the slide number; the presenter's views show a hidden bubble
 faded. The overview, print and the page without JavaScript show every bubble. While a
 code block of the slide is edited, its bubbles are hidden, since the edited text may run
-under them, and placed again on every change.
+under them, and placed again on every change. An open output panel moves below the bubbles of its code. Of
+any other bubble and the panel, the one shown last is on top: a bubble shown by an
+advance covers the panel, and a run brings the panel back over it.
 
 ### Runtime check
 
@@ -662,8 +664,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   the code in the fit solver; on a full slide that stepped the code down a size or two,
   which costs more legibility than an output shown only while it matters. The output is
   a panel over the slide, at the code size and in the code colors, as wide as the body:
-  directly below the code
-  when at least three lines fit there, otherwise anchored to the bottom of the safe area
+  directly below the code and the code's shown bubbles (it moves as a step shows or
+  hides one) when at least three lines fit there, otherwise anchored to the bottom of the safe area
   (at most 45% of the canvas high) over whatever it covers. It opens when a run starts
   and closes with its × button or `Esc` (when not editing); it stays open across
   navigation. Output longer than the panel scrolls: by wheel or drag on an always-visible
