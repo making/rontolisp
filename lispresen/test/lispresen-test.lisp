@@ -484,6 +484,27 @@ q\")))")))
          "(deck :agenda t)
 (slide \"x\")")
         '((:warning 1 ":agenda lists the sections, and this deck has none"))))))
+  (testing ":morph pairs the tokens of the first code blocks of two slides, a bracket with
+the token beside it, so a form that moved moves whole"
+    (multiple-value-bind (html diagnostics)
+        (lispresen:render "(slide :title \"a\" (code :lang \"lisp\" \"(f \\\"x
+y\\\") (g)\"))
+(slide :title \"b\" :morph t (code :lang \"lisp\" :steps ((2 2)) \"(g) (f \\\"x
+y\\\")\"))
+(slide :title \"e\" :morph t (code :lang \"console\" \"$ ls\"))
+(section \"s\")
+(slide :title \"c\" :morph t (code \"x\"))
+(slide :title \"d\" :morph t (p \"x\"))")
+      (ok (contains html "<pre class=\"code\"><code><span class=\"tk\">(</span><span class=\"tk\">f</span> <span class=\"tk hl-s\">&quot;x</span>
+<span class=\"tk hl-s\">y&quot;</span>"))
+      ;; A token never spans a line end, so the line spans of :steps wrap whole tokens.
+      (ok (contains html "data-morph><code><span class=\"ln\"><span class=\"tk\" data-m=\"5\">(</span><span class=\"tk\" data-m=\"6\">g</span><span class=\"tk\" data-m=\"7\">)</span> <span class=\"tk\" data-m=\"0\">(</span><span class=\"tk\" data-m=\"1\">f</span> <span class=\"tk hl-s\" data-m=\"2\">&quot;x</span></span>
+<span class=\"ln\" data-hot=\"1\"><span class=\"tk hl-s\" data-m=\"3\">y&quot;</span><span class=\"tk\" data-m=\"4\">)</span></span>"))
+      (ok
+       (equal (mapcar #'lispresen::diagnostic-message diagnostics)
+              '(":morph changes code, not a console transcript"
+                ":morph changes the code of the slide before; that slide has none"
+                ":morph changes the slide's first code block; this slide has none")))))
   (testing "the built-in themes pass the contrast lint; an override keeps its base's rules"
     (dolist (theme '("light" "dark" "high-contrast" "midnight"))
       (ok

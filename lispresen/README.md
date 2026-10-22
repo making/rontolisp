@@ -36,7 +36,7 @@ The design is in [DESIGN.md](DESIGN.md).
 |------|---------|
 | `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted |
 | `(section "title")` | a section divider |
-| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's) |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
@@ -156,6 +156,30 @@ before moving on to the next slide; going back undoes them one at a time.
 Here the first advance brings the definition forward, the second the call, the third the
 bubble. Nothing moves when a step is revealed: hidden items keep their room. Print and the
 overview show the whole slide; the presenter window shows what is still to come faded.
+
+## Code morph
+
+When a talk rewrites a function step by step, `:morph t` on the slide with the new
+version shows the change: on the page advance into it, the tokens the two versions share
+move to their new place, removed ones fade out and added ones fade in. Going back plays
+it in reverse.
+
+```lisp
+(slide :title "素朴な再帰"
+  (code :lang "lisp" "(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))"))
+
+(slide :title "ループで" :morph t
+  (code :lang "lisp" "
+    (defun fib (n)
+      (loop repeat n
+            for a = 0 then b and b = 1 then (+ a b)
+            finally (return a)))"))
+```
+
+The morph pairs the first code block of each slide; which tokens pair is decided when the
+deck is rendered, so it is the same on every backend. A jump (`#N`, the overview),
+`prefers-reduced-motion` and a block edited in the player switch at once; print shows each
+slide as it is.
 
 ## Running
 

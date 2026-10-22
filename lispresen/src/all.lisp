@@ -21,6 +21,7 @@
 #+rontolisp (load "theme.lisp")
 #+rontolisp (load "player.lisp")
 #+rontolisp (load "highlight.lisp")
+#+rontolisp (load "morph.lisp")
 #+rontolisp (load "html.lisp")
 #+rontolisp (load "lispresen.lisp")
 
@@ -31,6 +32,6 @@
   (dolist (name
            '("package" "reader" "budoux-ja" "phrase" "metrics" "template"
              "model" "embed" "qr" "diagram" "layout" "lint" "theme" "player"
-             "highlight" "html" "lispresen"))
+             "highlight" "morph" "html" "lispresen"))
     (load
      (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))

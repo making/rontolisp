@@ -54,6 +54,16 @@
       (push (list form line) forms)
       (setf pos end))"))
 
+;; :morph: on a page advance the code changes from the previous slide's, the tokens the
+;; two share moving to their new place.
+(slide :title "行番号も持っておく" :morph t
+  (p "前のスライドとの違いだけが動く。")
+  (code :lang "lisp" :run nil "
+    (multiple-value-bind (form end)
+        (read-from-string source t nil :start pos)
+      (push (list form (line-at source pos)) forms)
+      (setf pos end))"))
+
 ;; Page advances bring the definition forward, then the call, then the callout on it; the
 ;; code is lines of a file beside the deck, its language from the extension.
 (slide :title "その場で動かす"

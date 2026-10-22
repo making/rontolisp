@@ -33,7 +33,8 @@
 ;;; title, :deck until the deck's :kicker decides it. META lists the (TEXT RUN) of each
 ;;; line under the title of the title slide: the author, the date and the URL. STEPS
 ;;; lists what a page advance reveals, in source order (stepped items, code blocks with
-;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS).
+;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS). MORPH
+;;; is the :morph option: its first code block changes from the previous slide's.
 (defstruct slide
   number
   line
@@ -50,7 +51,8 @@
   kicker-run
   meta
   steps
-  (step-count 0))
+  (step-count 0)
+  morph)
 
 ;;; LEAD is true for a (lead ...) paragraph, set in the muted color.
 (defstruct para inlines run lead)
@@ -61,7 +63,10 @@
 ;;; RUN is the deck's :run option (true unless :run nil); RUNNABLE is set when the slide is
 ;;; fitted, from the language, RUN and the deck's runtime.
 ;;; STEPS lists, for each step of :steps, the 0-based indices of the lines it brings
-;;; forward; STEP-NUMBERS the page advance of each.
+;;; forward; STEP-NUMBERS the page advance of each. MORPH is set when a slide's :morph
+;;; pairs the block (morph.lisp): (:target . PAIRS) for the block that changes, PAIRS the
+;;; index of the old token each of its tokens continues or nil; :source for the block it
+;;; changes from.
 (defstruct code-block
   lang
   lines
@@ -71,7 +76,8 @@
   fresh
   stdin
   steps
-  step-numbers)
+  step-numbers
+  morph)
 ;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
 (defstruct figure src alt caption caption-run strip)
 (defstruct table-block
@@ -748,7 +754,8 @@ callout points at, or else a paragraph holding it as inline content."
 
 (defun parse-slide (form number line)
   (multiple-value-bind (opts body)
-      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS") "slide")
+      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS" "MORPH")
+                     "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
            (*callouts* nil)
@@ -776,6 +783,7 @@ callout points at, or else a paragraph holding it as inline content."
        :layout (let ((l (opt opts "LAYOUT")))
                  (and l (string-downcase (symbol-value-name l))))
        :class (opt opts "CLASS")
+       :morph (and (opt opts "MORPH") t)
        :blocks (group-columns (nreverse blocks))
        :notes (and notes (format nil "~{~a~^~%~}" (nreverse notes)))))))
 
@@ -959,6 +967,7 @@ expanded first, so the sections an agenda lists are known before any slide is pa
               (cond ((equal tag "SLIDE")
                      (let ((slide (parse-slide form (incf number) line)))
                        (number-steps slide (deck-callouts deck))
+                       (when (slide-morph slide) (morph-code slide (car slides)))
                        (when (eq (slide-kicker slide) :deck)
                          (setf (slide-kicker slide)
                                (and (eq (deck-kicker deck) :section)

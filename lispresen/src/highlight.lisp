@@ -44,13 +44,12 @@
                     (member tok *form-heads* :test #'string=)))
            "d"))))
 
-(defun write-highlighted (text out)
-  "TEXT as HTML with a span around each highlighted token."
-  (let ((n (length text)) (i 0))
+(defun highlight-segments (text)
+  "TEXT cut into (START END CLASS) segments that cover it in order: each token with its
+class (nil for none), each delimiter and blank character a segment of its own."
+  (let ((n (length text)) (i 0) (segments nil))
     (flet ((emit (class end)
-             (when class (format out "<span class=\"hl-~a\">" class))
-             (write-escaped (subseq text i end) out)
-             (when class (write-string "</span>" out))
+             (push (list i end class) segments)
              (setf i end)))
       (loop while (< i n)
             do
@@ -78,7 +77,16 @@
                  ((char= c #\\) (emit "s" (token-end text (min n (+ i 2)))))
                  ((delimiter-p c) (emit nil (1+ i)))
                  (t (let ((j (token-end text i)))
-                      (emit (token-class text i j) j)))))))))
+                      (emit (token-class text i j) j)))))))
+    (nreverse segments)))
+
+(defun write-highlighted (text out)
+  "TEXT as HTML with a span around each highlighted token."
+  (loop for (start end class) in (highlight-segments text)
+        do
+          (when class (format out "<span class=\"hl-~a\">" class))
+          (write-escaped (subseq text start end) out)
+          (when class (write-string "</span>" out))))
 
 (defun write-console (lines out)
   "The lines of a console transcript as HTML: the prompt of a command line marked, the

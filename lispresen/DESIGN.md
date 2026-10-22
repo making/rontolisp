@@ -38,9 +38,11 @@ Goals:
 - Byte-identical output for the same deck on every backend.
 - One HTML file. Without runnable code it has no network dependency at all.
 
-Non-goals: WYSIWYG editing, animations/transitions, free-form positioning, PowerPoint
+Non-goals: WYSIWYG editing, slide transitions, free-form positioning, PowerPoint
 export. Builds are page advances that reveal list items, bring code lines forward and show
-callouts (Page advances, below); each takes effect at once, without a transition.
+callouts (Page advances, below); each takes effect at once, without a transition. The one
+animation is the code morph (below): a slide that rewrites the previous slide's code
+shows the change as it happens.
 
 ## Deck format
 
@@ -99,7 +101,7 @@ Elements:
 
 | Kind | Forms |
 |------|-------|
-| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`), `define` (below) |
+| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`, `:morph`), `define` (below) |
 | Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `notes`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
@@ -197,8 +199,9 @@ source string
   -> read      top-level forms + start offsets            (reader.lisp)
   -> expand    template uses replaced by their bodies      (template.lisp)
   -> parse     validated model: deck / slide / block / inline structs,
-               code files read, diagnostics for malformed
-               or unknown forms                            (model.lisp, embed.lisp)
+               code files read, :morph tokens paired,
+               diagnostics for malformed or unknown forms  (model.lisp, embed.lisp,
+                                                            morph.lisp)
   -> embed     image sources as data: URIs, with --embed   (embed.lisp)
   -> segment   Japanese phrase boundaries                  (phrase.lisp)
   -> layout    layout selection + fit solver -> per-slide geometry and sizes
@@ -572,7 +575,64 @@ follows what it is about; the parser records them as it reads (`number-steps`).
 - The presenter window and the audience window share the step with the slide number;
   the presenter's views show what is still hidden faded. The overview, print and the
   page without JavaScript show every step and no faded line. Editing a block ends its
-  fading: its text is highlighted anew, without line spans.
+  fading: its text is highlighted anew, without line spans, until Reset restores the
+  deck's markup.
+
+### Code morph
+
+```lisp
+(slide :title "v1" (code :lang "lisp" "(defun f (x) (* x x))"))
+(slide :title "v2" :morph t (code :lang "lisp" "(defun f (x)
+  (* x x x))"))
+```
+
+`(slide :morph t ...)` animates its first code block from the first code block of the
+slide before it: on the page advance into the slide, tokens the two share move from their
+old place to their new one, tokens only the old code has fade out, tokens only the new
+code has fade in, and the code panel grows or shrinks to its new box, all in one 600 ms.
+Going back plays it in reverse. The option is on the slide rather than on the block
+because it names a relation between two slides; the block is the slide's first, as for
+the previous slide.
+
+- **The pairing is computed at render time** (`morph.lisp`), in portable Lisp, so every
+  backend emits the same one and `check.sh` compares it. Tokens are the highlighter's
+  segments split at blanks (a plain block is one segment), so no token holds a blank or a
+  line end: whitespace and indentation are not tokens, and a re-indented line moves. The
+  pairing keeps the order of both blocks, the way a patience diff does: the shared start
+  and end, then the texts found once on each side as anchors (their longest run in the
+  same order), each gap between anchors again, and a gap without anchors by a longest
+  common subsequence. A first pass compares a bracket together with the token inside it
+  next to it, so the `(` of `(defun` is not taken by the `(` of a `(defvar` added above
+  it; the gaps between those pairs are then paired by text alone. Last, a text left
+  exactly once among the unpaired tokens of both sides is paired too, so a form that
+  moved past others moves instead of fading out and in. A gap of more than 10^6 cells
+  (tokens times tokens) is reported and the slide switches without the morph, since an
+  untrusted deck could otherwise make the table arbitrarily large.
+- **The HTML carries it**: both blocks' tokens are `<span class="tk">` (with the
+  highlight class), a token of the new block names the old token it continues by index
+  in `data-m`, and the new block's `pre` has `data-morph`. A block can be the new code of
+  one morph and the old code of the next. Tokens are `inline-block`, so they can be
+  transformed; in a `pre` this changes no width or height. A token never spans a line
+  end, so the line spans of `:steps` wrap whole tokens.
+- **The player only plays it** (Web Animations): it measures the old tokens and panel
+  before the switch and the new ones after, moves each paired token from its old box
+  (translate and scale, the code size may differ) with the opacity of a faded line
+  carried over, fades unpaired new tokens in over the second half, puts a copy of each
+  unpaired old token at its old place fading out over the first half, and draws the panel
+  as a box animated from the old rectangle to the new one while the new `pre` shows no
+  background and does not clip. Everything it added is removed when the animation ends
+  or anything else changes the slide.
+- It plays on a page advance (keys, a swipe, or the presenter window's advance, which
+  the message to the audience window carries), between adjacent slides only. A jump
+  (`#N`, the overview, Home/End) switches at once, as does the presenter window itself,
+  whose views are thumbnails, and `prefers-reduced-motion: reduce`.
+- Runnable code: the morph is between the deck's texts. A block edited in the player
+  holds no token spans, so a morph from or to it switches at once until Reset restores
+  the deck's markup.
+- Print, the overview and the page without JavaScript show each slide as it is.
+- Warnings: a `:morph` slide without a code block, one whose previous slide has none,
+  and a console transcript on either side (its output lines wrap between any two
+  characters, which tokens as boxes would change).
 
 ### Callouts
 
@@ -763,7 +823,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   height, so the caret and selection land on the highlighted text, which is re-rendered on
   every input. While editing, keys go to the editor instead of navigation,
   `Ctrl/Cmd+Enter` runs, `Tab` inserts two spaces, `Esc` leaves (see Full screen for
-  `Esc` in full screen), and Reset restores the deck's text and closes the output. Run
+  `Esc` in full screen), and Reset restores the deck's markup and closes the output. Run
   and Reset sit in the block's top-right corner; the player adds them, so print and the
   no-script view show none.
 - The output takes no room on the slide. A first version reserved an output box below
@@ -1009,6 +1069,7 @@ lispresen/
     html.lisp            HTML escaping and emission, stylesheet
     player.lisp          the player script as a string constant
     highlight.lisp       tokenizer for Lisp / Scheme / Clojure code
+    morph.lisp           the token pairing of a :morph slide's code
     lispresen.lisp       render
   web/
     lispresen-web.lisp   browser reactor
@@ -1048,6 +1109,7 @@ before committing a change under `lispresen/`.
   blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
   console column and a list column, dark code panels (`:code :dark`), section kickers, an
   agenda, a title slide with an embedded SVG logo and a QR code, a
+  code morph, a
   quote, an embedded PNG, a list revealed by steps, a flow, two cells drawings in columns
   (one with dotted pairs), and three callouts (an inline one, one naming a box of the flow
   by `:at`, and a step one named by `:at` in runnable code read from a file by `:lines`,
@@ -1069,7 +1131,9 @@ before committing a change under `lispresen/`.
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
   order of a slide's page advances (items, code lines, a bubble after what it wraps) and
-  a highlight string across a line end, the callout and `:steps` diagnostics, the kicker diagnostics, base64 padding, the
+  a highlight string across a line end, the morph pairing (a moved form, a string
+  token split at a line end inside `:steps` lines) and its diagnostics, the callout and
+  `:steps` diagnostics, the kicker diagnostics, base64 padding, the
   embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics). The golden deck covers
   emission, so HTML is not asserted piecewise.
@@ -1080,7 +1144,9 @@ before committing a change under `lispresen/`.
   share definitions across slides, and recover from an infinite loop by timeout; the
   presenter window must follow navigation both ways, every kind of step included, show edits
   and outputs, and forward Run; a callout must sit beside its anchor after the runtime
-  check; Start must put the audience window in full screen on the other display,
+  check; a deck of three versions of a function must morph stepping forward and back,
+  driven from either window, and switch at once on a jump, under reduced motion and
+  after an edit; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.

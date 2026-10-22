@@ -133,6 +133,10 @@ html.ov #stage,html.presenter #stage{visibility:hidden}
 #pv .pending{visibility:visible;opacity:.35}
 .ln.dim{opacity:.35}
 .slide.editing .ln.dim{opacity:1}
+.tk{display:inline-block;transform-origin:0 0}
+pre.mo{overflow:visible;background:none;box-shadow:none}
+.mb{position:absolute}
+.mg{position:absolute;z-index:3;font-family:MONO;white-space:pre;transform-origin:0 0}
 figure.dg{flex:none;display:block;position:relative;align-self:center}
 .dg-art{position:absolute;left:0;top:0;overflow:visible}
 .dg-b{fill:var(--accent)}
@@ -287,11 +291,12 @@ block B, which the player also finds the anchor by; nothing when there are none.
     (format out "</~a>~%" tag)))
 
 (defun write-code-text (b out)
-  (let ((text (format nil "~{~a~^~%~}" (code-block-lines b))))
+  (let ((text (code-text b)))
     (cond ((code-block-steps b)
            (write-stepped-lines (with-output-to-string (s)
                                   (write-code-text (copy-code-block-plain b) s))
                                 b out))
+          ((code-block-morph b) (write-morph-text b out))
           ((highlighted-p b) (write-highlighted text out))
           ((console-p b) (write-console (code-block-lines b) out))
           (t (write-escaped text out)))))
@@ -358,6 +363,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
     (write-described-by b out)
     (when (code-block-step-numbers b)
       (format out " data-focus=\"~{~d~^ ~}\"" (code-block-step-numbers b)))
+    (when (consp (code-block-morph b)) (write-string " data-morph" out))
     (write-string "><code>" out)
     (write-code-text b out)
     (write-string "</code></pre>" out)
