@@ -5497,10 +5497,9 @@ public final class ClojureLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-USE-V"));
 			case "in-ns" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-IN-NS-V"));
-			case "unquote" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
-					new LispSymbol("RONTOLISP::%CLOJURE-UNQUOTE-V"));
-			case "unquote-splicing" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
-					new LispSymbol("RONTOLISP::%CLOJURE-UNQUOTE-SPLICING-V"));
+			// the oracle's vars are unbound: their value is the unbound root
+			case "unquote", "unquote-splicing" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"),
+					LispString.literal(ClojureCoreNames.NAMESPACE + "/" + name));
 			case "derive", "underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy" ->
 				ClojureHierarchyLowering.valueOf(this, name);
 			case "prefer-method" -> ClojureHierarchyLowering.preferMethodValue();

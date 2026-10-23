@@ -2453,6 +2453,7 @@ cases:
       (println (try ((fn [f a] (f a)) aget v39-arr) (catch clojure.lang.ArityException e (.getMessage e))))
       (println (try ((fn [f] (f 1)) unquote) (catch IllegalStateException e (ex-message e))))
       (println (try ((fn [f] (f)) unquote-splicing) (catch IllegalStateException e (ex-message e))))
+      (println (fn? unquote) (ifn? unquote-splicing) (str unquote) (identical? unquote unquote))
     expected: |
       (true true false)
       true
@@ -2490,6 +2491,7 @@ cases:
       aget takes an array and subscripts
       Attempting to call unbound fn: #'clojure.core/unquote
       Attempting to call unbound fn: #'clojure.core/unquote-splicing
+      false true Unbound: #'clojure.core/unquote true
   - name: auto-resolved-keywords-use-the-file-ns
     # ::kw resolves against the file's ns name, ::alias/kw against the alias;
     # :a/b stays opaque. The corpus shapes: interest-rate/account-level over :tag,
@@ -9956,8 +9958,8 @@ cases:
       ("p" "q")
   - name: unbound-vars-answer-the-unbound-root
     # Oracle-identical (clj 1.12.6): a declared-never-defined name and a value-less def are
-    # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v"),
-    # calling it signals, bound? is false until a definition binds it, defonce binds it. A
+    # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v",
+    # ifn? but not fn?, like Var$Unbound), calling it signals, bound? is false until a definition binds it, defonce binds it. A
     # value-less def or declare leaves a bound root alone; declare adds :declared to the
     # metadata and a ^:dynamic declare rebinds. The root prints #<Unbound: #'v> (the
     # oracle's #object carries a hash).
@@ -9965,7 +9967,7 @@ cases:
       (declare ub-y)
       (def ub-v #'ub-y)
       (prn (bound? #'ub-y) (bound? ub-v) (var? ub-v) ub-v (str @ub-v) (str ub-y) (bound?))
-      (prn (= @ub-v @ub-v) (= @ub-v ub-y) (nil? @ub-v) (if ub-y :truthy :falsy) (bound? ub-v 1) (try (bound? 1 ub-v) (catch Exception e :refused)) (map bound? [ub-v]))
+      (prn (= @ub-v @ub-v) (= @ub-v ub-y) (nil? @ub-v) (if ub-y :truthy :falsy) (bound? ub-v 1) (try (bound? 1 ub-v) (catch Exception e :refused)) (map bound? [ub-v]) (fn? ub-y) (ifn? ub-y))
       (prn (try (ub-y 1) (catch Exception e (ex-message e))) (try (#'ub-y) (catch Exception e (ex-message e))) (try (@ub-v 1 2) (catch Exception e (ex-message e))))
       (prn (:declared (meta #'ub-y)) (:name (meta ub-v)))
       (def ub-z)
@@ -9995,7 +9997,7 @@ cases:
       (prn (bound? #'*ub-e*) (str *ub-e*))
     expected: |
       false false true #'reading/ub-y "Unbound: #'reading/ub-y" "Unbound: #'reading/ub-y" true
-      true true false :truthy false :refused (false)
+      true true false :truthy false :refused (false) false true
       "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y"
       true ub-y
       false "Unbound: #'reading/ub-z" "Attempting to call unbound fn: #'reading/ub-z"

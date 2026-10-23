@@ -259,9 +259,9 @@ the defining namespace), `~` inserts its form's value, `~@` splices a sequence i
 list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
 one symbol per expansion, the same at every occurrence within it. An unquote outside
 any syntax-quote is an error, as is a splice outside a sequence; as values, `unquote`
-and `unquote-splicing` answer a function whose every call throws the oracle's
-`IllegalStateException` (`Attempting to call unbound fn: #'clojure.core/unquote`), whose
-vars are unbound. `macroexpand-1`
+and `unquote-splicing` answer the unbound root of their vars, like the oracle's (`ifn?`
+but not `fn?`, `str` `Unbound: #'clojure.core/unquote`; a call throws
+`Attempting to call unbound fn: #'clojure.core/unquote`). `macroexpand-1`
 expands once and `macroexpand` to the fixpoint, each answering the expansion as the
 mangled data itself, so `=` against a quoted form holds and printing spells the
 oracle's lowercase; `gensym` answers a fresh uninterned symbol per

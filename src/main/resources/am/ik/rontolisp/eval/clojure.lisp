@@ -10888,13 +10888,15 @@
       (rontolisp::%clojure-transient-p x)))
 
 (defun rontolisp::%clojure-is-ifn (x)
-  "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
-   IFn, like the oracle's, unless its body implements it."
+  "ifn?: a function, keyword, symbol, map, set, vector, var or an unbound var's
+   root (the oracle's Var$Unbound is an AFn). A record is no IFn, like the
+   oracle's, unless its body implements it."
   (or (functionp x) (rontolisp::%clojure-keyword-p x)
       (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)
-      (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)))
+      (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)
+      (rontolisp::%clojure-unbound-p x)))
 
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
@@ -16202,20 +16204,6 @@
   (rontolisp::%clojure-check-arity args 1 1 "in-ns")
   (rontolisp::%clojure-unsupported-operation-exception
    "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
-
-(defun rontolisp::%clojure-unquote-v (&rest args)
-  "unquote as a value: the oracle's var is unbound, so a call refuses as its
-   unbound root does."
-  (declare (ignore args))
-  (rontolisp::%clojure-illegal-state-exception
-   "Attempting to call unbound fn: #'clojure.core/unquote"))
-
-(defun rontolisp::%clojure-unquote-splicing-v (&rest args)
-  "unquote-splicing as a value: the oracle's var is unbound, so a call refuses
-   as its unbound root does."
-  (declare (ignore args))
-  (rontolisp::%clojure-illegal-state-exception
-   "Attempting to call unbound fn: #'clojure.core/unquote-splicing"))
 
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result
