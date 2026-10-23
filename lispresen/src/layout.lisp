@@ -96,7 +96,9 @@ top right corner.")
 
 (defparameter *runnable-langs* '("lisp" "scheme" "clojure"))
 
-(defun highlighted-p (b)
+(defun runnable-lang-p (b)
+  "True when the code block B is in a language the runtime runs. Code in any other
+language is never run, whatever its :run says."
   (and (code-block-lang b)
        (member (string-downcase (code-block-lang b)) *runnable-langs*
                :test #'string=)))
@@ -111,7 +113,7 @@ top right corner.")
              (prepare-blocks (column-blocks col) runtime)))
           ((code-block-p b)
            (setf (code-block-runnable b)
-                 (and (highlighted-p b) (code-block-run b)
+                 (and (runnable-lang-p b) (code-block-run b)
                       (not (eq runtime :none)) t)))
           ((quotation-p b)
            (setf (quotation-run b) (make-text-run (quotation-inlines b)))

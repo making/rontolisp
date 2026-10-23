@@ -435,6 +435,82 @@ q\")))")))
 (w \"a\")
 (w \"b\")") '((:error 2 "templates expand to more than 10 forms")))))))
 
+(deftest highlighting
+  (testing "each language's comments, strings, keywords and constants; a comment marker
+in a string and a string in a comment stay what they are inside"
+    (dolist (row
+             '(("lisp" "(defun f (x) \"a ; b\" ; \"c\"
+  (list :k 1 nil #\\a))"
+                (("d" "defun") ("s" "\"a ; b\"") ("c" "; \"c\"") ("k" ":k") ("n" "1")
+                 ("n" "nil") ("s" "#\\a")))
+               ("clojure" "(fn [x] #| \"a\" |# \\b)"
+                (("d" "fn") ("c" "#| \"a\" |#") ("s" "\\b")))
+               ("console" "$ ls -l
+a # \"b\"
+
+$" (("k" "$") ("c" "a # \"b\"") ("k" "$")))
+               ("java" "int n = 0x1F; // \"no\"
+String s = \"// no\\\"\" + 'x' + '\\'' + 1.5; /* \"a\" */ return null;
+var t = \"\"\"
+  a \"b\" // c
+  \"\"\";"
+                (("k" "int") ("n" "0x1F") ("c" "// \"no\"") ("s" "\"// no\\\"\"")
+                 ("s" "'x'") ("s" "'\\''") ("n" "1.5") ("c" "/* \"a\" */") ("k" "return")
+                 ("n" "null") ("k" "var") ("s" "\"\"\"
+  a \"b\" // c
+  \"\"\"")))
+               ("kotlin" "fun f(c: Char = 'x') = \"\"\"raw \\\"\"\" // k"
+                (("k" "fun") ("s" "'x'") ("s" "\"\"\"raw \\\"\"\"") ("c" "// k")))
+               ("javascript" "const s = `a ${x}
+// b`; // 'c'
+let t = 'it\\'s /* no */';"
+                (("k" "const") ("s" "`a ${x}
+// b`") ("c" "// 'c'") ("k" "let") ("s" "'it\\'s /* no */'")))
+               ("ts" "type T = { a: number } // t"
+                (("k" "type") ("k" "number") ("c" "// t")))
+               ("c" "#include <stdio.h>
+char c = '\\n'; /* a
+b */" (("k" "#include") ("k" "char") ("s" "'\\n'") ("c" "/* a
+b */")))
+               ("cpp" "template <typename T> auto p = nullptr;"
+                (("k" "template") ("k" "typename") ("k" "auto") ("n" "nullptr")))
+               ("go" "func f() string { return `a\\` } // g"
+                (("k" "func") ("k" "return") ("s" "`a\\`") ("c" "// g")))
+               ("rust" "fn f<'a>(s: &'a str) -> char { '\\u{41}' }"
+                (("k" "fn") ("s" "'\\u{41}'")))
+               ("python" "def f(s='#'):  # it's
+    return \"\"\"a
+'b'\"\"\" if s else None"
+                (("k" "def") ("s" "'#'") ("c" "# it's") ("k" "return") ("s" "\"\"\"a
+'b'\"\"\"") ("k" "if") ("k" "else") ("n" "None")))
+               ("bash" "for f in *.txt; do echo \"$f # no\" ${#f} 'a\\' # yes
+done" (("k" "for") ("k" "in") ("k" "do") ("s" "\"$f # no\"") ("s" "'a\\'")
+       ("c" "# yes") ("k" "done")))
+               ("sql" "SELECT name FROM t -- 'x'
+WHERE note = 'it''s -- no' AND id IS NOT NULL /* y */"
+                (("k" "SELECT") ("k" "FROM") ("c" "-- 'x'") ("k" "WHERE")
+                 ("s" "'it''s -- no'") ("k" "AND") ("k" "IS") ("k" "NOT") ("n" "NULL")
+                 ("c" "/* y */")))
+               ("json" "{\"a\": [1, -2.5e3, true, null], \"b //\" : \"c\"}"
+                (("k" "\"a\"") ("n" "1") ("n" "2.5e3") ("n" "true") ("n" "null")
+                 ("k" "\"b //\"") ("s" "\"c\"")))
+               ("yaml" "key: it's # note
+list:
+  - \"a # b\"
+  - ['c''d', 1.2.3]
+url: http://x#y
+on: yes"
+                (("k" "key") ("c" "# note") ("k" "list") ("s" "\"a # b\"") ("s" "'c''d'")
+                 ("n" "1.2.3") ("k" "url") ("k" "on") ("n" "yes")))
+               ("text" "int x; // y" ())))
+      (destructuring-bind (lang source expected) row
+        (ok (equal (loop for (start end class)
+                           in (lispresen::highlight-segments source lang)
+                         when class
+                           collect (list class (subseq source start end)))
+                   expected)
+            lang)))))
+
 (deftest qr-codes
   (testing "Reed-Solomon, format and version bits match the standard's examples"
     ;; HELLO WORLD at 1-M, and the format and version tables of ISO/IEC 18004.
@@ -593,6 +669,8 @@ and libpng read them"
                               (cond ((string= path "a.clj") a)
                                     ((string= path "b.txt") (vector 255)))))
         (ok (contains html "data-lang=\"clojure\""))
+        (ok (equal (mapcar #'lispresen::code-file-lang '("A.java" "b.yml" "c.txt"))
+                   '("java" "yaml" nil)))
         (ok (contains html "é→𝄞"))
         (ok
          (equal (mapcar #'lispresen::diagnostic-message diagnostics)

@@ -142,7 +142,10 @@ Rules:
   leading byte order mark dropped) instead, lines FIRST to LAST when `:lines` is given,
   dedented the same way. A relative path resolves against the deck's directory, as an
   image's does (Images, below). `:lang` defaults by extension: `lisp` / `lsp` / `cl`
-  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, none otherwise. The file is read
+  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, and for the other highlighted
+  languages (Runnable code, below) `java`, `kt`, `js` / `mjs`, `ts`, `c` / `h`, `cpp` /
+  `cc` / `hpp`, `go`, `rs`, `py`, `sh` / `bash` / `zsh`, `sql`, `json`, `yaml` / `yml`;
+  none otherwise. The file is read
   while the deck is parsed, with or without `--embed` (the code is part of the page), so
   `:at` and every lint see its lines. A deck can name any file the host can read, so an
   untrusted deck is rendered where it reads nothing else: the browser host, or WASM with
@@ -973,6 +976,25 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   `clojure` block, runnable or not; the editor re-highlights on input with the same rules
   ported to the player script, which produce the same markup (checked on a sample of all
   three languages, 2026-10-22). The colors are theme variables.
+- Code in another language a talk shows next to Lisp is highlighted by a second
+  tokenizer driven by a table of rules per language: `java`, `kotlin` (`kt`),
+  `javascript` (`js`), `typescript` (`ts`), `c`, `cpp` (`c++`), `go`, `rust` (`rs`),
+  `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`). A
+  language's rules are its line and block comment delimiters, its string delimiters with
+  their escapes (`\`, or SQL's and YAML's doubled quote) and whether they span lines
+  (Python's triple quotes, Java and Kotlin text blocks, template literals and Go's raw
+  strings, all set as plain strings), `'x'` character literals (C family; a `'` that
+  starts none, a Rust lifetime, is punctuation), its keywords (`hl-k`, compared ignoring
+  case in SQL) and constants (`true`, `null`, `None`; `hl-n`, as numbers are). In JSON and
+  YAML a key is `hl-k`. In shell and YAML a `#` comment opens only at the start of a word
+  (`${#a}`, `a#b`), in YAML a quote too (`it's`), and a string left open ends at the end of
+  its line, so a stray quote colors one line at most. It is no grammar: enough to set
+  comments, strings and keywords apart from the back of the room. Only colors change, so
+  the widths, the fit solver and the layout are the monospace table's as for any code;
+  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. They are never run, whatever
+  `:run` says, and not editable; any other `:lang` is plain `code-fg` text. Checked
+  2026-10-24 in Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in
+  theme, the runtime check making no correction.
 - A `console` block is a shell transcript: a line starting with `$ ` is a command, its
   `$` in the keyword color, and every other line is output, in the comment color. It is
   never runnable. A command line is set on one line like code; an output line longer
@@ -1388,7 +1410,7 @@ lispresen/
     raster.lisp          polygon filling, strokes, text, the SVG subset of a logo
     page-image.lisp      the title slide drawn as the page image
     player.lisp          the player script as a string constant
-    highlight.lisp       tokenizer for Lisp / Scheme / Clojure code
+    highlight.lisp       tokenizers: Lisp / Scheme / Clojure, console, other languages
     morph.lisp           the token pairing of a :morph slide's code
     lispresen.lisp       render
     starter.lisp         the starter deck lispresen new writes (CLI only)
@@ -1443,7 +1465,8 @@ before committing a change under `lispresen/`.
   instructions (`使い方`) and a slide to try it on (`試す`). It has runnable Lisp, Scheme
   (`:fresh`, `:stdin`) and Clojure (`:timeout`) blocks, a columns slide built from a
   `&rest` template and a template the samples of deck code go through, a lead above a row
-  of a code column and a list column, console transcripts, dark code panels
+  of a code column and a list column, console transcripts, Java, Python and shell
+  blocks, dark code panels
   (`:code :dark`), section kickers (replaced on the paired slides, dropped on one), a
   named agenda placed by `(agenda)` after an opening slide, a title slide with an
   embedded SVG logo and a QR code (drawn as the page image too, with the description and
@@ -1481,8 +1504,9 @@ before committing a change under `lispresen/`.
   token split at a line end inside `:steps` lines) and its diagnostics, the callout and
   `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
   check values, deflate and a whole PNG against what zlib reads, the
-  embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
-  extension, their diagnostics), and both starter decks rendering with no diagnostic. The golden deck covers
+  embedding diagnostics, code files (UTF-8 up to four bytes, `:lines`, the language by
+  extension, their diagnostics), the highlighting of every language from a table of
+  (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must

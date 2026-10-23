@@ -153,6 +153,33 @@
     ok   jvm
     skip native: the jar carries no precompiler for this platform (linux-x86_64)"))
 
+(slide :title "ほかの言語のコード" :kicker "書き方"
+  (p (tt ":lang") " が " (tt "java") "、" (tt "python") "、" (tt "bash") "、"
+     (tt "sql") "、" (tt "json") " などなら、その言語の規則で色を付ける。"
+     "動かせるのは Lisp、Scheme、Clojure だけ。")
+  (sexp "
+    (code :lang \"java\" \"
+      long square(long x) {
+        return x * x; // ...
+      }\")"))
+
+(slide :title "ほかの言語のコード" :kicker "表示例"
+  (column
+    (code :lang "java" "
+      // the same function in Java
+      static long square(long x) {
+        return x * x;
+      }"))
+  (column
+    (code :lang "python" "
+      def square(x):
+          \"\"\"x times itself\"\"\"
+          return x * x  # or None"))
+  (code :lang "bash" "
+    for f in talks/*.lisp; do
+      lispresen \"$f\" -o \"${f%.lisp}.html\"  # one page each
+    done"))
+
 (slide :title "段組み" :kicker "書き方"
   (p "続けて書いた " (tt "column") " が横に並ぶ。前後のブロックは全幅になる。")
   (sexp "
