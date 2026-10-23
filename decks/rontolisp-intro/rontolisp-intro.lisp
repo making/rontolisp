@@ -458,6 +458,90 @@
                  metal:+triangle+ 0 (* 36 *static-count*))")
   (source "examples/macos/metal-pagoda-garden.lisp (抜粋、一部省略)"))
 
+;;; --- interop and libraries from Clojure ---------------------------------------------
+
+(slide :title "Clojure から使う"
+  (table :header ("用途" "Common Lisp" "Clojure")
+         :caption "Clojure のプログラムでは右の列を使う。テストはどちらも rontolisp test で実行する"
+    ("Java の呼び出し" (cell (tt "java") " パッケージ") "Java interop")
+    ("依存ライブラリ" "ASDF、Quicklisp" (tt "deps.edn"))
+    ("テスト" "rove" (tt "clojure.test"))
+    ("HTTP リクエスト" (tt "rontolisp:fetch") (tt "rontolisp.http-client"))
+    ("Web アプリ" "Clack" "Ring")))
+
+(slide :title "Clojure の Java interop"
+  (p (link "https://clojure.org/reference/java_interop" "Clojure の書き方") "で Java を呼ぶ。" (tt "fn") " は、そのまま " (tt "Comparator") " として渡せる。")
+  (code :lang "clojure" :run nil "
+    (ns demo
+      (:import (java.util ArrayList Collections)))
+
+    (let [words (ArrayList. [\"kiwi\" \"fig\" \"banana\"])]
+      (Collections/sort words (fn [a b] (compare (count a) (count b))))
+      (println (vec words)))                ; [fig kiwi banana]
+    (println (Integer/parseInt \"42\") (.toUpperCase \"hi\") (Math/max 3 7))
+    ;; 42 HI 7")
+  (p "JVM 上のインタプリタと、コンパイルした " (tt ".class") " で使える。"))
+
+(slide :title "deps.edn で Clojure のライブラリを使う"
+  (p (link "https://clojure.org/reference/deps_edn" (tt "deps.edn")) " に書いた "
+     (link "https://github.com/clojure/data.json" "data.json") " などを、Maven から取得して読む。")
+  (code :lang "clojure" :run nil "
+    ;; deps.edn
+    {:paths [\"src\"]
+     :deps {org.clojure/data.json {:mvn/version \"2.5.1\"}}}
+    ;; src/app/main.clj
+    (ns app.main
+      (:require [clojure.data.json :as json]))
+    (defn -main [& args]
+      (println (json/write-str {:lang \"clojure\" :args args})))")
+  (code :lang "console" "
+    $ rontolisp -M -m app.main x y
+    {\"lang\":\"clojure\",\"args\":[\"x\",\"y\"]}"))
+
+(slide :title "clojure.test でテストを書く"
+  (p (link "https://clojure.github.io/clojure/clojure.test-api.html" (tt "clojure.test")) " で書いたテストは、"
+     (tt "deps.edn") " のあるディレクトリで " (tt "rontolisp test") " を実行すると、結果を終了コードで返す。")
+  (code :lang "clojure" "
+    (ns demo-test
+      (:require [clojure.test :refer [deftest is testing run-tests]]))
+
+    (defn add [a b] (+ a b))
+
+    (deftest add-test
+      (testing \"adding two integers\"
+        (is (= 3 (add 1 2)))
+        (is (not= 4 (add 1 2)))))
+
+    (run-tests)"))
+
+(slide :title "rontolisp.http-client で HTTP リクエストを送る"
+  (p "rontolisp 独自の " (tt "rontolisp.http-client") " は、"
+     (link "https://github.com/babashka/http-client" "babashka.http-client") " と同じ API で、内部では "
+     (tt "rontolisp:fetch") " を使う。")
+  (code :lang "clojure" "
+    (ns example
+      (:require [rontolisp.http-client :as http]))
+
+    (let [r (http/get \"https://httpbin.ik.am/get\"
+                      {:query-params {\"lang\" \"clojure\"}})]
+      (println (:status r) (get-in r [:headers \"content-type\"]))
+      (println (re-find #\"\\\"lang\\\": ?\\\"clojure\\\"\" (:body r))))"))
+
+(slide :title "Ring で Web アプリを書く"
+  (p "rontolisp 独自の " (tt "ring.adapter.rontolisp") " が " (link "https://github.com/ring-clojure/ring" "Ring")
+     " のハンドラを動かす。デプロイ先は Clack と同じ。")
+  (code :lang "clojure" :run nil "
+    (ns app
+      (:require [ring.adapter.rontolisp :refer [run-server]]
+                [ring.util.response :as response]))
+    (defn handler [{:keys [uri]}]
+      (-> (response/response (str \"Hello, \" uri \"\\n\"))
+          (response/content-type \"text/plain\")))
+    (run-server handler {:port 3000})")
+  (code :lang "console" "
+    $ curl http://127.0.0.1:3000/clojure
+    Hello, /clojure"))
+
 ;;; --- next steps -------------------------------------------------------------------
 
 (section "次の一歩")

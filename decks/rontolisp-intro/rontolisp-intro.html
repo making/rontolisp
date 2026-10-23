@@ -772,32 +772,126 @@ html:not(.js) #fs{display:none}
 <p class="source">examples/macos/metal<span class="nw">-p</span>agoda<span class="nw">-g</span>arden.lisp (抜粋、<wbr>一部<wbr>省略)</p>
 <div class="page">46</div>
 </section>
-<section class="slide layout-standard" id="s47" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s47" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">Clojure から<wbr>使う</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>Clojure の<wbr>プログラムでは<wbr>右の<wbr>列を<wbr>使う。<wbr>テストは<wbr>どちらも rontolisp test で<wbr>実行する</caption><colgroup><col style="width:497px"><col style="width:511px"><col style="width:688px"></colgroup><thead><tr><th scope="col">用途</th><th scope="col">Common Lisp</th><th scope="col">Clojure</th></tr></thead><tbody><tr><td>Java の<wbr>呼び出し</td><td><code>java</code> パッケージ</td><td>Java interop</td></tr><tr><td>依存ライブラリ</td><td>ASDF、<wbr>Quicklisp</td><td><code>deps.edn</code></td></tr><tr><td>テスト</td><td>rove</td><td><code>clojure.test</code></td></tr><tr><td>HTTP リクエスト</td><td><code>rontolisp:fetch</code></td><td><code>rontolisp.http<span class="nw">-c</span>lient</code></td></tr><tr><td>Web アプリ</td><td>Clack</td><td>Ring</td></tr></tbody></table>
+</div>
+<div class="page">47</div>
+</section>
+<section class="slide layout-standard" id="s48" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">Clojure の Java interop</h1>
+<div class="body" style="top:232px;height:776px">
+<p><a href="https://clojure.org/reference/java_interop">Clojure の<wbr>書き方</a>で Java を<wbr>呼ぶ。<wbr><code>fn</code> は、<wbr>そのまま <code>Comparator</code> と<wbr>して<wbr>渡せる。</p>
+<pre class="code" data-lang="clojure"><code>(<span class="hl-d">ns</span> demo
+  (<span class="hl-k">:import</span> (java.util ArrayList Collections)))
+
+(<span class="hl-d">let</span> [words (ArrayList. [<span class="hl-s">&quot;kiwi&quot;</span> <span class="hl-s">&quot;fig&quot;</span> <span class="hl-s">&quot;banana&quot;</span>])]
+  (Collections/sort words (<span class="hl-d">fn</span> [a b] (compare (count a) (count b))))
+  (println (vec words)))                <span class="hl-c">; [fig kiwi banana]</span>
+(println (Integer/parseInt <span class="hl-s">&quot;42&quot;</span>) (.toUpperCase <span class="hl-s">&quot;hi&quot;</span>) (Math/max <span class="hl-n">3</span> <span class="hl-n">7</span>))
+<span class="hl-c">;; 42 HI 7</span></code></pre>
+<p>JVM 上の<wbr>インタプリタと、<wbr>コンパイルした <code>.class</code> で<wbr>使える。</p>
+</div>
+<div class="page">48</div>
+</section>
+<section class="slide layout-standard" id="s49" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">deps.edn で Clojure の<wbr>ライブラリを<wbr>使う</h1>
+<div class="body" style="top:232px;height:776px">
+<p><a href="https://clojure.org/reference/deps_edn"><code>deps.edn</code></a> に<wbr>書いた <a href="https://github.com/clojure/data.json">data.json</a> などを、<wbr>Maven から<wbr>取得して<wbr>読む。</p>
+<pre class="code" data-lang="clojure"><code><span class="hl-c">;; deps.edn</span>
+{<span class="hl-k">:paths</span> [<span class="hl-s">&quot;src&quot;</span>]
+ <span class="hl-k">:deps</span> {org.clojure/data.json {<span class="hl-k">:mvn/version</span> <span class="hl-s">&quot;2.5.1&quot;</span>}}}
+<span class="hl-c">;; src/app/main.clj</span>
+(<span class="hl-d">ns</span> app.main
+  (<span class="hl-k">:require</span> [clojure.data.json <span class="hl-k">:as</span> json]))
+(<span class="hl-d">defn</span> -main [&amp; args]
+  (println (json/write-str {<span class="hl-k">:lang</span> <span class="hl-s">&quot;clojure&quot;</span> <span class="hl-k">:args</span> args})))</code></pre>
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp -M -m app.main x y
+<span class="hl-c">{&quot;lang&quot;:&quot;clojure&quot;,&quot;args&quot;:[&quot;x&quot;,&quot;y&quot;]}</span></code></pre>
+</div>
+<div class="page">49</div>
+</section>
+<section class="slide layout-standard" id="s50" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">clojure.test で<wbr>テストを<wbr>書く</h1>
+<div class="body" style="top:232px;height:776px">
+<p><a href="https://clojure.github.io/clojure/clojure.test-api.html"><code>clojure.test</code></a> で<wbr>書いた<wbr>テストは、<wbr><code>deps.edn</code> の<wbr>ある<wbr>ディレクトリで <code>rontolisp test</code> を<wbr>実行すると、<wbr>結果を<wbr>終了コードで<wbr>返す。</p>
+<div class="codebox runnable" data-lang="clojure" data-timeout="10"><pre class="code"><code>(<span class="hl-d">ns</span> demo-test
+  (<span class="hl-k">:require</span> [clojure.test <span class="hl-k">:refer</span> [deftest is testing run-tests]]))
+
+(<span class="hl-d">defn</span> add [a b] (+ a b))
+
+(<span class="hl-d">deftest</span> add-test
+  (testing <span class="hl-s">&quot;adding two integers&quot;</span>
+    (is (= <span class="hl-n">3</span> (add <span class="hl-n">1</span> <span class="hl-n">2</span>)))
+    (is (not= <span class="hl-n">4</span> (add <span class="hl-n">1</span> <span class="hl-n">2</span>)))))
+
+(run-tests)</code></pre></div>
+</div>
+<div class="page">50</div>
+</section>
+<section class="slide layout-standard" id="s51" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">rontolisp.http<span class="nw">-c</span>lient で HTTP リクエストを<wbr>送る</h1>
+<div class="body" style="top:336px;height:672px">
+<p>rontolisp 独自の <code>rontolisp.http<span class="nw">-c</span>lient</code> は、<wbr><a href="https://github.com/babashka/http-client">babashka.http<span class="nw">-c</span>lient</a> と<wbr>同じ API で、<wbr>内部では <code>rontolisp:fetch</code> を<wbr>使う。</p>
+<div class="codebox runnable" data-lang="clojure" data-timeout="10"><pre class="code"><code>(<span class="hl-d">ns</span> example
+  (<span class="hl-k">:require</span> [rontolisp.http-client <span class="hl-k">:as</span> http]))
+
+(<span class="hl-d">let</span> [r (http/get <span class="hl-s">&quot;https://httpbin.ik.am/get&quot;</span>
+                  {<span class="hl-k">:query-params</span> {<span class="hl-s">&quot;lang&quot;</span> <span class="hl-s">&quot;clojure&quot;</span>}})]
+  (println (<span class="hl-k">:status</span> r) (get-in r [<span class="hl-k">:headers</span> <span class="hl-s">&quot;content-type&quot;</span>]))
+  (println (re-find #<span class="hl-s">&quot;\&quot;lang\&quot;: ?\&quot;clojure\&quot;&quot;</span> (<span class="hl-k">:body</span> r))))</code></pre></div>
+</div>
+<div class="page">51</div>
+</section>
+<section class="slide layout-standard" id="s52" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">Ring で Web アプリを<wbr>書く</h1>
+<div class="body" style="top:232px;height:776px">
+<p>rontolisp 独自の <code>ring.adapter.rontolisp</code> が <a href="https://github.com/ring-clojure/ring">Ring</a> の<wbr>ハンドラを<wbr>動かす。<wbr>デプロイ先は Clack と<wbr>同じ。</p>
+<pre class="code" data-lang="clojure"><code>(<span class="hl-d">ns</span> app
+  (<span class="hl-k">:require</span> [ring.adapter.rontolisp <span class="hl-k">:refer</span> [run-server]]
+            [ring.util.response <span class="hl-k">:as</span> response]))
+(<span class="hl-d">defn</span> handler [{<span class="hl-k">:keys</span> [uri]}]
+  (-&gt; (response/response (str <span class="hl-s">&quot;Hello, &quot;</span> uri <span class="hl-s">&quot;\n&quot;</span>))
+      (response/content-type <span class="hl-s">&quot;text/plain&quot;</span>)))
+(run-server handler {<span class="hl-k">:port</span> <span class="hl-n">3000</span>})</code></pre>
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> curl http://127.0.0.1:3000/clojure
+<span class="hl-c">Hello, /clojure</span></code></pre>
+</div>
+<div class="page">52</div>
+</section>
+<section class="slide layout-standard" id="s53" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li class="current">次の<wbr>一歩</li></ol>
 </div>
-<div class="page">47</div>
+<div class="page">53</div>
 </section>
-<section class="slide layout-table" id="s48" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s54" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">examples ディレクトリ</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:756px"><col style="width:940px"></colgroup><thead><tr><th scope="col">ディレクトリ</th><th scope="col">内容</th></tr></thead><tbody><tr><td><code>console/</code></td><td>アルゴリズムと<wbr>コンソール入出力</td></tr><tr><td><code>scheme/</code> <code>clojure/</code></td><td>Scheme と Clojure の<wbr>プログラム</td></tr><tr><td><code>ml/</code> <code>llm/</code></td><td>数値計算、<wbr>機械学習、<wbr>Llama 2&nbsp;の<wbr>推論</td></tr><tr><td><code>net/</code> <code>db/</code></td><td>ソケット、<wbr>HTTP サーバ、<wbr>PostgreSQL</td></tr><tr><td><code>jvm/</code> <code>macos/</code></td><td>Java 連携、<wbr>Swing、<wbr>Cocoa、<wbr>Metal</td></tr><tr><td><code>browser/</code></td><td>ページで<wbr>動かす WASM</td></tr><tr><td><code>asdf/</code></td><td>実在の<wbr>ライブラリの<wbr>読み込み</td></tr></tbody></table>
 </div>
-<div class="page">48</div>
+<div class="page">54</div>
 </section>
-<section class="slide layout-standard" id="s49" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s55" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">次に<wbr>読むもの</h1>
 <div class="body" style="top:232px;height:776px">
 <ul><li><a href="https://making.github.io/rontolisp/docs/">ドキュメント</a> はじめに、<wbr>コンパイル、<wbr>言語リファレンス、<wbr>ガイド</li><li><a href="https://making.github.io/rontolisp/playground.html">プレイグラウンド</a> インストールせずに<wbr>試す</li><li><a href="https://making.github.io/rontolisp/skill/">エージェントスキル</a> AI コーディングエージェント向けに、<wbr>ドキュメントから<wbr>生成した<wbr>もの</li><li><a href="https://github.com/making/rontolisp">GitHub</a> ソースと <code>examples/</code></li></ul>
 </div>
-<div class="page">49</div>
+<div class="page">55</div>
 </section>
-<section class="slide layout-statement closing" id="s50" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement closing" id="s56" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
-<div class="page">50</div>
+<div class="page">56</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>
