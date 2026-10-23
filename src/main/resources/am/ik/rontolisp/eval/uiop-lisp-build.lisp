@@ -63,17 +63,20 @@
                               (uiop/lisp-build::%cc-context-arguments %cc-c))
                        %cc-s))))))
 
-(define-condition uiop/lisp-build:compile-file-error (compile-condition error)
+(define-condition uiop/lisp-build:compile-file-error
+    (uiop/lisp-build:compile-condition error)
   ())
 (define-condition uiop/lisp-build:compile-warned-warning
-    (compile-condition warning)
+    (uiop/lisp-build:compile-condition warning)
   ())
-(define-condition uiop/lisp-build:compile-warned-error (compile-condition error)
+(define-condition uiop/lisp-build:compile-warned-error
+    (uiop/lisp-build:compile-condition error)
   ())
 (define-condition uiop/lisp-build:compile-failed-warning
-    (compile-condition warning)
+    (uiop/lisp-build:compile-condition warning)
   ())
-(define-condition uiop/lisp-build:compile-failed-error (compile-condition error)
+(define-condition uiop/lisp-build:compile-failed-error
+    (uiop/lisp-build:compile-condition error)
   ())
 
 ;;; Raising on the behaviour flags. Portable over the two flags and the real

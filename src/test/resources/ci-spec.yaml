@@ -19982,6 +19982,11 @@ cases:
       (print (handler-case (uiop:with-current-directory ("/tmp") (defun ci-uiop-probe () 1))
                (uiop:not-implemented-error () :signalled)))
       (print (fboundp 'ci-uiop-probe))
+      ;; A lisp-build condition names its parent home-qualified, so the subclass
+      ;; alone brings compile-condition (and its report) with it.
+      (print (handler-case (error 'uiop:compile-file-error :description "compile failed"
+                                  :context-format "~a/~a" :context-arguments (list 1 2))
+               (error (c) (princ-to-string c))))
     expected: |
       (T T)
       #P"/tmp/b.txt"
@@ -19991,6 +19996,7 @@ cases:
       "Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM"
       :SIGNALLED
       NIL
+      "compile failed while 1/2"
   - name: uiop-symbol-call-as-a-value
     source: |
       ;; dexador's backend dispatch: uiop:symbol-call taken as a VALUE and applied
@@ -30317,6 +30323,18 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
+    fails: true
+  - name: uncaught-not-implemented-error-report
+    source: |
+      ;; An operation no backend can do signals uiop:not-implemented-error, whose
+      ;; report renders its explanation through #'format.
+      (print (handler-case (error "caught") (error () :ok)))
+      (uiop:chdir "/tmp")
+      (print :unreached)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: Not (currently) implemented on rontolisp: UIOP/OS:CHDIR no backend can move its own working directory (the JVM reads user.dir once at startup; WASI has no chdir)
     fails: true
   - name: uncaught-nil-message-report
     source: |
