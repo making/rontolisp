@@ -197,6 +197,24 @@ deck is rendered, so it is the same on every backend. A jump (`#N`, the overview
 `prefers-reduced-motion` and a block edited in the player switch at once; print shows each
 slide as it is.
 
+## Install
+
+A native executable, which needs neither a JVM nor rontolisp, is on the
+[lispresen-0.1.0-SNAPSHOT release](https://github.com/making/rontolisp/releases/tag/lispresen-0.1.0-SNAPSHOT)
+(macOS arm64, Linux amd64/arm64), rebuilt with every push that changes lispresen. For example,
+on macOS (Apple Silicon):
+
+```bash
+wget https://github.com/making/rontolisp/releases/download/lispresen-0.1.0-SNAPSHOT/lispresen-darwin-arm64
+chmod +x lispresen-darwin-arm64
+sudo mv lispresen-darwin-arm64 /usr/local/bin/lispresen
+lispresen talk.lisp                                             # writes talk.html
+```
+
+On Linux the file is `lispresen-linux-amd64` or `lispresen-linux-arm64`. On macOS, a file
+downloaded with a browser is quarantined and refused at start-up;
+`xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that.
+
 ## Running
 
 From the repository root, with the executable jar built (`./mvnw package`):

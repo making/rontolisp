@@ -8,6 +8,7 @@
 #
 #   lispresen/check.sh            # verify
 #   lispresen/check.sh --update   # rewrite the golden HTML and PNG from the interpreter first
+#   lispresen/check.sh --exe PATH # verify only the lispresen executable at PATH (no jar needed)
 #
 # Needs the executable jar (./mvnw package; RONTOLISP_JAR overrides its path), java and
 # wasmtime; the SBCL leg is skipped when sbcl is not on PATH. The unit tests stay on
@@ -43,9 +44,16 @@ check() {
   else
     echo "FAIL $name"
     cat "$work/$name.err"
+    cmp "$golden" "$work/$name.html" || true
+    cmp "$golden_png" "$dir/intro.png" || true
     status=1
   fi
 }
+
+if [[ ${1:-} == --exe ]]; then
+  check "$(basename "$2")" "$2"
+  exit $status
+fi
 
 check interpreter java -jar "$jar" "$here/cli.lisp" --
 java -jar "$jar" "$here/cli.lisp" -o "$work/lispresen.jar" > /dev/null
