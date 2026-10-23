@@ -364,6 +364,27 @@ proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); a TLS han
 the component (`.todo/415`); `--no-gc`; the browser playground; `(do () ...)`-style
 empty do bindings in examples (pre-existing `expandDo` limitation).
 
+## Socket tests
+- **A test listens on the address its client connects to: `127.0.0.1`.** macOS lets `127.0.0.1:P`
+  bind beside `*:P` (Linux refuses) and the more specific listener takes the loopback connection, so a
+  parallel test binding `127.0.0.1:P` took a wildcard test's connection and its accept waited forever
+  (`compileAndRunUsocketAddressAccessors`, 22 min in `Net.accept`, 2026-10-23). Two `127.0.0.1:P` binds
+  conflict, so a specific listener cannot lose its connection. A wildcard listener in a test only
+  listens. Java-side peers bind loopback too (`TlsTestSupport`, `StreamHandleConcurrencySupport`).
+- **No test picks a port by closing a probe listener** (the freed port may be another test's by then):
+  refusals connect to port 0; a `tls-listen` server binds port 0 and writes the port to a file its Java
+  client waits on (`TlsTestSupport.reportPortForm`).
+- **Hang guard**: a test that blocks on a socket is `@SocketTest` (`testsupport`) = `@Test` +
+  `@Timeout(5 min, SEPARATE_THREAD)`. The default `SAME_THREAD` mode only interrupts, and a platform
+  thread in `ServerSocket.accept` ignores that (measured 2026-10-23: still blocked after the interrupt;
+  the JDK closes the socket on interrupt only for a virtual thread), so the guard abandons the thread.
+  Component tests are bounded by `HostWasmtime`'s 300 s process timeout, `TlsTestSupport`'s helper
+  threads by a 120 s socket timeout.
+- Not changed: listeners a test does not place -- the `http-handler` directive's server (`*:P`, the
+  directive takes no host) and Testcontainers' mapped ports -- can still lose a loopback connection to
+  a test's `127.0.0.1:P` listener; that fails the tests involved, and the guard bounds the socket side.
+  A host argument for the directive is a product change this rare flake does not pay for.
+
 ## Pinning tests
 `HandleOperandFixture` (`ThreadTest`/`JvmThreadTest`); `LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*`;
 `JvmLispCompilerTest#compileAndRunTcp*`/`#compileAndRunUsocket*`/`#compileAndRunTls*`/

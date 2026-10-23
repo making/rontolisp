@@ -12,6 +12,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -238,7 +239,7 @@ class JvmThreadTest {
 				""", "ThreadBt2Prog")).isEqualTo("(T CONFIGURED NIL \"bt2-thread\" UNSET NIL)");
 	}
 
-	@Test
+	@SocketTest
 	void threadAndSocketOperatorsSignalTheirConditionOverAValueTheyCannotTake() throws Exception {
 		// The interpreter's conditions and words (ThreadTest), where a cast or a null
 		// table used to leak a host exception.
@@ -246,7 +247,7 @@ class JvmThreadTest {
 			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
 	}
 
-	@Test
+	@SocketTest
 	void socketHostFailuresReadAsTheInterpretersDo() throws Exception {
 		assertThat(compileAndRun(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_PROGRAM, "HostFailureProg"))
 			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_EXPECTED);

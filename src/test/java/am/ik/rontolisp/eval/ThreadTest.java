@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,7 +101,7 @@ class ThreadTest {
 			.hasMessage("THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)");
 	}
 
-	@Test
+	@SocketTest
 	void threadAndSocketOperatorsSignalTheirConditionOverAValueTheyCannotTake() {
 		// Pinned identically on the JVM (JvmThreadTest).
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -110,7 +111,7 @@ class ThreadTest {
 			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
 	}
 
-	@Test
+	@SocketTest
 	void socketHostFailuresReadAsTheJvmBackendsDo() {
 		// Pinned identically on the JVM (JvmThreadTest).
 		ByteArrayOutputStream out = new ByteArrayOutputStream();

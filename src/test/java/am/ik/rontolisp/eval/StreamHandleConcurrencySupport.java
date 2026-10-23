@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -47,7 +48,7 @@ final class StreamHandleConcurrencySupport {
 	 * @throws IOException if the listener cannot be bound
 	 */
 	static ServerSocket startEchoServer() throws IOException {
-		ServerSocket listener = new ServerSocket(0);
+		ServerSocket listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
 		Thread.ofVirtual().start(() -> {
 			while (!listener.isClosed()) {
 				final Socket connection;

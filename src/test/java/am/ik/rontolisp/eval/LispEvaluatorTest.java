@@ -60,6 +60,7 @@ import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.SocketTest;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -12711,7 +12712,7 @@ class LispEvaluatorTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	void tcpEchoRoundTripOnLoopback() {
 		// Single-threaded choreography: connect before accept (the connection sits in
 		// the listen backlog) and write before the peer reads (small payloads sit in
@@ -12733,7 +12734,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(new LispString("hello"));
 	}
 
-	@Test
+	@SocketTest
 	void tcpByteOpsOnSocket() {
 		String program = """
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12750,7 +12751,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(new LispInteger(65));
 	}
 
-	@Test
+	@SocketTest
 	void tcpCharacterOpsOnSocket() {
 		// write-string / write-char / read-char on a socket handle: the
 		// write side puts the string's UTF-8 bytes on the wire (read back one by one
@@ -12784,7 +12785,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program).print()).isEqualTo("(65 195 135 66 504 90 121)");
 	}
 
-	@Test
+	@SocketTest
 	void tcpTerpriOnSocket() {
 		// terpri carries the socket arm write-string and write-line already had: a
 		// bounded write-line lowers to write-string plus terpri, so a bounded
@@ -12806,7 +12807,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program).print()).isEqualTo("(NIL 97 10)");
 	}
 
-	@Test
+	@SocketTest
 	void tcpReadCharAtPeerCloseHonoursTheEofArguments() {
 		// The socket read answers nil at peer close, and read-char turns that into the
 		// SAME eof contract a file stream gets: the 3-arg form yields the eof value,
@@ -12847,7 +12848,7 @@ class LispEvaluatorTest {
 		assertThat(eval(bareByte).print()).isEqualTo(":SIGNALLED");
 	}
 
-	@Test
+	@SocketTest
 	void tcpReadLineReturnsNilAfterPeerClose() {
 		String program = """
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12863,7 +12864,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(LispNil.INSTANCE);
 	}
 
-	@Test
+	@SocketTest
 	void tcpArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TCP-CONNECT");
@@ -12882,7 +12883,7 @@ class LispEvaluatorTest {
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a socket or listener handle");
 	}
 
-	@Test
+	@SocketTest
 	void tcpAddressAccessorsOnLoopback() {
 		String program = """
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12925,7 +12926,7 @@ class LispEvaluatorTest {
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a connected socket handle");
 	}
 
-	@Test
+	@SocketTest
 	void usocketEchoOverLoopback() {
 		// The Postmodern (cl-postgres) shape: socket-connect with :element-type,
 		// socket-stream, stream I/O, socket-close. Same single-threaded loopback
@@ -12945,9 +12946,15 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(new LispString("hello"));
 	}
 
-	@Test
+	@SocketTest
 	void usocketAddressAccessors() {
+		// The wildcard listener only listens: a connection to 127.0.0.1:P would go to
+		// another test's 127.0.0.1:P listener before this one (.kb/tcp-sockets.md,
+		// "Socket tests").
 		String program = """
+				(let ((w (usocket:socket-listen usocket:*wildcard-host* 0)))
+				  (unless (> (usocket:get-local-port w) 0) (error "no port"))
+				  (usocket:socket-close w))
 				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
 				       (port (usocket:get-local-port listener))
 				       (client (usocket:socket-connect "127.0.0.1" port))
@@ -12961,18 +12968,7 @@ class LispEvaluatorTest {
 				  (usocket:socket-close listener)
 				  result)
 				""";
-		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" T \"127.0.0.1\" \"127.0.0.1\")");
-	}
-
-	@Test
-	void usocketWildcardHostListens() {
-		String program = """
-				(let* ((listener (usocket:socket-listen usocket:*wildcard-host* 0))
-				       (port (usocket:get-local-port listener)))
-				  (usocket:socket-close listener)
-				  (> port 0))
-				""";
-		assertThat(eval(program)).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti(program).print()).isEqualTo("(\"127.0.0.1\" T \"127.0.0.1\" \"127.0.0.1\")");
 	}
 
 	@Test
@@ -13029,7 +13025,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" T)");
 	}
 
-	@Test
+	@SocketTest
 	void usocketSocketOptionReceiveTimeoutIsARealReadDeadline() {
 		// (setf (usocket:socket-option s :receive-timeout) seconds) is the portable
 		// usocket read-timeout spelling (dexador sets it on every connection). It
@@ -13070,7 +13066,7 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo(":NO-SUCH-SOCKET");
 	}
 
-	@Test
+	@SocketTest
 	void usocketWaitForInputPollsThroughListen() {
 		// A REAL wait on this backend: listen probes the kernel receive buffer, so
 		// an empty socket polls to its timeout (nil with :ready-only) and a socket
@@ -13098,7 +13094,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program).print()).isEqualTo("(NIL T T T \"ping\")");
 	}
 
-	@Test
+	@SocketTest
 	void usocketWithMacrosEchoOverLoopback() {
 		// with-socket-listener + with-client-socket + with-connected-socket compose;
 		// each closes its handle on normal exit (lite: no unwind-protect, so a body
@@ -13114,7 +13110,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(new LispString("ping"));
 	}
 
-	@Test
+	@SocketTest
 	void usocketWithConnectedSocketClosesOnNormalExit() {
 		// After the body, the socket handle is closed: a subsequent read-line on it
 		// signals instead of blocking.
@@ -14072,23 +14068,17 @@ class LispEvaluatorTest {
 	@Test
 	void handlerCaseCatchesUsocketSocketErrorOnConnectToClosedPort() {
 		// A connection failure is re-signaled as a typed usocket:socket-error, catchable
-		// by type (.kb/error-handling.md).
+		// by type (.kb/error-handling.md). Port 0 refuses on every host; a closed
+		// ephemeral port may be another test's by the time of the connect.
 		assertThat(eval("""
-				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
-				       (p (usocket:get-local-port l)))
-				  (usocket:socket-close l)
-				  (handler-case (usocket:socket-connect "127.0.0.1" p)
-				    (usocket:socket-error (e) :refused)))
+				(handler-case (usocket:socket-connect "127.0.0.1" 0)
+				  (usocket:socket-error (e) :refused))
 				""").print()).isEqualTo(":REFUSED");
 	}
 
 	@Test
 	void usocketConnectFailureMessageIsPreservedWhenUncaught() {
-		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
-		evaluator.eval(LispReader.readFromString(
-				"(setq up-port (let ((l (usocket:socket-listen \"127.0.0.1\" 0))) (let ((p (usocket:get-local-port l))) (usocket:socket-close l) p)))"));
-		assertThatThrownBy(
-				() -> evaluator.eval(LispReader.readFromString("(usocket:socket-connect \"127.0.0.1\" up-port)")))
+		assertThatThrownBy(() -> eval("(usocket:socket-connect \"127.0.0.1\" 0)"))
 			.isInstanceOfSatisfying(LispEvalException.class, e -> {
 				assertThat(e.getMessage()).contains("tcp-connect");
 				assertThat(e.condition()).isNotNull();
@@ -14280,7 +14270,7 @@ class LispEvaluatorTest {
 			.isInstanceOf(LispEvalException.class);
 	}
 
-	@Test
+	@SocketTest
 	void usocketWithConnectedSocketClosesOnErrorExit() {
 		// The error-path sibling of usocketWithConnectedSocketClosesOnNormalExit: the
 		// unwind-protect cleanup closes the socket even when the body signals.
@@ -14310,7 +14300,7 @@ class LispEvaluatorTest {
 		assertThat(eval(program)).isEqualTo(LispTrue.INSTANCE);
 	}
 
-	@Test
+	@SocketTest
 	void tlsEchoRoundTripOnLoopback() throws Exception {
 		// A TLS handshake needs the server to participate concurrently (unlike the
 		// plain-TCP backlog trick), so the echo peer runs on a background thread. The
@@ -14332,7 +14322,7 @@ class LispEvaluatorTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	void tlsConnectUntrustedCertificateSignalsError() throws Exception {
 		// Without the trust-store override the JDK default trust store does not trust
 		// the self-signed server certificate, so the handshake must fail with an error.
@@ -14344,47 +14334,48 @@ class LispEvaluatorTest {
 		}
 	}
 
-	@Test
-	void tlsListenEchoRoundTripOnLoopback() throws Exception {
+	@SocketTest
+	void tlsListenEchoRoundTripOnLoopback(@TempDir Path dir) throws Exception {
 		// The Lisp side is the TLS *server* (tls-listen + the plain tcp-accept); the
 		// peer is a Java client thread that trusts the self-signed certificate
-		// directly and retries connecting until the listener is bound. The accepted
-		// socket handshakes lazily on the first read.
-		int port = am.ik.rontolisp.TlsTestSupport.freePort();
-		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over server tls");
+		// directly and connects to the port the program reports. The accepted socket
+		// handshakes lazily on the first read.
+		Path portFile = dir.resolve("tls.port");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over server tls");
 		String program = """
-				(let* ((listener (rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
-				       (bound-port (rontolisp:tcp-local-port listener))
-				       (client (rontolisp:tcp-accept listener))
-				       (line (read-line client)))
-				  (write-line line client)
-				  (close client)
-				  (close listener)
-				  (list bound-port line))
+				(let ((listener (rontolisp:tls-listen "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    line))
 				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
-				port);
-		assertThat(eval(program).print()).isEqualTo("(" + port + " \"hello over server tls\")");
+				am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"));
+		assertThat(eval(program)).isEqualTo(new LispString("hello over server tls"));
 		client.join();
 	}
 
-	@Test
-	void tlsListenPemEchoRoundTripOnLoopback() throws Exception {
+	@SocketTest
+	void tlsListenPemEchoRoundTripOnLoopback(@TempDir Path dir) throws Exception {
 		// The Lisp side is the TLS server configured from PEM files (cert + PKCS#8
 		// key); the peer trusts the same self-signed certificate. The PEM cert is the
 		// very certificate the shared keystore holds, so the existing echo client
 		// trusts it unchanged.
-		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		Path portFile = dir.resolve("tls.port");
 		java.nio.file.Path[] pem = am.ik.rontolisp.TlsTestSupport.pemFiles();
-		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over pem tls");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over pem tls");
 		String program = """
-				(let* ((listener (rontolisp:tls-listen-pem "%s" "%s" %d "127.0.0.1"))
-				       (client (rontolisp:tcp-accept listener))
-				       (line (read-line client)))
-				  (write-line line client)
-				  (close client)
-				  (close listener)
-				  line)
-				""".formatted(pem[0], pem[1], port);
+				(let ((listener (rontolisp:tls-listen-pem "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    line))
+				""".formatted(pem[0], pem[1], am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"));
 		assertThat(eval(program)).isEqualTo(new LispString("hello over pem tls"));
 		client.join();
 	}
@@ -14431,7 +14422,7 @@ class LispEvaluatorTest {
 			.hasMessage("TLS-LISTEN: The value \"nope\" is not of type (INTEGER 0 65535)");
 	}
 
-	@Test
+	@SocketTest
 	void tlsArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TLS-CONNECT");
@@ -14449,7 +14440,7 @@ class LispEvaluatorTest {
 			.hasMessageContaining("expects :insecure");
 	}
 
-	@Test
+	@SocketTest
 	void tlsConnectInsecureSkipsCertificateVerification() throws Exception {
 		// The self-signed server certificate is NOT in any trust store here;
 		// :insecure t must skip both the chain validation and the hostname check.
@@ -14467,7 +14458,7 @@ class LispEvaluatorTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	void tlsConnectInsecureNilStillVerifies() throws Exception {
 		// :insecure nil is the verifying default, so the untrusted self-signed
 		// certificate must still fail the handshake.
@@ -14479,7 +14470,7 @@ class LispEvaluatorTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	void tlsUpgradeEchoRoundTripOnLoopback() throws Exception {
 		// tls-upgrade wraps an ALREADY-CONNECTED handle (the cl+ssl
 		// make-ssl-client-stream shape): plain tcp-connect first, then the upgrade
@@ -14501,7 +14492,7 @@ class LispEvaluatorTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	void tlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
 		// No trust store here; :insecure t must skip both the chain validation and
 		// the hostname check, like tls-connect's.
@@ -14520,7 +14511,7 @@ class LispEvaluatorTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	void tlsUpgradeUntrustedCertificateSignalsError() throws Exception {
 		// The verifying default must reject the untrusted self-signed certificate.
 		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
@@ -14548,7 +14539,7 @@ class LispEvaluatorTest {
 			.hasMessageContaining("expects a connected socket handle");
 	}
 
-	@Test
+	@SocketTest
 	void clSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
 		// The cl+ssl shim end to end, the dexador shape: usocket:socket-connect,
 		// then make-ssl-client-stream upgrades the connected stream (default
@@ -14573,7 +14564,7 @@ class LispEvaluatorTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	void clSslShimVerifyNoneContextReachesTheInsecureFlag() throws Exception {
 		// dex:*not-verify-ssl* / :insecure travels as make-context :verify-mode
 		// +ssl-verify-none+ (installed by with-global-context) plus :verify nil;
@@ -20323,7 +20314,7 @@ class LispEvaluatorTest {
 	// JvmLispCompilerTest#compileAndRunRontolispNativesAreFunctionValues and
 	// WasmLispCompilerIntegrationTest#rontolispNativesAreFunctionValues (the compiled
 	// backends had no value for them).
-	@Test
+	@SocketTest
 	void rontolispNativesAreFunctionValues() {
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_EXPECTED);

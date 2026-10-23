@@ -17247,7 +17247,7 @@ class WasmLispCompilerIntegrationTest {
 		// stream.
 		String program = """
 				(rontolisp:async-defun main ()
-				  (let* ((listener (rontolisp:tcp-listen 0))
+				  (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
 				         (port (rontolisp:tcp-local-port listener))
 				         (client (rontolisp:tcp-connect "127.0.0.1" port))
 				         (server (rontolisp:tcp-accept listener)))

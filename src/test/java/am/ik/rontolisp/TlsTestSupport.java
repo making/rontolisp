@@ -29,6 +29,9 @@ public final class TlsTestSupport {
 
 	public static final String STORE_PASSWORD = "changeit";
 
+	/** How long a helper thread waits on a peer: an accept, a read, a reported port. */
+	private static final int IO_TIMEOUT_MS = 120_000;
+
 	private static volatile @Nullable Path keyStorePath;
 
 	private TlsTestSupport() {
@@ -162,32 +165,31 @@ public final class TlsTestSupport {
 	}
 
 	/**
-	 * Picks a currently-free TCP port on 127.0.0.1 by binding an ephemeral listener and
-	 * closing it. Used by the {@code tls-listen} tests, which must embed the port in the
-	 * Lisp program before it runs (there is no channel to read a port back mid-run).
-	 * @return a port number that was free at the time of the call
+	 * The Lisp form that reports a {@code tls-listen} server's bound port to the client
+	 * of {@link #startOneShotEchoClient}: the server binds port 0 and writes the port it
+	 * got, so no test picks a port by closing a probe listener -- another test may bind
+	 * the freed port before the server does ({@code .kb/tcp-sockets.md}, "Socket tests").
+	 * @param portFile the file the client waits on
+	 * @param listener the Lisp variable holding the listener
+	 * @return the form's source text
 	 */
-	public static int freePort() {
-		try (java.net.ServerSocket probe = new java.net.ServerSocket(0, 1,
-				java.net.InetAddress.getByName("127.0.0.1"))) {
-			return probe.getLocalPort();
-		}
-		catch (IOException ex) {
-			throw new UncheckedIOException(ex);
-		}
+	public static String reportPortForm(Path portFile, String listener) {
+		return "(with-open-file (o \"" + portFile.toString().replace("\\", "\\\\")
+				+ "\" :direction :output :if-exists :supersede) (write-line (princ-to-string (rontolisp:tcp-local-port "
+				+ listener + ")) o))";
 	}
 
 	/**
-	 * Starts a daemon thread that connects a TLS client (trusting the shared self-signed
-	 * certificate directly, no system properties needed) to 127.0.0.1:{@code port}, sends
-	 * one line and reads the reply. The connect is retried until the server under test
-	 * has bound the port. Failures end the thread quietly (the server side asserts the
-	 * visible behavior).
-	 * @param port the port the Lisp {@code tls-listen} server will bind
+	 * Starts a daemon thread that waits for the Lisp {@code tls-listen} server under test
+	 * to report its port ({@link #reportPortForm}), connects a TLS client (trusting the
+	 * shared self-signed certificate directly, no system properties needed) to 127.0.0.1
+	 * on it, sends one line and reads the reply. Every wait is bounded; failures end the
+	 * thread quietly (the server side asserts the visible behavior).
+	 * @param portFile the file the server writes its port to
 	 * @param line the line to send (without the newline)
 	 * @return the started thread (join it to make sure the exchange finished)
 	 */
-	public static Thread startOneShotEchoClient(int port, String line) {
+	public static Thread startOneShotEchoClient(Path portFile, String line) {
 		Thread thread = new Thread(() -> {
 			try {
 				KeyStore ks = KeyStore.getInstance("PKCS12");
@@ -199,22 +201,17 @@ public final class TlsTestSupport {
 				tmf.init(ks);
 				SSLContext context = SSLContext.getInstance("TLS");
 				context.init(null, tmf.getTrustManagers(), null);
-				long deadline = System.currentTimeMillis() + 10_000;
-				while (true) {
-					try (SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket("127.0.0.1", port)) {
-						socket.startHandshake();
-						socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
-						socket.getOutputStream().flush();
-						new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
-							.readLine();
-						return;
-					}
-					catch (java.net.ConnectException ex) {
-						if (System.currentTimeMillis() > deadline) {
-							return;
-						}
-						Thread.sleep(20);
-					}
+				int port = awaitPort(portFile);
+				if (port < 0) {
+					return;
+				}
+				try (SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket("127.0.0.1", port)) {
+					socket.setSoTimeout(IO_TIMEOUT_MS);
+					socket.startHandshake();
+					socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
+					socket.getOutputStream().flush();
+					new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
+						.readLine();
 				}
 			}
 			catch (Exception ex) {
@@ -226,22 +223,42 @@ public final class TlsTestSupport {
 		return thread;
 	}
 
+	// The port once the whole line is written (the trailing newline), -1 past the
+	// deadline.
+	private static int awaitPort(Path portFile) throws IOException, InterruptedException {
+		long deadline = System.currentTimeMillis() + IO_TIMEOUT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (Files.exists(portFile)) {
+				String text = Files.readString(portFile, StandardCharsets.UTF_8);
+				if (text.endsWith("\n")) {
+					return Integer.parseInt(text.strip());
+				}
+			}
+			Thread.sleep(20);
+		}
+		return -1;
+	}
+
 	/**
 	 * Starts a daemon thread that accepts one connection, echoes one line back and
-	 * closes. Handshake or I/O failures end the thread quietly (the client side asserts
-	 * the visible behavior).
+	 * closes. Every wait is bounded; handshake or I/O failures end the thread quietly
+	 * (the client side asserts the visible behavior).
 	 * @param server the server socket to accept on
 	 * @return the started thread (join it to make sure the exchange finished)
 	 */
 	public static Thread startOneShotEchoServer(SSLServerSocket server) {
 		Thread thread = new Thread(() -> {
-			try (SSLSocket socket = (SSLSocket) server.accept()) {
-				BufferedReader reader = new BufferedReader(
-						new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-				String line = reader.readLine();
-				if (line != null) {
-					socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
-					socket.getOutputStream().flush();
+			try {
+				server.setSoTimeout(IO_TIMEOUT_MS);
+				try (SSLSocket socket = (SSLSocket) server.accept()) {
+					socket.setSoTimeout(IO_TIMEOUT_MS);
+					BufferedReader reader = new BufferedReader(
+							new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+					String line = reader.readLine();
+					if (line != null) {
+						socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
+						socket.getOutputStream().flush();
+					}
 				}
 			}
 			catch (IOException ex) {

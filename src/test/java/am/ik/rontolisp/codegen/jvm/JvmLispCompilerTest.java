@@ -51,6 +51,7 @@ import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
+import am.ik.rontolisp.testsupport.SocketTest;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
@@ -2434,13 +2435,11 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunHandlerCaseCatchesUsocketSocketError() throws Exception {
 		// A connection failure is re-signaled as a typed usocket:socket-error, catchable
-		// by type on the JVM backend (.kb/error-handling.md).
+		// by type on the JVM backend (.kb/error-handling.md). Port 0 refuses on every
+		// host; a closed ephemeral port may be another test's by the time of the connect.
 		assertThat(compileAndRunUsocket("""
-				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
-				       (p (usocket:get-local-port l)))
-				  (usocket:socket-close l)
-				  (print (handler-case (usocket:socket-connect "127.0.0.1" p)
-				           (usocket:socket-error (e) :refused))))
+				(print (handler-case (usocket:socket-connect "127.0.0.1" 0)
+				         (usocket:socket-error (e) :refused)))
 				""")).isEqualTo(":REFUSED");
 	}
 
@@ -11900,7 +11899,7 @@ class JvmLispCompilerTest {
 			.hasStackTraceContaining("java.net.ConnectException");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpEchoRoundTripOnLoopback() throws Exception { // Single-threaded
 																		// choreography on
 																		// port 0: connect
@@ -11943,7 +11942,7 @@ class JvmLispCompilerTest {
 					"""))))).isEqualTo("\"hello\"\n\"el\n\"");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpByteOpsOnSocket() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -11959,7 +11958,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("65");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpCharacterOpsOnSocket() throws Exception {
 		// write-string / write-char / read-char on a socket handle: the
 		// _writeString / _readChar stream helpers grow the socket arm the byte and line
@@ -11991,7 +11990,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("(65 195 135 66 504 90 121)");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpTerpriOnSocket() throws Exception {
 		// terpri carries the socket arm write-string and write-line already had: a
 		// bounded write-line lowers to write-string plus terpri, so a bounded
@@ -12013,7 +12012,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("NIL\n97\n10");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12048,7 +12047,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo(":SIGNALLED");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpReadLineReturnsNilAfterPeerClose() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12063,7 +12062,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("NIL");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunAWrongCountTcpCallSignalsAtCallTime() throws Exception {
 		assertThat(compileAndRun("""
 				(defun tcp-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
@@ -12086,7 +12085,7 @@ class JvmLispCompilerTest {
 				"TCP-LOCAL-ADDRESS expects 1 argument, got 0\"""");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunTcpAddressAccessorsOnLoopback() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
@@ -12103,7 +12102,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("\"127.0.0.1\"\n\"127.0.0.1\"\nT\n\"127.0.0.1\"");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunUsocketEchoOverLoopback() throws Exception {
 		// The Postmodern (cl-postgres) shape on the compiled backend: socket-connect
 		// with :element-type, socket-stream, stream I/O, socket-close.
@@ -12121,10 +12120,16 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("\"hello\"");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunUsocketAddressAccessors() throws Exception {
+		// The wildcard listener only listens: a connection to 127.0.0.1:P would go to
+		// another test's 127.0.0.1:P listener before this one (.kb/tcp-sockets.md,
+		// "Socket tests").
 		assertThat(compileAndRunUsocket("""
-				(let* ((listener (usocket:socket-listen usocket:*wildcard-host* 0))
+				(let ((w (usocket:socket-listen usocket:*wildcard-host* 0)))
+				  (print (> (usocket:get-local-port w) 0))
+				  (usocket:socket-close w))
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
 				       (port (usocket:get-local-port listener))
 				       (client (usocket:socket-connect "127.0.0.1" port))
 				       (server (usocket:socket-accept listener)))
@@ -12134,10 +12139,10 @@ class JvmLispCompilerTest {
 				  (usocket:socket-close server)
 				  (usocket:socket-close client)
 				  (usocket:socket-close listener))
-				""")).isEqualTo("\"127.0.0.1\"\nT\n\"127.0.0.1\"");
+				""")).isEqualTo("T\n\"127.0.0.1\"\nT\n\"127.0.0.1\"");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunUsocketSocketOptionReceiveTimeoutIsARealReadDeadline() throws Exception {
 		// The interpreter twin is usocketSocketOptionReceiveTimeoutIsARealReadDeadline:
 		// the setf place rides the emitted _tcpSetTimeout (Socket.setSoTimeout), the
@@ -12160,7 +12165,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("0.2\n:TIMED-OUT\nNIL\n:UNSUPPORTED");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunUsocketWaitForInputPollsThroughListen() throws Exception {
 		// The interpreter twin is usocketWaitForInputPollsThroughListen: a real
 		// listen-based poll on this backend -- empty polls to the timeout, buffered
@@ -12185,7 +12190,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("NIL\nT\nT\nT\n\"ping\"");
 	}
 
-	@Test
+	@SocketTest
 	void compileAndRunUsocketWithMacrosEchoOverLoopback() throws Exception {
 		assertThat(compileAndRunUsocket("""
 				(usocket:with-socket-listener (listener "127.0.0.1" 0)
@@ -12196,7 +12201,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("\"ping\"");
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunTlsEchoRoundTripOnLoopback() throws Exception {
 		// A TLS handshake needs the server to participate concurrently, so the echo
@@ -12219,7 +12224,7 @@ class JvmLispCompilerTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsUntrustedCertificateThrows() throws Exception {
 		// Without the trust-store override the JDK default trust store does not trust
@@ -12235,48 +12240,51 @@ class JvmLispCompilerTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsListenEchoRoundTripOnLoopback() throws Exception {
 		// The compiled program is the TLS *server* (tls-listen + the plain
 		// tcp-accept); the peer is a Java client thread that trusts the self-signed
-		// certificate directly and retries connecting until the listener is bound.
-		int port = am.ik.rontolisp.TlsTestSupport.freePort();
-		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over server tls");
+		// certificate directly and connects to the port the program reports.
+		Path portFile = this.tempDir.resolve("tls.port");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over server tls");
 		assertThat(compileAndRun("""
-				(let* ((listener (rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
-				       (client (rontolisp:tcp-accept listener))
-				       (line (read-line client)))
-				  (write-line line client)
-				  (close client)
-				  (close listener)
-				  (print line))
+				(let ((listener (rontolisp:tls-listen "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
 				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
-				port)))
+				am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
 			.isEqualTo("\"hello over server tls\"");
 		client.join();
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsListenP12EchoRoundTripOnLoopback() throws Exception {
 		// The compiled program is the TLS server configured from an embedded PKCS12
 		// keystore (the shape the tls-listen-pem inliner produces). The keystore is
 		// built from the shared PEM material; the peer trusts the same certificate.
-		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		Path portFile = this.tempDir.resolve("tls.port");
 		java.nio.file.Path[] pem = am.ik.rontolisp.TlsTestSupport.pemFiles();
 		String base64 = am.ik.rontolisp.eval.TlsPemSupport.pemToBase64Pkcs12(pem[0].toString(), pem[1].toString());
 		String password = am.ik.rontolisp.eval.TlsPemSupport.KEYSTORE_PASSWORD;
-		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over p12 tls");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over p12 tls");
 		assertThat(compileAndRun("""
-				(let* ((listener (rontolisp:%%tls-listen-p12 "%s" "%s" %d "127.0.0.1"))
-				       (client (rontolisp:tcp-accept listener))
-				       (line (read-line client)))
-				  (write-line line client)
-				  (close client)
-				  (close listener)
-				  (print line))
-				""".formatted(base64, password, port))).isEqualTo("\"hello over p12 tls\"");
+				(let ((listener (rontolisp:%%tls-listen-p12 "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
+				""".formatted(base64, password, am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
+			.isEqualTo("\"hello over p12 tls\"");
 		client.join();
 	}
 
@@ -12315,7 +12323,7 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("expects :insecure");
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureSkipsCertificateVerification() throws Exception {
 		// The self-signed server certificate is NOT trusted here; :insecure t makes
@@ -12334,7 +12342,7 @@ class JvmLispCompilerTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureNilStillVerifies() throws Exception {
 		// :insecure nil is the verifying default, so the untrusted certificate must
@@ -12348,7 +12356,7 @@ class JvmLispCompilerTest {
 		}
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunTlsUpgradeEchoRoundTripOnLoopback() throws Exception {
 		// _tlsUpgrade wraps an ALREADY-CONNECTED _streams entry (the cl+ssl
@@ -12370,7 +12378,7 @@ class JvmLispCompilerTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
 		// No trust store here; :insecure t makes _tlsUpgrade install the generated
@@ -12398,7 +12406,7 @@ class JvmLispCompilerTest {
 
 	// The compiled twin of LispEvaluatorTest#rontolispNativesAreFunctionValues: each
 	// #'rontolisp:NAME was "The function RONTOLISP:NAME is undefined".
-	@Test
+	@SocketTest
 	void compileAndRunRontolispNativesAreFunctionValues() throws Exception {
 		for (String[] pair : new String[][] {
 				{ am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_PROGRAM,
@@ -12419,7 +12427,7 @@ class JvmLispCompilerTest {
 
 	// The TLS natives as function values over a real handshake: tls-listen serves,
 	// tls-connect and tls-upgrade connect (:insecure, so no trust store is needed).
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsNativesAreFunctionValues() throws Exception {
 		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
@@ -12445,18 +12453,19 @@ class JvmLispCompilerTest {
 					""".formatted(server.getLocalPort()))).isEqualTo("\"upgraded through a value\"");
 			echo.join();
 		}
-		int port = am.ik.rontolisp.TlsTestSupport.freePort();
-		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "served through a value");
+		Path portFile = this.tempDir.resolve("tls.port");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "served through a value");
 		assertThat(compileAndRun("""
-				(let* ((listener (funcall #'rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
-				       (client (rontolisp:tcp-accept listener))
-				       (line (read-line client)))
-				  (write-line line client)
-				  (close client)
-				  (close listener)
-				  (print line))
+				(let ((listener (funcall #'rontolisp:tls-listen "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
 				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
-				port)))
+				am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
 			.isEqualTo("\"served through a value\"");
 		client.join();
 	}
@@ -12472,7 +12481,7 @@ class JvmLispCompilerTest {
 					am.ik.rontolisp.compiler.BuiltinFunctionWrappers.TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE);
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunClSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
 		// The cl+ssl shim on the compile path, the dexador shape: the shim is
@@ -12507,7 +12516,7 @@ class JvmLispCompilerTest {
 		});
 	}
 
-	@Test
+	@SocketTest
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureSurvivesOptimize() throws Exception {
 		// --optimize (the writer's shake) must keep the X509TrustManager methods of the

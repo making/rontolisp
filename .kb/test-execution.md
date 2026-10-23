@@ -151,10 +151,8 @@ forks already fill the runner.
   holds it `READ`. A `--gpu` run takes `testsupport/GpuDeviceLock`, a provider that
   serializes while `LinalgGpu.available()` and hands out nothing without a device:
   concurrent use of one device from several embedded `am.ik.gpu` copies is unmeasured.
-- Still exposed: the two `tls-listen` tests reserve a port with `TlsTestSupport.freePort`
-  (the weaker device of the next section), now with same-JVM competitors; the cost-ratio
-  pins (`assertScanIsFlat` and siblings) compare two halves of ONE run, with 500 ms + 6x
-  slack.
+- Still exposed: the cost-ratio pins (`assertScanIsFlat` and siblings) compare two halves of
+  ONE run, with 500 ms + 6x slack. Socket tests: `.kb/tcp-sockets.md`, "Socket tests".
 
 Found on the way, **2026-09-24**: the first concurrent run of `JvmLinalgSimdAccelCompilerTest`
 hung forever on a class-initialization deadlock in production code. `LispFloatArray` (a
