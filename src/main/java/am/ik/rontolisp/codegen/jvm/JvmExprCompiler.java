@@ -1200,6 +1200,18 @@ final class JvmExprCompiler {
 			// five are Lisp over it, uiop-image.lisp): main's own String[] behind
 			// the class name, through the _argv helper.
 			case LispNames.HOST_ARGV -> JvmArgvCompiler.compile(cons, ctx, className);
+			// The local zone behind the universal time codec: the _localTimeOffset
+			// helper over java.time (emitted because the reference gated it).
+			case LispNames.LOCAL_TIME_OFFSET -> {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.LOCAL_TIME_OFFSET + " expects 1 argument, got " + (parts.size() - 1));
+				}
+				compileExpr(parts.get(1), ctx, className);
+				ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), JvmLocalTimeRuntimeBuilder.METHOD,
+						JvmLocalTimeRuntimeBuilder.DESC));
+			}
 			// %target-machine-type: the ABI this artifact targets, the one thing the
 			// environment-enquiry family (machine-type, a prelude defun over it)
 			// answers differently per backend. A class file is CPU-independent, so

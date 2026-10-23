@@ -1415,6 +1415,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// caller), so a program that does not read its arguments keeps byte-identical
 		// output -- and main grows no prologue.
 		boolean usesArgv = programUsesSymbol(program, LispNames.HOST_ARGV);
+		// Local-time-zone helper: emitted only when the program references the internal
+		// %local-time-offset primitive (the prelude's %local-zone, behind the universal
+		// time codec), so every other program keeps byte-identical output.
+		boolean usesLocalTime = programUsesSymbol(program, LispNames.LOCAL_TIME_OFFSET);
 		// Octet-vector decode helper: emitted only when the program references the
 		// internal %octets-to-string-packed primitive (the prelude's lenient octet
 		// decoder is its one caller), so a program that never turns bytes into text
@@ -3912,6 +3916,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
+		final JvmLocalTimeRuntimeBuilder.@Nullable LocalTimeRuntime localTimeRuntime = usesLocalTime
+				? JvmLocalTimeRuntimeBuilder.build(cp, longValueOf) : null;
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
 				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
@@ -5100,6 +5106,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (argvRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(), argvRuntime.desc(),
 					argvRuntime.code());
+		}
+		if (localTimeRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, localTimeRuntime.name(),
+					localTimeRuntime.desc(), localTimeRuntime.code());
 		}
 		for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(), mm.code());

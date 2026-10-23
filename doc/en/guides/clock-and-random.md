@@ -56,14 +56,48 @@ an **integer on every backend**.
 [`encode-universal-time`](../reference/functions/encode-universal-time.md) and
 [`decode-universal-time`](../reference/functions/decode-universal-time.md) convert
 between that integer and calendar fields with pure arithmetic, so they behave
-identically everywhere — with one deliberate deviation: a missing time zone means
-**GMT, not the machine's local zone**, because no backend-portable source of the
-local zone exists (WASI exposes no timezone at all).
+identically everywhere. Without a time zone they work in the local one, and so does
+[`get-decoded-time`](../reference/functions/get-decoded-time.md) — see
+[the local time zone](#the-local-time-zone) below.
 
 Waiting is the clock's other half. [`sleep`](../reference/functions/sleep.md) parks
 the thread on the interpreter and the JVM, waits on the real host timer under
 `--component` (costing no CPU), and busy-waits on the clock on WASM Preview 1,
 whose imports include a clock but no timer. On `--no-wasi` it signals — see below.
+
+## The local time zone
+
+Without a `time-zone`, `decode-universal-time`, `encode-universal-time` and
+`get-decoded-time` use the local time zone, daylight saving time included, and report
+it as SBCL does: `time-zone` is the zone's standard offset west of GMT in hours (a
+ratio for a zone like India's), `daylight-p` whether daylight saving time adds its
+hour. Each build asks a different host for the zone:
+
+| build | the local zone |
+| --- | --- |
+| interpreter, JVM, the `rontolisp` binary | the JVM's default zone: `TZ`, else the system's setting; `-Duser.timezone` overrides both |
+| WASM (Preview 1, `--component`) | read by the module as the C library reads it: `TZ` names a zone file under `/usr/share/zoneinfo` (or `TZDIR`), a file path, or a POSIX rule such as `EST5EDT,M3.2.0,M11.1.0`; without `TZ`, `/etc/localtime` |
+| `--native` | the runner asks the host's C library: `TZ`, else `/etc/localtime` |
+| browser playground | the browser's zone |
+| WASM `--no-wasi` | UTC: the module owns no environment and no files |
+
+A WASM module sees only what wasmtime grants it, so pass the variable and the zone
+files:
+
+```sh
+wasmtime run --env TZ=Asia/Tokyo --dir /usr/share/zoneinfo prog.wasm
+```
+
+Without `TZ` the module needs `/etc/localtime`, which on macOS and most Linux
+distributions is a symbolic link to an absolute path that wasmtime's sandbox does not
+follow. A zone the module cannot read is UTC. A `--native` executable has no such
+limit: it answers what a native program answers.
+
+Two differences between hosts remain. The JVM does not read a POSIX rule:
+`TZ=EST5EDT,M3.2.0,M11.1.0` becomes the offset in effect when the JVM starts, with no
+transitions. And the zone files are the system's on WASM and `--native` but the JDK's
+own copy on the JVM, so a zone whose rules changed recently can differ until both are
+updated.
 
 ## A module with no host — `--no-wasi`
 

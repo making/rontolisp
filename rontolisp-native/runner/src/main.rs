@@ -13,12 +13,13 @@
 //!
 //! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers a
 //! fetch's `rlhttp` imports (`http`). The side that assembles an output picks the one the
-//! module's imports need.
+//! module's imports need. Both answer the local time zone (`rltime`, `localtime`).
 
 use std::process::exit;
 
 #[cfg(feature = "net")]
 mod http;
+mod localtime;
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_os = "linux",
@@ -101,6 +102,11 @@ fn run() -> wasmtime::Result<()> {
         wasmtime::bail!(
             "this program uses rontolisp:fetch, whose host is the network runner (rlrun-net), not this one"
         );
+    }
+    // A program decoding a time in the local zone imports the C library's answer
+    // (`localtime`): the module cannot read /etc/localtime through the sandbox itself.
+    if module.imports().any(|i| i.module() == localtime::MODULE) {
+        localtime::add_to_linker(&mut linker)?;
     }
     let mut store = Store::new(&engine, wasi.build_p1());
     let instance = linker.instantiate(&mut store, &module)?;

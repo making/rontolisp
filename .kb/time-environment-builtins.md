@@ -1,4 +1,4 @@
-# Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, `uiop:getenv`, and the environment-enquiry family)
+# Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, the universal-time codec and the local time zone, `uiop:getenv`, and the environment-enquiry family)
 
 ## The three time built-ins
 - Return an **integer on every backend**. In `LispNames` / `PackageRegistry.CL_FUNCTIONS`.
@@ -36,11 +36,56 @@
   `uiop-image.lisp` definition over `LispNames.HOST_ARGV`. Preview 1 uses an `_argv` helper
   over `args_sizes_get`/`args_get` as APPENDED user imports (no preview1 slot moves).
 
-## Universal-time codec
-`encode-universal-time` / `decode-universal-time` are `LispPreludeLibrary` defuns: era-based
-proleptic Gregorian integer arithmetic, exact at any year, `days*86400 + h*3600 + m*60 + s +
-zone*3600` with **25567** as the 1900->1970 day offset. Deviations: a missing or nil
-`time-zone` means **GMT, not local** (WASI exposes no timezone); `daylight-p` decodes nil.
+## Universal-time codec and the local time zone
+`encode-universal-time` / `decode-universal-time` / `get-decoded-time` are `LispPreludeLibrary`
+defuns: era-based proleptic Gregorian integer arithmetic, exact at any year, `days*86400 +
+h*3600 + m*60 + s + zone*3600` with **25567** as the 1900->1970 day offset.
+`get-decoded-time` is in `LispMacroExpander.passesMultipleValues` (its tail is a call; without
+the entry its eight extra values died at every caller -- `LispPreludeLibraryTest` only catches
+a literal `values`).
+
+**A missing `time-zone` is the LOCAL zone, DST included (since 2026-10-24; GMT before).**
+One per-backend primitive, `%local-time-offset` (`LispNames.LOCAL_TIME_OFFSET`, CL_INTERNALS):
+Unix seconds in, `offset-east-seconds * 2 + (dst ? 1 : 0)` out. The prelude's `%local-zone`
+clamps the argument to +-8.64e12 s (a JS `Date`'s range) so every host can answer.
+- decode: `time-zone` returned = STANDARD zone, west-positive hours, rational
+  (`(/ (- (if dst 3600 0) east) 3600)`), `daylight-p` = the dst bit -- CLHS's one-hour-DST
+  model, SBCL's exact formula (Lord Howe's 30-minute DST reads `T -10` like SBCL). The wall
+  clock uses the real total offset.
+- encode without a zone: SBCL's two lookups -- the zone at the wall-clock HOUR read as UTC,
+  then at the instant that guess names; gap/overlap times land where SBCL's do (checked
+  against SBCL 2.6.5 for New York 2026: 02:30 on 03-08 -> 3981940200, 01:30 on 11-01 ->
+  4002499800, the EDT reading).
+- Interpreter: `eval/LocalTimeZone.offset` (`ZoneId.systemDefault()`). JVM:
+  `JvmLocalTimeRuntimeBuilder`'s `_localTimeOffset`, the same three java.time calls emitted into
+  the class, gated on the name (no travelling runtime class: `-o X.class` stays one file).
+  Browser playground: `src/web/.../Target_LocalTimeZone` -> `BrowserTimeZone` (JS `Date`;
+  DST = offset east of min(Jan, Jul)). The native-image binary is the interpreter: GraalVM
+  reads `TZ` at run time.
+- WASM: `eval/LocalTimeLibrary`, spliced right INSIDE the prelude (keyed on the codec's
+  SURFACE names, so the prelude then supplies what it needs; prunable). Three arms:
+  Preview 1 / `--component` = `localtime.lisp`, a guest-side reader of `TZ` -> TZif file under
+  `TZDIR`/`/usr/share/zoneinfo` (v2+ block + footer POSIX rule) or a POSIX rule string, `TZ`
+  unset -> `/etc/localtime`, nothing readable -> UTC; read once per run. `--native` = a
+  `rontolisp:wasm-import` of the runner's `rltime.local_offset` (`(i64) -> i64`, the host C
+  library's `localtime_r`; `rontolisp-native/runner/src/localtime.rs`). `--no-wasi` = UTC.
+- **Why the runner and not the guest reader under `--native`**: the stub preopens `/`, but
+  `/etc/localtime` is an ABSOLUTE symlink on macOS (`/var/db/timezone/...`, and
+  `/usr/share/zoneinfo` itself is one) and on Debian/Ubuntu; cap-std refuses to follow it and
+  `path_readlink` refuses an absolute target (`.kb/read-load-streams.md`). Measured
+  2026-10-24: `(open "/etc/localtime" ...)` under `wasmtime run --dir /` answers nil. The
+  same wall stops plain `wasmtime run` with `TZ` unset -> UTC; `--env TZ=<name> --dir
+  /usr/share/zoneinfo` works (the host resolves the preopen's own symlink).
+- Remaining host differences (documented in `guides/clock-and-random.md`): the JVM does not
+  parse a POSIX rule `TZ` (it becomes the fixed offset at JVM start); JVM zone data is the
+  JDK's tzdb, WASM/native's the system's. Measured 2026-10-24 on macOS against SBCL 2.6.5 over
+  UTC, Asia/Tokyo, America/New_York, Australia/Sydney, Asia/Kolkata, Australia/Lord_Howe,
+  `EST5EDT,M3.2.0,M11.1.0`, `JST-9`, TZ unset: `--native` identical everywhere; interpreter/JVM
+  identical except the POSIX rule; Preview 1/component (with `--env TZ --dir zoneinfo`)
+  identical except TZ unset.
+- Size: a `.wasm` asking for the local zone carries the reader (+2,258 B on a one-line decode,
+  7,638 -> 9,896 B). A program whose every call passes a LITERAL zone (`(decode-universal-time t 0)`,
+  HTTP dates) gets the UTC arm instead, so it imports nothing new (no env, no file reads).
 
 ## `rontolisp:random-bytes`
 Cryptographic sibling of `random` (`Math.random` on interpreter/JVM): a prelude defun over the
@@ -80,6 +125,11 @@ a machine the compiler never saw, and a run-time query would break emitted-outpu
 Everything unknowable answers `nil`, never a fabricated string.
 
 ## Tests
+Local zone: `LocalTimeLibraryTest` (the guest reader against java.time around every
+transition 1972-2045, POSIX rules, the arms), `LocalTimeZoneTest` (interpreter, JVM, Preview 1,
+component as child processes under `TZ`, against SBCL's lines),
+`NativeOutputE2eTest#theLocalTimeZoneIsTheOneTzNamesAsWasmtimeGivenTheZoneFilesDecodesIt`, the
+runner's `localtime::tests`, ci-spec `time-functions` (TZ-independent round trips).
 `LispEvaluatorTest#evalGetenv`, `#bareGetenvIsNotACommonLispFunction`,
 `#evalSleepParksAndReturnsNil`, `#environmentEnquiryFamilyAnswersPerBackendConstants`;
 `JvmLispCompilerTest#compileAndRunGetenv`, `#compileAndRunSleep`;

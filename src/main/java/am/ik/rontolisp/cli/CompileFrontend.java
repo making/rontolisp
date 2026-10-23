@@ -25,6 +25,7 @@ import am.ik.rontolisp.eval.HttpReactorLibrary;
 import am.ik.rontolisp.eval.HttpServeLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.InflateLibrary;
+import am.ik.rontolisp.eval.LocalTimeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.SafetensorsLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -759,9 +760,14 @@ final class CompileFrontend {
 						SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))))));
 		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
 		// output, needed by the primitive calls the macOS splices above introduce.
-		List<LispVal> program = UnreadCharLibrary
-			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
-				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)), features)))));
+		// LocalTimeLibrary right INSIDE the prelude: the WASM targets' local time zone is
+		// named only through the prelude's universal time codec, so it keys on the
+		// codec's surface names, and the prelude then supplies what the zone reader is
+		// written over.
+		List<LispVal> zoned = LocalTimeLibrary.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)),
+				spliceBackend, noWasi, options.runnerHosted());
+		List<LispVal> program = UnreadCharLibrary.process(WitLibrary
+			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(zoned, features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

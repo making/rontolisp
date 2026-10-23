@@ -64,6 +64,9 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the
   Objective-C host (`runner/src/objc`, macOS aarch64 only -- elsewhere it exits 1 naming the
   platform) and runs ON thread 0, `sleep` turning the event loop ([objc.md](objc.md), "--native").
+  A module importing from `rltime` (the local time zone of the universal-time codec,
+  `.kb/time-environment-builtins.md`) gets `local_offset` from the host C library
+  (`runner/src/localtime.rs`, both stubs; `tzset` once, then `localtime_r`).
   A module importing from `rlhttp` (a program that fetches) needs the NETWORK runner, `rlrun-net`
   ("The network runner" below); the plain stub exits 1 naming it.
   Not part of the fingerprint: the host is linked per module import, and a module is only ever

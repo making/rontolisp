@@ -39,8 +39,10 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 - 組み込みの `#'name` を渡した `multiple-value-call` はラッパーの固定
   アリティのままです — それ以外の引数個数にはユーザ定義関数か `lambda` を
   渡してください。
-- CL で副次値を持つ他の組み込み関数（`decode-universal-time`、比に対する
-  `truncate` 系の剰余など）は単一値のままです —
+- CL で副次値を持つ他の組み込み関数（比に対する `truncate` 系の剰余など）は
+  単一値のままです —
+  [`decode-universal-time`](../reference/functions/decode-universal-time.md) と
+  [`get-decoded-time`](../reference/functions/get-decoded-time.md) は 9 個の値すべてを、
   [`find-symbol`](../reference/functions/find-symbol.md) と
   [`intern`](../reference/functions/intern.md) はアクセス可能性ステータスを、
   [`macroexpand-1`](../reference/functions/macroexpand-1.md) /
