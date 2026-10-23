@@ -306,6 +306,21 @@
           (tt "--blas") " で 0.034 ms になる"))
   (source "doc/ja/guides/blas-acceleration.md、gpu-acceleration.md (計測は Apple M4 Max)"))
 
+(slide :title "Mac アプリを作る"
+  (column
+    (ul (li (tt "objc") " で AppKit を呼ぶ")
+        (li (tt "appkit") " でウィンドウやボタンを組み立てる")
+        "インタプリタ、JVM、ネイティブ実行ファイルで動く"
+        "追加のインストールは要らない"))
+  (column
+    (image "macos-minesweeper.png" :alt "rontolisp で書いた macOS のマインスイーパー"))
+  (source "examples/browser/minesweeper/minesweeper-macos.lisp"))
+
+(slide :title "Metal で GPU に描く"
+  (p (tt "metal") " パッケージで Metal を呼び、約 13,000 個のボクセルからなる庭園をアニメーションで描く。")
+  (image "macos-pagoda-garden.png" :alt "Metal で描いたボクセルの庭園と五重塔")
+  (source "examples/macos/metal-pagoda-garden.lisp"))
+
 ;;; --- next steps -------------------------------------------------------------------
 
 (section "次の一歩")
