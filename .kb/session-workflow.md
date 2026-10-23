@@ -1,4 +1,4 @@
-# Session workflow: builds outside the reactor, the deploy job, long runs, shared `develop`, after-task checks
+# Session workflow: builds outside the reactor, the deploy job, the snapshot tag, long runs, shared `develop`, after-task checks
 
 ## Builds outside the root reactor
 
@@ -54,6 +54,22 @@ declared origin still gets its credentials, with a warning. When the wrapper rea
 server (3.10 `strict` scope refuses it otherwise); 3.9.16 rejects the tag with a settings warning,
 so it is not there yet. Rejected: `-Dmaven.repository.credentialScope=id` (turns the scoping off)
 and `<repositoryOrigins>` on `central` (also hands the Portal token to `repo.maven.apache.org`).
+
+## The snapshot tag
+
+`ci.yaml`'s `release` and `lispresen.yaml`'s `release` move their snapshot tag
+(`0.1.0-SNAPSHOT`, `lispresen-0.1.0-SNAPSHOT`) in place through
+`.github/scripts/move-snapshot-tag.sh`; the release is updated, never recreated (the comment in
+`ci.yaml`). GITHUB_TOKEN cannot hold the `workflows` permission, and GitHub refuses it any ref at
+a commit with a `.github/workflows` file added or changed relative to the DEFAULT BRANCH's tip
+(403 `Resource not accessible by integration`). Measured 2026-10-24: lispresen's run of
+`71a37b3ef`, itself a workflow change, moved its tag while it was the tip; `a3de5305a`'s runs
+were refused once `770fedc35` changed `ci.yaml` behind them; `0ee4585f2` moved while the tip
+already had `lispresen.yaml`, which it lacked (a file only the tip has is no refusal). The
+old-to-new diff is not what is checked. So a run that a workflow change overtook publishes
+nothing and passes: a newer run of the same workflow publishes, and with none the script
+dispatches one on the branch. A run older than the tag's commit publishes nothing either. Only a
+token with `workflows` (a GitHub App or PAT secret) would let every run move the tag.
 
 ## Waiting for a long run
 

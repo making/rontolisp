@@ -12,6 +12,7 @@ on:
     paths:
     - lispresen/**
     - .github/workflows/lispresen.yaml
+    - .github/scripts/move-snapshot-tag.sh
   workflow_dispatch: {}
 
 # One run at a time, never cancelled: a run cancelled while uploading would leave the
@@ -88,9 +89,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # move-snapshot-tag.sh dispatches a run of the tip when a workflow change overtook this one
+      actions: write
     env:
       TAG: lispresen-${{ needs.version.outputs.version }}
     steps:
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github/scripts
     - name: Download the executables
       uses: actions/download-artifact@v8
       with:
@@ -101,19 +107,17 @@ jobs:
     # the two never touch each other's release: move the tag and let the action below
     # overwrite the assets. Do NOT delete and recreate the release (`gh release delete
     # --cleanup-tag`): a failed create then leaves the install commands in
-    # lispresen/README.md pointing at nothing (ci.yaml, "Move the snapshot tag").
+    # lispresen/README.md pointing at nothing (ci.yaml, "Move the snapshot tag"). The
+    # script publishes nothing from a run a workflow change overtook, as there.
     - name: Move the snapshot tag to this commit
+      id: tag
       if: needs.version.outputs.is_snapshot == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
-      run: |
-        set -e
-        gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/${TAG}" \
-          -f "sha=${{ github.sha }}" -F force=true \
-        || gh api -X POST "repos/${{ github.repository }}/git/refs" \
-             -f "ref=refs/tags/${TAG}" -f "sha=${{ github.sha }}"
+      run: .github/scripts/move-snapshot-tag.sh "$TAG"
     # make_latest: false, so a lispresen release never takes "Latest" from rontolisp's.
     - name: Create release
+      if: steps.tag.outputs.publish != 'false'
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ env.TAG }}
