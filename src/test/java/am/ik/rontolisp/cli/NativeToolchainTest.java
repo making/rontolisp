@@ -174,7 +174,7 @@ class NativeToolchainTest {
 		assumeFalse("macos-x86_64".equals(host), "the one platform no release carries a stub for");
 		assertThatThrownBy(() -> NativeToolchain.load().stub("macos-x86_64", true))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageStartingWith("--native: this program fetches (rontolisp:fetch)")
+			.hasMessageStartingWith("--native: this program fetches, serves HTTP or opens TCP sockets")
 			.hasMessageContaining("carries no " + NativeToolchain.NETWORK_STUB + " for macos-x86_64");
 	}
 

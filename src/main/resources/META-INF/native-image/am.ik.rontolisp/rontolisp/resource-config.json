@@ -429,6 +429,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/runner-sockets\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.TlsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/tls\\.lisp"

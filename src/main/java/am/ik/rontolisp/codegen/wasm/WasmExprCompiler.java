@@ -602,19 +602,16 @@ final class WasmExprCompiler {
 						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.OPEN_STREAM_P_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
-					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
-					// these, so the compile-time socket rewrite of the public names
-					// cannot
-					// recurse (component-only; the names exist only post-splice).
-					if (!ctx.component) {
-						throw new UnsupportedOperationException(
-								"rontolisp::" + qn.member() + " is an internal --component binding");
-					}
+					// %io-* socket-dispatch defuns a socket provider splices
+					// (sockets.lisp under --component, runner-sockets.lisp on a --native
+					// module) fall back through these, so the compile-time socket rewrite
+					// of the public names cannot recurse (the names exist only
+					// post-splice).
 					// The socket rewrite maps a 0/1-argument (read-char s) to
 					// (%io-read-char s), whose non-socket arm lands here -- so the typed
 					// end-of-file lowering has to apply under the alias too, or a
-					// component would keep the old uncatchable TRAP for exactly the
-					// programs that splice sockets.lisp.
+					// module would keep the old uncatchable TRAP for exactly the
+					// programs that splice a provider.
 					LispVal wideRaw = switch (qn.member()) {
 						case LispNames.READ_BYTE_RAW_INTERNAL ->
 							ctx.functions.containsKey(LispNames.WIDE_READ_BYTE_INTERNAL)
@@ -684,11 +681,10 @@ final class WasmExprCompiler {
 				if (LispNames.STR_BYTE_LENGTH_INTERNAL.equals(qn.member())
 						|| LispNames.STR_BYTE_REF_INTERNAL.equals(qn.member())
 						|| LispNames.STR_FROM_BYTE_INTERNAL.equals(qn.member())) {
-					// Byte-level string access for sockets.lisp's chunk bookkeeping: a
-					// socket chunk's BYTES are the wire truth, and the character
-					// accessors
-					// UTF-8-decode them (component-only; the names exist only
-					// post-splice).
+					// Byte-level string access for the socket providers' chunk
+					// bookkeeping (sockets.lisp, runner-sockets.lisp): a socket chunk's
+					// BYTES are the wire truth, and the character accessors UTF-8-decode
+					// them (the names exist only post-splice).
 					WasmStrByteCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
@@ -796,22 +792,24 @@ final class WasmExprCompiler {
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
 						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
 						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member()) || LispNames.TCP_PEER_PORT.equals(qn.member())
-						|| LispNames.TCP_SET_TIMEOUT.equals(qn.member())) && !ctx.component) {
+						|| LispNames.TCP_SET_TIMEOUT.equals(qn.member())) && !ctx.component && !ctx.socketsSpliced) {
 					// Under --component the tcp built-ins are the spliced sockets.lisp
-					// defuns (over the wit-imported wasi:sockets@0.3.0) -- the symbol
-					// falls
-					// through to the ordinary call path, which resolves the defun (the
-					// wait-for pattern). Preview 1 has no host sockets; the call site
-					// compiles to a call-time error (not a compile error) so a spliced
-					// library whose socket layer is dead code still compiles -- s-sql
-					// depends on cl-postgres but never opens a connection, and the
+					// defuns (over the wit-imported wasi:sockets@0.3.0), and on a
+					// --native module the spliced runner-sockets.lisp defuns (over the
+					// runner's rltcp imports) -- the symbol falls through to the
+					// ordinary call path, which resolves the defun (the wait-for
+					// pattern). A plain Preview 1 module has no host sockets; the call
+					// site compiles to a call-time error (not a compile error) so a
+					// spliced library whose socket layer is dead code still compiles --
+					// s-sql depends on cl-postgres but never opens a connection, and the
 					// pruner cannot drop cl-postgres' defmethod-anchored socket chain.
 					// A --no-wasi build (either shape) keeps the same call-time policy
 					// with a message naming the actual conflict.
 					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(ctx.noWasi
 							? "rontolisp:" + qn.member() + " requires the component's wasi:sockets imports, which"
 									+ " --no-wasi excludes (a --no-wasi build imports nothing); drop --no-wasi"
-							: "rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
+							: "rontolisp:" + qn.member()
+									+ " requires the interpreter, the JVM backend, --component or --native"
 									+ " (no host socket API is wired on Preview 1 WASM)"),
 							ctx);
 					return;

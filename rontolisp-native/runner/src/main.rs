@@ -12,9 +12,10 @@
 //! (what `wasmtime run` answers on Unix), 1 when the module cannot be loaded.
 //!
 //! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers the
-//! `rlhttp` imports (`http`) of a program that fetches or serves HTTP. The side that
-//! assembles an output picks the one the module's imports need. Both answer the local time
-//! zone (`rltime`, `localtime`).
+//! `rlhttp` imports (`http`) of a program that fetches or serves HTTP and the `rltcp`
+//! imports (`tcp`) of one that opens TCP sockets. The side that assembles an output picks
+//! the one the module's imports need. Both answer the local time zone (`rltime`,
+//! `localtime`).
 
 use std::process::exit;
 
@@ -29,6 +30,8 @@ mod localtime;
 mod memfns;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod objc;
+#[cfg(feature = "net")]
+mod tcp;
 
 use rlabi::payload;
 use wasmtime::{Engine, Linker, Module, Store, Trap};
@@ -104,6 +107,14 @@ fn run() -> wasmtime::Result<()> {
         wasmtime::bail!(
             "this program fetches or serves HTTP, whose host is the network runner (rlrun-net), not this one"
         );
+    }
+    // A program using rontolisp:tcp-* (the usocket shim included) imports the TCP host
+    // (`tcp`, rlrun-net only): the sockets a Preview 1 module has no import for.
+    if module.imports().any(|i| i.module() == "rltcp") {
+        #[cfg(feature = "net")]
+        tcp::add_to_linker(&mut linker)?;
+        #[cfg(not(feature = "net"))]
+        wasmtime::bail!("this program opens TCP sockets, whose host is the network runner (rlrun-net), not this one");
     }
     // A program decoding a time in the local zone imports the C library's answer
     // (`localtime`): the module cannot read /etc/localtime through the sandbox itself.

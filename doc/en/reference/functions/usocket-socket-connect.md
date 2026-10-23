@@ -57,5 +57,8 @@ WASM component backend a failed connection returns `nil` instead of signaling
 - **Interpreter** and **JVM**: full support (delegates to
   `rontolisp:tcp-connect`).
 - **WASM**: component mode only (`--component`), IPv4 literals only; a failed
-  connection returns `nil`. Preview 1 is a compile error.
+  connection returns `nil`. A plain Preview 1 `.wasm` signals at the call.
+- **Native executable** (`--native`): full support, as on the interpreter and
+  the JVM -- a failed connection signals `usocket:socket-error`
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.

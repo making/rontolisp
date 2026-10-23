@@ -67,8 +67,9 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   A module importing from `rltime` (the local time zone of the universal-time codec,
   `.kb/time-environment-builtins.md`) gets `local_offset` from the host C library
   (`runner/src/localtime.rs`, both stubs; `tzset` once, then `localtime_r`).
-  A module importing from `rlhttp` (a program that fetches) needs the NETWORK runner, `rlrun-net`
-  ("The network runner" below); the plain stub exits 1 naming it.
+  A module importing from `rlhttp` (a program that fetches or serves HTTP) or `rltcp` (one
+  opening TCP sockets) needs the NETWORK runner, `rlrun-net` ("The network runner" below); the
+  plain stub exits 1 naming it.
   Not part of the fingerprint: the host is linked per module import, and a module is only ever
   assembled with the stub of its own build.
 - **Fingerprint** `rlnative-abi=3;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
@@ -231,8 +232,12 @@ costs more than the rest of the stub's growth combined, so it is a SECOND stub, 
 from the same crate with `--features net`, and only a module that imports `rlhttp` starts with it:
 `RontoLispCli` asks `WasmLispCompiler.importModules` of the FINISHED module (after the tree shaker,
 so a fetch nothing reaches picks the plain stub) and `NativeToolchain.stub(platform, network)`
-loads `rlrun` or `rlrun-net`. Every other output starts with `rlrun`, whose one new start-up step is
-the scan of the module's imports for `rlhttp`.
+loads `rlrun` or `rlrun-net`. A program opening TCP sockets (`rontolisp:tcp-*`, the usocket shim)
+imports `rltcp` -- the runner's `std::net` host (`runner/src/tcp.rs`, `.kb/tcp-sockets.md`,
+"--native: the runner's sockets"), under the same `net` feature though it adds no dependency, so
+one network runner answers every network import -- and starts with `rlrun-net` the same way
+(`SocketsLibrary.RUNNER_IMPORT_MODULE`, since 2026-10-24). Every other output starts with `rlrun`,
+whose one new start-up step is the scan of the module's imports for `rlhttp` and `rltcp`.
 
 `profile.release-runner.package.<crate>` builds
 rustls, ring, rustls-webpki, untrusted and rustls-pki-types at `opt-level = "z"`, which is what
@@ -260,9 +265,10 @@ network host costs less than it does on Linux; there `FetchSpecE2eTest` (native 
   configuration (and the roots) is built on the first HTTPS request.
 - Tests: `NativeFetchTest` (a program that never fetches carries the same module for every
   platform as for a `.wasm`; a fetching one imports exactly `rlhttp.start/head/readResponseBody`;
-  on Linux the output starts with the stub its imports need), `NativeToolchainTest` (the network
-  runner pairs with the same shim), the Rust `http::*` tests and the native leg of
-  `FetchSpecE2eTest`. A fetching `linux-aarch64` output ran the fetch program and HTTPS to
+  on Linux a fetching and a socket output start with the stub their imports need),
+  `NativeTcpTest` (the `rltcp` imports; a loopback executable), `NativeToolchainTest` (the
+  network runner pairs with the same shim), the Rust `http::*` and `tcp::*` tests and the native
+  leg of `FetchSpecE2eTest`. A fetching `linux-aarch64` output ran the fetch program and HTTPS to
   `example.com` under `qemu-aarch64-static -cpu cortex-a53` (by hand, 2026-09-25).
 
 ## macOS: the module inside the signed image

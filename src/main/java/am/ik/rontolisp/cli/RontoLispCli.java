@@ -41,6 +41,7 @@ import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
+import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceSession;
@@ -1253,10 +1254,12 @@ public final class RontoLispCli {
 			else if (nativeTarget != null) {
 				// Only the executable is written: the .wasm and its precompiled form
 				// never leave memory. The runner is the one the module's imports need:
-				// a fetch's rlhttp only the network runner answers.
+				// a fetch's or a server's rlhttp and a socket's rltcp only the network
+				// runner answers.
 				NativeToolchain toolchain = NativeToolchain.load();
-				boolean network = WasmLispCompiler.importModules(bytes)
-					.contains(FetchResponseShape.RUNNER_IMPORT_MODULE);
+				java.util.Set<String> imports = WasmLispCompiler.importModules(bytes);
+				boolean network = imports.contains(FetchResponseShape.RUNNER_IMPORT_MODULE)
+						|| imports.contains(SocketsLibrary.RUNNER_IMPORT_MODULE);
 				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform(), network),
 						toolchain.precompile(bytes, nativeTarget)));
 			}

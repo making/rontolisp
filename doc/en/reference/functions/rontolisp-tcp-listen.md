@@ -40,6 +40,10 @@ bidirectional stream (see
   literal. Compile with `--component` and run with `wasmtime run
   -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed
   bind returns `nil`. Call-time error in Preview 1 (core-module) mode.
+- **Native executable** (`--native`): as on the interpreter and the JVM -- the
+  runner binds the port, `host` may be a hostname or an IP literal, and a
+  failed bind signals the same error
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported (no raw TCP in the browser sandbox).
 
 ## Limitations

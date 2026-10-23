@@ -6474,6 +6474,17 @@ public final class LispNames {
 	public static final String STR_FROM_BYTE_INTERNAL = "%STR-FROM-BYTE";
 
 	/**
+	 * The internal {@code rontolisp::%sock-fail} signalling site of the {@code --native}
+	 * runner's socket provider ({@code runner-sockets.lisp}): the one place it signals a
+	 * host failure or a wrong-kind handle from. Its NAME is an exception-handling trigger
+	 * for the WASM compiler, the way the usocket guard is, so a program carrying the
+	 * provider compiles in EH mode and the signal is a catchable {@code simple-error}
+	 * that reports its text when uncaught -- a bare {@code error} outside EH mode is a
+	 * trap carrying nothing (.kb/tcp-sockets.md, "--native: the runner's sockets").
+	 */
+	public static final String SOCK_FAIL_INTERNAL = "%SOCK-FAIL";
+
+	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
 	 * JSON document string into Lisp values following {@code com.inuoe.jzon}'s defaults:
 	 * a JSON object becomes a hash table with string keys, an array a simple vector, and

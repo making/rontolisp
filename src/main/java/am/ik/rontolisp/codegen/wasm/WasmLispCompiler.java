@@ -3475,12 +3475,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		catch (IllegalArgumentException ex) {
 			throw new UnsupportedOperationException(ex.getMessage());
 		}
-		if (this.component) {
-			// Socket I/O redirection + async promotion: a no-op unless sockets.lisp is
-			// spliced. Runs before any await counting so the promoted awaits are sized
-			// like user awaits.
-			program = WasmSocketsRewrite.rewrite(program);
-		}
+		// Socket I/O redirection + async promotion: a no-op unless a socket dispatch
+		// provider is spliced -- the component's sockets.lisp / stdin-dispatch.lisp, or
+		// the --native runner's runner-sockets.lisp, whose futures are settled values
+		// the degenerate Preview 1 await passes through. Runs before any await counting
+		// so the promoted awaits are sized like user awaits.
+		program = WasmSocketsRewrite.rewrite(program);
 		// --component compiles the raw async forms as entry+resume state machines
 		// (WasmAsyncEmit): a top-level async-defun becomes a plain defun whose name is
 		// remembered, and lowerProgram is skipped. Everything else (Preview 1, and a
@@ -3645,12 +3645,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A generic function whose name is a compiler-lowered built-in (fast-io's close
 		// methods): rename its dispatcher, keep the built-in as the default method, and
 		// route the program's call sites through it. No-op without such a generic.
-		// Under --component with sockets.lisp spliced, WasmSocketsRewrite has already
+		// With a socket dispatch provider spliced (sockets.lisp under --component,
+		// runner-sockets.lisp on a --native module), WasmSocketsRewrite has already
 		// redirected close/listen/... call sites onto its %io-* dispatch defuns, so the
 		// alias map makes those heads dispatch too and points each fall-through at the
 		// %io-* defun (whose socket-table bookkeeping must stay in the loop).
-		program = ShadowedBuiltins.process(program, closRegistry,
-				this.component ? WasmSocketsRewrite.builtinDispatchAliases(program) : java.util.Map.of());
+		program = ShadowedBuiltins.process(program, closRegistry, WasmSocketsRewrite.builtinDispatchAliases(program));
 		// A defun nested in a function body REDEFINES a top-level defun of the same name
 		// at run time, and only a global variable can hold both answers: the top-level
 		// definition is renamed and an assignment of its function value takes its place,
@@ -3975,11 +3975,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| bakedLayoutTags.contains(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME));
 		this.emitsUndefinedFunction = ehMode
 				&& (programUsesSymbol(program, LispNames.FMAKUNBOUND) || typedUndefinedFunction);
-		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
-		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
-		// ordinary user import -- the base variant; the dedicated sockets blob variant
-		// and its hand-written adapter are gone). In Preview 1 mode they raise a
-		// compile error (WasmExprCompiler). fetch + tcp and serve + tcp now compose:
+		// The rontolisp:tcp-* built-ins are spliced defuns the same way: sockets.lisp
+		// over a wit-imported wasi:sockets@0.3.0 under --component (an ordinary user
+		// import -- the base variant; the dedicated sockets blob variant and its
+		// hand-written adapter are gone), runner-sockets.lisp over the runner's rltcp
+		// imports on a --native module. A plain Preview 1 module compiles each call to
+		// a call-time error (WasmExprCompiler). fetch + tcp and serve + tcp compose:
 		// both are just user imports of different interfaces.
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
@@ -4991,6 +4992,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.hostRandom(this.hostRandom)
 			// Both transports make fetch a spliced defun the call site falls through to.
 			.hostFetch(this.hostFetch || this.runnerFetch)
+			// And both socket providers the tcp-* built-ins.
+			.socketsSpliced(WasmSocketsRewrite.spliced(program))
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
@@ -10457,6 +10460,15 @@ public final class WasmLispCompiler implements LispCompiler {
 								}
 							}
 						}
+						// The --native runner's socket provider signals its host failures
+						// through this one site (runner-sockets.lisp): the name is the
+						// trigger, as the usocket guard's is, so the signal carries its
+						// text and a handler-case can take it, where a bare %error
+						// outside EH mode is a trap carrying nothing.
+						if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
+								&& LispNames.SOCK_FAIL_INTERNAL.equals(qn.member())) {
+							return true;
+						}
 					}
 				}
 			}
@@ -11497,6 +11509,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		boolean hostFetch = false;
 
+		/**
+		 * True when a socket dispatch provider is spliced (sockets.lisp under
+		 * {@code --component}, runner-sockets.lisp on a {@code --native} module): the
+		 * {@code rontolisp:tcp-*} call sites fall through to the spliced defuns instead
+		 * of the Preview 1 call-time refusal. Not the function table: a native taken as a
+		 * VALUE registers a wrapper under the built-in's own name, whose body is the call
+		 * site itself, so a table test sent {@code #'rontolisp:tcp-connect} into a loop.
+		 */
+		boolean socketsSpliced = false;
+
 		// True in a rontolisp:http-handler (serve-mode) component.
 		boolean serve = false;
 
@@ -12297,6 +12319,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
 			this.hostFetch = builder.hostFetch;
+			this.socketsSpliced = builder.socketsSpliced;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.blockExitTag = builder.blockExitTag;
@@ -12457,6 +12480,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean hostRandom = false;
 
 			private boolean hostFetch = false;
+
+			private boolean socketsSpliced = false;
 
 			private boolean serve = false;
 
@@ -12646,6 +12671,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.reactorComponent = proto.reactorComponent;
 				this.hostRandom = proto.hostRandom;
 				this.hostFetch = proto.hostFetch;
+				this.socketsSpliced = proto.socketsSpliced;
 				this.serve = proto.serve;
 				this.ehMode = proto.ehMode;
 				this.blockExitTag = proto.blockExitTag;
@@ -12858,6 +12884,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder hostFetch(boolean hostFetch) {
 				this.hostFetch = hostFetch;
+				return this;
+			}
+
+			Builder socketsSpliced(boolean socketsSpliced) {
+				this.socketsSpliced = socketsSpliced;
 				return this;
 			}
 

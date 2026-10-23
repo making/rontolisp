@@ -690,11 +690,14 @@ final class CompileFrontend {
 		loaded = TlsLibrary.process(loaded, spliceBackend);
 		// The rontolisp:tcp-* built-ins on the --component path are the sockets.lisp
 		// library over a wit-imported wasi:sockets/types@0.3.0 (this splice replaced
-		// the hand-written sockets adapter). Spliced like http.lisp; a no-op elsewhere
-		// (the interpreter/JVM keep java.net.Socket, Preview 1 keeps the compile
-		// error). The trigger includes any usocket: reference: the usocket shim rides
-		// tcp-*, and its own splice runs later in this pipeline.
-		loaded = SocketsLibrary.process(loaded, spliceBackend);
+		// the hand-written sockets adapter), and on a --native module the
+		// runner-sockets.lisp library over the runner's rltcp imports -- the same
+		// dispatch layer over the other host. Spliced like http.lisp; a no-op
+		// elsewhere (the interpreter/JVM keep java.net.Socket, a plain Preview 1
+		// module keeps the call-time error). The trigger includes any usocket:
+		// reference: the usocket shim rides tcp-*, and its own splice runs later in
+		// this pipeline.
+		loaded = SocketsLibrary.process(loaded, spliceBackend, options.runnerHosted());
 		// Component stdin over wit-imported wasi:cli/stdin@0.3.0 (stdin.lisp), bound
 		// FROM the fixed import block. Two shapes: the %stdin-*-or-raw-f helpers
 		// sockets.lisp's dispatchers fall through to (a serve program gets the

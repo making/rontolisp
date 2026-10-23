@@ -21,28 +21,46 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code --component} implementation of the {@code rontolisp:tcp-*} built-ins: a
- * Lisp-source library ({@code sockets.lisp}) over a wit-imported
- * {@code wasi:sockets/types@0.3.0} surface ({@code sockets.wit}), both on the classpath.
- * The interpreter and the JVM keep their {@code java.net.Socket} implementations; Preview
- * 1 keeps the compile error (no host sockets). This library replaced the hand-written
- * {@code adapter-sockets.wat} -- a component tcp program is the base variant plus one
- * appended user import.
+ * The WASM implementations of the {@code rontolisp:tcp-*} built-ins, two Lisp-source
+ * providers of ONE dispatch layer:
+ * <ul>
+ * <li>{@code --component}: {@code sockets.lisp} over a wit-imported
+ * {@code wasi:sockets/types@0.3.0} surface ({@code sockets.wit}). This library replaced
+ * the hand-written {@code adapter-sockets.wat} -- a component tcp program is the base
+ * variant plus one appended user import.</li>
+ * <li>{@code --native}: {@code runner-sockets.lisp} over the runner's {@code rltcp}
+ * imports ({@link #RUNNER_IMPORT_MODULE}; {@code rontolisp-native/runner/src/tcp.rs}),
+ * which only the network runner answers -- the Preview 1 module of a native executable
+ * has no socket import of its own, and every call blocks the module's one thread.</li>
+ * </ul>
+ * The interpreter and the JVM keep their {@code java.net.Socket} implementations; a plain
+ * Preview 1 {@code .wasm} keeps the call-time error (no host sockets).
  *
  * <p>
- * The library also carries the {@code %io-*} dispatch defuns the WASM compiler's
+ * Both providers carry the {@code %io-*} dispatch defuns the WASM compiler's
  * socket-read/write rewrite targets ({@code read-line}/{@code read-byte}/
  * {@code read-char}/{@code write-line}/{@code write-byte}/{@code close} on a socket
  * handle consume the socket's stream instead of {@code fd_read}/{@code fd_write}), and
- * the {@code %...-future} async internals the async-body promotion awaits.
+ * the {@code %...-future} internals the async-body promotion awaits -- real async
+ * internals on the component, settled plain defuns on the runner. The rewrite picks its
+ * target by call shape without knowing which provider it got, so the two define the same
+ * names with the same shapes ({@code StdinLibraryTest} pins it).
  *
  * <p>
  * Like {@link HttpLibrary}, <strong>it lowers {@code sockets.lisp}'s own
  * {@code rontolisp:wit-import} directive ITSELF</strong> (calling
  * {@link WitImportDirective#lower}): {@code eval/WitImportInliner} has already run by the
- * time a library is spliced.
+ * time a library is spliced. {@code runner-sockets.lisp}'s {@code rontolisp:wasm-import}
+ * directives are Preview 1 core imports the backend binds as they are.
  */
 public final class SocketsLibrary {
+
+	/**
+	 * The runner's host module {@code runner-sockets.lisp} imports from
+	 * ({@code rontolisp-native/runner/src/tcp.rs}): a module importing it starts with the
+	 * network runner.
+	 */
+	public static final String RUNNER_IMPORT_MODULE = "rltcp";
 
 	private static final List<String> TCP_MEMBERS = List.of(LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
 			LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
@@ -50,24 +68,42 @@ public final class SocketsLibrary {
 
 	private static volatile @Nullable List<LispVal> forms;
 
+	private static volatile @Nullable List<LispVal> runnerForms;
+
 	private static volatile @Nullable String witText;
 
 	private SocketsLibrary() {
 	}
 
 	/**
-	 * The compile-path splice: when a {@code --component} program references a
-	 * {@code rontolisp:tcp-*} built-in (or the usocket package, whose shim rides them --
-	 * the usocket splice itself runs later in the pipeline, so its tcp references are not
-	 * visible here), splice {@code sockets.lisp} (its {@code wit-import} directive
-	 * already lowered). A no-op on every other backend and when the program does not
-	 * touch sockets.
+	 * The {@code --component} splice:
+	 * {@link #process(List, WitExportDirective.Backend, boolean)} with no runner.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
 	 * @return the program, spliced when applicable
 	 */
 	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend) {
-		if (backend != WitExportDirective.Backend.WASM_COMPONENT) {
+		return process(program, backend, false);
+	}
+
+	/**
+	 * The compile-path splice: when a {@code --component} program, or the Preview 1
+	 * module of a {@code --native} executable, references a {@code rontolisp:tcp-*}
+	 * built-in (or the usocket package, whose shim rides them -- the usocket splice
+	 * itself runs later in the pipeline, so its tcp references are not visible here),
+	 * splice the target's provider: {@code sockets.lisp} (its {@code wit-import}
+	 * directive already lowered) for the component, {@code runner-sockets.lisp} for the
+	 * runner. A no-op on every other backend and when the program does not touch sockets.
+	 * @param program the top-level forms
+	 * @param backend the backend being compiled for
+	 * @param runnerHosted whether the module runs under the {@code --native} runner
+	 * ({@code CompileFrontend.Options.runnerHosted()})
+	 * @return the program, spliced when applicable
+	 */
+	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend,
+			boolean runnerHosted) {
+		boolean runner = runnerHosted && backend == WitExportDirective.Backend.WASM_GC;
+		if (backend != WitExportDirective.Backend.WASM_COMPONENT && !runner) {
 			return program;
 		}
 		boolean referenced = false;
@@ -79,6 +115,11 @@ public final class SocketsLibrary {
 		}
 		if (!referenced || definesTcpConnect(program)) {
 			return program;
+		}
+		if (runner) {
+			List<LispVal> out = new ArrayList<>(runnerForms());
+			out.addAll(program);
+			return out;
 		}
 		List<LispVal> sockForms = forms();
 		// The WIT member filter: every name a sockets.lisp defun mentions (the
@@ -203,6 +244,21 @@ public final class SocketsLibrary {
 					cached = List
 						.copyOf(LispReader.readAllFromString(readResource("sockets.lisp"), Features.INTERPRETER));
 					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static List<LispVal> runnerForms() {
+		List<LispVal> cached = runnerForms;
+		if (cached == null) {
+			synchronized (SocketsLibrary.class) {
+				cached = runnerForms;
+				if (cached == null) {
+					cached = List.copyOf(
+							LispReader.readAllFromString(readResource("runner-sockets.lisp"), Features.INTERPRETER));
+					runnerForms = cached;
 				}
 			}
 		}

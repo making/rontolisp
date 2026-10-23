@@ -188,8 +188,14 @@ final class WasmSocketsRewrite {
 		return out;
 	}
 
-	// The splice marker: a top-level (defun rontolisp::%io-read-line ...).
-	private static boolean spliced(List<LispVal> program) {
+	/**
+	 * Whether a socket dispatch provider is spliced: the marker is a top-level
+	 * {@code (defun rontolisp::%io-read-line ...)}, which sockets.lisp,
+	 * stdin-dispatch.lisp and runner-sockets.lisp each define.
+	 * @param program the top-level forms
+	 * @return whether the dispatch defuns are present
+	 */
+	static boolean spliced(List<LispVal> program) {
 		for (LispVal form : program) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
 					&& (LispNames.DEFUN.equals(head.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()))

@@ -60,6 +60,10 @@ the server closes:
   `nil`. The tcp built-ins
   compile in Preview 1 (core-module) mode but every call raises a call-time
   error naming the backends that work.
+- **Native executable** (`--native`): as on the interpreter and the JVM -- the
+  runner opens the socket, `host` may be a hostname or an IP literal, and a
+  failed connection signals the same error
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so every tcp function signals an error.
 

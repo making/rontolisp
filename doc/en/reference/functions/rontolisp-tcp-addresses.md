@@ -42,4 +42,8 @@ Error: TCP-PEER-ADDRESS expects a connected socket handle
   return `nil` instead of signaling (so a spliced usocket program still runs
   there). Call-time error in Preview 1 (core-module) mode, like every tcp
   built-in.
+- **Native executable** (`--native`): as on the interpreter and the JVM --
+  real addresses and ports, and the `simple-error` above for a wrong kind of
+  handle
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.

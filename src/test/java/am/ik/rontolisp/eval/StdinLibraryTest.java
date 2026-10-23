@@ -98,25 +98,33 @@ class StdinLibraryTest {
 	}
 
 	@Test
-	void theTwoDispatchSplicesDefineTheSameNamesAndShapes() {
-		// stdin-dispatch.lisp and sockets.lisp are ALTERNATIVE providers of the same
-		// %io-* / %*-future dispatch names -- exactly one of them is spliced. The WASM
-		// socket/stdin I/O rewrite picks its target by CALL SHAPE and cannot know which
-		// file it got, so a name or an argument shape that only one file defines is a
-		// compile failure ("the function RONTOLISP::%IO-... is undefined", or an arity
-		// error) for every program on the other splice. That is not hypothetical: the
-		// bounded sequence ops and the eof-carrying read-char/read-line landed in
-		// sockets.lisp first and broke every async stdin component until this file
-		// caught up. Compare the name -> (required, optional) shape maps, not just the
-		// names.
-		Map<String, String> sockets = dispatchShapes(
-				SocketsLibrary.process(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"), COMPONENT));
+	void theThreeDispatchSplicesDefineTheSameNamesAndShapes() {
+		// stdin-dispatch.lisp, sockets.lisp and runner-sockets.lisp (the --native
+		// runner's provider) are ALTERNATIVE providers of the same %io-* / %*-future
+		// dispatch names -- exactly one of them is spliced. The WASM socket/stdin I/O
+		// rewrite picks its target by CALL SHAPE and cannot know which file it got, so a
+		// name or an argument shape that only one file defines is a compile failure
+		// ("the function RONTOLISP::%IO-... is undefined", or an arity error) for every
+		// program on the other splices. That is not hypothetical: the bounded sequence
+		// ops and the eof-carrying read-char/read-line landed in sockets.lisp first and
+		// broke every async stdin component until stdin-dispatch.lisp caught up. Compare
+		// the name -> (required, optional) shape maps, not just the names.
+		List<LispVal> tcp = LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))");
+		Map<String, String> sockets = dispatchShapes(SocketsLibrary.process(tcp, COMPONENT));
 		Map<String, String> stdin = dispatchShapes(StdinLibrary.process(
 				LispReader.readAllFromString(
 						"(rontolisp:async-defun main () (print (read-line)))\n" + "(rontolisp:await (main))"),
 				COMPONENT, false));
+		Map<String, String> runner = dispatchShapes(
+				SocketsLibrary.process(tcp, WitExportDirective.Backend.WASM_GC, true));
 		assertThat(stdin).isNotEmpty();
 		assertThat(stdin).containsAllEntriesOf(sockets);
+		assertThat(runner).containsAllEntriesOf(sockets);
+		assertThat(sockets).containsAllEntriesOf(runner);
+		// The runner's splice is the --native module's alone: a plain Preview 1 .wasm
+		// and a component read with the runner flag keep their own answers.
+		assertThat(SocketsLibrary.process(tcp, WitExportDirective.Backend.WASM_GC, false)).isSameAs(tcp);
+		assertThat(dispatchShapes(SocketsLibrary.process(tcp, COMPONENT, true))).isEqualTo(sockets);
 	}
 
 	// name -> "required/optional" for every dispatch defun a splice provides. Only the

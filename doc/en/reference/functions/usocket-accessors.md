@@ -32,5 +32,8 @@ context receives the address.
 - **Interpreter** and **JVM**: full support.
 - **WASM**: component mode only; all six accessors return real addresses and
   ports, like the interpreter/JVM (a failure returns `nil` instead of
-  signaling). Preview 1 is a compile error.
+  signaling). A plain Preview 1 `.wasm` signals at the call.
+- **Native executable** (`--native`): full support, as on the interpreter and
+  the JVM
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.

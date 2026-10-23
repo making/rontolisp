@@ -39,4 +39,7 @@ behind the usocket shim's
   mode a client sets it to avoid. Catch it (or do not set a read timeout) on
   this backend. Call-time error in Preview 1 (core-module) mode, like every
   tcp built-in.
+- **Native executable** (`--native`): a real read deadline, as on the
+  interpreter and the JVM; a read past it signals `read-line: Read timed out`
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.
