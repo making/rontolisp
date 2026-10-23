@@ -44,14 +44,43 @@ API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random
 
 [`encode-universal-time`](../reference/functions/encode-universal-time.md) と
 [`decode-universal-time`](../reference/functions/decode-universal-time.md)
-はその整数とカレンダー要素を純粋な算術で相互変換するので、どこでも同一に振る舞います — ただし意図的な差異が 1
-つあります: タイムゾーンを省略すると**マシンのローカルゾーンではなく GMT**
-になります。ローカルゾーンをバックエンド横断で得る手段が存在しない(WASI はタイムゾーンを一切公開していない)ためです。
+はその整数とカレンダー要素を純粋な算術で相互変換するので、どこでも同一に振る舞います。タイムゾーンを省略するとローカルゾーンで変換し、
+[`get-decoded-time`](../reference/functions/get-decoded-time.md) もローカルゾーンで現在時刻を返します
+(後述の[ローカルタイムゾーン](#the-local-time-zone))。
 
 待機は時計のもう半分です。[`sleep`](../reference/functions/sleep.md)
 はインタプリタと JVM ではスレッドを停止させ、`--component` では本物のホストタイマーを待ち(CPU
 を消費しません)、WASM Preview 1 ではクロックをビジーウェイトします(インポートにクロックはあってもタイマーが無いためです)。`--no-wasi`
 ではシグナルします — 後述します。
+
+## ローカルタイムゾーン
+
+`time-zone` を省略した `decode-universal-time`、`encode-universal-time` と
+`get-decoded-time` は、夏時間を含むローカルタイムゾーンを使い、SBCL と同じ形で報告します。
+`time-zone` はそのゾーンの標準時の GMT から西へのオフセット (時間単位。インドのようなゾーンでは比)、
+`daylight-p` は夏時間の 1 時間が加わっているかどうかです。ゾーンの問い合わせ先はビルドごとに異なります:
+
+| ビルド | ローカルゾーン |
+| --- | --- |
+| インタプリタ、JVM、`rontolisp` バイナリ | JVM の既定ゾーン: `TZ`、なければシステムの設定。`-Duser.timezone` は両方より優先 |
+| WASM (Preview 1、`--component`) | C ライブラリと同じ手順でモジュール自身が読む: `TZ` は `/usr/share/zoneinfo` (または `TZDIR`) 以下のゾーンファイル名、ファイルパス、`EST5EDT,M3.2.0,M11.1.0` のような POSIX 規則のいずれか。`TZ` がなければ `/etc/localtime` |
+| `--native` | ランナーがホストの C ライブラリに問い合わせる: `TZ`、なければ `/etc/localtime` |
+| ブラウザのプレイグラウンド | ブラウザのゾーン |
+| WASM `--no-wasi` | UTC。モジュールは環境変数もファイルも持たない |
+
+WASM モジュールが読めるのは wasmtime が渡したものだけなので、環境変数とゾーンファイルの両方を渡します:
+
+```sh
+wasmtime run --env TZ=Asia/Tokyo --dir /usr/share/zoneinfo prog.wasm
+```
+
+`TZ` がない場合、モジュールは `/etc/localtime` を読む必要があります。しかし macOS と多くの Linux
+ディストリビューションではこれが絶対パスへのシンボリックリンクであり、wasmtime のサンドボックスはそれをたどりません。
+モジュールが読めないゾーンは UTC になります。`--native` の実行ファイルにはこの制限がなく、ネイティブのプログラムと同じ答えを返します。
+
+ホストによる違いが 2 つ残ります。JVM は POSIX 規則を読まないので、`TZ=EST5EDT,M3.2.0,M11.1.0`
+は JVM 起動時点のオフセットに固定され、切り替えが起きません。また、ゾーンファイルは WASM と `--native`
+ではシステムのもの、JVM では JDK 自身が持つものを使うため、最近規則が変わったゾーンでは両方が更新されるまで答えが食い違うことがあります。
 
 ## ホストを持たないモジュール — `--no-wasi`
 

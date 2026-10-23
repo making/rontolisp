@@ -521,6 +521,7 @@ categories:
       - { slug: get-universal-time, name: "get-universal-time" }
       - { slug: encode-universal-time, name: "encode-universal-time" }
       - { slug: decode-universal-time, name: "decode-universal-time" }
+      - { slug: get-decoded-time, name: "get-decoded-time" }
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
       - { slug: sleep, name: "sleep" }

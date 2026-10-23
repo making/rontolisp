@@ -5,6 +5,7 @@
 ;;   rontolisp examples/net/hello-clack.lisp -o App.class && java -cp . App
 ;;   rontolisp examples/net/hello-clack.lisp -o app.jar && java -jar app.jar
 ;;   rontolisp examples/net/hello-clack.lisp -o app.war                 # Servlet 6 container
+;;   rontolisp examples/net/hello-clack.lisp --native -o app && ./app   # native executable, :8080
 ;;   rontolisp examples/net/hello-clack.lisp -o app.wasm --component && \
 ;;     wasmtime serve -S cli=y app.wasm
 ;;   rontolisp examples/net/hello-clack.lisp -o worker.wasm --no-wasi   # Cloudflare Worker
@@ -19,7 +20,8 @@
          (format nil "Hello from Clack on rontolisp!~%~a ~a~%"
                  (getf env :request-method) (getf env :path-info)))))
 
-;; Works on the interpreter and the JDK HTTP server only.
+;; Read where the program owns the socket: the interpreter, the JVM, a native
+;; executable.
 (defun server-port ()
   (let ((value (uiop:getenvp "PORT"))) (if value (parse-integer value) 8080)))
 

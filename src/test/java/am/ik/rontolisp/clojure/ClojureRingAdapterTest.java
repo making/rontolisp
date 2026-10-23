@@ -26,6 +26,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.SocketTest;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -37,7 +38,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * {@code ring.adapter.rontolisp/run-server}: one Ring handler served over real requests
  * on the interpreter and the JVM (a socket, {@code :join? false} so the test keeps the
- * thread) and called through the {@code handle-request} export of a {@code --no-wasi}
+ * thread) and by a {@code --native} executable (its runner's server, the process the test
+ * stops), and called through the {@code handle-request} export of a {@code --no-wasi}
  * module by a JS host (the Preview 1 serving transport). The {@code --component} leg
  * under {@code wasmtime serve} is {@code ServeRingComponentE2eTest}; the war leg is
  * {@code WarE2eTest}. What every leg pins: the request map (a lower-cased method keyword
@@ -149,6 +151,53 @@ class ClojureRingAdapterTest {
 		}
 		finally {
 			RontoHttpServer.stopServer(handle);
+		}
+	}
+
+	@SocketTest
+	void aNativeExecutableServesARingHandlerThroughItsRunner() throws Exception {
+		int port = freePort();
+		Path source = this.workDir.resolve("probe.clj");
+		Files.writeString(source, program("handler", port));
+		Files.writeString(this.workDir.resolve("asset.txt"), "héllo\n");
+		Path executable = this.workDir.resolve("probe");
+		try {
+			runCli(source.toString(), "--native", "-o", executable.toString());
+		}
+		catch (UnsupportedOperationException ex) {
+			assumeTrue(
+					Boolean.getBoolean("rontolisp.native.required")
+							|| !String.valueOf(ex.getMessage()).contains("--native is not available for "),
+					ex.getMessage());
+			throw ex;
+		}
+		// The runner serves until it is stopped: run-server never returns on a native
+		// executable, :join? false or not.
+		Process server = new ProcessBuilder(executable.toString()).redirectErrorStream(true)
+			.redirectOutput(this.workDir.resolve("server.log").toFile())
+			.start();
+		try {
+			awaitListening(port, server);
+			assertServes(port);
+		}
+		finally {
+			server.destroyForcibly().waitFor();
+		}
+	}
+
+	private void awaitListening(int port, Process server) throws Exception {
+		long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+		while (true) {
+			try (java.net.Socket probe = new java.net.Socket("127.0.0.1", port)) {
+				return;
+			}
+			catch (IOException ex) {
+				if (!server.isAlive() || System.nanoTime() > deadline) {
+					throw new IllegalStateException(
+							"the server never listened: " + Files.readString(this.workDir.resolve("server.log")), ex);
+				}
+				Thread.sleep(50);
+			}
 		}
 	}
 

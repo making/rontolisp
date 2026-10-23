@@ -11,14 +11,16 @@
 //! Exit status: the program's `proc_exit` code, 0 when `_start` returns, 134 after a trap
 //! (what `wasmtime run` answers on Unix), 1 when the module cannot be loaded.
 //!
-//! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers a
-//! fetch's `rlhttp` imports (`http`). The side that assembles an output picks the one the
-//! module's imports need.
+//! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers the
+//! `rlhttp` imports (`http`) of a program that fetches or serves HTTP. The side that
+//! assembles an output picks the one the module's imports need. Both answer the local time
+//! zone (`rltime`, `localtime`).
 
 use std::process::exit;
 
 #[cfg(feature = "net")]
 mod http;
+mod localtime;
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_os = "linux",
@@ -92,15 +94,21 @@ fn run() -> wasmtime::Result<()> {
             "this program uses the Objective-C runtime (objc:, appkit:), which a --native output reaches on macOS on Apple silicon only"
         );
     }
-    // A program using rontolisp:fetch imports the network host (`http`, rlrun-net only);
-    // nothing of it runs before the first request.
+    // A program using rontolisp:fetch, or serving HTTP (clack:clackup, Ring's run-server),
+    // imports the network host (`http`, rlrun-net only); nothing of it runs before the
+    // first request or the server's start.
     if module.imports().any(|i| i.module() == "rlhttp") {
         #[cfg(feature = "net")]
         http::add_to_linker(&mut linker)?;
         #[cfg(not(feature = "net"))]
         wasmtime::bail!(
-            "this program uses rontolisp:fetch, whose host is the network runner (rlrun-net), not this one"
+            "this program fetches or serves HTTP, whose host is the network runner (rlrun-net), not this one"
         );
+    }
+    // A program decoding a time in the local zone imports the C library's answer
+    // (`localtime`): the module cannot read /etc/localtime through the sandbox itself.
+    if module.imports().any(|i| i.module() == localtime::MODULE) {
+        localtime::add_to_linker(&mut linker)?;
     }
     let mut store = Store::new(&engine, wasi.build_p1());
     let instance = linker.instantiate(&mut store, &module)?;

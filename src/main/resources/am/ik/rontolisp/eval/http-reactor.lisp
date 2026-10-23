@@ -59,7 +59,13 @@
 ;;;;                                     ;   passes one out of band (the second
 ;;;;                                     ;   dispatch argument) wins over it.
 ;;;;         "scheme": "https",          ; optional, defaults to "http"
-;;;;         "remote-addr": "203.0.113.7"}  ; optional, Clack's :remote-addr
+;;;;         "remote-addr": "203.0.113.7",  ; optional, Clack's :remote-addr
+;;;;         "remote-port": 51234,       ; optional, Clack's :remote-port
+;;;;         "protocol": "HTTP/1.1",     ; optional, defaults to "HTTP/1.1"
+;;;;         "local-addr": "127.0.0.1",  ; optional: the address and port the
+;;;;         "local-port": 5000}         ;   request came in on, the fallback of
+;;;;                                     ;   :server-name / :server-port when no
+;;;;                                     ;   Host header names them
 ;;;;
 ;;;;   out  {"status": 200,
 ;;;;         "headers": [["content-type", "application/json"]],  ; an ARRAY of
@@ -88,8 +94,10 @@
 ;;;; recoverable, since the 500 below carries its report in band and the host
 ;;;; must discard the chunks it already took rather than prepending them to it.
 ;;;;
-;;;; :remote-port is always nil (a reactor host exposes no peer port), and
-;;;; :server-name / :server-port come from the Host header.
+;;;; A host that owns no socket (a Worker) leaves the peer and local keys out:
+;;;; :remote-port is then nil, and :server-name / :server-port come from the
+;;;; Host header. The runner of a --native executable owns one and fills them
+;;;; (http-serve.lisp's native leg).
 ;;;;
 ;;;; %http-reactor-handle CATCHES: on a reactor an uncaught Lisp error is a trap
 ;;;; that takes the whole instance down, and the host would have to throw the
@@ -426,8 +434,10 @@
   ;; The positional raw tuple %http-make-env consumes:
   ;;   (method request-uri header-alist body server-protocol url-scheme
   ;;    local-name local-port remote-addr remote-port script-name)
-  ;; The Host header supplies :server-name / :server-port, so the two
-  ;; placeholders below never win when the host sends one. BODY is the
+  ;; The Host header supplies :server-name / :server-port, so the local
+  ;; address and port (or the two placeholders standing in for them when the
+  ;; host has no socket to read them from) never win when the request names
+  ;; one. BODY is the
   ;; out-of-band body source; the envelope's own "body" key is the fallback,
   ;; which is what keeps a host that has not moved yet working unchanged.
   ;; "script-name" is the envelope's optional mount point (a host that mounts
@@ -436,8 +446,10 @@
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
    (rontolisp::%http-reactor-header-alist (gethash "headers" req))
    (rontolisp::%http-reactor-request-body body (gethash "body" req) buffered)
-   "HTTP/1.1" (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req)
-   nil (or (gethash "script-name" req) "")))
+   (or (gethash "protocol" req) "HTTP/1.1") (gethash "scheme" req)
+   (or (gethash "local-addr" req) "localhost") (or (gethash "local-port" req) 80)
+   (gethash "remote-addr" req) (gethash "remote-port" req)
+   (or (gethash "script-name" req) "")))
 
 (defun rontolisp::%http-reactor-write (sink chunk)
   ;; One response chunk out, RESOLVED. A host writer that suspends answers a

@@ -173,6 +173,55 @@ class HttpHandlerJvmTest {
 		waitForPort(port);
 	}
 
+	@am.ik.rontolisp.testsupport.SocketTest
+	void aNativeExecutableServesTheDirectiveThroughItsRunner() throws Exception {
+		// The directive on a --native executable: its runner serves, and the default
+		// :raw-body is the asynchronous stream an async-defun handler drains with
+		// read-all, as on every other transport; an octet body goes out as it is.
+		int port = freePort();
+		Path source = this.tempDir.resolve("serve.lisp");
+		Files.writeString(source, """
+				(rontolisp:async-defun handle (env)
+				  (if (string= (getf env :path-info) "/octets")
+				      (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+				        (setf (aref v 0) 255)
+				        (setf (aref v 1) 254)
+				        (setf (aref v 2) 65)
+				        (list 200 (list :content-type "application/octet-stream") v))
+				      (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				        (list 200 nil
+				              (list (if (eq (getf env :request-method) :POST) "POST" "?") ":" body
+				                    " " (format nil "~a" (getf env :remote-port)))))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port));
+		Path executable = this.tempDir.resolve("serve");
+		try {
+			new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+					new java.io.PrintStream(new java.io.ByteArrayOutputStream(), true))
+				.run(new String[] { source.toString(), "--native", "-o", executable.toString() });
+		}
+		catch (UnsupportedOperationException ex) {
+			org.junit.jupiter.api.Assumptions.assumeTrue(
+					Boolean.getBoolean("rontolisp.native.required")
+							|| !String.valueOf(ex.getMessage()).contains("--native is not available for "),
+					ex.getMessage());
+			throw ex;
+		}
+		Process server = new ProcessBuilder(executable.toString()).redirectErrorStream(true)
+			.redirectOutput(this.tempDir.resolve("serve.log").toFile())
+			.start();
+		try {
+			waitForPort(port);
+			HttpResponse<String> echo = post(port, "/", "payload");
+			assertThat(echo.body()).as(Files.readString(this.tempDir.resolve("serve.log")))
+				.matches("POST:payload [1-9][0-9]*");
+			assertThat(getBytes(port, "/octets").body()).containsExactly(0xff, 0xfe, 0x41);
+		}
+		finally {
+			server.destroyForcibly().waitFor();
+		}
+	}
+
 	@Test
 	void compiledDirectiveServesClackEnvironment() throws Exception {
 		int port = freePort();

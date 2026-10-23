@@ -12,6 +12,7 @@ HTTP 受信トランスポートで提供します。組み込みなので、`cl
 | インタプリタ | `rontolisp app.clj` | プログラムがバインドするソケット（`:port`、`:host`） |
 | JVM | `-o App.class`、`-o app.jar` | 同じソケットサーバー |
 | Servlet war | `-o app.war` | ポートはコンテナが持ち、`run-server` はハンドラを登録して戻る |
+| ネイティブ実行ファイル | `--native -o app` | ソケットは実行ファイルのランナーが持つ（`:port`、`:host`）。`run-server` はプロセスが止められるまで配信する（[ネイティブ実行ファイルへのコンパイル](../../compiling/native.md#serving-http)） |
 | WASM コンポーネント | `-o app.wasm --component`、`wasmtime serve` で実行 | ソケットはホストが持ち、`run-server` はすぐ戻る |
 | WASM リアクター | `-o app.wasm --no-wasi` | ホストが `handle-request` エクスポートを呼ぶ（[Clack ガイド](../../guides/clack.md)のリアクタビルド） |
 
@@ -72,7 +73,7 @@ get /hello
 ハンドラがマップ以外を返した場合と、それ以外の種類のボディを返した場合はエラーを通知し、
 トランスポートは 500 を返します。プログラムが読めるファイルを指さない `java.io.File` も
 同じです。WebAssembly の配信トランスポート（`wasmtime serve`、リアクター）にはファイル
-システムがないので、ファイルを配信できるのはインタープリター、JVM、war です。プログラムが
+システムがないので、ファイルを配信できるのはインタープリター、JVM、war、ネイティブ実行ファイルです。プログラムが
 持ち運ぶ[リソース](clojure-java-io.md)の上のバイトストリームはどこでも配信できます。
 レスポンスを組み立てる関数（`file-response` と `resource-response` を含む）とパラメーターの
 ミドルウェアは、組み込みの [Ring ユーティリティ](ring-util.md)にあります。

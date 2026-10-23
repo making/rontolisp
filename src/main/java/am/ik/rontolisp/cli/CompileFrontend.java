@@ -25,6 +25,7 @@ import am.ik.rontolisp.eval.HttpReactorLibrary;
 import am.ik.rontolisp.eval.HttpServeLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.InflateLibrary;
+import am.ik.rontolisp.eval.LocalTimeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.SafetensorsLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -554,6 +555,12 @@ final class CompileFrontend {
 		// ring.adapter.rontolisp/run-server both call it. FIRST, because each leg is
 		// what a later pass reads -- the http-handler directive (HttpHandlerInliner,
 		// HttpLibrary, the :raw-body scan), the reactor marker (HttpReactorInliner).
+		// A --native module is Preview 1, which has no incoming TCP: the runner serves
+		// (http-serve.lisp's #+rontolisp-native leg), so the http-handler DIRECTIVE
+		// becomes a call of that leg here, before the splice below reads the program.
+		if (options.runnerHosted()) {
+			loaded = HttpReactorInliner.lowerHttpHandlerForRunner(loaded);
+		}
 		loaded = HttpServeLibrary.process(loaded, features);
 		// objc:, appkit:, metal: and scene: have no lowering for a .wasm and never will
 		// (no WASM runtime offers a foreign function API, AppKit or Metal); the JVM
@@ -759,9 +766,14 @@ final class CompileFrontend {
 						SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))))));
 		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
 		// output, needed by the primitive calls the macOS splices above introduce.
-		List<LispVal> program = UnreadCharLibrary
-			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
-				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)), features)))));
+		// LocalTimeLibrary right INSIDE the prelude: the WASM targets' local time zone is
+		// named only through the prelude's universal time codec, so it keys on the
+		// codec's surface names, and the prelude then supplies what the zone reader is
+		// written over.
+		List<LispVal> zoned = LocalTimeLibrary.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)),
+				spliceBackend, noWasi, options.runnerHosted());
+		List<LispVal> program = UnreadCharLibrary.process(WitLibrary
+			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(zoned, features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

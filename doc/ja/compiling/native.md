@@ -34,9 +34,20 @@ SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt ./fetcher
 
 fetch するプログラムは、HTTP と TLS を含む大きいランナーから始まります。それ以外のプログラムは小さいランナーのままです([サイズと速度](#size-and-speed))。
 
+## HTTP の配信
+
+`(clack:clackup app :server :rontolisp)` で起動した [Clack](../guides/clack.md) アプリケーション、`run-server` で起動した [Ring](../clojure/reference/ring.md) ハンドラ、[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md) で配信するハンドラは、実行ファイルから配信できます: ランナーが `:port` と `:address` にバインドして接続を受け付け、HTTP/1.1 を話し、リクエストにはプログラムが応答します。
+
+```bash
+rontolisp app.lisp --native -o app
+./app        # 止めるまで配信する(Ctrl-C)
+```
+
+ランナーは接続をそれぞれ専用のスレッドで読み(リクエストのヘッダーとボディ全体。ボディは `Content-Length` でも chunked でもかまいません)、HTTP/1.1 のとおり接続を keep-alive し、1 分間何も来ない接続を閉じます。アプリケーションはプログラムの唯一のスレッドで 1 リクエストずつ応答し、レスポンスは `Content-Length` 付きでまとめて送られます。そのため `clackup`、`run-server`、`http-handler` は戻りません: `:use-thread` や `:join? false` があってもプログラムを先へ進める別のスレッドがなく、サーバーはプロセスとともに止まります。リクエストはインタプリタや JVM が組み立てるものと同じで、相手のアドレスとポートも入ります。ハンドラが配信するファイルは、ほかのプログラムと同じくファイルシステムから読みます([ファイル](#files))。
+
 ## フラグ
 
-デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。fetch するプログラムにフラグは要りません。リクエストはランナー自身が送ります([HTTP](#http))。
+デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。fetch や配信をするプログラムにフラグは要りません。リクエストの送信も配信もランナー自身が行います([HTTP](#http)、[HTTP の配信](#serving-http))。
 
 ## 動作環境
 
@@ -58,4 +69,4 @@ Apple シリコン (`macos-aarch64`) では、実行ファイルは `objc`、`ap
 
 ## サイズと速度
 
-実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch するプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。
+実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch や配信をするプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

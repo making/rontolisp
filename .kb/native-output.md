@@ -64,6 +64,9 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the
   Objective-C host (`runner/src/objc`, macOS aarch64 only -- elsewhere it exits 1 naming the
   platform) and runs ON thread 0, `sleep` turning the event loop ([objc.md](objc.md), "--native").
+  A module importing from `rltime` (the local time zone of the universal-time codec,
+  `.kb/time-environment-builtins.md`) gets `local_offset` from the host C library
+  (`runner/src/localtime.rs`, both stubs; `tzset` once, then `localtime_r`).
   A module importing from `rlhttp` (a program that fetches) needs the NETWORK runner, `rlrun-net`
   ("The network runner" below); the plain stub exits 1 naming it.
   Not part of the fingerprint: the host is linked per module import, and a module is only ever
@@ -219,7 +222,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 ## The network runner
 
 A program that fetches (`.kb/fetch-http.md`, "--native") imports `rlhttp`, which the runner answers
-with an HTTP/1.1 client over rustls + ring (`runner/src/http`, the cargo feature `net`). That client
+with an HTTP/1.1 client over rustls + ring (`runner/src/http`, the cargo feature `net`). A program
+that SERVES (Clack's `:server :rontolisp`, Ring's `run-server`) imports `rlhttp` too, the
+server's fields (`serve`, `nextRequest`, ... -- `runner/src/http/serve.rs`, `.kb/http-server.md`,
+"--native: the runner's server"), so it starts with the same network runner; the server adds
+no dependency (std::net + the client's `httparse`). That client
 costs more than the rest of the stub's growth combined, so it is a SECOND stub, `rlrun-net`, built
 from the same crate with `--features net`, and only a module that imports `rlhttp` starts with it:
 `RontoLispCli` asks `WasmLispCompiler.importModules` of the FINISHED module (after the tree shaker,

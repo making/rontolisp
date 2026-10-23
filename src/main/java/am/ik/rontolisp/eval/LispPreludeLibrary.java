@@ -60,10 +60,11 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code get-setf-expansion} -- the five setf-expansion values (lite: variable and
  * accessor-cons places, environment ignored), consumed through the ordinary
  * {@code %mv-spill} channel by a {@code multiple-value-bind} caller.</li>
- * <li>{@code encode-universal-time} / {@code decode-universal-time} -- the CL universal
- * time codec (seconds since 1900-01-01 00:00:00 GMT) as pure era-based Gregorian
- * arithmetic; lite: a nil time-zone means GMT, not the local zone (no backend-portable
- * local-zone source exists), and {@code daylight-p} decodes as nil.</li>
+ * <li>{@code encode-universal-time} / {@code decode-universal-time} /
+ * {@code get-decoded-time} -- the CL universal time codec (seconds since 1900-01-01
+ * 00:00:00 GMT) as pure era-based Gregorian arithmetic; a nil time-zone is the local
+ * zone, daylight saving time included, through the per-backend {@code %local-time-offset}
+ * primitive.</li>
  * <li>The pathname family -- {@code pathname} / {@code parse-namestring} /
  * {@code namestring} / {@code merge-pathnames} / {@code make-pathname} /
  * {@code probe-file} / {@code truename} plus the {@code %path-ns} unwrap helper: a
@@ -3106,11 +3107,26 @@ public final class LispPreludeLibrary {
 		// Universal time = seconds since 1900-01-01 00:00:00 GMT. Days go through the
 		// era-based civil-date algorithm (proleptic Gregorian, exact for any year),
 		// so both directions are pure integer arithmetic that every backend runs
-		// identically. Lite deviation, documented: a nil time-zone means GMT (zone 0),
-		// not the machine's local zone -- no backend-portable local-zone source
-		// exists (WASI exposes no timezone), and defaulting to the one zone every
-		// backend agrees on keeps the pair backend-identical. 25567 = days from
-		// 1900-01-01 to the 1970-01-01 pivot of the civil-date algorithm.
+		// identically. 25567 = days from 1900-01-01 to the 1970-01-01 pivot of the
+		// civil-date algorithm.
+		//
+		// A missing time-zone is the LOCAL zone (CLHS 25.1.4.1), daylight saving time
+		// included, asked of %local-time-offset through %local-zone -- the one
+		// per-backend piece (.kb/time-environment-builtins.md). Its answer is the total
+		// offset east of UTC in seconds, doubled, plus 1 under daylight saving time.
+		// The time-zone a decode returns is the STANDARD zone (west-positive hours,
+		// rational where the zone is), daylight-p saying whether the hour on top of it
+		// is in effect -- CLHS's model, which assumes one hour of daylight saving, and
+		// SBCL's answer. Encoding a local wall clock asks the zone twice, as SBCL does:
+		// at the wall-clock hour read as UTC, then at the instant that first guess
+		// names, so a time in a spring-forward gap or a fall-back overlap lands where
+		// SBCL's does. The clamp keeps every host inside the range all of them can
+		// answer (a JavaScript Date's, +-8.64e12 seconds).
+		SOURCES.put(LispNames.LOCAL_ZONE_INTERNAL, """
+				(defun %local-zone (universal-time)
+				  (%local-time-offset (max -8640000000000
+				                           (min 8640000000000 (- universal-time 2208988800)))))
+				""");
 		SOURCES.put(LispNames.ENCODE_UNIVERSAL_TIME, """
 				(defun encode-universal-time (second minute hour date month year &optional time-zone)
 				  (let* ((y (if (<= month 2) (- year 1) year))
@@ -3120,15 +3136,19 @@ public final class LispPreludeLibrary {
 				         (doy (+ (floor (+ (* 153 mp) 2) 5) (- date 1)))
 				         (doe (+ (* yoe 365) (floor yoe 4) (- (floor yoe 100)) doy))
 				         (days-1970 (+ (* era 146097) doe -719468))
-				         (tz (or time-zone 0)))
-				    (+ (* (+ days-1970 25567) 86400)
-				       (* hour 3600) (* minute 60) second
-				       (* tz 3600))))
+				         (hour-start (+ (* (+ days-1970 25567) 86400) (* hour 3600)))
+				         (local (+ hour-start (* minute 60) second)))
+				    (if time-zone
+				        (+ local (* time-zone 3600))
+				        (- local
+				           (floor (%local-zone (- local (floor (%local-zone hour-start) 2))) 2)))))
 				""");
 		SOURCES.put(LispNames.DECODE_UNIVERSAL_TIME, """
 				(defun decode-universal-time (universal-time &optional time-zone)
-				  (let* ((tz (or time-zone 0))
-				         (ut (- universal-time (* tz 3600)))
+				  (let* ((zone (if time-zone 0 (%local-zone universal-time)))
+				         (daylight (oddp zone))
+				         (east (if time-zone (- (* time-zone 3600)) (floor zone 2)))
+				         (ut (+ universal-time east))
 				         (days (floor ut 86400))
 				         (secs (- ut (* days 86400)))
 				         (z (+ (- days 25567) 719468))
@@ -3148,7 +3168,11 @@ public final class LispPreludeLibrary {
 				            (floor secs 3600)
 				            date month year
 				            (mod (+ (- days 25567) 3) 7)
-				            nil tz)))
+				            daylight
+				            (or time-zone (/ (- (if daylight 3600 0) east) 3600)))))
+				""");
+		SOURCES.put(LispNames.GET_DECODED_TIME, """
+				(defun get-decoded-time () (decode-universal-time (get-universal-time)))
 				""");
 		// The environment-enquiry family (CLHS 25.1.5). Every one of them is a CONSTANT
 		// per backend, so they are prelude defuns rather than per-backend built-ins, and

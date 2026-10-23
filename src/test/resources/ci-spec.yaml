@@ -28029,10 +28029,22 @@ cases:
       (print (> (get-universal-time) 3786825600))
       (print (integerp (get-internal-real-time)))
       (print (integerp (get-internal-run-time)))
+      ;; Without a zone the codec takes the local one, whatever TZ this run has: the
+      ;; zone and daylight flag a decode returns encode the same instant back, and so
+      ;; does the decoded wall clock alone. An explicit zone is the zone.
+      (multiple-value-bind (s mi h d mo y dow dst tz) (decode-universal-time 3993062400)
+        (print (list (rationalp tz) (integerp dow)
+                     (= 3993062400 (- (encode-universal-time s mi h d mo y tz) (if dst 3600 0)))
+                     (= 3993062400 (encode-universal-time s mi h d mo y)))))
+      (print (multiple-value-list (decode-universal-time 3993062400 -9)))
+      (print (length (multiple-value-list (get-decoded-time))))
     expected: |
       T
       T
       T
+      (T T T T)
+      (0 0 9 15 7 2026 2 NIL -9)
+      9
   - name: signum
     source: |
       (print (signum -5))

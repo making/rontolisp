@@ -91,6 +91,10 @@ signature > heading > body, then earlier offset.
   indexed including the `<h1>` repeating the title — skipping it made the trees' indexes
   diverge. Anchors come from `alignHeadingIds`. `DocGenTest` pins the shape. `fetch` needs a
   real origin — preview over `jwebserver`, not `file://`.
+- `DocGenTest` reads both files with snakeyaml (JSON is YAML). **snakeyaml 2.3 threw
+  `IndexOutOfBoundsException` when a surrogate pair straddled its 1024-char read** -- content
+  placement alone (an unrelated page's edit moved `clojure/deviations.md`'s supplementary
+  characters onto the boundary, 2026-10-24); 2.6 reads one char less and is the floor.
 
 ## Build and preview
 ```bash

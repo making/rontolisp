@@ -41779,7 +41779,7 @@ public final class LispMacroExpander {
 			case LispNames.VALUES, LispNames.VALUES_LIST, LispNames.FUNCALL, LispNames.APPLY, LispNames.EVAL,
 					LispNames.MULTIPLE_VALUE_CALL, LispNames.MULTIPLE_VALUE_PROG1, LispNames.PARSE_INTEGER,
 					LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.DECODE_FLOAT,
-					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME,
+					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME,
 					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
 					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT ->
 				true;
