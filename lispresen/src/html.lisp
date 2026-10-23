@@ -22,6 +22,7 @@ body{font-family:FONTS}
 .slide{position:absolute;left:0;top:0;overflow:hidden;background:var(--bg);display:none}
 .slide.active{display:block}
 html:not(.js) #stage{position:static;overflow:visible}
+html.js #stage{touch-action:manipulation}
 html:not(.js) #deck{position:static}
 html:not(.js) .slide{display:block;position:relative;margin-bottom:32px}
 h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}

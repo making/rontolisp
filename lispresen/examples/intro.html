@@ -23,6 +23,7 @@ body{font-family:'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-
 .slide{position:absolute;left:0;top:0;overflow:hidden;background:var(--bg);display:none}
 .slide.active{display:block}
 html:not(.js) #stage{position:static;overflow:visible}
+html.js #stage{touch-action:manipulation}
 html:not(.js) #deck{position:static}
 html:not(.js) .slide{display:block;position:relative;margin-bottom:32px}
 h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}
@@ -633,7 +634,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">使い方</p>
 <h1 class="title">キー操作</h1>
 <div class="body" style="top:232px;height:776px">
-<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>スワイプでも<wbr>送れる。<wbr>印刷すると 1&nbsp;枚 1&nbsp;ページの PDF に<wbr>なる</caption><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">キー</th><th scope="col">動作</th></tr></thead><tbody><tr><td><code>→ ↓ Space PageDown</code></td><td>次へ</td></tr><tr><td><code>← ↑ PageUp</code></td><td>前へ</td></tr><tr><td><code>Home End</code></td><td>最初と<wbr>最後</td></tr><tr><td><code>F</code></td><td>全画面 (ダブルクリックでも)</td></tr><tr><td><code>O</code></td><td>全スライドの<wbr>一覧</td></tr><tr><td><code>P</code></td><td>発表者ウィンドウ</td></tr><tr><td><code>E</code></td><td>コードの<wbr>編集</td></tr></tbody></table>
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>タップ (左 3&nbsp;分の 1&nbsp;で<wbr>前へ) や<wbr>スワイプでも<wbr>送れる。<wbr>印刷で 1&nbsp;枚 1&nbsp;ページの PDF</caption><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">キー</th><th scope="col">動作</th></tr></thead><tbody><tr><td><code>→ ↓ Space PageDown</code></td><td>次へ</td></tr><tr><td><code>← ↑ PageUp</code></td><td>前へ</td></tr><tr><td><code>Home End</code></td><td>最初と<wbr>最後</td></tr><tr><td><code>F</code></td><td>全画面 (ダブルクリックでも)</td></tr><tr><td><code>O</code></td><td>全スライドの<wbr>一覧</td></tr><tr><td><code>P</code></td><td>発表者ウィンドウ</td></tr><tr><td><code>E</code></td><td>コードの<wbr>編集</td></tr></tbody></table>
 </div>
 <div class="page">43</div>
 </section>
@@ -1230,13 +1231,20 @@ hooks.place.push(callouts);
 addEventListener('resize',fit);
 d.addEventListener('fullscreenchange',function(){fit();wake();});
 addEventListener('hashchange',function(){show(fromHash());});
-stage.addEventListener('dblclick',toggleFull);
+var y0=0,t0=0,tt=0,TAPPABLE='a,button,input,textarea,select,label,summary,video,audio,iframe,[contenteditable],[tabindex],.codebox.runnable,.out';
+function typing(){var a=d.activeElement;return !!a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'||a.isContentEditable);}
+stage.addEventListener('dblclick',function(){if(Date.now()-tt>1000)toggleFull();});
 fs.addEventListener('click',function(e){e.stopPropagation();fs.blur();toggleFull();});
 fs.addEventListener('dblclick',function(e){e.stopPropagation();});
 stage.addEventListener('mousemove',wake);
-stage.addEventListener('touchstart',function(e){x0=e.touches[0].clientX;},{passive:true});
-stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0;x0=null;
-if(Math.abs(dx)>50)move(dx<0?1:-1);});
+stage.addEventListener('touchstart',function(e){var v=window.visualViewport,p=e.touches[0];tt=Date.now();
+x0=e.touches.length>1||(v&&v.scale>1.01)||typing()?null:p.clientX;y0=p.clientY;t0=tt;},{passive:true});
+stage.addEventListener('touchcancel',function(){x0=null;});
+stage.addEventListener('touchend',function(e){tt=Date.now();if(x0===null||e.touches.length)return;
+var p=e.changedTouches[0],dx=p.clientX-x0,dy=p.clientY-y0,s=getSelection();x0=null;
+if(Math.abs(dx)>50){move(dx<0?1:-1);return;}
+if(Math.abs(dx)>10||Math.abs(dy)>10||tt-t0>500||ov||presenter||e.target.closest(TAPPABLE)||(s&&!s.isCollapsed))return;
+e.preventDefault();wake();move(p.clientX<stage.clientWidth/3?-1:1);});
 window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
 if(presenter)buildPresenter();
 deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});

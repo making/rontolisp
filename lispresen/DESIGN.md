@@ -635,7 +635,7 @@ follows what it is about; the parser records them as it reads (`number-steps`).
   class="ln">`, the highlight spans closed and opened again at a line end), `data-hot`
   with the steps that bring it forward.
 - The player hides every step of a slide entered forward; each page advance (→, ↓,
-  space, PageDown, Enter, a swipe) reveals the next, the slide's last moves on, and going
+  space, PageDown, Enter, a tap, a swipe) reveals the next, the slide's last moves on, and going
   back undoes the last one revealed before it moves to the previous slide, which it
   enters with every step taken. Hidden items keep their room (`visibility: hidden`), so
   nothing moves.
@@ -689,7 +689,7 @@ the previous slide.
   as a box animated from the old rectangle to the new one while the new `pre` shows no
   background and does not clip. Everything it added is removed when the animation ends
   or anything else changes the slide.
-- It plays on a page advance (keys, a swipe, or the presenter window's advance, which
+- It plays on a page advance (keys, a tap, a swipe, or the presenter window's advance, which
   the message to the audience window carries), between adjacent slides only. A jump
   (`#N`, the overview, Home/End) switches at once, as does the presenter window itself,
   whose views are thumbnails, and `prefers-reduced-motion: reduce`.
@@ -1022,7 +1022,7 @@ One file containing:
   `--muted`), font stacks, the layout classes, and print CSS (`@page` sized to the
   canvas, one slide per page) for PDF export through the browser's print dialog.
 - The player script: canvas scaling, navigation (arrow keys, space, PageUp/PageDown for
-  clickers, Home/End, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
+  clickers, Home/End, tap, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
   below),
   the runtime check, a presenter window (`P`, below), and the runnable-code worker,
   included only when the deck has runnable code.
@@ -1055,12 +1055,34 @@ over a `BroadcastChannel` named after the file's path. The presenter's copy of t
 slide shows the audience window's edits and outputs, and its Run and Reset act in the
 audience window, where the code runs.
 
+### Touch
+
+A phone shows the canvas letterboxed as on any screen, held upright too: the slide is the
+same picture, so there is no second, scrolling layout to keep in step with it.
+
+- A tap (a touch that moves under 10 px and lifts within 500 ms) on the left third of the
+  stage goes back, anywhere else goes forward, a step at a time like the keys. Forward is
+  most of the taps, so it gets the larger part; the band covers the whole stage height, so
+  the empty space above and below an upright slide works too. A tap that moves cancels
+  the touch's default action (`preventDefault`), so no click or `dblclick` follows it.
+- A tap on something that does something itself is left to it: links, buttons, form
+  fields, `[tabindex]`, `[contenteditable]`, a runnable code block (a tap edits it) and its
+  output. A tap while text is selected clears the selection, and one while the editor has
+  focus leaves the editor, instead of moving.
+- A horizontal swipe over 50 px moves as before; a touch is a swipe or a tap, never both.
+  Two fingers, a pinch-zoomed page (`visualViewport.scale` above 1), or the editor with
+  focus move nothing, so panning a zoomed slide does not turn the page.
+- A mouse click moves nothing, so the desktop works as before.
+- `touch-action: manipulation` on the stage turns off the double-tap zoom, so two quick
+  taps are two page moves. A `dblclick` within 1 s of a touch is ignored, so a double tap
+  on a link or a code block does not toggle full screen.
+
 ### Full screen
 
 Presenting is done in full screen; the windowed view is for preparation.
 
-- `F`, double-click on the slide, or the full-screen button of the toolbar (shown on
-  mouse movement, hidden after 2 s) calls `requestFullscreen` on the stage element. The
+- `F`, a mouse double-click on the slide, or the full-screen button of the toolbar (shown
+  on mouse movement or a tap, hidden after 2 s) calls `requestFullscreen` on the stage element. The
   Fullscreen API needs a user gesture, so the deck cannot open in full screen by itself.
 - The canvas scale is recomputed on `resize` and `fullscreenchange`, so entering full
   screen changes only the scale, never the layout the solver computed. The letterbox

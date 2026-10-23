@@ -1,7 +1,7 @@
 ;;;; player.lisp -- the script that presents the slides.
 ;;;;
 ;;;; *PLAYER-SCRIPT* scales the fixed canvas to the window (letterboxed), moves between
-;;;; slides (keys, swipe, #N in the URL), toggles full screen (F, double-click, the
+;;;; slides (keys, tap, swipe, #N in the URL), toggles full screen (F, double-click, the
 ;;;; button), shows the overview (O) and the presenter window (P), and corrects the
 ;;;; static sizes where the fonts the browser has are wider than the model (the runtime
 ;;;; check; ?check shows what it changed), and morphs the code of a (slide :morph t ...)
@@ -329,13 +329,20 @@ hooks.place.push(callouts);
 addEventListener('resize',fit);
 d.addEventListener('fullscreenchange',function(){fit();wake();});
 addEventListener('hashchange',function(){show(fromHash());});
-stage.addEventListener('dblclick',toggleFull);
+var y0=0,t0=0,tt=0,TAPPABLE='a,button,input,textarea,select,label,summary,video,audio,iframe,[contenteditable],[tabindex],.codebox.runnable,.out';
+function typing(){var a=d.activeElement;return !!a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'||a.isContentEditable);}
+stage.addEventListener('dblclick',function(){if(Date.now()-tt>1000)toggleFull();});
 fs.addEventListener('click',function(e){e.stopPropagation();fs.blur();toggleFull();});
 fs.addEventListener('dblclick',function(e){e.stopPropagation();});
 stage.addEventListener('mousemove',wake);
-stage.addEventListener('touchstart',function(e){x0=e.touches[0].clientX;},{passive:true});
-stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0;x0=null;
-if(Math.abs(dx)>50)move(dx<0?1:-1);});
+stage.addEventListener('touchstart',function(e){var v=window.visualViewport,p=e.touches[0];tt=Date.now();
+x0=e.touches.length>1||(v&&v.scale>1.01)||typing()?null:p.clientX;y0=p.clientY;t0=tt;},{passive:true});
+stage.addEventListener('touchcancel',function(){x0=null;});
+stage.addEventListener('touchend',function(e){tt=Date.now();if(x0===null||e.touches.length)return;
+var p=e.changedTouches[0],dx=p.clientX-x0,dy=p.clientY-y0,s=getSelection();x0=null;
+if(Math.abs(dx)>50){move(dx<0?1:-1);return;}
+if(Math.abs(dx)>10||Math.abs(dy)>10||tt-t0>500||ov||presenter||e.target.closest(TAPPABLE)||(s&&!s.isCollapsed))return;
+e.preventDefault();wake();move(p.clientX<stage.clientWidth/3?-1:1);});
 window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
 if(presenter)buildPresenter();
 deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});

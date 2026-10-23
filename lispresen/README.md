@@ -238,8 +238,9 @@ success, 1 errors (or warnings under `--strict`), 2 usage.
 ## Presenting
 
 Open the HTML file in a browser. Arrow keys, space, PageUp/PageDown (clickers),
-Home/End and swiping move between slides; `#N` in the URL opens slide N. `F`, a double
-click or the button in the bottom-right corner toggles full screen. `O` shows all slides.
+Home/End and swiping move between slides; on a touch screen, a tap on the left third goes
+back and anywhere else goes forward. `#N` in the URL opens slide N. `F`, a double click
+or the button in the bottom-right corner toggles full screen. `O` shows all slides.
 Printing to PDF puts one slide on each page.
 
 `P` opens the presenter window: the current and next slide, the notes, a timer (click it

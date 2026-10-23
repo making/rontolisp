@@ -328,7 +328,7 @@
 
 (slide :title "キー操作" :kicker "使い方"
   (table :header ("キー" "動作")
-         :caption "スワイプでも送れる。印刷すると 1 枚 1 ページの PDF になる"
+         :caption "タップ (左 3 分の 1 で前へ) やスワイプでも送れる。印刷で 1 枚 1 ページの PDF"
     ((tt "→ ↓ Space PageDown") "次へ")
     ((tt "← ↑ PageUp") "前へ")
     ((tt "Home End") "最初と最後")
