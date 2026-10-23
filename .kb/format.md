@@ -75,7 +75,17 @@ calling `formatMessagePieces` itself for the literal. (d) carries the renderer f
 `(warn ctrl a b)`; only `error` also injects `%error-runtime`. Until 2026-09-29 the literal half was
 missing: `(error "~d arg~:p" n)` in a program with no `handler-case` compiled to a call of the
 undefined `%fmt-render` (`JvmLispCompilerTest.anUncaughtErrorWhoseLiteralControlOnlyTheRendererCanLowerReportsItsMessage`,
-`WasmLispCompilerIntegrationTest.warnWithALiteralControlOnlyTheRendererCanLowerRendersIt`). A program with no way in carries
+`WasmLispCompilerIntegrationTest.warnWithALiteralControlOnlyTheRendererCanLowerRendersIt`). (e) The
+registry's condition `:report`s are scanned beside the program, as `mayCreateInstances` and
+`mayCreateComplex` scan them: a typed signal of a class with a report of its own inlines that
+report at the site (`expandTypedSignal`), and `define-condition` left it in the registry. Only the
+routed report runtime carried it into the scan before, so under `SignalMessages.LAZY` (wasm-GC
+outside EH mode) `uiop:not-implemented-error`'s `(apply #'format ...)` report compiled to a call
+of an undefined `%fmt-render` and warned; the run itself was the silent trap every uncaught signal
+is there (`WasmLispCompilerIntegrationTest.anUncaughtConditionOutsideEhModeStaysSilent`, now under
+`UndefinedWarnings.forbid`). The cost, measured 2026-10-23: the dead-code pass drops the renderer
+such a module never reaches, but the `*print-pretty*` initialization it spells stays (+48 B on
+`(uiop:chdir "/tmp")`, +171 B on a two-form toy). A program with no way in carries
 none of the renderer (NOT tree-shakeable -- every arm is reachable from
 `%fmt-render`). The interpreter cannot inject top-level defuns, so
 `LispEvaluator.ensureFormatRendererLoaded` evaluates the same forms on the first resolution of a

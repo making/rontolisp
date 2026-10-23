@@ -27097,7 +27097,7 @@ public final class LispMacroExpander {
 			// The format renderer is still injected here when the program reaches it:
 			// this path carries the plainest runtime-control (format ...) programs.
 			return withScharSetRuntime(
-					withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry), dynamic));
+					withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry), closRegistry, dynamic));
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
@@ -27498,7 +27498,7 @@ public final class LispMacroExpander {
 		// simple-condition's format-control THROUGH the renderer), and gated so a program
 		// whose every format call has a literal control -- the overwhelming majority --
 		// carries none of it.
-		out = withFormatRenderer(out, dynamic);
+		out = withFormatRenderer(out, closRegistry, dynamic);
 		// The shared (setf (aref var i) x) / (setf (char s i) c) string writer, once per
 		// program that can reach it. LAST, so its scan covers every definition injected
 		// above INCLUDING the renderer's: a spliced body that writes into a string makes
@@ -27530,6 +27530,14 @@ public final class LispMacroExpander {
 	 * at runtime is a format control, and the designator expansion renders it -- see
 	 * {@link #signalRendersRuntimeControl}.</li>
 	 * </ul>
+	 * The scan covers the registry's condition {@code :report}s beside the program: a
+	 * typed signal of a class with a report of its own inlines that report at the signal
+	 * site ({@link #expandTypedSignal}), and {@code define-condition} left it in the
+	 * registry, not in the program. Outside the routed report runtime (the wasm-GC
+	 * backends' lazy messages) nothing else carries it, so a report rendering through
+	 * {@code #'format} -- {@code uiop:not-implemented-error}'s -- compiled to a call of
+	 * an undefined {@code %fmt-render}. A report no site inlines costs nothing: the
+	 * renderer it brought is unreachable and the dead-code pass drops it.
 	 * <p>
 	 * The {@code ~/name/} arm rides along only when the program can be seen to reach it:
 	 * that arm resolves a function out of the control string at run time, so carrying it
@@ -27540,15 +27548,18 @@ public final class LispMacroExpander {
 	 * {@code --dynamic}, whose whole contract is that a name resolves at run time. A
 	 * program that spells none gets a stub that signals if one is ever rendered.
 	 * @param forms the program to scan
+	 * @param closRegistry the registry holding the condition reports a signal inlines
 	 * @param dynamic whether the backend compiles in late-binding mode
 	 * @return the program, with the renderer definitions appended when it needs them
 	 */
-	private static List<LispVal> withFormatRenderer(List<LispVal> forms, boolean dynamic) {
-		for (LispVal form : forms) {
+	private static List<LispVal> withFormatRenderer(List<LispVal> forms, ClosRegistry closRegistry, boolean dynamic) {
+		List<LispVal> scanned = new java.util.ArrayList<>(forms);
+		scanned.addAll(closRegistry.conditionReports().values());
+		for (LispVal form : scanned) {
 			if (FormatRenderer.isUsed(form) || reachesFormatRenderer(form)) {
 				List<LispVal> withRenderer = new java.util.ArrayList<>(forms);
 				withRenderer.addAll(FormatRenderer.defuns());
-				withRenderer.addAll(dynamic || FormatRenderer.namesFunctionDesignator(forms)
+				withRenderer.addAll(dynamic || FormatRenderer.namesFunctionDesignator(scanned)
 						? FormatRenderer.functionDesignatorDefuns() : FormatRenderer.functionDesignatorStubDefuns());
 				return withRenderer;
 			}

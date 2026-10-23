@@ -560,9 +560,11 @@ class WasmLispCompilerIntegrationTest {
 
 	// The non-EH twin of the above: no catching form, so the module carries no tag
 	// section -- an uncaught condition is the bare `unreachable` %error has always been.
+	// A call the compile could not resolve traps the same way, so none may warn.
 	private static String compileAndRunExpectTrap(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		byte[] wasmBytes = am.ik.rontolisp.testsupport.UndefinedWarnings
+			.forbid(() -> new WasmLispCompiler().compile(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("expected a trap for: %s\nstdout: %s", lispCode, result.getStdout())
@@ -23659,6 +23661,15 @@ class WasmLispCompilerIntegrationTest {
 		// machinery, so it is deliberately not done (.kb/error-handling.md).
 		String stderr = compileAndRunExpectTrap("(print 1) (error \"boom: ~a\" 42)");
 		assertThat(stderr).contains("unreachable").doesNotContain("Unhandled condition");
+		// A typed signal inlines its class's own :report, which define-condition left in
+		// the registry: one rendering through #'format (uiop:not-implemented-error's)
+		// needs the format renderer, or the compile warns of an undefined %fmt-render.
+		assertThat(compileAndRunExpectTrap("""
+				(define-condition nie-like (error) ((f :initarg :f :reader nie-like-f))
+				  (:report (lambda (c s) (write-string (apply #'format nil "~a" (list (nie-like-f c))) s))))
+				(print 1)
+				(error 'nie-like :f 42)
+				""")).contains("unreachable").doesNotContain("Unhandled condition");
 	}
 
 	@Test

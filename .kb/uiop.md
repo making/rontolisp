@@ -415,6 +415,13 @@ expression compilers, long after this pass, so without an entry the compiled pro
 `The function UIOP/UTILITY:X is undefined` at run time while the interpreter works. Only the DIRECT
 callee is listed; the fixpoint pulls the rest.
 
+**A library form names another uiop definition HOME-QUALIFIED.** The fixpoint matches the symbol
+names a form spells against the qualified names the inventory defines, so a bare spelling selects
+nothing: the five `uiop/lisp-build` subclasses named their parent `compile-condition`, and a
+program signalling one without naming the parent failed to compile (`DEFCLASS: unknown superclass
+COMPILE-CONDITION`) on the JVM and both WASM backends until 2026-10-23, while the interpreter, which
+loads every uiop class up front, worked (ci-spec `uiop-sub-packages-and-not-implemented-error`).
+
 | surface macro | direct callee(s) |
 |---|---|
 | `with-temporary-file` | `call-with-temporary-file` (which references `ensure-directory-pathname`, `default-temporary-directory` and `%temp-file-name`; the fixpoint pulls them) |
