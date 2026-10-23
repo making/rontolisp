@@ -34,6 +34,8 @@ on:
     # whose runtime it loads.
     - lispresen/examples/intro.html
     - lispresen/examples/intro.png
+    # The slide decks and their link-preview images.
+    - decks/**
     - .github/workflows/pages.yaml
   workflow_dispatch:
 
@@ -119,6 +121,16 @@ jobs:
       run: |
         install -D -m 644 lispresen/examples/intro.html web/dist/lispresen/intro.html
         install -D -m 644 lispresen/examples/intro.png web/dist/lispresen/intro.png
+    # Every deck is committed rendered (decks/build.sh, --embed), so its HTML and the PNG
+    # its og:image names are copied as is: decks/<name>/*.html and *.png to
+    # web/dist/decks/<name>/. After the web profile, which recreates web/dist.
+    - name: Publish the slide decks (web/dist/decks/<name>/)
+      run: |
+        shopt -s nullglob
+        for f in decks/*/*.html decks/*/*.png; do
+          name=$(basename "$(dirname "$f")")
+          install -D -m 644 "$f" "web/dist/decks/$name/$(basename "$f")"
+        done
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v5
       with:

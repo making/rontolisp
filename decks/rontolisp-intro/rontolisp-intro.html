@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rontolisp 入門</title>
+<meta name="description" content="Java で実装した Common Lisp のサブセット rontolisp の入門。インストール、言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまで">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html">
+<meta property="og:title" content="rontolisp 入門">
+<meta property="og:description" content="Java で実装した Common Lisp のサブセット rontolisp の入門。インストール、言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまで">
+<meta property="og:image" content="https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="675">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--accent:#0b5cad;--code-bg:#22272e;--code-fg:#e6e8eb;--code-muted:#9aa3ad;--head-bg:#e3ebf6;--rule:#d0d7de;--mark:#fff0a0;--hl-str:#96d0ff;--hl-kw:#6cb6ff;--hl-def:#f47067;--hl-const:#dcbdfb;}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--fg)}
+body{font-family:'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif}
+#stage{position:fixed;inset:0;overflow:hidden;background:var(--bg)}
+#deck{position:absolute;left:0;top:0;transform-origin:0 0}
+.slide{position:absolute;left:0;top:0;overflow:hidden;background:var(--bg);display:none}
+.slide.active{display:block}
+html:not(.js) #stage{position:static;overflow:visible}
+html:not(.js) #deck{position:static}
+html:not(.js) .slide{display:block;position:relative;margin-bottom:32px}
+h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}
+.nw{white-space:nowrap}
+.title{position:absolute;font-size:var(--title);line-height:var(--title-lh);font-weight:700;text-wrap:balance}
+.body{position:absolute;display:flex;flex-direction:column;gap:var(--gap);font-size:var(--body);line-height:var(--body-lh)}
+ul,ol{padding-left:var(--indent)}
+li+li,li>ul,li>ol{margin-top:var(--item-gap)}
+li::marker{color:var(--accent)}
+code{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:1em;line-height:1;padding:0 .125em;border-radius:.2em}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg)}
+pre{flex:none;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
+pre.console{white-space:pre-wrap;line-break:anywhere}
+pre code{line-height:inherit;padding:0}
+strong{font-weight:700}
+mark{background:var(--mark);color:inherit;padding:0 .125em;border-radius:.2em}
+.accent{color:var(--accent)}
+.lead{color:var(--muted)}
+.agenda>li{color:var(--muted)}
+.agenda>li.current{color:var(--accent);font-weight:700}
+.source{position:absolute;font-size:32px;line-height:40px;color:var(--muted)}
+#progress{position:absolute;left:0;bottom:0;width:0;height:6px;background:var(--accent)}
+html:not(.js) #progress{display:none}
+.kicker{position:absolute;font-size:32px;line-height:40px;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+a{color:var(--accent)}
+figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
+figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
+figcaption{color:var(--muted);text-align:center}
+table{flex:none;border-collapse:collapse;table-layout:fixed;font-size:var(--table);line-height:var(--table-lh)}
+caption{caption-side:top;text-align:left;color:var(--muted);padding-bottom:var(--cell-y)}
+th,td{padding:var(--cell-y) var(--cell-x);text-align:left;vertical-align:top}
+thead th{background:var(--head-bg);box-shadow:1px 0 var(--head-bg)}
+tbody th,tbody td{box-shadow:inset 0 -1px var(--rule)}
+th{font-weight:700}
+.right{text-align:right;font-variant-numeric:tabular-nums}
+.center{text-align:center}
+.centered{position:absolute;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.statement,.section-title,.deck-title{font-size:var(--stmt);line-height:var(--stmt-lh);font-weight:700;text-wrap:balance}
+.section-title{color:var(--accent)}
+.deck-meta{font-size:40px;line-height:60px;color:var(--muted)}
+.deck-title+.deck-meta{margin-top:48px}
+.logo{height:160px;max-width:100%;object-fit:contain;margin-bottom:48px}
+.qr{position:absolute;display:flex;flex-direction:column;gap:8px;font-size:24px;line-height:34px;white-space:nowrap}
+.qr.right{align-items:flex-end}
+.qr a{color:var(--muted)}
+.page{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.notes{display:none}
+.overflow{outline:8px solid #d1242f;outline-offset:-8px}
+.slide.measure{display:block;visibility:hidden}
+html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
+#chk{position:fixed;right:8px;top:8px;max-width:60%;max-height:60%;overflow:auto;z-index:20;padding:8px 12px;background:rgba(0,0,0,.8);color:#fff;font:14px/1.5 Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre-wrap}
+.hl-c{color:var(--code-muted)}
+.hl-s{color:var(--hl-str)}
+.hl-k{color:var(--hl-kw)}
+.hl-d{color:var(--hl-def)}
+.hl-n{color:var(--hl-const)}
+.codebox{flex:none;position:relative}
+.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--code-bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
+.out.open{display:flex;flex-direction:column}
+.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);color:var(--code-fg);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.out pre::-webkit-scrollbar{width:20px}
+.out pre::-webkit-scrollbar-thumb{background:var(--code-muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
+.out.err pre{color:var(--hl-def)}
+.out.busy pre{color:var(--code-muted)}
+.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--code-muted);font:400 48px/1 'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif;cursor:pointer}
+.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--code-fg);font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
+.codebox textarea::selection{background:var(--mark)}
+.runnable pre.code{cursor:text}
+.tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
+.band>pre.code,.band>textarea{padding-top:calc(60px + var(--code-pad))}
+.tools button{font:700 28px/1 'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:var(--bg);cursor:pointer;opacity:.85}
+.tools button+button{background:var(--rule);color:var(--fg)}
+.tools .run[data-state=loading]{background:var(--rule);color:var(--muted)}
+.tools .run[data-state=failed]{background:var(--hl-def)}
+.pv-bar .rt{color:var(--muted)}
+.pv-bar .rt[data-state=failed]{color:var(--hl-def)}
+.quote{flex:none;display:block;border-left:8px solid var(--accent);padding-left:calc(var(--indent) - 8px)}
+.quote figcaption{margin-top:var(--item-gap);text-align:left}
+.columns{flex:none;display:flex;column-gap:80px}
+.columns.grow{flex:1 1 0;min-height:0}
+.column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
+#ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
+.thumb{position:relative;overflow:clip;outline:1px solid var(--rule);cursor:pointer}
+.thumb.sel{outline:4px solid var(--accent)}
+.thumb>.slide{transform-origin:0 0}
+.thumb>.slide .page,#ov .tools,#ov .out{display:none}
+html.ov #stage,html.presenter #stage{visibility:hidden}
+#pv{position:fixed;inset:0;display:grid;grid-template-columns:60% 1fr;grid-template-rows:auto auto 1fr;gap:16px;padding:16px;font-size:18px;line-height:1.5}
+.pv-bar{grid-column:1/3;display:flex;gap:16px;align-items:center}
+.pv-timer{font:700 32px Menlo,Consolas,'BIZ UDGothic',monospace;cursor:pointer}
+.pv-bar button{font:inherit;padding:4px 14px}
+.pv-cur{grid-row:2/4}
+.pv-cur>.thumb{cursor:default}
+.pv-next>.thumb{opacity:.85}
+.pv-notes{overflow:auto;font-size:24px;line-height:1.6;white-space:pre-wrap}
+.say{position:absolute;z-index:4;display:flex;flex-direction:column;justify-content:center;border:3px solid var(--accent);border-radius:16px;background:var(--head-bg);padding:var(--say-y) var(--say-x);font-size:var(--say);line-height:var(--say-lh);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.say::before,.say::after{content:'';position:absolute}
+.say::before{background:var(--accent)}
+.say::after{background:var(--head-bg)}
+.say[data-side=below]::before,.say[data-side=above]::before{left:calc(var(--tail) - 18px);width:36px;height:32px}
+.say[data-side=below]::after,.say[data-side=above]::after{left:calc(var(--tail) - 16px);width:32px;height:29px}
+.say[data-side=below]::before{top:-35px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=below]::after{top:-29px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=above]::before{bottom:-35px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=above]::after{bottom:-29px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=right]::before,.say[data-side=left]::before{top:calc(var(--tail) - 18px);width:32px;height:36px}
+.say[data-side=right]::after,.say[data-side=left]::after{top:calc(var(--tail) - 16px);width:29px;height:32px}
+.say[data-side=right]::before{left:-35px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=right]::after{left:-29px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say.front{z-index:6}
+.slide.editing .say,.pending{visibility:hidden}
+#ov .pending{visibility:visible}
+#pv .pending{visibility:visible;opacity:.35}
+.ln.dim{opacity:.35}
+.slide.editing .ln.dim{opacity:1}
+.tk{display:inline-block;transform-origin:0 0}
+pre.mo{overflow:visible;background:none;box-shadow:none}
+.mb{position:absolute}
+.mg{position:absolute;z-index:3;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre;transform-origin:0 0}
+figure.dg{flex:none;display:block;position:relative;align-self:center}
+.dg-art{position:absolute;left:0;top:0;overflow:visible}
+.dg-b{fill:var(--accent)}
+.dg-f{fill:var(--head-bg)}
+.dg-e{fill:var(--fg)}
+.dg-flow{padding:0}
+.dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
+.dg-flow>.dg-l{padding:0 var(--dg-x)}
+span.dg-l{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre}
+.dg-t,.dg-v{text-align:left}
+.dg-v{white-space:nowrap}
+figure.pointed{align-items:flex-end}
+figure.pointed figcaption{align-self:stretch}
+#fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
+#stage.pointer #fs{opacity:1}
+#stage.idle{cursor:none}
+html:not(.js) #fs{display:none}
+.slide{width:1920px;height:1080px}
+.kicker,.title,.body,.centered,.source{left:112px;width:1696px}
+.source{bottom:72px}
+.kicker{top:32px}
+.title,.centered{top:80px}
+.centered{height:928px}
+.page{right:112px}.out{left:112px;width:1696px}
+.thumb{aspect-ratio:1920/1080}
+@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
+</style>
+</head>
+<body>
+<div id="stage">
+<div id="deck" style="width:1920px;height:1080px">
+<section class="slide layout-title" id="s1" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><img class="logo" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIj48cmVjdCB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgcng9IjI0IiBmaWxsPSIjMGI1Y2FkIi8+PHBhdGggZD0iTTM4IDMwIFEyNCA2MCAzOCA5MCBNODIgMzAgUTk2IDYwIDgyIDkwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTUwIDQwIEw3MCA4MCBNNjAgNjAgTDUwIDgwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+Cg==" alt="rontolisp"><h1 class="deck-title">rontolisp 入門</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>3</p></div>
+<div class="qr right" style="left:1350px;top:646px;width:458px"><svg class="qr-code" viewBox="0 0 37 37" width="320" height="320" role="img" aria-label="QR code: https://github.com/making/rontolisp" shape-rendering="crispEdges"><rect width="37" height="37" fill="#fff"/><path fill="#000" d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM19 4h6v1h-6zM26 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM14 5h3v1h-3zM18 5h2v1h-2zM21 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM14 6h1v1h-1zM17 6h3v1h-3zM22 6h1v1h-1zM26 6h1v1h-1zM28 6h3v1h-3zM32 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h4v1h-4zM21 7h1v1h-1zM23 7h1v1h-1zM26 7h1v1h-1zM28 7h3v1h-3zM32 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM17 8h1v1h-1zM23 8h1v1h-1zM26 8h1v1h-1zM28 8h3v1h-3zM32 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h5v1h-5zM26 9h1v1h-1zM32 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h7v1h-7zM12 11h2v1h-2zM15 11h1v1h-1zM17 11h2v1h-2zM21 11h1v1h-1zM24 11h1v1h-1zM4 12h1v1h-1zM6 12h2v1h-2zM9 12h3v1h-3zM13 12h1v1h-1zM15 12h4v1h-4zM21 12h3v1h-3zM26 12h1v1h-1zM29 12h1v1h-1zM31 12h2v1h-2zM4 13h1v1h-1zM6 13h1v1h-1zM11 13h2v1h-2zM15 13h2v1h-2zM20 13h1v1h-1zM22 13h3v1h-3zM26 13h3v1h-3zM32 13h1v1h-1zM5 14h2v1h-2zM8 14h1v1h-1zM10 14h1v1h-1zM13 14h1v1h-1zM15 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM30 14h2v1h-2zM7 15h3v1h-3zM11 15h1v1h-1zM13 15h8v1h-8zM22 15h5v1h-5zM28 15h1v1h-1zM32 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM10 16h4v1h-4zM15 16h2v1h-2zM19 16h5v1h-5zM29 16h2v1h-2zM6 17h2v1h-2zM9 17h1v1h-1zM12 17h1v1h-1zM14 17h4v1h-4zM19 17h2v1h-2zM23 17h1v1h-1zM26 17h1v1h-1zM30 17h3v1h-3zM4 18h2v1h-2zM7 18h1v1h-1zM10 18h1v1h-1zM13 18h2v1h-2zM16 18h1v1h-1zM18 18h1v1h-1zM21 18h4v1h-4zM26 18h1v1h-1zM30 18h3v1h-3zM4 19h5v1h-5zM11 19h7v1h-7zM19 19h1v1h-1zM23 19h6v1h-6zM31 19h1v1h-1zM5 20h4v1h-4zM10 20h3v1h-3zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h1v1h-1zM22 20h3v1h-3zM28 20h2v1h-2zM31 20h1v1h-1zM5 21h4v1h-4zM11 21h3v1h-3zM15 21h1v1h-1zM17 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM27 21h1v1h-1zM29 21h3v1h-3zM4 22h1v1h-1zM6 22h1v1h-1zM8 22h1v1h-1zM10 22h4v1h-4zM15 22h1v1h-1zM19 22h1v1h-1zM21 22h2v1h-2zM24 22h1v1h-1zM26 22h3v1h-3zM30 22h1v1h-1zM7 23h2v1h-2zM12 23h1v1h-1zM16 23h1v1h-1zM20 23h2v1h-2zM26 23h3v1h-3zM30 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h2v1h-2zM12 24h1v1h-1zM14 24h2v1h-2zM17 24h1v1h-1zM19 24h4v1h-4zM24 24h7v1h-7zM12 25h1v1h-1zM14 25h1v1h-1zM17 25h2v1h-2zM20 25h3v1h-3zM24 25h1v1h-1zM28 25h5v1h-5zM4 26h7v1h-7zM12 26h1v1h-1zM14 26h1v1h-1zM16 26h2v1h-2zM20 26h1v1h-1zM22 26h3v1h-3zM26 26h1v1h-1zM28 26h2v1h-2zM31 26h1v1h-1zM4 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM28 27h2v1h-2zM31 27h1v1h-1zM4 28h1v1h-1zM6 28h3v1h-3zM10 28h1v1h-1zM13 28h4v1h-4zM18 28h1v1h-1zM21 28h1v1h-1zM24 28h5v1h-5zM30 28h2v1h-2zM4 29h1v1h-1zM6 29h3v1h-3zM10 29h1v1h-1zM12 29h1v1h-1zM14 29h3v1h-3zM18 29h3v1h-3zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h3v1h-3zM32 29h1v1h-1zM4 30h1v1h-1zM6 30h3v1h-3zM10 30h1v1h-1zM12 30h1v1h-1zM18 30h1v1h-1zM20 30h3v1h-3zM24 30h1v1h-1zM27 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM13 31h2v1h-2zM16 31h5v1h-5zM22 31h1v1h-1zM24 31h2v1h-2zM27 31h1v1h-1zM29 31h1v1h-1zM31 31h1v1h-1zM4 32h7v1h-7zM12 32h4v1h-4zM18 32h1v1h-1zM20 32h1v1h-1zM22 32h5v1h-5zM31 32h1v1h-1z"/></svg><p><a href="https://github.com/making/rontolisp">https://github.com/making/rontolisp</a></p></div>
+</section>
+<section class="slide layout-standard" id="s2" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">2</div>
+</section>
+<section class="slide layout-standard" id="s3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li class="current">rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">3</div>
+</section>
+<section class="slide layout-standard" id="s4" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">rontolisp とは</p>
+<h1 class="title">Java で<wbr>実装した Common Lisp の<wbr>サブセット</h1>
+<div class="body" style="top:336px;height:672px">
+<p>一つの<wbr>ソースを、<wbr>三つの<wbr>実行モードで<wbr>動かす。</p>
+<ul><li><strong>インタプリタ</strong> REPL と<wbr>ファイル実行。<wbr>ツリーウォークで<wbr>評価する</li><li><strong>JVM コンパイラ</strong> <code>.class</code> や <code>.jar</code> を<wbr>出力する</li><li><strong>WASM コンパイラ</strong> wasm<span class="nw">-G</span>C を<wbr>使った <code>.wasm</code> を<wbr>出力する</li></ul>
+<p>コアライブラリは<wbr>外部依存を<wbr>持たない。<wbr>JVM と WASM の<wbr>バイトコードも、<wbr>ASM などの<wbr>ライブラリを<wbr>使わずに<wbr>出力する。</p>
+</div>
+<div class="page">4</div>
+</section>
+<section class="slide layout-standard" id="s5" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">rontolisp とは</p>
+<h1 class="title">なぜ<wbr>サブセットなのか</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li>インタプリタ、<wbr>JVM、<wbr>WASM で<wbr>同じように<wbr>動く</li><li>ランタイムの<wbr>メタオブジェクトプロトコルなしで<wbr>バイトコードへ<wbr>直接コンパイルできるよう、<wbr>言語を<wbr>小さく<wbr>保つ</li><li>その<wbr>ため、<wbr>完全な Common Lisp の<wbr>機能の<wbr>多くを<wbr>意図的に<wbr>省いている</li></ul>
+</div>
+<p class="source">doc/ja/guides/missing<span class="nw">-f</span>eatures.md</p>
+<div class="page">5</div>
+</section>
+<section class="slide layout-standard" id="s6" data-steps="1" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">rontolisp とは</p>
+<h1 class="title">まず<wbr>動かしてみる</h1>
+<div class="body" style="top:232px;height:776px">
+<p>この<wbr>スライドの<wbr>コードは<wbr>ブラウザの<wbr>中の rontolisp が<wbr>実行する。<wbr>クリックで<wbr>編集し、<wbr>Run で<wbr>実行する。</p>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s6c1"><code>(<span class="hl-d">defun</span> fact (n)
+  (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
+(print (fact <span class="hl-n">10</span>))</code></pre></div>
+</div>
+<div class="say step" id="s6c1" role="note" data-side="below" data-step="1" data-at="(fact 10)" style="left:159px;top:677px;width:573px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:283px"><p>Run で 3628800&nbsp;が<wbr>出る</p></div>
+<div class="page">6</div>
+<aside class="notes">Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。</aside>
+</section>
+<section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li class="current">インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">7</div>
+</section>
+<section class="slide layout-standard" id="s8" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
+<h1 class="title">インストール</h1>
+<div class="body" style="top:232px;height:776px">
+<p>リリースページの<wbr>ビルド済みバイナリを <code>PATH</code> に<wbr>置く。<wbr>JVM は<wbr>要らない。</p>
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> URL=https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT
+<span class="hl-k">$</span> wget $URL/rontolisp-darwin-arm64
+<span class="hl-k">$</span> chmod +x rontolisp-darwin-arm64
+<span class="hl-k">$</span> sudo mv rontolisp-darwin-arm64 /usr/local/bin/rontolisp
+<span class="hl-k">$</span> rontolisp --version</code></pre>
+<ul><li>Linux の x86<span class="nw">-6</span>4&nbsp;と ARM64&nbsp;向けも<wbr>ある</li><li>Java 25&nbsp;以降が<wbr>あれば、<wbr>実行可能 JAR でも<wbr>動く</li></ul>
+</div>
+<div class="page">8</div>
+</section>
+<section class="slide layout-standard" id="s9" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
+<h1 class="title">REPL</h1>
+<div class="body" style="top:232px;height:776px">
+<p>引数なしで<wbr>起動すると REPL に<wbr>なる。<wbr>定義は<wbr>入力を<wbr>またいで<wbr>残る。</p>
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp
+<span class="hl-c">CL-USER&gt; (+ 1 2)</span>
+<span class="hl-c">3</span>
+<span class="hl-c">CL-USER&gt; (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))</span>
+<span class="hl-c">FACT</span>
+<span class="hl-c">CL-USER&gt; (fact 10)</span>
+<span class="hl-c">3628800</span>
+<span class="hl-c">CL-USER&gt; (quit)</span></code></pre>
+<p>プロンプトには<wbr>現在の<wbr>パッケージ名が<wbr>出る。<wbr>括弧が<wbr>閉じるまで<wbr>複数行を<wbr>読む。</p>
+</div>
+<div class="page">9</div>
+</section>
+<section class="slide layout-columns" id="s10" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
+<h1 class="title">ファイルを<wbr>実行する</h1>
+<div class="body" style="top:232px;height:776px">
+<div class="columns">
+<div class="column" style="width:680px">
+<pre class="code" data-lang="lisp"><code><span class="hl-c">;; program.lisp</span>
+(<span class="hl-d">defun</span> square (x) (* x x))
+(print (square <span class="hl-n">5</span>))
+(print (square <span class="hl-n">12</span>))</code></pre>
+</div>
+<div class="column" style="width:936px">
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp program.lisp
+
+<span class="hl-c">25</span>
+<span class="hl-c">144</span>
+<span class="hl-k">$</span> rontolisp -e &quot;(print (+ 1 2))&quot;
+
+<span class="hl-c">3</span></code></pre>
+<ul><li>REPL と<wbr>違い、<wbr>値を<wbr>エコーしない</li><li>エラーで<wbr>終わると、<wbr>終了コードが 0&nbsp;以外に<wbr>なる</li></ul>
+</div>
+</div>
+</div>
+<div class="page">10</div>
+</section>
+<section class="slide layout-table" id="s11" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
+<h1 class="title">コマンドの<wbr>一覧</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:790px"><col style="width:906px"></colgroup><thead><tr><th scope="col">コマンド</th><th scope="col">動作</th></tr></thead><tbody><tr><td><code>rontolisp</code></td><td>REPL</td></tr><tr><td><code>rontolisp app.lisp</code></td><td>ファイルを<wbr>インタプリタで<wbr>実行</td></tr><tr><td><code>rontolisp <span class="nw">-e</span> &quot;(...)&quot;</code></td><td>引数の<wbr>プログラムを<wbr>実行</td></tr><tr><td><code>rontolisp app.lisp <span class="nw">-o</span> OUT</code></td><td>コンパイル。<wbr><code>OUT</code> の<wbr>拡張子で<wbr>出力を<wbr>選ぶ</td></tr><tr><td><code>rontolisp format src/</code></td><td>ソースを<wbr>正規の<wbr>レイアウトに<wbr>再インデント</td></tr><tr><td><code>rontolisp test tests/main.lisp</code></td><td>rove の<wbr>テストを<wbr>実行し、<wbr>結果を<wbr>終了コードに<wbr>する</td></tr></tbody></table>
+</div>
+<div class="page">11</div>
+</section>
+<section class="slide layout-standard" id="s12" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li class="current">言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">12</div>
+</section>
+<section class="slide layout-table" id="s13" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">言語</p>
+<h1 class="title">使える Common Lisp の<wbr>範囲</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><caption>詳しくは<wbr>「未対応の CL 機能」<wbr>の<wbr>ページに<wbr>ある</caption><colgroup><col style="width:601px"><col style="width:1095px"></colgroup><thead><tr><th scope="col">機能</th><th scope="col">状況</th></tr></thead><tbody><tr><td>マクロ、<wbr>バッククォート</td><td>使える</td></tr><tr><td>コンディションと<wbr>リスタート</td><td>使える。<wbr>デバッガとの<wbr>統合は<wbr>ない</td></tr><tr><td>多値</td><td>使える</td></tr><tr><td>CLOS</td><td>一部。<wbr>静的な<wbr>サブセットと、<wbr>定義時の MOP の<wbr>サブセット</td></tr><tr><td><code>loop</code></td><td>一部 (拡張版)</td></tr><tr><td><code>eval<span class="nw">-w</span>hen</code></td><td><code>progn</code> と<wbr>して<wbr>扱う</td></tr></tbody></table>
+</div>
+<div class="page">13</div>
+</section>
+<section class="slide layout-standard" id="s14" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">言語</p>
+<h1 class="title">プログラムも<wbr>リスト</h1>
+<div class="body" style="top:232px;height:776px">
+<p>コードは S 式で<wbr>書く。<wbr>S 式は<wbr>リストなので、<wbr>マクロは<wbr>リストを<wbr>組み立てて<wbr>コードを<wbr>作る。</p>
+<figure class="dg" role="img" aria-label="(progn (princ &quot;hi &quot;) (princ &quot;hi &quot;))" style="width:906px;height:274px;--dg:44px;--dg-lh:62px;--dg-x:26px">
+<svg class="dg-art" width="906" height="274" aria-hidden="true"><rect class="dg-b" x="37" y="0" width="124" height="62"/><rect class="dg-b" x="217" y="0" width="124" height="62"/><rect class="dg-b" x="217" y="106" width="124" height="62"/><rect class="dg-b" x="397" y="106" width="124" height="62"/><rect class="dg-b" x="602" y="0" width="124" height="62"/><rect class="dg-b" x="602" y="106" width="124" height="62"/><rect class="dg-b" x="782" y="106" width="124" height="62"/><rect class="dg-f" x="41" y="4" width="56" height="54"/><rect class="dg-f" x="101" y="4" width="56" height="54"/><rect class="dg-f" x="221" y="4" width="56" height="54"/><rect class="dg-f" x="281" y="4" width="56" height="54"/><rect class="dg-f" x="221" y="110" width="56" height="54"/><rect class="dg-f" x="281" y="110" width="56" height="54"/><rect class="dg-f" x="401" y="110" width="56" height="54"/><rect class="dg-f" x="461" y="110" width="56" height="54"/><rect class="dg-f" x="606" y="4" width="56" height="54"/><rect class="dg-f" x="666" y="4" width="56" height="54"/><rect class="dg-f" x="606" y="110" width="56" height="54"/><rect class="dg-f" x="666" y="110" width="56" height="54"/><rect class="dg-f" x="786" y="110" width="56" height="54"/><rect class="dg-f" x="846" y="110" width="56" height="54"/><circle class="dg-e" cx="68" cy="31" r="5"/><rect class="dg-e" x="66" y="31" width="4" height="58"/><polygon class="dg-e" points="57,89 68,106 79,89"/><circle class="dg-e" cx="130" cy="31" r="5"/><rect class="dg-e" x="130" y="29" width="70" height="4"/><polygon class="dg-e" points="200,20 217,31 200,42"/><circle class="dg-e" cx="248" cy="31" r="5"/><rect class="dg-e" x="246" y="31" width="4" height="58"/><polygon class="dg-e" points="237,89 248,106 259,89"/><circle class="dg-e" cx="248" cy="137" r="5"/><rect class="dg-e" x="246" y="137" width="4" height="58"/><polygon class="dg-e" points="237,195 248,212 259,195"/><circle class="dg-e" cx="310" cy="137" r="5"/><rect class="dg-e" x="310" y="135" width="70" height="4"/><polygon class="dg-e" points="380,126 397,137 380,148"/><circle class="dg-e" cx="428" cy="137" r="5"/><rect class="dg-e" x="426" y="137" width="4" height="58"/><polygon class="dg-e" points="417,195 428,212 439,195"/><polygon class="dg-e" points="461,164 467,164 517,110 511,110"/><circle class="dg-e" cx="310" cy="31" r="5"/><rect class="dg-e" x="310" y="29" width="275" height="4"/><polygon class="dg-e" points="585,20 602,31 585,42"/><circle class="dg-e" cx="633" cy="31" r="5"/><rect class="dg-e" x="631" y="31" width="4" height="58"/><polygon class="dg-e" points="622,89 633,106 644,89"/><circle class="dg-e" cx="633" cy="137" r="5"/><rect class="dg-e" x="631" y="137" width="4" height="58"/><polygon class="dg-e" points="622,195 633,212 644,195"/><circle class="dg-e" cx="695" cy="137" r="5"/><rect class="dg-e" x="695" y="135" width="70" height="4"/><polygon class="dg-e" points="765,126 782,137 765,148"/><circle class="dg-e" cx="813" cy="137" r="5"/><rect class="dg-e" x="811" y="137" width="4" height="58"/><polygon class="dg-e" points="802,195 813,212 824,195"/><polygon class="dg-e" points="846,164 852,164 902,110 896,110"/><polygon class="dg-e" points="666,58 672,58 722,4 716,4"/></svg>
+<span class="dg-l" style="left:0px;top:106px;width:136px;height:62px">progn</span><span class="dg-l" style="left:180px;top:212px;width:136px;height:62px">princ</span><span class="dg-l" style="left:360px;top:212px;width:136px;height:62px">&quot;hi &quot;</span><span class="dg-l" style="left:565px;top:212px;width:136px;height:62px">princ</span><span class="dg-l" style="left:745px;top:212px;width:136px;height:62px">&quot;hi &quot;</span>
+</figure>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code"><code>(<span class="hl-d">defmacro</span> twice (&amp;body body) `(<span class="hl-d">progn</span> ,@body ,@body))
+(print (macroexpand-1 &#39;(twice (princ <span class="hl-s">&quot;hi &quot;</span>))))
+(twice (princ <span class="hl-s">&quot;hi &quot;</span>))</code></pre></div>
+</div>
+<div class="page">14</div>
+</section>
+<section class="slide layout-code" id="s15" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">言語</p>
+<h1 class="title">CLOS と<wbr>コンディション</h1>
+<div class="body" style="top:232px;height:776px">
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code"><code>(<span class="hl-d">defclass</span> circle () ((r <span class="hl-k">:initarg</span> <span class="hl-k">:r</span> <span class="hl-k">:reader</span> r)))
+(<span class="hl-d">defclass</span> square () ((side <span class="hl-k">:initarg</span> <span class="hl-k">:side</span> <span class="hl-k">:reader</span> side)))
+(<span class="hl-d">defgeneric</span> area (shape))
+(<span class="hl-d">defmethod</span> area ((c circle)) (* <span class="hl-n">3</span> (r c) (r c)))
+(<span class="hl-d">defmethod</span> area ((s square)) (* (side s) (side s)))
+(print (mapcar #&#39;area (list (make-instance &#39;circle <span class="hl-k">:r</span> <span class="hl-n">2</span>)
+                            (make-instance &#39;square <span class="hl-k">:side</span> <span class="hl-n">3</span>))))
+(<span class="hl-d">handler-case</span> (/ <span class="hl-n">1</span> <span class="hl-n">0</span>)
+  (division-by-zero () <span class="hl-k">:infinity</span>))</code></pre></div>
+</div>
+<div class="page">15</div>
+</section>
+<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">言語</p>
+<h1 class="title">Scheme の<wbr>フロントエンド (実験的)</h1>
+<div class="body" style="top:232px;height:776px">
+<p><code>.scm</code> の<wbr>ファイルを、<wbr>R7RS<span class="nw">-s</span>mall の<wbr>一部と<wbr>して<wbr>読む。</p>
+<div class="codebox runnable" data-lang="scheme" data-timeout="10"><pre class="code"><code>(import (scheme base) (scheme write))
+(<span class="hl-d">define</span> (count-up n)
+  (<span class="hl-d">let</span> loop ((i <span class="hl-n">0</span>) (acc &#39;()))
+    (<span class="hl-d">if</span> (= i n)
+        (reverse acc)
+        (<span class="hl-d">loop</span> (+ i <span class="hl-n">1</span>) (cons (* i i) acc)))))
+(display (count-up <span class="hl-n">5</span>))</code></pre></div>
+</div>
+<div class="page">16</div>
+</section>
+<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">言語</p>
+<h1 class="title">Clojure の<wbr>フロントエンド (実験的)</h1>
+<div class="body" style="top:232px;height:776px">
+<p><code>.clj</code> と <code>.cljc</code> を、<wbr>Clojure の<wbr>小さな<wbr>サブセットと<wbr>して<wbr>読む。</p>
+<div class="codebox runnable" data-lang="clojure" data-timeout="10"><pre class="code"><code>(<span class="hl-d">defn</span> fact [n]
+  (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
+(println (fact <span class="hl-n">20</span>))
+(println (-&gt;&gt; (range <span class="hl-n">10</span>) (filter odd?) (map #(* % %)) (reduce +)))
+(println (frequencies <span class="hl-s">&quot;mississippi&quot;</span>))</code></pre></div>
+</div>
+<div class="page">17</div>
+</section>
+<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">言語</p>
+<h1 class="title">言語は<wbr>ファイルごとに<wbr>決まる</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">拡張子</th><th scope="col">言語</th></tr></thead><tbody><tr><td><code>.lisp .asd</code></td><td>Common Lisp</td></tr><tr><td><code>.scm</code></td><td>Scheme</td></tr><tr><td><code>.clj .cljc</code></td><td>Clojure</td></tr><tr><td>それ以外</td><td><code><span class="nw">--s</span>ource<span class="nw">-l</span>anguage</code> で<wbr>指定する</td></tr></tbody></table>
+<ul><li>一つの<wbr>プログラムに<wbr>複数の<wbr>言語の<wbr>ファイルを<wbr>混ぜられる</li><li>どの<wbr>言語も<wbr>同じ<wbr>コアフォームに<wbr>変換され、<wbr>すべての<wbr>バックエンドで<wbr>動く</li><li>Scheme と Clojure は<wbr>実験的。<wbr>動かし続けたい<wbr>ものは Common Lisp で<wbr>書く</li></ul>
+</div>
+<div class="page">18</div>
+</section>
+<section class="slide layout-standard" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li class="current">バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">19</div>
+</section>
+<section class="slide layout-standard" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">一つの<wbr>パイプラインから<wbr>三つの<wbr>実行モードへ</h1>
+<div class="body" style="top:232px;height:776px">
+<figure class="dg" style="width:1157px;height:432px;--dg:48px;--dg-lh:68px;--dg-x:28px">
+<svg class="dg-art" width="1157" height="432" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="517" height="168" rx="12"/><rect class="dg-b" x="589" y="0" width="488" height="168" rx="12"/><rect class="dg-b" x="0" y="264" width="296" height="168" rx="12"/><rect class="dg-b" x="368" y="264" width="789" height="168" rx="12"/><rect class="dg-f" x="4" y="4" width="509" height="160" rx="8"/><rect class="dg-f" x="593" y="4" width="480" height="160" rx="8"/><rect class="dg-f" x="4" y="268" width="288" height="160" rx="8"/><rect class="dg-f" x="372" y="268" width="781" height="160" rx="8"/><rect class="dg-e" x="525" y="82" width="37" height="4"/><polygon class="dg-e" points="562,72 581,84 562,96"/><rect class="dg-e" x="831" y="176" width="4" height="42"/><rect class="dg-e" x="146" y="214" width="689" height="4"/><rect class="dg-e" x="146" y="214" width="4" height="23"/><polygon class="dg-e" points="136,237 148,256 160,237"/><rect class="dg-e" x="304" y="346" width="37" height="4"/><polygon class="dg-e" points="341,336 360,348 341,360"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:517px;height:168px;padding-top:16px">ソース (CL、<wbr>Scheme、<wbr>Clojure)</li><li class="dg-l" style="left:589px;top:0px;width:488px;height:168px;padding-top:50px">コアフォームに<wbr>変換</li><li class="dg-l" style="left:0px;top:264px;width:296px;height:168px;padding-top:50px">マクロ展開</li><li class="dg-l" style="left:368px;top:264px;width:789px;height:168px;padding-top:50px">インタプリタ、<code>.class</code>、<code>.wasm</code></li></ol>
+</figure>
+<ul><li>言語の<wbr>違いは<wbr>最初の<wbr>変換で<wbr>吸収する</li><li>バックエンドは Scheme や Clojure の<wbr>名前を<wbr>知らない</li></ul>
+</div>
+<div class="page">20</div>
+</section>
+<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">出力の<wbr>拡張子で<wbr>バックエンドを<wbr>選ぶ</h1>
+<div class="body" style="top:232px;height:776px">
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp hello.lisp                                # インタプリタ
+<span class="hl-k">$</span> rontolisp hello.lisp -o Hello.class &amp;&amp; java Hello   # JVM
+<span class="hl-k">$</span> rontolisp hello.lisp -o hello.jar &amp;&amp; java -jar hello.jar
+<span class="hl-k">$</span> rontolisp hello.lisp -o hello.wasm &amp;&amp; wasmtime run hello.wasm
+<span class="hl-k">$</span> rontolisp hello.lisp -o hello-c.wasm --component &amp;&amp; wasmtime run hello-c.wasm
+<span class="hl-k">$</span> rontolisp hello.lisp --native -o hello &amp;&amp; ./hello   # ネイティブ</code></pre>
+<p>どの<wbr>形でも <code>(print (+ 1 2))</code> は 3&nbsp;を<wbr>出力する。</p>
+</div>
+<div class="page">21</div>
+</section>
+<section class="slide layout-columns" id="s22" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">JVM と WASM</h1>
+<div class="body" style="top:232px;height:776px">
+<div class="columns">
+<div class="column" style="width:774px">
+<p><strong>JVM</strong></p>
+<ul><li><code>.jar</code> は <code>java <span class="nw">-j</span>ar</code> で<wbr>動く</li><li>Java の<wbr>ライブラリにも<wbr>できる</li></ul>
+</div>
+<div class="column" style="width:842px">
+<p><strong>WASM</strong></p>
+<ul><li>既定は WASI Preview 1</li><li><code><span class="nw">--c</span>omponent</code> で WASI 0.3</li><li><code><span class="nw">--n</span>o<span class="nw">-w</span>asi</code> で<wbr>インポートなし</li><li><code><span class="nw">--n</span>o<span class="nw">-g</span>c</code> で<wbr>任意の<wbr>エンジン向け (数値と<wbr>文字列のみ)</li></ul>
+</div>
+</div>
+</div>
+<div class="page">22</div>
+</section>
+<section class="slide layout-standard" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">ネイティブ実行ファイル</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code><span class="nw">--n</span>ative</code> は、<wbr>WASM 出力を wasmtime で<wbr>マシンコードに<wbr>プリコンパイルし、<wbr>小さな<wbr>ランナーの<wbr>後ろに<wbr>付ける。</p>
+<ul><li>実行に wasmtime も JVM も<wbr>要らない</li><li>起動は<wbr>約 10&nbsp;ms</li><li><code><span class="nw">--n</span>ative<span class="nw">-t</span>arget</code> で Linux の x86_64&nbsp;と aarch64、<wbr>macOS の aarch64&nbsp;向けを<wbr>作れる</li></ul>
+</div>
+<p class="source">doc/ja/compiling/native.md</p>
+<div class="page">23</div>
+</section>
+<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">インタプリタと<wbr>コンパイル結果の<wbr>速さ</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">fib ベンチマークの<wbr>実行時間 (短い<wbr>ほど<wbr>速い)</p>
+<figure class="dg" style="width:1696px;height:276px;--dg:48px;--dg-lh:68px;--dg-x:28px" aria-describedby="s24c1">
+<svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-b" x="316" y="12" width="1117" height="68"/><rect class="dg-b" x="316" y="104" width="12" height="68"/><rect class="dg-b" x="316" y="196" width="44" height="68"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:12px;width:288px;height:68px">インタプリタ</p><p class="dg-l dg-v" style="left:1461px;top:12px;width:235px;height:68px">5,442 ms</p><p class="dg-l dg-t" style="left:0px;top:104px;width:288px;height:68px">JVM</p><p class="dg-l dg-v" style="left:356px;top:104px;width:157px;height:68px">60 ms</p><p class="dg-l dg-t" style="left:0px;top:196px;width:288px;height:68px">WASM</p><p class="dg-l dg-v" style="left:388px;top:196px;width:190px;height:68px">218 ms</p>
+</figure>
+</div>
+<div class="say" id="s24c1" role="note" data-side="below" data-at="インタプリタ" style="left:960px;top:465px;width:848px;height:152px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:727px"><p>ループ中心の<wbr>コードは、<wbr>コンパイルで 20〜200&nbsp;倍速くなる</p></div>
+<p class="source">bench<span class="nw">-r</span>eport/results/benchmarks.md (2026<span class="nw">-0</span>9<span class="nw">-0</span>4, Linux x86_64, AMD EPYC 9V74)</p>
+<div class="page">24</div>
+</section>
+<section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">インタプリタは<wbr>試行錯誤に<wbr>使う</h1>
+<div class="body" style="top:232px;height:776px">
+<ul><li>即座に<wbr>起動し、<wbr>コンパイラと<wbr>同じ<wbr>意味で<wbr>実行する</li><li>I/O が<wbr>中心の<wbr>スクリプトなら、<wbr>速さの<wbr>差は<wbr>表に<wbr>出にくい</li><li>CPU を<wbr>使い切る<wbr>処理は、<wbr>コンパイルした<wbr>成果物で<wbr>動かす</li></ul>
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp program.lisp -o program.jar
+<span class="hl-k">$</span> java -jar program.jar</code></pre>
+</div>
+<div class="page">25</div>
+</section>
+<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">バックエンド</p>
+<h1 class="title">ブラウザで<wbr>動かす</h1>
+<div class="body" style="top:232px;height:776px">
+<ul><li><strong>プレイグラウンド</strong> rontolisp 自体を GraalVM の Web Image で WebAssembly に<wbr>した<wbr>もの。<wbr>REPL と、<code>.class</code> や <code>.wasm</code> への<wbr>コンパイルが<wbr>ブラウザの<wbr>中で<wbr>完結する</li><li><strong>ドキュメント</strong> リファレンスの Lisp の<wbr>例は Run で<wbr>実行できる</li><li><strong>この<wbr>デッキ</strong> 同じ<wbr>ブラウザ版が<wbr>コードを<wbr>実行している</li><li><strong>自分の<wbr>プログラム</strong> WASM に<wbr>コンパイルして<wbr>ページから<wbr>呼ぶ (<code>examples/browser/</code> の<wbr>マインスイーパーや WebGL)</li></ul>
+</div>
+<div class="page">26</div>
+</section>
+<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li class="current">連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">27</div>
+</section>
+<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">Java 連携</h1>
+<div class="body" style="top:232px;height:776px">
+<p><code>java</code> パッケージが、<wbr>リフレクションで<wbr>任意の Java API を<wbr>呼ぶ。</p>
+<pre class="code" data-lang="lisp"><code>(java:call (java:new <span class="hl-s">&quot;java.lang.StringBuilder&quot;</span> <span class="hl-s">&quot;ab&quot;</span>) <span class="hl-s">&quot;length&quot;</span>)  <span class="hl-c">; =&gt; 2</span>
+(java:static <span class="hl-s">&quot;java.lang.Math&quot;</span> <span class="hl-s">&quot;max&quot;</span> <span class="hl-n">3</span> <span class="hl-n">7</span>)                        <span class="hl-c">; =&gt; 7</span>
+(java:field <span class="hl-s">&quot;java.lang.Integer&quot;</span> <span class="hl-s">&quot;MAX_VALUE&quot;</span>)                    <span class="hl-c">; =&gt; 2147483647</span></code></pre>
+<ul><li>JVM 上の<wbr>インタプリタと、<wbr>コンパイルした <code>.class</code> で<wbr>動く</li><li>WASM は<wbr>ホストの<wbr>オブジェクトを<wbr>表せないので、<wbr>コンパイルを<wbr>拒否する</li></ul>
+</div>
+<div class="page">28</div>
+</section>
+<section class="slide layout-columns" id="s29" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">ASDF で<wbr>複数ファイルの<wbr>プロジェクトを<wbr>読む</h1>
+<div class="body" style="top:232px;height:776px">
+<div class="columns">
+<div class="column" style="width:828px">
+<pre class="code" data-lang="lisp"><code><span class="hl-c">;; my-app.asd</span>
+(<span class="hl-d">defsystem</span> <span class="hl-k">:my-app</span>
+  <span class="hl-k">:depends-on</span> (<span class="hl-k">:base</span>)
+  <span class="hl-k">:serial</span> <span class="hl-n">t</span>
+  <span class="hl-k">:components</span> ((<span class="hl-k">:file</span> <span class="hl-s">&quot;package&quot;</span>)
+               (<span class="hl-k">:file</span> <span class="hl-s">&quot;main&quot;</span>)))</code></pre>
+</div>
+<div class="column" style="width:788px">
+<ul><li><code>.asd</code> は<wbr>プレーンな<wbr>データと<wbr>して<wbr>解析する</li><li>依存する<wbr>システムから<wbr>順に<wbr>読み込む</li><li><code><span class="nw">--s</span>ystem<span class="nw">-p</span>ath</code> で<wbr>探す場所を<wbr>足す</li><li>インタプリタ、<wbr>JVM、<wbr>WASM の<wbr>どれでも<wbr>同じように<wbr>動く</li></ul>
+</div>
+</div>
+</div>
+<div class="page">29</div>
+</section>
+<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">実在の<wbr>ライブラリを<wbr>そのまま<wbr>読む</h1>
+<div class="body" style="top:232px;height:776px">
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp
+<span class="hl-c">CL-USER&gt; (ql:quickload &quot;split-sequence&quot;)</span>
+<span class="hl-c">(split-sequence)</span>
+<span class="hl-c">CL-USER&gt; (split-sequence:split-sequence #\, &quot;a,b,c&quot;)</span>
+<span class="hl-c">(&quot;a&quot; &quot;b&quot; &quot;c&quot;)</span></code></pre>
+<ul><li><code>ql:quickload</code> は Quicklisp の<wbr>配布物から<wbr>取得し、<wbr><code>~/.rontolisp/quicklisp/</code> に<wbr>キャッシュする</li><li>alexandria、<wbr>cl<span class="nw">-p</span>pcre、<wbr>cl<span class="nw">-w</span>ho、<wbr>jzon、<wbr>chipz などを、<wbr>上流の<wbr>ソースの<wbr>まま 4&nbsp;つの<wbr>バックエンドで<wbr>動かしている</li></ul>
+</div>
+<div class="page">30</div>
+</section>
+<section class="slide layout-table" id="s31" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">その<wbr>ほかの<wbr>組み込みパッケージ</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><caption>動く<wbr>バックエンドは<wbr>パッケージごとに<wbr>違う。<wbr>各ガイドを<wbr>参照</caption><colgroup><col style="width:684px"><col style="width:1012px"></colgroup><thead><tr><th scope="col">パッケージ</th><th scope="col">用途</th></tr></thead><tbody><tr><td><code>uiop</code></td><td>環境変数、<wbr>ファイル、<wbr>ディレクトリなど (一部を<wbr>実装)</td></tr><tr><td><code>rove</code>、<wbr><code>rontolisp test</code></td><td>テスト</td></tr><tr><td><code>rontolisp:fetch</code></td><td>HTTP リクエスト</td></tr><tr><td><code>clack</code></td><td>Web アプリケーション</td></tr><tr><td><code>linalg</code>、<wbr><code>torch</code></td><td>線形代数と<wbr>ニューラルネットワーク</td></tr><tr><td><code>cffi</code></td><td>C ライブラリの<wbr>呼び出し (JVM)</td></tr><tr><td><code>objc</code>、<wbr><code>appkit</code></td><td>macOS の GUI</td></tr></tbody></table>
+</div>
+<div class="page">31</div>
+</section>
+<section class="slide layout-standard" id="s32" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li class="current">次の<wbr>一歩</li></ol>
+</div>
+<div class="page">32</div>
+</section>
+<section class="slide layout-table" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">次の<wbr>一歩</p>
+<h1 class="title">examples ディレクトリ</h1>
+<div class="body" style="top:232px;height:776px">
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:756px"><col style="width:940px"></colgroup><thead><tr><th scope="col">ディレクトリ</th><th scope="col">内容</th></tr></thead><tbody><tr><td><code>console/</code></td><td>アルゴリズムと<wbr>コンソール入出力</td></tr><tr><td><code>scheme/</code> <code>clojure/</code></td><td>Scheme と Clojure の<wbr>プログラム</td></tr><tr><td><code>ml/</code> <code>llm/</code></td><td>数値計算、<wbr>機械学習、<wbr>Llama 2&nbsp;の<wbr>推論</td></tr><tr><td><code>net/</code> <code>db/</code></td><td>ソケット、<wbr>HTTP サーバ、<wbr>PostgreSQL</td></tr><tr><td><code>jvm/</code> <code>macos/</code></td><td>Java 連携、<wbr>Swing、<wbr>Cocoa、<wbr>Metal</td></tr><tr><td><code>browser/</code></td><td>ページで<wbr>動かす WASM</td></tr><tr><td><code>asdf/</code></td><td>実在の<wbr>ライブラリの<wbr>読み込み</td></tr></tbody></table>
+</div>
+<div class="page">33</div>
+</section>
+<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">次の<wbr>一歩</p>
+<h1 class="title">次に<wbr>読むもの</h1>
+<div class="body" style="top:232px;height:776px">
+<ul><li><a href="https://making.github.io/rontolisp/docs/">ドキュメント</a> はじめに、<wbr>コンパイル、<wbr>言語リファレンス、<wbr>ガイド</li><li><a href="https://making.github.io/rontolisp/playground.html">プレイグラウンド</a> インストールせずに<wbr>試す</li><li><a href="https://making.github.io/rontolisp/skill/">エージェントスキル</a> AI コーディングエージェント向けに、<wbr>ドキュメントから<wbr>生成した<wbr>もの</li><li><a href="https://github.com/making/rontolisp">GitHub</a> ソースと <code>examples/</code></li></ul>
+</div>
+<div class="page">34</div>
+</section>
+<section class="slide layout-statement closing" id="s35" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
+<div class="page">35</div>
+</section>
+<div id="progress" aria-hidden="true"></div>
+</div>
+<button id="fs" title="Full screen (F)" aria-label="Full screen"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+</div>
+<script type="application/json" id="lp">{"runtime":"https://making.github.io/rontolisp/","top":80,"bottom":72,"gap":48,"steps":{"title":[80,72,64,56],"body":[56,52,48,44,40],"code":[44,40,36,32,28],"table":[48,44,40,36],"stmt":[120,104,88,72,56]},"say":{"reach":36,"half":18,"inset":34,"clear":12,"border":3}}</script>
+<script>(function(){
+var d=document,de=d.documentElement;de.classList.add('js');
+var cfg=JSON.parse(d.getElementById('lp').textContent);
+var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs'),pg=d.getElementById('progress');
+var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
+var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
+var params=new URLSearchParams(location.search),presenter=params.has('presenter');
+var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
+var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
+function send(m){if(chan)chan.postMessage(m);}
+function fit(){var s=Math.min(innerWidth/W,innerHeight/H);
+deck.style.transform='translate('+(innerWidth-W*s)/2+'px,'+(innerHeight-H*s)/2+'px) scale('+s+')';}
+function steps(i){return +slides[i].dataset.steps||0;}
+function focus(sl,k){sl.querySelectorAll('pre[data-focus]').forEach(function(p){var c=0;
+p.dataset.focus.split(' ').forEach(function(x){if(+x<=k&&+x>c)c=+x;});
+p.querySelectorAll('.ln').forEach(function(l){l.classList.toggle('dim',c>0&&(' '+(l.dataset.hot||'')+' ').indexOf(' '+c+' ')<0);});});}
+var RM=window.matchMedia?matchMedia('(prefers-reduced-motion: reduce)'):null,mo=[],mgen=0;
+function unmorph(){mgen++;mo.forEach(function(x){if(x.cancel)x.cancel();else x.remove();});mo=[];
+deck.querySelectorAll('pre.mo').forEach(function(p){p.classList.remove('mo');});}
+function snap(sl){var p=sl.querySelector('pre.code');if(!p||!p.querySelector('.tk'))return null;
+var o=sl.getBoundingClientRect(),z=o.width/W,cs=getComputedStyle(p);
+function at(e){var r=e.getBoundingClientRect();return {l:(r.left-o.left)/z,t:(r.top-o.top)/z,w:r.width/z,h:r.height/z};}
+return {pre:p,box:at(p),fs:cs.fontSize,lh:cs.lineHeight,toks:Array.prototype.map.call(p.querySelectorAll('.tk'),function(e){
+var l=e.closest('.dim');return {e:e,r:at(e),o:l?+getComputedStyle(l).opacity:1};})};}
+function grab(a,b){if(a<0||Math.abs(a-b)!==1||presenter||(RM&&RM.matches)||!Element.prototype.animate)return null;
+var fw=b>a;if(!slides[fw?b:a].querySelector('pre[data-morph]'))return null;var A=snap(slides[a]);
+return A&&function(){var B=snap(slides[b]),L=[];if(!B)return;B.toks.forEach(function(t,j){L[j]=fw&&t.e.dataset.m?+t.e.dataset.m:-1;});
+if(!fw)A.toks.forEach(function(t,j){if(t.e.dataset.m)L[+t.e.dataset.m]=j;});play(A,B,L);};}
+function play(A,B,L){var sl=B.pre.closest('.slide'),cs=getComputedStyle(B.pre),used=[],g=++mgen,bg=d.createElement('div'),last;
+function run(e,f){var x=e.animate(f,{duration:600,easing:'ease-in-out'});mo.push(x);return x;}
+function box(r){return {left:r.l+'px',top:r.t+'px',width:r.w+'px',height:r.h+'px'};}
+bg.className='mb';bg.style.cssText='left:'+B.box.l+'px;top:'+B.box.t+'px;width:'+B.box.w+'px;height:'+B.box.h+'px;background:'+cs.backgroundColor+';border-radius:'+cs.borderRadius+';box-shadow:'+cs.boxShadow;
+sl.insertBefore(bg,sl.firstChild);mo.push(bg);B.pre.classList.add('mo');last=run(bg,[box(A.box),box(B.box)]);
+B.toks.forEach(function(t,j){var s=L[j]>=0?A.toks[L[j]]:null;if(!s){run(t.e,[{opacity:0},{opacity:0,offset:.4},{opacity:1}]);return;}used[L[j]]=1;
+run(t.e,[{transform:'translate('+(s.r.l-t.r.l)+'px,'+(s.r.t-t.r.t)+'px) scale('+(t.r.w?s.r.w/t.r.w:1)+')',opacity:Math.min(1,s.o/t.o)},{transform:'none',opacity:1}]);});
+A.toks.forEach(function(s,j){if(used[j])return;var x=d.createElement('span');x.className='mg';x.textContent=s.e.textContent;
+x.style.cssText='left:'+s.r.l+'px;top:'+s.r.t+'px;font-size:'+A.fs+';line-height:'+A.lh+';opacity:0;color:'+getComputedStyle(s.e).color;
+sl.appendChild(x);mo.push(x);run(x,[{opacity:s.o},{opacity:0,offset:.6},{opacity:0}]);});
+last.finished.then(function(){if(g===mgen)unmorph();},function(){});}
+function show(i,quiet,k,dir){if(!slides.length)return;i=Math.max(0,Math.min(slides.length-1,i));
+var n=steps(i);k=k===undefined?0:k<0?n:Math.min(k,n);if(i===cur&&k===shown)return;
+var same=i===cur,m=null;if(!same){unmorph();if(dir)m=grab(cur,i);if(cur>=0)slides[cur].classList.remove('active');cur=i;slides[cur].classList.add('active');
+try{if(location.hash!=='#'+(cur+1))history.replaceState(null,'','#'+(cur+1));}catch(e){}
+if(pg)pg.style.width=(cur+1)*100/slides.length+'%';}
+slides[cur].querySelectorAll('[data-step]').forEach(function(e){var s=+e.dataset.step;e.classList.toggle('pending',s>k);
+if(same&&s>shown&&s<=k&&e.classList.contains('say'))e.classList.add('front');});focus(slides[cur],k);shown=k;if(m)m();
+if(!quiet)send({t:'go',i:cur,k:shown,m:same?0:dir||0});hooks.go.forEach(function(f){f(cur);});}
+function move(dir){var n=steps(cur);if(dir>0&&shown<n)show(cur,false,shown+1);else if(dir<0&&shown>0)show(cur,false,shown-1);
+else if(cur+dir>=0&&cur+dir<slides.length)show(cur+dir,false,dir<0?-1:0,dir);}
+function fromHash(){var n=parseInt(location.hash.slice(1),10);return n>0?n-1:0;}
+function toggleFull(){if(d.fullscreenElement){d.exitFullscreen();}else if(stage.requestFullscreen){stage.requestFullscreen();}}
+function wake(){stage.classList.add('pointer');stage.classList.remove('idle');clearTimeout(idle);
+idle=setTimeout(function(){stage.classList.remove('pointer');if(d.fullscreenElement)stage.classList.add('idle');},2000);}
+function thumb(i,live){var t=d.createElement('div');t.className='thumb';var c=slides[i].cloneNode(true);
+c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');t.appendChild(c);return t;}
+function scaleThumbs(root){root.querySelectorAll('.thumb').forEach(function(t){t.firstChild.style.transform='scale('+t.clientWidth/W+')';});}
+var ov=null,sel=0;
+function mark(){Array.prototype.forEach.call(ov.children,function(t,i){t.classList.toggle('sel',i===sel);});
+ov.children[sel].scrollIntoView({block:'nearest'});}
+function openOverview(){unmorph();if(ov)ov.remove();ov=d.createElement('div');ov.id='ov';
+slides.forEach(function(s,i){var t=thumb(i);t.onclick=function(){closeOverview();show(i);};ov.appendChild(t);});
+d.body.appendChild(ov);de.classList.add('ov');scaleThumbs(ov);sel=Math.max(cur,0);mark();}
+function closeOverview(){de.classList.remove('ov');if(ov){ov.remove();ov=null;}}
+function overviewKey(k){var t=ov.children,cols=0;while(cols<t.length&&t[cols].offsetTop===t[0].offsetTop)cols++;
+if(k==='ArrowRight')sel++;else if(k==='ArrowLeft')sel--;else if(k==='ArrowDown')sel+=cols;else if(k==='ArrowUp')sel-=cols;
+else if(k==='Enter'||k===' '){var i=sel;closeOverview();show(i);return true;}
+else if(k==='o'||k==='O'||k==='Escape'){closeOverview();return true;}else return false;
+sel=Math.max(0,Math.min(t.length-1,sel));mark();return true;}
+function openPresenter(){var u=location.href.split('#')[0];
+window.pw=open(u+(u.indexOf('?')<0?'?':'&')+'presenter#'+(cur+1),'lispresen-presenter','popup,width=1280,height=800');}
+d.addEventListener('keydown',function(e){if(e.altKey||e.ctrlKey||e.metaKey)return;
+var tg=e.target.tagName;if(tg==='TEXTAREA'||tg==='INPUT')return;var k=e.key;
+if(ov){if(overviewKey(k))e.preventDefault();return;}
+if(hooks.key.some(function(f){return f(k);})){e.preventDefault();return;}
+if(k==='ArrowRight'||k==='ArrowDown'||k==='PageDown'||k===' '||k==='Enter')move(1);
+else if(k==='ArrowLeft'||k==='ArrowUp'||k==='PageUp'||k==='Backspace')move(-1);
+else if(k==='Home')show(0);else if(k==='End')show(slides.length-1);
+else if((k==='f'||k==='F')&&!presenter)toggleFull();
+else if(k==='o'||k==='O')openOverview();
+else if((k==='p'||k==='P')&&!presenter)openPresenter();
+else if(k==='Escape'&&d.fullscreenElement)d.exitFullscreen();else return;e.preventDefault();});
+async function startHere(m){var o={};if(m.screen&&window.getScreenDetails){try{var sd=await getScreenDetails();
+sd.screens.forEach(function(s){if(s.left===m.screen.left&&s.top===m.screen.top)o.screen=s;});}catch(e){}}
+try{await stage.requestFullscreen(o);}catch(e){console.warn('lispresen: press F in this window for full screen',e);}}
+if(chan)chan.onmessage=function(e){var m=e.data;if(m.t==='go')show(m.i,true,m.k,m.m);
+else if(m.t==='hello'&&!presenter){send({t:'go',i:cur,k:shown});hooks.hello.forEach(function(f){f();});}
+hooks.msg.forEach(function(f){f(m);});};
+addEventListener('message',function(e){if(e.source===window.pw&&e.data&&e.data.t==='start')startHere(e.data);});
+function pad(n){return (n<10?'0':'')+n;}
+function buildPresenter(){de.classList.add('presenter');var pv=d.createElement('div');pv.id='pv';
+var bar=d.createElement('div');bar.className='pv-bar';var timer=d.createElement('span');timer.className='pv-timer';
+timer.title='Click to reset';var count=d.createElement('span');var start=d.createElement('button');start.textContent='Start';
+start.title='Full screen on the other display';bar.append(timer,count,start);
+var cu=d.createElement('div');cu.className='pv-cur';var nx=d.createElement('div');nx.className='pv-next';
+var notes=d.createElement('div');notes.className='pv-notes';pv.append(bar,cu,nx,notes);d.body.appendChild(pv);
+hooks.bar.forEach(function(f){f(bar);});
+var t0=Date.now();function tick(){var s=Math.floor((Date.now()-t0)/1000);timer.textContent=pad(Math.floor(s/60))+':'+pad(s%60);}
+setInterval(tick,500);tick();timer.onclick=function(){t0=Date.now();tick();};
+start.onclick=async function(){t0=Date.now();tick();var m={t:'start'};
+if(window.getScreenDetails){try{var ps=await navigator.permissions.query({name:'window-management'});
+if(ps.state==='granted'){var sd=await getScreenDetails();
+var other=sd.screens.filter(function(s){return s!==sd.currentScreen;})[0];if(other)m.screen={left:other.left,top:other.top};}
+else if(ps.state==='prompt')getScreenDetails().catch(function(){});}catch(e){}}
+var w=window.opener,o=/^https?:$/.test(location.protocol)?location.origin:'*';if(!w||w.closed)return;
+try{if(o==='*')throw 0;w.postMessage(m,{targetOrigin:o,delegate:'fullscreen'});}catch(e){w.postMessage(m,o);}};
+function render(i){cu.replaceChildren(thumb(i,true));
+nx.replaceChildren(i+1<slides.length?thumb(i+1):'');var a=slides[i].querySelector('.notes');notes.textContent=a?a.textContent:'';
+count.textContent=(i+1)+' / '+slides.length;scaleThumbs(pv);hooks.thumb.forEach(function(f){f(cu);});}
+hooks.go.push(render);addEventListener('resize',function(){scaleThumbs(pv);});}
+function px(st,name){return parseInt(st.getPropertyValue(name),10);}
+function next(list,v){var i=list.indexOf(v);return i>=0&&i<list.length-1?list[i+1]:0;}
+function setVars(st,vs){for(var k in vs)st.setProperty('--'+k,vs[k]+'px');}
+function bodyVars(s){return {'body':s,'body-lh':Math.ceil(s*15/10),'gap':Math.floor(s*3/5),'indent':Math.ceil(s*12/10),'item-gap':Math.floor(s/4)};}
+function codeVars(c){return {'code':c,'code-lh':Math.ceil(c*14/10),'code-pad':Math.floor(c/2)};}
+function tableVars(s){return {'table':s,'table-lh':Math.ceil(s*14/10),'cell-x':Math.floor(s*3/5),'cell-y':Math.floor(s/4)};}
+function over(el){return el.scrollHeight>el.clientHeight+1;}
+function check(){var log=[];slides.forEach(function(sl,i){var st=sl.style,notes=[];sl.classList.add('measure');
+var t=sl.querySelector(':scope>.title'),b=sl.querySelector(':scope>.body'),c=sl.querySelector(':scope>.centered'),s;
+if(t&&b){var room=parseInt(b.style.top,10)-cfg.top-cfg.gap;
+while(t.offsetHeight>room+1&&(s=next(cfg.steps.title,px(st,'--title')))){notes.push('title '+px(st,'--title')+'px -> '+s+'px');
+setVars(st,{'title':s,'title-lh':Math.ceil(s*13/10)});}}
+if(b){var regions=[b].concat(Array.prototype.slice.call(b.querySelectorAll('.column')));
+while(regions.some(over)){var moved=false;
+if((s=next(cfg.steps.body,px(st,'--body')))){notes.push('body '+px(st,'--body')+'px -> '+s+'px');setVars(st,bodyVars(s));moved=true;}
+if(b.querySelector('pre')&&(s=next(cfg.steps.code,px(st,'--code')))){notes.push('code '+px(st,'--code')+'px -> '+s+'px');setVars(st,codeVars(s));moved=true;}
+b.querySelectorAll('table').forEach(function(tb){var ts=next(cfg.steps.table,px(tb.style,'--table'));
+if(ts){notes.push('table '+px(tb.style,'--table')+'px -> '+ts+'px');setVars(tb.style,tableVars(ts));moved=true;}});
+if(!moved)break;}
+if(regions.some(over)){sl.classList.add('overflow');notes.push('overflows at the smallest sizes');}}
+if(c){while(over(c)&&(s=next(cfg.steps.stmt,px(st,'--stmt')))){notes.push('text '+px(st,'--stmt')+'px -> '+s+'px');
+setVars(st,{'stmt':s,'stmt-lh':Math.ceil(s*135/100)});}}
+hooks.place.forEach(function(f){f(sl,notes);});sl.classList.remove('measure');if(notes.length){sl.classList.add('corrected');
+notes.forEach(function(n){var line='slide '+(i+1)+': '+n;console.warn('lispresen: '+line);log.push(line);});}});
+if(params.has('check')&&!presenter){de.classList.add('check');var o=d.createElement('div');o.id='chk';
+o.textContent='runtime check: '+(log.length?NL+log.join(NL):'no corrections');d.body.appendChild(o);}}
+
+var boxes=Array.prototype.slice.call(d.querySelectorAll('#deck .codebox.runnable'));
+var BS=String.fromCharCode(92),DQ=String.fromCharCode(34);
+var HEADS=' lambda fn let let* letrec letfn flet labels if when unless cond case and or loop do dolist dotimes progn begin quote setf setq set! recur try catch handler-case unwind-protect block return-from multiple-value-bind destructuring-bind ns in-package require ';
+var CONSTS=' nil t true false #t #f #true #false ';
+function delim(c){return [32,9,10,13,12].indexOf(c.charCodeAt(0))>=0||('()[]{};`,'+DQ+String.fromCharCode(39)).indexOf(c)>=0;}
+function esc(s){var o='';for(var i=0;i<s.length;i++){var c=s[i];o+=c==='&'?'&amp;':c==='<'?'&lt;':c==='>'?'&gt;':c===DQ?'&quot;':c===String.fromCharCode(39)?'&#39;':c;}return o;}
+function highlight(t){var n=t.length,i=0,o='';
+function emit(k,e){var s=esc(t.slice(i,e));o+=k?'<span class=hl-'+k+'>'+s+'</span>':s;i=e;}
+function tend(j){while(j<n&&!delim(t[j]))j++;return j;}
+function cls(j){var k=t.slice(i,j).toLowerCase();if(k[0]===':')return 'k';if(CONSTS.indexOf(' '+k+' ')>=0)return 'n';
+var c=k[0],dg=function(x){return x>='0'&&x<='9';};if(dg(c)||(k.length>1&&'+-.'.indexOf(c)>=0&&dg(k[1])))return 'n';
+if(i>0&&t[i-1]==='('&&((k.length>3&&k.slice(0,3)==='def')||HEADS.indexOf(' '+k+' ')>=0))return 'd';return null;}
+while(i<n){var c=t[i],nx=i+1<n?t[i+1]:'',e,j;
+if(c===';'){e=t.indexOf(NL,i);emit('c',e<0?n:e);}
+else if(c==='#'&&nx==='|'){e=t.indexOf('|#',i+2);emit('c',e<0?n:e+2);}
+else if(c===DQ){j=i+1;while(j<n){if(t[j]===BS)j+=2;else if(t[j]===DQ){j++;break;}else j++;}emit('s',Math.min(j,n));}
+else if(c==='#'&&nx===BS)emit('s',tend(Math.min(n,i+3)));
+else if(c===BS)emit('s',tend(Math.min(n,i+2)));
+else if(delim(c))emit(null,i+1);
+else{j=tend(i);emit(cls(j),j);}}
+return o;}
+var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
+var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
+function workerMain(B){Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
+.then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
+catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({id:m.id,v:v});};postMessage({ready:1});})
+.catch(function(x){postMessage({fail:String(x)});});}
+function label(k){k.dataset.state=rt;k.textContent=rt==='ready'?'Run':rt==='loading'?'Loading':'Failed';
+k.title=rt==='ready'?'Run (Ctrl+Enter)':rt==='loading'?'Loading the runtime; a run waits for it':why+'; Run retries';}
+function setRt(s){rt=s;d.querySelectorAll('.tools .run').forEach(label);
+d.querySelectorAll('.rt').forEach(function(e){e.dataset.state=s;e.textContent='runtime: '+s;e.title=s==='failed'?why:'';});if(!presenter)send({t:'rt',s:s,why:why});}
+function fail(g,text){if(g!==gen)return;why=text;console.error('lispresen: '+text);setRt('failed');
+queue.forEach(function(i){output(i,text,true);});queue=[];}
+function startWorker(){if(worker)worker.terminate();worker=null;busy=-1;clearTimeout(timer);setRt('loading');var g=++gen;
+fetch(base+'rontoplayground.js').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' for '+r.url);return r.text();})
+.then(function(t){if(g!==gen)return;
+worker=new Worker(URL.createObjectURL(new Blob([t,NL+';('+workerMain.toString()+')('+JSON.stringify(base)+')'],{type:'text/javascript'})));
+worker.onmessage=function(e){var m=e.data;if(m.ready){setRt('ready');pump();}
+else if(m.fail)fail(g,'the runtime did not start from '+base+': '+m.fail);else done(m.id,m.v);};
+worker.onerror=function(e){fail(g,'the runtime did not start from '+base+': '+e.message);};})
+.catch(function(x){fail(g,!worker&&base.indexOf('file:')===0?'a deck opened as a file cannot fetch the runtime from '+base+
+'; serve the deck over HTTP (jwebserver) or use :runtime :hosted':'the runtime did not load from '+base+': '+x);});}
+function codeOf(b){return b.querySelector('pre.code').textContent;}
+function output(i,text,err,wait){var s=state[i];s.out=text;s.err=!!err;s.busy=!!wait;s.open=true;paint(boxes[i],s);share(i);}
+function outOf(b){var os=b.closest('.slide').querySelectorAll('.out');for(var k=0;k<os.length;k++)if(os[k].dataset.o===b.dataset.i)return os[k];}
+function place(b,o){var body=b.offsetParent;if(!body)return;var sl=b.closest('.slide'),st=sl.style;
+var top=body.offsetTop+b.offsetTop+b.offsetHeight+16,pre=b.querySelector('[aria-describedby]'),ids=pre?pre.getAttribute('aria-describedby').split(' '):[],room;
+sl.querySelectorAll(':scope>.say').forEach(function(c){if(ids.indexOf(c.id)>=0&&!c.classList.contains('pending')&&c.style.display!=='none')
+top=Math.max(top,c.offsetTop+c.offsetHeight+16);});room=H-cfg.bottom-top;
+if(room>=3*px(st,'--code-lh')+2*px(st,'--code-pad')){o.style.top=top+'px';o.style.bottom='auto';o.style.maxHeight=room+'px';}
+else{o.style.top='auto';o.style.bottom=cfg.bottom+'px';o.style.maxHeight=Math.floor(H*45/100)+'px';}}
+function paint(b,s){var o=outOf(b);o.firstChild.textContent=s.out;o.classList.toggle('err',s.err);o.classList.toggle('busy',s.busy);
+o.classList.toggle('open',s.open);if(s.open)place(b,o);
+if(s.busy)b.closest('.slide').querySelectorAll('.say.front').forEach(function(c){c.classList.remove('front');});}
+function scrollOut(root,k){if(k!=='ArrowDown'&&k!=='ArrowUp')return false;var o=root&&root.querySelector('.out.open pre');if(!o)return false;
+var step=3*px(o.closest('.slide').style,'--code-lh');
+if(k==='ArrowDown'?o.scrollTop+o.clientHeight<o.scrollHeight-1:o.scrollTop>0){o.scrollTop+=k==='ArrowDown'?step:-step;return true;}return false;}
+function hide(i){state[i].open=false;paint(boxes[i],state[i]);share(i);}
+function share(i){send({t:'code',i:i,s:state[i]});}
+function run(b){var i=+b.dataset.i;if(busy===i||queue.indexOf(i)>=0)return;queue.push(i);
+output(i,rt==='ready'?'running...':'waiting for the runtime...',false,true);if(rt==='failed')startWorker();else pump();}
+function pump(){if(busy>=0||!queue.length||rt!=='ready')return;var i=queue.shift(),b=boxes[i];busy=i;
+worker.postMessage({id:i,lang:b.dataset.lang.toLowerCase(),src:codeOf(b),fresh:b.hasAttribute('data-fresh'),stdin:b.dataset.stdin||''});
+var secs=+b.dataset.timeout||10;timer=setTimeout(function(){output(i,'timed out after '+secs+' s; the runtime restarted, so earlier definitions are gone',true);startWorker();},secs*1000);}
+function done(i,v){clearTimeout(timer);busy=-1;var err=typeof v==='string'&&v.indexOf('ERROR:')===0;output(i,err?v.slice(6).trim():String(v),err);pump();}
+function setCode(b,text,html){b.querySelector('pre.code code').innerHTML=html||highlight(text);var i=+b.dataset.i;state[i].text=text;share(i);
+var sl=b.closest('.slide');hooks.place.forEach(function(f){f(sl,[]);});}
+function reset(i){leave();setCode(boxes[i],orig[i].text,orig[i].html);focus(slides[cur],shown);hide(i);}
+function leave(){if(!editing)return;var ta=editing.querySelector('textarea');editing.closest('.slide').classList.remove('editing');editing=null;if(ta)ta.remove();}
+function edit(b){if(editing===b)return;leave();editing=b;b.closest('.slide').classList.add('editing');var pre=b.querySelector('pre.code'),ta=d.createElement('textarea');
+ta.value=codeOf(b);ta.spellcheck=false;ta.setAttribute('wrap','off');ta.style.height=pre.offsetHeight+'px';b.appendChild(ta);ta.focus();
+ta.addEventListener('input',function(){setCode(b,ta.value);});
+ta.addEventListener('scroll',function(){pre.scrollTop=ta.scrollTop;pre.scrollLeft=ta.scrollLeft;});
+ta.addEventListener('keydown',function(e){e.stopPropagation();
+if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run(b);}
+else if(e.key==='Escape'){e.preventDefault();leave();}
+else if(e.key==='Tab'){e.preventDefault();ta.setRangeText('  ',ta.selectionStart,ta.selectionEnd,'end');setCode(b,ta.value);}});
+ta.addEventListener('blur',function(){setTimeout(function(){if(editing===b&&d.activeElement!==ta)leave();},0);});}
+function tools(b,onRun,onReset){var t=d.createElement('div');t.className='tools';
+[['Run','Run (Ctrl+Enter)',onRun],['Reset','Restore the code',onReset]].forEach(function(x){var k=d.createElement('button');
+k.textContent=x[0];k.title=x[1];if(x[2]===onRun){k.className='run';label(k);}k.addEventListener('mousedown',function(e){e.preventDefault();});
+k.addEventListener('click',function(e){e.stopPropagation();x[2]();});t.appendChild(k);});b.appendChild(t);
+b.addEventListener('dblclick',function(e){e.stopPropagation();});}
+function apply(b,s){if(!s)return;b.querySelector('pre.code code').innerHTML=highlight(s.text);paint(b,s);}
+function openOn(i){return boxes.filter(function(b){return state[+b.dataset.i].open&&slides[i].contains(b);});}
+boxes.forEach(function(b,i){b.dataset.i=i;orig[i]={text:codeOf(b),html:b.querySelector('pre.code code').innerHTML};state[i]={text:orig[i].text,out:'',err:false,busy:false,open:false};
+var o=d.createElement('div');o.className='out';o.dataset.o=i;o.setAttribute('aria-live','polite');
+var c=d.createElement('button');c.textContent=String.fromCharCode(215);c.title='Close (Esc)';
+o.append(d.createElement('pre'),c);b.closest('.slide').appendChild(o);});
+hooks.go.push(function(i){openOn(i).forEach(function(b){place(b,outOf(b));});});
+if(presenter){var rtl=d.createElement('span');
+hooks.bar.push(function(bar){var r=d.createElement('button');r.textContent='Reset runtime';r.title='Start a new interpreter';
+r.onclick=function(){send({t:'reset-rt'});};rtl.className='rt';rtl.dataset.state=rt;rtl.textContent='runtime: '+rt;bar.append(rtl,r);});
+hooks.thumb.push(function(root){root.querySelectorAll('.codebox.runnable').forEach(function(b){var i=+b.dataset.i;
+var old=b.querySelector('.tools');if(old)old.remove();apply(b,state[i]);
+outOf(b).lastChild.onclick=function(){send({t:'hide',i:i});};
+tools(b,function(){send({t:'run',i:i});},function(){send({t:'reset',i:i});});});});
+hooks.key.push(function(k){return scrollOut(d.querySelector('.pv-cur'),k);});
+hooks.key.push(function(k){var open=k==='Escape'?openOn(cur):[];
+open.forEach(function(b){send({t:'hide',i:+b.dataset.i});});return open.length>0;});
+hooks.msg.push(function(m){if(m.t==='rt'){why=m.why||'';setRt(m.s);}else if(m.t==='code'){state[m.i]=m.s;
+d.querySelectorAll('#pv .codebox').forEach(function(b){if(+b.dataset.i===m.i)apply(b,m.s);});}});
+send({t:'hello'});}
+else{boxes.forEach(function(b,i){tools(b,function(){run(b);},function(){reset(i);});
+outOf(b).lastChild.onclick=function(){hide(i);};
+b.querySelector('pre.code').addEventListener('click',function(){edit(b);});});
+hooks.key.push(function(k){return scrollOut(slides[cur],k);});
+hooks.key.push(function(k){var open=k==='Escape'?openOn(cur):[];
+open.forEach(function(b){hide(+b.dataset.i);});return open.length>0;});
+hooks.key.push(function(k){if(k!=='e'&&k!=='E')return false;var b=slides[cur].querySelector('.codebox.runnable');if(b)edit(b);return !!b;});
+hooks.msg.push(function(m){if(m.t==='run')run(boxes[m.i]);else if(m.t==='reset')reset(m.i);else if(m.t==='hide')hide(m.i);
+else if(m.t==='reset-rt')startWorker();});
+hooks.hello.push(function(){send({t:'rt',s:rt,why:why});boxes.forEach(function(b,i){share(i);});});
+d.addEventListener('fullscreenchange',function(){var kb=navigator.keyboard;if(!kb||!kb.lock)return;
+if(d.fullscreenElement)kb.lock(['Escape']).catch(function(){});else kb.unlock();});
+startWorker();}
+
+var SAY=cfg.say;
+function cbox(r,o,k){return {l:Math.round((r.left-o.left)/k),t:Math.round((r.top-o.top)/k),r:Math.round((r.right-o.left)/k),b:Math.round((r.bottom-o.top)/k)};}
+function crects(list,o,k){var a=[];for(var j=0;j<list.length;j++)if(list[j].width>=1&&list[j].height>=1)a.push(cbox(list[j],o,k));return a;}
+function cunion(a){if(!a.length)return a;var u={l:a[0].l,t:a[0].t,r:a[0].r,b:a[0].b};
+a.forEach(function(r){u.l=Math.min(u.l,r.l);u.t=Math.min(u.t,r.t);u.r=Math.max(u.r,r.r);u.b=Math.max(u.b,r.b);});return [u];}
+function ctext(root,o,k){var a=[],w=d.createTreeWalker(root,NodeFilter.SHOW_TEXT),rg=d.createRange(),n;
+while((n=w.nextNode())){if(n.parentElement.closest('.say,.notes,.out'))continue;rg.selectNodeContents(n);a=a.concat(crects(rg.getClientRects(),o,k));}return a;}
+function cmeet(a,b){return a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;}
+function canchor(sl,c,o,k){var el=null,at=c.dataset.at;sl.querySelectorAll('[aria-describedby]').forEach(function(e){
+if(!el&&e.getAttribute('aria-describedby').split(' ').indexOf(c.id)>=0)el=e;});if(!el)return [];
+if(el.classList.contains('dg')){var r=el,ls,j;if(at!==undefined){r=null;ls=el.querySelectorAll('.dg-l:not(.dg-v)');
+for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent===at)r=ls[j];for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent.indexOf(at)>=0)r=ls[j];
+if(r&&r.classList.contains('dg-t'))r=r.nextElementSibling;}
+return r?[cbox(r.getBoundingClientRect(),o,k)]:[];}
+if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.createRange(),w=d.createTreeWalker(el,NodeFilter.SHOW_TEXT),n;if(i<0)return [];
+while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
+return cunion(crects(rg.getClientRects(),o,k));}
+if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
+return cunion(ctext(el,o,k));}
+function cobstacles(sl,o,k){var a=ctext(sl,o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img'),fr=cbox(f.getBoundingClientRect(),o,k);
+if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
+sl.querySelectorAll('.tools,.dg-art>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
+function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
+function along(a,ext,lo,hi){return [a-Math.floor(ext/2),a-I,a-ext+I].map(function(p){return Math.max(lo,Math.min(hi-ext,p));});}
+ax=fl.r;ay=Math.floor((fl.t+fl.b)/2);along(ay,h,bd.t,bd.b).forEach(function(y){out.push({side:'right',x:ax+R,y:y,tail:ay-y,tb:{l:ax,t:ay-HB,r:ax+R,b:ay+HB}});});
+ax=Math.floor((fl.l+fl.r)/2);ay=fl.b;along(ax,w,bd.l,bd.r).forEach(function(x){out.push({side:'below',x:x,y:ay+R,tail:ax-x,tb:{l:ax-HB,t:ay,r:ax+HB,b:ay+R}});});
+ax=Math.floor((f1.l+f1.r)/2);ay=f1.t;along(ax,w,bd.l,bd.r).forEach(function(x){out.push({side:'above',x:x,y:ay-R-h,tail:ax-x,tb:{l:ax-HB,t:ay-R,r:ax+HB,b:ay}});});
+ax=f1.l;ay=Math.floor((f1.t+f1.b)/2);along(ay,h,bd.t,bd.b).forEach(function(y){out.push({side:'left',x:ax-R-w,y:y,tail:ay-y,tb:{l:ax-R,t:ay-HB,r:ax,b:ay+HB}});});
+return out;}
+function cfree(p,w,h,obs,bd){var C=SAY.clear,I=SAY.inset,g={l:p.x-C,t:p.y-C,r:p.x+w+C,b:p.y+h+C};
+return bd.l<=p.x&&p.x+w<=bd.r&&bd.t<=p.y&&p.y+h<=bd.b&&I<=p.tail&&p.tail<=(p.side==='right'||p.side==='left'?h:w)-I&&
+!obs.some(function(r){return cmeet(g,r)||cmeet(p.tb,r);});}
+function callouts(sl,notes){var cs=sl.querySelectorAll(':scope>.say'),body=sl.querySelector(':scope>.body');if(!cs.length||!body||!sl.offsetWidth)return;
+var o=sl.getBoundingClientRect(),k=o.width/W,bd=cbox(body.getBoundingClientRect(),o,k),obs=cobstacles(sl,o,k);
+Array.prototype.forEach.call(cs,function(c,j){var f=canchor(sl,c,o,k),w=c.offsetWidth,h=c.offsetHeight,ps,p=null,q,x,y;
+c.style.display=f.length?'':'none';if(!f.length)return;ps=ccands(f,w,h,bd);
+for(q=0;q<ps.length&&!p;q++)if(cfree(ps[q],w,h,obs,bd))p=ps[q];
+if(!p){if(!c.classList.contains('overflow')){c.classList.add('overflow');notes.push('callout '+(j+1)+' has no room');}}
+else{if(c.dataset.side!==p.side)notes.push('callout '+(j+1)+' '+c.dataset.side+' -> '+p.side);
+c.classList.remove('overflow');c.dataset.side=p.side;c.style.left=p.x+'px';c.style.top=p.y+'px';c.style.setProperty('--tail',(p.tail-SAY.border)+'px');}
+x=parseInt(c.style.left,10);y=parseInt(c.style.top,10);obs.push({l:x,t:y,r:x+w,b:y+h});if(p)obs.push(p.tb);});}
+hooks.place.push(callouts);
+
+addEventListener('resize',fit);
+d.addEventListener('fullscreenchange',function(){fit();wake();});
+addEventListener('hashchange',function(){show(fromHash());});
+stage.addEventListener('dblclick',toggleFull);
+fs.addEventListener('click',function(e){e.stopPropagation();fs.blur();toggleFull();});
+fs.addEventListener('dblclick',function(e){e.stopPropagation();});
+stage.addEventListener('mousemove',wake);
+stage.addEventListener('touchstart',function(e){x0=e.touches[0].clientX;},{passive:true});
+stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0;x0=null;
+if(Math.abs(dx)>50)move(dx<0?1:-1);});
+window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
+if(presenter)buildPresenter();
+deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});
+fit();show(fromHash(),presenter);
+if(d.fonts&&d.fonts.ready)d.fonts.ready.then(check);else check();
+})();</script>
+</body>
+</html>
