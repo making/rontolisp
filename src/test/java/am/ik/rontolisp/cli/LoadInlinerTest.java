@@ -517,7 +517,8 @@ class LoadInlinerTest {
 					"'|mylib|", "(PRINT (MYLIB-ANSWER))");
 		assertThat(result.stream().map(LispVal::print).filter(form -> form.startsWith("(%BEGIN-FILE ")))
 			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
-			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home.toRealPath() + "/quicklisp/software/mylib-1.0/mylib.lisp\")");
+			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home.toRealPath()
+					+ "/quicklisp/software/mylib-1.0/mylib.lisp\")");
 	}
 
 	@Test
