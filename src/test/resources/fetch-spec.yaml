@@ -3,7 +3,8 @@
 # http://127.0.0.1:<port> replaces @ORIGIN@ -- and the same expected text on each: the
 # interpreter and the JVM (the JDK's HttpClient), a --native output (the runner's rlhttp
 # host) and a --component under `wasmtime run -S http=y` (wasi:http). Cases run IN ORDER,
-# concatenated into one program per leg, and the output is sliced back per case.
+# concatenated into one program per leg, and the output is cut back into cases at the
+# end mark the program prints after each.
 #
 # The origin's endpoints (FetchSpecE2eTest.origin): /hello (200, "hello-from-fetch",
 # X-Test: ok; "got-header" when the request carries X-Custom: abc), /echo ("<METHOD>:

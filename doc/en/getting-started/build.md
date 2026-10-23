@@ -89,7 +89,9 @@ This produces `target/rontolisp`, a standalone native binary with instant startu
   the build adds through `rustup` when it is missing. The build compiles the
   precompiler into the binary; without `cargo` it warns and the binary answers
   `--native is not available`. `-Drontolisp.native.build=true` does the same for
-  the JAR build above.
+  the JAR build above. A precompiler built earlier is rebuilt by any build once a
+  file it is built from (`rontolisp-native/`) has changed; without `cargo`, the
+  build warns that it is out of date.
 
 **Usage:**
 

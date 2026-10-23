@@ -16,7 +16,9 @@
 #   ./build.sh --maven BUILD REQUIRED
 #       what pom.xml runs in generate-resources, with the values of the properties
 #       rontolisp.native.build and rontolisp.native.required (true|false):
-#       BUILD     build the pair when cargo is found; without cargo, warn and go on
+#       BUILD     build the pair when cargo is found; without cargo, warn and go on.
+#                 A pair already there and older than a file it is built from is
+#                 rebuilt the same way under false too
 #       REQUIRED  fail unless target/resources holds the host's shim and both stubs
 #                 afterwards (built here or put there by CI), and on Linux unless the
 #                 stubs are static
@@ -194,17 +196,38 @@ if [[ ${1:-} == --maven ]]; then
   build=${2:?BUILD}
   required=${3:?REQUIRED}
   dest=target/resources/am/ik/rontolisp/native/$os-$arch
-  if [[ $build == true ]]; then
+  # A pair older than a file it is built from is rebuilt whatever BUILD says: otherwise
+  # every --native output, and every native test leg, runs the runner of an older tree
+  # (on 2026-10-23 a pair of 2026-10-08 sent each octet-vector request body empty, a
+  # runner change of 2026-10-09). make's rule, on the files' times: a pair CI downloaded
+  # is newer than the checkout, so it is never rebuilt.
+  stale=false
+  if [[ $build != true && -f $dest/$lib ]] &&
+    [[ -n $(find Cargo.toml Cargo.lock abi precomp runner -type f -newer "$dest/$lib" -print -quit) ]]; then
+    stale=true
+  fi
+  if [[ $build == true ]] || $stale; then
     if find_cargo; then
+      if $stale; then
+        echo "rontolisp-native: the $os-$arch pair is older than its sources; rebuilding it" >&2
+      fi
       if ! stubs=$(build_pair "$required"); then
-        echo "error: rontolisp-native/build.sh failed; pass -Drontolisp.native.build=false" \
-          "to build without --native for $os-$arch" >&2
+        if $stale; then
+          echo "error: rontolisp-native/build.sh failed; delete rontolisp-native/$dest" \
+            "to build without --native for $os-$arch" >&2
+        else
+          echo "error: rontolisp-native/build.sh failed; pass -Drontolisp.native.build=false" \
+            "to build without --native for $os-$arch" >&2
+        fi
         exit 1
       fi
       install_pair "$stubs" "$dest"
     elif [[ ! -f $dest/$lib ]]; then
       echo "WARNING: cargo (Rust >= 1.96) not found: this build carries no --native" \
         "precompiler for $os-$arch, and --native will say it is not available" >&2
+    elif $stale; then
+      echo "WARNING: rontolisp-native/$dest is older than its sources and cargo (Rust >= 1.96)" \
+        "is not found: --native outputs run the runner those older sources built" >&2
     fi
   fi
   if [[ $required == true ]]; then

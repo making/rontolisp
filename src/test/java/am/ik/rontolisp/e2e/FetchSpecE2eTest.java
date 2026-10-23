@@ -58,11 +58,13 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code --native} output through its runner's {@code rlhttp} host
  * ({@code rontolisp-native/runner/src/http}), a {@code --component} through
  * {@code wasi:http} under {@code wasmtime run -S http=y} (.kb/fetch-http.md). The
- * {@code ci-spec.yaml} idea: the cases are concatenated into one program per leg and the
- * output is sliced back per case, so a failure names its case and its leg. The second
- * corpus, {@code clojure-http-spec.yaml}, is the Clojure client
- * ({@code rontolisp.http-client}) and {@code clojure.java.io}'s reads of an {@code http:}
- * URL over the same origin and legs, one {@code .clj} program per leg.
+ * {@code ci-spec.yaml} idea: the cases are concatenated into one program per leg, each
+ * followed by a line marking its end, and the output is cut back into cases at those
+ * marks, so a failure names its case and its leg, and a case printing too few or too many
+ * lines leaves the other cases' output where it is. The second corpus,
+ * {@code clojure-http-spec.yaml}, is the Clojure client ({@code rontolisp.http-client})
+ * and {@code clojure.java.io}'s reads of an {@code http:} URL over the same origin and
+ * legs, one {@code .clj} program per leg.
  *
  * <p>
  * Every leg goes through the command line -- this JVM's {@link RontoLispCli}, or the
@@ -101,6 +103,12 @@ class FetchSpecE2eTest {
 	 * leg preopens it, the native runner preopens its working directory, which it is.
 	 */
 	private static final String SCRATCH_MARK = "@SCRATCH@";
+
+	/**
+	 * Starts the line a program prints after each case, the case's name following it:
+	 * where the output is cut into cases.
+	 */
+	private static final String CASE_END = "%fetch-spec-case-end ";
 
 	/** The native binary that compiles, or {@code null} for this JVM. */
 	private static final @Nullable String BINARY = System.getProperty("rontolisp.binary");
@@ -450,7 +458,7 @@ class FetchSpecE2eTest {
 		// have answered.
 		List<Callable<String>> runs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
-			String program = program(spec.on(leg), originUrl, leg);
+			String program = program(spec.on(leg), originUrl, leg, fileName.endsWith(".clj"));
 			runs.add(started(leg, () -> run(leg, program, fileName)));
 		}
 		List<DynamicNode> legs = new ArrayList<>();
@@ -460,18 +468,53 @@ class FetchSpecE2eTest {
 		return legs.stream();
 	}
 
-	private static String program(List<Case> cases, String originUrl, Leg leg) {
+	// The cases in order, each followed by the form printing its end mark. The mark goes
+	// after its case, not before: a Clojure program's ns form comes first.
+	private static String program(List<Case> cases, String originUrl, Leg leg, boolean clojure) {
 		StringBuilder program = new StringBuilder();
 		for (Case c : cases) {
-			program.append(c.source().replace(ORIGIN_MARK, originUrl).replace(LEG_MARK, leg.key()));
+			program.append(c.source().replace(ORIGIN_MARK, originUrl).replace(LEG_MARK, leg.key()))
+				.append(clojure ? "(println \"" : "(write-line \"")
+				.append(CASE_END)
+				.append(c.name())
+				.append("\")\n");
 		}
 		return program.toString();
 	}
 
+	/**
+	 * What a program printed for one case, and the name its end mark carried: null for
+	 * what it printed after its last mark.
+	 */
+	record Slice(@Nullable String name, List<String> lines) {
+
+	}
+
+	// The output cut at each end mark. A case whose last line has no line end leaves that
+	// line on the mark's, before the mark.
+	private static List<Slice> slices(String output) {
+		List<Slice> slices = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		for (String line : lines(output)) {
+			int mark = line.indexOf(CASE_END);
+			if (mark < 0) {
+				current.add(line);
+				continue;
+			}
+			if (mark > 0) {
+				current.add(line.substring(0, mark));
+			}
+			slices.add(new Slice(line.substring(mark + CASE_END.length()), current));
+			current = new ArrayList<>();
+		}
+		slices.add(new Slice(null, current));
+		return slices;
+	}
+
 	private static DynamicContainer leg(Leg leg, List<Case> cases, Callable<String> run) {
-		List<String> actual;
+		List<Slice> slices;
 		try {
-			actual = lines(run.call());
+			slices = slices(run.call());
 		}
 		catch (Skipped skipped) {
 			return dynamicContainer(leg.name(),
@@ -482,21 +525,23 @@ class FetchSpecE2eTest {
 					Stream.of(dynamicTest("(execution failed)", () -> fail(leg + ": " + ex, ex))));
 		}
 		List<DynamicTest> tests = new ArrayList<>();
-		int expectedTotal = cases.stream().mapToInt(c -> c.expectedLines().size()).sum();
-		tests.add(dynamicTest("total-line-count",
-				() -> assertThat(actual).as("%s printed a different number of lines than the spec", leg)
-					.hasSize(expectedTotal)));
-		int offset = 0;
-		for (Case c : cases) {
-			List<String> expected = c.expectedLines();
-			int start = Math.min(offset, actual.size());
-			List<String> slice = actual.subList(start, Math.min(offset + expected.size(), actual.size()));
-			offset += expected.size();
-			tests.add(dynamicTest(c.name(),
-					() -> assertThat(slice)
-						.as("case '%s' on %s%n--- source ---%n%s--- end source ---", c.name(), leg, c.source())
-						.containsExactlyElementsOf(expected)));
+		for (int i = 0; i < cases.size(); i++) {
+			Case c = cases.get(i);
+			// Past the slice after the last mark, a case the program never started.
+			Slice slice = (i < slices.size()) ? slices.get(i) : new Slice(null, List.of());
+			tests.add(dynamicTest(c.name(), () -> {
+				assertThat(slice.name())
+					.as("the end mark of case '%s' on %s (the program stopped first, having printed %s)", c.name(), leg,
+							slice.lines())
+					.isEqualTo(c.name());
+				assertThat(slice.lines())
+					.as("case '%s' on %s%n--- source ---%n%s--- end source ---", c.name(), leg, c.source())
+					.containsExactlyElementsOf(c.expectedLines());
+			}));
 		}
+		List<String> after = (slices.size() > cases.size()) ? slices.get(cases.size()).lines() : List.of();
+		tests.add(dynamicTest("after-the-last-case",
+				() -> assertThat(after).as("what %s printed after its last case", leg).isEmpty()));
 		return dynamicContainer(leg.name(), tests.stream());
 	}
 

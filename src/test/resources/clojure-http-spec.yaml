@@ -2,7 +2,8 @@
 # (FetchSpecE2eTest#clojureHttpClient): the fetch-spec.yaml origin and legs -- the
 # interpreter and the JVM (the JDK's HttpClient), a --native output (the runner's rlhttp
 # host) and a --component under `wasmtime run -S http=y` (wasi:http) -- over one .clj
-# program per leg, sliced back per case. @ORIGIN@ is the origin's http://127.0.0.1:<port>.
+# program per leg, cut back into cases at the end mark printed after each. @ORIGIN@ is
+# the origin's http://127.0.0.1:<port>.
 #
 # Every expected line was diffed against the oracle, clj 1.12.6 with
 # babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),

@@ -100,7 +100,12 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
   there afterwards and, on Linux, its stub is static. Without the musl target (no rustup)
   the stub falls back to linking glibc dynamically with a warning, except under `required`.
-  "Static" is read
+  A host pair already in `target/resources` and older than a file under `Cargo.toml`,
+  `Cargo.lock`, `abi/`, `precomp/` or `runner/` is rebuilt under `build=false` too (make's rule
+  on mtimes; without cargo, a warning): a checkout's pair of 2026-10-08 sent every
+  octet-vector request body empty, the runner having learned `octets` on 10-09, and failed the
+  native leg of `FetchSpecE2eTest` on 2026-10-23 while CI passed. A pair CI downloads is newer
+  than the checkout, so it is never rebuilt. "Static" is read
   from the ELF program headers (no `PT_INTERP`, `build.sh --is-static`), never from `ldd`:
   ldd calls any foreign-architecture file "not a dynamic executable" and, on the aarch64
   runner, reported the static-pie stub as dynamic (CI run 36008491295, 2026-09-24).

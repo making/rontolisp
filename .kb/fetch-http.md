@@ -181,8 +181,11 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
 
 `src/test/resources/fetch-spec.yaml` (`FetchSpecE2eTest`) runs one fetch corpus against one local
 origin on every transport a program fetches through -- the interpreter, the JVM, a `--native`
-output and a `--component` under `wasmtime run -S http=y` -- concatenated into one program per leg
-and sliced back per case, like `ci-spec.yaml`. It is in `./mvnw test` (the native leg skips
+output and a `--component` under `wasmtime run -S http=y` -- concatenated into one program per leg,
+each case followed by a printed end mark naming it, and cut back into cases at those marks (not by
+line counts, as `ci-spec.yaml` slices: a case printing one line too few no longer shifts every
+later case's output, which made a stale native runner's two empty bodies read as 21 failures,
+2026-10-23). It is in `./mvnw test` (the native leg skips
 without the host's pair, the component leg without wasmtime) and in CI's native-image job, where
 the native leg compiles through the binary on each release platform. The `--host-fetch` reactor
 has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
