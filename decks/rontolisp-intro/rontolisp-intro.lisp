@@ -295,6 +295,17 @@
     ((tt "cffi") "C ライブラリの呼び出し (JVM)")
     ((cell (tt "objc") "、" (tt "appkit")) "macOS の GUI")))
 
+(slide :title "行列演算を SIMD、BLAS、GPU で速くする"
+  (p (tt "linalg") " と " (tt "vec") " の行列演算を、フラグでハードウェアに振り向ける。")
+  (table :header ("フラグ" "計算する場所")
+    ((tt "--simd") "CPU のベクトル命令")
+    ((tt "--blas") "OS の BLAS (Accelerate、OpenBLAS など)")
+    ((tt "--gpu") "NVIDIA の GPU (CUDA)、Mac の GPU (Metal)"))
+  (ul "BLAS や GPU のないマシンでも、同じプログラムが同じ結果を出す"
+      (li "128x128 の行列積 1 回が、インタプリタの 1,848 ms から " (tt "--simd") " で 0.62 ms、"
+          (tt "--blas") " で 0.034 ms になる"))
+  (source "doc/ja/guides/blas-acceleration.md、gpu-acceleration.md (計測は Apple M4 Max)"))
+
 ;;; --- next steps -------------------------------------------------------------------
 
 (section "次の一歩")

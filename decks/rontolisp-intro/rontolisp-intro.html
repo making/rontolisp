@@ -560,32 +560,43 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">32</div>
 </section>
-<section class="slide layout-standard" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s33" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">連携と<wbr>ライブラリ</p>
+<h1 class="title">行列演算を SIMD、<wbr>BLAS、<wbr>GPU で<wbr>速くする</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code>linalg</code> と <code>vec</code> の<wbr>行列演算を、<wbr>フラグで<wbr>ハードウェアに<wbr>振り向ける。</p>
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><colgroup><col style="width:729px"><col style="width:967px"></colgroup><thead><tr><th scope="col">フラグ</th><th scope="col">計算する<wbr>場所</th></tr></thead><tbody><tr><td><code><span class="nw">--s</span>imd</code></td><td>CPU の<wbr>ベクトル命令</td></tr><tr><td><code><span class="nw">--b</span>las</code></td><td>OS の BLAS (Accelerate、<wbr>OpenBLAS など)</td></tr><tr><td><code><span class="nw">--g</span>pu</code></td><td>NVIDIA の GPU (CUDA)、<wbr>Mac の GPU (Metal)</td></tr></tbody></table>
+<ul><li>BLAS や GPU の<wbr>ない<wbr>マシンでも、<wbr>同じ<wbr>プログラムが<wbr>同じ<wbr>結果を<wbr>出す</li><li>128x128&nbsp;の<wbr>行列積 1&nbsp;回が、<wbr>インタプリタの 1,848&nbsp;ms から <code><span class="nw">--s</span>imd</code> で 0.62&nbsp;ms、<wbr><code><span class="nw">--b</span>las</code> で 0.034&nbsp;ms に<wbr>なる</li></ul>
+</div>
+<p class="source">doc/ja/guides/blas<span class="nw">-a</span>cceleration.md、<wbr>gpu<span class="nw">-a</span>cceleration.md (計測は Apple M4&nbsp;Max)</p>
+<div class="page">33</div>
+</section>
+<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li class="current">次の<wbr>一歩</li></ol>
 </div>
-<div class="page">33</div>
+<div class="page">34</div>
 </section>
-<section class="slide layout-table" id="s34" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">examples ディレクトリ</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:756px"><col style="width:940px"></colgroup><thead><tr><th scope="col">ディレクトリ</th><th scope="col">内容</th></tr></thead><tbody><tr><td><code>console/</code></td><td>アルゴリズムと<wbr>コンソール入出力</td></tr><tr><td><code>scheme/</code> <code>clojure/</code></td><td>Scheme と Clojure の<wbr>プログラム</td></tr><tr><td><code>ml/</code> <code>llm/</code></td><td>数値計算、<wbr>機械学習、<wbr>Llama 2&nbsp;の<wbr>推論</td></tr><tr><td><code>net/</code> <code>db/</code></td><td>ソケット、<wbr>HTTP サーバ、<wbr>PostgreSQL</td></tr><tr><td><code>jvm/</code> <code>macos/</code></td><td>Java 連携、<wbr>Swing、<wbr>Cocoa、<wbr>Metal</td></tr><tr><td><code>browser/</code></td><td>ページで<wbr>動かす WASM</td></tr><tr><td><code>asdf/</code></td><td>実在の<wbr>ライブラリの<wbr>読み込み</td></tr></tbody></table>
 </div>
-<div class="page">34</div>
+<div class="page">35</div>
 </section>
-<section class="slide layout-standard" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s36" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">次に<wbr>読むもの</h1>
 <div class="body" style="top:232px;height:776px">
 <ul><li><a href="https://making.github.io/rontolisp/docs/">ドキュメント</a> はじめに、<wbr>コンパイル、<wbr>言語リファレンス、<wbr>ガイド</li><li><a href="https://making.github.io/rontolisp/playground.html">プレイグラウンド</a> インストールせずに<wbr>試す</li><li><a href="https://making.github.io/rontolisp/skill/">エージェントスキル</a> AI コーディングエージェント向けに、<wbr>ドキュメントから<wbr>生成した<wbr>もの</li><li><a href="https://github.com/making/rontolisp">GitHub</a> ソースと <code>examples/</code></li></ul>
 </div>
-<div class="page">35</div>
-</section>
-<section class="slide layout-statement closing" id="s36" style="--stmt:120px;--stmt-lh:162px;">
-<div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
 <div class="page">36</div>
+</section>
+<section class="slide layout-statement closing" id="s37" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
+<div class="page">37</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>
