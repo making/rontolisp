@@ -1597,8 +1597,8 @@ it takes none of the rendering options; a deck file named `new` is rendered as `
   as comments), sections, a list with notes, a statement, inline forms, runnable code,
   columns with a callout, a table and a flow. An image is a comment: the deck would name
   a file `new` does not write.
-- The date is today in UTC. rontolisp decodes time as GMT on every backend (WASI has no
-  time zone), so SBCL is asked for UTC too, and the deck is the same on every backend.
+- The date is today in the local time zone: `decode-universal-time` without a zone, which
+  every backend resolves locally. `check.sh` masks the date, so its legs need no pinned `TZ`.
 - An existing file is never replaced without `--force`: `open` with `:if-exists nil`,
   so nothing can come between the check and the write. `-` writes to standard output.
 
