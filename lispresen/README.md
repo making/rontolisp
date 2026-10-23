@@ -296,7 +296,8 @@ slide needs it; a slide that does not fit at 40 px is outlined in red and report
 error instead of being shrunk further. Text widths are computed from a table measured on
 Hiragino Sans, the widest of the font stack, and phrase boundaries come from a port of
 [BudouX](https://github.com/google/budoux)'s Japanese model, so the browser breaks lines
-where lispresen measured them.
+where lispresen measured them. A number stays on one line with its counter (`1 時間`) and
+never breaks inside (`2026-10-22`, `1,000`).
 
 ## Development
 

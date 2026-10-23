@@ -65,6 +65,32 @@ not treat as letters."
   "True for a character a line must not start with."
   (find c "、。，．）」』】〕〉》ー・！？：；ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ)]},.!?:;"))
 
+(defun half-digit-p (text i)
+  "True when I is an index of TEXT holding a half-width digit."
+  (and (< -1 i (length text)) (char<= #\0 (char text i) #\9)))
+
+(defun inside-number-p (text i)
+  "True when I lies inside a digit run joined by - / . : or , (a date, a version, a time,
+1,000): between two digits, or next to such a joiner with a digit on each side of it."
+  (flet ((joiner-p (j) (find (char text j) "-/.:,")))
+    (and (> i 0)
+         (or (and (half-digit-p text (1- i)) (half-digit-p text i))
+             (and (joiner-p i) (half-digit-p text (1- i))
+                  (half-digit-p text (1+ i)))
+             (and (joiner-p (1- i)) (half-digit-p text (- i 2))
+                  (half-digit-p text i))))))
+
+(defun number-space-p (text styles i)
+  "True when the space before I separates a half-width number from the word that
+follows it (1 時間, 211 件), which a line keeps together. Another number, a bracket
+opening an aside and code are not such a word."
+  (and (> i 1)
+       (char= (char text (1- i)) #\Space)
+       (half-digit-p text (- i 2))
+       (not (find (char text i) " ([{（「『【〔〈《"))
+       (not (half-digit-p text i))
+       (notany (lambda (j) (eq (svref styles j) :mono)) (list (- i 2) (1- i) i))))
+
 ;;; --- runs ----------------------------------------------------------------------
 
 ;;; A paragraph's text with what wrapping needs. STYLES holds :normal, :bold or :mono
@@ -122,8 +148,10 @@ callouts in it."
               (char-width (char-code (char text i)) (svref styles i)))
         (when (> i 0)
           (setf (svref breaks i)
-                (cond ((char= (char text (1- i)) #\Space) t)
+                (cond ((number-space-p text styles i) nil)
+                      ((char= (char text (1- i)) #\Space) t)
                       ((char= (char text i) #\Space) nil)
+                      ((inside-number-p text i) nil)
                       ((and (eq (svref styles (1- i)) :mono)
                             (eq (svref styles i) :mono))
                        nil)

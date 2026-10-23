@@ -343,6 +343,16 @@ phrases (文節), not between arbitrary characters.
 - Under `keep-all` the browser still breaks after closing punctuation (`、。」』）！？`)
   and before an opening bracket, which are not letters to it; the model takes those
   opportunities too, or it predicts lines the browser does not need.
+- A number is one unit with what a reader takes as part of it. A half-width number keeps
+  the word after its space (`1 時間`, `2 営業日`, `211 件`; not another number, an
+  opening bracket or code), written as a no-break space, and a digit run joined by `-` `/` `.` `:` `,` (`2026-10-22`, `1.2.3`,
+  `12:30`, `1,000`) never breaks inside.
+- Chrome breaks after a dash (`-` `‐` `–`) before a letter, a digit or a bracket even
+  under `keep-all` (`2026-` / `10-22`, `read-` / `from-string`), and Safari does not
+  (measured 2026-10-23, Chrome 155 and Safari 26.3). Where the model does not break after
+  a dash, the dash and the character after it are wrapped in a `white-space: nowrap`
+  span. A character (a word joiner) would do it too, but it would be copied with the
+  text, into a pasted symbol as well.
 - The model wraps greedily phrase by phrase; Latin words break at spaces. A phrase wider
   than the line falls back to character breaks with kinsoku (no line starts with
   `、。，．）」』】ー・！？` or a small kana, no line ends with `（「『【`), the same rule

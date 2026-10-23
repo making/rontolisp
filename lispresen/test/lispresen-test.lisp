@@ -36,7 +36,18 @@
             '("rontolispで" "作る" "プレゼンツール"))))
   (testing "a phrase boundary becomes <wbr>, a space does not need one"
     (let ((html (lispresen:render "(slide \"聴衆が読みやすいプレゼン in HTML\")")))
-      (ok (contains html "聴衆が<wbr>読みやすい<wbr>プレゼン in HTML")))))
+      (ok (contains html "聴衆が<wbr>読みやすい<wbr>プレゼン in HTML"))))
+  (testing "a space that is no boundary is a no-break space, and a dash keeps the
+character after it, which Chrome breaks before"
+    (let ((html
+           (lispresen:render
+            "(slide \"版は 1 時間以内 2026-10-22\" (p (tt \"read-from-string 1 x\")))")))
+      (ok
+       (contains html
+                 "版は 1&nbsp;時間以内 2026<span class=\"nw\">-1</span>0<span class=\"nw\">-2</span>2"))
+      (ok
+       (contains html
+                 "<code>read<span class=\"nw\">-f</span>rom<span class=\"nw\">-s</span>tring 1 x</code>")))))
 
 (deftest line-wrapping
   (testing "full-width text is exactly 1 em per character"
@@ -50,11 +61,18 @@
       (ok (= (lispresen::run-lines run 100 418) 2))
       (ok (= (lispresen::run-min-width run 100) 204))
       (ok (= (lispresen::run-full-width run 100) 419))))
-  (testing "inline code breaks only at its spaces"
+  (testing "inline code breaks at every one of its spaces, a number's too"
     (let ((run
            (lispresen::make-text-run
-            (list "x " (list :tt "read-from-string")))))
-      (ok (equal (mapcar #'first (lispresen::run-units run)) '(0 2))))))
+            (list "x " (list :tt "read-from-string 1 x")))))
+      (ok (equal (mapcar #'first (lispresen::run-units run)) '(0 2 19 21)))))
+  (testing "a number keeps the word after its space and the joiners inside it"
+    (let ((run
+           (lispresen::make-text-run
+            (list "締切は 2026-10-22 の 1 時間前、1,000 (概算) 件"))))
+      ;; 締切は / 2026-10-22 の / 1 時間前、 / 1,000 / (概算) / 件
+      (ok
+       (equal (mapcar #'first (lispresen::run-units run)) '(0 4 17 23 29 34))))))
 
 (defparameter *long-item* "\"とても長い項目を何度も繰り返して書くことで、このスライドの文字が小さくなる。\"")
 

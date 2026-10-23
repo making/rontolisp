@@ -3,7 +3,8 @@
 ;;;; Every size the fit solver chose is written as a px custom property on its slide or
 ;;;; table, so the stylesheet stays fixed and the browser lays out exactly what was
 ;;;; measured. Phrase boundaries become <wbr>; with word-break: keep-all the browser
-;;;; breaks Japanese text nowhere else.
+;;;; breaks Japanese text nowhere else, and the breaks it would still make where the model
+;;;; makes none (at a space, after a dash) are taken away.
 
 (in-package :lispresen)
 
@@ -24,6 +25,7 @@ html:not(.js) #stage{position:static;overflow:visible}
 html:not(.js) #deck{position:static}
 html:not(.js) .slide{display:block;position:relative;margin-bottom:32px}
 h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}
+.nw{white-space:nowrap}
 .title{position:absolute;font-size:var(--title);line-height:var(--title-lh);font-weight:700;text-wrap:balance}
 .body{position:absolute;display:flex;flex-direction:column;gap:var(--gap);font-size:var(--body);line-height:var(--body-lh)}
 ul,ol{padding-left:var(--indent)}
@@ -229,15 +231,33 @@ html:not(.js) #fs{display:none}
   (loop for c across s do (write-escaped-char c out)))
 
 (defun write-inlines (inlines run out)
-  "INLINES as HTML, with <wbr> at each phrase boundary of RUN not next to a space."
-  (let ((text (run-text run)) (breaks (run-breaks run)) (i 0))
-    (labels ((chars (s)
+  "INLINES as HTML, breaking where RUN breaks: a <wbr> at each boundary not next to a
+space, a no-break space for a space that is no boundary (1 時間), and a dash kept on one
+line with the character after it when that is no boundary, as Chrome breaks after a dash
+(2026-10-22, end-to-end) and Safari and the model do not."
+  (let ((text (run-text run)) (breaks (run-breaks run)) (i 0) (nowrap nil))
+    (labels ((glued-p (k)
+               (and (< k (length text)) (not (svref breaks k))
+                    (char/= (char text k) #\Space)))
+             (chars (s)
                (loop for c across s
+                     for j from 1
                      do
-                       (when (and (> i 0) (svref breaks i)
-                                  (char/= (char text (1- i)) #\Space)
-                                  (char/= c #\Space))
-                         (write-string "<wbr>" out)) (write-escaped-char c out)
+                       (let ((dash (and (find c "-‐–") (< j (length s))
+                                        (glued-p (1+ i)))))
+                         (when (and (> i 0) (svref breaks i)
+                                    (char/= (char text (1- i)) #\Space)
+                                    (char/= c #\Space))
+                           (write-string "<wbr>" out))
+                         (when (and dash (not nowrap))
+                           (write-string "<span class=\"nw\">" out)
+                           (setf nowrap t))
+                         (if (and (char= c #\Space) (glued-p (1+ i)))
+                             (write-string "&nbsp;" out)
+                             (write-escaped-char c out))
+                         (when (and nowrap (not dash))
+                           (write-string "</span>" out)
+                           (setf nowrap nil)))
                        (incf i)))
              (wrap (tag nodes)
                (format out "<~a>" tag)
