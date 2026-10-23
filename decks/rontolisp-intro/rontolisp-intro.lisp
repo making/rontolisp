@@ -284,16 +284,73 @@
   (ul (li (tt "ql:quickload") " は Quicklisp の配布物から取得し、" (tt "~/.rontolisp/quicklisp/") " にキャッシュする")
       "alexandria、cl-ppcre、cl-who、jzon、chipz などが、上流のソースのままインタプリタ、JVM、WASM で動く"))
 
-(slide :title "そのほかの組み込みパッケージ"
+(slide :title "そのほかのパッケージ"
   (table :header ("パッケージ" "用途")
-         :caption "使えるバックエンドはパッケージごとに異なる。詳しくは各ガイドにある"
-    ((tt "uiop") "環境変数、ファイル、ディレクトリなど")
+         :caption "次のページから一つずつ紹介する"
+    ((tt "uiop") "環境変数、ファイル、文字列")
     ((cell (tt "rove") "、" (tt "rontolisp test")) "テスト")
     ((tt "rontolisp:fetch") "HTTP リクエスト")
     ((tt "clack") "Web アプリケーション")
-    ((cell (tt "linalg") "、" (tt "torch")) "線形代数とニューラルネットワーク")
-    ((tt "cffi") "C ライブラリの呼び出し (JVM)")
-    ((cell (tt "objc") "、" (tt "appkit")) "macOS の GUI")))
+    ((cell (tt "linalg") "、" (tt "vec") "、" (tt "torch")) "行列演算とニューラルネットワーク")
+    ((tt "cffi") "C ライブラリの呼び出し")
+    ((cell (tt "objc") "、" (tt "appkit") "、" (tt "metal")) "macOS の GUI と GPU 描画")))
+
+(slide :title "uiop で環境やファイルを扱う"
+  (p (tt "uiop") " は、環境変数、パス名、ファイル、文字列の操作を、多くのライブラリが使う共通の名前で提供する。")
+  (code :lang "lisp" "
+    (print (uiop:split-string \"red,green,blue\" :separator \",\"))
+    (print (uiop:strcat \"ronto\" \"lisp\"))
+    (print (uiop:subpathname \"/usr/local/\" \"bin/rontolisp\"))
+    (print (uiop:emptyp \"\"))"))
+
+(slide :title "rove でテストを書く"
+  (p (tt "rontolisp test") " が rove のテストを実行し、結果を終了コードで返す。")
+  (column
+    (code :lang "lisp" :run nil "
+      ;; tests/main.lisp
+      (defpackage #:my-app/tests
+        (:use #:cl #:rove))
+      (in-package #:my-app/tests)
+
+      (defun add (a b) (+ a b))
+
+      (deftest add-test
+        (ok (= (add 1 2) 3))
+        (ng (= (add 1 2) 4)))"))
+  (column
+    (code :lang "console" "
+      $ rontolisp test tests/main.lisp
+      add-test
+        ✓ Expect (= (ADD 1 2) 3) to be true.
+        ✓ Expect (= (ADD 1 2) 4) to be false.
+      Summary:
+        All 1 test passed.
+      $ echo $?
+      0")))
+
+(slide :title "fetch で HTTP リクエストを送る"
+  (p (tt "rontolisp:fetch") " は JavaScript の " (tt "fetch") " にならった API で、" (tt "rontolisp:await") " で応答を待つ。")
+  (code :lang "lisp" "
+    (let* ((res (rontolisp:await
+                 (rontolisp:fetch \"https://httpbin.ik.am/get?lang=lisp\")))
+           (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+           (json (rontolisp:json-parse body)))
+      (print (getf res :status))
+      (print (gethash \"lang\" (gethash \"args\" json))))"))
+
+(slide :title "Clack で Web アプリを書く"
+  (p "アプリケーションは、リクエストの plist を受け取ってレスポンスのリストを返す関数。")
+  (code :lang "lisp" :run nil "
+    (ql:quickload \"clack\")  ; app.lisp
+    (clack:clackup
+     (lambda (env)
+       (list 200 '(:content-type \"text/plain\")
+             (list (format nil \"Hello, ~A~%\" (getf env :path-info)))))
+     :server :rontolisp :port 5000 :use-thread nil)")
+  (code :lang "console" "
+    $ rontolisp app.lisp &
+    $ curl http://127.0.0.1:5000/rontolisp
+    Hello, /rontolisp"))
 
 (slide :title "Web アプリを一つのソースで各環境へ"
   (p "Clack のアプリケーションを、ソースを変えずにビルドだけで各環境に合わせる。")
@@ -304,6 +361,15 @@
     ((tt "-o app.wasm --component") (cell (tt "wasmtime serve") " など"))
     ((tt "-o worker.wasm --no-wasi") "Cloudflare Workers"))
   (source "examples/net/httpbin-clack.lisp、examples/cloudflare-workers/、examples/gae/"))
+
+(slide :title "linalg と vec で行列を計算する"
+  (p (tt "linalg") " は numpy 風の行列演算を、" (tt "vec") " は浮動小数点ベクトルの演算カーネルを提供する。")
+  (code :lang "lisp" "
+    (print (linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8))))
+    (print (linalg:solve #2A((4 0) (2 4)) #(8 8)))
+    (print (linalg:sum #2A((1 2 3) (4 5 6)) :axis 0))
+    (print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))
+    (print (vec:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"))
 
 (slide :title "行列演算を SIMD、BLAS、GPU で速くする"
   (p (tt "linalg") " と " (tt "vec") " の行列演算を、フラグでハードウェアに振り向ける。")
@@ -316,6 +382,31 @@
           (tt "--blas") " で 0.034 ms になる"))
   (source "doc/ja/guides/blas-acceleration.md、gpu-acceleration.md (計測は Apple M4 Max)"))
 
+(slide :title "torch でニューラルネットワークを学習する"
+  (p (tt "torch") " は " (tt "linalg") " の上に載る PyTorch 風のパッケージで、勾配を自動微分で求める。XOR を 2 層のネットワークに学習させる。")
+  (code :lang "lisp" "
+    (linalg:seed 3)
+    (defparameter *mlp*
+      (torch:sequential (torch:linear 2 8) #'torch:relu (torch:linear 8 1)))
+    (defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+    (defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+    (defparameter *sgd* (torch:sgd *mlp* :lr 0.2))
+    (dotimes (i 200)
+      (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+        (torch:zero-grad *sgd*)
+        (torch:backward loss)
+        (torch:step *sgd*)))
+    (print (torch:data (torch:forward *mlp* *xs*)))"))
+
+(slide :title "cffi で C ライブラリを呼ぶ"
+  (p "上流の CFFI をそのまま読み込み、" (tt "defcfun") " で C の関数を Lisp の関数として定義する。")
+  (code :lang "console" "
+    CL-USER> (ql:quickload :cffi)
+    CL-USER> (cffi:defcfun \"strlen\" :long (s :string))
+    CL-USER> (strlen \"hello, world\")
+    12")
+  (p (tt "rontolisp") " コマンドと、コンパイルした " (tt ".class") " や " (tt ".jar") " で使える。"))
+
 (slide :title "Mac アプリを作る"
   (column
     (ul (li (tt "objc") " で AppKit を呼ぶ")
@@ -326,10 +417,37 @@
     (image "macos-minesweeper.png" :alt "rontolisp で書いた macOS のマインスイーパー"))
   (source "examples/browser/minesweeper/minesweeper-macos.lisp"))
 
+(slide :title "appkit のコード"
+  (p "ウィンドウにラベルを置き、クリックで表示を変える。マインスイーパーも、同じ関数で画面を組み立てている。")
+  (code :lang "lisp" :run nil "
+    (defvar *win*
+      (appkit:window \"rontolisp\" :width 240 :height 160 :dark t))
+    (defvar *face*
+      (appkit:label *win* \"🙂\" :x 94 :y 54 :width 52 :height 52
+                    :size 26 :align :center))
+    (appkit:on-click *face*
+      (lambda (button) (appkit:set-text *face* \"😮\")))
+    (appkit:wait *win*)"))
+
 (slide :title "Metal で GPU に描く"
   (p (tt "metal") " パッケージで Metal を呼び、約 13,000 個のボクセルからなる庭園をアニメーションで描く。")
   (image "macos-pagoda-garden.png" :alt "Metal で描いたボクセルの庭園と五重塔")
   (source "examples/macos/metal-pagoda-garden.lisp"))
+
+(slide :title "Metal の描画コード"
+  (p "ウィンドウに Metal を取り付け、シェーダからパイプラインを作り、フレームごとに描画コマンドを送る。")
+  (code :lang "lisp" :run nil "
+    (defvar *metal*
+      (metal:attach *window* :clear '(0.02 0.03 0.07 1.0) :depth t))
+    (defvar *library* (metal:library *metal* *shaders*))
+    (defvar *solid* (metal:pipeline *metal* *library* \"vox_vertex\" \"vox_fragment\"))
+    (defvar *static-buffer* (metal:buffer *metal* *static*))
+    ;; every frame
+    (objc:invoke encoder \"setRenderPipelineState:\" *solid*)
+    (objc:invoke encoder \"setVertexBuffer:offset:atIndex:\" *static-buffer* 0 0)
+    (objc:invoke encoder \"drawPrimitives:vertexStart:vertexCount:\"
+                 metal:+triangle+ 0 (* 36 *static-count*))")
+  (source "examples/macos/metal-pagoda-garden.lisp (抜粋、一部省略)"))
 
 ;;; --- next steps -------------------------------------------------------------------
 
