@@ -1097,31 +1097,52 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">83</div>
 </section>
-<section class="slide layout-standard" id="s84" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s84" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">使い方</p>
+<h1 class="title">編集しながら<wbr>見る</h1>
+<div class="body" style="top:232px;height:776px">
+<p><code>lispresen serve</code> は<wbr>デッキを HTTP で<wbr>配り、<wbr>保存する<wbr>たびに<wbr>描き直す。</p>
+<ul><li>ブラウザで<wbr>開いた<wbr>ページは、<wbr>見ていた<wbr>スライドの<wbr>まま<wbr>読み込み直す</li><li>診断は<wbr>ターミナルと、<wbr>スライドに<wbr>重ねた<wbr>パネルに<wbr>出る</li><li>画像と<wbr>動画は<wbr>デッキの<wbr>横から<wbr>配るので、<wbr><code><span class="nw">--e</span>mbed</code> は<wbr>要らない</li></ul>
+</div>
+<div class="page">84</div>
+</section>
+<section class="slide layout-standard" id="s85" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">試す</p>
+<h1 class="title">編集しながら<wbr>見る</h1>
+<div class="body" style="top:232px;height:776px">
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> lispresen serve talk.lisp
+<span class="hl-c">lispresen: built talk.lisp: 0 errors, 0 warnings</span></code></pre>
+<ol><li><code>http://127.0.0.1:8000/</code> を<wbr>ブラウザで<wbr>開く</li><li>デッキを<wbr>書き換えて<wbr>保存し、<wbr>ページが<wbr>追従するのを<wbr>見る</li><li>Ctrl<span class="nw">-C</span> で<wbr>止め、<wbr><code>lispresen talk.lisp <span class="nw">--e</span>mbed <span class="nw">--s</span>trict</code> で HTML を<wbr>書く</li></ol>
+</div>
+<div class="page">85</div>
+</section>
+<section class="slide layout-standard" id="s86" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">コマンドライン</h1>
 <div class="body" style="top:232px;height:776px">
 <pre class="code"><code>lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none]
                [--embed] [--check] [--strict]
 lispresen new FILE [--lang ja|en] [--force]
+lispresen serve DECK [--port N] [--host ADDR] [--theme NAME]
+                     [--runtime URL|hosted|none]
 lispresen --version</code></pre>
 <ul><li><code>-</code> で<wbr>標準入力から<wbr>読み、<wbr>標準出力に<wbr>書く</li><li><code><span class="nw">--e</span>mbed</code> で<wbr>画像を<wbr>埋め込み、<wbr>ファイル一つで<wbr>完結させる</li><li><code><span class="nw">--v</span>ersion</code> は<wbr>版と<wbr>ビルドした<wbr>コミットを JSON で<wbr>出す</li><li>終了コードは 0&nbsp;が<wbr>成功、<wbr>1&nbsp;が<wbr>エラー、<wbr>2&nbsp;が<wbr>使い方の<wbr>誤り</li></ul>
 </div>
-<div class="page">84</div>
+<div class="page">86</div>
 </section>
-<section class="slide layout-standard" id="s85" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s87" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">始め方</h1>
 <div class="body" style="top:232px;height:776px">
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> lispresen new talk.lisp
-<span class="hl-k">$</span> lispresen talk.lisp
-<span class="hl-k">$</span> open talk.html</code></pre>
-<ul><li><code>new</code> は、<wbr>主な<wbr>フォームに<wbr>コメントで<wbr>説明を<wbr>添えた<wbr>雛形を<wbr>書く。<wbr><code><span class="nw">--l</span>ang en</code> なら<wbr>英語</li><li>診断には<wbr>行番号が<wbr>付く。<wbr>その<wbr>行を<wbr>直して<wbr>描き直す</li><li>見本は<wbr>この<wbr>デッキ、<wbr><code>lispresen/examples/intro.lisp</code></li></ul>
+<span class="hl-k">$</span> lispresen serve talk.lisp
+<span class="hl-k">$</span> lispresen talk.lisp --embed --strict</code></pre>
+<ul><li><code>new</code> は、<wbr>主な<wbr>フォームに<wbr>コメントで<wbr>説明を<wbr>添えた<wbr>雛形を<wbr>書く。<wbr><code><span class="nw">--l</span>ang en</code> なら<wbr>英語</li><li>診断には<wbr>行番号が<wbr>付く。<wbr>その<wbr>行を<wbr>直して<wbr>保存すると、<wbr>ページが<wbr>描き直る</li><li>見本は<wbr>この<wbr>デッキ、<wbr><code>lispresen/examples/intro.lisp</code></li></ul>
 </div>
-<div class="page">85</div>
+<div class="page">87</div>
 </section>
-<section class="slide layout-statement closing" id="s86" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement closing" id="s88" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">スライドも、<wbr>コードと<wbr>同じように<wbr>書いて、<wbr>レビューして、<wbr>動かす。</p></div>
-<div class="page">86</div>
+<div class="page">88</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>

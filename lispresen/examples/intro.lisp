@@ -671,11 +671,27 @@
   (p (tt "curl") " と " (tt "wget") " で取得したファイルは隔離されない。ブラウザでダウンロードしたファイルは "
      (tt "xattr -d com.apple.quarantine") " で隔離を外す。"))
 
+(slide :title "編集しながら見る" :kicker "使い方"
+  (p (tt "lispresen serve") " はデッキを HTTP で配り、保存するたびに描き直す。")
+  (ul "ブラウザで開いたページは、見ていたスライドのまま読み込み直す"
+      "診断はターミナルと、スライドに重ねたパネルに出る"
+      (li "画像と動画はデッキの横から配るので、" (tt "--embed") " は要らない")))
+
+(slide :title "編集しながら見る" :kicker "試す"
+  (code :lang "console" "
+    $ lispresen serve talk.lisp
+    lispresen: built talk.lisp: 0 errors, 0 warnings")
+  (ol (li (tt "http://127.0.0.1:8000/") " をブラウザで開く")
+      "デッキを書き換えて保存し、ページが追従するのを見る"
+      (li "Ctrl-C で止め、" (tt "lispresen talk.lisp --embed --strict") " で HTML を書く")))
+
 (slide :title "コマンドライン"
   (code "
     lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none]
                    [--embed] [--check] [--strict]
     lispresen new FILE [--lang ja|en] [--force]
+    lispresen serve DECK [--port N] [--host ADDR] [--theme NAME]
+                         [--runtime URL|hosted|none]
     lispresen --version")
   (ul (li (tt "-") " で標準入力から読み、標準出力に書く")
       (li (tt "--embed") " で画像を埋め込み、ファイル一つで完結させる")
@@ -686,11 +702,11 @@
 (slide :title "始め方" :kicker nil
   (code :lang "console" "
     $ lispresen new talk.lisp
-    $ lispresen talk.lisp
-    $ open talk.html")
+    $ lispresen serve talk.lisp
+    $ lispresen talk.lisp --embed --strict")
   (ul (li (tt "new") " は、主なフォームにコメントで説明を添えた雛形を書く。"
           (tt "--lang en") " なら英語")
-      (li "診断には行番号が付く。その行を直して描き直す")
+      (li "診断には行番号が付く。その行を直して保存すると、ページが描き直る")
       (li "見本はこのデッキ、" (tt "lispresen/examples/intro.lisp"))))
 
 ;; :class adds a class to the slide's <section>; no built-in style uses this one.
