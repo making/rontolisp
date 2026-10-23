@@ -59,8 +59,10 @@ without `:agenda` (a warning), and needs at least one section after it.
 `(slide [:title "t"] [:kicker "k"] [:footer nil] [:layout name] [:class "c"] [:morph t] block...)`
 
 - The layout comes from the slide's shape: no title and one short paragraph is a
-  statement (large, centered); title plus one image, code, table or quote gets that
-  layout; `column`s give columns; anything else is standard. `:layout` rarely helps.
+  statement (large, centered); no title and one image without `:caption` is `full` (the
+  image covers the slide); title plus one image, code, table or quote gets that
+  layout; `column`s give columns; anything else is standard. `:layout` rarely helps,
+  except `:image-left` / `:image-right` (Images, below), which shape never chooses.
 - `:kicker "text"` is a small label above the title; `:kicker nil` drops the deck's.
 
 ## Blocks
@@ -74,7 +76,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(code :file "fib.lisp" [:lines (4 6)])` | code from a UTF-8 file beside the deck; `:lang` defaults by extension (`.lisp`, `.java`, `.py`, `.sh`, `.json`, ...) |
 | `(quote [:cite "who"] inline...)` | quotation |
 | `(column block...)` | consecutive columns stand side by side; widths come from content |
-| `(image "path" :alt "text" [:caption "text"])` | image fitted into the remaining space |
+| `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | image fitted into the remaining space; full-bleed or split (Images, below) |
 | `(table ...)` | table (below) |
 | `(flow ...)`, `(bars ...)`, `(cells ...)` | diagrams (below) |
 | `(notes "text")` | speaker notes, presenter window only |
@@ -147,6 +149,22 @@ Without `--embed` the HTML refers to the file by that path. `--embed` inlines `p
 `jpg`, `gif`, `webp`, `avif`, `svg` and reports a missing file as an error. An SVG or PNG
 does not follow the theme's colors; prefer a `flow`, `bars` or `cells` diagram where one
 fits.
+
+A photograph can run to the slide's edges:
+
+```lisp
+(slide (image "venue.jpg" :alt "the venue"))              ; full: covers the whole slide
+(slide :title "Venue" :layout :image-left                 ; or :image-right
+  (image "venue.jpg" :alt "the venue" :share 1/3)          ; 1/3, 1/2 (default) or 2/3
+  (ul "5 minutes from the station" "200 seats"))
+```
+
+- The image is cropped to its area; `:fit :contain` shows it whole on the background.
+- A split slide fits its title and other blocks in the width the image leaves (736 px of
+  1920 at half). Keep that text short; `2/3` leaves room for a word or two.
+- No text on a picture: a full slide has no title, caption, source or callout and shows
+  no page number or footer; a split image takes no caption or callout. Put a photo
+  credit in a split slide's `source` or in `notes`.
 
 ## Templates
 
@@ -248,5 +266,8 @@ drawn. Leave all of these out for a deck that is not published.
 | `(agenda) places the agenda of (deck :agenda t), which this deck lacks` | add `:agenda t` to the deck, or remove `(agenda)` |
 | `:agenda lists the sections, and this deck has none` | add `section`s or drop `:agenda` |
 | `image X has no :alt` | add `:alt "what it shows"` |
+| `the full layout needs an (image ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
+| `the image-left layout needs one (image ...) outside columns, ...` | keep one image, outside `column`, without `:caption` or a callout on it |
+| `image X takes :fit only on a :full, :image-left or :image-right slide` | remove `:fit`; an image in the body is always shown whole |
 | `cannot embed image X: cannot read it` | fix the path (relative to the deck) |
 | `:page-image is drawn in the :page-image-font, which this deck lacks` | add a TrueType font, use an absolute image URL, or remove `:page-image` |

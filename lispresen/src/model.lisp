@@ -94,7 +94,10 @@
   step-numbers
   morph)
 ;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
-(defstruct figure src alt caption caption-run strip)
+;;; FIT is :contain when an image filling the slide or a side of it is shown whole on the
+;;; background, nil to cover its area (the :fit option); SHARE is the (NUMERATOR
+;;; DENOMINATOR) of the canvas width it takes beside text, nil for half (the :share option).
+(defstruct figure src alt caption caption-run strip fit share)
 (defstruct table-block
   header
   rows
@@ -499,7 +502,7 @@ those. Nil after reporting a malformed one."
           (report :error "(image ...) takes the image path first")
           nil)
         (multiple-value-bind (opts rest)
-            (split-options (cddr form) '("ALT" "CAPTION") "image")
+            (split-options (cddr form) '("ALT" "CAPTION" "FIT" "SHARE") "image")
           (when rest
             (report :error "(image ...) takes only a path and options"))
           (let ((alt (string-option opts "ALT" "image")))
@@ -507,7 +510,27 @@ those. Nil after reporting a malformed one."
               (report :warning (format nil "image ~a has no :alt" src)))
             (make-figure :src src
                          :alt alt
-                         :caption (string-option opts "CAPTION" "image")))))))
+                         :caption (string-option opts "CAPTION" "image")
+                         :fit (parse-image-fit (opt opts "FIT"))
+                         :share (parse-image-share (opt opts "SHARE"))))))))
+
+(defun parse-image-fit (x)
+  "The :fit of an image: :contain, or nil for :cover and when absent."
+  (cond ((null x) nil)
+        ((equal (symbol-value-name x) "COVER") nil)
+        ((equal (symbol-value-name x) "CONTAIN") :contain)
+        (t (report :error ":fit of image must be :cover or :contain") nil)))
+
+(defparameter *image-shares* '((1 3) (1 2) (2 3)))
+
+(defun parse-image-share (x)
+  "The :share of an image as (NUMERATOR DENOMINATOR), or nil when absent."
+  (cond ((null x) nil)
+        ((and (rationalp x) (not (integerp x))
+              (member (list (numerator x) (denominator x)) *image-shares*
+                      :test #'equal))
+         (list (numerator x) (denominator x)))
+        (t (report :error ":share of image must be 1/3, 1/2 or 2/3") nil)))
 
 (defun parse-cell (x)
   (if (equal (form-tag x) "CELL")

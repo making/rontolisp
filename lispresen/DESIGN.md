@@ -109,7 +109,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -417,6 +417,7 @@ phrases (文節), not between arbitrary characters.
 | Deck header (generated first slide) | `title` (below) |
 | `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
+| No title, one `image` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
 | Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
@@ -441,6 +442,50 @@ Placement rules: the title sits at the same position on every content slide, and
 body is top-aligned under it, so the audience's eye does not search for the start of
 each slide. Statement, section and title layouts are centered. Images need no intrinsic
 size: lispresen computes the box, the browser fits the image inside it.
+
+#### Full-bleed and split images
+
+An image in the body box keeps the safe area's margins around it, so a photograph cannot
+fill the screen, nor run to the slide's edge beside text. Two layouts take an image out of
+the body and give it a part of the canvas, edge to edge:
+
+```lisp
+(slide (image "venue.jpg" :alt "会場"))                       ; full, by its shape
+(slide :layout :full (image "chart.png" :alt "..." :fit :contain))
+(slide :title "t" :layout :image-left (image "p.jpg" :alt "...") (ul ...))
+(slide :title "t" :layout :image-right (ul ...) (image "p.jpg" :alt "..." :share 1/3))
+```
+
+- `full`: the image covers the whole canvas (`object-fit: cover`, centered, cut at the
+  edges its aspect does not match), or with `:fit :contain` is shown whole on the theme
+  background. A slide with no title, one `image` without `:caption` and no source or
+  callout takes it automatically; `:layout :full` on any other slide is a warning and
+  the slide keeps its own layout.
+- `image-left` / `image-right`: the slide's one `image` outside columns takes the left or
+  right `:share` of the canvas width (`1/3`, `1/2` or `2/3`; half by default), top to
+  bottom, covering it or, with `:fit :contain`, shown whole in it. The kicker, the title,
+  the body, the source, the footer and the page number are laid out in the rest less the
+  112 px side margins, as on any slide in a narrower content width: 736 px at half of
+  16:9, 1056 at a third, 416 at two thirds (496, 736 and 256 on 4:3, where two thirds
+  leave room for a word or two). The fit solver sees nothing new, the narrower body it
+  handles for columns. The slide writes the region as `--left`, `--width` and `--right`
+  on its element, which the stylesheet places those elements and a run's output overlay
+  by. A slide without exactly one such image, or whose image has a `:caption` or a
+  callout, is a warning and keeps its own layout. A split is never chosen by shape: a
+  title and an image with other blocks stay a `standard` slide whose image shares the
+  body.
+- **No text on a picture.** The contrast lint cannot check a color against an image, so
+  text never stands on one. A full slide has no title, caption, source or callout by the
+  rule above, and drops the page number and the footer as the title slide does. The
+  progress bar stays along the bottom edge: it is a 6 px bar in the accent color, no
+  text. A caption on a full-bleed or split image is refused rather than set on the
+  picture or in a band under it, which would take the edge back; a credit goes in the
+  notes or in a split slide's source line.
+- `:fit` on an image in the body box, or `:share` anywhere but a split slide, is a
+  warning: an image in the body box is always shown whole.
+- Print, the overview and the presenter thumbnails show these slides like any other: the
+  image is part of the slide. The page image draws the title slide and is unaffected, and
+  so is `--embed`, which inlines the image as it does in the body.
 
 ### Fit solver
 
@@ -1007,8 +1052,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1431,6 +1476,7 @@ lispresen/
     intro.png            its golden page image
     fonts/               the page image's fonts: BIZ UDPGothic subsets, OFL.txt
     pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
+    photo.svg            the picture of its full-bleed and split slides
     logo.svg             its title slide's logo
     fib.lisp             the code file one of its slides shows lines of
   tools/
@@ -1472,7 +1518,8 @@ before committing a change under `lispresen/`.
   embedded SVG logo and a QR code (drawn as the page image too, with the description and
   page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
-  numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
+  numeric columns), every inline form, an embedded PNG, a full-bleed slide and a split one
+  (`:image-right`, `:share 1/3`, the ratio read on every backend), ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
   chart with a source line under it, a progress bar, `:layout` and
   `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
@@ -1485,7 +1532,8 @@ before committing a change under `lispresen/`.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
-  line breaking at their exact boundaries, step selection, the hard-floor error, the
+  line breaking at their exact boundaries, step selection, the hard-floor error, the layout a lone untitled image takes and
+  the text region of a split slide, the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   the QR encoder against the standard's examples and its version boundaries, the title
   slide's logo and QR code, the preview tags (none without the options, every one with

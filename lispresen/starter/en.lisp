@@ -60,6 +60,10 @@
 
 ;; An image is a file beside the deck, fitted into the slide:
 ;; (slide :title "An image" (image "photo.png" :alt "What it shows" :caption "A caption"))
+;; Alone on a slide without a title it fills the slide; :layout :image-left (or
+;; :image-right) sets it edge to edge beside the text:
+;; (slide (image "photo.png" :alt "What it shows"))
+;; (slide :title "An image" :layout :image-left (image "photo.png" :alt "...") (ul "a" "b"))
 
 (section "Summary")
 

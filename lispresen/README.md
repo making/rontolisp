@@ -43,7 +43,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :footer :description :page-url :page-image :page-image-font :lang)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck, `:footer "text"` (or `("text " (link ...))`) sets one line at the left of the bottom band on every slide but the title slide, a hashtag, a handle or a confidentiality label; `:lang "en"` is the page's `<html lang>` tag (a BCP 47 tag, default `ja`; it changes the declaration only, phrase breaking stays Japanese); `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
 | `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
-| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below) |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below). `:layout :image-left` or `:image-right` sets the slide's image edge to edge on that side of the canvas and fits the title and the other blocks in the rest (Layout, below) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
@@ -52,7 +52,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(code :steps ("(defun" (3 4) ("x" "y")) ...)` | brings lines forward one page advance at a time and fades the rest: a string names the first line holding it, `(3 4)` lines 3 to 4 of the block as shown, a list several of them |
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
-| `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
+| `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | an image, fitted into the remaining space; alone on a slide without a title, it covers the whole slide. `:fit :contain` shows a full-bleed or split image whole instead of cropping it, `:share` (`1/3`, `1/2`, `2/3`) is the width a split image takes |
 | `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
@@ -408,6 +408,21 @@ Hiragino Sans, the widest of the font stack, and phrase boundaries come from a p
 [BudouX](https://github.com/google/budoux)'s Japanese model, so the browser breaks lines
 where lispresen measured them. A number stays on one line with its counter (`1 時間`) and
 never breaks inside (`2026-10-22`, `1,000`).
+
+A photograph can fill the slide or one side of it:
+
+```lisp
+(slide (image "venue.jpg" :alt "会場"))           ; no title, one image: covers the slide
+(slide :title "会場" :layout :image-right         ; :image-left puts it on the left
+  (ul "駅から徒歩 5 分" "定員 200 人")
+  (image "venue.jpg" :alt "会場" :share 1/3))     ; a third of the width, half by default
+```
+
+The image is cropped to its area (`:fit :contain` shows it whole on the background), and
+the title and body of a split slide are fitted in the width the image leaves. Text is
+never set on a picture, since its contrast cannot be checked: a full-bleed image takes no
+title, caption, source or callout and shows no page number or footer, and an image beside
+text takes no caption.
 
 ## Development
 

@@ -50,6 +50,9 @@ html:not(.js) #progress{display:none}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
+figure.bleed{position:absolute;top:0;height:100%;display:block}
+.bleed img{display:block;width:100%;height:100%;max-width:none;object-fit:cover}
+.bleed.contain img{object-fit:contain}
 figcaption{color:var(--muted);text-align:center}
 table{flex:none;border-collapse:collapse;table-layout:fixed;font-size:var(--table);line-height:var(--table-lh)}
 caption{caption-side:top;text-align:left;color:var(--muted);padding-bottom:var(--cell-y)}
@@ -210,16 +213,18 @@ html:not(.js) #fs{display:none}
                    :initial-value *stylesheet*) out)
     (write-theme-style theme out)
     ;; The canvas-dependent geometry.
-    (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
-    (format out ".kicker,.title,.body,.centered,.source{left:~dpx;width:~dpx}~%"
-            *margin-x* content)
+    ;; The text region, which a split slide moves beside its image (SLIDE-STYLE).
+    (format out ".slide{width:~dpx;height:~dpx;--left:~dpx;--width:~dpx;--right:~dpx}~%"
+            width *canvas-height* *margin-x* content *margin-x*)
+    (format out
+            ".kicker,.title,.body,.centered,.source,.out{left:var(--left);width:var(--width)}~%")
     (format out ".source{bottom:~dpx}~%" *margin-bottom*)
     (format out ".kicker{top:~dpx}~%" (- *margin-top* *kicker-lh* 8))
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
-    (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
-            *margin-x* content)
-    (format out ".footer{left:~dpx;width:~dpx}~%" *margin-x* (footer-width deck))
+    (format out ".page{right:var(--right)}~%")
+    (format out ".footer{left:var(--left);width:calc(var(--width) - ~dpx)}~%"
+            (- content (footer-width deck)))
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
             "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
@@ -442,6 +447,18 @@ takes a share of the room the other blocks leave, as the image does."
           (format out "</div>~%"))
   (format out "</div>~%"))
 
+(defun write-bleed (bleed out)
+  "The image of a full or split slide, covering its part of the canvas top to bottom, or
+shown whole on the background with :fit :contain."
+  (destructuring-bind (b left width) bleed
+    (format out "<figure class=\"bleed~:[~; contain~]\" style=\"left:~dpx;width:~dpx\""
+            (figure-fit b) left width)
+    (write-string "><img src=\"" out)
+    (write-escaped (figure-src b) out)
+    (write-string "\" alt=\"" out)
+    (write-escaped (or (figure-alt b) "") out)
+    (format out "\"></figure>~%")))
+
 (defun write-figure (b out)
   (write-string "<figure" out)
   (when (figure-strip b)
@@ -594,8 +611,12 @@ the list it draws."
 
 ;;; --- slides ------------------------------------------------------------------------
 
-(defun slide-style (fit)
+(defun slide-style (deck fit)
   (with-output-to-string (s)
+    ;; The text region of a split slide, beside its image.
+    (unless (= (fit-width fit) (content-width deck))
+      (format s "--left:~dpx;--width:~dpx;--right:~dpx;" (fit-left fit) (fit-width fit)
+              (- (canvas-width deck) (fit-left fit) (fit-width fit))))
     (when (fit-title-size fit)
       (format s "--title:~dpx;--title-lh:~dpx;" (fit-title-size fit)
               (title-lh (fit-title-size fit))))
@@ -670,8 +691,10 @@ corner the fit solver chose."
     (format out "\" id=\"s~d\"" (slide-number slide))
     (when (> (slide-step-count slide) 0)
       (format out " data-steps=\"~d\"" (slide-step-count slide)))
-    (format out " style=\"~a\">~%" (slide-style fit))
-    (cond ((equal layout "title") (write-title-slide deck slide out))
+    (format out " style=\"~a\">~%" (slide-style deck fit))
+    (when (fit-bleed fit) (write-bleed (fit-bleed fit) out))
+    (cond ((equal layout "full"))
+          ((equal layout "title") (write-title-slide deck slide out))
           ((equal layout "section")
            (write-string "<div class=\"centered\"><h1 class=\"section-title\">"
                          out)
@@ -680,7 +703,7 @@ corner the fit solver chose."
            (format out "</h1></div>~%"))
           ((equal layout "statement")
            (let ((p (car (slide-blocks slide)))
-                 (source (source-height deck slide)))
+                 (source (source-height slide (fit-width fit))))
              (write-string "<div class=\"centered\"" out)
              (when (> source 0)
                (format out " style=\"height:~dpx\"" (- (safe-height) source)))
@@ -709,7 +732,7 @@ corner the fit solver chose."
       (write-string "<p class=\"footer\">" out)
       (write-inlines (deck-footer deck) (deck-footer-run deck) out)
       (format out "</p>~%"))
-    (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
+    (when (page-number-shown-p deck slide)
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
       (write-string "<aside class=\"notes\">" out)

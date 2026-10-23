@@ -278,6 +278,28 @@
            :alt "read, parse, segment, layout, lint, emit の六段階"
            :caption "PNG はテーマの色に従わない")))
 
+(slide :title "画面いっぱいの画像" :kicker "書き方"
+  (p "題も本文もなく画像だけを置くと、画像で画面を覆う。次のスライドが表示例。")
+  (ul (li (tt ":fit :contain") " なら切り取らず、全体を背景の上に収める")
+      "写真の上に文字は置かない。ページ番号も出さない")
+  (sexp "
+    (slide (image \"photo.svg\" :alt \"夕暮れの山並み\"))"))
+
+(slide (image "photo.svg" :alt "夕暮れの山並みの絵"))
+
+(slide :title "画像と文章を並べる" :kicker "書き方"
+  (p (tt ":layout :image-left") " か " (tt ":image-right") " で、画像を画面の端まで広げる。")
+  (sexp "
+    (slide :title \"画像と文章を並べる\" :layout :image-right
+      (ul \"画像は上下と横の端まで届く\" ...)
+      (image \"photo.svg\" :alt \"夕暮れの山並み\" :share 1/3))"))
+
+(slide :title "画像と文章を並べる" :kicker "表示例" :layout :image-right
+  (ul "画像は上下と横の端まで届く"
+      (li "幅は " (tt ":share") " の 1/3, 1/2, 2/3 から選ぶ")
+      "題と本文は残りの幅に収める")
+  (image "photo.svg" :alt "夕暮れの山並みの絵" :share 1/3))
+
 (slide :title "テンプレート" :kicker "書き方"
   (p (tt "define") " で名前を付け、使う所を本体で置き換える。評価はしない。")
   (sexp "
@@ -321,10 +343,10 @@
   (table :header ("スライドの形" "レイアウト")
          :caption ":layout で選ぶこともできる"
     ("題がなく、段落が一つ" (tt "statement"))
+    ("題がなく、画像が一つ" (tt "full"))
     ("題と画像が一つ" (tt "image"))
-    ("題とコードが一つ" (tt "code"))
-    ("題と表が一つ" (tt "table"))
-    ("題と引用が一つ" (tt "quote"))
+    ("題とコード、表、引用のどれか一つ"
+     (cell (tt "code") " " (tt "table") " " (tt "quote")))
     ((cell (tt "column") " を含む") (tt "columns"))
     ("それ以外" (tt "standard"))))
 

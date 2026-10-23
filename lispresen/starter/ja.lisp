@@ -59,6 +59,10 @@
 
 ;; An image is a file beside the deck, fitted into the slide:
 ;; (slide :title "画像" (image "photo.png" :alt "写真の説明" :caption "キャプション"))
+;; Alone on a slide without a title it fills the slide; :layout :image-left (or
+;; :image-right) sets it edge to edge beside the text:
+;; (slide (image "photo.png" :alt "写真の説明"))
+;; (slide :title "画像" :layout :image-left (image "photo.png" :alt "...") (ul "a" "b"))
 
 (section "まとめ")
 

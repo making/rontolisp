@@ -175,6 +175,29 @@ widens its first and last character"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")
                "layout-statement\" id=\"s1\" style=\"--stmt:120px")))
+  (testing "a lone untitled image fills the canvas; a split slide fits its text beside one"
+    (multiple-value-bind (html diagnostics)
+        (lispresen:render "(deck :page-numbers t)
+(slide (image \"a.jpg\" :alt \"a\"))
+(slide :title \"t\" :layout :image-left (image \"b.jpg\" :alt \"b\") \"x\")
+(slide :title \"t\" :layout :image-right \"x\" (image \"c.jpg\" :alt \"c\" :share 1/3 :fit :contain))
+(slide :title \"t\" :layout :full (image \"d.jpg\" :alt \"d\"))
+(slide :layout :image-left (image \"e.jpg\" :alt \"e\" :caption \"c\") (image \"f.jpg\" :alt \"f\" :fit :fill))")
+      ;; No page number over the picture.
+      (ok (contains html "layout-full\" id=\"s1\" style=\"\">
+<figure class=\"bleed\" style=\"left:0px;width:1920px\"><img src=\"a.jpg\" alt=\"a\"></figure>
+</section>"))
+      ;; Half the 1920 px canvas, then the 112 px margins on both sides of the text.
+      (ok (contains html "style=\"--left:1072px;--width:736px;--right:112px;"))
+      (ok (contains html "<figure class=\"bleed\" style=\"left:0px;width:960px\">"))
+      (ok (contains html "<div class=\"body\" style=\"top:232px;height:776px\">
+<p>x</p>"))
+      (ok (contains html "style=\"--left:112px;--width:1056px;--right:752px;"))
+      (ok (contains html "<figure class=\"bleed contain\" style=\"left:1280px;width:640px\">"))
+      (ok (equal (mapcar #'lispresen::diagnostic-message diagnostics)
+                 '("the full layout needs an (image ...) without :caption as the only block, and no title, source or callout"
+                   ":fit of image must be :cover or :contain"
+                   "the image-left layout needs one (image ...) outside columns, without :caption or a callout on it")))))
   (testing "a source line takes its height and a gap out of the body or the statement"
     ;; Body: 1080 - 72 - (80 + 104 + 48) = 776, less 24 + 40; statement: 928 - 64.
     (let ((html
