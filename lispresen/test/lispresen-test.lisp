@@ -6,12 +6,9 @@
 
 #-rontolisp (require :asdf)
 
-#+rontolisp (load "../src/all.lisp")
-#+rontolisp (load "../src/build.lisp")
-#+rontolisp (load "../src/starter.lisp")
-#-rontolisp
-(dolist (name '("all" "build" "starter"))
-  (load (merge-pathnames (format nil "../src/~a.lisp" name) *load-truename*)))
+(load (merge-pathnames "../src/all.lisp" *load-truename*))
+(load (merge-pathnames "../src/build.lisp" *load-truename*))
+(load (merge-pathnames "../src/starter.lisp" *load-truename*))
 (asdf:load-system :rove)
 
 (defpackage :lispresen-test (:use :cl :rove))

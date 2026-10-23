@@ -1,43 +1,30 @@
 ;;;; all.lisp -- every lispresen source, in load order.
 ;;;;
-;;;; On rontolisp, top-level literal loads: the compilers splice the files in at compile
-;;;; time, so a program loading this file compiles to one self-contained artifact, and a
-;;;; relative path resolves against this file. Standard Common Lisp resolves it against
-;;;; the working directory instead, so elsewhere the paths are merged with
-;;;; *LOAD-TRUENAME*; the compile path does not splice that spelling yet.
+;;;; Each path is merged onto *LOAD-TRUENAME*, since standard Common Lisp resolves a
+;;;; relative load against the working directory. rontolisp's compilers splice the files
+;;;; in at compile time all the same, so a program loading this file compiles to one
+;;;; self-contained artifact.
 
-#+rontolisp (load "package.lisp")
-#+rontolisp (load "reader.lisp")
-#+rontolisp (load "budoux-ja.lisp")
-#+rontolisp (load "phrase.lisp")
-#+rontolisp (load "metrics.lisp")
-#+rontolisp (load "math.lisp")
-#+rontolisp (load "template.lisp")
-#+rontolisp (load "model.lisp")
-#+rontolisp (load "embed.lisp")
-#+rontolisp (load "qr.lisp")
-#+rontolisp (load "diagram.lisp")
-#+rontolisp (load "layout.lisp")
-#+rontolisp (load "lint.lisp")
-#+rontolisp (load "theme.lisp")
-#+rontolisp (load "player.lisp")
-#+rontolisp (load "highlight.lisp")
-#+rontolisp (load "morph.lisp")
-#+rontolisp (load "html.lisp")
-#+rontolisp (load "png.lisp")
-#+rontolisp (load "truetype.lisp")
-#+rontolisp (load "raster.lisp")
-#+rontolisp (load "page-image.lisp")
-#+rontolisp (load "lispresen.lisp")
-
-;;; One compilation unit, so a call to a function defined in a later file is not
-;;; reported as undefined.
-#-rontolisp
-(with-compilation-unit ()
-  (dolist (name
-           '("package" "reader" "budoux-ja" "phrase" "metrics" "math" "template"
-             "model" "embed" "qr" "diagram" "layout" "lint" "theme" "player"
-             "highlight" "morph" "html" "png" "truetype" "raster"
-             "page-image" "lispresen"))
-    (load
-     (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))
+(load (merge-pathnames "package.lisp" *load-truename*))
+(load (merge-pathnames "reader.lisp" *load-truename*))
+(load (merge-pathnames "budoux-ja.lisp" *load-truename*))
+(load (merge-pathnames "phrase.lisp" *load-truename*))
+(load (merge-pathnames "metrics.lisp" *load-truename*))
+(load (merge-pathnames "math.lisp" *load-truename*))
+(load (merge-pathnames "template.lisp" *load-truename*))
+(load (merge-pathnames "model.lisp" *load-truename*))
+(load (merge-pathnames "embed.lisp" *load-truename*))
+(load (merge-pathnames "qr.lisp" *load-truename*))
+(load (merge-pathnames "diagram.lisp" *load-truename*))
+(load (merge-pathnames "layout.lisp" *load-truename*))
+(load (merge-pathnames "lint.lisp" *load-truename*))
+(load (merge-pathnames "theme.lisp" *load-truename*))
+(load (merge-pathnames "player.lisp" *load-truename*))
+(load (merge-pathnames "highlight.lisp" *load-truename*))
+(load (merge-pathnames "morph.lisp" *load-truename*))
+(load (merge-pathnames "html.lisp" *load-truename*))
+(load (merge-pathnames "png.lisp" *load-truename*))
+(load (merge-pathnames "truetype.lisp" *load-truename*))
+(load (merge-pathnames "raster.lisp" *load-truename*))
+(load (merge-pathnames "page-image.lisp" *load-truename*))
+(load (merge-pathnames "lispresen.lisp" *load-truename*))

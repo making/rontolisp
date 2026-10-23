@@ -14,18 +14,16 @@ what the tuning targets.
 ## Portability
 
 lispresen is portable Common Lisp first: it runs on SBCL as well, and produces the same
-bytes there. Code that needs a rontolisp feature (a literal `load` the compilers splice,
-a WASM export, the playground runtime's hooks) sits behind `#+rontolisp`, with a
+bytes there. Code that needs a rontolisp feature (a WASM export, the playground
+runtime's hooks) sits behind `#+rontolisp`, with a
 `#-rontolisp` spelling for other implementations where one is needed; without a
 specific reason, code is written in standard CL. SBCL then serves as the reference the
 rontolisp backends are checked against.
 
-The one place this costs code today is loading the sources. Standard CL resolves a
-relative `load` against the working directory, so the portable spelling is
-`(load (merge-pathnames "x.lisp" *load-truename*))`; rontolisp's compilers splice only a
-literal path, resolved against the loading file, and leave the portable spelling to a
-run-time `load` that cannot find the file. Until the compile path splices the portable
-spelling too, `cli.lisp`, `src/all.lisp` and the test file carry both.
+Loading the sources takes no conditional. Standard CL resolves a relative `load`
+against the working directory, so every source is loaded as
+`(load (merge-pathnames "x.lisp" *load-truename*))`, and rontolisp's compilers splice
+that spelling at compile time as they splice a literal path.
 
 ## Goals and non-goals
 
@@ -1605,11 +1603,10 @@ key names of `rontolisp --version`. It leaves out rontolisp's `buildTimestamp` a
   checkout has all of these. An environment variable set by the workflow would need
   setting by hand for every local build. `#.` would read the same files; a macro keeps
   the reading in ordinary functions.
-- The root is found from the file being compiled: `*load-truename*`, bound in a file a
-  literal `load` splices (relative to the compiler's working directory on the compile
-  path, absolute elsewhere), never in the top-level file. So a use sits in a top-level
-  form of a loaded file; the interpreter expands a function body's macros when it first
-  runs, outside the load.
+- The root is found from the file being compiled: `*load-truename*`, the absolute path
+  of the file being loaded or spliced. So a use sits in a top-level form of a loaded
+  file; the interpreter expands a function body's macros when it first runs, outside the
+  load.
 - Outside a repository (a copy of `lispresen/` alone) each is `unknown`, and the build
   succeeds.
 
@@ -1819,7 +1816,7 @@ module, 796 KB as a component and 6.7 MB as a native executable (macOS arm64, me
 
 ## Open points
 
-Verified in phase 1: a literal `load` of files holding `defpackage` / `in-package`,
+Verified in phase 1: a `load` of files holding `defpackage` / `in-package`,
 nested two levels (`cli.lisp` -> `src/all.lisp` -> `src/*.lisp`), inlines on every
 compiled backend, and the compiled runtime reader reads Japanese decks as the interpreter
 does (the golden check). Verified in phase 2 (Chrome 155, 2026-10-22): the hosted runtime

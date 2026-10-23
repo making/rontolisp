@@ -25,3 +25,11 @@ rontolisp prog.lisp -o prog.wasm
 ```
 
 Only a top-level `load` with a literal path is inlined; a `load` whose path is computed, or one nested inside another form, stays a runtime call and needs `--dynamic` (above) for the compiler to accept calls into the loaded code. The interpreter is unaffected -- it always loads at runtime -- and the include resolves paths the same way the runtime `load` does: a relative path resolves against the directory of the file doing the load (the entry file for a top-level `load`), so a program can be compiled or run from any working directory and still find its companion files.
+
+One computed path counts as literal: a path built from the loading file's own location. Standard Common Lisp resolves a relative `load` against the working directory, so a program that must also run on another Common Lisp names its files relative to `*load-truename*`:
+
+```console
+(load (merge-pathnames "src/a.lisp" *load-truename*))
+```
+
+Inside the file doing the load, `*load-truename*` and `*load-pathname*` are known when the program is compiled, and `*compile-file-truename*` / `*compile-file-pathname*` are `nil`, so the compiler computes the path and splices the file exactly like `(load "src/a.lisp")`. It does so for `merge-pathnames`, `uiop:merge-pathnames*` and `uiop:subpathname` over those variables, `(or *compile-file-truename* *load-truename*)` included, and for the path argument of `require`. The compiled program is self-contained: it needs no `src/` when it runs. Merge onto `*load-truename*`, not `*load-pathname*`: the truename is absolute, while `*load-pathname*` is the path as written, and when that has a directory part (`app/main.lisp`) the merged path is relative and repeats it, since a relative `load` resolves against the loading file's directory.

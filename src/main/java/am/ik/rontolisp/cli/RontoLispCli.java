@@ -771,7 +771,10 @@ public final class RontoLispCli {
 				.javaClassPath(javaClassPath::add)
 				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
 				.build());
-			for (LispVal form : frontend.program()) {
+			// The load-context brackets are lowered as every backend lowers them first:
+			// to the assignments a program reading the variables needs, and to nothing
+			// otherwise -- a marker is no Common Lisp to read back.
+			for (LispVal form : LispMacroExpander.lowerLoadContextMarkers(frontend.program())) {
 				// A (%struct-definition (defstruct ...)) marker is compile-path
 				// bookkeeping
 				// the BACKENDS consume (LispMacroExpander.expandTopLevelDefinitions); the
@@ -831,12 +834,24 @@ public final class RontoLispCli {
 			exprs = evaluator.clojureProgram(exprs);
 		}
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+		// A Common Lisp entry file is the file being loaded: its forms -- and its #.
+		// data, resolved just before each form runs -- see *load-pathname* (the path as
+		// given) and *load-truename* (its truename), as the compile paths' bracket
+		// around the same file does (LoadInliner).
+		String loadedFile = language == SourceLanguage.COMMON_LISP ? entryFile : null;
+		boolean entryContext = loadedFile != null;
+		if (loadedFile != null) {
+			evaluator.pushLoadContext(loadedFile, evaluator.sourceLoader().canonicalPath(loadedFile));
+		}
 		try {
 			for (LispVal expr : exprs) {
 				evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 			}
 		}
 		finally {
+			if (entryContext) {
+				evaluator.popLoadContext();
+			}
 			// The program has ended -- by its last form, by quit/exit (LispExitSignal) or
 			// by an uncaught condition -- so an output file it never closed gets what it
 			// still buffers, as it does on the other three backends.

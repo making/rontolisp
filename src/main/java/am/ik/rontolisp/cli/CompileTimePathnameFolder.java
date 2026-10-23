@@ -117,6 +117,42 @@ final class CompileTimePathnameFolder {
 	}
 
 	/**
+	 * Folds the path argument of a top-level {@code load} / {@code require} written in
+	 * the file whose load context is {@code pathname} / {@code truename} -- the portable
+	 * idiom {@code (load (merge-pathnames "x.lisp" *load-truename*))}, which standard
+	 * Common Lisp needs because it resolves a relative {@code load} against the working
+	 * directory. Inside that file the four load and compile-file variables are known: the
+	 * two load ones hold the file's context (nil outside every file, as at run time) and
+	 * the two compile-file ones are nil on every backend. So the argument reduces exactly
+	 * as the run time would compute it, and a {@code load} it reduces splices like a
+	 * literal one.
+	 * @param expr the argument
+	 * @param systems the compile-time system registry
+	 * @param pathname the file's {@code *load-pathname*}, or {@code null} outside a file
+	 * @param truename the file's {@code *load-truename*}, or {@code null} outside a file
+	 * @return the namestring the argument evaluates to, or {@code null} when it is not
+	 * reducible here (the {@code load} is then left to the run time)
+	 */
+	static @Nullable String foldLoadPath(LispVal expr, Map<String, AsdfSystems.LispSystem> systems,
+			@Nullable String pathname, @Nullable String truename) {
+		Map<String, LispVal> locals = new HashMap<>();
+		bindLoadVariable(locals, LispNames.LOAD_PATHNAME_VAR, pathname);
+		bindLoadVariable(locals, LispNames.LOAD_TRUENAME_VAR, truename);
+		bindLoadVariable(locals, LispNames.COMPILE_FILE_PATHNAME_VAR, null);
+		bindLoadVariable(locals, LispNames.COMPILE_FILE_TRUENAME_VAR, null);
+		LispVal value = reduce(expr, systems, Map.of(), locals, true);
+		return value == null ? null : PathnameOps.designatorNamestring(value);
+	}
+
+	// One load variable under each spelling a reference may use.
+	private static void bindLoadVariable(Map<String, LispVal> locals, String name, @Nullable String value) {
+		LispVal bound = value == null ? LispNil.INSTANCE : new LispString(value);
+		locals.put(name, bound);
+		locals.put(LispNames.CL_PKG + ":" + name, bound);
+		locals.put("COMMON-LISP:" + name, bound);
+	}
+
+	/**
 	 * Collects the names the program assigns anywhere -- the recorded-parameter
 	 * invalidator described in the class docs. Matched on the operator's MEMBER name so a
 	 * qualified {@code cl:setq} counts too, and over-collection only costs a missed fold.
@@ -274,7 +310,7 @@ final class CompileTimePathnameFolder {
 			return foldWithOpenFile(cons, items, systems, parameters, writtenPaths, mutableNames, atTop);
 		}
 		if (isFoldablePrimitiveHead(op)) {
-			LispVal reduced = reduce(form, systems, parameters, java.util.Map.of(), writtenPaths);
+			LispVal reduced = reduce(form, systems, parameters, java.util.Map.of(), false);
 			if (reduced != null) {
 				return reduced;
 			}
@@ -303,7 +339,7 @@ final class CompileTimePathnameFolder {
 		boolean changed = false;
 		if (items.size() >= 3) {
 			LispVal valueExpr = items.get(2);
-			LispVal reduced = reduce(valueExpr, systems, parameters, java.util.Map.of(), writtenPaths);
+			LispVal reduced = reduce(valueExpr, systems, parameters, java.util.Map.of(), false);
 			if (reduced instanceof LispString
 					|| (reduced instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME)) {
 				// The recorded name must be one NOTHING assigns and the binding must be a
@@ -355,7 +391,7 @@ final class CompileTimePathnameFolder {
 			return recurseCons(original, items, systems, parameters, writtenPaths, mutableNames, false);
 		}
 		LispVal pathExpr = specParts.get(1);
-		LispVal reducedPath = reduce(pathExpr, systems, parameters, java.util.Map.of(), writtenPaths);
+		LispVal reducedPath = reduce(pathExpr, systems, parameters, java.util.Map.of(), false);
 		LispVal foldedPathExpr = reducedPath != null ? reducedPath
 				: foldForm(pathExpr, systems, parameters, writtenPaths, mutableNames, false);
 		boolean changed = foldedPathExpr != pathExpr;
@@ -569,9 +605,15 @@ final class CompileTimePathnameFolder {
 	 * <p>
 	 * Returns {@code null} for any other shape -- the caller then falls back to a generic
 	 * recursion.
+	 * <p>
+	 * {@code loadPath} is set only for the argument of a top-level {@code load} /
+	 * {@code require} ({@link #foldLoadPath}), and adds the two shapes the portable load
+	 * idiom is spelled with: {@code (or ...)} and two-argument CL
+	 * {@code (merge-pathnames ...)}. Everywhere else they stay run-time calls, so no
+	 * {@code with-open-file} over a computed path starts bundling the file it names.
 	 */
 	private static @Nullable LispVal reduce(LispVal expr, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		if (expr instanceof LispString || expr instanceof LispInteger || expr instanceof LispDouble
 				|| expr instanceof LispNil || expr instanceof LispTrue) {
 			return expr;
@@ -596,42 +638,76 @@ final class CompileTimePathnameFolder {
 			return args.size() == 1 ? args.get(0) : null;
 		}
 		if (LispNames.LIST.equals(opName)) {
-			return reduceList(args, systems, parameters, locals, writtenPaths);
+			return reduceList(args, systems, parameters, locals, loadPath);
 		}
 		if (LispNames.MAKE_PATHNAME.equals(opName)) {
-			return reduceMakePathname(args, systems, parameters, locals, writtenPaths);
+			return reduceMakePathname(args, systems, parameters, locals, loadPath);
 		}
 		if (LispNames.LET.equals(opName) || LispNames.LET_STAR.equals(opName)) {
-			return reduceLet(args, LispNames.LET_STAR.equals(opName), systems, parameters, locals, writtenPaths);
+			return reduceLet(args, LispNames.LET_STAR.equals(opName), systems, parameters, locals, loadPath);
 		}
 		if (LispNames.WHEN.equals(opName)) {
-			return reduceWhen(args, systems, parameters, locals, writtenPaths);
+			return reduceWhen(args, systems, parameters, locals, loadPath);
 		}
 		if (LispNames.EVAL.equals(opName)) {
-			return reduceEval(args, systems, parameters, locals, writtenPaths);
+			return reduceEval(args, systems, parameters, locals, loadPath);
+		}
+		String clMember = clMember(opName);
+		if (loadPath && LispNames.OR.equals(clMember)) {
+			return reduceOr(args, systems, parameters, locals);
+		}
+		if (loadPath && LispNames.MERGE_PATHNAMES.equals(clMember) && args.size() == 2) {
+			// Two arguments only: a one-argument call merges onto
+			// *default-pathname-defaults*, which a program may have set.
+			return reduceMergePathnames(args, systems, parameters, locals, true);
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
 		if (qn == null) {
 			return null;
 		}
 		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
-			return reduceMergePathnames(args, systems, parameters, locals, writtenPaths);
+			return reduceMergePathnames(args, systems, parameters, locals, loadPath);
 		}
 		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SUBPATHNAME)) {
-			return reduceSubpathname(args, systems, parameters, locals, writtenPaths);
+			return reduceSubpathname(args, systems, parameters, locals, loadPath);
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())) {
 			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
 					|| LispNames.COMPONENT_PATHNAME.equals(qn.member())) {
 				// component-pathname of a SYSTEM is its source directory, and a system is
 				// the only component object rontolisp materializes.
-				return reduceSystemSourceDirectory(args, systems, parameters, locals, writtenPaths);
+				return reduceSystemSourceDirectory(args, systems, parameters, locals, loadPath);
 			}
 			if (LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member())) {
-				return reduceSystemRelativePathname(args, systems, parameters, locals, writtenPaths);
+				return reduceSystemRelativePathname(args, systems, parameters, locals, loadPath);
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * {@code (or FORM...)} over constants: the first non-nil value, or nil. An unknown
+	 * form before the first non-nil one declines the whole form -- it may be the answer.
+	 */
+	private static @Nullable LispVal reduceOr(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
+			Map<String, LispVal> parameters, Map<String, LispVal> locals) {
+		for (LispVal arg : args) {
+			LispVal value = reduce(arg, systems, parameters, locals, true);
+			if (value == null || !(value instanceof LispNil)) {
+				return value;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// The member a name of the COMMON-LISP package is spelled with, bare or qualified;
+	// null for a name of any other package.
+	private static @Nullable String clMember(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn == null) {
+			return name;
+		}
+		return LispNames.CL_PKG.equals(qn.pkg()) || "COMMON-LISP".equals(qn.pkg()) ? qn.member() : null;
 	}
 
 	private static @Nullable LispVal reduceSymbol(LispSymbol sym, Map<String, LispVal> parameters,
@@ -665,7 +741,7 @@ final class CompileTimePathnameFolder {
 	 *
 	 */
 	private static @Nullable LispVal reduceEval(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		if (args.size() != 1) {
 			return null;
 		}
@@ -679,7 +755,7 @@ final class CompileTimePathnameFolder {
 		}
 		try {
 			LispVal parsed = LispReader.readFromString(text.value());
-			return reduce(parsed, systems, parameters, locals, writtenPaths);
+			return reduce(parsed, systems, parameters, locals, loadPath);
 		}
 		catch (RuntimeException ex) {
 			return null;
@@ -697,7 +773,7 @@ final class CompileTimePathnameFolder {
 	 */
 	private static @Nullable LispVal reduceLet(List<LispVal> args, boolean sequential,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters, Map<String, LispVal> locals,
-			java.util.Set<String> writtenPaths) {
+			boolean loadPath) {
 		if (args.isEmpty() || !(args.get(0) instanceof LispCons bindings) || !bindings.isProperList()) {
 			return null;
 		}
@@ -712,7 +788,7 @@ final class CompileTimePathnameFolder {
 			}
 			Map<String, LispVal> initScope = sequential ? scope : locals;
 			LispVal init = parts.size() >= 2 ? parts.get(1) : LispNil.INSTANCE;
-			LispVal value = reduce(init, systems, parameters, initScope, writtenPaths);
+			LispVal value = reduce(init, systems, parameters, initScope, loadPath);
 			if (value == null) {
 				String systemName = systemDesignator(init, parameters, initScope);
 				if (systemName == null) {
@@ -724,7 +800,7 @@ final class CompileTimePathnameFolder {
 		}
 		LispVal result = LispNil.INSTANCE;
 		for (int i = 1; i < args.size(); i++) {
-			LispVal reduced = reduce(args.get(i), systems, parameters, scope, writtenPaths);
+			LispVal reduced = reduce(args.get(i), systems, parameters, scope, loadPath);
 			if (reduced == null) {
 				return null;
 			}
@@ -739,11 +815,11 @@ final class CompileTimePathnameFolder {
 	 * the whole form is declined.
 	 */
 	private static @Nullable LispVal reduceWhen(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		if (args.isEmpty()) {
 			return null;
 		}
-		LispVal test = reduce(args.get(0), systems, parameters, locals, writtenPaths);
+		LispVal test = reduce(args.get(0), systems, parameters, locals, loadPath);
 		if (test == null) {
 			return null;
 		}
@@ -752,7 +828,7 @@ final class CompileTimePathnameFolder {
 		}
 		LispVal result = LispNil.INSTANCE;
 		for (int i = 1; i < args.size(); i++) {
-			LispVal reduced = reduce(args.get(i), systems, parameters, locals, writtenPaths);
+			LispVal reduced = reduce(args.get(i), systems, parameters, locals, loadPath);
 			if (reduced == null) {
 				return null;
 			}
@@ -762,11 +838,11 @@ final class CompileTimePathnameFolder {
 	}
 
 	private static @Nullable LispVal reduceList(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		LispVal tail = LispNil.INSTANCE;
 		List<LispVal> reduced = new ArrayList<>(args.size());
 		for (LispVal arg : args) {
-			LispVal r = reduce(arg, systems, parameters, locals, writtenPaths);
+			LispVal r = reduce(arg, systems, parameters, locals, loadPath);
 			if (r == null) {
 				return null;
 			}
@@ -779,10 +855,10 @@ final class CompileTimePathnameFolder {
 	}
 
 	private static @Nullable LispVal reduceMakePathname(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		List<LispVal> reduced = new ArrayList<>(args.size());
 		for (LispVal arg : args) {
-			LispVal r = reduce(arg, systems, parameters, locals, writtenPaths);
+			LispVal r = reduce(arg, systems, parameters, locals, loadPath);
 			if (r == null) {
 				return null;
 			}
@@ -801,18 +877,18 @@ final class CompileTimePathnameFolder {
 
 	private static @Nullable LispVal reduceMergePathnames(List<LispVal> args,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters, Map<String, LispVal> locals,
-			java.util.Set<String> writtenPaths) {
+			boolean loadPath) {
 		if (args.isEmpty() || args.size() > 2) {
 			return null;
 		}
-		LispVal specified = reduce(args.get(0), systems, parameters, locals, writtenPaths);
+		LispVal specified = reduce(args.get(0), systems, parameters, locals, loadPath);
 		String specifiedNs = specified == null ? null : PathnameOps.designatorNamestring(specified);
 		if (specifiedNs == null) {
 			return null;
 		}
 		String defaults = "";
 		if (args.size() == 2) {
-			LispVal defaultsVal = reduce(args.get(1), systems, parameters, locals, writtenPaths);
+			LispVal defaultsVal = reduce(args.get(1), systems, parameters, locals, loadPath);
 			String defaultsNs = defaultsVal == null ? null : PathnameOps.designatorNamestring(defaultsVal);
 			if (defaultsNs != null) {
 				defaults = defaultsNs;
@@ -839,7 +915,7 @@ final class CompileTimePathnameFolder {
 	 * away.
 	 */
 	private static @Nullable LispVal reduceSubpathname(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, Map<String, LispVal> locals, java.util.Set<String> writtenPaths) {
+			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
 		if (args.size() != 2 && args.size() != 4) {
 			return null;
 		}
@@ -848,7 +924,7 @@ final class CompileTimePathnameFolder {
 			if (!(args.get(2) instanceof LispSymbol key) || !":TYPE".equals(key.name())) {
 				return null;
 			}
-			LispVal typeVal = reduce(args.get(3), systems, parameters, locals, writtenPaths);
+			LispVal typeVal = reduce(args.get(3), systems, parameters, locals, loadPath);
 			if (typeVal instanceof LispString typeStr) {
 				type = typeStr.value();
 			}
@@ -856,12 +932,12 @@ final class CompileTimePathnameFolder {
 				return null;
 			}
 		}
-		LispVal base = reduce(args.get(0), systems, parameters, locals, writtenPaths);
+		LispVal base = reduce(args.get(0), systems, parameters, locals, loadPath);
 		String baseNs = base == null ? null : PathnameOps.designatorNamestring(base);
 		if (baseNs == null) {
 			return null;
 		}
-		LispVal sub = reduce(args.get(1), systems, parameters, locals, writtenPaths);
+		LispVal sub = reduce(args.get(1), systems, parameters, locals, loadPath);
 		if (sub instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME) {
 			String subNs = PathnameOps.designatorNamestring(sub);
 			if (subNs != null && subNs.startsWith("/")) {
@@ -914,7 +990,7 @@ final class CompileTimePathnameFolder {
 	 */
 	private static @Nullable LispVal reduceSystemRelativePathname(List<LispVal> args,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters, Map<String, LispVal> locals,
-			java.util.Set<String> writtenPaths) {
+			boolean loadPath) {
 		if (args.size() != 2) {
 			return null;
 		}
@@ -926,7 +1002,7 @@ final class CompileTimePathnameFolder {
 		if (system == null) {
 			return null;
 		}
-		LispVal relative = reduce(args.get(1), systems, parameters, locals, writtenPaths);
+		LispVal relative = reduce(args.get(1), systems, parameters, locals, loadPath);
 		String relativeNs = relative == null ? null : PathnameOps.designatorNamestring(relative);
 		if (relativeNs == null) {
 			return null;
@@ -940,7 +1016,7 @@ final class CompileTimePathnameFolder {
 
 	private static @Nullable LispVal reduceSystemSourceDirectory(List<LispVal> args,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters, Map<String, LispVal> locals,
-			java.util.Set<String> writtenPaths) {
+			boolean loadPath) {
 		if (args.size() != 1) {
 			return null;
 		}

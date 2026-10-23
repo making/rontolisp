@@ -106,7 +106,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [binary-sequence-io.md](binary-sequence-io.md) -- `read-sequence`/`write-sequence` over a packed buffer in one native transfer
 - [character-sequence-io.md](character-sequence-io.md) -- `read-sequence` into a string: a block of storage units per host read, never one read per character
 - [directory-listing.md](directory-listing.md) -- the one `%list-directory` primitive and the Lisp spellings above it
-- [load-inliner.md](load-inliner.md) -- compile-time `load` inlining, `require`/`provide`
+- [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (a path merged onto `*load-truename*` included), `require`/`provide`, the load-context brackets (the entry file's too; an absolute truename)
 
 ## Errors and concurrency
 

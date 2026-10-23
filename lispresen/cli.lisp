@@ -20,12 +20,9 @@
 #-rontolisp (require :asdf)
 
 ;;; build.lisp and starter.lisp are the CLI's alone; the browser editor leaves them out.
-#+rontolisp (load "src/all.lisp")
-#+rontolisp (load "src/build.lisp")
-#+rontolisp (load "src/starter.lisp")
-#-rontolisp
-(dolist (name '("all" "build" "starter"))
-  (load (merge-pathnames (format nil "src/~a.lisp" name) *load-truename*)))
+(load (merge-pathnames "src/all.lisp" *load-truename*))
+(load (merge-pathnames "src/build.lisp" *load-truename*))
+(load (merge-pathnames "src/starter.lisp" *load-truename*))
 
 (defparameter *usage*
   "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]

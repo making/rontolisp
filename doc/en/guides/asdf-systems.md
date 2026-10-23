@@ -292,11 +292,13 @@ library still has to stay inside the supported subset below.
 
 - **The load-context variables hold the file being loaded, on every backend.**
   While a file is being loaded, `*load-pathname*` holds the path `load` was
-  called with and `*load-truename*` the path it resolved to; the enclosing
-  file's values come back when it finishes, and outside a load both are `nil` —
-  read at top level or from a function the load defined and your program calls
-  later. **A component is loaded by its resolved path**, so both variables hold
-  what
+  called with and `*load-truename*` the file's truename (its absolute path,
+  symbolic links resolved); the enclosing file's values come back when it
+  finishes. The program file you run or compile counts as a file being loaded,
+  so its own forms see its path; a program read from standard input or `-e`
+  has none, and outside every load both are `nil` — read at top level or from
+  a function the load defined and your program calls later. **A component is
+  loaded by its resolved path**, so `*load-pathname*` holds what
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)
   answers for it, which is what lets a test framework correlate the definitions
   of a file with the system that owns it. This works the same on the compile

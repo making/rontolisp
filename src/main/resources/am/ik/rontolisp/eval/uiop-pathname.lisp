@@ -339,9 +339,9 @@
 ;; DEFAULTS (a pathname designator, or a function answering one), and a relative
 ;; path with no absolute default is an ERROR. The error arm is deliberately not
 ;; taken here: rontolisp absolutizes only truenames (probe-file, truename,
-;; directory) -- *load-truename* is the path as resolved against the loading file,
-;; and with no chdir a relative namestring denotes the same file for the whole
-;; run (uiop:get-pathname-defaults answers *default-pathname-defaults*, #P"", for
+;; directory, *load-truename*) -- *load-pathname* is the path as given, and with
+;; no chdir a relative namestring denotes the same file for the whole run
+;; (uiop:get-pathname-defaults answers *default-pathname-defaults*, #P"", for
 ;; exactly that reason). What callers do with the value is use it as the
 ;; IDENTITY of a file -- rove keys its file-to-suite map by it and looks the key
 ;; up again by asdf:component-pathname -- and the path as resolved is that

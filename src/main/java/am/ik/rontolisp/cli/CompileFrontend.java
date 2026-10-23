@@ -92,7 +92,8 @@ final class CompileFrontend {
 	 * ASDF systems come from, plus the {@link Options} the whole pipeline runs under.
 	 *
 	 * @param source the program text
-	 * @param entryFile the path the text was read from, for diagnostics
+	 * @param entryFile the path the text was read from, for diagnostics and, for a Common
+	 * Lisp program, its {@code *load-pathname*} / {@code *load-truename*}
 	 * @param sourceLanguage the {@code --source-language} override naming the entry
 	 * source's language, or {@code null} to pick it from the entry file's extension
 	 * @param standards what every source file is read against ({@code --scheme-standard})
@@ -500,8 +501,11 @@ final class CompileFrontend {
 		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
 				request.javaClassPath());
 		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards(), files);
+		// A Common Lisp entry file is the file being loaded, so its forms run inside its
+		// own load context (LoadInliner brackets it, the interpreter binds it). The
+		// other languages have no *load-truename* to answer.
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
-				request.dists(), request.standards());
+				request.dists(), request.standards(), language == SourceLanguage.COMMON_LISP ? entryFile : null);
 		return expand(new Loaded(loaded, features, request.standards()), options);
 	}
 

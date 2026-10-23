@@ -25,3 +25,11 @@ rontolisp prog.lisp -o prog.wasm
 ```
 
 インライン展開されるのはリテラルパスを持つトップレベルの `load` のみです。パスが計算される `load` や、別のフォームの内側にネストした `load` はランタイム呼び出しのままとなり、コンパイラがロード先コードへの呼び出しを受け入れるには（上記の）`--dynamic` が必要です。インタプリタはこの影響を受けません（常にランタイムで load します）。また、インクルードはランタイムの `load` と同じ方法でパスを解決します。相対パスはその `load` を書いたファイルのディレクトリ（トップレベルの `load` ならエントリファイル）からの相対で解決されるため、どのワーキングディレクトリからコンパイル・実行しても companion ファイルを見つけられます。
+
+計算されるパスのうち、load を書いたファイル自身の位置から組み立てたパスはリテラルと同じに扱われます。標準の Common Lisp は相対パスの `load` をワーキングディレクトリから解決するため、ほかの Common Lisp でも動かすプログラムはファイルを `*load-truename*` からの相対で指定します。
+
+```console
+(load (merge-pathnames "src/a.lisp" *load-truename*))
+```
+
+load を書いたファイルの中では `*load-truename*` と `*load-pathname*` の値がコンパイル時に決まっており、`*compile-file-truename*` と `*compile-file-pathname*` は `nil` です。そのためコンパイラはパスを計算し、`(load "src/a.lisp")` と同じようにファイルを展開します。対象は、これらの変数に対する `merge-pathnames`、`uiop:merge-pathnames*`、`uiop:subpathname`（`(or *compile-file-truename* *load-truename*)` を含む）と、`require` のパス引数です。コンパイルしたプログラムは自己完結しており、実行時に `src/` を必要としません。マージする先は `*load-pathname*` ではなく `*load-truename*` にしてください。truename は絶対パスですが、`*load-pathname*` は書かれたとおりのパスです。それがディレクトリ部分を持つ場合（`app/main.lisp`）、マージした結果は相対パスになり、相対パスの `load` は読み込み元ファイルのディレクトリから解決されるため、ディレクトリが二重に付きます。
