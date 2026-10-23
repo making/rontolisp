@@ -797,10 +797,18 @@ else{j=tend(i);emit(cls(j),j);}}
 return o;}
 var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
 var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
-function workerMain(B){Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
+function workerMain(B){self.rontoFetchBroker=true;Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
 .then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
-catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({id:m.id,v:v});};postMessage({ready:1});})
-.catch(function(x){postMessage({fail:String(x)});});}
+catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({type:'result',id:m.id,v:v});};postMessage({type:'ready'});})
+.catch(function(x){postMessage({type:'fail',error:String(x)});});}
+function broker(m){var i32=new Int32Array(m.sab,0,2),S=String.fromCharCode(1),hs=(m.reqHeaders||'').split(NL),h={},k;
+for(k=0;k+1<hs.length;k+=2)if(hs[k])h[hs[k]]=hs[k+1];
+fetch(m.url,{method:m.method,headers:h,body:m.body===null?undefined:m.body}).then(function(r){return r.text().then(function(t){
+var c=r.headers.get('content-encoding'),dec=c!==null&&c.split(',').every(function(x){return /^(x-gzip|gzip|deflate|br)$/i.test(x.trim());}),l='';
+r.headers.forEach(function(v,n){if(!dec||(n!=='content-encoding'&&n!=='content-length'))l+=n+': '+v+String.fromCharCode(13)+NL;});return r.status+S+l+S+t;});})
+.catch(function(x){return 'ERR'+S+(x&&x.message||'request failed');})
+.then(function(t){var p=new TextEncoder().encode(t);if(m.sab.byteLength<8+p.length)m.sab.grow(8+p.length);
+new Uint8Array(m.sab).set(p,8);i32[1]=p.length;Atomics.store(i32,0,1);Atomics.notify(i32,0);});}
 function label(k){k.dataset.state=rt;k.textContent=rt==='ready'?'Run':rt==='loading'?'Loading':'Failed';
 k.title=rt==='ready'?'Run (Ctrl+Enter)':rt==='loading'?'Loading the runtime; a run waits for it':why+'; Run retries';}
 function setRt(s){rt=s;d.querySelectorAll('.tools .run').forEach(label);
@@ -811,8 +819,8 @@ function startWorker(){if(worker)worker.terminate();worker=null;busy=-1;clearTim
 fetch(base+'rontoplayground.js').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' for '+r.url);return r.text();})
 .then(function(t){if(g!==gen)return;
 worker=new Worker(URL.createObjectURL(new Blob([t,NL+';('+workerMain.toString()+')('+JSON.stringify(base)+')'],{type:'text/javascript'})));
-worker.onmessage=function(e){var m=e.data;if(m.ready){setRt('ready');pump();}
-else if(m.fail)fail(g,'the runtime did not start from '+base+': '+m.fail);else done(m.id,m.v);};
+worker.onmessage=function(e){var m=e.data;if(g!==gen)return;if(m.type==='ronto-fetch')broker(m);else if(m.type==='ready'){setRt('ready');pump();}
+else if(m.type==='fail')fail(g,'the runtime did not start from '+base+': '+m.error);else if(m.type==='result')done(m.id,m.v);};
 worker.onerror=function(e){fail(g,'the runtime did not start from '+base+': '+e.message);};})
 .catch(function(x){fail(g,!worker&&base.indexOf('file:')===0?'a deck opened as a file cannot fetch the runtime from '+base+
 '; serve the deck over HTTP (jwebserver) or use :runtime :hosted':'the runtime did not load from '+base+': '+x);});}
@@ -838,7 +846,7 @@ output(i,rt==='ready'?'running...':'waiting for the runtime...',false,true);if(r
 function pump(){if(busy>=0||!queue.length||rt!=='ready')return;var i=queue.shift(),b=boxes[i];busy=i;
 worker.postMessage({id:i,lang:b.dataset.lang.toLowerCase(),src:codeOf(b),fresh:b.hasAttribute('data-fresh'),stdin:b.dataset.stdin||''});
 var secs=+b.dataset.timeout||10;timer=setTimeout(function(){output(i,'timed out after '+secs+' s; the runtime restarted, so earlier definitions are gone',true);startWorker();},secs*1000);}
-function done(i,v){clearTimeout(timer);busy=-1;var err=typeof v==='string'&&v.indexOf('ERROR:')===0;output(i,err?v.slice(6).trim():String(v),err);pump();}
+function done(i,v){if(i!==busy)return;clearTimeout(timer);busy=-1;var err=typeof v==='string'&&v.indexOf('ERROR:')===0;output(i,err?v.slice(6).trim():String(v),err);pump();}
 function setCode(b,text,html){b.querySelector('pre.code code').innerHTML=html||highlight(text);var i=+b.dataset.i;state[i].text=text;share(i);
 var sl=b.closest('.slide');hooks.place.forEach(function(f){f(sl,[]);});}
 function reset(i){leave();setCode(boxes[i],orig[i].text,orig[i].html);focus(slides[cur],shown);hide(i);}

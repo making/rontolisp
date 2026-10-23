@@ -877,6 +877,19 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   need the CORS header the hosted files carry. A failure is reported with its cause in
   the output of a waiting run, the Run button's tooltip and the presenter window; for a
   runtime directory and a deck opened from `file://` it says to serve the deck over HTTP.
+- `rontolisp:fetch` takes the runtime's async path when the page is cross-origin
+  isolated: the worker posts each request (`{type:'ronto-fetch'}` with a
+  `SharedArrayBuffer`) and blocks in `Atomics.wait` until the page's `fetch` writes the
+  response into the buffer. The runner is that page side (`broker`, the playground's
+  `brokerFetch` protocol, `.kb/fetch-http.md`), and the worker declares it with
+  `self.rontoFetchBroker = true`; without isolation the runtime uses a synchronous XHR in
+  the worker. A deck published under `https://making.github.io/rontolisp/` is isolated
+  whenever the browser has opened the playground, whose COOP/COEP service worker has
+  scope `/rontolisp/`. Before the runner brokered, a fetch there blocked the worker until
+  the timeout (measured 2026-10-23, Chrome, the intro deck on Pages).
+- Messages from the worker carry a `type` (`ready`, `fail`, `result`, `ronto-fetch`).
+  The runner drops anything from a worker it has since replaced, and a result for a run
+  other than the current one.
 - One run at a time: Run on another block while one runs queues it, and a run started
   before the runtime is ready waits for it.
 - When the deck contains runnable code, the worker starts loading as soon as the deck
