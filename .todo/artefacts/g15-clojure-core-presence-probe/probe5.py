@@ -1,6 +1,7 @@
-import subprocess, json, threading, uuid
+import subprocess, json, threading, uuid, os
 from concurrent.futures import ThreadPoolExecutor
-JAR="/nvme1n1-disk/rontolisp/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
+# The executable jar of the checkout holding this directory (override with RONTOLISP_JAR).
+JAR=os.environ.get("RONTOLISP_JAR",os.path.join(os.path.dirname(os.path.abspath(__file__)),"..","..","..","target","rontolisp-0.1.0-SNAPSHOT-exec.jar"))
 pairs=[l.strip() for l in open("others-q.txt") if l.strip()]
 nses=sorted({p.split("/")[0] for p in pairs})
 tl=threading.local()

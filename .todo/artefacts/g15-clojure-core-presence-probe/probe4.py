@@ -1,6 +1,7 @@
-import subprocess, json, threading
+import subprocess, json, threading, os
 from concurrent.futures import ThreadPoolExecutor
-JAR="/nvme1n1-disk/rontolisp/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
+# The executable jar of the checkout holding this directory (override with RONTOLISP_JAR).
+JAR=os.environ.get("RONTOLISP_JAR",os.path.join(os.path.dirname(os.path.abspath(__file__)),"..","..","..","target","rontolisp-0.1.0-SNAPSHOT-exec.jar"))
 names=[l.strip() for l in open("oracle-core.txt") if l.strip()]
 
 # g26 dispositions of the deprecated/internal six (see .todo/g26 and

@@ -349,7 +349,11 @@
   `alias`、`refer`、`ns-unmap`、`ns-unalias` はプログラムを下ろしながら結線するため、本体の中でも
   ファイル全体に届きます（oracle は本体の実行時に走ります）。単独の `(refer-clojure ...)` も
   同じ `(:refer-clojure ...)` フィルタ（`:only`・`:exclude`・`:rename`、`nil` を返す）を
-  同じように結線します。リテラルの `load-string` はファイルと
+  同じように結線します。値としての `require`、`use`、`in-ns`（`(apply require nses)`）は、
+  実行時のどの適用も `UnsupportedOperationException` で拒否します。ライブラリのロードと
+  名前空間の切り替えはプログラムを下ろすときに行うためです（oracle はロードし、切り替えます。
+  spec を 1 つも渡さない `require` と `use` は、ここでも oracle と同じ `Nothing specified to load`
+  を投げます）。リテラルの `load-string` はファイルと
   同じく先に宣言するため、同じ形が定義したものをもう名乗れます（oracle は後の形が必要です）。
   lazy-or-strict 動詞が strict に実現した seq の `bounded-count` は全部数えます（oracle は lazy のまま
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は

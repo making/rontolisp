@@ -10,6 +10,8 @@ needs no file, any other namespace loads from its file on the source path;
 a bare library symbol refers all of it; an unknown namespace is an error.
 An unquoted vector spec is accepted too, though real Clojure rejects it.
 A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
+As a value every application refuses at run time, since libraries load while the program
+lowers (of no spec, the oracle's `Nothing specified to load`).
 
 ```clojure
 (use '[clojure.string :only [upper-case]])

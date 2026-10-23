@@ -16,9 +16,9 @@ Result: 624/679 head-ok, 17 unsupported in both positions (the g15 todo list);
 136/136 non-core names resolvable, all listed namespaces `require`-able.
 
 Rerun: rebuild the jar, then `python3 -I probe4.py` and `python3 -I probe5.py`
-from this directory (each run needs the jar path inside the script to point at
-the fresh build; threads write per-thread temp `_[pq]-*.clj` files into the
-cwd -- delete them afterwards, they are not artefacts).
+from this directory (each script runs `target/rontolisp-0.1.0-SNAPSHOT-exec.jar` of
+the checkout holding it, or `$RONTOLISP_JAR`; threads write per-thread temp
+`_[pq]-*.clj` files into the cwd -- delete them afterwards, they are not artefacts).
 
 ## Re-run (2026-10-22, jar rebuilt at HEAD `5a61be256`)
 
@@ -66,3 +66,20 @@ re-run must report every name at its natural position (functions in both
 positions, non-function values as values): the counted gap is exactly the 2
 documented refusals (`add-classpath`, `Inst`), with `PrintWriter-on` and
 `primitives-classnames` exempt and uncounted.
+
+## Final re-run (2026-10-24, jar rebuilt on `a3de5305a` plus the closing change)
+
+- core: value-ok 675, head-ok 637; counted ok **675 of 677** (2 exempt); `NEITHER
+  (counted)` is exactly `Inst add-classpath`; **head-only 0**. The last five
+  head-only names got value arms in the closing change: `require`, `use`, `in-ns`
+  refuse every application at run time (libraries load and namespaces switch while
+  the program lowers; `require`/`use` of no spec throw the oracle's `Nothing
+  specified to load`), `unquote`/`unquote-splicing` throw the oracle's unbound-var
+  `IllegalStateException` when called. Before it (same day, without the change):
+  value-ok 670, head-only exactly those five.
+- Value-only: the same 38 non-function vars (the dynamic vars, `*1`..`*e`,
+  `default-data-readers`), at their natural position.
+- non-core: 136/136, unchanged (`others-probe.json` byte-identical).
+- g39 (the 30 functions) and g35 (`deliver`/`promise`) closed on 2026-10-22; with
+  this run every `clojure.core` function resolves in both positions and the g15
+  item is closed.

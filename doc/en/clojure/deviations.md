@@ -363,7 +363,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   when the body runs); a `load-string` of a literal declares ahead like a file, so the
   same form may already name what it defines (the oracle's needs a later form). The
   standalone `(refer-clojure ...)` wires the same `(:refer-clojure ...)` filter that
-  way (`:only`, `:exclude`, `:rename`, answering `nil`).
+  way (`:only`, `:exclude`, `:rename`, answering `nil`). As values (`(apply require
+  nses)`), `require`, `use` and `in-ns` refuse every application at run time with an
+  `UnsupportedOperationException`: libraries load and namespaces switch while the program
+  lowers, where the oracle loads and switches (of no spec, `require` and `use` throw its
+  `Nothing specified to load` here too).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`; a bit operation takes an

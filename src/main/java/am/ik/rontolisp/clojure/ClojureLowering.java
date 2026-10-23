@@ -5491,6 +5491,16 @@ public final class ClojureLowering {
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-V"));
 			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
+			case "require" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-REQUIRE-V"));
+			case "use" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-USE-V"));
+			case "in-ns" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-IN-NS-V"));
+			case "unquote" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-UNQUOTE-V"));
+			case "unquote-splicing" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-UNQUOTE-SPLICING-V"));
 			case "derive", "underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy" ->
 				ClojureHierarchyLowering.valueOf(this, name);
 			case "prefer-method" -> ClojureHierarchyLowering.preferMethodValue();

@@ -20,6 +20,8 @@ when the body runs, answering `nil` like any other `require`; there, and inside 
 `when`, a namespace no root holds fails only when the code runs, with the oracle's
 `FileNotFoundException` (`Could not locate a/b__init.class, a/b.clj or a/b.cljc on
 classpath.`), so an optional library's `(try (require 'x) (catch Exception e ...))` works.
+As a value every application refuses at run time, since libraries load while the program
+lowers (of no spec, the oracle's `Nothing specified to load`).
 
 ```clojure
 (require '[clojure.string :as s])

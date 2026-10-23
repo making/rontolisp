@@ -2451,6 +2451,8 @@ cases:
       (println (try ((fn [f] (f :a)) isa?) (catch clojure.lang.ArityException e (.getMessage e))))
       (println (try ((fn [f] (f)) await-for) (catch clojure.lang.ArityException e (.getMessage e))))
       (println (try ((fn [f a] (f a)) aget v39-arr) (catch clojure.lang.ArityException e (.getMessage e))))
+      (println (try ((fn [f] (f 1)) unquote) (catch IllegalStateException e (ex-message e))))
+      (println (try ((fn [f] (f)) unquote-splicing) (catch IllegalStateException e (ex-message e))))
     expected: |
       (true true false)
       true
@@ -2486,6 +2488,8 @@ cases:
       isa? takes a child and a parent, or a hierarchy and both
       Wrong number of args (0) passed to: clojure.core/await-for
       aget takes an array and subscripts
+      Attempting to call unbound fn: #'clojure.core/unquote
+      Attempting to call unbound fn: #'clojure.core/unquote-splicing
   - name: auto-resolved-keywords-use-the-file-ns
     # ::kw resolves against the file's ns name, ::alias/kw against the alias;
     # :a/b stays opaque. The corpus shapes: interest-rate/account-level over :tag,
@@ -4250,12 +4254,27 @@ cases:
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
     # A compiled program carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
+    # require, use and in-ns as values refuse any application the same way:
+    # libraries load and namespaces switch while the program lowers (the oracle
+    # loads clojure.set, prints nil twice and the namespace; of no spec it
+    # throws "Nothing specified to load" wrapped in a CompilerException, and
+    # names clojure.lang.RT/1 in in-ns's arity error).
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
+      (println (try ((fn [f] (f 'clojure.set)) require) (catch UnsupportedOperationException e (ex-message e))))
+      (println (try (apply use '[clojure.set]) (catch UnsupportedOperationException e (ex-message e))))
+      (println (try ((fn [f] (f)) require) (catch Exception e (ex-message e))))
+      (println (try ((fn [f n] (f n)) in-ns 'x.y) (catch UnsupportedOperationException e (ex-message e))))
+      (println (try ((fn [f] (f)) in-ns) (catch clojure.lang.ArityException e (ex-message e))))
     expected: |
       eval is not supported at run time: only a macro body's eval runs, while the program lowers
       resolve of a computed symbol is not supported at run time: vars exist only while the program lowers
+      require of computed specs is not supported at run time: libraries load while the program lowers
+      use of computed specs is not supported at run time: libraries load while the program lowers
+      Nothing specified to load
+      in-ns of a computed name is not supported at run time: namespaces switch while the program lowers
+      Wrong number of args (0) passed to: clojure.core/in-ns
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time

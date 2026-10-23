@@ -16179,6 +16179,44 @@
   (rontolisp::%clojure-check-arity args 2 2 "ns-unalias")
   (rontolisp::%clojure-ns-unalias-here (car args) (car (cdr args))))
 
+(defun rontolisp::%clojure-load-libs-v (name args)
+  "require or use (NAME) as a value: libraries load while the program lowers,
+   so any spec refuses at run time; of none, the oracle's own refusal."
+  (if (null args)
+      (rontolisp::%clojure-exception "Nothing specified to load")
+      (rontolisp::%clojure-unsupported-operation-exception
+       (format nil
+               "~A of computed specs is not supported at run time: libraries load while the program lowers"
+               name))))
+
+(defun rontolisp::%clojure-require-v (&rest args)
+  "require as a value."
+  (rontolisp::%clojure-load-libs-v "require" args))
+
+(defun rontolisp::%clojure-use-v (&rest args)
+  "use as a value."
+  (rontolisp::%clojure-load-libs-v "use" args))
+
+(defun rontolisp::%clojure-in-ns-v (&rest args)
+  "in-ns as a value: refused -- namespaces switch while the program lowers."
+  (rontolisp::%clojure-check-arity args 1 1 "in-ns")
+  (rontolisp::%clojure-unsupported-operation-exception
+   "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
+
+(defun rontolisp::%clojure-unquote-v (&rest args)
+  "unquote as a value: the oracle's var is unbound, so a call refuses as its
+   unbound root does."
+  (declare (ignore args))
+  (rontolisp::%clojure-illegal-state-exception
+   "Attempting to call unbound fn: #'clojure.core/unquote"))
+
+(defun rontolisp::%clojure-unquote-splicing-v (&rest args)
+  "unquote-splicing as a value: the oracle's var is unbound, so a call refuses
+   as its unbound root does."
+  (declare (ignore args))
+  (rontolisp::%clojure-illegal-state-exception
+   "Attempting to call unbound fn: #'clojure.core/unquote-splicing"))
+
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result
 ;; (clojure/ClojureLowering, interact). A file only reads them, as nil.
