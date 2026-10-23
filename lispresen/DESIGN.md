@@ -1378,6 +1378,9 @@ lispresen/
     starter.lisp         the starter deck lispresen new writes (CLI only)
   starter/
     ja.lisp, en.lisp     the starter decks, read in when lispresen is built
+  skills/lispresen/
+    SKILL.md             the agent skill: install, write, render, check (README)
+    references/          its condensed deck format and diagnostics
   web/
     lispresen-web.lisp   browser reactor
     index.html           editor page

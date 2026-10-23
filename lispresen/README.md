@@ -221,6 +221,25 @@ downloaded with a browser is quarantined and killed at start-up;
 `xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that (`wget` and `curl` set no
 quarantine).
 
+## A skill for AI agents
+
+[skills/lispresen](skills/lispresen/SKILL.md) is a skill for Claude Code (and other agents
+that read `SKILL.md`): it installs lispresen where it is missing, starts from `lispresen
+new`, writes and renders the deck, fixes what the diagnostics report and checks the result
+in a browser. To install it for every project:
+
+```bash
+dir=~/.claude/skills/lispresen
+base=https://raw.githubusercontent.com/making/rontolisp/develop/lispresen/skills/lispresen
+mkdir -p $dir/references
+curl -fsSL -o $dir/SKILL.md $base/SKILL.md
+curl -fsSL -o $dir/references/deck-format.md $base/references/deck-format.md
+```
+
+From a checkout, `cp -R lispresen/skills/lispresen ~/.claude/skills/`; for one project
+only, copy it into that project's `.claude/skills/`. Claude Code uses it when asked for
+slides made with lispresen, or on `/lispresen`.
+
 ## Running
 
 From the repository root, with the executable jar built (`./mvnw package`):
