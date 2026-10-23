@@ -9,8 +9,7 @@ instance) need no shim. [`uiop:directory-exists-p`](uiop-directory-exists-p.md)
 is the directory twin.
 
 The pathname answered on success is the truename, as
-[`probe-file`](probe-file.md)'s is: every symbolic link resolved, nothing made
-absolute. A link whose target is missing answers the link itself, as
+[`probe-file`](probe-file.md)'s is: absolute, every symbolic link resolved. A link whose target is missing answers the link itself, as
 `probe-file` does.
 
 ```lisp

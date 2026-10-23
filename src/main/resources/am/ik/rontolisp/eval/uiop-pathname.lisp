@@ -338,8 +338,8 @@
 ;; upstream: an absolute path passes through, a relative one is merged against
 ;; DEFAULTS (a pathname designator, or a function answering one), and a relative
 ;; path with no absolute default is an ERROR. The error arm is deliberately not
-;; taken here: rontolisp absolutizes NOWHERE -- truename carries the argument
-;; namestring, *load-truename* is the path as resolved against the loading file,
+;; taken here: rontolisp absolutizes only truenames (probe-file, truename,
+;; directory) -- *load-truename* is the path as resolved against the loading file,
 ;; and with no chdir a relative namestring denotes the same file for the whole
 ;; run (uiop:get-pathname-defaults answers *default-pathname-defaults*, #P"", for
 ;; exactly that reason). What callers do with the value is use it as the

@@ -3403,23 +3403,6 @@ public final class Environment implements Scope {
 			String value = System.getenv(name.value());
 			return value == null ? LispNil.INSTANCE : new LispString(value);
 		}));
-		// %host-getcwd: the host's working-directory namestring, or nil where the host
-		// has no such notion (both WASM backends: WASI programs have preopened
-		// directories and no current one). uiop:getcwd is Lisp over this and turns the
-		// nil into its not-implemented-error, so the backends share one definition.
-		env.defineFunction(LispNames.HOST_GETCWD, new LispFunction(LispNames.HOST_GETCWD, args -> {
-			requireArgCount(LispNames.HOST_GETCWD, args, 0);
-			String cwd;
-			try {
-				cwd = System.getProperty("user.dir");
-			}
-			catch (RuntimeException ex) {
-				// A host without system properties (the browser playground) has no
-				// working directory to answer, which is the same nil as WASI's.
-				cwd = null;
-			}
-			return cwd == null || cwd.isEmpty() ? LispNil.INSTANCE : new LispString(cwd);
-		}));
 		// %target-machine-type: the ABI the running artifact targets, which is what
 		// machine-type answers (a per-backend CONSTANT, no host is consulted -- see
 		// .kb/time-environment-builtins.md). The interpreter runs on the JVM, so it

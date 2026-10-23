@@ -246,7 +246,8 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと
   JVM）。どのバックエンドにもある URL は `as-url` が作り、その `.toURI` が URI です。
 - `lastModified` は秒単位（1000 の倍数）で答えます。オラクルはミリ秒単位で答えることがあります。
-- WASM では相対の File の `getAbsolutePath` を拒否します（作業ディレクトリがありません）。
+- WASM では、モジュールが作業ディレクトリを持たない場合（`wasmtime run --dir .`）に相対の
+  File の `getAbsolutePath` を拒否します。`--native` 実行ファイルは作業ディレクトリを持ちます。
   `canRead` はファイルが存在するかを答えます。
 - `line-seq` はパスと同じく File、URL、バイトストリームも受け付けます（[line-seq](line-seq.md)）。
   オラクルはリーダーだけを受け付けます。

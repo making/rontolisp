@@ -69,9 +69,11 @@
   (if (and %dfe-path (%delete-file (%path-ns %dfe-path))) t nil))
 
 ;; The defaults relative names resolve against. Upstream absolutizes them
-;; against getcwd; rontolisp absolutizes nowhere (every backend resolves a
-;; relative path against the host's working directory), so the honest answer is
-;; the defaults themselves -- *default-pathname-defaults* unless overridden,
+;; against getcwd; here only the truenames are absolute (probe-file, truename,
+;; directory, truenamize), and a pathname that names a file is kept as spelled
+;; (every backend resolves a relative path against the host's working
+;; directory, and ensure-absolute-pathname's callers key files by it), so the
+;; honest answer is the defaults themselves -- *default-pathname-defaults* unless overridden,
 ;; whose initial #P"" designates exactly the host working directory, keeping
 ;; (merge-pathnames x (uiop:get-pathname-defaults)) = x. This retired the
 ;; Java built-in that predated it and answered the literal "" before the
@@ -84,8 +86,8 @@
 ;;;; Probing: truename*, probe-file*, directory* and safe-file-write-date.
 ;;;; Upstream's per-implementation stat dance collapses here: probe-file is the
 ;;;; one existence probe on every backend (a directory counts as existing and
-;;;; answers in directory form, the answer has its symlinks resolved, nothing is
-;;;; absolutized), truename is
+;;;; answers in directory form, the answer is absolute where the backend has a
+;;;; working directory and has its symlinks resolved), truename is
 ;;;; probe-file plus a signal, and directory is the one listing over
 ;;;; %list-directory (.kb/directory-listing.md). So probe-file* parses, probes,
 ;;;; and answers either the parsed pathname or its truename; truename* is the
@@ -246,10 +248,12 @@
 ;; "Resolve as much of a pathname as possible": %real-path resolves every
 ;; link among the components that exist and keeps the rest as spelled, which
 ;; is the answer upstream's walk up the parent directories reaches. Upstream
-;; absolutizes against get-pathname-defaults first; rontolisp absolutizes
-;; nowhere (see get-pathname-defaults above), so a relative path stays one.
+;; absolutizes first and so does this, as truename does (%absolute-path); where
+;; there is no working directory (both WASM backends) a relative path stays one,
+;; upstream's own answer when it cannot absolutize.
 (defun uiop/filesystem:truenamize (%tnz-pathname)
-  (when %tnz-pathname (pathname (%real-path (%path-ns %tnz-pathname)))))
+  (when %tnz-pathname
+    (pathname (%real-path (%absolute-path (%path-ns %tnz-pathname))))))
 
 (defun uiop/filesystem:resolve-symlinks (%rs-path)
   (uiop/filesystem:truenamize %rs-path))

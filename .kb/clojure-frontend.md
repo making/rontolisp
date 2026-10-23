@@ -3420,8 +3420,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   and an entry past 4 GB (zip64's extra field) not read, `.openStream` of a `jar:` URL a
   `BufferedInputStream` (the oracle's `JarURLConnection$JarURLInputStream`);
   `lastModified` in whole seconds (`file-write-date`'s
-  resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
-  cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
+  resolution, every backend); wasm: `getAbsolutePath` of a relative File refused where
+  `%host-getcwd` is nil (`--dir .`; a `--native` output has a cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
 - Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
   `java-io-files-are-made-renamed-and-deleted`, `extend-takes-a-map-computed-at-run-time`
   (all four backends, oracle-identical but the hash/`class` case); clojure-http-spec

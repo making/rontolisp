@@ -57,7 +57,8 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
   not UTF-8) and `/` as fd 4 (covers every absolute path). The absolute name is what lets
   `../x` leave the current directory: the module joins a climbing relative path onto it and
-  resolves it through `/`. Exit: the
+  resolves it through `/`. It is also the module's working directory (`%host-getcwd`, so
+  `uiop:getcwd` answers and truenames are absolute, `.kb/pathnames.md`). Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
   A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the

@@ -765,25 +765,26 @@ public final class LispPreludeLibrary {
 		// like %pathname-split stay string-typed. The merge rule is the same one
 		// PathnameOps.mergePathnames implements; the two are pinned against each other
 		// by LispPreludeLibraryTest.
-		SOURCES.put(LispNames.MERGE_PATHNAMES, """
-				(defun merge-pathnames (%mp-path &optional %mp-defaults %mp-default-version)
-				  (declare (ignore %mp-default-version))
-				  (let* ((%mp-pp (%path-ns %mp-path))
-				         (%mp-dd (%path-ns %mp-defaults))
-				         (p (if (stringp %mp-pp) %mp-pp ""))
-				         (d (if (stringp %mp-dd) %mp-dd ""))
-				         (ps (position #\\/ p :from-end t))
-				         (ds (position #\\/ d :from-end t))
-				         (pdir (if ps (subseq p 0 (+ ps 1)) ""))
-				         (pfile (if ps (subseq p (+ ps 1)) p))
-				         (ddir (if ds (subseq d 0 (+ ds 1)) ""))
-				         (dfile (if ds (subseq d (+ ds 1)) d))
-				         (dir (cond ((string= pdir "") ddir)
-				                    ((char= (char pdir 0) #\\/) pdir)
-				                    ((string= ddir "") pdir)
-				                    (t (concatenate 'string ddir pdir)))))
-				    (pathname (concatenate 'string dir (if (string= pfile "") dfile pfile)))))
-				""");
+		SOURCES.put(LispNames.MERGE_PATHNAMES,
+				"""
+						(defun merge-pathnames (%mp-path &optional (%mp-defaults *default-pathname-defaults*) %mp-default-version)
+						  (declare (ignore %mp-default-version))
+						  (let* ((%mp-pp (%path-ns %mp-path))
+						         (%mp-dd (%path-ns %mp-defaults))
+						         (p (if (stringp %mp-pp) %mp-pp ""))
+						         (d (if (stringp %mp-dd) %mp-dd ""))
+						         (ps (position #\\/ p :from-end t))
+						         (ds (position #\\/ d :from-end t))
+						         (pdir (if ps (subseq p 0 (+ ps 1)) ""))
+						         (pfile (if ps (subseq p (+ ps 1)) p))
+						         (ddir (if ds (subseq d 0 (+ ds 1)) ""))
+						         (dfile (if ds (subseq d (+ ds 1)) d))
+						         (dir (cond ((string= pdir "") ddir)
+						                    ((char= (char pdir 0) #\\/) pdir)
+						                    ((string= ddir "") pdir)
+						                    (t (concatenate 'string ddir pdir)))))
+						    (pathname (concatenate 'string dir (if (string= pfile "") dfile pfile)))))
+						""");
 		// %path-ns: the LENIENT designator unwrap -- a pathname value's namestring,
 		// anything else unchanged -- so the family below keeps its "a non-string
 		// coerces to the empty namestring" tolerance while accepting pathname values.
@@ -2312,13 +2313,16 @@ public final class LispPreludeLibrary {
 		// a link's target is spliced in front of what is left (relative to the link's
 		// directory, or from the root when it is absolute), and a .. drops the component
 		// before it only once that component is itself resolved, which is what makes
-		// a/../b through a link to c/d mean c/b. A relative path stays relative: the
-		// working directory is the one thing a WASI module cannot name. A component that
+		// a/../b through a link to c/d mean c/b. A relative path stays relative
+		// (%absolute-path is the caller's step before it). A component that
 		// does not exist reads as no link and is kept as spelled (getCanonicalPath's
 		// answer for a missing file); after 40 links the rest is kept as spelled too,
-		// the loop limit a host's own open reports. A trailing slash is kept.
+		// the loop limit a host's own open reports. A trailing slash is kept. With
+		// %rp-lexical no link is read, so a .. drops the component before it as
+		// SPELLED -- directory's reading of its pathspec, as SBCL's in both
+		// :resolve-symlinks modes.
 		SOURCES.put(LispNames.REAL_PATH_INTERNAL, """
-				(defun %real-path (%rp-path)
+				(defun %real-path (%rp-path &optional %rp-lexical)
 				  (flet ((%rp-join (%rp-a %rp-rev)
 				           (let ((%rp-s nil))
 				             (dolist (%rp-p %rp-rev)
@@ -2341,7 +2345,7 @@ public final class LispPreludeLibrary {
 				                        (setq %rp-done (cdr %rp-done)))
 				                       ((not %rp-abs) (setq %rp-done (cons %rp-c %rp-done)))))
 				                (t
-				                 (let ((%rp-to (and (< %rp-links 40)
+				                 (let ((%rp-to (and (not %rp-lexical) (< %rp-links 40)
 				                                    (%read-link (%rp-join %rp-abs (cons %rp-c %rp-done))))))
 				                   (cond ((null %rp-to) (setq %rp-done (cons %rp-c %rp-done)))
 				                         (t (setq %rp-links (+ %rp-links 1))
@@ -2355,6 +2359,24 @@ public final class LispPreludeLibrary {
 				              (%rp-done (concatenate 'string %rp-s "/"))
 				              (%rp-abs %rp-s)
 				              (t "./"))))))
+				""");
+		// %absolute-path: the namestring merged with *default-pathname-defaults* and,
+		// when that is still relative, placed below the working directory -- the
+		// absolute path SBCL's truename family answers, whose defaults start out AS the
+		// working directory. %host-getcwd is nil where there is none (both WASM
+		// backends: a WASI module has preopens and no current directory; an in-memory
+		// interpreter loader), and there the path stays relative, resolved against
+		// whatever the host resolves it against: the answer is still a path the module
+		// can open, which an invented absolute one under a preopen need not be.
+		SOURCES.put(LispNames.ABSOLUTE_PATH_INTERNAL, """
+				(defun %absolute-path (%ap-ns)
+				  (let ((%ap-m (namestring (merge-pathnames %ap-ns))))
+				    (if (and (> (length %ap-m) 0) (char= (char %ap-m 0) #\\/))
+				        %ap-m
+				        (let ((%ap-cwd (%host-getcwd)))
+				          (if %ap-cwd
+				              (concatenate 'string (%dir-namestring %ap-cwd) %ap-m)
+				              %ap-m)))))
 				""");
 		// %probe-truename: probe-file's answer as a namestring, nil when nothing is there
 		// -- the path with its symbolic links resolved (%real-path), its trailing slash
@@ -2381,12 +2403,12 @@ public final class LispPreludeLibrary {
 				                   (%pt-l (concatenate 'string (if (string= %pt-d "./") "" %pt-d) %pt-name)))
 				              (and (%read-link %pt-l) %pt-l)))))))
 				""");
-		// probe-file: the truename as a pathname VALUE (%probe-truename), nil when the
-		// file is not there. Takes both designator spellings, like every path-taking
-		// operator.
+		// probe-file: the truename as a pathname VALUE (%probe-truename of the absolute
+		// path), nil when the file is not there. Takes both designator spellings, like
+		// every path-taking operator.
 		SOURCES.put(LispNames.PROBE_FILE, """
 				(defun probe-file (%pf-path)
-				  (let ((%pf-t (%probe-truename (namestring %pf-path))))
+				  (let ((%pf-t (%probe-truename (%absolute-path (namestring %pf-path)))))
 				    (if %pf-t (pathname %pf-t) nil)))
 				""");
 		// The directory-LISTING family: one Lisp rendering of the pattern, prefix,
@@ -2596,10 +2618,14 @@ public final class LispPreludeLibrary {
 				                 %wd-acc))
 				              (t (%wild-dirs (concatenate 'string %wd-base %wd-c "/") %wd-rest))))))
 				""");
+		// directory: the pathspec made absolute (%absolute-path) and its . and .. taken
+		// out by SPELLING before anything is listed -- SBCL reads lk/../ as the directory
+		// holding lk in both :resolve-symlinks modes, where truename would follow lk --
+		// then split at its last slash into the directory walk and the name match.
 		SOURCES.put(LispNames.DIRECTORY, """
 				(defun directory (%dir-spec &key ((:resolve-symlinks %dir-rs) t))
 				  (let* ((%dir-x (%path-ns %dir-spec))
-				         (%dir-p (if (stringp %dir-x) %dir-x ""))
+				         (%dir-p (%real-path (%absolute-path (if (stringp %dir-x) %dir-x "")) t))
 				         (%dir-s (position #\\/ %dir-p :from-end t))
 				         (%dir-d (if %dir-s (subseq %dir-p 0 (+ %dir-s 1)) ""))
 				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p))

@@ -130,9 +130,33 @@ All prelude Lisp, so the four backends run ONE definition each.
   `runtime-absolute-path-open-probe-and-load` pins the openable answer rather than its
   host-dependent spelling.
 - **`directory` answers truenames, each once** (2026-10-23; `.kb/directory-listing.md`), and
-  `:resolve-symlinks nil` keeps the matched spellings. Remaining lite edges: nothing is made
-  absolute, and with `:resolve-symlinks nil` a `..` in the pathspec stays as spelled (SBCL
-  still takes it out).
+  `:resolve-symlinks nil` keeps the matched spellings; the pathspec's `.`/`..` go by spelling in
+  both modes, as SBCL's.
+- **The truename family is ABSOLUTE, as SBCL's** (2026-10-23): `%absolute-path` merges with
+  `*default-pathname-defaults*` (`merge-pathnames`' default now, CL's) and puts a still-relative
+  path below `%host-getcwd`, before `probe-file` / `truename` / `directory` / `uiop:truenamize`
+  resolve it. SBCL's own defaults ARE the cwd; ours stay `#P""` and the cwd is added after, so a
+  user-bound RELATIVE defaults still ends up absolute (SBCL answers relative there under
+  `:resolve-symlinks nil`, with a warning) -- not copied. `%host-getcwd` per backend: the
+  interpreter's `SourceLoader.workingDirectory()` (`user.dir` for `fileSystem()`, NIL for an
+  in-memory loader, whose paths have nothing to sit below -- `probeFileGoesThroughTheInstalledSourceLoader`),
+  the JVM's `user.dir`, and on both WASM backends `_host_getcwd`: **fd 3's preopen name when it is
+  absolute, else NIL**. fd 3 is what every relative path resolves against, so its absolute name
+  is the one working directory a module can know: the `--native` runner stub names it
+  `current_dir()` (`.kb/native-output.md`), and there all four answers equal SBCL's;
+  `wasmtime run --dir .` names it `.`, and the answers stay relative (the cwd itself `./`). Not
+  done: inventing an absolute path from a preopen that does not name the cwd -- it need not be
+  openable. Not absolutized: `ensure-absolute-pathname` / `get-pathname-defaults` /
+  `probe-file*`'s parsed answer (rove keys files by the path as given, `.kb/uiop.md`) and
+  `file-error-pathname` (the designator as given). ci-spec cases print these answers through
+  `(enough-namestring p (truename ""))`, so one expectation holds where they are absolute and
+  where they are not, and `JvmDeadMethodEliminationCorpusTest`'s two run directories compare
+  equal.
+- **WASM `_probe_file` of a preopen root** (fixed 2026-10-23): `_path_dirfd` writes `.` over the
+  staged path's last byte when the path names a preopened directory itself; the directory form
+  was built from that staging, so `/r/abs54` answered `/r/abs5./`. The probe saves the byte
+  before `path_open` and puts it back
+  (`absoluteRuntimePathResolvesAgainstThePreopenThatCoversIt`).
 
 ## Tests
 `LispReaderTest#readPathname*`; `LispEvaluatorTest#pathname*` plus its wild-pathname,
@@ -143,8 +167,11 @@ pins); `Jvm/WasmLispCompilerTest`'s `pathnameAlgebraOverTheFlatNamestring`,
 `namestringHalvesNstringCaseAndEnvironmentEnquiry` and twins; the truename/link tree
 `truenameResolvesEverySymbolicLinkInThePath` in all three suites (interpreter, JVM, both
 WASM; SBCL-checked directory forms, dangling link, `directory` with and without
-`:resolve-symlinks`); ci-spec `truename-resolves-symbolic-links` (the same over the staged
-`e95-links/`),
+`:resolve-symlinks`, a `..` after the link `de` -> `d/e` read by spelling in `directory` and
+through the link in `truename`, `*default-pathname-defaults*` merged; the interpreter and JVM
+twins also pin `(truename "")` = the real `user.dir`), `relativePathClimbsAboveANamedCurrentDirectory`
+(WASM under the native stub's preopens: `uiop:getcwd` and absolute truenames); ci-spec
+`truename-resolves-symbolic-links` (the same over the staged `e95-links/`),
 `pathname-algebra-over-the-flat-namestring`, `pathname-family-and-broadcast-streams`,
 `lite-builtins-residue`, `probe-file-existing-and-missing`,
 `directory-listing-and-uiop-walkers`,

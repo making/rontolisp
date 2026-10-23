@@ -21,8 +21,8 @@
   プロセス環境を書き換えられるバックエンドはありません（JVM は原理的に不可、WASI
   は読み取り専用）。そのため `(setf (uiop:getenv name) value)` はプログラム単位の
   マップに値を記録し、`uiop:getenv` がそれを先に参照します。
-- **`chdir` はどのバックエンドにもなく**、WASM バックエンドには作業ディレクトリ
-  自体がありません。[作業ディレクトリ](#the-working-directory)を参照してください。
+- **`chdir` はどのバックエンドにもなく**、WASM モジュールが作業ディレクトリを
+  持つのはホストがそれを名指した場合だけです。[作業ディレクトリ](#the-working-directory)を参照してください。
 
 ## ホストの識別
 
@@ -115,9 +115,14 @@ NIL
 | `uiop:chdir` | どのバックエンドでも `uiop:not-implemented-error` をシグナルします |
 
 `uiop:getcwd` は、ホストプロセスが作業ディレクトリを持つインタプリタと JVM で
-値を返します。**WASM バックエンドは両方ともシグナルします**。WASI プログラムには
-preopen されたディレクトリが与えられるだけで「現在の」ディレクトリはなく、答える
-べきものが存在しないからです。
+値を返します。WASI プログラムには preopen されたディレクトリが与えられるだけで
+「現在の」ディレクトリはありません。そのため**両 WASM バックエンドが値を返すのは、
+相対パスの解決に使う最初の preopen ディレクトリにホストが絶対パスの名前を付けた
+場合だけ**で（[`--native`](../../compiling/native.md) 実行ファイルのランナーがそうです）、
+それ以外ではシグナルします（`wasmtime run --dir .` はその名前を `.` とします）。
+[`probe-file`](../functions/probe-file.md)、[`truename`](../functions/truename.md)、
+[`directory`](../functions/directory.md) は、相対パスをこれと同じ作業ディレクトリの
+下に置きます。
 
 `uiop:chdir` は JVM を含むすべてでシグナルします。Java は `user.dir` を起動時に
 一度読むだけでプロセスの作業ディレクトリを移動できず、WASI には `chdir` 自体が

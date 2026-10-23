@@ -11170,10 +11170,12 @@ class WasmLispCompilerIntegrationTest {
 		// (path_open's symlink_follow), which both backends refused until then -- a path
 		// naming a link read as missing. fd_readdir reports dl and up as links, not
 		// directories: the directory forms of the :resolve-symlinks nil listing pin
-		// that the walk asks each link where it leads.
+		// that the walk asks each link where it leads. A WASI module has no working
+		// directory, so a relative truename stays relative (the cwd itself "./").
 		ExecResult staged = wasmtime.execInContainer("bash", "-c",
-				"cd " + workDir() + " && rm -rf tl && mkdir -p tl/d && echo a > tl/a.txt && echo f > tl/d/f.txt"
-						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up && ln -s none tl/dang");
+				"cd " + workDir() + " && rm -rf tl && mkdir -p tl/d/e && echo a > tl/a.txt && echo f > tl/d/f.txt"
+						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up && ln -s none tl/dang"
+						+ " && ln -s d/e tl/de");
 		assertThat(staged.getExitCode()).as(staged.getStderr()).isZero();
 		String code = """
 				(defvar *b* "")
@@ -11183,6 +11185,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (rel (truename (tl "dl/f.txt"))))
 				(print (rel (truename (tl "dl/../a.txt"))))
 				(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
+				(print (rel (truename (tl "de/../f.txt"))))
+				(print (rel (let ((*default-pathname-defaults* (pathname (tl "")))) (truename "in"))))
 				(print (rel (probe-file (tl "in"))))
 				(print (rel (uiop:directory-exists-p (tl "dl"))))
 				(print (with-open-file (s (tl "in")) (read-line s)))
@@ -11193,12 +11197,17 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang")))))
 				(print (mapcar #'rel (directory (tl "*"))))
 				(print (mapcar #'rel (directory (tl "*") :resolve-symlinks nil)))
+				(print (mapcar #'rel (directory (tl "de/../*.txt"))))
+				(print (mapcar #'rel (directory (tl "de/../*.txt") :resolve-symlinks nil)))
 				(print (mapcar #'rel (uiop:subdirectories (tl ""))))
+				(print (truename ""))
 				""";
 		String expected = """
 				"tl/a.txt"
 				"tl/d/f.txt"
 				"tl/a.txt"
+				"tl/a.txt"
+				"tl/d/f.txt"
 				"tl/a.txt"
 				"tl/a.txt"
 				"tl/d/"
@@ -11208,9 +11217,12 @@ class WasmLispCompilerIntegrationTest {
 				"tl/d/"
 				"tl/dang"
 				(NIL "tl/dang")
-				("tl/a.txt" "tl/d/" "tl/dang")
-				("tl/d/" "tl/dl/" "tl/in" "tl/up/")
-				("tl/d/" "tl/dl/" "tl/up/")""";
+				("tl/a.txt" "tl/d/" "tl/d/e/" "tl/dang")
+				("tl/d/" "tl/de/" "tl/dl/" "tl/in" "tl/up/")
+				("tl/a.txt")
+				("tl/a.txt")
+				("tl/d/" "tl/de/" "tl/dl/" "tl/up/")
+				#P"./\"""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
 	}
@@ -11304,7 +11316,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun fsp-ours (paths)
 				  (remove-if-not (lambda (p)
 				                   (let ((n (namestring p)))
-				                     (and (> (length n) 6) (string= (subseq n 0 6) "./fsp-"))))
+				                     (and (> (length n) 4) (string= (subseq n 0 4) "fsp-"))))
 				                 paths))
 				(print (uiop:probe-file* "fsp-a.txt"))
 				(print (uiop:probe-file* "fsp-a.txt" :truename t))
@@ -11337,8 +11349,8 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				#P"fsp-a.txt"
 				NIL
-				(#P"./fsp-a.txt" #P"./fsp-b.txt")
-				(#P"./fsp-a.txt" #P"./fsp-b.txt")
+				(#P"fsp-a.txt" #P"fsp-b.txt")
+				(#P"fsp-a.txt" #P"fsp-b.txt")
 				T
 				#P"fsp-a.txt"
 				(#P"fsp-a.txt" #P"fsp-b.txt")
@@ -12750,7 +12762,9 @@ class WasmLispCompilerIntegrationTest {
 	// is BUILT AT RUN TIME. A LITERAL absolute path proves nothing here -- both compile
 	// paths bundle the file's compile-time contents into the artifact
 	// (CompileTimePathnameFolder, .kb/asdf.md), so nothing is opened and the program
-	// "works" with no --dir at all.
+	// "works" with no --dir at all. (probe-file *root*) names the preopened directory
+	// itself, which the preopen resolution opens as "." written over the path's last
+	// staged byte: its directory form must still spell the path.
 	private static final String ABSOLUTE_PATH_PROGRAM = """
 			(defvar *root* "%s")
 			(print (with-open-file (s (concatenate 'string *root* "/sub/abs.txt")) (read-line s)))
@@ -12767,7 +12781,7 @@ class WasmLispCompilerIntegrationTest {
 				#P"%s/sub/abs.txt"
 				NIL
 				NIL
-				#P"%s"
+				#P"%s/"
 				"relative"
 				""".formatted(root, root).trim();
 	}
@@ -12820,9 +12834,11 @@ class WasmLispCompilerIntegrationTest {
 
 	// Every path is BUILT AT RUN TIME (a literal one is bundled at compile time, see
 	// ABSOLUTE_PATH_PROGRAM). The rename's new name merges to "../made/../made/y.txt":
-	// two climbs in one path.
+	// two climbs in one path. fd 3's absolute name is the working directory, so
+	// uiop:getcwd answers it and the truenames are absolute, as the interpreter's are.
 	private static final String PARENT_DIRECTORY_PROGRAM = """
 			(defvar *root* "%s")
+			(print (namestring (uiop:getcwd)))
 			(defun up (name) (concatenate 'string ".." "/" name))
 			(print (with-open-file (s (up "up.txt")) (read-line s)))
 			(print (probe-file (up "up.txt")))
@@ -12839,10 +12855,11 @@ class WasmLispCompilerIntegrationTest {
 			(print (directory (up "*.txt")))
 			""";
 
-	// What the interpreter prints run from <root>/cwd.
+	// What the interpreter prints run from <root>/cwd: %1$s is <root>, %2$s its truename.
 	private static final String PARENT_DIRECTORY_EXPECTED = """
+			"%1$s/cwd/"
 			"up"
-			#P"../up.txt"
+			#P"%2$s/up.txt"
 			NIL
 			"up"
 			"in-cwd"
@@ -12852,7 +12869,7 @@ class WasmLispCompilerIntegrationTest {
 			"made"
 			T
 			NIL
-			(#P"../up.txt")""";
+			(#P"%2$s/up.txt")""";
 
 	/**
 	 * Runs a program with fd 3 preopened as {@code cwd} under its own absolute name and
@@ -12878,14 +12895,14 @@ class WasmLispCompilerIntegrationTest {
 		// preopen instead -- the case of every --native output.
 		String root = stageParentDirectoryTree();
 		assertThat(compileAndRunInNamedCwd(PARENT_DIRECTORY_PROGRAM.formatted(root), root + "/cwd", false))
-			.isEqualTo(PARENT_DIRECTORY_EXPECTED);
+			.isEqualTo(PARENT_DIRECTORY_EXPECTED.formatted(root, Path.of(root).toRealPath()));
 	}
 
 	@Test
 	void componentRelativePathClimbsAboveANamedCurrentDirectory() throws Exception {
 		String root = stageParentDirectoryTree();
 		assertThat(compileAndRunInNamedCwd(PARENT_DIRECTORY_PROGRAM.formatted(root), root + "/cwd", true))
-			.isEqualTo(PARENT_DIRECTORY_EXPECTED);
+			.isEqualTo(PARENT_DIRECTORY_EXPECTED.formatted(root, Path.of(root).toRealPath()));
 	}
 
 	// One program for both WASM modes: the entries are created by the program itself so

@@ -11987,14 +11987,16 @@ cases:
     # mode: the adapter over wasi:filesystem's create-directory-at / unlink-file-at
     # / rename-at). ensure-directories-exist makes every missing level; delete-file
     # answers nil -- which the Lisp above it raises the file-error from -- when the
-    # file is already gone.
+    # file is already gone. probe-file's truename is absolute where the backend has a
+    # working directory, so it is printed below the run directory's own truename.
     source: |
+      (defun w257-rel (p) (and p (pathname (enough-namestring p (truename "")))))
       (print (ensure-directories-exist "w257/sub/dir/x.txt"))
       (with-open-file (out "w257/sub/dir/x.txt" :direction :output) (write-line "hello" out))
-      (print (probe-file "w257/sub/dir/x.txt"))
+      (print (w257-rel (probe-file "w257/sub/dir/x.txt")))
       (print (rename-file "w257/sub/dir/x.txt" "y.txt"))
       (print (probe-file "w257/sub/dir/x.txt"))
-      (print (probe-file "w257/sub/dir/y.txt"))
+      (print (w257-rel (probe-file "w257/sub/dir/y.txt")))
       (print (delete-file "w257/sub/dir/y.txt"))
       (print (probe-file "w257/sub/dir/y.txt"))
       (print (ignore-errors (delete-file "w257/sub/dir/y.txt")))
@@ -12509,15 +12511,18 @@ cases:
       99
   - name: probe-file-existing-and-missing
     source: |
-      ;; probe-file answers a PATHNAME value carrying the truename (here, with no
-      ;; link in the path, the argument namestring), and takes both designator
-      ;; spellings.
+      ;; probe-file answers a PATHNAME value carrying the truename, and takes both
+      ;; designator spellings. The truename is absolute where the backend has a
+      ;; working directory (SBCL's answer) and relative on both WASM backends, which
+      ;; have none -- so it is printed below the run directory's own truename, which
+      ;; on WASM is "./".
       (with-open-file (out "probe.dat" :direction :output) (write-line "x" out))
-      (print (probe-file "probe.dat"))
-      (print (probe-file #P"probe.dat"))
+      (defun probe-rel (p) (and p (pathname (enough-namestring p (truename "")))))
+      (print (probe-rel (probe-file "probe.dat")))
+      (print (probe-rel (probe-file #P"probe.dat")))
       (print (probe-file "probe-absent.dat"))
       (print (if (uiop:file-exists-p "probe.dat") 'yes 'no))
-      (print (mapcar #'probe-file (list "probe.dat" "probe-absent.dat")))
+      (print (mapcar #'probe-rel (mapcar #'probe-file (list "probe.dat" "probe-absent.dat"))))
     expected: |
       #P"probe.dat"
       #P"probe.dat"
@@ -12527,37 +12532,50 @@ cases:
   - name: truename-resolves-symbolic-links
     # truename resolves every symbolic link in the path over %read-link (both WASM
     # backends through path_readlink, the component adapter's over readlink-at) and
-    # takes . and .. out, a .. after a link from where the link LEADS; a relative
-    # path stays relative. probe-file and uiop:directory-exists-p answer the same
-    # truename (as SBCL's do), and a link in the last component opens through on
-    # every backend. A directory answers in directory form however it is spelled, a
-    # dangling link answers itself, and directory answers each match's truename once;
-    # :resolve-symlinks nil keeps the matched names, a link to a directory in
-    # directory form (WASM's fd_readdir reports it as a link) and the dangling one
-    # dropped -- SBCL 2.6.5's answers. The e95-links/ tree is staged by the driver
-    # (CorpusFixtures.stageSymlinkTree): no backend creates a link.
+    # takes . and .. out, a .. after a link from where the link LEADS. A relative
+    # path is merged with *default-pathname-defaults* and placed below the working
+    # directory where the backend has one (the interpreter and the JVM, as SBCL);
+    # both WASM backends have none and keep it relative, so every answer is printed
+    # below the run directory's own truename ("./" on WASM). probe-file and
+    # uiop:directory-exists-p answer the same truename (as SBCL's do), and a link in
+    # the last component opens through on every backend. A directory answers in
+    # directory form however it is spelled, a dangling link answers itself, and
+    # directory answers each match's truename once; :resolve-symlinks nil keeps the
+    # matched names, a link to a directory in directory form (WASM's fd_readdir
+    # reports it as a link) and the dangling one dropped. directory takes a .. out of
+    # its pathspec by SPELLING in both modes (de/.. is e95-links, where truename
+    # follows de to d/e) -- SBCL 2.6.5's answers. The e95-links/ tree is staged by
+    # the driver (CorpusFixtures.stageSymlinkTree): no backend creates a link.
     source: |
-      (print (namestring (truename "e95-links/in")))
-      (print (namestring (truename "e95-links/dl/f.txt")))
-      (print (namestring (truename "e95-links/dl/../a.txt")))
-      (print (namestring (truename "./e95-links/up/../in")))
-      (print (namestring (truename "e95-links/dl/")))
-      (print (list (probe-file "e95-links/in") (probe-file "e95-links/dl/none")))
-      (print (uiop:directory-exists-p "e95-links/dl"))
+      (defun e95-rel (p) (and p (pathname (enough-namestring p (truename "")))))
+      (print (namestring (e95-rel (truename "e95-links/in"))))
+      (print (namestring (e95-rel (truename "e95-links/dl/f.txt"))))
+      (print (namestring (e95-rel (truename "e95-links/dl/../a.txt"))))
+      (print (namestring (e95-rel (truename "./e95-links/up/../in"))))
+      (print (namestring (e95-rel (truename "e95-links/dl/"))))
+      (print (namestring (e95-rel (truename "e95-links/de/../f.txt"))))
+      (print (e95-rel (let ((*default-pathname-defaults* #P"e95-links/")) (truename "in"))))
+      (print (mapcar #'e95-rel (list (probe-file "e95-links/in") (probe-file "e95-links/dl/none"))))
+      (print (e95-rel (uiop:directory-exists-p "e95-links/dl")))
       (print (with-open-file (s "e95-links/in") (read-line s)))
       (print (handler-case (truename "e95-links/none") (file-error () :missing)))
-      (print (namestring (uiop:resolve-symlinks "e95-links/dl/new.txt")))
-      (print (list (truename "e95-links/dl") (probe-file "e95-links/d") (probe-file "e95-links/a.txt/")))
-      (print (list (probe-file "e95-links/dang") (uiop:file-exists-p "e95-links/dl")))
-      (print (directory "e95-links/*"))
-      (print (directory "e95-links/*" :resolve-symlinks nil))
-      (print (uiop:subdirectories "e95-links/"))
+      (print (namestring (e95-rel (uiop:resolve-symlinks "e95-links/dl/new.txt"))))
+      (print (mapcar #'e95-rel (list (truename "e95-links/dl") (probe-file "e95-links/d")
+                                     (probe-file "e95-links/a.txt/"))))
+      (print (list (e95-rel (probe-file "e95-links/dang")) (uiop:file-exists-p "e95-links/dl")))
+      (print (mapcar #'e95-rel (directory "e95-links/*")))
+      (print (mapcar #'e95-rel (directory "e95-links/*" :resolve-symlinks nil)))
+      (print (mapcar #'e95-rel (directory "e95-links/de/../*.txt")))
+      (print (mapcar #'e95-rel (directory "e95-links/de/../*.txt" :resolve-symlinks nil)))
+      (print (mapcar #'e95-rel (uiop:subdirectories "e95-links/")))
     expected: |
       "e95-links/a.txt"
       "e95-links/d/f.txt"
       "e95-links/a.txt"
       "e95-links/a.txt"
       "e95-links/d/"
+      "e95-links/d/f.txt"
+      #P"e95-links/a.txt"
       (#P"e95-links/a.txt" NIL)
       #P"e95-links/d/"
       "a"
@@ -12565,9 +12583,11 @@ cases:
       "e95-links/d/new.txt"
       (#P"e95-links/d/" #P"e95-links/d/" #P"e95-links/a.txt")
       (#P"e95-links/dang" NIL)
-      (#P"e95-links/a.txt" #P"e95-links/d/" #P"e95-links/dang")
-      (#P"e95-links/d/" #P"e95-links/dl/" #P"e95-links/in" #P"e95-links/up/")
-      (#P"e95-links/d/" #P"e95-links/dl/" #P"e95-links/up/")
+      (#P"e95-links/a.txt" #P"e95-links/d/" #P"e95-links/d/e/" #P"e95-links/dang")
+      (#P"e95-links/d/" #P"e95-links/de/" #P"e95-links/dl/" #P"e95-links/in" #P"e95-links/up/")
+      (#P"e95-links/a.txt")
+      (#P"e95-links/a.txt")
+      (#P"e95-links/d/" #P"e95-links/de/" #P"e95-links/dl/" #P"e95-links/up/")
   - name: runtime-absolute-path-open-probe-and-load
     source: |
       ;; An ABSOLUTE path BUILT AT RUN TIME opens, probes and loads the same on all
@@ -12597,8 +12617,10 @@ cases:
     source: |
       ;; The whole matching family over the one %list-directory primitive: ANSI wild
       ;; components, sorted, subdirectories carrying a trailing "/", every entry a
-      ;; PATHNAME value -- directory's a truename (so "./" is taken out), the uiop
-      ;; walkers' the spelling they listed (upstream's :resolve-symlinks nil). The entries
+      ;; PATHNAME value -- directory's a truename, the uiop walkers' the spelling they
+      ;; listed (upstream's :resolve-symlinks nil); "./" is taken out of both, and
+      ;; both are absolute where the backend has a working directory, so each is
+      ;; printed below the run directory's own truename ("./" on WASM). The entries
       ;; are written by this case so the answer does not depend on what else the run
       ;;       directory holds. The "./*.*" and (uiop:directory-files ".") reads are ONE
       ;; FLAT listing of the run directory, kept deliberately: anchoring their
@@ -12607,16 +12629,18 @@ cases:
       ;; unbounded shape is the RECURSIVE walk -- see wild-pathnames below.
       (with-open-file (out "dls-b.txt" :direction :output) (write-line "b" out))
       (with-open-file (out "dls-a.txt" :direction :output) (write-line "a" out))
+      (defun dls-rel (p) (and p (pathname (enough-namestring p (truename "")))))
       (defun dls-ours (paths)
-        (remove-if-not (lambda (p)
-                         (let ((n (file-namestring p)))
-                           (and (> (length n) 4) (string= (subseq n 0 4) "dls-"))))
-                       paths))
-      (print (directory "./dls-*.txt"))
-      (print (directory #P"./dls-?.txt"))
+        (mapcar #'dls-rel
+                (remove-if-not (lambda (p)
+                                 (let ((n (file-namestring p)))
+                                   (and (> (length n) 4) (string= (subseq n 0 4) "dls-"))))
+                               paths)))
+      (print (dls-ours (directory "./dls-*.txt")))
+      (print (dls-ours (directory #P"./dls-?.txt")))
       (print (dls-ours (directory "./*.*")))
       (print (dls-ours (uiop:directory-files ".")))
-      (print (uiop:directory-exists-p "."))
+      (print (equal (uiop:directory-exists-p ".") (truename "")))
       (print (uiop:directory-exists-p "dls-a.txt"))
       (print (uiop:directory-exists-p "no-such-directory"))
       (print (directory "no-such-directory/*.*"))
@@ -12628,17 +12652,17 @@ cases:
       ;; stays out of this case: only the interpreter and the JVM pin it (LispEvaluatorTest and
       ;; JvmLispCompilerTest).
       (print (uiop:probe-file* "dls-a.txt"))
-      (print (uiop:probe-file* "dls-a.txt" :truename t))
+      (print (dls-rel (uiop:probe-file* "dls-a.txt" :truename t)))
       (print (uiop:probe-file* "dls-missing.txt"))
-      (print (uiop:truename* "dls-a.txt"))
+      (print (dls-rel (uiop:truename* "dls-a.txt")))
       (print (uiop:truename* "dls-missing.txt"))
       (print (dls-ours (uiop:directory* "./*.txt")))
     expected: |
       (#P"dls-a.txt" #P"dls-b.txt")
       (#P"dls-a.txt" #P"dls-b.txt")
       (#P"dls-a.txt" #P"dls-b.txt")
-      (#P"./dls-a.txt" #P"./dls-b.txt")
-      #P"./"
+      (#P"dls-a.txt" #P"dls-b.txt")
+      T
       NIL
       NIL
       NIL
@@ -12648,7 +12672,7 @@ cases:
       NIL
       #P"dls-a.txt"
       NIL
-      (#P"./dls-a.txt" #P"./dls-b.txt")
+      (#P"dls-a.txt" #P"dls-b.txt")
   - name: with-output-to-string-print-family
     source: |
       (print (with-output-to-string (ss-out)
@@ -20553,7 +20577,10 @@ cases:
                    (wild-pathname-p "/a/**/x.lisp" :name) (wild-pathname-p "/a/b.c")))
       (print (namestring (translate-pathname "/a/b/d/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
       (print (namestring (translate-pathname "/a/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
-      (print (directory "./wpc-sub/**/*.txt"))
+      ;; directory's truenames are absolute where the backend has a working
+      ;; directory, so they are printed below the run directory's own truename.
+      (print (mapcar (lambda (p) (pathname (enough-namestring p (truename ""))))
+                     (directory "./wpc-sub/**/*.txt")))
       (print (directory "./no-such-directory/**/*.lisp"))
     expected: |
       "/a/**/*.lisp"

@@ -16,10 +16,11 @@ rontolisp の[パス名](../data-types.md)は 1 つのフラットな名前文�
   `uiop:logical-pathname-p` はすべてに対して `nil`、`uiop:physical-pathname-p` は
   `pathnamep`、`uiop:physicalize-pathname` は型強制つきの恒等関数で、
   `uiop:make-pathname-logical` は `uiop:not-implemented-error` をシグナルします。
-- **どこでも絶対化しません**: `uiop:ensure-absolute-pathname` は、本家がシグナル
-  する場面で相対パスをそれ自身として返します — rontolisp は相対パスを実行中ずっと
-  ホストの作業ディレクトリ基準で解決するので、与えられたパスがすでにファイルの
-  同一性だからです。
+- **絶対パスにするのは真名だけです**: `uiop:ensure-absolute-pathname` は、本家が
+  シグナルする場面で相対パスをそれ自身として返します — rontolisp は相対パスを実行中
+  ずっとホストの作業ディレクトリ基準で解決するので、与えられたパスがすでにファイルの
+  同一性だからです。`probe-file`、`truename`、`directory`、`uiop:truenamize` は
+  SBCL と同じく絶対パスを返します。
 
 ## 組み立てとマージ
 

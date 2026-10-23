@@ -8,7 +8,7 @@
 ディレクトリ版は [`uiop:directory-exists-p`](uiop-directory-exists-p.md) です。
 
 成功時に返るパス名は、[`probe-file`](probe-file.md) と同じく真名 (truename) です。
-シンボリックリンクをすべて解決し、絶対パス化は行いません。指す先が存在しないリンクは、
+絶対パスで、シンボリックリンクをすべて解決します。指す先が存在しないリンクは、
 `probe-file` と同じくリンク自身を返します。
 
 ```lisp

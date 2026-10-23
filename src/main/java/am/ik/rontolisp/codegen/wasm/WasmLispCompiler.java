@@ -2281,6 +2281,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// that makes no table.
 	static final int FUNC_HT_BASE = FUNC_READ_LINK + 1;
 
+	// _host_getcwd () -> (ref null eq): the working directory, fd 3's preopen name when
+	// the host spells it absolute, else nil (WasmIoRuntimeBuilder.buildHostGetcwdBody,
+	// over the fixed fd_prestat_get / fd_prestat_dir_name imports). Reuses _argv's
+	// () -> (ref null eq) signature (TYPE_READ_LINE); appended after the last fixed
+	// helper so no index above shifts. A nil stub unless a WASI program names
+	// %host-getcwd.
+	static final int FUNC_HOST_GETCWD = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2311,7 +2319,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
+	static final int FUNC_VEC_BASE = FUNC_HOST_GETCWD + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2332,12 +2340,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
-	// (_rand_big), the path stat (_file_write_date), the link read (_read_link) and the
-	// hash-table runtime (_ht_*) -- plus, under --simd, the vec: SIMD block, and the
-	// conditional helpers (the _arity_* / _undefined_function / _unbound_variable /
-	// _lit_stage / _funcref chain and the complex block). Use
-	// userFuncBase(), which adds those offsets.
-	static final int FUNC_USER_BASE = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
+	// (_rand_big), the path stat (_file_write_date), the link read (_read_link), the
+	// hash-table runtime (_ht_*) and the working directory (_host_getcwd) -- plus,
+	// under --simd, the vec: SIMD block, and the conditional helpers (the _arity_* /
+	// _undefined_function / _unbound_variable / _lit_stage / _funcref chain and the
+	// complex block). Use userFuncBase(), which adds those offsets.
+	static final int FUNC_USER_BASE = FUNC_HOST_GETCWD + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3804,6 +3812,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// way: path_readlink, the adapter's over wasi:filesystem's readlink-at under
 		// --component. A --no-wasi module has no links, so %read-link answers nil there.
 		boolean hostReadLink = !this.noWasi && programUsesSymbol(program, LispNames.READ_LINK_INTERNAL);
+		// %host-getcwd reads fd 3's preopen name over the two fixed prestat imports; a
+		// --no-wasi module has no preopens (they are trap stubs there), so it answers
+		// nil.
+		boolean hostGetcwd = !this.noWasi && programUsesSymbol(program, LispNames.HOST_GETCWD);
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
 		// _open body -- gated on the surface fact so every other module keeps its bytes.
@@ -8031,6 +8043,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
 					fnDef.addFunction(WasmHashTableRuntimeBuilder.typeIndexOf(i));
 				}
+				fnDef.addFunction(TYPE_READ_LINE); // _host_getcwd () -> value
+													// (FUNC_HOST_GETCWD)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -9104,6 +9118,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
 					code.addFunction(WasmHashTableRuntimeBuilder.build(i, tableFlags));
 				}
+				// the working directory (FUNC_HOST_GETCWD): fd 3's absolute preopen name,
+				// or a nil stub where nothing names %host-getcwd.
+				code.addFunction(
+						hostGetcwd ? WasmIoRuntimeBuilder.buildHostGetcwdBody() : WasmEmitHelper.buildNilBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

@@ -59,11 +59,19 @@ each name BARE with a trailing `/` when itself a directory.
 ## `directory` IS ANSI's `directory`
 - `"d/*"` is a wild NAME with NO type (matches `sub` and `README`, not `a.txt`); `"d/*.*"` matches
   everything (`%pathname-typed-p`). A non-wild pathspec designates ITSELF (`%probe-truename`).
+- **The pathspec is made absolute, then its `.` and `..` are taken out by SPELLING, before any
+  listing** (2026-10-23): `(%real-path (%absolute-path spec) t)`, the walk with no link read. SBCL
+  2.6.5 does the same in BOTH `:resolve-symlinks` modes -- `lk/../*.*` lists the directory holding
+  `lk`, where `truename` of `lk/../x` follows `lk` first -- so the old `..`-as-spelled answer under
+  nil and the link-following one under t were both wrong. A `..` after a wild component drops it
+  too (`*/../a.txt` is `a.txt`, SBCL's answer when a subdirectory exists); SBCL's NIL for
+  `**/../a.txt` and for `/../tmp/` is not copied.
 - **The answers are TRUENAMES, deduplicated after the sort** (2026-10-23, SBCL's
   `:resolve-symlinks t`): an entry is MATCHED by its listed name, then the directory is
   resolved once (`%real-path`) and each entry asked `%read-link` -- a non-link is the resolved
   directory plus its name, a link goes through `%probe-truename` (a dangling one answers
-  itself). So `./x` answers `x`, and a link and its target come back once. One `%read-link`
+  itself). So `./x` answers `<cwd>/x` (`x` where there is no working directory), and a link and
+  its target come back once. One `%read-link`
   per entry is the cost (SBCL pays a realpath per entry). `:resolve-symlinks nil` keeps the
   matched spelling, a link asked `%probe-file` for its form, a dangling one DROPPED (SBCL
   2.6.5 drops it there and keeps it under `t`). The uiop walkers (`directory-files`,

@@ -71,7 +71,7 @@ does, so `uiop:*resolve-symlinks*` defaults to `t` as upstream's does:
 | Function | What it answers |
 |----------|-----------------|
 | `uiop:*resolve-symlinks*` | `t` |
-| `uiop:resolve-symlinks` / `uiop:truenamize` | the pathname with every symbolic link among the parts that exist resolved, the rest kept as spelled (a relative path stays relative) |
+| `uiop:resolve-symlinks` / `uiop:truenamize` | the pathname made absolute as [`truename`](../functions/truename.md) makes it, with every symbolic link among the parts that exist resolved and the rest kept as spelled |
 | `uiop:resolve-symlinks*` | `resolve-symlinks` when the flag is true, the argument untouched when it is not |
 | `uiop:lisp-implementation-directory` | `nil` — there is no install directory to name: no `compile-file`, no fasl cache |
 | `uiop:lisp-implementation-pathname-p` | `nil` — nothing is under a directory that does not exist |

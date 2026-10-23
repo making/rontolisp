@@ -335,7 +335,8 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   rule). A link counts when its target does. The kind comes from the stat each backend has:
   `isDirectory` (JVM `_probeFile`, `SourceLoader.isDirectory`), `fd_filestat_get` on the
   descriptor the WASM probe already opened (filetype 3), the directory form built from the
-  staged path bytes with `/"` written over the closing quote. Interpreter goes through the installed **`SourceLoader.exists`**,
+  staged path bytes with `/"` written over the closing quote (the last path byte saved across
+  `path_open`, which writes `.` over it for a preopen root). Interpreter goes through the installed **`SourceLoader.exists`**,
   never `Files` directly, so the playground's in-memory loader answers (`fileSystem()` OVERRIDES with
   `Files.exists` — a read is wrong for a file that exists but is not decodable text). JVM
   `_probeFile` + `JvmProbeFileCompiler`; WASM `_probe_file` (`FUNC_PROBE_FILE` after `FUNC_T_SYM` as

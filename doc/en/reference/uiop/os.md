@@ -23,8 +23,8 @@ gap:
   backend can rewrite its own process environment (the JVM cannot at all, WASI's
   is read-only), so `(setf (uiop:getenv name) value)` records the value in a
   per-program map that `uiop:getenv` consults first.
-- **There is no `chdir` anywhere**, and no working directory on the WASM
-  backends. See [The working directory](#the-working-directory).
+- **There is no `chdir` anywhere**, and a WASM module has a working directory
+  only where the host names it. See [The working directory](#the-working-directory).
 
 ## Host identity
 
@@ -117,8 +117,13 @@ backends.
 | `uiop:chdir` | signals `uiop:not-implemented-error` on every backend |
 
 `uiop:getcwd` answers on the interpreter and the JVM, where the host process has
-a working directory. **Both WASM backends signal**: a WASI program is given
-preopened directories and no current one, so there is nothing to answer.
+a working directory. A WASI program is given preopened directories and no current
+one, so **both WASM backends answer only where the host names the first preopened
+directory -- the one every relative path resolves against -- by an absolute path**,
+as the runner of a [`--native`](../../compiling/native.md) executable does, and
+signal otherwise (`wasmtime run --dir .` names it `.`). The same answer is what
+[`probe-file`](../functions/probe-file.md), [`truename`](../functions/truename.md)
+and [`directory`](../functions/directory.md) place a relative path below.
 
 `uiop:chdir` signals everywhere, including the JVM. Java reads `user.dir` once
 at startup and cannot move the process working directory, and WASI has no

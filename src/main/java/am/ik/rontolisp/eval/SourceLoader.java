@@ -184,6 +184,19 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * The directory a relative path names a file below -- what {@code %host-getcwd}
+	 * answers on the interpreter, over which {@code probe-file}, {@code truename} and
+	 * {@code directory} make their answers absolute. Like {@link #exists} it must never
+	 * throw; {@code null} means there is none, which is also the default: a loader that
+	 * is not a filesystem (the browser playground's in-memory map) resolves a relative
+	 * path against nothing, as a WASI program does.
+	 * @return the working directory's absolute namestring, or {@code null}
+	 */
+	@Nullable default String workingDirectory() {
+		return null;
+	}
+
+	/**
 	 * The entry names of a zip archive (a jar), in the archive's own order, a directory
 	 * entry's ending with {@code /} -- what a Clojure dependency on a jar contributes is
 	 * read from the archive in place, never extracted ({@link #loadArchiveEntry}). Like
@@ -374,6 +387,18 @@ public interface SourceLoader {
 				}
 				catch (RuntimeException ex) {
 					return path;
+				}
+			}
+
+			@Override
+			@Nullable public String workingDirectory() {
+				try {
+					String cwd = System.getProperty("user.dir");
+					return cwd == null || cwd.isEmpty() ? null : cwd;
+				}
+				catch (RuntimeException ex) {
+					// A host without system properties has no working directory.
+					return null;
 				}
 			}
 

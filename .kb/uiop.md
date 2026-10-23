@@ -141,8 +141,10 @@ an UNSET, which is why the reader answers the whole ENTRY, not its cdr. Writer =
 `(defun (setf uiop/os:getenv) ...)`; a program whose FIRST touch is the write needs
 `LispEvaluator.ensureUiopSetfPlaceLoaded`. `hostname` -> nil (trigger: a `machine-instance`
 built-in). `getcwd` real where the host has a working directory, signals where it does not
-(`%host-getcwd` answers `user.dir` / NIL, and ONE shared Lisp definition turns that nil into the
-error — the divergence is a VALUE, not a second code path); `chdir` signals everywhere;
+(`%host-getcwd` answers the interpreter's `SourceLoader.workingDirectory()` -- `user.dir` for the
+filesystem loader, NIL for an in-memory one -- the JVM's `user.dir`, and on WASM fd 3's preopen
+name when it is absolute (`_host_getcwd`, `.kb/pathnames.md`), and ONE shared Lisp definition
+turns a nil into the error — the divergence is a VALUE, not a second code path); `chdir` signals everywhere;
 The four members of the shortcut family are all real (`.todo/916`): the two parsers seek a
 binary file stream with `file-position`, real on all four backends now
 (`.kb/read-load-streams.md`), so `parse-windows-shortcut` / `parse-file-location-info` run
@@ -226,7 +228,8 @@ directory on all four since 2026-10-09: `%delete-file` falls back to the injecte
 branch -- there is no backend that spawns one); an explicit `:validate nil` fails the
 first check rather than the second, both the same `parameter-error`. **Symlinks resolve
 on all four** (2026-10-09): `truenamize` (and `resolve-symlinks` over it) is
-`%real-path`, the walk behind `truename` (`.kb/pathnames.md`), whose "missing parts kept
+`%real-path` over `%absolute-path` (absolute where `truename` is, 2026-10-23), the walk
+behind `truename` (`.kb/pathnames.md`), whose "missing parts kept
 as spelled" is the answer upstream's walk up the parents reaches, so `*resolve-symlinks*`
 defaults to t as upstream's does. `probe-file* :truename t` answers `truename`;
 `file-exists-p` and `directory-exists-p` answer resolved spellings, as upstream's do over
@@ -237,7 +240,7 @@ directory form: `file-exists-p` of a directory is nil (no compile-path fold onto
 to name) and `lisp-implementation-pathname-p` follows it. **`with-current-directory`
 inherits `chdir`'s decision and invents no second one**: `call-with-current-directory`
 binds `*default-pathname-defaults*` and `chdir`s (running `chdir` BEFORE `getcwd` so the
-signal names `CHDIR` on all four -- `getcwd` has no WASM answer), a nil dir just runs
+signal names `CHDIR` on all four -- `getcwd` has no answer under `wasmtime run --dir .`), a nil dir just runs
 the thunk; the macro is a `LispMacroExpander` expansion over it (every uiop macro is),
 with the `MACRO_EXPANSION_CALLEES` row its expansion needs.
 

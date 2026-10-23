@@ -2060,6 +2060,19 @@ public final class LispEvaluator {
 					String target = this.sourceLoader.readLink(path.value());
 					return target == null ? LispNil.INSTANCE : new LispString(target);
 				}));
+		// %host-getcwd: the working-directory namestring the SourceLoader resolves a
+		// relative path against (user.dir for the filesystem loader), nil where it has
+		// none -- an in-memory loader, as WASI programs have preopened directories and no
+		// current one. uiop:getcwd turns the nil into its not-implemented-error, and the
+		// truename family keeps a relative answer relative over it.
+		this.globalEnv.defineFunction(LispNames.HOST_GETCWD, new LispFunction(LispNames.HOST_GETCWD, args -> {
+			if (!args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.HOST_GETCWD + " expects no arguments, got " + args.size());
+			}
+			String cwd = this.sourceLoader.workingDirectory();
+			return cwd == null ? LispNil.INSTANCE : new LispString(cwd);
+		}));
 		// file-write-date: the same SourceLoader mediation as %probe-file, for the same
 		// reason -- a host without a filesystem has no modification times and answers the
 		// nil Common Lisp already prescribes for "cannot be determined".

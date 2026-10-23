@@ -785,6 +785,120 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * Builds the _host_getcwd() function body: the working directory as a string, or
+	 * {@code ref.null eq} (nil) when the module cannot know one. Every relative path
+	 * resolves against fd 3, so fd 3's preopen name IS the working directory when the
+	 * host spells it absolute -- the {@code --native} runner stub names it after the
+	 * current directory -- and says nothing when it is relative ({@code wasmtime run
+	 * --dir .} names it {@code "."}). A trailing slash is dropped (the root stays
+	 * {@code "/"}), and a name over {@value #PRESTAT_NAME_MAX} bytes answers nil, the
+	 * preopen walk's own limit. The scratch is advanced over before
+	 * {@code fd_prestat_get} (under {@code --component} its first call allocates at
+	 * HEAP_PTR) and popped after: the prestat record, 8-aligned as the host checks it,
+	 * the name at {@code scr + 8}, its opening quote written over the record's last byte
+	 * and its closing quote after it, read back by {@code _str_fresh}.
+	 * @return the function body bytes
+	 */
+	static byte[] buildHostGetcwdBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// no params ; i32 locals: OLD=0, SCR=1, NLEN=2 ; ref local: STR=3
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int OLD = 0, SCR = 1, NLEN = 2, STR = 3;
+		// old = HEAP_PTR ; scr = align8(old) ; HEAP_PTR = align8(scr +
+		// PRESTAT_SCRATCH_BYTES + 1), the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES + 1);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 1 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.BLOCK, 0x40); // $none: str stays nil
+		// fd_prestat_get(3, scr) == 0, else no preopen at all
+		i32(w, 3);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// nlen = the record's name length, 1..PRESTAT_NAME_MAX
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// fd_prestat_dir_name(3, scr + 8, nlen) == 0
+		i32(w, 3);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative name says nothing about where the program runs
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, '/');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitStripTrailingSlashes(w, SCR, NLEN);
+		// mem8[scr + 7] = '"' ; mem8[scr + 8 + nlen] = '"' ; str = _str_fresh(scr + 7,
+		// nlen + 2)
+		getLocal(w, SCR);
+		i32(w, '"');
+		w.write(Instruction.I32_STORE8, 0x00, 0x07);
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, '"');
+		w.write(Instruction.I32_STORE8, 0x00, 0x08);
+		getLocal(w, SCR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		w.write(Instruction.END); // $none
+		// pop the scratch and answer
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds the _probe_file(path) function body: the path when it names an existing
 	 * file, the path in directory form (one trailing {@code /} added) when it names a
 	 * directory, {@code ref.null eq} (nil) otherwise. Same staging and {@code path_open}
@@ -799,20 +913,23 @@ final class WasmIoRuntimeBuilder {
 	 * <p>
 	 * The staged path keeps a spare byte after its closing quote and the 64-byte
 	 * {@code filestat} sits 8-aligned after that, so the directory form is the staged
-	 * bytes with {@code /"} written over the quote, read back by {@code _str_fresh}.
+	 * bytes with {@code /"} written over the quote, read back by {@code _str_fresh}. The
+	 * preopen resolution writes {@code "."} over the path's last staged byte when the
+	 * path names a preopened directory itself, so that byte is saved before the
+	 * {@code path_open} and put back after it.
 	 * @return the function body bytes
 	 */
 	static byte[] buildProbeFileBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, FS=3, ERR=4, TYPE=5 ; ref
-		// local: STR=6
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, FS=3, ERR=4, TYPE=5, LAST=6 ;
+		// ref local: STR=7
 		w.write(2);
-		w.write(5);
+		w.write(6);
 		w.write(Type.I32);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
-		final int PATH = 0, OFF = 1, PLEN = 2, FS = 3, ERR = 4, TYPE = 5, STR = 6;
+		final int PATH = 0, OFF = 1, PLEN = 2, FS = 3, ERR = 4, TYPE = 5, LAST = 6, STR = 7;
 
 		// Stage the path bytes into linear scratch exactly as _open does (see there for
 		// why HEAP_PTR is advanced over the staging for the duration of the call).
@@ -845,6 +962,13 @@ final class WasmIoRuntimeBuilder {
 		i32(w, FILESTAT_BYTES);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// last = memory[off + plen], the path's last byte, which the preopen resolution
+		// may overwrite with "."
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, LAST);
 		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath, oflags=0,
 		// fs_rights_base=FD_READ=2, fs_rights_inheriting=0, fdflags=0,
 		// fd_out=OPEN_FD_ADDR)
@@ -859,6 +983,12 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
 		setLocal(w, ERR);
+		// memory[off + plen] = last: the staging spells the path again
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LAST);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		// if errno != 0: pop the staging, return nil
 		getLocal(w, ERR);
 		w.write(Instruction.IF, 0x40);

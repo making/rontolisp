@@ -4723,12 +4723,13 @@ public final class LispNames {
 
 	/**
 	 * The {@code probe-file} built-in function: the truename as a PATHNAME value when the
-	 * file exists, {@code nil} otherwise -- every symbolic link resolved and every
-	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), a directory in
-	 * directory form whatever the spelling, nothing made absolute, as SBCL resolves them.
-	 * Prelude Lisp over {@link #PROBE_TRUENAME_INTERNAL}; takes both designator
-	 * spellings. {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load}
-	 * existence guards ask the primitive directly: they need no truename.
+	 * file exists, {@code nil} otherwise -- made absolute
+	 * ({@link #ABSOLUTE_PATH_INTERNAL}), every symbolic link resolved and every {@code .}
+	 * / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), a directory in directory form
+	 * whatever the spelling, as SBCL resolves them. Prelude Lisp over
+	 * {@link #PROBE_TRUENAME_INTERNAL}; takes both designator spellings.
+	 * {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load} existence
+	 * guards ask the primitive directly: they need no truename.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
 
@@ -4767,12 +4768,24 @@ public final class LispNames {
 	/**
 	 * The {@code %real-path} internal prelude function: a namestring with every symbolic
 	 * link among its components resolved (over {@link #READ_LINK_INTERNAL}) and every
-	 * {@code .} and {@code ..} taken out. A relative path stays relative to the working
-	 * directory (no backend needs to know it), an absolute one absolute; a component that
-	 * does not exist is kept as spelled. One Lisp definition on all four backends, behind
-	 * {@link #PROBE_FILE}, {@link #TRUENAME} and the Clojure front end's canonical paths.
+	 * {@code .} and {@code ..} taken out -- or, given a true second argument, the
+	 * {@code .} and {@code ..} alone, by spelling, no link read. A relative path stays
+	 * relative, an absolute one absolute; a component that does not exist is kept as
+	 * spelled. One Lisp definition on all four backends, behind {@link #PROBE_FILE},
+	 * {@link #TRUENAME}, {@link #DIRECTORY} and the Clojure front end's canonical paths.
 	 */
 	public static final String REAL_PATH_INTERNAL = "%REAL-PATH";
+
+	/**
+	 * The {@code %absolute-path} internal prelude function: a namestring merged with
+	 * {@code *default-pathname-defaults*} and, when still relative, placed below the
+	 * working directory ({@link #HOST_GETCWD}) -- what {@link #PROBE_FILE},
+	 * {@link #TRUENAME} and {@link #DIRECTORY} answer below, as SBCL's do. Where there is
+	 * no working directory (both WASM backends, an in-memory interpreter loader) a
+	 * relative path stays relative to whatever the host resolves it against: on WASM the
+	 * preopens.
+	 */
+	public static final String ABSOLUTE_PATH_INTERNAL = "%ABSOLUTE-PATH";
 
 	/**
 	 * The {@code pathname} built-in function: the identity on a pathname value, a fresh
@@ -10829,10 +10842,13 @@ public final class LispNames {
 	/**
 	 * The {@code %host-getcwd} internal primitive behind {@code uiop:getcwd}: the host's
 	 * working-directory namestring, or nil when the host has no such notion. The JVM's
-	 * {@code user.dir} on the interpreter and the JVM; nil on both WASM backends, which
-	 * have preopened directories and no current one at all -- {@code uiop:getcwd} turns
-	 * that nil into the {@code not-implemented-error} its one shared Lisp definition
-	 * signals, so the divergence is a value, not a second code path.
+	 * {@code user.dir} on the JVM, the {@code SourceLoader}'s working directory on the
+	 * interpreter (that same {@code user.dir} for the filesystem loader, nil for an
+	 * in-memory one); nil on both WASM backends, which have preopened directories and no
+	 * current one at all -- {@link #ABSOLUTE_PATH_INTERNAL} reads it, and
+	 * {@code uiop:getcwd} turns that nil into the {@code not-implemented-error} its one
+	 * shared Lisp definition signals, so the divergence is a value, not a second code
+	 * path.
 	 */
 	public static final String HOST_GETCWD = "%HOST-GETCWD";
 

@@ -19,10 +19,11 @@ consequences worth knowing:
   `uiop:physical-pathname-p` is `pathnamep`, `uiop:physicalize-pathname` is the
   coercing identity, and `uiop:make-pathname-logical` signals
   `uiop:not-implemented-error`.
-- **Nothing is absolutized**: `uiop:ensure-absolute-pathname` answers a relative
-  path as itself where upstream signals — rontolisp resolves relative paths
-  against the host working directory for the whole run, so the path as given is
-  already the file's identity.
+- **Only truenames are absolute**: `uiop:ensure-absolute-pathname` answers a
+  relative path as itself where upstream signals — rontolisp resolves relative
+  paths against the host working directory for the whole run, so the path as given
+  is already the file's identity. `probe-file`, `truename`, `directory` and
+  `uiop:truenamize` answer absolute paths, as on SBCL.
 
 ## Building and merging
 

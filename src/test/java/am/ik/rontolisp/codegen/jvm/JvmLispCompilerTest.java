@@ -5512,14 +5512,20 @@ class JvmLispCompilerTest {
 		// (LispEvaluatorTest#truenameResolvesEverySymbolicLinkInThePath), over the
 		// emitted _readLink.
 		java.nio.file.Path base = tempDir.toRealPath().resolve("tlj");
-		java.nio.file.Files.createDirectories(base.resolve("tl/d"));
+		java.nio.file.Files.createDirectories(base.resolve("tl/d/e"));
 		java.nio.file.Files.writeString(base.resolve("tl/a.txt"), "a\n");
 		java.nio.file.Files.writeString(base.resolve("tl/d/f.txt"), "f\n");
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/in"), java.nio.file.Path.of("a.txt"));
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dl"), java.nio.file.Path.of("d"));
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/up"), java.nio.file.Path.of("../tl/d"));
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dang"), java.nio.file.Path.of("none"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/de"), java.nio.file.Path.of("d/e"));
 		assertThat(compileAndRun(TRUENAME_THROUGH_LINKS.formatted(base + "/"))).isEqualTo(TRUENAME_THROUGH_LINKS_OUT);
+		// A relative truename is placed below the working directory (user.dir).
+		assertThat(compileAndRun("(print (list (truename \"\") (probe-file \"pom.xml\")"
+				+ " (directory \"pom.xml\" :resolve-symlinks nil)))"))
+			.isEqualTo("(#P\"%1$s/\" #P\"%1$s/pom.xml\" (#P\"%2$s/pom.xml\"))"
+				.formatted(java.nio.file.Path.of("").toRealPath(), java.nio.file.Path.of("").toAbsolutePath()));
 	}
 
 	private static final String TRUENAME_THROUGH_LINKS = """
@@ -5530,6 +5536,8 @@ class JvmLispCompilerTest {
 			(print (rel (truename (tl "dl/f.txt"))))
 			(print (rel (truename (tl "dl/../a.txt"))))
 			(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
+			(print (rel (truename (tl "de/../f.txt"))))
+			(print (rel (let ((*default-pathname-defaults* (pathname (tl "")))) (truename "in"))))
 			(print (rel (probe-file (tl "in"))))
 			(print (rel (uiop:directory-exists-p (tl "dl"))))
 			(print (with-open-file (s (tl "in")) (read-line s)))
@@ -5540,6 +5548,8 @@ class JvmLispCompilerTest {
 			(print (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang")))))
 			(print (mapcar #'rel (directory (tl "*"))))
 			(print (mapcar #'rel (directory (tl "*") :resolve-symlinks nil)))
+			(print (mapcar #'rel (directory (tl "de/../*.txt"))))
+			(print (mapcar #'rel (directory (tl "de/../*.txt") :resolve-symlinks nil)))
 			(print (mapcar #'rel (uiop:subdirectories (tl ""))))
 			""";
 
@@ -5547,6 +5557,8 @@ class JvmLispCompilerTest {
 			"tl/a.txt"
 			"tl/d/f.txt"
 			"tl/a.txt"
+			"tl/a.txt"
+			"tl/d/f.txt"
 			"tl/a.txt"
 			"tl/a.txt"
 			"tl/d/"
@@ -5556,9 +5568,11 @@ class JvmLispCompilerTest {
 			"tl/d/"
 			"tl/dang"
 			(NIL "tl/dang")
-			("tl/a.txt" "tl/d/" "tl/dang")
-			("tl/d/" "tl/dl/" "tl/in" "tl/up/")
-			("tl/d/" "tl/dl/" "tl/up/")""";
+			("tl/a.txt" "tl/d/" "tl/d/e/" "tl/dang")
+			("tl/d/" "tl/de/" "tl/dl/" "tl/in" "tl/up/")
+			("tl/a.txt")
+			("tl/a.txt")
+			("tl/d/" "tl/de/" "tl/dl/" "tl/up/")""";
 
 	@Test
 	void compileAndRunUiopFilesystemProbeWalkAndMutate() throws Exception {

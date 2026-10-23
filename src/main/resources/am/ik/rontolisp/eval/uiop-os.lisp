@@ -28,9 +28,12 @@
 ;;;;   (user.dir is read at startup and does not follow the OS cwd), and a WASI
 ;;;;   program has preopened directories and no current one -- so chdir would
 ;;;;   have to lie on every backend. getcwd answers %host-getcwd where there is
-;;;;   one (the JVM's user.dir on the interpreter and the JVM) and signals
-;;;;   where the primitive answers nil (both WASM backends), which keeps the
-;;;;   divergence in a VALUE rather than in a second code path.
+;;;;   one (the JVM's user.dir on the interpreter and the JVM; on WASM the
+;;;;   absolute name of fd 3, the preopen every relative path resolves against,
+;;;;   which a --native executable's runner gives it) and signals where the
+;;;;   primitive answers nil (an in-memory interpreter loader, WASM under
+;;;;   `--dir .`), which keeps the divergence in a VALUE rather than in a second
+;;;;   code path.
 
 ;;; Feature expressions. Upstream's definition, including the &optional feature
 ;;; set (which lets a caller test a set other than the running one) and its
@@ -130,7 +133,7 @@
     (if %cwd
         (uiop/pathname:ensure-directory-pathname %cwd)
         (uiop/utility:not-implemented-error "UIOP/OS:GETCWD"
-                                            "this backend has no working directory (a WASI program has preopened directories and no current one)"))))
+                                            "this program has no working directory (a WASI program has preopened directories and no current one, unless the host names the first by an absolute path)"))))
 
 (defun uiop/os:chdir (%cd-x)
   (declare (ignore %cd-x))

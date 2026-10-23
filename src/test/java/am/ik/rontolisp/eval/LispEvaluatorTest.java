@@ -25995,22 +25995,27 @@ class LispEvaluatorTest {
 		// (JvmLispCompilerTest / WasmLispCompilerIntegrationTest
 		// #truenameResolvesEverySymbolicLinkInThePath): a link to a file, a link to a
 		// directory, a .. after a link (taken from where the link LEADS), a link reached
-		// from a .. walk; probe-file and uiop:directory-exists-p answer the same
+		// from a .. walk, a relative name merged with *default-pathname-defaults*;
+		// probe-file and uiop:directory-exists-p answer the same
 		// truename, a link opens through, and uiop:resolve-symlinks keeps a missing last
 		// part as spelled. A link to a directory answers in directory form (so
 		// uiop:file-exists-p says nil), a dangling link answers itself; directory
 		// matches each link by its name and answers each truename once, and
 		// :resolve-symlinks nil (uiop's walkers) keeps the names -- a link to a
-		// directory in directory form, the dangling one dropped. Every answer after the
-		// uiop:resolve-symlinks one is SBCL 2.6.5's on this tree.
+		// directory in directory form, the dangling one dropped. directory takes a ..
+		// out of its pathspec by SPELLING in both modes (de/.. is tl, where truename
+		// follows de to d/e). Every answer after the uiop:resolve-symlinks one is SBCL
+		// 2.6.5's on this tree. A relative truename is placed below the working
+		// directory, as SBCL's is.
 		Path base = tempDir.toRealPath();
-		Files.createDirectories(base.resolve("tl/d"));
+		Files.createDirectories(base.resolve("tl/d/e"));
 		Files.writeString(base.resolve("tl/a.txt"), "a\n");
 		Files.writeString(base.resolve("tl/d/f.txt"), "f\n");
 		Files.createSymbolicLink(base.resolve("tl/in"), Path.of("a.txt"));
 		Files.createSymbolicLink(base.resolve("tl/dl"), Path.of("d"));
 		Files.createSymbolicLink(base.resolve("tl/up"), Path.of("../tl/d"));
 		Files.createSymbolicLink(base.resolve("tl/dang"), Path.of("none"));
+		Files.createSymbolicLink(base.resolve("tl/de"), Path.of("d/e"));
 		assertThat(evalMulti("""
 				(defvar *b* "%s/")
 				(defun tl (x) (concatenate 'string *b* "tl/" x))
@@ -26019,6 +26024,8 @@ class LispEvaluatorTest {
 				      (rel (truename (tl "dl/f.txt")))
 				      (rel (truename (tl "dl/../a.txt")))
 				      (rel (truename (concatenate 'string *b* "./tl/up/../in")))
+				      (rel (truename (tl "de/../f.txt")))
+				      (rel (let ((*default-pathname-defaults* (pathname (tl "")))) (truename "in")))
 				      (rel (probe-file (tl "in")))
 				      (rel (uiop:directory-exists-p (tl "dl")))
 				      (with-open-file (s (tl "in")) (read-line s))
@@ -26029,11 +26036,19 @@ class LispEvaluatorTest {
 				      (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang"))))
 				      (mapcar #'rel (directory (tl "*")))
 				      (mapcar #'rel (directory (tl "*") :resolve-symlinks nil))
+				      (mapcar #'rel (directory (tl "de/../*.txt")))
+				      (mapcar #'rel (directory (tl "de/../*.txt") :resolve-symlinks nil))
 				      (mapcar #'rel (uiop:subdirectories (tl ""))))
 				""".formatted(base)).print())
-			.isEqualTo("(\"tl/a.txt\" \"tl/d/f.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/d/\" \"a\" :MISSING"
-					+ " \"tl/d/new.txt\" \"tl/d/\" \"tl/dang\" (NIL \"tl/dang\") (\"tl/a.txt\" \"tl/d/\" \"tl/dang\")"
-					+ " (\"tl/d/\" \"tl/dl/\" \"tl/in\" \"tl/up/\") (\"tl/d/\" \"tl/dl/\" \"tl/up/\"))");
+			.isEqualTo("(\"tl/a.txt\" \"tl/d/f.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/d/f.txt\" \"tl/a.txt\" \"tl/a.txt\""
+					+ " \"tl/d/\" \"a\" :MISSING \"tl/d/new.txt\" \"tl/d/\" \"tl/dang\" (NIL \"tl/dang\")"
+					+ " (\"tl/a.txt\" \"tl/d/\" \"tl/d/e/\" \"tl/dang\") (\"tl/d/\" \"tl/de/\" \"tl/dl/\" \"tl/in\" \"tl/up/\")"
+					+ " (\"tl/a.txt\") (\"tl/a.txt\") (\"tl/d/\" \"tl/de/\" \"tl/dl/\" \"tl/up/\"))");
+		assertThat(evalMulti(
+				"(list (truename \"\") (probe-file \"pom.xml\") (directory \"pom.xml\" :resolve-symlinks nil))")
+			.print())
+			.isEqualTo("(#P\"%1$s/\" #P\"%1$s/pom.xml\" (#P\"%2$s/pom.xml\"))".formatted(Path.of("").toRealPath(),
+					Path.of("").toAbsolutePath()));
 	}
 
 	@Test
@@ -26082,17 +26097,19 @@ class LispEvaluatorTest {
 				""").print())
 			.isEqualTo("(#P\"/tmp\" (#P\"/tmp\" #P\"/var\") #P\"/tmp/\" (#P\"/tmp/\" #P\"/var/\") NIL)");
 		// Symlinks resolve (truename's walk), so the flag defaults to t as upstream's
-		// does; a path naming no link comes back as spelled, the flag off answers the
-		// argument itself, and there is no install directory to name.
+		// does; a path naming no link comes back as spelled, made absolute as a
+		// truename is, the flag off answers the argument itself, and there is no
+		// install directory to name.
 		assertThat(evalMulti("""
 				(list uiop:*resolve-symlinks*
 				      (uiop:resolve-symlinks "/a/b")
 				      (let ((uiop:*resolve-symlinks* nil)) (uiop:resolve-symlinks* "x"))
-				      (uiop:resolve-symlinks* "x")
+				      (list (pathname-name (uiop:resolve-symlinks* "x"))
+				            (first (pathname-directory (uiop:resolve-symlinks* "x"))))
 				      (uiop:truenamize nil)
 				      (uiop:lisp-implementation-directory)
 				      (uiop:lisp-implementation-pathname-p "/x"))
-				""").print()).isEqualTo("(T #P\"/a/b\" \"x\" #P\"x\" NIL NIL NIL)");
+				""").print()).isEqualTo("(T #P\"/a/b\" \"x\" (\"x\" :ABSOLUTE) NIL NIL NIL)");
 		// The write side, real on this backend: make, rename over, delete the tree.
 		assertThat(evalMulti("""
 				(let ((base "%s/fs-"))

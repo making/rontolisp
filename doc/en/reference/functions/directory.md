@@ -15,36 +15,41 @@ openable and a directory carries a trailing `/`:
 (directory "no-such-directory/*.*")   ; => NIL
 ```
 
-Given a directory holding `a.txt`, `b.txt` and the subdirectories `sub/` and
-`empty/`:
+A truename is absolute: a relative pathspec is merged with
+`*default-pathname-defaults*` and placed below the working directory, as SBCL's is.
+Run from `/w`, given a directory `d` holding `a.txt`, `b.txt` and the
+subdirectories `sub/` and `empty/`:
 
 | pathspec | answer |
 |---|---|
-| `"d/*.*"` | `(#P"d/a.txt" #P"d/b.txt" #P"d/empty/" #P"d/sub/")` — everything |
-| `"d/*.txt"` | `(#P"d/a.txt" #P"d/b.txt")` |
-| `"d/?.txt"` | `(#P"d/a.txt" #P"d/b.txt")` |
-| `"d/*"` | `(#P"d/empty/" #P"d/sub/")` — a wild name with NO type, so only untyped entries |
+| `"d/*.*"` | `(#P"/w/d/a.txt" #P"/w/d/b.txt" #P"/w/d/empty/" #P"/w/d/sub/")` — everything |
+| `"d/*.txt"` | `(#P"/w/d/a.txt" #P"/w/d/b.txt")` |
+| `"d/?.txt"` | `(#P"/w/d/a.txt" #P"/w/d/b.txt")` |
+| `"d/*"` | `(#P"/w/d/empty/" #P"/w/d/sub/")` — a wild name with NO type, so only untyped entries |
 | `"d/a*"` | `NIL` — same rule: `a.txt` has a type |
 
 A **non-wild pathspec designates itself**, as in Common Lisp: `"d/a.txt"` answers
-`(#P"d/a.txt")` when the file exists, and a directory answers itself in directory
-form -- both `"d"` and `"d/"` give `(#P"d/")`. **Listing a directory is
+`(#P"/w/d/a.txt")` when the file exists, and a directory answers itself in directory
+form -- both `"d"` and `"d/"` give `(#P"/w/d/")`. **Listing a directory is
 `"d/*.*"`, not `"d/"`.**
 
 A **symbolic link** is matched by its own name and answered by its truename, so two
 names for one file come back once; a link whose target is missing answers itself.
 `:resolve-symlinks nil` keeps the matched names instead: a link to a directory still
-carries the trailing `/`, and a link whose target is missing is left out. Given a
-directory `t/` holding the directory `d/` (with `a.txt` in it), `ln` a link to `d`,
-`al` a link to `d/a.txt` and `dang` a link to nothing:
+carries the trailing `/`, and a link whose target is missing is left out. Run from
+`/w`, given a directory `t/` holding the directory `d/` (with `a.txt` in it), `ln` a
+link to `d`, `al` a link to `d/a.txt` and `dang` a link to nothing:
 
 | call | answer |
 |---|---|
-| `(directory "t/*")` | `(#P"t/d/" #P"t/d/a.txt" #P"t/dang")` |
-| `(directory "t/*" :resolve-symlinks nil)` | `(#P"t/al" #P"t/d/" #P"t/ln/")` |
+| `(directory "t/*")` | `(#P"/w/t/d/" #P"/w/t/d/a.txt" #P"/w/t/dang")` |
+| `(directory "t/*" :resolve-symlinks nil)` | `(#P"/w/t/al" #P"/w/t/d/" #P"/w/t/ln/")` |
 
-A truename takes out `.` and `..`, so `(directory "./*.txt")` answers `#P"a.txt"`,
-not `#P"./a.txt"`; nothing is made absolute.
+The **`.` and `..` of the pathspec are taken out by spelling** before anything is
+listed, in both modes, as SBCL does: `(directory "./*.txt")` answers
+`#P"/w/a.txt"`, and `(directory "t/ln/../*")` lists `t/`, the directory holding the
+name `ln`, wherever `ln` leads. [`truename`](truename.md) reads a `..` after a link
+from where the link leads instead.
 
 A **wild directory component** expands the prefix before the name is matched.
 `*` walks exactly one level and `**` walks the whole subtree -- and, as in Common
@@ -57,8 +62,7 @@ come back too:
 | `"d/**/*.lisp"` | every `.lisp` file in `d/` and anywhere below it |
 | `"d/**/"` | `d/` itself and every directory below it |
 
-Every expectation above is the same answer SBCL gives for the same tree, except that
-SBCL makes each answer absolute.
+Every expectation above is the same answer SBCL gives for the same tree.
 
 ## Backend support
 
@@ -69,7 +73,10 @@ answers `nil` rather than failing), `java.io.File.list` on the JVM, and WASI
 `--component` an adapter over `wasi:filesystem`'s `read-directory`. A WASM module
 resolves the path against its preopened directories -- a relative path against the
 first one, an absolute path against the preopened directory whose name is its
-longest prefix -- so run it with `--dir`; without one nothing matches.
+longest prefix -- so run it with `--dir`; without one nothing matches. The answers
+are absolute only where the module knows its working directory, as for
+[`probe-file`](probe-file.md): under `wasmtime run --dir .` the table's answers lose
+their `/w/` prefix.
 
 The `.` and `..` self/parent entries are never returned on any backend. On WASM a
 link is resolved only where the module can read it through a preopened directory, as

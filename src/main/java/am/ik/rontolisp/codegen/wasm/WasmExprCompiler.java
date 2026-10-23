@@ -1419,12 +1419,22 @@ final class WasmExprCompiler {
 	 */
 	private static boolean compileOperator2(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
-			// %host-getcwd: nil on both WASM backends. A WASI program has preopened
-			// directories and no CURRENT one -- there is no cwd to answer and no
-			// chdir to move it -- and uiop:getcwd's one shared Lisp definition turns
-			// that nil into its not-implemented-error, so the divergence is a value
-			// rather than a second code path.
-			case LispNames.HOST_GETCWD -> compileExpansion(LispNil.INSTANCE, ctx, tail);
+			// %host-getcwd: _host_getcwd, fd 3's preopen name when the host spells it
+			// absolute (the --native runner stub names it after the current
+			// directory), nil otherwise. A WASI program has preopened directories and
+			// no CURRENT one; fd 3 is what every relative path resolves against, so an
+			// absolute name for it is the one working directory the module can know.
+			// Where it is nil, uiop:getcwd's one shared Lisp definition turns it into
+			// its not-implemented-error, so the divergence is a value rather than a
+			// second code path.
+			case LispNames.HOST_GETCWD -> {
+				if (cons.toList().size() != 1) {
+					throw new UnsupportedOperationException(
+							LispNames.HOST_GETCWD + " expects no arguments, got " + (cons.toList().size() - 1));
+				}
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HOST_GETCWD);
+			}
 			// %target-machine-type: the ABI this artifact targets, the one thing the
 			// environment-enquiry family (machine-type, a prelude defun over it)
 			// answers differently per backend. Both WASM backends emit wasm32

@@ -245,7 +245,8 @@ replaced.
   JVM); `as-url` makes the URL every backend has, and `.toURI` of it the URI.
 - `lastModified` answers whole seconds (a multiple of 1000), where the oracle may answer
   milliseconds.
-- On WASM `getAbsolutePath` of a relative File is refused (no working directory). `canRead`
+- On WASM `getAbsolutePath` of a relative File is refused where the module has no working
+  directory (`wasmtime run --dir .`); a `--native` executable has one. `canRead`
   answers whether the file exists.
 - `line-seq` also takes a File, a URL and a byte stream, as it takes a path
   ([line-seq](line-seq.md)), where the oracle takes only a reader.

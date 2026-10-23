@@ -65,7 +65,7 @@ NIL
 | 関数 | 答え |
 |----------|--------|
 | `uiop:*resolve-symlinks*` | `t` |
-| `uiop:resolve-symlinks` / `uiop:truenamize` | 存在する部分にあるシンボリックリンクをすべて解決し、残りは綴りのまま残したパス名 (相対パスは相対パスのまま) |
+| `uiop:resolve-symlinks` / `uiop:truenamize` | [`truename`](../functions/truename.md) と同じく絶対パスにし、存在する部分にあるシンボリックリンクをすべて解決し、残りは綴りのまま残したパス名 |
 | `uiop:resolve-symlinks*` | フラグが真なら `resolve-symlinks`、そうでなければ引数をそのまま |
 | `uiop:lisp-implementation-directory` | `nil` — 名付けるべきインストールディレクトリが存在しない。`compile-file` も fasl キャッシュもない |
 | `uiop:lisp-implementation-pathname-p` | `nil` — 存在しないディレクトリの下にあるものはない |

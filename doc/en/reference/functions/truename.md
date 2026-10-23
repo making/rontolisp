@@ -7,11 +7,14 @@ The signal is the point: `(ignore-errors (truename path))` is the Common Lisp
 idiom for "this path if it is there, `nil` otherwise", and libraries use it to
 probe for an optional file or directory.
 
-The value on success is the path with every symbolic link in it resolved and
-every `.` and `..` taken out, a `..` after a link counting from where the link
-leads: with `d` a link to `x/y`, `(truename "d/../f.txt")` is `#P"x/f.txt"`.
-Nothing is made absolute -- a relative path answers a path relative to the working
-directory, which a WASM module cannot name. A directory answers in directory form
+The value on success is the absolute path with every symbolic link in it resolved
+and every `.` and `..` taken out, a `..` after a link counting from where the link
+leads. A relative path is merged with `*default-pathname-defaults*` and placed below
+the working directory first, as SBCL's is: run from `/w`, with `d` a link to `x/y`,
+`(truename "d/../f.txt")` is `#P"/w/x/f.txt"`. Where the program has no working
+directory -- a WASM module whose host names its first preopened directory by a
+relative path, as `wasmtime run --dir .` does -- the answer stays relative,
+`#P"x/f.txt"` ([`probe-file`](probe-file.md) has the details). A directory answers in directory form
 (with its trailing `/`) whatever the spelling, and a link whose target is missing
 answers the link itself, as SBCL's does. When you
 want an existence answer without the condition, use [`probe-file`](probe-file.md),

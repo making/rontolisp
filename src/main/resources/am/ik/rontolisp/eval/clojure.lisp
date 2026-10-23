@@ -27973,7 +27973,8 @@
 
 (defun rontolisp::%clojure-io-absolute-path (f)
   "The File F's absolute path: its own when absolute, else below the working
-   directory, which neither wasm backend has."
+   directory, which a wasm module has only where the host names fd 3 by an
+   absolute path (%host-getcwd)."
   (if (rontolisp::%clojure-io-absolute-p f)
       (rontolisp::%clojure-io-path f)
       (let ((cwd (%host-getcwd)))
