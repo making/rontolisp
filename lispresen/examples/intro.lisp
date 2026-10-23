@@ -210,6 +210,26 @@
       (cells '(slide :title "t" (p "x")))))
   (column (cells '((a . 1) (b . 2)))))
 
+(slide :title "棒グラフ" :kicker "書き方"
+  (p "値は整数か、文字列で書いた小数。単位は書いたとおりに付く。")
+  (sexp "
+    (lead \"コンパイルした CLI の大きさ\")
+    (say \"JVM なしで動く\" :at \"ネイティブ\"
+      (bars :unit \" KB\" (\"JVM (jar)\" 297) (\"WASM\" 788)
+            (\"WASM component\" 796) (\"ネイティブ\" \"6,700\")))
+    (source \"2026-10-22, macOS arm64 で測定\")"))
+
+;; A bar chart: a value is an integer or a decimal written as a string, the unit written
+;; after it; the callout names a bar by its label. The source stands at the bottom.
+(slide :title "棒グラフ" :kicker "表示例"
+  (lead "コンパイルした CLI の大きさ")
+  (say "JVM なしで動く" :at "ネイティブ"
+    (bars :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("WASM component" 796)
+          ("ネイティブ" "6,700")))
+  (source "2026-10-22, macOS arm64 で測定 ("
+          (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
+                "DESIGN.md") ")"))
+
 (slide :title "画像" :kicker "書き方"
   (p "画像は残りの場所に収まる。" (tt "--embed") " で HTML に埋め込む。")
   (sexp "
@@ -485,26 +505,6 @@
     ("ネイティブ" "実行ファイル" (tt "./lispresen"))
     ("SBCL" "なし" (tt "sbcl --script cli.lisp"))
     ("ブラウザ" (cell :colspan 2 (tt "web/") " のエディタが入力のたびに描き直す"))))
-
-(slide :title "棒グラフ" :kicker "書き方"
-  (p "値は整数か、文字列で書いた小数。単位は書いたとおりに付く。")
-  (sexp "
-    (lead \"コンパイルした CLI の大きさ\")
-    (say \"JVM なしで動く\" :at \"ネイティブ\"
-      (bars :unit \" KB\" (\"JVM (jar)\" 297) (\"WASM\" 788)
-            (\"WASM component\" 796) (\"ネイティブ\" \"6,700\")))
-    (source \"2026-10-22, macOS arm64 で測定\")"))
-
-;; A bar chart: a value is an integer or a decimal written as a string, the unit written
-;; after it; the callout names a bar by its label. The source stands at the bottom.
-(slide :title "棒グラフ" :kicker "表示例"
-  (lead "コンパイルした CLI の大きさ")
-  (say "JVM なしで動く" :at "ネイティブ"
-    (bars :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("WASM component" 796)
-          ("ネイティブ" "6,700")))
-  (source "2026-10-22, macOS arm64 で測定 ("
-          (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
-                "DESIGN.md") ")"))
 
 (slide :title "コマンドライン"
   (code "
