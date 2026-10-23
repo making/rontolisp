@@ -295,6 +295,16 @@
     ((tt "cffi") "C ライブラリの呼び出し (JVM)")
     ((cell (tt "objc") "、" (tt "appkit")) "macOS の GUI")))
 
+(slide :title "Web アプリを一つのソースで各環境へ"
+  (p "Clack のアプリケーションを、ソースを変えずにビルドだけで各環境に合わせる。")
+  (table :header ("ビルド" "動かす場所")
+    ((tt "rontolisp app.lisp") "インタプリタ")
+    ((tt "-o app.jar") "JVM、Google App Engine")
+    ((tt "-o app.war") "Servlet コンテナ")
+    ((tt "-o app.wasm --component") (cell (tt "wasmtime serve") " など"))
+    ((tt "-o worker.wasm --no-wasi") "Cloudflare Workers"))
+  (source "examples/net/httpbin-clack.lisp、examples/cloudflare-workers/、examples/gae/"))
+
 (slide :title "行列演算を SIMD、BLAS、GPU で速くする"
   (p (tt "linalg") " と " (tt "vec") " の行列演算を、フラグでハードウェアに振り向ける。")
   (table :header ("フラグ" "計算する場所")
