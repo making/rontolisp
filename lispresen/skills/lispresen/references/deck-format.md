@@ -42,6 +42,7 @@ keyword starts the content.
 | `:theme` | `:light` (default), `:dark`, `:high-contrast`, `:midnight`, or `(theme ...)` below |
 | `:aspect` | `:16x9` (default) or `:4x3` |
 | `:agenda t` / `:agenda "Title"` | agenda slide listing the sections; each section divider shows it with that section highlighted |
+| `:footer "text"` | one line at the left of the bottom band on every slide but the title slide (a hashtag, a handle, a label); `(slide :footer nil)` drops it |
 | `:kicker :section` | each titled slide shows its section title above its title |
 | `:progress t` | thin progress bar along the bottom edge |
 | `:page-numbers t` | page numbers |
@@ -54,7 +55,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 
 ## Slides: (slide ...)
 
-`(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)`
+`(slide [:title "t"] [:kicker "k"] [:footer nil] [:layout name] [:class "c"] [:morph t] block...)`
 
 - The layout comes from the slide's shape: no title and one short paragraph is a
   statement (large, centered); title plus one image, code, table or quote gets that

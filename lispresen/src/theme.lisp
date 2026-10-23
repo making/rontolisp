@@ -50,7 +50,7 @@ pre{border-radius:2px;box-shadow:inset 0 0 0 1px var(--rule)}
 .out,.codebox textarea,.say{border-radius:2px}
 thead th{background:none;color:var(--accent);box-shadow:inset 0 -1px var(--accent)}
 .quote{border-left-width:3px;padding-left:calc(var(--indent) - 3px)}
-.page{color:var(--accent)}
+.page,.footer{color:var(--accent)}
 ")
 
 (defparameter *theme-styles*

@@ -65,6 +65,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :page-url "https://example.com/talk.html"   ; where this HTML is published
       :page-image "talk.png"                      ; the title slide, drawn as a PNG
       :page-image-font ("r.ttf" "b.ttf")          ; the TrueType fonts it is drawn in
+      :footer "#talk @me"      ; one line at the left of the bottom band, on every slide
       :progress t              ; a bar along the bottom edge, as long as the slide's place
       :page-numbers t)
 
@@ -106,7 +107,7 @@ Elements:
 
 | Kind | Forms |
 |------|-------|
-| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`, `:morph`), `define` (below) |
+| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
 | Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
@@ -181,6 +182,15 @@ Rules:
   so a link in it is a link; like a title or a caption it takes no callout. A second
   source on a slide is an error, a source longer than 2 lines a warning. It is a label
   like the page number, outside the body type scale.
+- `(deck :footer inline...)` sets one line on every slide but the title slide, at the left
+  of the bottom band at the page number's size and color: a hashtag, a handle, a
+  confidentiality label. The value is a string, an inline form or a list of inlines
+  (`("#talk " (link "https://e.org" "@me"))`; a link takes the footer's color). It is
+  a label like the page number, outside the body type scale, and takes no room from the
+  body. Its width is the content width less the widest page number and a 48 px gap; one
+  longer than a line is cut with an ellipsis and reported once. `(slide :footer nil)`
+  drops it from a slide. A source stays above the band. It is part of the slide, so print
+  and the overview show it.
 - `(deck :progress t)` draws a 6 px bar in the accent color along the bottom edge of the
   canvas, as wide as the current slide's place in the deck (slide 3 of 20: 15%). The
   player sets its width on every move, so it is no slide's element: the overview and the
@@ -975,7 +985,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 | Severity | Condition |
 |----------|-----------|
 | error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1060,6 +1070,8 @@ One file containing:
   them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
   dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
+- A footer as `<p class="footer">` after the source, placed by the stylesheet at the left
+  of the bottom band.
 - A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
   of the safe area; with `:progress`, a `<div id="progress">` after the slides in the
   canvas.

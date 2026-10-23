@@ -39,6 +39,7 @@ read with it, and under EMBED every local image is inlined as a data: URI."
           (when embed (embed-images slide))
           (fit-slide deck slide)
           (lint-slide deck slide)))
+      (let ((*line* (deck-line deck))) (lint-footer deck))
       (when (and page-image (drawn-page-image-p deck) (deck-page-image-font deck))
         (let* ((*line* (deck-line deck))
                (octets (draw-page-image deck theme logo-src)))

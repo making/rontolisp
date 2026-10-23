@@ -68,7 +68,9 @@ th{font-weight:700}
 .qr{position:absolute;display:flex;flex-direction:column;gap:QR-GAP;font-size:QR-SIZE;line-height:QR-LH;white-space:nowrap}
 .qr.right{align-items:flex-end}
 .qr a{color:var(--muted)}
-.page{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
+.page,.footer{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
+.footer{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.footer a{color:inherit}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
 .slide.measure{display:block;visibility:hidden}
@@ -217,6 +219,7 @@ html:not(.js) #fs{display:none}
     (format out ".centered{height:~dpx}~%" (safe-height))
     (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
             *margin-x* content)
+    (format out ".footer{left:~dpx;width:~dpx}~%" *margin-x* (footer-width deck))
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
             "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
@@ -704,6 +707,10 @@ corner the fit solver chose."
     (when (slide-source-run slide)
       (write-string "<p class=\"source\">" out)
       (write-inlines (slide-source slide) (slide-source-run slide) out)
+      (format out "</p>~%"))
+    (when (footer-shown-p deck slide)
+      (write-string "<p class=\"footer\">" out)
+      (write-inlines (deck-footer deck) (deck-footer-run deck) out)
       (format out "</p>~%"))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
