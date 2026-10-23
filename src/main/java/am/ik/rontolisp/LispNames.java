@@ -6608,10 +6608,20 @@ public final class LispNames {
 	 * (the server certificate is validated against the JDK default trust store and the
 	 * hostname is verified), and returns a bidirectional stream handle usable with
 	 * {@code read-line}, {@code write-line}, {@code read-byte}, {@code write-byte} and
-	 * {@code close}. Interpreter and JVM backends only; the WASM backend has no TLS host
-	 * support.
+	 * {@code close}. On the WASM component it is {@code tcp-connect} plus
+	 * {@code tls-upgrade} over {@code wasi:tls}.
 	 */
 	public static final String TLS_CONNECT = "TLS-CONNECT";
+
+	/**
+	 * The read deadline, in milliseconds, under which the interpreter's and the JVM
+	 * backend's {@code tls-connect} run the handshake on the socket they open: a peer
+	 * that accepts and never answers TLS fails the call instead of hanging it. The caller
+	 * has no handle to set a deadline on before the handshake, so the operator sets one;
+	 * the connection it answers carries none ({@code tcp-set-timeout} sets one). Not a
+	 * name, but the one number both backends must share.
+	 */
+	public static final int TLS_CONNECT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 	/**
 	 * The {@code tls-listen} function provided by the {@code rontolisp} package. Binds a

@@ -18,6 +18,13 @@ is the failure mode a client sets it to avoid), but it costs two real things:
 - **`usocket:wait-for-input` cannot be honest there** -- it returns
   immediately claiming readiness because component `listen` sees only the
   chunk buffer and a poll would spin forever on data waiting host-side.
+- **`tls-connect`'s handshake has no deadline there** -- the interpreter/JVM
+  run it under a 10 s read deadline
+  (`LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS`) so a peer that accepts and
+  never answers TLS fails the call; on the component the `connector.connect`
+  await blocks forever. With the race, `tls.lisp`'s `%tls-upgrade-f` races
+  that await against the timer (the socket's deadline for `tls-upgrade`, the
+  10 s default for `tls-connect`) and answers nil on expiry.
 
 ## The essential fix
 
@@ -44,5 +51,5 @@ combinator.
 
 When this lands, retire the signalling arm in `sockets.lisp`'s
 `tcp-set-timeout`, the wasm claim branch in `usocket:wait-for-input`
-(usocket.lisp), and the corresponding notes in `.kb/tcp-sockets.md` and the
-doc pages -- the divergences carry this todo as their re-evaluation trigger.
+(usocket.lisp), the "no deadline" notes of `rontolisp-tls-connect.md`, and
+the corresponding notes in `.kb/tcp-sockets.md` and the doc pages -- the divergences carry this todo as their re-evaluation trigger.

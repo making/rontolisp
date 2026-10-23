@@ -50,7 +50,10 @@ HTTPS リクエストには [`rontolisp:fetch`](rontolisp-fetch.md) を使って
   (`SSLSocketFactory.createSocket(socket, host, port, true)`)を使います。
   ハンドシェイクの失敗(信頼されていない証明書、ホスト名の不一致、TLS を話さない
   相手)はエラーを通知します。文字列でない `host` はその演算子の `type-error` を
-  通知します。
+  通知します。ハンドシェイクはソケットの読み取り期限
+  ([`rontolisp:tcp-set-timeout`](rontolisp-tcp-set-timeout.md))まで待ちます。
+  期限がなければ、応答しない相手に対して呼び出しが返りません。期限は
+  アップグレード後の接続にもそのまま適用されます。
 - **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
   `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグに
   `-S tls=y` を追加します。このバックエンドではアップグレードこそが*自然な*

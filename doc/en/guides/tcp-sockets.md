@@ -419,8 +419,9 @@ connecting and returns the same kind of stream handle, so `read-line`,
 certificate is validated against the JDK default trust store and the hostname
 is verified; point the `javax.net.ssl.trustStore` system properties at your
 own trust store to accept self-signed certificates, or pass `:insecure t` to
-skip verification entirely (development only). See the reference page for
-details and an HTTPS-by-hand example:
+skip verification entirely (development only). On the interpreter and the
+JVM a handshake that does not finish within 10 seconds signals an error. See
+the reference page for details and an HTTPS-by-hand example:
 
 ```console
 (let ((sock (rontolisp:tls-connect "example.com" 443)))

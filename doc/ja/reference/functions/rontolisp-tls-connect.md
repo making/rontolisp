@@ -48,7 +48,15 @@
   `host` にはホスト名または IP リテラルを指定できます。接続やハンドシェイクの
   失敗(ポート拒否、信頼されていない証明書、ホスト名の不一致)はエラーを通知
   します。文字列でない `host` や `(INTEGER 0 65535)` の範囲外の `port` は、接続の前に
-  その演算子の `type-error` を通知します。
+  その演算子の `type-error` を通知します。ハンドシェイクは **10 秒以内**に
+  完了しなければなりません。接続を受け付けたまま TLS に応答しない相手に対しては、
+  呼び出しが止まり続けるのではなくエラー(`... Read timed out`)を通知し、
+  接続を閉じます。返されるハンドルには読み取り期限がありません。期限は
+  [`rontolisp:tcp-set-timeout`](rontolisp-tcp-set-timeout.md) で設定します。
+  ハンドシェイクの上限を変えるには、
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) で接続し、`tcp-set-timeout`
+  で期限を設定してから [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md) を
+  呼びます。そのハンドシェイクはソケットの読み取り期限まで待ちます。
 - **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
   `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグ
   (`-S tcp=y -S inherit-network=y`)に `-S tls=y`
@@ -62,7 +70,10 @@
   `:insecure` はそこでは効きません — 非 `nil` の `:insecure` 値は黙って
   検証する代わりに**エラーを通知**します。このインターフェイスは明示的に
   実験段階のドラフトなので、wasmtime の更新に rontolisp 側の追随が
-  必要になることがあります。
+  必要になることがあります。そこではハンドシェイクに**期限がありません**
+  (`wasi:sockets` にも `wasi:tls` にも期限の設定がなく、このバックエンドの
+  `tcp-set-timeout` はエラーを通知します)。接続を受け付けたまま TLS に応答しない
+  相手に対しては、呼び出しが返りません。
 - **WASM Preview 1**: 非サポート — **コンパイルエラー**です(Preview 1 には
   `wasi:tls` のホスト API が存在しません)。
 - **ブラウザプレイグラウンド**: 非サポート — ブラウザのサンドボックスには生の

@@ -51,7 +51,10 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   (`SSLSocketFactory.createSocket(socket, host, port, true)`); a failed
   handshake (untrusted certificate, hostname mismatch, a peer that does not
   speak TLS) signals an error. A `host` that is no string signals the
-  operator's `type-error`.
+  operator's `type-error`. The handshake waits as long as the socket's read
+  deadline ([`rontolisp:tcp-set-timeout`](rontolisp-tcp-set-timeout.md))
+  allows — with none set, a peer that never answers blocks the call — and
+  the deadline keeps governing the upgraded connection.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
   flags. On this backend the upgrade is the *natural* primitive (the host's

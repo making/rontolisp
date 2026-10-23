@@ -36,7 +36,14 @@ or `OP: MSG` (`tcp-accept`, `tcp-set-timeout`, `read-line`, `read-char`, `read-b
 handler `emitHostFailure` appends to each socket helper (`_sockReadByte`/`_sockWriteByte` carry the byte
 operators' arm, so `_readByte`/`_writeByte` call them). Before 2026-10-11 the JVM answered the bare
 `Connection refused` / `Address already in use`. The handler frame records the caught exception as an `Object`:
-`checkcast Throwable` before using it. Pinned by `HandleOperandFixture.HOST_FAILURE_PROGRAM`. Still unwrapped on
+`checkcast Throwable` before using it. Pinned by `HandleOperandFixture.HOST_FAILURE_PROGRAM`, whose refused
+connects go to PORT 0 (nothing can listen there; macOS answers "Can't assign requested address", Linux
+"Connection refused", so only the prefix is pinned). **Trap**: never test a refusal by closing an ephemeral
+listener and reconnecting -- under the parallel suite another test bound the freed port, the connect succeeded,
+and the then-unbounded `tls-connect` handshake hung `./mvnw test` for 8 hours (2026-10-23). A
+bound-but-not-listening socket is no fix either: macOS DROPS the SYN (measured: `Operation timed out`). The
+`*:P` conflict is taken against an every-interface listener: macOS's SO_REUSEADDR lets `*:P` bind beside a
+`127.0.0.1:P` listener (Linux refuses), which read `:NO-ERROR` there. Still unwrapped on
 the JVM: nothing known; an unknown host's text (`no-such-host.invalid`) is DNS-dependent and unpinned.
 Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling.md)).
 
@@ -76,6 +83,17 @@ listener and the accepted `SSLSocket` handshakes lazily on first I/O.
 - `tls-upgrade` transport is `SSLSocketFactory.createSocket(socket, host, port, true)`; the
   handshaken socket becomes a NEW stream-table entry (closing it closes both).
   `SocketSupport.upgradeTls` / `_tlsUpgrade`, under `usesTlsConnect`.
+- `tls-connect` IS `new Socket(host, port)` + that same handshake (`SocketSupport.handshake` /
+  `_tlsHandshake`, shared by both operators), as on the component. **Handshake deadline**: the
+  handshake waits as long as the socket's `SO_TIMEOUT` allows. `tls-upgrade` uses whatever the
+  caller set (`tcp-set-timeout`; none = unbounded, the caller's choice). `tls-connect` sets
+  `LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS` (10 s, Go's `TLSHandshakeTimeout` and Netty's
+  default) on its fresh socket -- the caller has no handle to set one on first -- clears it to 0
+  after the handshake, and on any failure CLOSES the socket before signalling (a timed-out
+  `SSLSocket` stays open otherwise). A custom bound is `tcp-connect` + `tcp-set-timeout` +
+  `tls-upgrade`; no `:timeout` option. The timeout's text is `... Read timed out` (pinned through
+  `tls-upgrade` with a 50 ms deadline in `HOST_FAILURE_PROGRAM`; the 10 s default itself is not
+  timed by any test). WASM component: NO handshake deadline (`.todo/415`).
 - `:insecure` non-nil skips BOTH chain validation and endpoint identification; the keyword must be
   LITERAL. Interpreter `SocketSupport.TrustAllManager`; on the JVM the GENERATED PROGRAM CLASS
   implements `X509TrustManager` (the JDK cannot take an anonymous TrustManager from hand-assembled
@@ -342,7 +360,8 @@ resource next to `ShimLibraries`, the package seeded in `PackageRegistry`, the s
 ## Not supported
 UDP; hostname resolution on WASM (which caps the component TLS story — a real `https://` host needs
 its IP by hand plus `tls-upgrade` with the DNS name); TLS servers on WASM (permanent, client-only
-proposal); mutual TLS; CONNECT timeouts; `--no-gc`; the browser playground; `(do () ...)`-style
+proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); a TLS handshake deadline on
+the component (`.todo/415`); `--no-gc`; the browser playground; `(do () ...)`-style
 empty do bindings in examples (pre-existing `expandDo` limitation).
 
 ## Pinning tests

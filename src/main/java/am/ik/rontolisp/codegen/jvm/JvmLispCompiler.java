@@ -1487,9 +1487,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// marshals the request/response plists through the _invoke_1 dispatcher.
 		// The async runtime is a third user: the class implements Runnable and
 		// _async_run does `new Prog()` per spawned body.
-		// The whole socket group is emitted together, and the _tlsConnect/_tlsUpgrade
-		// bodies instantiate the generated class as their trust-all X509TrustManager --
-		// so the constructor is part of the SOCKET gate, not the narrower tls one. Only
+		// The whole socket group is emitted together, and the _tlsHandshake body
+		// (behind _tlsConnect/_tlsUpgrade) instantiates the generated class as its
+		// trust-all X509TrustManager -- so the constructor is part of the SOCKET gate,
+		// not the narrower tls one. Only
 		// the interface and its three trust methods stay on usesTlsConnect (nothing
 		// calls them from bytecode; JSSE does, and only a tls-connect/tls-upgrade call
 		// site can reach those helpers).
@@ -5116,7 +5117,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		if (ctorName != null) {
-			// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
+			// No-arg constructor: super(). _tlsHandshake does `new Prog()` for the
 			// :insecure trust-all manager; the http-handler directive does the
 			// same for the RontoHttpServer.Handler instance.
 			// The sized-stack launcher does it for its Runnable.

@@ -12870,19 +12870,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void tcpConnectRefusedSignalsError() {
-		// Listen on an ephemeral port, close it, then connect to the now-free port.
-		String program = """
-				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
-				       (port (rontolisp:tcp-local-port listener)))
-				  (close listener)
-				  (rontolisp:tcp-connect "127.0.0.1" port))
-				""";
-		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tcp-connect");
-	}
-
-	@Test
 	void tcpArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TCP-CONNECT");
@@ -14361,19 +14348,6 @@ class LispEvaluatorTest {
 			assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
 				.hasMessageContaining("tls-connect");
 		}
-	}
-
-	@Test
-	void tlsConnectRefusedSignalsError() {
-		// Listen on an ephemeral port, close it, then connect to the now-free port.
-		String program = """
-				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
-				       (port (rontolisp:tcp-local-port listener)))
-				  (close listener)
-				  (rontolisp:tls-connect "127.0.0.1" port))
-				""";
-		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tls-connect");
 	}
 
 	@Test

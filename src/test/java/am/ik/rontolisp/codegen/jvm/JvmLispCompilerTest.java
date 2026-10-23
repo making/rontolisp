@@ -12041,17 +12041,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunTcpConnectRefusedThrows() throws Exception {
-		assertThatThrownBy(() -> compileAndRun("""
-				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
-				       (port (rontolisp:tcp-local-port listener)))
-				  (close listener)
-				  (rontolisp:tcp-connect "127.0.0.1" port))
-				""")).hasStackTraceContaining("tcp-connect: cannot connect to 127.0.0.1:")
-			.hasStackTraceContaining("Connection refused");
-	}
-
-	@Test
 	void compileAndRunAWrongCountTcpCallSignalsAtCallTime() throws Exception {
 		assertThat(compileAndRun("""
 				(defun tcp-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))

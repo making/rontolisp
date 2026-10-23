@@ -100,19 +100,30 @@ public final class HandleOperandFixture {
 			       (port (rontolisp:tcp-local-port l)))
 			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-listen port "127.0.0.1")))
 			                   (format nil "tcp-listen: cannot listen on 127.0.0.1:~D: Address already in use" port)))
-			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-listen port nil)))
-			                   (format nil "tcp-listen: cannot listen on *:~D: Address already in use" port)))
+			  ;; the every-interface conflict needs an every-interface listener: BSD's
+			  ;; SO_REUSEADDR lets *:P bind beside 127.0.0.1:P
+			  (let* ((w (rontolisp:tcp-listen 0 nil))
+			         (wport (rontolisp:tcp-local-port w)))
+			    (print (hf-check (hf-msg (lambda () (rontolisp:tcp-listen wport nil)))
+			                     (format nil "tcp-listen: cannot listen on *:~D: Address already in use" wport)))
+			    (close w))
+			  ;; a peer that accepts and never answers: the handshake ends at the
+			  ;; socket's read deadline
 			  (let* ((c (rontolisp:tcp-connect "127.0.0.1" port))
 			         (a (rontolisp:tcp-accept l)))
+			    (rontolisp:tcp-set-timeout c 50)
+			    (print (hf-check (hf-msg (lambda () (rontolisp:tls-upgrade c "127.0.0.1")))
+			                     "tls-upgrade: cannot upgrade the stream to TLS against 127.0.0.1: Read timed out"))
 			    (close a)
-			    (print (hf-prefix (hf-msg (lambda () (rontolisp:tls-upgrade c "127.0.0.1")))
-			                      "tls-upgrade: cannot upgrade the stream to TLS against 127.0.0.1: "))
 			    (close c))
-			  (close l)
-			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-connect "127.0.0.1" port)))
-			                   (format nil "tcp-connect: cannot connect to 127.0.0.1:~D: Connection refused" port)))
-			  (print (hf-check (hf-msg (lambda () (rontolisp:tls-connect "127.0.0.1" port)))
-			                   (format nil "tls-connect: cannot connect to 127.0.0.1:~D: Connection refused" port))))
+			  (close l))
+			;; Nothing can listen on port 0, so a connect there fails on every host (the
+			;; JDK's text is the OS's); a closed ephemeral port is no such address --
+			;; another test may bind it before the connect.
+			(print (hf-prefix (hf-msg (lambda () (rontolisp:tcp-connect "127.0.0.1" 0)))
+			                  "tcp-connect: cannot connect to 127.0.0.1:0: "))
+			(print (hf-prefix (hf-msg (lambda () (rontolisp:tls-connect "127.0.0.1" 0)))
+			                  "tls-connect: cannot connect to 127.0.0.1:0: "))
 			(let* ((l (rontolisp:tcp-listen 0 "127.0.0.1"))
 			       (c (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l)))
 			       (a (rontolisp:tcp-accept l)))

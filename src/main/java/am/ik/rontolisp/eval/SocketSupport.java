@@ -23,6 +23,8 @@ import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
+import am.ik.rontolisp.LispNames;
+
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -68,6 +70,12 @@ final class SocketSupport {
 	 * (unlike the process-wide cached {@code SSLSocketFactory.getDefault()}). An
 	 * {@link SSLSocket} is a {@link Socket}, so the returned socket goes into the stream
 	 * table unchanged and every stream built-in works on it as-is.
+	 * <p>
+	 * It is {@code tcp-connect} plus {@link #upgradeTls}'s handshake, run under a read
+	 * deadline of {@link LispNames#TLS_CONNECT_HANDSHAKE_TIMEOUT_MS} (the caller has no
+	 * handle to set one on first), so a peer that accepts and never speaks TLS fails the
+	 * call; the deadline is cleared once the handshake completes, and on a failure the
+	 * connection is closed.
 	 * @param host a hostname or IP literal
 	 * @param port the remote TCP port
 	 * @param insecure whether to skip certificate and hostname verification
@@ -75,19 +83,23 @@ final class SocketSupport {
 	 * @throws LispEvalException if the connection or the handshake fails
 	 */
 	static Socket connectTls(String host, int port, boolean insecure) {
+		Socket socket = null;
 		try {
-			SSLContext context = SSLContext.getInstance("TLS");
-			context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
-			SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket(host, port);
-			if (!insecure) {
-				SSLParameters parameters = socket.getSSLParameters();
-				parameters.setEndpointIdentificationAlgorithm("HTTPS");
-				socket.setSSLParameters(parameters);
-			}
-			socket.startHandshake();
-			return socket;
+			socket = new Socket(host, port);
+			socket.setSoTimeout(LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS);
+			Socket tls = handshake(socket, host, insecure);
+			socket.setSoTimeout(0);
+			return tls;
 		}
 		catch (IOException | GeneralSecurityException ex) {
+			if (socket != null) {
+				try {
+					socket.close();
+				}
+				catch (IOException ignored) {
+					// the failure being reported is the handshake's
+				}
+			}
 			throw new LispEvalException("tls-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
 		}
 	}
@@ -102,7 +114,8 @@ final class SocketSupport {
 	 * connection ({@code SSLSocketFactory.createSocket(socket, host, port, true)})
 	 * instead of opening a new one, which is what an HTTP client that has already
 	 * connected (and possibly issued a proxy CONNECT) needs. The returned
-	 * {@link SSLSocket} closes the underlying socket when closed.
+	 * {@link SSLSocket} closes the underlying socket when closed. The handshake waits as
+	 * long as the socket's read deadline ({@code tcp-set-timeout}) allows.
 	 * @param socket the connected TCP socket to upgrade
 	 * @param host the server name the certificate is verified against (and sent as SNI)
 	 * @param insecure whether to skip certificate and hostname verification
@@ -111,22 +124,31 @@ final class SocketSupport {
 	 */
 	static Socket upgradeTls(Socket socket, String host, boolean insecure) {
 		try {
-			SSLContext context = SSLContext.getInstance("TLS");
-			context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
-			SSLSocket tls = (SSLSocket) ((javax.net.ssl.SSLSocketFactory) context.getSocketFactory())
-				.createSocket(socket, host, socket.getPort(), true);
-			if (!insecure) {
-				SSLParameters parameters = tls.getSSLParameters();
-				parameters.setEndpointIdentificationAlgorithm("HTTPS");
-				tls.setSSLParameters(parameters);
-			}
-			tls.startHandshake();
-			return tls;
+			return handshake(socket, host, insecure);
 		}
 		catch (IOException | GeneralSecurityException ex) {
 			throw new LispEvalException(
 					"tls-upgrade: cannot upgrade the stream to TLS against " + host + ": " + ex.getMessage());
 		}
+	}
+
+	/**
+	 * The client handshake {@link #connectTls} and {@link #upgradeTls} share: wraps the
+	 * connected socket in an {@link SSLSocket} that closes it when closed and runs the
+	 * handshake against {@code host}.
+	 */
+	private static Socket handshake(Socket socket, String host, boolean insecure)
+			throws IOException, GeneralSecurityException {
+		SSLContext context = SSLContext.getInstance("TLS");
+		context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
+		SSLSocket tls = (SSLSocket) context.getSocketFactory().createSocket(socket, host, socket.getPort(), true);
+		if (!insecure) {
+			SSLParameters parameters = tls.getSSLParameters();
+			parameters.setEndpointIdentificationAlgorithm("HTTPS");
+			tls.setSSLParameters(parameters);
+		}
+		tls.startHandshake();
+		return tls;
 	}
 
 	/** Accepts any peer certificate chain; used only by the {@code :insecure} opt-out. */

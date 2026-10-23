@@ -48,7 +48,17 @@ TLS-wrapped protocols:
 - **Interpreter** and **JVM**: use the JDK TLS stack (`SSLSocket`); `host` may
   be a hostname or an IP literal. A failed connection or handshake (refused
   port, untrusted certificate, hostname mismatch) signals an error. A `host` that is no string or a `port` outside `(INTEGER 0 65535)` signals the
-  operator's `type-error` before anything connects.
+  operator's `type-error` before anything connects. The handshake must
+  complete within **10 seconds**: a peer that accepts the connection and
+  never answers TLS signals an error (`... Read timed out`) and the
+  connection is closed, instead of the call hanging. The returned handle
+  has no read deadline; set one with
+  [`rontolisp:tcp-set-timeout`](rontolisp-tcp-set-timeout.md). For a
+  different handshake bound, call
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md), set the deadline with
+  `tcp-set-timeout` and then
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md): its handshake waits
+  as long as the socket's read deadline allows.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
   flags (`-S tcp=y -S inherit-network=y`). Like
@@ -62,7 +72,10 @@ TLS-wrapped protocols:
   system properties and `:insecure` have no effect there — a non-`nil`
   `:insecure` value **signals** rather than silently verifying). The
   interface is an explicitly experimental draft, so a wasmtime update may
-  need a matching rontolisp update.
+  need a matching rontolisp update. The handshake has **no deadline** there
+  (`wasi:sockets` and `wasi:tls` expose none, and `tcp-set-timeout` signals
+  on this backend), so a peer that accepts and never answers TLS blocks the
+  call.
 - **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
   API exists for Preview 1).
 - **Browser playground**: not supported — the browser sandbox provides no raw

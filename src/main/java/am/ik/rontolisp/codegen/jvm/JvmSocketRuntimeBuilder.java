@@ -148,6 +148,10 @@ final class JvmSocketRuntimeBuilder {
 
 	private static final String SOCK_MS_DESC = "(Ljava/lang/Object;)I";
 
+	private static final String TLS_HANDSHAKE_METHOD = "_tlsHandshake";
+
+	private static final String TLS_HANDSHAKE_DESC = "(Ljava/net/Socket;Ljava/lang/String;Ljava/lang/Object;)Ljava/net/Socket;";
+
 	/** {@code _sockEntry}'s kinds: a connected socket. */
 	private static final int SOCKET_KIND = 1;
 
@@ -186,11 +190,9 @@ final class JvmSocketRuntimeBuilder {
 
 	private final MethodRefEntry sslContextGetSocketFactory;
 
-	private final MethodRefEntry socketFactoryCreateSocket;
-
-	private final ClassEntry sslSocketFactoryClass;
-
 	private final MethodRefEntry sslSocketFactoryCreateOverSocket;
+
+	private final MethodRefEntry tlsHandshakeRef;
 
 	private final MethodRefEntry sslSocketGetSSLParameters;
 
@@ -349,14 +351,11 @@ final class JvmSocketRuntimeBuilder {
 				"([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V");
 		this.sslContextGetSocketFactory = cp.methodRef(sslContextClass, "getSocketFactory",
 				"()Ljavax/net/ssl/SSLSocketFactory;");
-		ClassEntry socketFactoryClass = cp.classEntry("javax/net/SocketFactory");
-		this.socketFactoryCreateSocket = cp.methodRef(socketFactoryClass, "createSocket",
-				"(Ljava/lang/String;I)Ljava/net/Socket;");
-		// The layered createSocket overload (_tlsUpgrade's transport) is declared on
+		// The layered createSocket overload (_tlsHandshake's transport) is declared on
 		// SSLSocketFactory, not on the javax.net.SocketFactory base.
-		this.sslSocketFactoryClass = cp.classEntry("javax/net/ssl/SSLSocketFactory");
-		this.sslSocketFactoryCreateOverSocket = cp.methodRef(this.sslSocketFactoryClass, "createSocket",
-				"(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;");
+		this.sslSocketFactoryCreateOverSocket = cp.methodRef(cp.classEntry("javax/net/ssl/SSLSocketFactory"),
+				"createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;");
+		this.tlsHandshakeRef = cp.methodRef(thisClass, TLS_HANDSHAKE_METHOD, TLS_HANDSHAKE_DESC);
 		this.sslSocketGetSSLParameters = cp.methodRef(this.sslSocketClass, "getSSLParameters",
 				"()Ljavax/net/ssl/SSLParameters;");
 		this.sslSocketSetSSLParameters = cp.methodRef(this.sslSocketClass, "setSSLParameters",
@@ -454,6 +453,8 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTlsConnect()));
 		methods.add(new SocketMethod(cp.utf8Entry(TLS_UPGRADE_METHOD), cp.utf8Entry(TLS_UPGRADE_DESC),
 				builder.buildTlsUpgrade()));
+		methods.add(new SocketMethod(cp.utf8Entry(TLS_HANDSHAKE_METHOD), cp.utf8Entry(TLS_HANDSHAKE_DESC),
+				builder.buildTlsHandshake()));
 		methods.add(new SocketMethod(cp.utf8Entry(TLS_LISTEN_METHOD), cp.utf8Entry(TLS_LISTEN_DESC),
 				builder.buildTlsListen()));
 		methods.add(new SocketMethod(cp.utf8Entry(TLS_LISTEN_P12_METHOD), cp.utf8Entry(TLS_LISTEN_P12_DESC),
@@ -535,82 +536,60 @@ final class JvmSocketRuntimeBuilder {
 
 	/**
 	 * {@code _tlsConnect(Object host, Object port, Object insecure) -> Long handle}.
-	 * Strips the surrounding quotes from the host string, opens a blocking TLS connection
-	 * and stores the handshaken {@code SSLSocket} in the stream table. A fresh
-	 * {@code SSLContext} is initialized per call (so the {@code javax.net.ssl.trustStore}
-	 * system properties are re-read on every connection). A {@code null} (nil)
-	 * {@code insecure} verifies: the JDK default trust store plus HTTPS-style endpoint
-	 * identification; non-nil skips both by installing the generated program class itself
-	 * as a trust-all {@code X509TrustManager} (see the interface/methods emitted by
-	 * {@code JvmLispCompiler} when {@code tls-connect} is used). An {@code SSLSocket} is
-	 * a {@code Socket}, so every socket branch of the stream built-ins works on the entry
-	 * unchanged.
+	 * {@code tcp-connect} plus {@link #buildTlsHandshake}'s handshake (the interpreter's
+	 * {@code SocketSupport.connectTls}): opens a blocking {@code Socket}, runs the
+	 * handshake under a read deadline of
+	 * {@link LispNames#TLS_CONNECT_HANDSHAKE_TIMEOUT_MS} (the caller has no handle to set
+	 * one on first), clears the deadline and stores the {@code SSLSocket} in the stream
+	 * table. A failure closes the socket it opened before signalling.
 	 */
 	private MethodCode buildTlsConnect() {
-		// Slots: 0=host, 1=port, 2=insecure, 3=h (String), 4=socket (SSLSocket),
-		// 5=params, 6=p (int)
+		// Slots: 0=host, 1=port, 2=insecure, 3=h (String), 4=sock (Socket or null),
+		// 5=tls (Socket), 6=p (int), 7/8=the handler's exception and text
 		MethodCode code = new MethodCode();
 		emitCheckedString(code, 0, 3, LispNames.TLS_CONNECT);
 		emitCheckedPort(code, 1, LispNames.TLS_CONNECT);
 		code.istore(6);
+		code.aconst_null();
+		code.astore(4);
 		MethodCode.Label tryStart = code.newBoundLabel();
-		// SSLContext ctx = SSLContext.getInstance("TLS");
-		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
-		// null);
-		code.ldc(this.tlsStr);
-		code.invokestatic(this.sslContextGetInstance);
+		// sock = new Socket(h, p); sock.setSoTimeout(DEADLINE);
+		code.new_(this.socketClass);
 		code.dup();
-		code.aconst_null();
-		code.aload(2);
-		MethodCode.Label ifSecure = code.newLabel();
-		code.ifnull(ifSecure);
-		code.iconst_1();
-		code.anewarray(this.trustManagerClass);
-		code.dup();
-		code.iconst_0();
-		code.new_(this.thisClassRef);
-		code.dup();
-		code.invokespecial(this.thisClassInit);
-		code.aastore();
-		MethodCode.Label gotoInit = code.newLabel();
-		code.goto_(gotoInit);
-		code.labelBinding(ifSecure);
-		code.aconst_null();
-		code.labelBinding(gotoInit);
-		code.aconst_null();
-		code.invokevirtual(this.sslContextInit);
-		// socket = (SSLSocket) ctx.getSocketFactory().createSocket(h, p)
-		code.invokevirtual(this.sslContextGetSocketFactory);
 		code.aload(3);
 		code.iload(6);
-		code.invokevirtual(this.socketFactoryCreateSocket);
-		code.checkcast(this.sslSocketClass);
+		code.invokespecial(this.socketInit);
 		code.astore(4);
-		// endpoint identification only on the verifying path:
-		// if (insecure == null) { params = socket.getSSLParameters();
-		// params.setEndpointIdentificationAlgorithm("HTTPS");
-		// socket.setSSLParameters(params); }
+		code.aload(4);
+		code.loadConstant(LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS);
+		code.invokevirtual(this.socketSetSoTimeout);
+		// tls = _tlsHandshake(sock, h, insecure); sock.setSoTimeout(0);
+		code.aload(4);
+		code.aload(3);
 		code.aload(2);
-		MethodCode.Label ifInsecure = code.newLabel();
-		code.ifnonnull(ifInsecure);
-		code.aload(4);
-		code.invokevirtual(this.sslSocketGetSSLParameters);
+		code.invokestatic(this.tlsHandshakeRef);
 		code.astore(5);
+		code.aload(4);
+		code.iconst_0();
+		code.invokevirtual(this.socketSetSoTimeout);
 		code.aload(5);
-		code.ldc(this.httpsStr);
-		code.invokevirtual(this.sslParametersSetEndpointIdAlg);
-		code.aload(4);
-		code.aload(5);
-		code.invokevirtual(this.sslSocketSetSSLParameters);
-		code.labelBinding(ifInsecure);
-		// socket.startHandshake();
-		code.aload(4);
-		code.invokevirtual(this.sslSocketStartHandshake);
-		code.aload(4);
 		code.invokestatic(this.addStreamRef);
 		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
 		emitHostFailure(code, tryStart, tryEnd, 7, true, c -> {
+			// if (sock != null) try { sock.close(); } catch (IOException ignored) {}
+			MethodCode.Label closed = c.newLabel();
+			c.aload(4);
+			c.ifnull(closed);
+			MethodCode.Label closeStart = c.newBoundLabel();
+			c.aload(4);
+			c.invokevirtual(this.socketClose);
+			MethodCode.Label closeEnd = c.newBoundLabel();
+			c.goto_(closed);
+			MethodCode.Label closeFailed = c.newBoundLabel();
+			c.pop();
+			c.labelBinding(closed);
+			c.exceptionCatch(closeStart, closeEnd, closeFailed, this.cp.classEntry("java/io/IOException"));
 			c.ldc(this.cp.stringEntry("tls-connect: cannot connect to "));
 			emitHostPort(c, 3, 6, false);
 		});
@@ -620,19 +599,15 @@ final class JvmSocketRuntimeBuilder {
 	/**
 	 * {@code _tlsUpgrade(Object handle, Object host, Object insecure) -> Long handle}.
 	 * Wraps an ALREADY-CONNECTED socket entry in TLS as a client (the substrate of the
-	 * {@code cl+ssl} shim's {@code make-ssl-client-stream}): same per-call
-	 * {@code SSLContext} and trust policy as {@link #buildTlsConnect} -- a {@code null}
-	 * (nil) {@code insecure} verifies against the JDK trust store with HTTPS-style
-	 * endpoint identification, non-nil installs the generated program class as the
-	 * trust-all {@code X509TrustManager} -- but the handshake runs over the EXISTING
-	 * connection via {@code SSLSocketFactory.createSocket(socket, host, port, true)}
-	 * instead of opening a new one. The wrapping {@code SSLSocket} is stored as a NEW
-	 * stream-table entry (a plain {@code Socket} subclass, so every socket branch of the
-	 * stream built-ins works on it unchanged).
+	 * {@code cl+ssl} shim's {@code make-ssl-client-stream}) through
+	 * {@link #buildTlsHandshake}; the handshake waits as long as the socket's read
+	 * deadline ({@code tcp-set-timeout}) allows. The wrapping {@code SSLSocket} is stored
+	 * as a NEW stream-table entry (a plain {@code Socket} subclass, so every socket
+	 * branch of the stream built-ins works on it unchanged).
 	 */
 	private MethodCode buildTlsUpgrade() {
 		// Slots: 0=handle, 1=host, 2=insecure, 3=h (String), 4=sock (Socket),
-		// 5=tls (SSLSocket), 6=params
+		// 7/8=the handler's exception and text
 		MethodCode code = new MethodCode();
 		// sock = the connected socket the handle names; then h = the host
 		emitCheckedEntry(code, 0, SOCKET_KIND, LispNames.TLS_UPGRADE + " expects a connected socket handle");
@@ -640,61 +615,10 @@ final class JvmSocketRuntimeBuilder {
 		code.astore(4);
 		emitCheckedString(code, 1, 3, LispNames.TLS_UPGRADE);
 		MethodCode.Label tryStart = code.newBoundLabel();
-		// SSLContext ctx = SSLContext.getInstance("TLS");
-		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
-		// null);
-		code.ldc(this.tlsStr);
-		code.invokestatic(this.sslContextGetInstance);
-		code.dup();
-		code.aconst_null();
-		code.aload(2);
-		MethodCode.Label ifSecure = code.newLabel();
-		code.ifnull(ifSecure);
-		code.iconst_1();
-		code.anewarray(this.trustManagerClass);
-		code.dup();
-		code.iconst_0();
-		code.new_(this.thisClassRef);
-		code.dup();
-		code.invokespecial(this.thisClassInit);
-		code.aastore();
-		MethodCode.Label gotoInit = code.newLabel();
-		code.goto_(gotoInit);
-		code.labelBinding(ifSecure);
-		code.aconst_null();
-		code.labelBinding(gotoInit);
-		code.aconst_null();
-		code.invokevirtual(this.sslContextInit);
-		// tls = (SSLSocket) ((SSLSocketFactory) ctx.getSocketFactory())
-		// .createSocket(sock, h, sock.getPort(), true)
-		code.invokevirtual(this.sslContextGetSocketFactory);
-		code.checkcast(this.sslSocketFactoryClass);
 		code.aload(4);
 		code.aload(3);
-		code.aload(4);
-		code.invokevirtual(this.socketGetPort);
-		code.iconst_1();
-		code.invokevirtual(this.sslSocketFactoryCreateOverSocket);
-		code.checkcast(this.sslSocketClass);
-		code.astore(5);
-		// endpoint identification only on the verifying path (see buildTlsConnect)
 		code.aload(2);
-		MethodCode.Label ifInsecure = code.newLabel();
-		code.ifnonnull(ifInsecure);
-		code.aload(5);
-		code.invokevirtual(this.sslSocketGetSSLParameters);
-		code.astore(6);
-		code.aload(6);
-		code.ldc(this.httpsStr);
-		code.invokevirtual(this.sslParametersSetEndpointIdAlg);
-		code.aload(5);
-		code.aload(6);
-		code.invokevirtual(this.sslSocketSetSSLParameters);
-		code.labelBinding(ifInsecure);
-		// tls.startHandshake();
-		code.aload(5);
-		code.invokevirtual(this.sslSocketStartHandshake);
-		code.aload(5);
+		code.invokestatic(this.tlsHandshakeRef);
 		code.invokestatic(this.addStreamRef);
 		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
@@ -705,6 +629,85 @@ final class JvmSocketRuntimeBuilder {
 			c.ldc(this.cp.stringEntry(": "));
 			c.invokevirtual(this.stringConcat);
 		});
+		return code;
+	}
+
+	/**
+	 * {@code _tlsHandshake(Socket sock, String host, Object insecure) -> Socket}: the
+	 * client handshake {@link #buildTlsConnect} and {@link #buildTlsUpgrade} share (the
+	 * interpreter's {@code SocketSupport.handshake}); a host exception propagates to the
+	 * caller's handler. A fresh {@code SSLContext} per call (so the
+	 * {@code javax.net.ssl.trustStore} system properties are re-read on every
+	 * connection); a {@code null} (nil) {@code insecure} verifies against the JDK default
+	 * trust store with HTTPS-style endpoint identification, non-nil skips both by
+	 * installing the generated program class itself as a trust-all
+	 * {@code X509TrustManager} (see the interface/methods emitted by
+	 * {@code JvmLispCompiler} when {@code tls-connect} or {@code tls-upgrade} is used).
+	 * The transport is {@code SSLSocketFactory.createSocket(sock, host, sock.getPort(),
+	 * true)}, so closing the answer closes {@code sock}.
+	 */
+	private MethodCode buildTlsHandshake() {
+		// Slots: 0=sock (Socket), 1=host (String), 2=insecure, 3=tls (SSLSocket),
+		// 4=params
+		MethodCode code = new MethodCode();
+		// SSLContext ctx = SSLContext.getInstance("TLS");
+		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
+		// null);
+		code.ldc(this.tlsStr);
+		code.invokestatic(this.sslContextGetInstance);
+		code.dup();
+		code.aconst_null();
+		code.aload(2);
+		MethodCode.Label ifSecure = code.newLabel();
+		code.ifnull(ifSecure);
+		code.iconst_1();
+		code.anewarray(this.trustManagerClass);
+		code.dup();
+		code.iconst_0();
+		code.new_(this.thisClassRef);
+		code.dup();
+		code.invokespecial(this.thisClassInit);
+		code.aastore();
+		MethodCode.Label gotoInit = code.newLabel();
+		code.goto_(gotoInit);
+		code.labelBinding(ifSecure);
+		code.aconst_null();
+		code.labelBinding(gotoInit);
+		code.aconst_null();
+		code.invokevirtual(this.sslContextInit);
+		// tls = (SSLSocket) ctx.getSocketFactory().createSocket(sock, host,
+		// sock.getPort(), true)
+		code.invokevirtual(this.sslContextGetSocketFactory);
+		code.aload(0);
+		code.aload(1);
+		code.aload(0);
+		code.invokevirtual(this.socketGetPort);
+		code.iconst_1();
+		code.invokevirtual(this.sslSocketFactoryCreateOverSocket);
+		code.checkcast(this.sslSocketClass);
+		code.astore(3);
+		// endpoint identification only on the verifying path:
+		// if (insecure == null) { params = tls.getSSLParameters();
+		// params.setEndpointIdentificationAlgorithm("HTTPS");
+		// tls.setSSLParameters(params); }
+		code.aload(2);
+		MethodCode.Label ifInsecure = code.newLabel();
+		code.ifnonnull(ifInsecure);
+		code.aload(3);
+		code.invokevirtual(this.sslSocketGetSSLParameters);
+		code.astore(4);
+		code.aload(4);
+		code.ldc(this.httpsStr);
+		code.invokevirtual(this.sslParametersSetEndpointIdAlg);
+		code.aload(3);
+		code.aload(4);
+		code.invokevirtual(this.sslSocketSetSSLParameters);
+		code.labelBinding(ifInsecure);
+		// tls.startHandshake(); return tls;
+		code.aload(3);
+		code.invokevirtual(this.sslSocketStartHandshake);
+		code.aload(3);
+		code.areturn();
 		return code;
 	}
 
