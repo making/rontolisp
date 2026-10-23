@@ -6,9 +6,8 @@
 (deck :title "rontolisp deep dive"
       :author "rontolisp"
       :date "2026-10-23"
-      :logo (image "logo.svg" :alt "rontolisp")
       :url "https://github.com/making/rontolisp"
-      :description "rontolisp の内部: 一つのコアフォームの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルまで"
+      :description "rontolisp の内部: コアフォームのリストという一つの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルへ"
       :page-url "https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.html"
       :page-image "rontolisp-deep-dive.png"
       :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf")
@@ -26,16 +25,16 @@
 
 (slide :title "一つのパイプライン、四つのバックエンド"
   (flow "ソース" "コアフォーム" "マクロ展開" "評価 / コンパイル")
-  (ul (li (tt "SourceLanguage") " が言語ごとに読み込み、コアフォームに下げる")
-      (li "インタプリタ (" (tt "LispEvaluator") ") が評価し、JVM と WASM のコンパイラがバイト列にする")
-      "WASM は Preview 1 とコンポーネントの二通りで、合わせて四つ")
+  (ul (li (tt "SourceLanguage") " が言語ごとにソースを読み、コアフォームに下げる")
+      (li "インタプリタ (" (tt "LispEvaluator") ") が評価し、JVM と WASM のコンパイラはバイト列を出力する")
+      "WASM には Preview 1 とコンポーネントの二通りがあり、バックエンドは合わせて四つ")
   (source ".kb/architecture.md (Pipeline), .kb/running-backends.md"))
 
 (slide :title "IR はコアフォームのリスト"
   (say "先頭の名前で分岐する" :at "if"
     (cells '(if (< x 0) neg pos)))
-  (ul (li "言語が作る " (tt "List<LispVal>") " がそのまま IR になる")
-      "その下に別の中間表現はない")
+  (ul (li (tt "SourceLanguage") " が返す " (tt "List<LispVal>") " が、そのまま IR になる")
+      "これより低いレベルの中間表現はない")
   (source ".kb/source-language.md, .kb/scheme-frontend.md"))
 
 (slide :title "ソースからフォームへの入口は一つ"
@@ -72,7 +71,7 @@
       `(let ((tmp ,a)) (setq ,a ,b) (setq ,b tmp)))
     (print (macroexpand-1 '(swap x y)))
     (macroexpand '(cond ((< x 0) 'neg) (t 'pos)))")
-  (ul "バッククォートは読み込みの時点で list、append、cons、quote に展開する"
+  (ul "バッククォートは、リーダーが読み込み時に list、append、cons、quote の呼び出しに展開する"
       (li "コンパイルパスでは " (tt "UserMacroExpander") " が " (tt "defmacro")
           " をマクロ用のインタプリタで評価し、呼び出しを展開してから定義を取り除く"))
   (source ".kb/defmacro-backquote.md"))
@@ -85,7 +84,7 @@
   (flow "読み込み" (tt "(load ...)" " の展開") "ライブラリの接合" "WIT の lowering" "刈り込み")
   (ul (li "すべてのバックエンドと埋め込み側が " (tt "CompileFrontend") " を通る")
       (li "パスの並びは " (tt "CompileFrontend.expand") " にだけ書き、ほかの場所で書き直さない")
-      (li "テストも " (tt "CompileFrontendAccess") " から前段に入る"))
+      (li "テストも " (tt "CompileFrontendAccess") " を通して前段を呼ぶ"))
   (source ".kb/architecture.md (Package rules)"))
 
 (slide :title "接合は入れ子の呼び出しで書く"
@@ -97,14 +96,14 @@
             UserMacroExpander.expand(...), ...), ...), ...);
       ...
       program = LibraryDefunPruner.prune(program);"))
-  (p "並びに意味がある。Scheme の実行時ライブラリは、それが使う文字列比較を含むプレリュードの内側に接合する。")
+  (p "呼び出しの順序には意味がある。Scheme の実行時ライブラリはプレリュードの文字列比較を使うので、プレリュードの内側に接合する。")
   (source "src/main/java/am/ik/rontolisp/cli/CompileFrontend.java からの抜粋, .kb/scheme-frontend.md"))
 
 (slide :title "書き直しを禁じた経緯"
-  (lead "二つのコーパス検査が、パスの並びを写して持っていた")
+  (lead "二つのコーパス検査がパスの並びの写しを持ち、本体からずれていった")
   (ul (li (tt "tokenizer:") " のケースが " (tt "ci-spec.yaml") " に入った時点で 8 パス、直した時点で 10 パス遅れていた")
-      (li "名前を数えても見えない位置のずれもあった (" (tt "VecLibrary") ")")
-      (li (tt "JvmOsrBackedgeCorpusTest") " は 2026-09-19 まで写しを持ち、11 の接合に遅れ、成功するたびに警告を 10 行出していた"))
+      (li "パスの名前を数えるだけでは見つからない、位置のずれもあった (" (tt "VecLibrary") ")")
+      (li (tt "JvmOsrBackedgeCorpusTest") " は 2026-09-19 まで写しを持ち、接合 11 個分遅れて、成功するたびに警告を 10 行出していた"))
   (source ".kb/architecture.md (Package rules)"))
 
 ;;; --- the interpreter and the JVM ---------------------------------------------------
@@ -112,28 +111,28 @@
 (section "インタプリタと JVM")
 
 (slide :title "既定の実行経路はインタプリタ"
-  (p (tt "-o") " のない " (tt "rontolisp app.lisp") " は " (tt "LispEvaluator") " で動かす。そう決めてある。")
+  (p (tt "-o") " のない " (tt "rontolisp app.lisp") " は、コンパイルせずに " (tt "LispEvaluator") " で実行する。")
   (table :header ("測ったもの" "値")
     ("インタプリタのループ (SBCL 比)" "20〜240 倍遅い")
     ((cell (tt "java -jar") " のコンパイルの固定費") "約 0.6 秒")
     ((cell "前段 (温まった後)") "約 4 ms")
     ((cell "JVM のコード生成 (温まった後)") "約 140 ms")
-    ("ネイティブバイナリのコンパイル全体" "約 0.16 秒"))
+    ("ネイティブバイナリでのコンパイル全体" "約 0.16 秒"))
   (source ".kb/default-run-path.md"))
 
 (slide :title "実行エンジンを自動で切り替えない理由"
   (ul (li "固定費の大半は、コンパイラ自身のクラスロードと JIT のウォームアップ")
       (li "メモリ上でコンパイルして実行すると、" (tt "java -jar") " で "
           (tt "(print 'hi)") " が 2.2 倍遅くなる")
-      "ネイティブバイナリは、実行時にクラスを定義できない"
-      "エンジンを切り替えると、経路の間の差がそのまま挙動の変化になる")
+      "rontolisp のネイティブバイナリは、実行時にクラスを定義できない"
+      "実行のたびにエンジンが変わると、インタプリタとコンパイル経路の食い違いが、そのまま気付きにくい挙動の変化になる")
   (source ".kb/default-run-path.md"))
 
 (slide :title "自由変数の解析が一つ抜けると"
   (p (tt "FreeVarAnalyzer") " がフォームの一部を読み飛ばしても、コンパイルエラーにはならない。結果は三通りに分かれる。")
   (table :header ("経路" "結果")
     ("インタプリタ" "正しい (環境ごと捕捉する)")
-    ("JVM" "新しいコピーを読み、黙って誤る")
+    ("JVM" "変数の新しいコピーを読み、エラーなしに誤った結果を出す")
     ("WASM" "コンパイル時に拒否する"))
   (source ".kb/core-representation.md (Three-pass compilation)"))
 
@@ -151,11 +150,11 @@
          :caption "どれも定数スタックで動き、出力は変わらない"
     ("インタプリタ" (cell (tt "eval") " のループで、末尾のフォームがフレームを置き換える"))
     ("JVM" (cell "自分への末尾呼び出しはメソッドの先頭への " (tt "goto")
-                 "。関数値を通すものは 64 個を超えるとトランポリン"))
+                 "。関数値を通す末尾呼び出しは、64 回を超えて続くとトランポリンに切り替える"))
     ("WASM" (cell "末尾位置の呼び出しをすべて " (tt "return_call") " で出す")))
   (source ".kb/interpreter-tail-calls.md, .kb/jvm-self-tail-calls.md, .kb/jvm-tail-bounce.md, .kb/wasm-tail-calls.md"))
 
-(slide :title "定数スタックで回す"
+(slide :title "定数スタックで動く末尾再帰"
   (p "ブラウザで動くインタプリタでも、末尾呼び出しはフレームを積まない。")
   (say "Run で DONE が返る" :at "(count-down 100000)"
     (code :lang "lisp" "
@@ -173,7 +172,7 @@
       "浮動小数点数は構造体にボックス化する"
       (li "文字列はバイトの配列 (" (tt "$str_bytes") ")")
       "モジュールはアロケータを持たない"
-      (li (tt "--no-gc") " は純粋計算のサブセットを、スカラーとリニアメモリの文字列に下げる"))
+      (li (tt "--no-gc") " は、純粋な計算に限ったプログラムを、スカラーとリニアメモリの文字列に下げる"))
   (source "doc/ja/compiling/wasm.md, .kb/wasm-gc-strings.md, size-report/results/wasm-flags.md"))
 
 (slide :title "例外処理はプログラムが使うときだけ"
@@ -181,16 +180,16 @@
           " を含むプログラムだけを EH モードでコンパイルする")
       (li "EH モードではタグ " (tt "$lisp-cond") " を一つ置き、"
           (tt "try_table") " と " (tt "throw") " で捕まえる")
-      "それ以外のプログラムは、EH を知らないビルドとバイト単位で同じになる"
+      "それ以外のプログラムは、EH 対応のないコンパイラの出力とバイト単位で同じになる"
       (li (tt "ref.cast") " の失敗のような trap は捕まえられない"))
   (source ".kb/error-handling.md (WASM EH-mode specifics)"))
 
 (slide :title "着地パッドで局所変数を読み直す"
   (lead "コーパス全体が、コードの大きさによって " (tt "cast failure") " で落ちたり通ったりした")
-  (ul "Cranelift が局所変数を、呼び出しの前に評価した引数として着地パッドに渡していた"
+  (ul "Cranelift は局所変数を、呼び出しの前に評価した引数として着地パッドに渡していた"
       "呼び出しの間にコピー GC がオブジェクトを動かすと、パッドは古い参照を受け取る"
-      "対策として、パッドの最初で、その後に使う局所変数を読み直す")
-  (notes "3,590 行の実行の 3,587 行目で trap した。GC の事前拡張がコードの大きさに比例するので、ケースを一つ足すだけで結果が変わった。")
+      "対策として、パッドの先頭で、その後に使う局所変数を読み直す")
+  (notes "3,590 行を出力する実行の 3,587 行目で trap した。落ちるか通るかは、その呼び出しの間に GC が起きるかどうかだけで決まる。GC ヒープの事前拡張はコードのバイト数に比例するので、ケースを一つ足すだけで GC の時期がずれ、結果が変わった。")
   (source ".kb/wasm-landing-pad-refresh.md, .kb/wasi-component.md"))
 
 (slide :title "コンポーネントは Preview 1 のコアを包む"
@@ -198,16 +197,16 @@
   (ul "コアモジュールは Preview 1 の出力と同じものを使う"
       (li "アダプタが " (tt "wasi_snapshot_preview1") " の 15 関数を、WASI 0.3 の stream と future で実装する")
       (li (tt "--optimize") " は使うインタフェースだけを残す。" (tt "(print \"Hello World!\")")
-          " では 11 から 3 に、7,690 B から 2,138 B になる"))
+          " では、インタフェースが 11 から 3 に、インポートのブロックが 7,690 B から 2,138 B になる"))
   (source ".kb/wasi-component.md"))
 
-(slide :title "大きさは刈り込みで決まる"
+(slide :title "刈り込みで変わる .wasm の大きさ"
   (lead "chipz で gunzip するプログラムの " (tt ".wasm"))
   (say "既定で刈り込む" :at "--optimize (既定)"
     (bars :unit " B" ("--optimize=off" "550,484") ("--optimize (既定)" "133,689")
           ("--optimize=size" "102,171") ("--component --optimize=size" "106,355")))
-  (p "Hello, World! だけを出すプログラムは 271,101 B から 480 B になる。")
-  (notes "大きさは一つの量ではない。バイト列を動かすと、生のサイズは減り gzip 後のサイズは増えることがある (.kb/size-measurement.md)。")
+  (p "Hello, World! だけを出すプログラムは、" (tt "--optimize=off") " の 271,101 B から既定の 480 B になる。")
+  (notes "「大きさ」は一つの量ではない。バイト列を削らずに別の場所へ移すと、生のサイズは減っても gzip 後のサイズは増えることがある (.kb/size-measurement.md)。")
   (source "size-report/results/wasm-flags.md (2026-10-15 測定)"))
 
 (slide :title "ネイティブ実行ファイル"
@@ -215,13 +214,13 @@
   (ul (li "Linux では " (tt "stub ++ module ++ 長さ ++ \"RLNATIVE\"")
           "、macOS では署名した Mach-O の中にモジュールを置く")
       "プリコンパイラとランナーは同じ wasmtime の設定で作り、指紋が違えば書き出す前に拒否する"
-      (li "Rust のワークスペース (" (tt "rontolisp-native/") ") は Maven の外にあり、コアは依存を持たないまま"))
+      (li "Rust のワークスペース (" (tt "rontolisp-native/") ") は Maven の外にあり、コアは外部依存を持たないままになる"))
   (source ".kb/native-output.md"))
 
 (slide :title "ランナーの大きさ"
   (bars :unit " MB" ("Linux x86_64" "2.1") ("Linux aarch64" "1.9") ("macOS" "1.7"))
   (ul (li "実行ファイルは、ランナーに " (tt ".wasm") " の約 11 倍を足した大きさ")
-      (li "起動は約 10 ms で、" (tt "wasmtime run") " とほぼ同じ速度で動く"))
+      (li "起動は約 10 ms。同じモジュールを " (tt "wasmtime run") " で動かすのとほぼ同じ速度で動く"))
   (source "doc/ja/compiling/native.md (サイズと速度)"))
 
 ;;; --- the Scheme and Clojure front ends ---------------------------------------------
@@ -229,11 +228,11 @@
 (section "三つの言語、一つの IR")
 
 (slide :title "Scheme と Clojure もコアフォームに下げる"
-  (ul "どのバックエンドも、Scheme や Clojure の名前を知らない"
+  (ul "Scheme や Clojure のために、バックエンドへ名前を足すことはない"
       (li "バックエンドは演算子の名前で分岐し、" (tt "FreeVarAnalyzer")
           " も同じ名前を見る手書きの走査")
-      "知らない先頭が来ると、エラーにならずに三通りに分かれる"
-      "実行時の補助関数は Common Lisp のソースで、使わない定義は刈り込む")
+      "走査が扱わない先頭のフォームは、エラーにならずに三通りの結果に分かれる"
+      "実行時の補助関数は Common Lisp で書き、使わない定義は刈り込む")
   (source ".kb/scheme-frontend.md, .kb/clojure-frontend.md"))
 
 (slide :title "Scheme の末尾再帰"
@@ -280,7 +279,7 @@
   (source "lispresen/DESIGN.md (Runtime)"))
 
 (slide :title "Clojure を clj と突き合わせる"
-  (lead "117 の式を clj 1.12.6.1673 と各バックエンドで評価し、印字を比べる。2026-10-21 の初回で差はなかった")
+  (lead "117 の式を clj 1.12.6.1673 と各バックエンドで評価し、印字結果を比べる。2026-10-21 の初回の実行では、四つのバックエンドすべてで差がなかった")
   (bars ("clojure.core" 89) ("clojure.string" 16) ("clojure.set" 7)
         ("clojure.walk" 2) ("clojure.pprint" 2) ("clojure.data" 1))
   (source ".kb/clojure-frontend.md (Differential parity harness)"))
@@ -302,13 +301,13 @@
   (ul "ケースをつなげて一つのプログラムにし、バックエンドごとに一度だけ実行して、出力をケースに切り分ける"
       (li "各バックエンドで、既定と " (tt "--simd") " の二回流す")
       (li (tt "./mvnw test") " は " (tt "CiSpecE2eTest") " を飛ばす。CI のネイティブジョブで動く")
-      "2026-10-17 に、コーパスと重複する 373 のテストメソッドを消し、298 組の JVM と WASM の対をケースに移した")
+      "2026-10-17 に、コーパスと重複する 373 のテストメソッドを消し、JVM と WASM で対になった 298 組のテストをケースに移した")
   (source "src/test/resources/ci-spec.yaml (1,354 ケース、2026-10-23 に数えた), .kb/test-execution.md"))
 
 (slide :title "出力はプログラムだけで決まる"
   (ul "同じソースと同じビルドなら、何度コンパイルしても同じバイト列になる"
       (li (tt "Map.of") " や " (tt "Set.of") " の反復の順序は、JVM を起動するたびに変わる")
-      (li "6 行のプログラムを 8 回コンパイルして、" (tt ".class") " も " (tt ".wasm") " も 3 種類できたことがある")
+      (li "6 行のプログラムを 8 回コンパイルしたら、" (tt ".class") " も " (tt ".wasm") " も 3 通りのバイト列になったことがある")
       (li "順序を持つ引数は " (tt "SequencedSet") " で型付けする"))
   (source ".kb/emitted-output-determinism.md"))
 

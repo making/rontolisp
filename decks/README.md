@@ -18,7 +18,7 @@ decks/
     fonts/          the TrueType fonts the preview image is drawn in, if any
 ```
 
-A deck may keep other files it uses (a logo, code it shows) beside its source.
+A deck may keep other files it uses (images, code it shows) beside its source.
 
 ## Building
 

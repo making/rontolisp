@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>rontolisp deep dive</title>
-<meta name="description" content="rontolisp の内部: 一つのコアフォームの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルまで">
+<meta name="description" content="rontolisp の内部: コアフォームのリストという一つの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルへ">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.html">
 <meta property="og:title" content="rontolisp deep dive">
-<meta property="og:description" content="rontolisp の内部: 一つのコアフォームの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルまで">
+<meta property="og:description" content="rontolisp の内部: コアフォームのリストという一つの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルへ">
 <meta property="og:image" content="https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="675">
@@ -176,8 +176,8 @@ html:not(.js) #fs{display:none}
 <div id="stage">
 <div id="deck" style="width:1920px;height:1080px">
 <section class="slide layout-title" id="s1" style="--stmt:120px;--stmt-lh:162px;">
-<div class="centered"><img class="logo" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIj48cmVjdCB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgcng9IjI0IiBmaWxsPSIjMGI1Y2FkIi8+PHBhdGggZD0iTTM4IDMwIFEyNCA2MCAzOCA5MCBNODIgMzAgUTk2IDYwIDgyIDkwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTUwIDQwIEw3MCA4MCBNNjAgNjAgTDUwIDgwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+Cg==" alt="rontolisp"><h1 class="deck-title">rontolisp deep dive</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>3</p></div>
-<div class="qr right" style="left:1350px;top:686px;width:458px"><svg class="qr-code" viewBox="0 0 37 37" width="280" height="280" role="img" aria-label="QR code: https://github.com/making/rontolisp" shape-rendering="crispEdges"><rect width="37" height="37" fill="#fff"/><path fill="#000" d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM19 4h6v1h-6zM26 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM14 5h3v1h-3zM18 5h2v1h-2zM21 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM14 6h1v1h-1zM17 6h3v1h-3zM22 6h1v1h-1zM26 6h1v1h-1zM28 6h3v1h-3zM32 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h4v1h-4zM21 7h1v1h-1zM23 7h1v1h-1zM26 7h1v1h-1zM28 7h3v1h-3zM32 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM17 8h1v1h-1zM23 8h1v1h-1zM26 8h1v1h-1zM28 8h3v1h-3zM32 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h5v1h-5zM26 9h1v1h-1zM32 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h7v1h-7zM12 11h2v1h-2zM15 11h1v1h-1zM17 11h2v1h-2zM21 11h1v1h-1zM24 11h1v1h-1zM4 12h1v1h-1zM6 12h2v1h-2zM9 12h3v1h-3zM13 12h1v1h-1zM15 12h4v1h-4zM21 12h3v1h-3zM26 12h1v1h-1zM29 12h1v1h-1zM31 12h2v1h-2zM4 13h1v1h-1zM6 13h1v1h-1zM11 13h2v1h-2zM15 13h2v1h-2zM20 13h1v1h-1zM22 13h3v1h-3zM26 13h3v1h-3zM32 13h1v1h-1zM5 14h2v1h-2zM8 14h1v1h-1zM10 14h1v1h-1zM13 14h1v1h-1zM15 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM30 14h2v1h-2zM7 15h3v1h-3zM11 15h1v1h-1zM13 15h8v1h-8zM22 15h5v1h-5zM28 15h1v1h-1zM32 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM10 16h4v1h-4zM15 16h2v1h-2zM19 16h5v1h-5zM29 16h2v1h-2zM6 17h2v1h-2zM9 17h1v1h-1zM12 17h1v1h-1zM14 17h4v1h-4zM19 17h2v1h-2zM23 17h1v1h-1zM26 17h1v1h-1zM30 17h3v1h-3zM4 18h2v1h-2zM7 18h1v1h-1zM10 18h1v1h-1zM13 18h2v1h-2zM16 18h1v1h-1zM18 18h1v1h-1zM21 18h4v1h-4zM26 18h1v1h-1zM30 18h3v1h-3zM4 19h5v1h-5zM11 19h7v1h-7zM19 19h1v1h-1zM23 19h6v1h-6zM31 19h1v1h-1zM5 20h4v1h-4zM10 20h3v1h-3zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h1v1h-1zM22 20h3v1h-3zM28 20h2v1h-2zM31 20h1v1h-1zM5 21h4v1h-4zM11 21h3v1h-3zM15 21h1v1h-1zM17 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM27 21h1v1h-1zM29 21h3v1h-3zM4 22h1v1h-1zM6 22h1v1h-1zM8 22h1v1h-1zM10 22h4v1h-4zM15 22h1v1h-1zM19 22h1v1h-1zM21 22h2v1h-2zM24 22h1v1h-1zM26 22h3v1h-3zM30 22h1v1h-1zM7 23h2v1h-2zM12 23h1v1h-1zM16 23h1v1h-1zM20 23h2v1h-2zM26 23h3v1h-3zM30 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h2v1h-2zM12 24h1v1h-1zM14 24h2v1h-2zM17 24h1v1h-1zM19 24h4v1h-4zM24 24h7v1h-7zM12 25h1v1h-1zM14 25h1v1h-1zM17 25h2v1h-2zM20 25h3v1h-3zM24 25h1v1h-1zM28 25h5v1h-5zM4 26h7v1h-7zM12 26h1v1h-1zM14 26h1v1h-1zM16 26h2v1h-2zM20 26h1v1h-1zM22 26h3v1h-3zM26 26h1v1h-1zM28 26h2v1h-2zM31 26h1v1h-1zM4 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM28 27h2v1h-2zM31 27h1v1h-1zM4 28h1v1h-1zM6 28h3v1h-3zM10 28h1v1h-1zM13 28h4v1h-4zM18 28h1v1h-1zM21 28h1v1h-1zM24 28h5v1h-5zM30 28h2v1h-2zM4 29h1v1h-1zM6 29h3v1h-3zM10 29h1v1h-1zM12 29h1v1h-1zM14 29h3v1h-3zM18 29h3v1h-3zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h3v1h-3zM32 29h1v1h-1zM4 30h1v1h-1zM6 30h3v1h-3zM10 30h1v1h-1zM12 30h1v1h-1zM18 30h1v1h-1zM20 30h3v1h-3zM24 30h1v1h-1zM27 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM13 31h2v1h-2zM16 31h5v1h-5zM22 31h1v1h-1zM24 31h2v1h-2zM27 31h1v1h-1zM29 31h1v1h-1zM31 31h1v1h-1zM4 32h7v1h-7zM12 32h4v1h-4zM18 32h1v1h-1zM20 32h1v1h-1zM22 32h5v1h-5zM31 32h1v1h-1z"/></svg><p><a href="https://github.com/making/rontolisp">https://github.com/making/rontolisp</a></p></div>
+<div class="centered"><h1 class="deck-title">rontolisp deep dive</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>3</p></div>
+<div class="qr right" style="left:1350px;top:646px;width:458px"><svg class="qr-code" viewBox="0 0 37 37" width="320" height="320" role="img" aria-label="QR code: https://github.com/making/rontolisp" shape-rendering="crispEdges"><rect width="37" height="37" fill="#fff"/><path fill="#000" d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM19 4h6v1h-6zM26 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM14 5h3v1h-3zM18 5h2v1h-2zM21 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM14 6h1v1h-1zM17 6h3v1h-3zM22 6h1v1h-1zM26 6h1v1h-1zM28 6h3v1h-3zM32 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h4v1h-4zM21 7h1v1h-1zM23 7h1v1h-1zM26 7h1v1h-1zM28 7h3v1h-3zM32 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM17 8h1v1h-1zM23 8h1v1h-1zM26 8h1v1h-1zM28 8h3v1h-3zM32 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h5v1h-5zM26 9h1v1h-1zM32 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h7v1h-7zM12 11h2v1h-2zM15 11h1v1h-1zM17 11h2v1h-2zM21 11h1v1h-1zM24 11h1v1h-1zM4 12h1v1h-1zM6 12h2v1h-2zM9 12h3v1h-3zM13 12h1v1h-1zM15 12h4v1h-4zM21 12h3v1h-3zM26 12h1v1h-1zM29 12h1v1h-1zM31 12h2v1h-2zM4 13h1v1h-1zM6 13h1v1h-1zM11 13h2v1h-2zM15 13h2v1h-2zM20 13h1v1h-1zM22 13h3v1h-3zM26 13h3v1h-3zM32 13h1v1h-1zM5 14h2v1h-2zM8 14h1v1h-1zM10 14h1v1h-1zM13 14h1v1h-1zM15 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM30 14h2v1h-2zM7 15h3v1h-3zM11 15h1v1h-1zM13 15h8v1h-8zM22 15h5v1h-5zM28 15h1v1h-1zM32 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM10 16h4v1h-4zM15 16h2v1h-2zM19 16h5v1h-5zM29 16h2v1h-2zM6 17h2v1h-2zM9 17h1v1h-1zM12 17h1v1h-1zM14 17h4v1h-4zM19 17h2v1h-2zM23 17h1v1h-1zM26 17h1v1h-1zM30 17h3v1h-3zM4 18h2v1h-2zM7 18h1v1h-1zM10 18h1v1h-1zM13 18h2v1h-2zM16 18h1v1h-1zM18 18h1v1h-1zM21 18h4v1h-4zM26 18h1v1h-1zM30 18h3v1h-3zM4 19h5v1h-5zM11 19h7v1h-7zM19 19h1v1h-1zM23 19h6v1h-6zM31 19h1v1h-1zM5 20h4v1h-4zM10 20h3v1h-3zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h1v1h-1zM22 20h3v1h-3zM28 20h2v1h-2zM31 20h1v1h-1zM5 21h4v1h-4zM11 21h3v1h-3zM15 21h1v1h-1zM17 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM27 21h1v1h-1zM29 21h3v1h-3zM4 22h1v1h-1zM6 22h1v1h-1zM8 22h1v1h-1zM10 22h4v1h-4zM15 22h1v1h-1zM19 22h1v1h-1zM21 22h2v1h-2zM24 22h1v1h-1zM26 22h3v1h-3zM30 22h1v1h-1zM7 23h2v1h-2zM12 23h1v1h-1zM16 23h1v1h-1zM20 23h2v1h-2zM26 23h3v1h-3zM30 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h2v1h-2zM12 24h1v1h-1zM14 24h2v1h-2zM17 24h1v1h-1zM19 24h4v1h-4zM24 24h7v1h-7zM12 25h1v1h-1zM14 25h1v1h-1zM17 25h2v1h-2zM20 25h3v1h-3zM24 25h1v1h-1zM28 25h5v1h-5zM4 26h7v1h-7zM12 26h1v1h-1zM14 26h1v1h-1zM16 26h2v1h-2zM20 26h1v1h-1zM22 26h3v1h-3zM26 26h1v1h-1zM28 26h2v1h-2zM31 26h1v1h-1zM4 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM28 27h2v1h-2zM31 27h1v1h-1zM4 28h1v1h-1zM6 28h3v1h-3zM10 28h1v1h-1zM13 28h4v1h-4zM18 28h1v1h-1zM21 28h1v1h-1zM24 28h5v1h-5zM30 28h2v1h-2zM4 29h1v1h-1zM6 29h3v1h-3zM10 29h1v1h-1zM12 29h1v1h-1zM14 29h3v1h-3zM18 29h3v1h-3zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h3v1h-3zM32 29h1v1h-1zM4 30h1v1h-1zM6 30h3v1h-3zM10 30h1v1h-1zM12 30h1v1h-1zM18 30h1v1h-1zM20 30h3v1h-3zM24 30h1v1h-1zM27 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM13 31h2v1h-2zM16 31h5v1h-5zM22 31h1v1h-1zM24 31h2v1h-2zM27 31h1v1h-1zM29 31h1v1h-1zM31 31h1v1h-1zM4 32h7v1h-7zM12 32h4v1h-4zM18 32h1v1h-1zM20 32h1v1h-1zM22 32h5v1h-5zM31 32h1v1h-1z"/></svg><p><a href="https://github.com/making/rontolisp">https://github.com/making/rontolisp</a></p></div>
 </section>
 <section class="slide layout-standard" id="s2" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
@@ -201,7 +201,7 @@ html:not(.js) #fs{display:none}
 <svg class="dg-art" width="1505" height="100" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="200" height="100" rx="12"/><rect class="dg-b" x="272" y="0" width="344" height="100" rx="12"/><rect class="dg-b" x="688" y="0" width="296" height="100" rx="12"/><rect class="dg-b" x="1056" y="0" width="449" height="100" rx="12"/><rect class="dg-f" x="4" y="4" width="192" height="92" rx="8"/><rect class="dg-f" x="276" y="4" width="336" height="92" rx="8"/><rect class="dg-f" x="692" y="4" width="288" height="92" rx="8"/><rect class="dg-f" x="1060" y="4" width="441" height="92" rx="8"/><rect class="dg-e" x="208" y="48" width="37" height="4"/><polygon class="dg-e" points="245,38 264,50 245,62"/><rect class="dg-e" x="624" y="48" width="37" height="4"/><polygon class="dg-e" points="661,38 680,50 661,62"/><rect class="dg-e" x="992" y="48" width="37" height="4"/><polygon class="dg-e" points="1029,38 1048,50 1029,62"/></svg>
 <ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:200px;height:100px;padding-top:16px">ソース</li><li class="dg-l" style="left:272px;top:0px;width:344px;height:100px;padding-top:16px">コアフォーム</li><li class="dg-l" style="left:688px;top:0px;width:296px;height:100px;padding-top:16px">マクロ展開</li><li class="dg-l" style="left:1056px;top:0px;width:449px;height:100px;padding-top:16px">評価 / コンパイル</li></ol>
 </figure>
-<ul><li><code>SourceLanguage</code> が<wbr>言語ごとに<wbr>読み込み、<wbr>コアフォームに<wbr>下げる</li><li>インタプリタ (<code>LispEvaluator</code>) が<wbr>評価し、<wbr>JVM と WASM の<wbr>コンパイラが<wbr>バイト列に<wbr>する</li><li>WASM は Preview 1&nbsp;と<wbr>コンポーネントの<wbr>二通りで、<wbr>合わせて<wbr>四つ</li></ul>
+<ul><li><code>SourceLanguage</code> が<wbr>言語ごとに<wbr>ソースを<wbr>読み、<wbr>コアフォームに<wbr>下げる</li><li>インタプリタ (<code>LispEvaluator</code>) が<wbr>評価し、<wbr>JVM と WASM の<wbr>コンパイラは<wbr>バイト列を<wbr>出力する</li><li>WASM には Preview 1&nbsp;と<wbr>コンポーネントの<wbr>二通りが<wbr>あり、<wbr>バックエンドは<wbr>合わせて<wbr>四つ</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Pipeline), .kb/running<span class="nw">-b</span>ackends.md</p>
 <div class="page">4</div>
@@ -214,7 +214,7 @@ html:not(.js) #fs{display:none}
 <svg class="dg-art" width="1066" height="300" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="136" height="68"/><rect class="dg-b" x="184" y="0" width="136" height="68"/><rect class="dg-b" x="184" y="116" width="136" height="68"/><rect class="dg-b" x="368" y="116" width="136" height="68"/><rect class="dg-b" x="552" y="116" width="136" height="68"/><rect class="dg-b" x="746" y="0" width="136" height="68"/><rect class="dg-b" x="930" y="0" width="136" height="68"/><rect class="dg-f" x="4" y="4" width="62" height="60"/><rect class="dg-f" x="70" y="4" width="62" height="60"/><rect class="dg-f" x="188" y="4" width="62" height="60"/><rect class="dg-f" x="254" y="4" width="62" height="60"/><rect class="dg-f" x="188" y="120" width="62" height="60"/><rect class="dg-f" x="254" y="120" width="62" height="60"/><rect class="dg-f" x="372" y="120" width="62" height="60"/><rect class="dg-f" x="438" y="120" width="62" height="60"/><rect class="dg-f" x="556" y="120" width="62" height="60"/><rect class="dg-f" x="622" y="120" width="62" height="60"/><rect class="dg-f" x="750" y="4" width="62" height="60"/><rect class="dg-f" x="816" y="4" width="62" height="60"/><rect class="dg-f" x="934" y="4" width="62" height="60"/><rect class="dg-f" x="1000" y="4" width="62" height="60"/><circle class="dg-e" cx="34" cy="34" r="6"/><rect class="dg-e" x="32" y="34" width="4" height="63"/><polygon class="dg-e" points="22,97 34,116 46,97"/><circle class="dg-e" cx="102" cy="34" r="6"/><rect class="dg-e" x="102" y="32" width="63" height="4"/><polygon class="dg-e" points="165,22 184,34 165,46"/><circle class="dg-e" cx="218" cy="34" r="6"/><rect class="dg-e" x="216" y="34" width="4" height="63"/><polygon class="dg-e" points="206,97 218,116 230,97"/><circle class="dg-e" cx="218" cy="150" r="6"/><rect class="dg-e" x="216" y="150" width="4" height="63"/><polygon class="dg-e" points="206,213 218,232 230,213"/><circle class="dg-e" cx="286" cy="150" r="6"/><rect class="dg-e" x="286" y="148" width="63" height="4"/><polygon class="dg-e" points="349,138 368,150 349,162"/><circle class="dg-e" cx="402" cy="150" r="6"/><rect class="dg-e" x="400" y="150" width="4" height="63"/><polygon class="dg-e" points="390,213 402,232 414,213"/><circle class="dg-e" cx="470" cy="150" r="6"/><rect class="dg-e" x="470" y="148" width="63" height="4"/><polygon class="dg-e" points="533,138 552,150 533,162"/><circle class="dg-e" cx="586" cy="150" r="6"/><rect class="dg-e" x="584" y="150" width="4" height="63"/><polygon class="dg-e" points="574,213 586,232 598,213"/><polygon class="dg-e" points="622,180 628,180 684,120 678,120"/><circle class="dg-e" cx="286" cy="34" r="6"/><rect class="dg-e" x="286" y="32" width="441" height="4"/><polygon class="dg-e" points="727,22 746,34 727,46"/><circle class="dg-e" cx="780" cy="34" r="6"/><rect class="dg-e" x="778" y="34" width="4" height="63"/><polygon class="dg-e" points="768,97 780,116 792,97"/><circle class="dg-e" cx="848" cy="34" r="6"/><rect class="dg-e" x="848" y="32" width="63" height="4"/><polygon class="dg-e" points="911,22 930,34 911,46"/><circle class="dg-e" cx="964" cy="34" r="6"/><rect class="dg-e" x="962" y="34" width="4" height="63"/><polygon class="dg-e" points="952,97 964,116 976,97"/><polygon class="dg-e" points="1000,64 1006,64 1062,4 1056,4"/></svg>
 <span class="dg-l" style="left:4px;top:116px;width:60px;height:68px">if</span><span class="dg-l" style="left:203px;top:232px;width:30px;height:68px">&lt;</span><span class="dg-l" style="left:387px;top:232px;width:30px;height:68px">x</span><span class="dg-l" style="left:571px;top:232px;width:30px;height:68px">0</span><span class="dg-l" style="left:736px;top:116px;width:89px;height:68px">neg</span><span class="dg-l" style="left:920px;top:116px;width:89px;height:68px">pos</span>
 </figure>
-<ul><li>言語が<wbr>作る <code>List&lt;LispVal&gt;</code> が<wbr>そのまま IR に<wbr>なる</li><li>その<wbr>下に<wbr>別の<wbr>中間表現は<wbr>ない</li></ul>
+<ul><li><code>SourceLanguage</code> が<wbr>返す <code>List&lt;LispVal&gt;</code> が、<wbr>そのまま IR に<wbr>なる</li><li>これより<wbr>低い<wbr>レベルの<wbr>中間表現は<wbr>ない</li></ul>
 </div>
 <div class="say" id="s5c1" role="note" data-side="below" data-at="if" style="left:112px;top:452px;width:490px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:346px"><p>先頭の<wbr>名前で<wbr>分岐する</p></div>
 <p class="source">.kb/source<span class="nw">-l</span>anguage.md, .kb/scheme<span class="nw">-f</span>rontend.md</p>
@@ -263,7 +263,7 @@ html:not(.js) #fs{display:none}
   `(<span class="hl-d">let</span> ((tmp ,a)) (<span class="hl-d">setq</span> ,a ,b) (<span class="hl-d">setq</span> ,b tmp)))
 (print (macroexpand-1 &#39;(swap x y)))
 (macroexpand &#39;(<span class="hl-d">cond</span> ((&lt; x <span class="hl-n">0</span>) &#39;neg) (<span class="hl-n">t</span> &#39;pos)))</code></pre></div>
-<ul><li>バッククォートは<wbr>読み込みの<wbr>時点で list、<wbr>append、<wbr>cons、<wbr>quote に<wbr>展開する</li><li>コンパイルパスでは <code>UserMacroExpander</code> が <code>defmacro</code> を<wbr>マクロ用の<wbr>インタプリタで<wbr>評価し、<wbr>呼び出しを<wbr>展開してから<wbr>定義を<wbr>取り除く</li></ul>
+<ul><li>バッククォートは、<wbr>リーダーが<wbr>読み込み時に list、<wbr>append、<wbr>cons、<wbr>quote の<wbr>呼び出しに<wbr>展開する</li><li>コンパイルパスでは <code>UserMacroExpander</code> が <code>defmacro</code> を<wbr>マクロ用の<wbr>インタプリタで<wbr>評価し、<wbr>呼び出しを<wbr>展開してから<wbr>定義を<wbr>取り除く</li></ul>
 </div>
 <p class="source">.kb/defmacro<span class="nw">-b</span>ackquote.md</p>
 <div class="page">9</div>
@@ -283,7 +283,7 @@ html:not(.js) #fs{display:none}
 <svg class="dg-art" width="1173" height="268" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="228" height="90" rx="12"/><rect class="dg-b" x="294" y="0" width="493" height="90" rx="12"/><rect class="dg-b" x="0" y="178" width="404" height="90" rx="12"/><rect class="dg-b" x="470" y="178" width="409" height="90" rx="12"/><rect class="dg-b" x="945" y="178" width="228" height="90" rx="12"/><rect class="dg-f" x="4" y="4" width="220" height="82" rx="8"/><rect class="dg-f" x="298" y="4" width="485" height="82" rx="8"/><rect class="dg-f" x="4" y="182" width="396" height="82" rx="8"/><rect class="dg-f" x="474" y="182" width="401" height="82" rx="8"/><rect class="dg-f" x="949" y="182" width="220" height="82" rx="8"/><rect class="dg-e" x="235" y="43" width="35" height="4"/><polygon class="dg-e" points="270,34 287,45 270,56"/><rect class="dg-e" x="539" y="97" width="4" height="39"/><rect class="dg-e" x="200" y="132" width="343" height="4"/><rect class="dg-e" x="200" y="132" width="4" height="22"/><polygon class="dg-e" points="191,154 202,171 213,154"/><rect class="dg-e" x="411" y="221" width="35" height="4"/><polygon class="dg-e" points="446,212 463,223 446,234"/><rect class="dg-e" x="886" y="221" width="35" height="4"/><polygon class="dg-e" points="921,212 938,223 921,234"/></svg>
 <ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:228px;height:90px;padding-top:14px">読み込み</li><li class="dg-l" style="left:294px;top:0px;width:493px;height:90px;padding-top:14px"><code>(load ...) の展開</code></li><li class="dg-l" style="left:0px;top:178px;width:404px;height:90px;padding-top:14px">ライブラリの<wbr>接合</li><li class="dg-l" style="left:470px;top:178px;width:409px;height:90px;padding-top:14px">WIT の lowering</li><li class="dg-l" style="left:945px;top:178px;width:228px;height:90px;padding-top:14px">刈り込み</li></ol>
 </figure>
-<ul><li>すべての<wbr>バックエンドと<wbr>埋め込み側が <code>CompileFrontend</code> を<wbr>通る</li><li>パスの<wbr>並びは <code>CompileFrontend.expand</code> にだけ<wbr>書き、<wbr>ほかの<wbr>場所で<wbr>書き直さない</li><li>テストも <code>CompileFrontendAccess</code> から<wbr>前段に<wbr>入る</li></ul>
+<ul><li>すべての<wbr>バックエンドと<wbr>埋め込み側が <code>CompileFrontend</code> を<wbr>通る</li><li>パスの<wbr>並びは <code>CompileFrontend.expand</code> にだけ<wbr>書き、<wbr>ほかの<wbr>場所で<wbr>書き直さない</li><li>テストも <code>CompileFrontendAccess</code> を<wbr>通して<wbr>前段を<wbr>呼ぶ</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Package rules)</p>
 <div class="page">11</div>
@@ -298,18 +298,18 @@ html:not(.js) #fs{display:none}
       UserMacroExpander.expand(...), ...), ...), ...);
 ...
 program = LibraryDefunPruner.prune(program);</code></pre>
-<p>並びに<wbr>意味が<wbr>ある。<wbr>Scheme の<wbr>実行時ライブラリは、<wbr>それが<wbr>使う<wbr>文字列比較を<wbr>含む<wbr>プレリュードの<wbr>内側に<wbr>接合する。</p>
+<p>呼び出しの<wbr>順序には<wbr>意味が<wbr>ある。<wbr>Scheme の<wbr>実行時ライブラリは<wbr>プレリュードの<wbr>文字列比較を<wbr>使うので、<wbr>プレリュードの<wbr>内側に<wbr>接合する。</p>
 </div>
 <div class="say" id="s12c1" role="note" data-side="right" data-at="prune(program);" style="left:1361px;top:554px;width:446px;height:82px;--say:40px;--say-lh:56px;--say-x:20px;--say-y:10px;--tail:38px"><p>使わない<wbr>定義を<wbr>落とす</p></div>
 <p class="source">src/main/java/am/ik/rontolisp/cli/CompileFrontend.java からの<wbr>抜粋, .kb/scheme<span class="nw">-f</span>rontend.md</p>
 <div class="page">12</div>
 </section>
-<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">CompileFrontend.expand</p>
 <h1 class="title">書き直しを<wbr>禁じた<wbr>経緯</h1>
 <div class="body" style="top:232px;height:712px">
-<p class="lead">二つの<wbr>コーパス検査が、<wbr>パスの<wbr>並びを<wbr>写して<wbr>持っていた</p>
-<ul><li><code>tokenizer:</code> の<wbr>ケースが <code>ci<span class="nw">-s</span>pec.yaml</code> に<wbr>入った<wbr>時点で 8&nbsp;パス、<wbr>直した<wbr>時点で 10&nbsp;パス遅れていた</li><li>名前を<wbr>数えても<wbr>見えない<wbr>位置の<wbr>ずれも<wbr>あった (<code>VecLibrary</code>)</li><li><code>JvmOsrBackedgeCorpusTest</code> は 2026<span class="nw">-0</span>9<span class="nw">-1</span>9&nbsp;まで<wbr>写しを<wbr>持ち、<wbr>11&nbsp;の<wbr>接合に<wbr>遅れ、<wbr>成功する<wbr>たびに<wbr>警告を 10&nbsp;行出していた</li></ul>
+<p class="lead">二つの<wbr>コーパス検査が<wbr>パスの<wbr>並びの<wbr>写しを<wbr>持ち、<wbr>本体から<wbr>ずれていった</p>
+<ul><li><code>tokenizer:</code> の<wbr>ケースが <code>ci<span class="nw">-s</span>pec.yaml</code> に<wbr>入った<wbr>時点で 8&nbsp;パス、<wbr>直した<wbr>時点で 10&nbsp;パス遅れていた</li><li>パスの<wbr>名前を<wbr>数えるだけでは<wbr>見つからない、<wbr>位置の<wbr>ずれも<wbr>あった (<code>VecLibrary</code>)</li><li><code>JvmOsrBackedgeCorpusTest</code> は 2026<span class="nw">-0</span>9<span class="nw">-1</span>9&nbsp;まで<wbr>写しを<wbr>持ち、<wbr>接合 11&nbsp;個分遅れて、<wbr>成功する<wbr>たびに<wbr>警告を 10&nbsp;行出していた</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Package rules)</p>
 <div class="page">13</div>
@@ -325,17 +325,17 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">既定の<wbr>実行経路は<wbr>インタプリタ</h1>
 <div class="body" style="top:232px;height:712px">
-<p><code><span class="nw">-o</span></code> の<wbr>ない <code>rontolisp app.lisp</code> は <code>LispEvaluator</code> で<wbr>動かす。<wbr>そう<wbr>決めてある。</p>
-<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">測った<wbr>もの</th><th scope="col">値</th></tr></thead><tbody><tr><td>インタプリタの<wbr>ループ (SBCL 比)</td><td>20〜240&nbsp;倍遅い</td></tr><tr><td><code>java <span class="nw">-j</span>ar</code> の<wbr>コンパイルの<wbr>固定費</td><td>約 0.6&nbsp;秒</td></tr><tr><td>前段 (温まった<wbr>後)</td><td>約 4&nbsp;ms</td></tr><tr><td>JVM の<wbr>コード生成 (温まった<wbr>後)</td><td>約 140&nbsp;ms</td></tr><tr><td>ネイティブバイナリの<wbr>コンパイル全体</td><td>約 0.16&nbsp;秒</td></tr></tbody></table>
+<p><code><span class="nw">-o</span></code> の<wbr>ない <code>rontolisp app.lisp</code> は、<wbr>コンパイルせずに <code>LispEvaluator</code> で<wbr>実行する。</p>
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">測った<wbr>もの</th><th scope="col">値</th></tr></thead><tbody><tr><td>インタプリタの<wbr>ループ (SBCL 比)</td><td>20〜240&nbsp;倍遅い</td></tr><tr><td><code>java <span class="nw">-j</span>ar</code> の<wbr>コンパイルの<wbr>固定費</td><td>約 0.6&nbsp;秒</td></tr><tr><td>前段 (温まった<wbr>後)</td><td>約 4&nbsp;ms</td></tr><tr><td>JVM の<wbr>コード生成 (温まった<wbr>後)</td><td>約 140&nbsp;ms</td></tr><tr><td>ネイティブバイナリでの<wbr>コンパイル全体</td><td>約 0.16&nbsp;秒</td></tr></tbody></table>
 </div>
 <p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
 <div class="page">15</div>
 </section>
-<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">実行エンジンを<wbr>自動で<wbr>切り<wbr>替えない<wbr>理由</h1>
 <div class="body" style="top:232px;height:712px">
-<ul><li>固定費の<wbr>大半は、<wbr>コンパイラ自身の<wbr>クラスロードと JIT の<wbr>ウォームアップ</li><li>メモリ上で<wbr>コンパイルして<wbr>実行すると、<wbr><code>java <span class="nw">-j</span>ar</code> で <code>(print &#39;hi)</code> が 2.2&nbsp;倍遅くなる</li><li>ネイティブバイナリは、<wbr>実行時に<wbr>クラスを<wbr>定義できない</li><li>エンジンを<wbr>切り<wbr>替えると、<wbr>経路の<wbr>間の<wbr>差が<wbr>そのまま<wbr>挙動の<wbr>変化に<wbr>なる</li></ul>
+<ul><li>固定費の<wbr>大半は、<wbr>コンパイラ自身の<wbr>クラスロードと JIT の<wbr>ウォームアップ</li><li>メモリ上で<wbr>コンパイルして<wbr>実行すると、<wbr><code>java <span class="nw">-j</span>ar</code> で <code>(print &#39;hi)</code> が 2.2&nbsp;倍遅くなる</li><li>rontolisp の<wbr>ネイティブバイナリは、<wbr>実行時に<wbr>クラスを<wbr>定義できない</li><li>実行の<wbr>たびに<wbr>エンジンが<wbr>変わると、<wbr>インタプリタと<wbr>コンパイル経路の<wbr>食い<wbr>違いが、<wbr>そのまま<wbr>気付きにくい<wbr>挙動の<wbr>変化に<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
 <div class="page">16</div>
@@ -345,7 +345,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <h1 class="title">自由変数の<wbr>解析が<wbr>一つ<wbr>抜けると</h1>
 <div class="body" style="top:232px;height:712px">
 <p><code>FreeVarAnalyzer</code> が<wbr>フォームの<wbr>一部を<wbr>読み飛ばしても、<wbr>コンパイルエラーには<wbr>ならない。<wbr>結果は<wbr>三通りに<wbr>分かれる。</p>
-<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">結果</th></tr></thead><tbody><tr><td>インタプリタ</td><td>正しい (環境ごと<wbr>捕捉する)</td></tr><tr><td>JVM</td><td>新しい<wbr>コピーを<wbr>読み、<wbr>黙って<wbr>誤る</td></tr><tr><td>WASM</td><td>コンパイル時に<wbr>拒否する</td></tr></tbody></table>
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">結果</th></tr></thead><tbody><tr><td>インタプリタ</td><td>正しい (環境ごと<wbr>捕捉する)</td></tr><tr><td>JVM</td><td>変数の<wbr>新しい<wbr>コピーを<wbr>読み、<wbr>エラーなしに<wbr>誤った<wbr>結果を<wbr>出す</td></tr><tr><td>WASM</td><td>コンパイル時に<wbr>拒否する</td></tr></tbody></table>
 </div>
 <p class="source">.kb/core<span class="nw">-r</span>epresentation.md (Three<span class="nw">-p</span>ass compilation)</p>
 <div class="page">17</div>
@@ -364,14 +364,14 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">末尾呼び出しの<wbr>実装は<wbr>経路ごとに<wbr>違う</h1>
 <div class="body" style="top:232px;height:712px">
-<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>どれも<wbr>定数スタックで<wbr>動き、<wbr>出力は<wbr>変わらない</caption><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">仕組み</th></tr></thead><tbody><tr><td>インタプリタ</td><td><code>eval</code> の<wbr>ループで、<wbr>末尾の<wbr>フォームが<wbr>フレームを<wbr>置き換える</td></tr><tr><td>JVM</td><td>自分への<wbr>末尾呼び出しは<wbr>メソッドの<wbr>先頭への <code>goto</code>。<wbr>関数値を<wbr>通すものは 64&nbsp;個を<wbr>超えると<wbr>トランポリン</td></tr><tr><td>WASM</td><td>末尾位置の<wbr>呼び出しを<wbr>すべて <code>return_call</code> で<wbr>出す</td></tr></tbody></table>
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>どれも<wbr>定数スタックで<wbr>動き、<wbr>出力は<wbr>変わらない</caption><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">仕組み</th></tr></thead><tbody><tr><td>インタプリタ</td><td><code>eval</code> の<wbr>ループで、<wbr>末尾の<wbr>フォームが<wbr>フレームを<wbr>置き換える</td></tr><tr><td>JVM</td><td>自分への<wbr>末尾呼び出しは<wbr>メソッドの<wbr>先頭への <code>goto</code>。<wbr>関数値を<wbr>通す末尾呼び出しは、<wbr>64&nbsp;回を<wbr>超えて<wbr>続くと<wbr>トランポリンに<wbr>切り<wbr>替える</td></tr><tr><td>WASM</td><td>末尾位置の<wbr>呼び出しを<wbr>すべて <code>return_call</code> で<wbr>出す</td></tr></tbody></table>
 </div>
 <p class="source">.kb/interpreter<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-s</span>elf<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-t</span>ail<span class="nw">-b</span>ounce.md, .kb/wasm<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md</p>
 <div class="page">19</div>
 </section>
 <section class="slide layout-standard" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">インタプリタと JVM</p>
-<h1 class="title">定数スタックで<wbr>回す</h1>
+<h1 class="title">定数スタックで<wbr>動く<wbr>末尾再帰</h1>
 <div class="body" style="top:232px;height:712px">
 <p>ブラウザで<wbr>動く<wbr>インタプリタでも、<wbr>末尾呼び出しは<wbr>フレームを<wbr>積まない。</p>
 <div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s20c1"><code>(<span class="hl-d">defun</span> count-down (n)
@@ -393,7 +393,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">WASM: 値は GC ヒープに<wbr>置く</h1>
 <div class="body" style="top:232px;height:712px">
-<ul><li>整数は <code>i31ref</code>。<wbr>fixnum の<wbr>範囲を<wbr>超えると 64&nbsp;ビットの<wbr>構造体、<wbr>さらに<wbr>超えると<wbr>多倍長整数</li><li>浮動小数点数は<wbr>構造体に<wbr>ボックス化する</li><li>文字列は<wbr>バイトの<wbr>配列 (<code>$str_bytes</code>)</li><li>モジュールは<wbr>アロケータを<wbr>持たない</li><li><code><span class="nw">--n</span>o<span class="nw">-g</span>c</code> は<wbr>純粋計算の<wbr>サブセットを、<wbr>スカラーと<wbr>リニアメモリの<wbr>文字列に<wbr>下げる</li></ul>
+<ul><li>整数は <code>i31ref</code>。<wbr>fixnum の<wbr>範囲を<wbr>超えると 64&nbsp;ビットの<wbr>構造体、<wbr>さらに<wbr>超えると<wbr>多倍長整数</li><li>浮動小数点数は<wbr>構造体に<wbr>ボックス化する</li><li>文字列は<wbr>バイトの<wbr>配列 (<code>$str_bytes</code>)</li><li>モジュールは<wbr>アロケータを<wbr>持たない</li><li><code><span class="nw">--n</span>o<span class="nw">-g</span>c</code> は、<wbr>純粋な<wbr>計算に<wbr>限った<wbr>プログラムを、<wbr>スカラーと<wbr>リニアメモリの<wbr>文字列に<wbr>下げる</li></ul>
 </div>
 <p class="source">doc/ja/compiling/wasm.md, .kb/wasm<span class="nw">-g</span>c<span class="nw">-s</span>trings.md, size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md</p>
 <div class="page">22</div>
@@ -402,7 +402,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">例外処理は<wbr>プログラムが<wbr>使う<wbr>ときだけ</h1>
 <div class="body" style="top:232px;height:712px">
-<ul><li><code>handler<span class="nw">-c</span>ase</code>、<wbr><code>ignore<span class="nw">-e</span>rrors</code>、<wbr><code>unwind<span class="nw">-p</span>rotect</code> を<wbr>含む<wbr>プログラムだけを EH モードで<wbr>コンパイルする</li><li>EH モードでは<wbr>タグ <code>$lisp<span class="nw">-c</span>ond</code> を<wbr>一つ<wbr>置き、<wbr><code>try_table</code> と <code>throw</code> で<wbr>捕まえる</li><li>それ以外の<wbr>プログラムは、<wbr>EH を<wbr>知らない<wbr>ビルドと<wbr>バイト単位で<wbr>同じに<wbr>なる</li><li><code>ref.cast</code> の<wbr>失敗のような trap は<wbr>捕まえられない</li></ul>
+<ul><li><code>handler<span class="nw">-c</span>ase</code>、<wbr><code>ignore<span class="nw">-e</span>rrors</code>、<wbr><code>unwind<span class="nw">-p</span>rotect</code> を<wbr>含む<wbr>プログラムだけを EH モードで<wbr>コンパイルする</li><li>EH モードでは<wbr>タグ <code>$lisp<span class="nw">-c</span>ond</code> を<wbr>一つ<wbr>置き、<wbr><code>try_table</code> と <code>throw</code> で<wbr>捕まえる</li><li>それ以外の<wbr>プログラムは、<wbr>EH 対応の<wbr>ない<wbr>コンパイラの<wbr>出力と<wbr>バイト単位で<wbr>同じに<wbr>なる</li><li><code>ref.cast</code> の<wbr>失敗のような trap は<wbr>捕まえられない</li></ul>
 </div>
 <p class="source">.kb/error<span class="nw">-h</span>andling.md (WASM EH<span class="nw">-m</span>ode specifics)</p>
 <div class="page">23</div>
@@ -412,11 +412,11 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <h1 class="title">着地パッドで<wbr>局所変数を<wbr>読み直す</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">コーパス全体が、<wbr>コードの<wbr>大きさに<wbr>よって <code>cast failure</code> で<wbr>落ちたり<wbr>通ったりした</p>
-<ul><li>Cranelift が<wbr>局所変数を、<wbr>呼び出しの<wbr>前に<wbr>評価した<wbr>引数と<wbr>して<wbr>着地パッドに<wbr>渡していた</li><li>呼び出しの<wbr>間に<wbr>コピー GC が<wbr>オブジェクトを<wbr>動かすと、<wbr>パッドは<wbr>古い<wbr>参照を<wbr>受け取る</li><li>対策と<wbr>して、<wbr>パッドの<wbr>最初で、<wbr>その後に<wbr>使う<wbr>局所変数を<wbr>読み直す</li></ul>
+<ul><li>Cranelift は<wbr>局所変数を、<wbr>呼び出しの<wbr>前に<wbr>評価した<wbr>引数と<wbr>して<wbr>着地パッドに<wbr>渡していた</li><li>呼び出しの<wbr>間に<wbr>コピー GC が<wbr>オブジェクトを<wbr>動かすと、<wbr>パッドは<wbr>古い<wbr>参照を<wbr>受け取る</li><li>対策と<wbr>して、<wbr>パッドの<wbr>先頭で、<wbr>その後に<wbr>使う<wbr>局所変数を<wbr>読み直す</li></ul>
 </div>
 <p class="source">.kb/wasm<span class="nw">-l</span>anding<span class="nw">-p</span>ad<span class="nw">-r</span>efresh.md, .kb/wasi<span class="nw">-c</span>omponent.md</p>
 <div class="page">24</div>
-<aside class="notes">3,590 行の実行の 3,587 行目で trap した。GC の事前拡張がコードの大きさに比例するので、ケースを一つ足すだけで結果が変わった。</aside>
+<aside class="notes">3,590 行を出力する実行の 3,587 行目で trap した。落ちるか通るかは、その呼び出しの間に GC が起きるかどうかだけで決まる。GC ヒープの事前拡張はコードのバイト数に比例するので、ケースを一つ足すだけで GC の時期がずれ、結果が変わった。</aside>
 </section>
 <section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
@@ -426,26 +426,26 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <svg class="dg-art" width="1402" height="152" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="521" height="152" rx="12"/><rect class="dg-b" x="587" y="0" width="228" height="152" rx="12"/><rect class="dg-b" x="881" y="0" width="521" height="152" rx="12"/><rect class="dg-f" x="4" y="4" width="513" height="144" rx="8"/><rect class="dg-f" x="591" y="4" width="220" height="144" rx="8"/><rect class="dg-f" x="885" y="4" width="513" height="144" rx="8"/><rect class="dg-e" x="528" y="74" width="35" height="4"/><polygon class="dg-e" points="563,65 580,76 563,87"/><rect class="dg-e" x="822" y="74" width="35" height="4"/><polygon class="dg-e" points="857,65 874,76 857,87"/></svg>
 <ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:521px;height:152px;padding-top:14px">コアモジュール (Preview 1)</li><li class="dg-l" style="left:587px;top:0px;width:228px;height:152px;padding-top:45px">アダプタ</li><li class="dg-l" style="left:881px;top:0px;width:521px;height:152px;padding-top:14px">WASI 0.3&nbsp;の<wbr>コンポーネント</li></ol>
 </figure>
-<ul><li>コアモジュールは Preview 1&nbsp;の<wbr>出力と<wbr>同じ<wbr>ものを<wbr>使う</li><li>アダプタが <code>wasi_snapshot_preview1</code> の 15&nbsp;関数を、<wbr>WASI 0.3&nbsp;の stream と future で<wbr>実装する</li><li><code><span class="nw">--o</span>ptimize</code> は<wbr>使う<wbr>インタフェースだけを<wbr>残す。<wbr><code>(print &quot;Hello World!&quot;)</code> では 11&nbsp;から 3&nbsp;に、<wbr>7,690&nbsp;B から 2,138&nbsp;B に<wbr>なる</li></ul>
+<ul><li>コアモジュールは Preview 1&nbsp;の<wbr>出力と<wbr>同じ<wbr>ものを<wbr>使う</li><li>アダプタが <code>wasi_snapshot_preview1</code> の 15&nbsp;関数を、<wbr>WASI 0.3&nbsp;の stream と future で<wbr>実装する</li><li><code><span class="nw">--o</span>ptimize</code> は<wbr>使う<wbr>インタフェースだけを<wbr>残す。<wbr><code>(print &quot;Hello World!&quot;)</code> では、<wbr>インタフェースが 11&nbsp;から 3&nbsp;に、<wbr>インポートの<wbr>ブロックが 7,690&nbsp;B から 2,138&nbsp;B に<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/wasi<span class="nw">-c</span>omponent.md</p>
 <div class="page">25</div>
 </section>
 <section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
-<h1 class="title">大きさは<wbr>刈り込みで<wbr>決まる</h1>
+<h1 class="title">刈り込みで<wbr>変わる .wasm の<wbr>大きさ</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">chipz で gunzip する<wbr>プログラムの <code>.wasm</code></p>
 <figure class="dg" style="width:1696px;height:398px;--dg:44px;--dg-lh:62px;--dg-x:26px" aria-describedby="s26c1">
 <svg class="dg-art" width="1696" height="398" aria-hidden="true"><rect class="dg-b" x="591" y="11" width="838" height="62"/><rect class="dg-b" x="591" y="95" width="203" height="62"/><rect class="dg-b" x="591" y="179" width="155" height="62"/><rect class="dg-b" x="591" y="294" width="161" height="62"/></svg>
 <p class="dg-l dg-t" style="left:0px;top:11px;width:565px;height:62px"><span class="nw">--o</span>ptimize=off</p><p class="dg-l dg-v" style="left:1455px;top:11px;width:241px;height:62px">550,484 B</p><p class="dg-l dg-t" style="left:0px;top:95px;width:565px;height:62px"><span class="nw">--o</span>ptimize (既定)</p><p class="dg-l dg-v" style="left:820px;top:95px;width:240px;height:62px">133,689 B</p><p class="dg-l dg-t" style="left:0px;top:179px;width:565px;height:62px"><span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:772px;top:179px;width:240px;height:62px">102,171 B</p><p class="dg-l dg-t" style="left:0px;top:263px;width:565px;height:124px"><span class="nw">--c</span>omponent <span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:778px;top:294px;width:240px;height:62px">106,355 B</p>
 </figure>
-<p>Hello, World! だけを<wbr>出す<wbr>プログラムは 271,101&nbsp;B から 480&nbsp;B に<wbr>なる。</p>
+<p>Hello, World! だけを<wbr>出す<wbr>プログラムは、<wbr><code><span class="nw">--o</span>ptimize=off</code> の 271,101&nbsp;B から<wbr>既定の 480&nbsp;B に<wbr>なる。</p>
 </div>
 <div class="say" id="s26c1" role="note" data-side="right" data-at="--optimize (既定)" style="left:1208px;top:433px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>既定で<wbr>刈り込む</p></div>
 <p class="source">size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md (2026<span class="nw">-1</span>0<span class="nw">-1</span>5&nbsp;測定)</p>
 <div class="page">26</div>
-<aside class="notes">大きさは一つの量ではない。バイト列を動かすと、生のサイズは減り gzip 後のサイズは増えることがある (.kb/size-measurement.md)。</aside>
+<aside class="notes">「大きさ」は一つの量ではない。バイト列を削らずに別の場所へ移すと、生のサイズは減っても gzip 後のサイズは増えることがある (.kb/size-measurement.md)。</aside>
 </section>
 <section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
@@ -455,7 +455,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <svg class="dg-art" width="1662" height="138" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="181" height="138" rx="12"/><rect class="dg-b" x="241" y="0" width="525" height="138" rx="12"/><rect class="dg-b" x="826" y="0" width="488" height="138" rx="12"/><rect class="dg-b" x="1374" y="0" width="288" height="138" rx="12"/><rect class="dg-f" x="4" y="4" width="173" height="130" rx="8"/><rect class="dg-f" x="245" y="4" width="517" height="130" rx="8"/><rect class="dg-f" x="830" y="4" width="480" height="130" rx="8"/><rect class="dg-f" x="1378" y="4" width="280" height="130" rx="8"/><rect class="dg-e" x="187" y="67" width="32" height="4"/><polygon class="dg-e" points="219,59 235,69 219,79"/><rect class="dg-e" x="772" y="67" width="32" height="4"/><polygon class="dg-e" points="804,59 820,69 804,79"/><rect class="dg-e" x="1320" y="67" width="32" height="4"/><polygon class="dg-e" points="1352,59 1368,69 1352,79"/></svg>
 <ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:181px;height:138px;padding-top:41px"><code>.wasm</code></li><li class="dg-l" style="left:241px;top:0px;width:525px;height:138px;padding-top:13px">wasmtime で<wbr>プリコンパイル</li><li class="dg-l" style="left:826px;top:0px;width:488px;height:138px;padding-top:41px">ランナーの<wbr>後ろに<wbr>付ける</li><li class="dg-l" style="left:1374px;top:0px;width:288px;height:138px;padding-top:41px">実行ファイル</li></ol>
 </figure>
-<ul><li>Linux では <code>stub ++ module ++ 長さ ++ &quot;RLNATIVE&quot;</code>、<wbr>macOS では<wbr>署名した Mach<span class="nw">-O</span> の<wbr>中に<wbr>モジュールを<wbr>置く</li><li>プリコンパイラと<wbr>ランナーは<wbr>同じ wasmtime の<wbr>設定で<wbr>作り、<wbr>指紋が<wbr>違えば<wbr>書き出す前に<wbr>拒否する</li><li>Rust の<wbr>ワークスペース (<code>rontolisp<span class="nw">-n</span>ative/</code>) は Maven の<wbr>外に<wbr>あり、<wbr>コアは<wbr>依存を<wbr>持たないまま</li></ul>
+<ul><li>Linux では <code>stub ++ module ++ 長さ ++ &quot;RLNATIVE&quot;</code>、<wbr>macOS では<wbr>署名した Mach<span class="nw">-O</span> の<wbr>中に<wbr>モジュールを<wbr>置く</li><li>プリコンパイラと<wbr>ランナーは<wbr>同じ wasmtime の<wbr>設定で<wbr>作り、<wbr>指紋が<wbr>違えば<wbr>書き出す前に<wbr>拒否する</li><li>Rust の<wbr>ワークスペース (<code>rontolisp<span class="nw">-n</span>ative/</code>) は Maven の<wbr>外に<wbr>あり、<wbr>コアは<wbr>外部依存を<wbr>持たないままに<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/native<span class="nw">-o</span>utput.md</p>
 <div class="page">27</div>
@@ -468,7 +468,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-b" x="382" y="12" width="1109" height="68"/><rect class="dg-b" x="382" y="104" width="1003" height="68"/><rect class="dg-b" x="382" y="196" width="897" height="68"/></svg>
 <p class="dg-l dg-t" style="left:0px;top:12px;width:354px;height:68px">Linux x86_64</p><p class="dg-l dg-v" style="left:1519px;top:12px;width:177px;height:68px">2.1 MB</p><p class="dg-l dg-t" style="left:0px;top:104px;width:354px;height:68px">Linux aarch64</p><p class="dg-l dg-v" style="left:1413px;top:104px;width:177px;height:68px">1.9 MB</p><p class="dg-l dg-t" style="left:0px;top:196px;width:354px;height:68px">macOS</p><p class="dg-l dg-v" style="left:1307px;top:196px;width:177px;height:68px">1.7 MB</p>
 </figure>
-<ul><li>実行ファイルは、<wbr>ランナーに <code>.wasm</code> の<wbr>約 11&nbsp;倍を<wbr>足した<wbr>大きさ</li><li>起動は<wbr>約 10&nbsp;ms で、<wbr><code>wasmtime run</code> と<wbr>ほぼ<wbr>同じ<wbr>速度で<wbr>動く</li></ul>
+<ul><li>実行ファイルは、<wbr>ランナーに <code>.wasm</code> の<wbr>約 11&nbsp;倍を<wbr>足した<wbr>大きさ</li><li>起動は<wbr>約 10&nbsp;ms。<wbr>同じ<wbr>モジュールを <code>wasmtime run</code> で<wbr>動かすのと<wbr>ほぼ<wbr>同じ<wbr>速度で<wbr>動く</li></ul>
 </div>
 <p class="source">doc/ja/compiling/native.md (サイズと<wbr>速度)</p>
 <div class="page">28</div>
@@ -480,11 +480,11 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 </div>
 <div class="page">29</div>
 </section>
-<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Scheme と Clojure も<wbr>コアフォームに<wbr>下げる</h1>
 <div class="body" style="top:336px;height:608px">
-<ul><li>どの<wbr>バックエンドも、<wbr>Scheme や Clojure の<wbr>名前を<wbr>知らない</li><li>バックエンドは<wbr>演算子の<wbr>名前で<wbr>分岐し、<wbr><code>FreeVarAnalyzer</code> も<wbr>同じ<wbr>名前を<wbr>見る<wbr>手書きの<wbr>走査</li><li>知らない<wbr>先頭が<wbr>来ると、<wbr>エラーに<wbr>ならずに<wbr>三通りに<wbr>分かれる</li><li>実行時の<wbr>補助関数は Common Lisp の<wbr>ソースで、<wbr>使わない<wbr>定義は<wbr>刈り込む</li></ul>
+<ul><li>Scheme や Clojure の<wbr>ために、<wbr>バックエンドへ<wbr>名前を<wbr>足す<wbr>ことはない</li><li>バックエンドは<wbr>演算子の<wbr>名前で<wbr>分岐し、<wbr><code>FreeVarAnalyzer</code> も<wbr>同じ<wbr>名前を<wbr>見る<wbr>手書きの<wbr>走査</li><li>走査が<wbr>扱わない<wbr>先頭の<wbr>フォームは、<wbr>エラーに<wbr>ならずに<wbr>三通りの<wbr>結果に<wbr>分かれる</li><li>実行時の<wbr>補助関数は Common Lisp で<wbr>書き、<wbr>使わない<wbr>定義は<wbr>刈り込む</li></ul>
 </div>
 <p class="source">.kb/scheme<span class="nw">-f</span>rontend.md, .kb/clojure<span class="nw">-f</span>rontend.md</p>
 <div class="page">30</div>
@@ -547,14 +547,14 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="source">lispresen/DESIGN.md (Runtime)</p>
 <div class="page">33</div>
 </section>
-<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Clojure を clj と<wbr>突き合わせる</h1>
 <div class="body" style="top:232px;height:712px">
-<p class="lead">117&nbsp;の<wbr>式を clj 1.12.6.1673&nbsp;と<wbr>各バックエンドで<wbr>評価し、<wbr>印字を<wbr>比べる。<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>1&nbsp;の<wbr>初回で<wbr>差は<wbr>なかった</p>
-<figure class="dg" style="width:1696px;height:504px;--dg:44px;--dg-lh:62px;--dg-x:26px">
-<svg class="dg-art" width="1696" height="504" aria-hidden="true"><rect class="dg-b" x="329" y="11" width="1280" height="62"/><rect class="dg-b" x="329" y="95" width="230" height="62"/><rect class="dg-b" x="329" y="179" width="100" height="62"/><rect class="dg-b" x="329" y="263" width="28" height="62"/><rect class="dg-b" x="329" y="347" width="28" height="62"/><rect class="dg-b" x="329" y="431" width="14" height="62"/></svg>
-<p class="dg-l dg-t" style="left:0px;top:11px;width:303px;height:62px">clojure.core</p><p class="dg-l dg-v" style="left:1635px;top:11px;width:61px;height:62px">89</p><p class="dg-l dg-t" style="left:0px;top:95px;width:303px;height:62px">clojure.string</p><p class="dg-l dg-v" style="left:585px;top:95px;width:61px;height:62px">16</p><p class="dg-l dg-t" style="left:0px;top:179px;width:303px;height:62px">clojure.set</p><p class="dg-l dg-v" style="left:455px;top:179px;width:31px;height:62px">7</p><p class="dg-l dg-t" style="left:0px;top:263px;width:303px;height:62px">clojure.walk</p><p class="dg-l dg-v" style="left:383px;top:263px;width:31px;height:62px">2</p><p class="dg-l dg-t" style="left:0px;top:347px;width:303px;height:62px">clojure.pprint</p><p class="dg-l dg-v" style="left:383px;top:347px;width:31px;height:62px">2</p><p class="dg-l dg-t" style="left:0px;top:431px;width:303px;height:62px">clojure.data</p><p class="dg-l dg-v" style="left:369px;top:431px;width:31px;height:62px">1</p>
+<p class="lead">117&nbsp;の<wbr>式を clj 1.12.6.1673&nbsp;と<wbr>各バックエンドで<wbr>評価し、<wbr>印字結果を<wbr>比べる。<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>1&nbsp;の<wbr>初回の<wbr>実行では、<wbr>四つの<wbr>バックエンドすべてで<wbr>差が<wbr>なかった</p>
+<figure class="dg" style="width:1696px;height:456px;--dg:40px;--dg-lh:56px;--dg-x:24px">
+<svg class="dg-art" width="1696" height="456" aria-hidden="true"><rect class="dg-b" x="300" y="10" width="1317" height="56"/><rect class="dg-b" x="300" y="86" width="236" height="56"/><rect class="dg-b" x="300" y="162" width="103" height="56"/><rect class="dg-b" x="300" y="238" width="29" height="56"/><rect class="dg-b" x="300" y="314" width="29" height="56"/><rect class="dg-b" x="300" y="390" width="14" height="56"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:10px;width:276px;height:56px">clojure.core</p><p class="dg-l dg-v" style="left:1641px;top:10px;width:55px;height:56px">89</p><p class="dg-l dg-t" style="left:0px;top:86px;width:276px;height:56px">clojure.string</p><p class="dg-l dg-v" style="left:560px;top:86px;width:55px;height:56px">16</p><p class="dg-l dg-t" style="left:0px;top:162px;width:276px;height:56px">clojure.set</p><p class="dg-l dg-v" style="left:427px;top:162px;width:28px;height:56px">7</p><p class="dg-l dg-t" style="left:0px;top:238px;width:276px;height:56px">clojure.walk</p><p class="dg-l dg-v" style="left:353px;top:238px;width:28px;height:56px">2</p><p class="dg-l dg-t" style="left:0px;top:314px;width:276px;height:56px">clojure.pprint</p><p class="dg-l dg-v" style="left:353px;top:314px;width:28px;height:56px">2</p><p class="dg-l dg-t" style="left:0px;top:390px;width:276px;height:56px">clojure.data</p><p class="dg-l dg-v" style="left:338px;top:390px;width:28px;height:56px">1</p>
 </figure>
 </div>
 <p class="source">.kb/clojure<span class="nw">-f</span>rontend.md (Differential parity harness)</p>
@@ -580,11 +580,11 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="source">.kb/running<span class="nw">-b</span>ackends.md, CLAUDE.md</p>
 <div class="page">36</div>
 </section>
-<section class="slide layout-standard" id="s37" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s37" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">ci<span class="nw">-s</span>pec.yaml は<wbr>一つの<wbr>プログラムと<wbr>して<wbr>流す</h1>
 <div class="body" style="top:336px;height:608px">
-<ul><li>ケースを<wbr>つなげて<wbr>一つの<wbr>プログラムにし、<wbr>バックエンドごとに<wbr>一度だけ<wbr>実行して、<wbr>出力を<wbr>ケースに<wbr>切り分ける</li><li>各バックエンドで、<wbr>既定と <code><span class="nw">--s</span>imd</code> の<wbr>二回流す</li><li><code>./mvnw test</code> は <code>CiSpecE2eTest</code> を<wbr>飛ばす。<wbr>CI の<wbr>ネイティブジョブで<wbr>動く</li><li>2026<span class="nw">-1</span>0<span class="nw">-1</span>7&nbsp;に、<wbr>コーパスと<wbr>重複する 373&nbsp;の<wbr>テストメソッドを<wbr>消し、<wbr>298&nbsp;組の JVM と WASM の<wbr>対を<wbr>ケースに<wbr>移した</li></ul>
+<ul><li>ケースを<wbr>つなげて<wbr>一つの<wbr>プログラムにし、<wbr>バックエンドごとに<wbr>一度だけ<wbr>実行して、<wbr>出力を<wbr>ケースに<wbr>切り分ける</li><li>各バックエンドで、<wbr>既定と <code><span class="nw">--s</span>imd</code> の<wbr>二回流す</li><li><code>./mvnw test</code> は <code>CiSpecE2eTest</code> を<wbr>飛ばす。<wbr>CI の<wbr>ネイティブジョブで<wbr>動く</li><li>2026<span class="nw">-1</span>0<span class="nw">-1</span>7&nbsp;に、<wbr>コーパスと<wbr>重複する 373&nbsp;の<wbr>テストメソッドを<wbr>消し、<wbr>JVM と WASM で<wbr>対に<wbr>なった 298&nbsp;組の<wbr>テストを<wbr>ケースに<wbr>移した</li></ul>
 </div>
 <p class="source">src/test/resources/ci<span class="nw">-s</span>pec.yaml (1,354&nbsp;ケース、<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>3&nbsp;に<wbr>数えた), .kb/test<span class="nw">-e</span>xecution.md</p>
 <div class="page">37</div>
@@ -593,7 +593,7 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">出力は<wbr>プログラムだけで<wbr>決まる</h1>
 <div class="body" style="top:232px;height:712px">
-<ul><li>同じ<wbr>ソースと<wbr>同じ<wbr>ビルドなら、<wbr>何度コンパイルしても<wbr>同じ<wbr>バイト列に<wbr>なる</li><li><code>Map.of</code> や <code>Set.of</code> の<wbr>反復の<wbr>順序は、<wbr>JVM を<wbr>起動する<wbr>たびに<wbr>変わる</li><li>6&nbsp;行の<wbr>プログラムを 8&nbsp;回コンパイルして、<code>.class</code> も <code>.wasm</code> も 3&nbsp;種類できたことがある</li><li>順序を<wbr>持つ<wbr>引数は <code>SequencedSet</code> で<wbr>型付けする</li></ul>
+<ul><li>同じ<wbr>ソースと<wbr>同じ<wbr>ビルドなら、<wbr>何度コンパイルしても<wbr>同じ<wbr>バイト列に<wbr>なる</li><li><code>Map.of</code> や <code>Set.of</code> の<wbr>反復の<wbr>順序は、<wbr>JVM を<wbr>起動する<wbr>たびに<wbr>変わる</li><li>6&nbsp;行の<wbr>プログラムを 8&nbsp;回コンパイルしたら、<code>.class</code> も <code>.wasm</code> も 3&nbsp;通りの<wbr>バイト列に<wbr>なったことがある</li><li>順序を<wbr>持つ<wbr>引数は <code>SequencedSet</code> で<wbr>型付けする</li></ul>
 </div>
 <p class="source">.kb/emitted<span class="nw">-o</span>utput<span class="nw">-d</span>eterminism.md</p>
 <div class="page">38</div>
