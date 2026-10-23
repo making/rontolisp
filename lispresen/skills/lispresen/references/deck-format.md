@@ -269,6 +269,8 @@ drawn. Leave all of these out for a deck that is not published.
 - **Parentheses.** An unbalanced form is `error: cannot read this form (unbalanced
   parentheses or bad syntax)`, reported at the line where the form starts.
 - **Full-width letters and digits** (`ＡＢＣ１２３`) are a warning; write half-width.
+- **Emoji** may be written as UTF-8 characters (`🚀`, `✅`, `🇯🇵`, `👨‍💻`); each emoji or
+  sequence is measured as one 1 em glyph and never split across lines.
 - **Every image and video needs `:alt`.**
 - **Do not shrink to fit.** There is no option for it; split the slide.
 

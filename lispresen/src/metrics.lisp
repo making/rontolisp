@@ -16,7 +16,39 @@
       (<= #x4E00 code #x9FFF) (<= #xA000 code #xA4CF) (<= #xAC00 code #xD7A3)
       (<= #xF900 code #xFAFF) (<= #xFE30 code #xFE4F) (<= #xFF00 code #xFF60)
       (<= #xFFE0 code #xFFE6) (<= #x1F300 code #x1F64F)
-      (<= #x1F900 code #x1F9FF) (<= #x20000 code #x3FFFD)))
+      (<= #x1F900 code #x1F9FF) (<= #x20000 code #x3FFFD)
+      ;; Emoji the color emoji face sets 1 em, measured in Chrome (DESIGN.md).
+      (<= #x2700 code #x27BF)                         ; dingbats
+      (<= #x231A code #x231B) (<= #x23E9 code #x23EC) (<= #x23EF code #x23F3) (<= #x23F8 code #x23FA)
+      (<= #x2B05 code #x2B07) (<= #x2B1B code #x2B1C) (= code #x2B50) (= code #x2B55)
+      (<= #x1F1E6 code #x1F1FF)                       ; regional indicators
+      (<= #x1F650 code #x1F6FF)                       ; transport and map, ornaments
+      (<= #x1FA00 code #x1FAFF)))
+
+(defun cluster-end (text i)
+  "The index after the emoji cluster TEXT starts at I, or I + 1 when the character at I
+starts none. A cluster is one glyph: a flag (two regional indicators), a character with
+a variation selector, a skin tone modifier or a keycap mark, and the characters a
+zero width joiner joins to it."
+  (let* ((n (length text)) (j (1+ i)) (code (char-code (char text i))) (special nil))
+    (flet ((code-at (k) (and (< k n) (char-code (char text k)))))
+      (cond ((<= #x1F1E6 code #x1F1FF)
+             (when (and (code-at j) (<= #x1F1E6 (code-at j) #x1F1FF))
+               (incf j)
+               (setf special t)))
+            ((or (> code 127) (find (char text i) "#*0123456789")))
+            (t (return-from cluster-end j)))
+      (loop
+        (let ((c (code-at j)))
+          (cond ((and c (or (= c #xFE0F) (= c #x20E3) (<= #x1F3FB c #x1F3FF)
+                            (<= #xE0020 c #xE007F)))
+                 (incf j)
+                 (setf special t))
+                ((and (eql c #x200D) (code-at (1+ j)) (> code 127))
+                 (incf j 2)
+                 (setf special t))
+                (t (return)))))
+      (if special j (1+ i)))))
 
 (defun parse-widths (s)
   (coerce (mapcar #'parse-integer (split-spaces s)) 'simple-vector))
@@ -39,15 +71,17 @@
 exactly 1 em in every face of the stack; proportional ones carry a 2% margin for
 sub-pixel rounding and faces other than the measured one. A character outside ASCII and
 the full-width ranges takes the width of a wide Latin letter."
-  (if (wide-code-p code)
-      1000
+  (cond
+    ((<= #x23ED code #x23EE) 1020)      ; the two emoji Chrome sets 1003 milli-em
+    ((wide-code-p code) 1000)
+    (t
       (ceiling (* (cond ((eq style :mono) 602)
                         ((<= 32 code 126)
                          (svref (if (eq style :bold)
                                     *ascii-bold-widths*
                                     *ascii-widths*) (- code 32)))
                         ((eq style :bold) 840)
-                        (t 800)) 102) 100)))
+                        (t 800)) 102) 100))))
 
 (defun px (milli size)
   "MILLI milli-em at SIZE px, in milli-px."
@@ -159,14 +193,23 @@ in it, and the indices of the characters inline code or a marker pads, one per s
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
-           (widths (make-array n :initial-element 0)))
+           (widths (make-array n :initial-element 0))
+           (inside (make-array n :initial-element nil)))
       (dolist (i pads) (incf (svref widths i) *inline-pad*))
+      (let ((i 0))
+        (loop while (< i n)
+              do (let ((e (cluster-end text i)))
+                   (incf (svref widths i)
+                         (if (> e (1+ i))
+                             1000
+                             (char-width (char-code (char text i)) (svref styles i))))
+                   (loop for k from (1+ i) below e do (setf (svref inside k) t))
+                   (setf i e))))
       (dotimes (i n)
-        (incf (svref widths i)
-              (char-width (char-code (char text i)) (svref styles i)))
         (when (> i 0)
           (setf (svref breaks i)
-                (cond ((number-space-p text styles i) nil)
+                (cond ((svref inside i) nil)
+                      ((number-space-p text styles i) nil)
                       ((char= (char text (1- i)) #\Space) t)
                       ((char= (char text i) #\Space) nil)
                       ((inside-number-p text i) nil)
@@ -201,7 +244,7 @@ order, and the width of its last line."
           end
           do
             (let ((cw (px (svref widths j) size)))
-              (cond ((and (> count 0) (> (+ cur cw) limit))
+              (cond ((and (> count 0) (> cw 0) (> (+ cur cw) limit))
                      (if (and (> count 1) (no-start-p (char text j)))
                          (setf cur (+ prev cw) count 2 starts
                                (cons (1- j) starts))
@@ -258,21 +301,34 @@ excluded unless SPACES is true."
       (incf total (+ (px (third u) size) last-wsp)))
     (milli-px->px (- total last-wsp))))
 
+(defun mono-widths (line)
+  "The milli-em width of each character of a line of code; an emoji cluster is its
+first character's, the rest zero."
+  (let ((widths (make-array (length line) :initial-element 0)) (i 0))
+    (loop while (< i (length line))
+          do (let ((e (cluster-end line i)))
+               (setf (svref widths i)
+                     (if (> e (1+ i))
+                         1000
+                         (char-width (char-code (char line i)) :mono))
+                     i e)))
+    widths))
+
 (defun mono-width (line size)
   "The px width of a line of code at SIZE."
   (let ((m 0))
-    (loop for c across line do (incf m (char-width (char-code c) :mono)))
+    (loop for w across (mono-widths line) do (incf m w))
     (milli-px->px (px m size))))
 
 (defun mono-wrap (line size avail)
   "The index of the first character of each row a line of code takes at SIZE px when it
 wraps between any two characters into AVAIL px, as a terminal wraps it."
   (let ((limit (* avail 1000)) (starts (list 0)) (cur 0))
-    (loop for c across line
+    (loop for mw across (mono-widths line)
           for i from 0
           do
-            (let ((w (px (char-width (char-code c) :mono) size)))
-              (when (and (> cur 0) (> (+ cur w) limit))
+            (let ((w (px mw size)))
+              (when (and (> cur 0) (> w 0) (> (+ cur w) limit))
                 (push i starts)
                 (setf cur 0))
               (incf cur w)))

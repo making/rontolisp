@@ -32,8 +32,14 @@
    (list
     (list :b (list "lispresen: S式で書くプレゼンテーションとBold Latin Titles of a Deck")))
    (list "「かぎ括弧」『二重かぎ括弧』（丸括弧）、そして句読点。、が行頭に来ないように禁則処理を確かめるための少し長めの文章をここに書いておく。")
+   (list "デプロイ完了 ✅ 速度は 🚀 倍、失敗は ❌ 件。開発者 👨‍💻 と 🇯🇵 の利用者が ❤️ を送った。")
    (list
     "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")))
+
+(defparameter *emoji*
+  '("🚀" "✅" "✨" "❌" "⚠️" "❤️" "⭐" "😀" "🔥" "📦" "✔️" "➡️" "⏭" "🙏" "🫠" "🩷" "🇯🇵" "🇺🇸"
+    "👨‍💻" "👨‍👩‍👧‍👦" "👍🏽" "1️⃣" "☀️" "✂️" "🗓️" "🧠")
+  "Emoji and emoji sequences the page sets alone and compares with the model's width.")
 
 (defparameter *check-script*
   "
@@ -45,9 +51,14 @@ var wide=[];[['400',MODEL.normal],['700',MODEL.bold]].forEach(function(t){for(va
 var s=document.createElement('span');s.style.cssText='font-size:1000px;white-space:pre;font-weight:'+t[0];
 s.textContent=String.fromCharCode(c).repeat(20);document.body.appendChild(s);var w=s.getBoundingClientRect().width/20;s.remove();
 if(w>t[1][c-32])wide.push(t[0]+' '+String.fromCharCode(c)+' '+Math.round(w)+'>'+t[1][c-32]);}});
+var emo=[];EMOJI.forEach(function(e){['400','700'].forEach(function(t){var s=document.createElement('span');
+s.style.cssText='font-size:1000px;white-space:pre;font-weight:'+t+';font-family:'+getComputedStyle(document.body).fontFamily;
+s.textContent=e[0].repeat(20);document.body.appendChild(s);var w=s.getBoundingClientRect().width/20;s.remove();
+if(w>e[1])emo.push(e[0]+' '+t+' '+Math.round(w)+'>'+e[1]);});});
 document.getElementById('result').textContent=ps.length+' paragraphs; model under browser: '+under.length+
 (under.length?' ('+under.join('; ')+')':'')+'; model one or more lines over: '+over+
-'; characters wider than the model: '+wide.length+(wide.length?' ('+wide.join('; ')+')':'');});
+'; characters wider than the model: '+wide.length+(wide.length?' ('+wide.join('; ')+')':'')+
+'; emoji wider than the model: '+emo.length+(emo.length?' ('+emo.join('; ')+')':'');});
 ")
 
 (defun write-calibration (path)
@@ -69,9 +80,11 @@ document.getElementById('result').textContent=ps.length+' paragraphs; model unde
             (format out "</p>~%")))))
     ;; The model's milli-em width of each printable ASCII character, margin included.
     (format out
-            "<script>var MODEL={normal:[~{~d~^,~}],bold:[~{~d~^,~}]};~a</script></body></html>~%"
+            "<script>var MODEL={normal:[~{~d~^,~}],bold:[~{~d~^,~}]},EMOJI=[~{[\"~a\",~d]~^,~}];~a</script></body></html>~%"
             (loop for c from 32 to 126 collect (char-width c :normal))
             (loop for c from 32 to 126 collect (char-width c :bold))
+            (loop for e in *emoji*
+                  append (list e (run-full-width (make-text-run (list e)) 1000)))
             *check-script*)))
 
 (write-calibration (or (car (uiop:command-line-arguments)) "calibrate.html"))

@@ -416,7 +416,8 @@ error instead of being shrunk further. Text widths are computed from a table mea
 Hiragino Sans, the widest of the font stack, and phrase boundaries come from a port of
 [BudouX](https://github.com/google/budoux)'s Japanese model, so the browser breaks lines
 where lispresen measured them. A number stays on one line with its counter (`1 時間`) and
-never breaks inside (`2026-10-22`, `1,000`).
+never breaks inside (`2026-10-22`, `1,000`). An emoji is measured as one em and a
+sequence (a flag, `👨‍💻`) as one glyph that no line breaks inside.
 
 A photograph can fill the slide or one side of it:
 

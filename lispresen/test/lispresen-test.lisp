@@ -70,6 +70,19 @@ character after it, which Chrome breaks before"
     (let ((run (lispresen::make-text-run (list "一二三四五六七八九十"))))
       (ok (= (lispresen::run-lines run 56 560) 1))
       (ok (= (lispresen::run-lines run 56 559) 2))))
+  (testing "an emoji is 1 em and a sequence is one glyph that no line breaks inside"
+    ;; rocket, check mark, flag, ZWJ sequence, skin tone, keycap: 6 em at 100 px.
+    (let ((run (lispresen::make-text-run
+                (list (format nil "~a~a~a~a~a~a" (code-char #x1F680) (code-char #x2705)
+                              (coerce (list (code-char #x1F1EF) (code-char #x1F1F5)) 'string)
+                              (coerce (list (code-char #x1F468) (code-char #x200D)
+                                            (code-char #x1F4BB)) 'string)
+                              (coerce (list (code-char #x1F44D) (code-char #x1F3FD)) 'string)
+                              (coerce (list #\1 (code-char #xFE0F) (code-char #x20E3))
+                                      'string))))))
+      (ok (= (lispresen::run-full-width run 100) 600))
+      (ok (equal (lispresen::wrap-run run 100 250) '(0 2 7)))
+      (ok (= (lispresen::mono-width (lispresen::run-text run) 100) 600))))
   (testing "Latin breaks at spaces, and a space ending a line takes no width"
     ;; aaa = 3 x 604 milli-em, the space 340, bbb = 3 x 677: 418.3 px at 100 px.
     (let ((run (lispresen::make-text-run (list "aaa bbb"))))

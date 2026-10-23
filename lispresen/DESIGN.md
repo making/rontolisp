@@ -331,6 +331,7 @@ Width of a code point, in milli-em:
 | Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
 | Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
+| Emoji (dingbats, transport and map, U+1FA00-1FAFF, ...) and an emoji sequence (flag, ZWJ, skin tone, variation selector, keycap) | 1000 per glyph, exact; the characters of a sequence after the first take 0 and never break apart |
 | Other proportional characters | 800 (bold 840), plus 2% |
 | Inline code (`tt`) and a marker (`mark`) | 125 more on the element's first character and on its last, its padding |
 
@@ -371,6 +372,17 @@ every ASCII character in both weights and reports any wider than the model, whic
 not depend on chance. Same day, 96 paragraphs (a bold title among them): never fewer
 lines in either browser, one more in 18 (Chrome) and 11 (Safari); no character wider
 than the model in either.
+
+Emoji, measured in Chrome 155 on macOS (Apple Color Emoji) on 2026-10-24, each set 20
+times at 1000 px in weights 400 and 700: every emoji in U+1F650-1F6FF (🚀), U+1FA00-1FAFF,
+U+2700-27BF (✅ ✨ ❌ and the text-style ✔ ❤), U+1F1E6-1F1FF, and the emoji of U+231A-23F3,
+U+2B05-2B55 is 1000 milli-em, as is every sequence tried (🇯🇵, 👨‍💻, 👨‍👩‍👧‍👦, 👍🏽, 1️⃣, ⚠️):
+one glyph, not one per code point. The earlier table counted them at 800 (too narrow, so
+the runtime check could step a slide down) or per code point (a ZWJ sequence 2800, too
+wide). The exceptions are ⏭ and ⏮ (U+23ED-23EE), 1003, which take 1020. The calibration
+page now sets 26 emoji and sequences in both weights and reports any wider than the
+model: none in Chrome (108 paragraphs, never fewer lines, one more in 18). Safari was not
+measured: its JavaScript from Apple Events is off on this machine.
 
 ### Line breaking
 
