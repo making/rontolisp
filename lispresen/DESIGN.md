@@ -1426,8 +1426,9 @@ before committing a change under `lispresen/`.
   `&rest` template and a template the samples of deck code go through, a lead above a row
   of a code column and a list column, console transcripts, dark code panels
   (`:code :dark`), section kickers (replaced on the paired slides, dropped on one), a
-  named agenda, a title slide with an embedded SVG logo and a QR code (drawn as the page
-  image too, with the description and page URL in the head), a statement, a
+  named agenda placed by `(agenda)` after an opening slide, a title slide with an
+  embedded SVG logo and a QR code (drawn as the page image too, with the description and
+  page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
   numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar

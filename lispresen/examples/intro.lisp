@@ -28,13 +28,16 @@
 
 ;;; --- what lispresen is, and why S-expressions -------------------------------------
 
-(section "lispresen とは")
-
+;; The opening slide comes before the agenda, which (agenda) places after it.
 (slide :title "S式のデッキから HTML を一つ作る"
   (flow (tt "talk.lisp") "lispresen" (tt "talk.html") "ブラウザ")
   (ul "書き手は内容だけを書く"
       "文字の大きさと配置は lispresen が決める"
       "できた HTML ファイル一つで発表できる"))
+
+(agenda)
+
+(section "lispresen とは")
 
 (slide :title "三つの特長"
   (ol (li (b "読めない文字を出さない")
@@ -102,19 +105,19 @@
            :caption \"デッキの要素は、どれもリストとして書く\"
       (\"図\" (tt \"flow cells bars\") \"3\")
       ...
-      ((cell :colspan 2 \"合計\") \"27\"))"))
+      ((cell :colspan 2 \"合計\") \"28\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
          :row-header t :align (:left :left :right)
          :caption "デッキの要素は、どれもリストとして書く"
-    ("トップレベル" (tt "deck section slide define") "4")
+    ("トップレベル" (tt "deck section slide agenda define") "5")
     ("ブロック" (tt "p lead ul ol code quote column image table") "9")
     ("部品" (tt "li cell") "2")
     ("図" (tt "flow cells bars") "3")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "27")))
+    ((cell :colspan 2 "合計") "28")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -488,6 +491,22 @@
       (li "題の上の小見出しは節の題。" (tt ":kicker") " で変えられる")
       "下端のバーとページ番号が今の位置を示す"))
 
+(slide :title "目次の位置" :kicker "書き方"
+  (p "目次は表紙の次に入る。" (tt "(agenda)") " を置くと、その位置に入る。")
+  (sexp "
+    (deck :title \"lispresen\" :agenda \"話の流れ\")
+    (slide :title \"S式のデッキから HTML を一つ作る\" ...)
+    (agenda)
+    (section \"lispresen とは\")")
+  (ul (li (tt "(agenda)") " より前のスライドと節は目次に載らない")
+      (li "目次を出すには " (tt ":agenda") " も要る")))
+
+;; The agenda of this deck stands at its own (agenda), so the try slide sends there.
+(slide :title "目次の位置" :kicker "試す"
+  (ol "Home で表紙に戻る"
+      (li "→ で進むと、表紙の次は " (tt "(agenda)") " より前に書いたスライド")
+      (li "もう一度 → で目次。最初の節は " (tt "(agenda)") " の後に書いた「lispresen とは」")))
+
 ;;; --- outputs and backends ---------------------------------------------------------
 
 (section "出力と始め方")
@@ -510,15 +529,6 @@
     ("SBCL" "なし" (tt "sbcl --script cli.lisp"))
     ("ブラウザ" (cell :colspan 2 (tt "web/") " のエディタが入力のたびに描き直す"))))
 
-(slide :title "コマンドライン"
-  (code "
-    lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none]
-                   [--embed] [--check] [--strict]")
-  (ul (li (tt "-") " で標準入力から読み、標準出力に書く")
-      (li (tt "--embed") " で画像を埋め込み、ファイル一つで完結させる")
-      (li (tt "--theme") " でデッキのテーマを差し替える")
-      (li "終了コードは 0 が成功、1 がエラー、2 が使い方の誤り")))
-
 ;; The preview image is an output of the same run, so the try slide links to the
 ;; published one instead of embedding it.
 (slide :title "リンクのプレビュー" :kicker "書き方"
@@ -539,14 +549,50 @@
       (li (link "https://making.github.io/rontolisp/lispresen/intro.png" (tt "intro.png"))
           " を開くと、描いた画像そのものを見られる")))
 
+(slide :title "ネイティブ実行ファイル" :kicker "使い方"
+  (p "JVM も rontolisp も要らない実行ファイルを、リリース "
+     (link "https://github.com/making/rontolisp/releases/tag/lispresen-0.1.0-SNAPSHOT"
+           (tt "lispresen-0.1.0-SNAPSHOT"))
+     " で配布している。")
+  (table :header ("プラットフォーム" "ファイル")
+    ("macOS (Apple Silicon)" (tt "lispresen-darwin-arm64"))
+    ("Linux (x86_64)" (tt "lispresen-linux-amd64"))
+    ("Linux (arm64)" (tt "lispresen-linux-arm64")))
+  (ul (li "実行権を付け、" (tt "PATH") " の通ったディレクトリに " (tt "lispresen") " の名前で置く")
+      (li "macOS でブラウザからダウンロードしたファイルは隔離され、起動すると止められる")))
+
+(slide :title "ネイティブ実行ファイル" :kicker "試す"
+  (code :lang "console" "
+    $ BASE=https://github.com/making/rontolisp/releases/download
+    $ curl -fLO $BASE/lispresen-0.1.0-SNAPSHOT/lispresen-darwin-arm64
+    $ chmod +x lispresen-darwin-arm64
+    $ sudo mv lispresen-darwin-arm64 /usr/local/bin/lispresen
+    $ lispresen --version
+    {\"version\": \"0.1.0-SNAPSHOT\", \"gitCommit\": \"3b9b214\"}")
+  (p (tt "curl") " と " (tt "wget") " で取得したファイルは隔離されない。ブラウザでダウンロードしたファイルは "
+     (tt "xattr -d com.apple.quarantine") " で隔離を外す。"))
+
+(slide :title "コマンドライン"
+  (code "
+    lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none]
+                   [--embed] [--check] [--strict]
+    lispresen new FILE [--lang ja|en] [--force]
+    lispresen --version")
+  (ul (li (tt "-") " で標準入力から読み、標準出力に書く")
+      (li (tt "--embed") " で画像を埋め込み、ファイル一つで完結させる")
+      (li (tt "--version") " は版とビルドしたコミットを JSON で出す")
+      (li "終了コードは 0 が成功、1 がエラー、2 が使い方の誤り")))
+
 ;; :kicker nil drops the section title the deck puts above this slide's title.
 (slide :title "始め方" :kicker nil
   (code :lang "console" "
-    $ ./mvnw package
-    $ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
-    $ java -jar $JAR lispresen/cli.lisp -- talk.lisp
+    $ lispresen new talk.lisp
+    $ lispresen talk.lisp
     $ open talk.html")
-  (p "見本はこのデッキ、" (tt "lispresen/examples/intro.lisp") "。"))
+  (ul (li (tt "new") " は、主なフォームにコメントで説明を添えた雛形を書く。"
+          (tt "--lang en") " なら英語")
+      (li "診断には行番号が付く。その行を直して描き直す")
+      (li "見本はこのデッキ、" (tt "lispresen/examples/intro.lisp"))))
 
 ;; :class adds a class to the slide's <section>; no built-in style uses this one.
 (slide :class "closing" "スライドも、コードと同じように書いて、レビューして、動かす。")
