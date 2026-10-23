@@ -49,6 +49,13 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
 - Resolve through `%stream-target` FIRST (synonym and OPEN streams are instances too,
   `.kb/read-load-streams.md`), so **splicing gray.lisp requires running
   `LispPreludeLibrary.process`** (`referencedBySurfaceForm`, `LibraryDefunPruner` roots).
+  A prelude ENTRY that is a Gray stream (the composite streams, `%broadcast-stream`) brings
+  gray.lisp too, so the prelude's fixpoint selects `%stream-target` for a pulled entry that
+  uses the protocol. Until 2026-10-24 it asked the user program only, and a program whose one
+  stream was `(make-two-way-stream *standard-input* *standard-output*)` (or which merely took
+  `#'make-two-way-stream`) compiled `%STREAM-TARGET is undefined` and failed at the first
+  dispatch on the JVM, P1 and the component. Pinned by
+  `CompositeStreampFixture.STANDARD_STREAMS_PROGRAM` on all four backends.
 - `%gray-close-dispatch` does NOT resolve a synonym (CLHS 21.1.3), tests `%STREAM` by tag
   ahead of `%obj-p`; predicate dispatchers pass the ORIGINAL designator to the built-in.
 - `%gray-fresh-line-dispatch` answers **nil** like the handle-based `fresh-line`, not
@@ -278,17 +285,18 @@ methods reuse the `%gray-default-*` loops. Package seeding in `PackageRegistry`;
 
 **The run-time test is not optional**: nil is not a stream but format's "return the string"
 destination ([standard-output-redirect.md](standard-output-redirect.md)), and the rewrite fires
-over the WHOLE program once ANY part uses the protocol. Walker rules (no position awareness):
+over the WHOLE program once ANY part uses the protocol. Walker rules -- the walk is
+`compiler.CallSiteWalk`, shared with `ShadowedBuiltins` and `WasmSocketsRewrite` (one walk since
+2026-10-24; three copies had drifted, see [lisp2-namespaces.md](lisp2-namespaces.md), "A lexical
+variable named like a function"):
 - A lambda-list keyword is never a stream arg (`streamArgMayBeInstance` rejects `&`-prefixed).
-- Rewrite list ELEMENTS, never a cdr TAIL as a call (`rewriteTail`).
-- **A BINDING form's structural position is not a call** (`rewriteBindingForm`): skip the
-  lambda list of `lambda`/`defun`/`defmacro`/`defmethod`/`destructuring-bind` and the variable
-  half of `let`/`let*`/`flet`/`labels`/`macrolet`; else a parameter named `format` fails with
-  "Parameter must be a symbol".
+- Rewrite list ELEMENTS, never a cdr TAIL as a call (`CallSiteWalk.arguments`).
+- **A BINDING form's structural position is not a call**: a lambda list, the variable half of a
+  binding, a `case` key; else a parameter named `format` fails with "Parameter must be a symbol"
+  and `(dolist (read-line l) ...)` leaves `read-line` an unbound variable.
 - **A slot NAME is not a call operator**: `defclass`/`define-condition`/`defstruct` slot specs
   are headed by the slot name — slot NAME, class name and superclass list verbatim, only
-  option VALUES rewritten, plus `defstruct`'s positional initform (`rewriteSlotSpec`'s
-  `firstOptionIndex`). Pinned by
+  option VALUES rewritten, plus `defstruct`'s positional initform. Pinned by
   `JvmLispCompilerTest.grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
 
 ## Limits

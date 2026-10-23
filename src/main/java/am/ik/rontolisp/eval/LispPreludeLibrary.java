@@ -4895,10 +4895,15 @@ public final class LispPreludeLibrary {
 				for (String pulled : referenced) {
 					// Prelude sources spell each other exactly as they define
 					// themselves, so the entry-to-entry edges stay member-matched:
-					// they carry no package ambiguity to resolve.
+					// they carry no package ambiguity to resolve. An entry that is a
+					// Gray stream (the composite streams) brings gray.lisp, spliced
+					// after this pass, whose every dispatch helper resolves through
+					// %stream-target: that edge is the protocol, not a spelling.
 					used = used || entryMemberNames(pulled).contains(member(name))
 							|| (PRINT_CONTROL_ENTRIES.contains(name)
-									&& referencedBySurfaceForm(name, formsFor(pulled), false));
+									&& referencedBySurfaceForm(name, formsFor(pulled), false))
+							|| (LispNames.STREAM_TARGET.equals(name)
+									&& GrayStreamsLibrary.usesProtocol(formsFor(pulled)));
 				}
 				if (used) {
 					referenced.add(name);

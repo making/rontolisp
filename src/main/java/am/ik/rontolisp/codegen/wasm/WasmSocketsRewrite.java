@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.CallSiteWalk;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -182,7 +183,7 @@ final class WasmSocketsRewrite {
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		for (LispVal form : program) {
 			// The top level is an asynchronous context (LispAsync.checkTopLevel).
-			out.add(rewriteForm(form, true));
+			out.add(CallSiteWalk.walk(form, ASYNC));
 		}
 		return out;
 	}
@@ -200,96 +201,54 @@ final class WasmSocketsRewrite {
 		return false;
 	}
 
-	// Mirrors LispAsync.check's context rules: async-defun/async-lambda bodies (and the
-	// %async-run thunk) are async, plain defun/lambda/defmethod and flet/labels
-	// definitions reset to sync, quote/defmacro/macrolet are left alone.
-	private static LispVal rewriteForm(LispVal form, boolean asyncContext) {
-		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
-			return form;
-		}
-		List<LispVal> parts = cons.toList();
-		if (cons.car() instanceof LispSymbol sym) {
-			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
-					return form;
+	private static final Context SYNC = new Context(false);
+
+	private static final Context ASYNC = new Context(true);
+
+	/**
+	 * The rewrite in one context. Mirrors LispAsync.check's context rules: async-defun /
+	 * async-lambda bodies (and the %async-run thunk) are asynchronous, plain defun /
+	 * lambda / defmethod and flet / labels definitions reset to synchronous.
+	 * {@link CallSiteWalk} keeps the positions that are not calls -- a lexical variable
+	 * named {@code close} or {@code read-line}, a {@code case} key -- which this pass
+	 * would otherwise have read as calls and renamed.
+	 */
+	private record Context(boolean async) implements CallSiteWalk.Rewriter {
+
+		@Override
+		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol head) {
+			if (LispNames.ASYNC_RUN_QUALIFIED.equals(head.name())) {
+				// the thunk handed to the async primitive IS the asynchronous body
+				List<LispVal> parts = cons.toList();
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal arg = parts.get(i);
+					out.add(arg instanceof LispCons argCons && argCons.isProperList()
+							&& argCons.car() instanceof LispSymbol lambda && LispNames.LAMBDA.equals(lambda.name())
+									? CallSiteWalk.lambda(argCons, ASYNC) : CallSiteWalk.walk(arg, ASYNC));
 				}
-				case LispNames.ASYNC_DEFUN_QUALIFIED -> {
-					return rebuildFrom(cons, parts, 3, true);
-				}
-				case LispNames.ASYNC_LAMBDA_QUALIFIED -> {
-					return rebuildFrom(cons, parts, 2, true);
-				}
-				case LispNames.ASYNC_RUN_QUALIFIED -> {
-					// the thunk handed to the async primitive IS the asynchronous body
-					List<LispVal> out = new java.util.ArrayList<>(parts.size());
-					out.add(parts.get(0));
-					for (int i = 1; i < parts.size(); i++) {
-						LispVal arg = parts.get(i);
-						if (arg instanceof LispCons argCons && argCons.isProperList()
-								&& argCons.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(head.name())) {
-							out.add(rebuildFrom(argCons, argCons.toList(), 2, true));
-						}
-						else {
-							out.add(rewriteForm(arg, true));
-						}
-					}
-					return LispCons.rebuiltList(cons, out);
-				}
-				case LispNames.DEFUN, LispNames.DEFMETHOD -> {
-					return rebuildFrom(cons, parts, 3, false);
-				}
-				case LispNames.LAMBDA -> {
-					return rebuildFrom(cons, parts, 2, false);
-				}
-				case LispNames.FLET, LispNames.LABELS -> {
-					List<LispVal> out = new java.util.ArrayList<>(parts.size());
-					out.add(parts.get(0));
-					if (parts.size() > 1 && parts.get(1) instanceof LispCons defs && defs.isProperList()) {
-						List<LispVal> newDefs = new java.util.ArrayList<>();
-						for (LispVal def : defs.toList()) {
-							newDefs.add(def instanceof LispCons defCons && defCons.isProperList()
-									? rebuildFrom(defCons, defCons.toList(), 2, false) : def);
-						}
-						out.add(LispCons.rebuiltList(defs, newDefs));
-					}
-					else if (parts.size() > 1) {
-						out.add(parts.get(1));
-					}
-					for (int i = 2; i < parts.size(); i++) {
-						out.add(rewriteForm(parts.get(i), asyncContext));
-					}
-					return LispCons.rebuiltList(cons, out);
-				}
-				default -> {
-					// fall through to the generic call rewrite
-				}
+				return LispCons.rebuiltList(cons, out);
 			}
 			// A read passing the recursive-p it ignores is rewritten without it first,
 			// so the shapes below never meet the extra argument.
 			LispVal withoutIgnored = IgnoredArgument.drop(cons);
 			if (withoutIgnored != cons) {
-				return rewriteForm(withoutIgnored, asyncContext);
+				return CallSiteWalk.walk(withoutIgnored, this);
 			}
-			LispVal substituted = substitute(sym.name(), parts, asyncContext);
-			if (substituted != null) {
-				return substituted;
-			}
+			return substitute(head.name(), cons.toList(), this.async);
 		}
-		List<LispVal> out = new java.util.ArrayList<>(parts.size());
-		for (LispVal part : parts) {
-			out.add(rewriteForm(part, asyncContext));
+
+		@Override
+		public CallSiteWalk.Rewriter body(String definer) {
+			return LispNames.ASYNC_DEFUN_QUALIFIED.equals(definer) || LispNames.ASYNC_LAMBDA_QUALIFIED.equals(definer)
+					? ASYNC : SYNC;
 		}
-		return LispCons.rebuiltList(cons, out);
+
 	}
 
-	// Rebuild parts keeping [0, from) verbatim (head, name, lambda list) and rewriting
-	// the rest in the given context.
-	private static LispVal rebuildFrom(LispCons original, List<LispVal> parts, int from, boolean asyncContext) {
-		List<LispVal> out = new java.util.ArrayList<>(parts.size());
-		for (int i = 0; i < parts.size(); i++) {
-			out.add(i < from ? parts.get(i) : rewriteForm(parts.get(i), asyncContext));
-		}
-		return LispCons.rebuiltList(original, out);
+	private static LispVal walk(LispVal form, boolean asyncContext) {
+		return CallSiteWalk.walk(form, asyncContext ? ASYNC : SYNC);
 	}
 
 	// The call substitution, or null when the head is not a target.
@@ -307,12 +266,12 @@ final class WasmSocketsRewrite {
 		// the substitution instead of at WasmExprCompiler time, which is after it -- is
 		// what puts them on the socket path at all.
 		if (LispNames.WRITE_CHAR.equals(head) && (parts.size() == 2 || parts.size() == 3)) {
-			return rewriteForm(LispMacroExpander.expandWriteChar(consOf(parts)), asyncContext);
+			return walk(LispMacroExpander.expandWriteChar(consOf(parts)), asyncContext);
 		}
 		if (LispNames.WRITE_STRING.equals(head) && hasLiteralBounds(parts)) {
 			LispVal bounded = LispMacroExpander.lowerWriteStringBounds(consOf(parts));
 			if (bounded != null) {
-				return rewriteForm(bounded, asyncContext);
+				return walk(bounded, asyncContext);
 			}
 		}
 		// (terpri [stream]) lowers onto write-string's dispatch: write-string owns the
@@ -323,7 +282,7 @@ final class WasmSocketsRewrite {
 		// site, the same rule the write-string/write-line defaulting applies.
 		if (LispNames.TERPRI.equals(head) && (parts.size() == 1 || parts.size() == 2)) {
 			LispVal stream = parts.size() == 2 ? parts.get(1) : new LispSymbol(LispNames.STANDARD_OUTPUT_VAR);
-			return rewriteForm(
+			return walk(
 					properList(
 							List.of(new LispSymbol(LispNames.PROGN),
 									properList(List.of(new LispSymbol(LispNames.WRITE_STRING),
@@ -447,7 +406,7 @@ final class WasmSocketsRewrite {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, internalName)));
 		for (int i = 1; i < parts.size(); i++) {
-			out.add(rewriteForm(parts.get(i), asyncContext));
+			out.add(walk(parts.get(i), asyncContext));
 		}
 		return properList(out);
 	}

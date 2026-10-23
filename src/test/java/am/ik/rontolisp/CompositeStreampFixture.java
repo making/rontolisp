@@ -30,6 +30,18 @@ public final class CompositeStreampFixture {
 			             (typep (csp-concatenated) 'stream)))
 			""";
 
+	/**
+	 * A composite stream over the standard streams, in a program that builds no other
+	 * stream: the composite class is a Gray stream, whose dispatch helpers resolve
+	 * through the prelude's {@code %stream-target}, and nothing else here selects it. The
+	 * compiled backends called it undefined. Its own program, since any string stream
+	 * beside it selects the helper.
+	 */
+	public static final String STANDARD_STREAMS_PROGRAM = """
+			(let ((s (make-two-way-stream *standard-input* *standard-output*)))
+			  (print (list (streamp s) (typep s 'stream) (input-stream-p s) (output-stream-p s))))
+			""";
+
 	/** What each program prints. */
 	public static final String EXPECTED = "(T T T T)";
 

@@ -12021,6 +12021,9 @@ class WasmLispCompilerIntegrationTest {
 				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM, component))
 				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.STANDARD_STREAMS_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 		}
 	}
 

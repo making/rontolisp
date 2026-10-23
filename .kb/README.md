@@ -27,7 +27,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Core language and evaluation
 
 - [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, an assignment of an unbound name (function body or top level) as a global, `%` prefix, JVM method mangling, WASM rec-groups
-- [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
+- [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split; a lexical variable named like a function and the one call-site walk (`CallSiteWalk`) every call-head rewrite takes
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
 - [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend; an operation applies, and signals, only after its arguments -- on the compiled fast paths too (SBCL's pairwise n-ary arithmetic is the one difference)

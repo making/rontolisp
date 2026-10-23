@@ -278,10 +278,12 @@ dies with "No applicable method: CLOSE on INTEGER".
   same name is never mistaken for it) with the interpreter's body renamed `%<name>--dispatch`;
   bind `%<name>--builtin` to a FORWARDER defun of the original built-in call
   (`ShadowedBuiltins.forwarderDefun`); rewrite call sites and `#'name` references onto the
-  dispatcher. The walker skips
-  quoted data, `defmacro`/`macrolet` bodies, the generated defuns themselves (the Gray
-  `DISPATCH_DEFUNS` rule — rewriting the forwarder's fallback would recurse) and the
-  non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/`handler-case`, and
+  dispatcher. The walk (`compiler.CallSiteWalk`, shared with the Gray and socket rewrites) skips
+  quoted data, `defmacro` bodies and `macrolet` definitions, the generated defuns themselves
+  (`process` emits them unwalked -- rewriting the forwarder's fallback would recurse) and the
+  non-evaluated positions of
+  the binding, clause and definition forms (`let`/`lambda`/`flet`/`do`/`dolist`/`case`/
+  `handler-case`/`cond`/`loop` patterns/slot specs ...), and
   keeps a PLACE's head (`setf`/`incf`/`push`/... -- `(setf (gethash k h) v)` of a methoded
   `gethash` was rewritten to an unknown `%gethash--dispatch` place and failed the compile). When
   `close` is shadowed, `with-open-file`/`with-open-stream`/`with-*-to-string` are pre-expanded

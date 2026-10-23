@@ -101,11 +101,15 @@ class GrayStreamsLibraryTest {
 	/**
 	 * A stream-less read or print reaches a Gray instance only through the current value
 	 * of the standard stream, which a program that never binds the variable cannot
-	 * change: its stream-less calls are left exactly as written.
+	 * change: its stream-less calls are left exactly as written. So is a list where no
+	 * form goes -- a {@code dolist} variable, a {@code case} key, a {@code let} variable
+	 * named like a stream operator -- which read as a call made {@code read-line} an
+	 * unbound variable on every compiled backend.
 	 */
 	@Test
-	void aProgramBindingNoStandardStreamKeepsItsStreamlessCalls() {
-		String user = "(defun f () (princ \"x\") (format t \"~a\" 1) (read-char) (peek-char))";
+	void aProgramBindingNoStandardStreamKeepsItsStreamlessCallsAndItsNonCalls() {
+		String user = "(defun f (l k) (princ \"x\") (format t \"~a\" 1) (read-char) (peek-char)"
+				+ " (dolist (read-line l) (print read-line)) (case k (close 1)) (let ((write-string l)) write-string))";
 		List<LispVal> processed = GrayStreamsLibrary.process(LispReader
 			.readAllFromString("(defclass c (rontolisp:fundamental-character-output-stream) ()) " + user));
 		assertThat(processed.get(processed.size() - 1).print())
