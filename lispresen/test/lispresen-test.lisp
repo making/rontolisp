@@ -994,6 +994,31 @@ no panel without diagnostics"
              (ok (= (first (request served "/fonts//OFL.txt")) 404))
              (ok (= (first (request served "/missing.png")) 404))
              (ok (= (first (request served "/" :post)) 405)))
+           (testing "one byte range of a file is answered 206 with its Content-Range, one
+past the end 416, and anything else the whole file"
+             (let* ((png (slurp-octets "../examples/pipeline.png"))
+                    (size (length png)))
+               (loop for (spec status start end)
+                       in `(("bytes=10-19" 206 10 20) ("bytes=100-" 206 100 ,size)
+                            ("bytes=-5" 206 ,(- size 5) ,size)
+                            ("bytes=0-99999999" 206 0 ,size)
+                            (,(format nil "bytes=~d-" size) 416) ("bytes=-0" 416)
+                            ("bytes=0-1,5-6" 200 0 ,size) ("bytes=5-2" 200 0 ,size)
+                            ("items=0-1" 200 0 ,size) (nil 200 0 ,size))
+                     do (let ((fields (make-hash-table :test 'equal)))
+                          (when spec (setf (gethash "range" fields) spec))
+                          (destructuring-bind (got headers body)
+                              (lispresen:served-respond
+                               served (list :request-method :get
+                                            :path-info "/pipeline.png" :headers fields))
+                            (ok (= got status) spec)
+                            (ok (equal (getf headers :content-range)
+                                       (case status
+                                         (206 (format nil "bytes ~d-~d/~d" start (1- end)
+                                                      size))
+                                         (416 (format nil "bytes */~d" size))))
+                                spec)
+                            (when start (ok (equalp body (subseq png start end)) spec)))))))
            (testing "an edit rebuilds and moves the version; a build with diagnostics
 carries the panel, and the next good one drops it"
              (spit deck "(slide :title \"a\" (b \"unclosed\")")

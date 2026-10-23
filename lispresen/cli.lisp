@@ -225,17 +225,30 @@ one unless --force is given."
          (first-space (position #\Space line))
          (second-space (and first-space (position #\Space line :start (1+ first-space))))
          (target (if first-space (subseq line (1+ first-space) second-space) "/"))
-         (query (position #\? target)))
-    (loop for field = (read-line stream nil)
-          while (and field (string/= (string-right-trim '(#\Return) field) "")))
+         (query (position #\? target))
+         (fields (make-hash-table :test 'equal)))
+    ;; The fields as Clack has them: names in lower case, a repeated one's values joined.
+    (loop for field = (string-right-trim '(#\Return) (or (read-line stream nil) ""))
+          for colon = (position #\: field)
+          while (string/= field "")
+          when colon
+            do (let ((name (string-downcase (subseq field 0 colon)))
+                     (value (string-trim " " (subseq field (1+ colon)))))
+                 (setf (gethash name fields)
+                       (let ((before (gethash name fields)))
+                         (if before (format nil "~a, ~a" before value) value)))))
     (destructuring-bind (status headers &optional body)
         (funcall app
                  (list :request-method
                        (intern (string-upcase (subseq line 0 (or first-space 0))) :keyword)
                        :path-info (percent-decode (subseq target 0 query))
-                       :query-string (and query (subseq target (1+ query)))))
-      (format stream "HTTP/1.1 ~d ~a~c~c" status (if (= status 200) "OK" "") #\Return
-              #\Linefeed)
+                       :query-string (and query (subseq target (1+ query)))
+                       :headers fields))
+      (format stream "HTTP/1.1 ~d ~a~c~c" status
+              (case status
+                (200 "OK") (206 "Partial Content") (404 "Not Found")
+                (405 "Method Not Allowed") (416 "Range Not Satisfiable") (t ""))
+              #\Return #\Linefeed)
       (loop for (name value) on headers by #'cddr
             do (format stream "~(~a~): ~a~c~c" name value #\Return #\Linefeed))
       (format stream "content-length: ~d~c~cconnection: close~c~c~c~c" (length body)

@@ -202,8 +202,8 @@ build that has any, put in before </body>."
                   :test #'string=))
       "application/octet-stream"))
 
-(defun respond (status type octets)
-  (list status (list :content-type type :cache-control "no-store") octets))
+(defun respond (status type octets &rest headers)
+  (list status (list* :content-type type :cache-control "no-store" headers) octets))
 
 (defun not-found ()
   (respond 404 "text/plain; charset=utf-8" (octets-of (format nil "not found~%"))))
@@ -218,19 +218,63 @@ leaves the deck's directory."
     (unless (find-if (lambda (part) (or (string= part "..") (string= part ""))) parts)
       (served-path served (subseq path-info 1)))))
 
-(defun serve-file (served path-info)
+(defun request-field (env name)
+  "The value of the request field NAME (lower case) of the Clack request ENV, or nil."
+  (let ((fields (getf env :headers)))
+    (and fields (gethash name fields))))
+
+(defun byte-range (spec size)
+  "The bytes of a file of SIZE bytes the Range field SPEC asks for, as (START . END) with
+END exclusive; :unsatisfiable when it asks only for bytes past the end; nil when it is not
+one range of bytes (malformed, another unit, several ranges), which the whole file
+answers."
+  (let* ((spec (string-trim " " spec))
+         (dash (position #\- spec)))
+    (when (and dash (> (length spec) 6) (string-equal "bytes=" spec :end2 6)
+               (not (find #\, spec)))
+      (let* ((first (string-trim " " (subseq spec 6 dash)))
+             (last (string-trim " " (subseq spec (1+ dash))))
+             (from (and (digits-p first 0 (length first)) (parse-integer first)))
+             (to (and (digits-p last 0 (length last)) (parse-integer last))))
+        (cond ((and from (string= last ""))
+               (if (< from size) (cons from size) :unsatisfiable))
+              ((and from to (<= from to))
+               (if (< from size) (cons from (min (1+ to) size)) :unsatisfiable))
+              ((and (string= first "") to)
+               (if (and (> to 0) (> size 0)) (cons (max 0 (- size to)) size)
+                   :unsatisfiable)))))))
+
+(defun serve-file (served path-info env)
+  "The file PATH-INFO names, whole or the one byte range the request asks for: a video
+is seekable only where its bytes can be asked for from any point."
   (let* ((path (served-file-path served path-info))
          (octets (and path (funcall (served-read-octets served) path))))
     (if octets
-        (progn
+        (let* ((size (length octets))
+               ;; No answer carries a validator, so an If-Range never matches.
+               (spec (and (not (request-field env "if-range"))
+                          (request-field env "range")))
+               (range (and spec (byte-range spec size))))
           (unless (assoc path (served-sent served) :test #'string=)
             (push (cons path (write-date path)) (served-sent served)))
-          (respond 200 (content-type path) octets))
+          (cond ((null range)
+                 (respond 200 (content-type path) octets :accept-ranges "bytes"))
+                ((eq range :unsatisfiable)
+                 (respond 416 "text/plain; charset=utf-8"
+                          (octets-of (format nil "range not satisfiable~%"))
+                          :content-range (format nil "bytes */~d" size)))
+                (t
+                 (respond 206 (content-type path)
+                          (subseq octets (car range) (cdr range))
+                          :accept-ranges "bytes"
+                          :content-range (format nil "bytes ~d-~d/~d" (car range)
+                                                 (1- (cdr range)) size)))))
         (not-found))))
 
 (defun served-respond (served env)
   "The response to the Clack request ENV: the page at /, the build's version at
-/__lispresen/version, a file beside the deck anywhere else."
+/__lispresen/version, a file beside the deck (or the byte range of it a Range field asks
+for) anywhere else."
   (let ((method (getf env :request-method))
         (path (or (getf env :path-info) "/")))
     (if (not (member method '(:get :head)))
@@ -244,4 +288,4 @@ leaves the deck's directory."
                  (refresh served)
                  (respond 200 "text/plain; charset=utf-8"
                           (octets-of (format nil "~d" (served-version served)))))
-                (t (serve-file served path)))))))
+                (t (serve-file served path env)))))))

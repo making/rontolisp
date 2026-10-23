@@ -366,8 +366,9 @@ network open it), `--theme` and `--runtime` are the rendering options above.
   were and rebuilds on a difference; an image or other file the page loaded that
   changed reloads the page without a rebuild. Nothing is rebuilt while no browser asks.
 - The files beside the deck are served at their relative paths, so images need no
-  `--embed`, and a `--runtime` directory beside the deck loads over HTTP. Nothing is
-  written to disk: no HTML, no page image.
+  `--embed`, and a `--runtime` directory beside the deck loads over HTTP. A request for
+  one byte range (`Range: bytes=...`) gets just those bytes, so a video can be sought.
+  Nothing is written to disk: no HTML, no page image.
 - Each build's diagnostics go to standard error as above. In the browser, a build with
   any shows them in a panel over the slides (a click hides it); the next build without
   any removes it. A deck that stops reading (an unbalanced parenthesis) still shows the

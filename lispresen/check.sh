@@ -6,8 +6,8 @@
 # the pom.xml version and the commit checked out, and the starter deck `new` writes to be
 # the same on every leg but for its date and to render without a diagnostic under
 # --strict, and `serve` to answer the deck's page (the same on every leg that serves),
-# its build version and its image, where the two WASM legs refuse it; then runs the unit
-# tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
+# its build version, its image and a byte range of its video, where the two WASM legs
+# refuse it; then runs the unit tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
 # in portable Common Lisp, with rontolisp-only code behind #+rontolisp.
 #
 #   lispresen/check.sh            # verify
@@ -79,7 +79,8 @@ check() {
   fi
   # serve: a WASM module accepts no connection, so those two legs must refuse it; every
   # other leg serves the page (the first one's is the one the others must equal), the
-  # build's version and the image the page names, until it is stopped.
+  # build's version, the image the page names and a byte range of the video (206), until
+  # it is stopped.
   case $name in
     wasm | wasm-component)
       if (cd "$dir" && "$@" serve intro.lisp) > "$work/$name.serve.err" 2>&1 \
@@ -98,6 +99,8 @@ check() {
           && [[ $(curl -fsS "$url/__lispresen/version") == 1 ]] \
           && curl -fsS -o "$work/$name.served.png" "$url/pipeline.png" \
           && cmp -s "$here/examples/pipeline.png" "$work/$name.served.png" \
+          && [[ $(curl -fsS -r 100-199 -o "$work/$name.range" -w '%{http_code}' "$url/demo.mp4") == 206 ]] \
+          && cmp -s "$work/$name.range" <(head -c 200 "$here/examples/demo.mp4" | tail -c 100) \
           && grep -q "/__lispresen/version" "$work/$name.served.html"; then
         [[ -f $work/served.html ]] || cp "$work/$name.served.html" "$work/served.html"
         if ! cmp -s "$work/served.html" "$work/$name.served.html"; then

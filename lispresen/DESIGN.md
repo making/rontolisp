@@ -1693,6 +1693,14 @@ the page (`--theme`, `--runtime`) and none that write files (`-o`, `--embed`, `-
 - **Files beside the deck** are served at their relative paths (a `..` or empty segment
   answers 404), so images need no `--embed` and a `--runtime` directory loads over HTTP.
   `Cache-Control: no-store` on every answer, so a reload fetches a changed image.
+- **One byte range per request**: a file answers `Accept-Ranges: bytes`, and a `Range`
+  of one byte range answers `206` with `Content-Range` (`416` past the end). Without it
+  Chrome cannot seek a served video beyond what it has loaded. Several ranges, another
+  unit, a malformed field or any `If-Range` (no answer carries a validator) get the whole
+  file, as RFC 9110 allows. The range is cut from the file read whole, and each transport
+  sends the answer whole: the native runner's server frames every response by its
+  `Content-Length`, which a `206` is too, so no transport needed a change; SBCL's loop
+  now hands the request fields to the application as Clack's `:headers` table.
 - **127.0.0.1 by default**: a deck in progress is not for the network; `--host 0.0.0.0`
   opts in. `--open` is not offered: no rontolisp backend can start a process
   (`uiop:run-program` is not implemented, and WASM has no processes), so the URL is
