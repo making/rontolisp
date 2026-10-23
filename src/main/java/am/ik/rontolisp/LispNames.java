@@ -322,6 +322,28 @@ public final class LispNames {
 	 */
 	public static final String DECODE_UNIVERSAL_TIME = "DECODE-UNIVERSAL-TIME";
 
+	/**
+	 * The {@code get-decoded-time} prelude function: {@link #DECODE_UNIVERSAL_TIME} of
+	 * the current universal time in the local time zone.
+	 */
+	public static final String GET_DECODED_TIME = "GET-DECODED-TIME";
+
+	/**
+	 * The {@code %local-time-offset} internal primitive behind the local time zone of
+	 * {@link #DECODE_UNIVERSAL_TIME} / {@link #ENCODE_UNIVERSAL_TIME}: given Unix
+	 * seconds, the local zone's total offset EAST of UTC in seconds at that instant,
+	 * doubled, plus 1 when daylight saving time is in effect. The interpreter and the JVM
+	 * ask {@code java.time.ZoneId.systemDefault()}; the WASM backends splice a Lisp
+	 * definition ({@code eval/LocalTimeLibrary}).
+	 */
+	public static final String LOCAL_TIME_OFFSET = "%LOCAL-TIME-OFFSET";
+
+	/**
+	 * The {@code %local-zone} internal prelude function: {@link #LOCAL_TIME_OFFSET} of a
+	 * universal time, clamped to the range every backend's host can answer.
+	 */
+	public static final String LOCAL_ZONE_INTERNAL = "%LOCAL-ZONE";
+
 	/** The {@code get-internal-real-time} built-in function. */
 	public static final String GET_INTERNAL_REAL_TIME = "GET-INTERNAL-REAL-TIME";
 
@@ -6450,6 +6472,17 @@ public final class LispNames {
 	 * write path's raw {@code $str_bytes} copy. See {@link #STR_BYTE_LENGTH_INTERNAL}.
 	 */
 	public static final String STR_FROM_BYTE_INTERNAL = "%STR-FROM-BYTE";
+
+	/**
+	 * The internal {@code rontolisp::%sock-fail} signalling site of the {@code --native}
+	 * runner's socket provider ({@code runner-sockets.lisp}): the one place it signals a
+	 * host failure or a wrong-kind handle from. Its NAME is an exception-handling trigger
+	 * for the WASM compiler, the way the usocket guard is, so a program carrying the
+	 * provider compiles in EH mode and the signal is a catchable {@code simple-error}
+	 * that reports its text when uncaught -- a bare {@code error} outside EH mode is a
+	 * trap carrying nothing (.kb/tcp-sockets.md, "--native: the runner's sockets").
+	 */
+	public static final String SOCK_FAIL_INTERNAL = "%SOCK-FAIL";
 
 	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a

@@ -32,4 +32,7 @@ It also works on a connected socket handle, where it reports the local
 - **WASM**: component-only, via `wasi:sockets`' `get-local-address`; returns
   `nil` for a handle that is not a socket or listener. Call-time error in
   Preview 1 (core-module) mode, like every tcp built-in.
+- **Native executable** (`--native`): as on the interpreter and the JVM, the
+  `simple-error` for a wrong kind of handle included
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.

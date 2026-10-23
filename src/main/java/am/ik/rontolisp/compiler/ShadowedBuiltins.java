@@ -14,7 +14,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
-import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
@@ -419,294 +418,54 @@ public final class ShadowedBuiltins {
 	}
 
 	private static LispVal rewrite(LispVal form, Map<String, String> shadowed, boolean closeShadowed) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol op && cons.isProperList()) {
+		return CallSiteWalk.walk(form, new CallSiteRenamer(shadowed, closeShadowed));
+	}
+
+	/**
+	 * Renames each call of a shadowed built-in -- and each {@code #'name} of one -- onto
+	 * its dispatcher; {@link CallSiteWalk} keeps the positions that are not calls.
+	 */
+	private record CallSiteRenamer(Map<String, String> shadowed,
+			boolean closeShadowed) implements CallSiteWalk.Rewriter {
+
+		@Override
+		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol op) {
 			String opName = op.name();
-			switch (opName) {
-				// Quoted data is data; a macro-definition body is a template the
-				// expander instantiates, not evaluated code (the WasmSocketsRewrite
-				// rule).
-				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET:
-					return form;
-				case LispNames.FUNCTION: {
-					if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named) {
-						String dispatch = shadowed.get(named.name());
-						if (dispatch != null) {
-							return listOf(op, new LispSymbol(dispatch));
-						}
+			if (LispNames.FUNCTION.equals(opName)) {
+				if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named) {
+					String dispatch = this.shadowed.get(named.name());
+					if (dispatch != null) {
+						return listOf(op, new LispSymbol(dispatch));
 					}
-					break;
 				}
-				default:
-					break;
+				return null;
 			}
-			List<LispVal> parts = cons.toList();
-			if (closeShadowed) {
+			if (this.closeShadowed) {
 				// The stream-closing macros spell (close ...) only after expansion;
 				// pre-expand them (unwind-protect shape, the interpreter/JVM
 				// semantics) so that close routes through the dispatcher exactly like
 				// the interpreter's global-binding lookup does.
-				switch (opName) {
-					case LispNames.WITH_OPEN_FILE:
-						return rewrite(LispMacroExpander.expandWithOpenFile(cons), shadowed, true);
-					case LispNames.WITH_OPEN_STREAM:
-						return rewrite(LispMacroExpander.expandWithOpenStream(cons, true), shadowed, true);
-					case LispNames.WITH_OUTPUT_TO_STRING:
-						return rewrite(LispMacroExpander.expandWithOutputToString(cons, true), shadowed, true);
-					case LispNames.WITH_INPUT_FROM_STRING:
-						return rewrite(LispMacroExpander.expandWithInputFromString(cons, true), shadowed, true);
-					default:
-						break;
+				LispVal expanded = switch (opName) {
+					case LispNames.WITH_OPEN_FILE -> LispMacroExpander.expandWithOpenFile(cons);
+					case LispNames.WITH_OPEN_STREAM -> LispMacroExpander.expandWithOpenStream(cons, true);
+					case LispNames.WITH_OUTPUT_TO_STRING -> LispMacroExpander.expandWithOutputToString(cons, true);
+					case LispNames.WITH_INPUT_FROM_STRING -> LispMacroExpander.expandWithInputFromString(cons, true);
+					default -> null;
+				};
+				if (expanded != null) {
+					return CallSiteWalk.walk(expanded, this);
 				}
 			}
-			// Non-evaluated positions of the binding/clause forms the walker can meet
-			// at this stage (built-in macros expand later, in Pass 2): a parameter,
-			// binding variable or clause head named like a shadowed built-in must not
-			// read as a call.
-			switch (opName) {
-				case LispNames.DEFUN: {
-					if (parts.size() >= 3) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(parts.get(1));
-						rebuilt.add(rewriteLambdaList(parts.get(2), shadowed, closeShadowed));
-						for (int i = 3; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.LAMBDA: {
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewriteLambdaList(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.FLET, LispNames.LABELS: {
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewriteLocalFunctionDefs(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR, LispNames.HANDLER_BIND,
-						LispNames.RESTART_BIND: {
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewriteBindings(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.DOLIST, LispNames.DOTIMES, LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM,
-						LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING: {
-					// (op (var expr...) body...): the spec's var is a binding, the
-					// rest of the spec evaluates. The with-* forms reach here only
-					// when close is NOT shadowed (pre-expansion above ate the other
-					// case).
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewriteBindingSpec(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.SETF, LispNames.PSETF, LispNames.INCF, LispNames.DECF, LispNames.POP, LispNames.REMF,
-						LispNames.PUSH, LispNames.PUSHNEW, LispNames.ROTATEF, LispNames.SHIFTF: {
-					// A place names its setf expansion, not a call: (setf (gethash k h)
-					// v) stores through gethash's setf function whatever methods the
-					// reader has, so the place's head stays and only its argument forms
-					// are rewritten.
-					List<LispVal> rebuilt = new ArrayList<>(parts.size());
-					rebuilt.add(parts.get(0));
-					for (int i = 1; i < parts.size(); i++) {
-						LispVal part = parts.get(i);
-						rebuilt.add(isPlacePosition(opName, i, parts.size())
-								? rewritePlace(part, shadowed, closeShadowed) : rewrite(part, shadowed, closeShadowed));
-					}
-					return LispCons.rebuiltList(cons, rebuilt);
-				}
-				case LispNames.MULTIPLE_VALUE_BIND, LispNames.DESTRUCTURING_BIND: {
-					if (parts.size() >= 3) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(parts.get(1));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
-						LispNames.CTYPECASE: {
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewrite(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewriteClause(parts.get(i), shadowed, closeShadowed, 1));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				case LispNames.HANDLER_CASE, LispNames.RESTART_CASE: {
-					// Clause shape (type-or-name (var...) body...): head and binding
-					// list are both non-evaluated.
-					if (parts.size() >= 2) {
-						List<LispVal> rebuilt = new ArrayList<>(parts.size());
-						rebuilt.add(parts.get(0));
-						rebuilt.add(rewrite(parts.get(1), shadowed, closeShadowed));
-						for (int i = 2; i < parts.size(); i++) {
-							rebuilt.add(rewriteClause(parts.get(i), shadowed, closeShadowed, 2));
-						}
-						return LispCons.rebuiltList(cons, rebuilt);
-					}
-					break;
-				}
-				default:
-					break;
+			String dispatch = this.shadowed.get(opName);
+			if (dispatch == null) {
+				return null;
 			}
-			String dispatch = shadowed.get(opName);
-			if (dispatch != null) {
-				// Positioned at the call, so a report the backend makes of it (a wrong
-				// argument count) points at the source.
-				return SourceProvenance.inherit(cons,
-						new LispCons(new LispSymbol(dispatch), rewriteTail(cons.cdr(), shadowed, closeShadowed)));
-			}
+			// Positioned at the call, so a report the backend makes of it (a wrong
+			// argument count) points at the source.
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(dispatch), CallSiteWalk.arguments(cons.cdr(), this)));
 		}
-		// Generic: rewrite the operator/elements individually. The tail is walked
-		// element-wise (NOT re-checked as a call), the GrayStreamsLibrary rule.
-		LispVal car = rewrite(cons.car(), shadowed, closeShadowed);
-		LispVal cdr = rewriteTail(cons.cdr(), shadowed, closeShadowed);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
-	}
 
-	/**
-	 * Whether element {@code index} of a place-modifying form is a place: every other
-	 * element from the first for {@code setf}/{@code psetf}, the second for
-	 * {@code push}/{@code pushnew}, all but the new value for {@code shiftf}, every one
-	 * for {@code rotatef}, and the first for the rest.
-	 */
-	private static boolean isPlacePosition(String op, int index, int size) {
-		return switch (op) {
-			case LispNames.SETF, LispNames.PSETF -> index % 2 == 1;
-			case LispNames.PUSH, LispNames.PUSHNEW -> index == 2;
-			case LispNames.ROTATEF -> true;
-			case LispNames.SHIFTF -> index < size - 1;
-			default -> index == 1;
-		};
-	}
-
-	/** A place: a compound place keeps its head, its argument forms evaluate. */
-	private static LispVal rewritePlace(LispVal place, Map<String, String> shadowed, boolean closeShadowed) {
-		if (place instanceof LispCons cons && cons.car() instanceof LispSymbol && cons.isProperList()) {
-			LispVal args = rewriteTail(cons.cdr(), shadowed, closeShadowed);
-			return args == cons.cdr() ? place : SourceProvenance.inherit(cons, new LispCons(cons.car(), args));
-		}
-		return rewrite(place, shadowed, closeShadowed);
-	}
-
-	private static LispVal rewriteTail(LispVal tail, Map<String, String> shadowed, boolean closeShadowed) {
-		return LispTrees.rebuildSpine(tail, node -> node instanceof LispCons ? null : node,
-				element -> rewrite(element, shadowed, closeShadowed));
-	}
-
-	/** A lambda list: parameter names stay, only default-value forms evaluate. */
-	private static LispVal rewriteLambdaList(LispVal params, Map<String, String> shadowed, boolean closeShadowed) {
-		if (!(params instanceof LispCons cons) || !cons.isProperList()) {
-			return params;
-		}
-		List<LispVal> rebuilt = new ArrayList<>();
-		for (LispVal param : cons.toList()) {
-			rebuilt.add(rewriteClause(param, shadowed, closeShadowed, 1));
-		}
-		return LispCons.rebuiltList(cons, rebuilt);
-	}
-
-	/** A let-style binding list: each binding's var stays, its init forms evaluate. */
-	private static LispVal rewriteBindings(LispVal bindings, Map<String, String> shadowed, boolean closeShadowed) {
-		if (!(bindings instanceof LispCons cons) || !cons.isProperList()) {
-			return bindings;
-		}
-		List<LispVal> rebuilt = new ArrayList<>();
-		for (LispVal binding : cons.toList()) {
-			rebuilt.add(rewriteClause(binding, shadowed, closeShadowed, 1));
-		}
-		return LispCons.rebuiltList(cons, rebuilt);
-	}
-
-	/** A single (var expr...) spec: the var stays, the rest evaluates. */
-	private static LispVal rewriteBindingSpec(LispVal spec, Map<String, String> shadowed, boolean closeShadowed) {
-		return rewriteClause(spec, shadowed, closeShadowed, 1);
-	}
-
-	/** A (flet ((name params body...) ...)) definition list. */
-	private static LispVal rewriteLocalFunctionDefs(LispVal defs, Map<String, String> shadowed, boolean closeShadowed) {
-		if (!(defs instanceof LispCons cons) || !cons.isProperList()) {
-			return defs;
-		}
-		List<LispVal> rebuilt = new ArrayList<>();
-		for (LispVal def : cons.toList()) {
-			if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 2) {
-				List<LispVal> defParts = defCons.toList();
-				List<LispVal> newDef = new ArrayList<>(defParts.size());
-				newDef.add(defParts.get(0));
-				newDef.add(rewriteLambdaList(defParts.get(1), shadowed, closeShadowed));
-				for (int i = 2; i < defParts.size(); i++) {
-					newDef.add(rewrite(defParts.get(i), shadowed, closeShadowed));
-				}
-				rebuilt.add(LispCons.rebuiltList(defCons, newDef));
-			}
-			else {
-				rebuilt.add(def);
-			}
-		}
-		return LispCons.rebuiltList(cons, rebuilt);
-	}
-
-	/**
-	 * A clause whose first {@code keep} elements are non-evaluated (a case key, a
-	 * handler-case type + binding list, a lambda-list parameter name); everything after
-	 * them evaluates. A non-cons clause is inert.
-	 */
-	private static LispVal rewriteClause(LispVal clause, Map<String, String> shadowed, boolean closeShadowed,
-			int keep) {
-		if (!(clause instanceof LispCons cons) || !cons.isProperList()) {
-			return clause;
-		}
-		List<LispVal> parts = cons.toList();
-		List<LispVal> rebuilt = new ArrayList<>(parts.size());
-		for (int i = 0; i < parts.size(); i++) {
-			rebuilt.add(i < keep ? parts.get(i) : rewrite(parts.get(i), shadowed, closeShadowed));
-		}
-		return LispCons.rebuiltList(cons, rebuilt);
 	}
 
 	private static LispVal consList(List<LispVal> items) {

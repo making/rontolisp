@@ -5366,32 +5366,6 @@ public final class ClojureLowering {
 			case "re-seq" -> ClojureStringLowering.reValue(this, "re-seq", List.of(2));
 			case "re-matches" -> ClojureStringLowering.reValue(this, "re-matches", List.of(2));
 			case "re-groups" -> ClojureStringLowering.reValue(this, "re-groups", List.of(1));
-			case "keep" -> ClojureFilterLowering.keepValue(this);
-			case "keep-indexed" -> ClojureFilterLowering.indexedValue(this, true);
-			case "map-indexed" -> ClojureFilterLowering.indexedValue(this, false);
-			case "every?" -> ClojureFilterLowering.everyValue(this);
-			case "some" -> ClojureFilterLowering.someValue(this);
-			case "remove" -> ClojureFilterLowering.removeValue(this);
-			case "distinct" -> ClojureFilterLowering.distinctValue();
-			case "partition" -> ClojureFilterLowering.partitionValue();
-			case "take-while" -> ClojureFilterLowering.takeWhileValue(this);
-			case "drop-while" -> ClojureFilterLowering.dropWhileValue(this);
-			case "interleave" -> ClojureFilterLowering.interleaveValue();
-			case "interpose" -> ClojureFilterLowering.interposeValue();
-			case "zipmap" -> ClojureFilterLowering.zipmapValue(this);
-			case "group-by" -> ClojureFilterLowering.groupByValue(this);
-			case "sort" -> ClojureFilterLowering.sortValue(this);
-			case "sort-by" -> ClojureFilterLowering.sortByValue(this);
-			case "last" -> ClojureFilterLowering.lastValue(this);
-			case "butlast" -> ClojureFilterLowering.butlastValue(this);
-			case "second" -> ClojureFilterLowering.secondValue(this);
-			case "mapv" -> ClojureFilterLowering.mapvValue(this);
-			case "filterv" -> ClojureFilterLowering.filtervValue(this);
-			case "mapcat" -> ClojureFilterLowering.mapcatValue(this);
-			case "ffirst" -> ClojureFilterLowering.ffirstValue(this);
-			case "nfirst" -> ClojureFilterLowering.nfirstValue(this);
-			case "fnext" -> ClojureFilterLowering.fnextValue(this);
-			case "nnext" -> ClojureFilterLowering.nnextValue(this);
 			case "boolean" -> sharedValue("boolean", ClojureFnLowering.booleanValue(this));
 			case "char" -> ClojureFnLowering.charValue(this);
 			case "name" -> ClojureFnLowering.nameValue(this);
@@ -5437,25 +5411,6 @@ public final class ClojureLowering {
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
 			case "file-seq" -> ClojureIoLowering.fileSeqValue();
-			case "atom" -> ClojureStateLowering.atomValue(this);
-			case "volatile!" -> ClojureStateLowering.volatileValue();
-			case "deref" -> ClojureStateLowering.derefValue(this);
-			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this, name);
-			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this, name);
-			case "compare-and-set!" -> ClojureStateLowering.compareAndSetValue(this);
-			case "swap-vals!", "reset-vals!" -> ClojureStateLowering.swapValsValue(this, name);
-			case "add-watch", "remove-watch", "set-validator!", "get-validator" ->
-				ClojureStateLowering.watchVerbValue(name);
-			case "ref" -> ClojureStateLowering.refValue(this);
-			case "alter" -> ClojureStateLowering.alterValue(this, "alter");
-			case "commute" -> ClojureStateLowering.alterValue(this, "commute");
-			case "ref-set" -> ClojureStateLowering.refSetValue(this);
-			case "agent" -> ClojureStateLowering.agentValue();
-			case "agent-error", "agent-errors", "clear-agent-errors", "restart-agent", "set-error-handler!",
-					"set-error-mode!", "error-handler", "error-mode" ->
-				ClojureStateLowering.agentVerbValue(name);
-			case "send" -> ClojureStateLowering.sendValue(this, "send");
-			case "send-off" -> ClojureStateLowering.sendValue(this, "send-off");
 			case "odd?" -> sharedValue("odd?",
 					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x)));
 			case "even?" -> sharedValue("even?",
@@ -5471,13 +5426,7 @@ public final class ClojureLowering {
 			case "some?" -> sharedValue("some?", ClojureFnLowering.predValue(this, x -> ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("not"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x))));
 			case "not" -> sharedValue("not", ClojureFnLowering.notValue(this));
-			case "ex-data" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_DATA);
-			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
-			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
-			case "Throwable->map" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.THROWABLE_TO_MAP);
-			case "StackTraceElement->vec" -> ClojureStateLowering.stackTraceElementVecValue(this);
 			case "EMPTY-NODE" -> ClojureSeqLowering.emptyNodeValue();
-			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "eval" -> ClojureMacroLowering.evalValue();
 			case "resolve" -> ClojureVarLowering.resolveValue();
 			case "ns-resolve" -> ClojureVarLowering.nsResolveValue();
@@ -5491,6 +5440,15 @@ public final class ClojureLowering {
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNMAP-V"));
 			case "ns-unalias" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-NS-UNALIAS-V"));
+			case "require" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-REQUIRE-V"));
+			case "use" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-USE-V"));
+			case "in-ns" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-IN-NS-V"));
+			// the oracle's vars are unbound: their value is the unbound root
+			case "unquote", "unquote-splicing" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"),
+					LispString.literal(ClojureCoreNames.NAMESPACE + "/" + name));
 			case "derive", "underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy" ->
 				ClojureHierarchyLowering.valueOf(this, name);
 			case "prefer-method" -> ClojureHierarchyLowering.preferMethodValue();
@@ -5502,13 +5460,6 @@ public final class ClojureLowering {
 			case "instance?" -> ClojureDispatchLowering.instanceValue(this);
 			case "satisfies?" -> ClojureProtocolLowering.satisfiesValue(this);
 			case "extend" -> ClojureProtocolLowering.extendValue(this);
-			case "await" -> ClojureStateLowering.awaitValue(this);
-			case "await-for" -> ClojureStateLowering.awaitForValue(this);
-			case "ensure" -> ClojureStateLowering.ensureValue(this);
-			case "shutdown-agents" -> ClojureStateLowering.shutdownAgentsValue();
-			case "struct" -> ClojureStateLowering.structValue(this);
-			case "struct-map" -> ClojureStateLowering.structMapValue(this);
-			case "push-thread-bindings", "pop-thread-bindings" -> ClojureStateLowering.threadBindingsValue(name);
 			case "aget", "alength", "aset" -> ClojureBytesLowering.valueOf(this, name);
 			case "list*" -> ClojureLoopLowering.listStarValue(this);
 			case "make-array" -> ClojureInteropLowering.makeArrayValue(this);
@@ -5517,6 +5468,14 @@ public final class ClojureLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST));
 			default -> {
+				LispVal state = ClojureStateLowering.valueOf(this, name);
+				if (state != null) {
+					yield state;
+				}
+				LispVal filter = ClojureFilterLowering.valueOf(this, name);
+				if (filter != null) {
+					yield filter;
+				}
 				if (ClojureCoreNames.isMacro(name)) {
 					// a core-macro name with no value arm answers the macro's expander
 					// as a value (g16): the run-time once-expansion over the quoted

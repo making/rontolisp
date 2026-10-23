@@ -30,6 +30,8 @@ mod serve;
 mod url;
 mod wire;
 
+pub(crate) use serve::reason;
+
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -298,7 +300,7 @@ fn reply_of(caller: &Caller<'_, WasiP1Ctx>, handle: Option<Rooted<ExternRef>>) -
     }
 }
 
-fn memory_string(caller: &mut Caller<'_, WasiP1Ctx>, ptr: i32, len: i32) -> wasmtime::Result<String> {
+pub(crate) fn memory_string(caller: &mut Caller<'_, WasiP1Ctx>, ptr: i32, len: i32) -> wasmtime::Result<String> {
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         wasmtime::bail!("the module exports no memory");
     };
@@ -310,7 +312,7 @@ fn memory_string(caller: &mut Caller<'_, WasiP1Ctx>, ptr: i32, len: i32) -> wasm
 }
 
 /// A `:string` result: bytes written into a block `__ronto_alloc` reserves.
-fn return_string(caller: &mut Caller<'_, WasiP1Ctx>, s: &str) -> wasmtime::Result<(i32, i32)> {
+pub(crate) fn return_string(caller: &mut Caller<'_, WasiP1Ctx>, s: &str) -> wasmtime::Result<(i32, i32)> {
     let alloc: TypedFunc<i32, i32> = match caller.get_export("__ronto_alloc") {
         Some(Extern::Func(f)) => f.typed(&caller)?,
         _ => wasmtime::bail!("the module exports no __ronto_alloc"),

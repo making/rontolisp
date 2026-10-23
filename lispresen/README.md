@@ -43,8 +43,8 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :footer :description :page-url :page-image :page-image-font :lang)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck, `:footer "text"` (or `("text " (link ...))`) sets one line at the left of the bottom band on every slide but the title slide, a hashtag, a handle or a confidentiality label; `:lang "en"` is the page's `<html lang>` tag (a BCP 47 tag, default `ja`; it changes the declaration only, phrase breaking stays Japanese); `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
 | `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
-| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below) |
-| `"text"`, `(p inline...)` | a paragraph |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below). `:layout :image-left` or `:image-right` sets the slide's image edge to edge on that side of the canvas and fits the title and the other blocks in the rest (Layout, below) |
+| `"text"`, `(p [:step t] inline...)` | a paragraph; `:step t` on it or on any block below but a list reveals the whole block on a page advance (below) |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
 | `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge; `java`, `kotlin`, `javascript` (`js`), `typescript` (`ts`), `c`, `cpp`, `go`, `rust`, `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`) are highlighted (comments, strings, keywords, numbers and constants; JSON and YAML keys) and never run; any other `:lang` is plain |
@@ -52,10 +52,12 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(code :steps ("(defun" (3 4) ("x" "y")) ...)` | brings lines forward one page advance at a time and fades the rest: a string names the first line holding it, `(3 4)` lines 3 to 4 of the block as shown, a list several of them |
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
-| `(image "path" :alt "text" [:caption "text"])` | an image, fitted into the remaining space |
+| `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | an image, fitted into the remaining space; alone on a slide without a title, it covers the whole slide. `:fit :contain` shows a full-bleed or split image whole instead of cropping it, `:share` (`1/3`, `1/2`, `2/3`) is the width a split image takes |
+| `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t] ...)` | a video (`mp4`, `webm`), laid out as an image and taking the same options. `:autoplay t` plays it when its slide is entered, never on page load; leaving the slide pauses it. A click or tap on it plays or pauses it. Print, the overview and the presenter window show the `:poster` image (or the first frame) |
 | `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
+| `(math expr...)` | a formula laid out from its S-expression (below): a display formula as a block, an inline one inside a paragraph, a list item or a table cell |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
 | `(source inline...)` | a line in the muted color at the bottom of the slide naming where its content comes from; one per slide |
@@ -63,8 +65,12 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
 | `(define name (param... [&rest rest]) body...)` | a template (below) |
 
-The deck is read, never evaluated: no macros, no backquote, no reader conditionals, no
-`#.`.
+The deck is read by lispresen's own reader, never evaluated: no macros, no backquote, no
+reader conditionals, no `#.`. Symbols keep the case they are written with (`N` and `n`
+are different letters in a formula; tags and options match whatever their case), `|a b|`
+and `\` escape characters in a symbol, and a decimal such as `2.5` is refused wherever it
+would be printed, since float printing differs between implementations: write it as a
+string.
 
 A template is reused by substitution: a later `(name arg...)` anywhere in the deck is
 replaced by the body, each parameter by its argument, the `&rest` arguments spliced where
@@ -134,6 +140,42 @@ Labels start at 48 px and step down to 36 px with the slide; a diagram wider tha
 room at 36 px is an error. A diagram is centered in its column or the body; a bar chart
 spans it.
 
+## Formulas
+
+A formula is written as an S-expression, prefix notation being a formula's tree already,
+and laid out by lispresen from the same width table as the text: no TeX, no script
+library, no image. In block position `(math ...)` is a display formula centered in its
+column or the body, set at the body size; inside a paragraph, a list item, a table cell
+or a flow label it is an inline formula of the text's size, fractions and limits set
+compactly so it stays within its line. A `say` around a block formula points at it.
+
+```lisp
+(p "計算量は " (math (O (* n (log n)))) " で済む")
+(math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a))))
+(math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+(math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6)))
+```
+
+| Form | Sets |
+|------|------|
+| `x`, `N`, `#\N`, `alpha`, `Gamma`, `inf`, `partial`, `cdots`, `reals`, ... | a symbol: one letter in italic, a longer name upright, a Greek letter or symbol by name (`infty`, `nabla`, `emptyset`, `forall`, `exists`, `ell`, `hbar`, `deg`, `dots`, `vdots`, `naturals`, `integers`, `rationals`, `complex`) |
+| `42`, `1/2`, `"if"` | a number; a ratio as a fraction; a string as text (a decimal is written as a string: `"0.5"`) |
+| `(+ a b)`, `(- a b)`, `(- a)`, `(* a b)`, `(pm a b)`, `(times a b)`, `(cdot a b)`, `(div a b)`, `(mod a b)` | sums and products; `*` is juxtaposition (`2x`, a dot between two numbers), a sum used as a factor or after a minus sign gets parentheses |
+| `(= a b c)`, `<`, `>`, `<=`, `>=`, `/=`, `approx`, `equiv`, `sim`, `propto`, `in`, `notin`, `subset`, `subseteq`, `->`, `=>`, `<=>`, `mapsto`, `ll`, `gg` | relations, chained |
+| `(/ a b)`, `(binom n k)`, `(deriv y x)`, `(partial f x)` | a fraction, a binomial coefficient, dy/dx, ∂f/∂x |
+| `(^ x 2)`, `(_ x i)`, `(^ (_ x i) 2)` | a superscript, a subscript, both |
+| `(sqrt x)`, `(root 3 x)`, `(abs x)`, `(norm v)`, `(floor x)`, `(ceil x)`, `(paren ...)`, `(bracket ...)`, `(brace ...)`, `(set a b)`, `(tuple a b)`, `(angle a b)` | radicals and delimiters, which grow with their content; several arguments are separated by commas |
+| `(sum lo hi body)`, `(prod ...)`, `(int ...)`, `(bigcup ...)`, `(bigcap ...)`, `(lim (-> n inf) body)` | large operators with their limits (either may be left out); below and above in a display formula, beside in an inline one |
+| `(sin x)`, `log`, `ln`, `exp`, `max`, `min`, `det`, `gcd`, ... | a function set upright, its argument in parentheses unless it is simple |
+| `(f x y)` | any other head is a function applied to its arguments: f(x, y) |
+| `(matrix (a b) (c d))`, `bmatrix`, `vmatrix`, `(cases (value condition) ...)` | a matrix in parentheses, brackets or bars; a case analysis behind a brace |
+| `(bar x)`, `(hat x)`, `(vec x)`, `(dot x)`, `(bold w)`, `(prime f)`, `(! n)`, `(not p)`, `(text "and")` | accents, bold, f′, n!, ¬p, words |
+
+Every formula carries a spoken form as its `aria-label` (`x equals (minus b plus or
+minus the square root of b squared minus 4 a c) over (2 a)`). A display formula wider
+than its room at the smallest body size is an error; an inline formula taller than its
+line (a matrix, a display-sized sum) is a warning that it belongs in a block.
+
 ## Callouts
 
 `say` puts a short comment in a speech bubble whose tail points at what it wraps: a
@@ -163,9 +205,10 @@ bubble, `:step nil` to opt one out) it appears on a page advance instead.
 ## Page advances
 
 A slide can reveal itself over several page advances: the items of a `(ul :step t ...)`,
-the lines of a `(code :steps ...)`, and step bubbles. Each advance takes the next step of
-the slide in the order they are written, a bubble after the steps of what it wraps,
-before moving on to the next slide; going back undoes them one at a time.
+any block with `:step t`, the lines of a `(code :steps ...)`, and step bubbles. Each
+advance takes the next step of the slide in the order they are written, a bubble after
+the steps of what it wraps, before moving on to the next slide; going back undoes them
+one at a time.
 
 ```lisp
 (slide :title "その場で動かす"
@@ -176,6 +219,21 @@ before moving on to the next slide; going back undoes them one at a time.
 Here the first advance brings the definition forward, the second the call, the third the
 bubble. Nothing moves when a step is revealed: hidden items keep their room. Print and the
 overview show the whole slide; the presenter window shows what is still to come faded.
+
+```lisp
+(slide :title "結果"
+  (p "測った値を見せてから、結論を出す。")
+  (bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788))
+  (lead :step t "配るなら jar が一番小さい"))
+```
+
+`:step t` reveals a whole block: a paragraph (`p`, `lead`), a quote, an image, a video, a
+table, a diagram, a display formula, a code block (its `:steps` then walk its lines) or a
+column. A table's rows and a diagram's boxes or bars come with their block; only a list
+reveals its parts one by one. A bubble that is no step but points at a stepped block, or
+stands in one, appears with it. A video with `:autoplay t` that is a step plays when it
+is revealed. `:step` on `notes`, on `source` or on the only block of an untitled slide
+(which would open empty) is an error.
 
 ## Code morph
 
@@ -284,15 +342,16 @@ lispresen --version
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
-`.html`. Code files are read into the HTML. Images are referenced by their path, relative to the deck; `--embed` puts them in
-the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
+`.html`. Code files are read into the HTML. Images and videos are referenced by their path, relative to the deck; `--embed` puts them in
+the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`; `mp4`, `webm`,
+a video over 20 MB reported, since the page then opens slowly), so the file
 alone is the whole deck, the page image (Link preview, below) aside. A WASM build reads and writes files
 only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
 
 `new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
-with `--lang en`, dated today in UTC. An existing `FILE` is left alone and reported unless
+with `--lang en`, dated today in the local time zone. An existing `FILE` is left alone and reported unless
 `--force` is given. A deck file named `new` is rendered as `./new`.
 
 `serve` serves the deck's page at `http://127.0.0.1:8000/` until it is stopped (Ctrl-C)
@@ -334,14 +393,21 @@ reports `unknown`.
 
 Open the HTML file in a browser. Arrow keys, space, PageUp/PageDown (clickers),
 Home/End and swiping move between slides; on a touch screen, a tap on the left third goes
-back and anywhere else goes forward. `#N` in the URL opens slide N. `F`, a double click
+back and anywhere else goes forward. A click or tap on a video plays or pauses it, and
+leaves the slide where it is. `#N` in the URL opens slide N. `F`, a double click
 or the button in the bottom-right corner toggles full screen. `O` shows all slides.
-Printing to PDF puts one slide on each page.
+While the deck is in full screen, and while the presenter window is open, the player holds a
+screen wake lock so the display does not dim or lock mid-talk (browsers that lack the API, or
+refuse it, are left as they are).
+Printing to PDF puts one slide on each page. With `?notes` in the URL it prints a handout:
+each page holds a slide and its notes under it (a slide without notes prints alone), on a page
+as wide as the canvas and twice as tall; notes longer than the area under the slide are cut.
 
 `P` opens the presenter window: the current and next slide, the notes, a timer (click it
 to reset) and Start, which puts the slides in full screen on the other display (Chrome or
 Edge, the deck served over HTTP; the first Start asks for permission to use the
-displays). Moving in either window moves the other.
+displays). Moving in either window moves the other, and a click on a video in the presenter window
+plays or pauses it in the slides. Print with notes opens the handout print (`?notes&print`).
 
 If the fonts on the presenting machine set text wider than lispresen measured, the deck
 steps the affected slides down a size when it opens; `?check` in the URL lists what it
@@ -432,7 +498,36 @@ error instead of being shrunk further. Text widths are computed from a table mea
 Hiragino Sans, the widest of the font stack, and phrase boundaries come from a port of
 [BudouX](https://github.com/google/budoux)'s Japanese model, so the browser breaks lines
 where lispresen measured them. A number stays on one line with its counter (`1 時間`) and
-never breaks inside (`2026-10-22`, `1,000`).
+never breaks inside (`2026-10-22`, `1,000`). An emoji is measured as one em and a
+sequence (a flag, `👨‍💻`) as one glyph that no line breaks inside.
+
+A photograph can fill the slide or one side of it:
+
+```lisp
+(slide (image "venue.jpg" :alt "会場"))           ; no title, one image: covers the slide
+(slide :title "会場" :layout :image-right         ; :image-left puts it on the left
+  (ul "駅から徒歩 5 分" "定員 200 人")
+  (image "venue.jpg" :alt "会場" :share 1/3))     ; a third of the width, half by default
+```
+
+The image is cropped to its area (`:fit :contain` shows it whole on the background), and
+the title and body of a split slide are fitted in the width the image leaves. Text is
+never set on a picture, since its contrast cannot be checked: a full-bleed image takes no
+title, caption, source or callout and shows no page number or footer, and an image beside
+text takes no caption.
+
+A recorded demo is a `video`, laid out as an image: in the body, over the whole slide or
+beside the text.
+
+```lisp
+(slide :title "デモ"
+  (video "demo.mp4" :alt "fib を評価する" :poster "demo.png" :autoplay t :muted t))
+```
+
+`:autoplay t` plays it when the slide is entered and leaving the slide pauses it. A
+browser plays sound only in a window that has had a key press or click, so when moving
+from the presenter window, press `F` in the slides window first; a `:muted t` video
+always plays.
 
 ## Development
 
@@ -446,5 +541,7 @@ lispresen/check.sh --update   # regenerate examples/intro.html and intro.png fir
 and `web/index.html`, served over HTTP, re-renders the deck as you type.
 
 `tools/calibrate.lisp` writes a page that compares the width model with the browser it
-is opened in. `tools/gen-budoux.py` regenerates `src/budoux-ja.lisp` from BudouX's
+is opened in: the line counts of sample paragraphs (formulas among them), every ASCII
+character, emoji, symbol and Greek letter in both weights, and the ink heights the
+formula layout assumes. `tools/gen-budoux.py` regenerates `src/budoux-ja.lisp` from BudouX's
 model (Apache License 2.0, `tools/BUDOUX-LICENSE`).

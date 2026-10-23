@@ -24,13 +24,10 @@
 
 ;;; build.lisp, starter.lisp and serve.lisp are the CLI's alone; the browser editor
 ;;; leaves them out.
-#+rontolisp (load "src/all.lisp")
-#+rontolisp (load "src/build.lisp")
-#+rontolisp (load "src/starter.lisp")
-#+rontolisp (load "src/serve.lisp")
-#-rontolisp
-(dolist (name '("all" "build" "starter" "serve"))
-  (load (merge-pathnames (format nil "src/~a.lisp" name) *load-truename*)))
+(load (merge-pathnames "src/all.lisp" *load-truename*))
+(load (merge-pathnames "src/build.lisp" *load-truename*))
+(load (merge-pathnames "src/starter.lisp" *load-truename*))
+(load (merge-pathnames "src/serve.lisp" *load-truename*))
 
 ;;; serve's server: Clack's rontolisp handler where rontolisp can own a server socket
 ;;; (the interpreter and the JVM bind it, a native executable's runner does), SBCL's
@@ -53,7 +50,7 @@
   --embed       inline images as data: URIs, so the HTML file stands alone
   --check       report diagnostics without writing HTML or the page image
   --strict      fail on warnings too
-  new FILE      write a starter deck to FILE (- for standard output), dated today (UTC)
+  new FILE      write a starter deck to FILE (- for standard output), dated today (local date)
   --lang L      the starter deck's language: ja (the default) or en
   --force       overwrite FILE when it exists
   serve DECK    serve DECK's page at http://ADDR:N/, rebuilt when a file it was built
@@ -143,10 +140,9 @@ TARGET is standard output."
         path)))
 
 (defun today ()
-  "Today's date as YYYY-MM-DD, in UTC: no backend but SBCL knows the local time zone, and
-a starter deck is the same on every one."
+  "Today's date as YYYY-MM-DD in the local time zone."
   (multiple-value-bind (second minute hour day month year)
-      (decode-universal-time (get-universal-time) 0)
+      (decode-universal-time (get-universal-time))
     (declare (ignore second minute hour))
     (format nil "~4,'0d-~2,'0d-~2,'0d" year month day)))
 

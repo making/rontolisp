@@ -14,18 +14,16 @@ what the tuning targets.
 ## Portability
 
 lispresen is portable Common Lisp first: it runs on SBCL as well, and produces the same
-bytes there. Code that needs a rontolisp feature (a literal `load` the compilers splice,
-a WASM export, the playground runtime's hooks) sits behind `#+rontolisp`, with a
+bytes there. Code that needs a rontolisp feature (a WASM export, the playground
+runtime's hooks) sits behind `#+rontolisp`, with a
 `#-rontolisp` spelling for other implementations where one is needed; without a
 specific reason, code is written in standard CL. SBCL then serves as the reference the
 rontolisp backends are checked against.
 
-The one place this costs code today is loading the sources. Standard CL resolves a
-relative `load` against the working directory, so the portable spelling is
-`(load (merge-pathnames "x.lisp" *load-truename*))`; rontolisp's compilers splice only a
-literal path, resolved against the loading file, and leave the portable spelling to a
-run-time `load` that cannot find the file. Until the compile path splices the portable
-spelling too, `cli.lisp`, `src/all.lisp` and the test file carry both.
+Loading the sources takes no conditional. Standard CL resolves a relative `load`
+against the working directory, so every source is loaded as
+`(load (merge-pathnames "x.lisp" *load-truename*))`, and rontolisp's compilers splice
+that spelling at compile time as they splice a literal path.
 
 ## Goals and non-goals
 
@@ -39,8 +37,8 @@ Goals:
 - One HTML file. Without runnable code it has no network dependency at all.
 
 Non-goals: WYSIWYG editing, slide transitions, free-form positioning, PowerPoint
-export. Builds are page advances that reveal list items, bring code lines forward and show
-callouts (Page advances, below); each takes effect at once, without a transition. The one
+export. Builds are page advances that reveal list items and whole blocks, bring code lines
+forward and show callouts (Page advances, below); each takes effect at once, without a transition. The one
 animation is the code morph (below): a slide that rewrites the previous slide's code
 shows the change as it happens.
 
@@ -109,8 +107,8 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
-| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
+| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `math` (an inline formula), `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
 
@@ -118,23 +116,33 @@ Rules:
   backquote or CLOS definitions (`doc/en/guides/eval-limitations.md`), so evaluating the
   deck would make the language a deck may use differ per backend. Reading only is
   identical everywhere and makes a deck file safe to render from an untrusted source.
-- Tags are matched by `symbol-name`, not by symbol identity, so the package the runtime
-  reader interns into does not matter. Options are keyword/value pairs at the start of
-  a form; the first argument that is not a keyword starts the content.
-- The compiled runtime reader does not support backquote, `#.`, `#+`/`#-`
-  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them. The
-  interpreter's and SBCL's readers evaluate `#.`, so the deck is read under `*read-eval*`
-  nil, which every backend refuses alike. A form holding a dotted list or more conses
-  than characters (shared or circular structure from `#n=`, which SBCL reads) is reported
-  and skipped, so the parser and the template expansion only ever see proper trees. The
-  one exception is the datum of `(cells ...)` (Diagrams, below), whose dotted pairs are
-  what it draws; the template substitution walks a dotted tail, and nothing else reads
-  the datum but the drawing.
+- **The deck is read by lispresen's own reader** (`reader.lisp`), not the backend's
+  `read-from-string`: lists, a dotted tail, strings (`\"` and `\\`, a backslash escaping
+  the next character), characters (`#\x`, `#\Space`, `#\Newline`, `#\Tab`), `'x`,
+  integers, ratios, decimals (read as floats, which every element refuses with a
+  message, since float printing differs between implementations), keywords, `t`, `nil`
+  and symbols, with `;` and `#| |#` comments. Anything else after `#` (`#.`, `#+`,
+  `#n=`) and backquote are errors. Two reasons. The backends' readers differ: the
+  compiled runtime reader has no backquote, `#.` or `#+` and reads `|a b|` as two
+  symbols where the interpreter and SBCL read one, so a deck using them rendered
+  differently per backend; one reader makes the syntax identical by construction, and
+  there is no `#.` to refuse. And every backend's reader folds case, which a formula
+  cannot afford: `N` and `n` are different letters. A symbol keeps the case it is
+  written with (uninterned, matched by name), `|...|` and `\` escape characters in it;
+  tags, options and template names match whatever their case, cells and formulas print
+  a symbol as written.
+- Tags are matched by `symbol-name`, so a symbol's package never matters. Options are
+  keyword/value pairs at the start of a form; the first argument that is not a keyword
+  starts the content.
+- A form holding a dotted list is reported and skipped, so the parser and the template
+  expansion only ever see proper trees. The one exception is the datum of `(cells ...)`
+  (Diagrams, below), whose dotted pairs are what it draws; the template substitution
+  walks a dotted tail, and nothing else reads the datum but the drawing.
   Characters are code points on every backend (`.kb/string-index-cost.md`), so Japanese
   strings measure and slice identically everywhere.
 - Top-level forms instead of one enclosing `(deck ...)`: each form is read separately,
-  and the stop index `read-from-string` returns gives its start offset, hence a line
-  number for every diagnostic. One enclosing form would leave only "slide 7".
+  and the index after it gives the next one's start offset, hence a line number for
+  every diagnostic. One enclosing form would leave only "slide 7".
 - `code` content is dedented (the common leading whitespace removed, a leading blank
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
@@ -331,6 +339,10 @@ Width of a code point, in milli-em:
 | Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
 | Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
+| Emoji (dingbats, transport and map, U+1FA00-1FAFF, ...) and an emoji sequence (flag, ZWJ, skin tone, variation selector, keycap) | 1000 per glyph, exact; the characters of a sequence after the first take 0 and never break apart |
+| Symbols the font stack sets wider than a Latin letter (™ ⌘ ¼½¾ Æ, Letterlike, number forms, math, technical, supplemental arrows and operators, currency, tiles) | per block, the widest glyph measured plus 2% (900-1650); box drawing and block elements 1000, 614 in code |
+| Greek (U+0370-03FF) and ∏ | 1000, exact |
+| The symbols formulas set (∑ ∫ √ ≤ ≥ ≠ ∞ ∈ − ± × ⋅ ∂ ∇ ′ ⌊ ⌋ ⟨ ⟩ ∀ ∃ ¬ ∧ ∨ ∪ ∩ ⊂ ℝ ℕ ℤ ℚ ℂ ∘ ≡ ∼ ∝ ℏ ° ⊕ ⊗ ˆ ¯, ...) | per glyph, the wider of weights 400 and 700 plus 2% (`*measured-symbol-widths*`), in place of the block width above, which over-estimates them by up to half and would space a formula out |
 | Other proportional characters | 800 (bold 840), plus 2% |
 | Inline code (`tt`) and a marker (`mark`) | 125 more on the element's first character and on its last, its padding |
 
@@ -371,6 +383,29 @@ every ASCII character in both weights and reports any wider than the model, whic
 not depend on chance. Same day, 96 paragraphs (a bold title among them): never fewer
 lines in either browser, one more in 18 (Chrome) and 11 (Safari); no character wider
 than the model in either.
+
+Emoji, measured in Chrome 155 on macOS (Apple Color Emoji) on 2026-10-24, each set 20
+times at 1000 px in weights 400 and 700: every emoji in U+1F650-1F6FF (🚀), U+1FA00-1FAFF,
+U+2700-27BF (✅ ✨ ❌ and the text-style ✔ ❤), U+1F1E6-1F1FF, and the emoji of U+231A-23F3,
+U+2B05-2B55 is 1000 milli-em, as is every sequence tried (🇯🇵, 👨‍💻, 👨‍👩‍👧‍👦, 👍🏽, 1️⃣, ⚠️):
+one glyph, not one per code point. The earlier table counted them at 800 (too narrow, so
+the runtime check could step a slide down) or per code point (a ZWJ sequence 2800, too
+wide). The exceptions are ⏭ and ⏮ (U+23ED-23EE), 1003, which take 1020. The calibration
+page now sets 26 emoji and sequences in both weights and reports any wider than the
+model: none in Chrome (108 paragraphs, never fewer lines, one more in 18). Safari was not
+measured: its JavaScript from Apple Events is off on this machine.
+
+Symbols, same day and browser: the calibration page also sets every assigned character of
+U+00A0-00FF, U+2000-2BFF and U+1F000-1F2FF in both weights and reports any wider than the
+model. The first run found 420 (™ 1004/1070, box drawing and control pictures 1000, ‱ 1378,
+⇪ 1181, U+26DF 1258, ⁇ ‼ ⁉, ¼½¾ 854-929, Æ æ Œ œ 1039-1153, and
+whole blocks of math and technical symbols up to 1612). They now take the block widths in the
+table, or 1000 when every glyph measured exactly 1 em (control pictures, box drawing, Roman
+numerals, ℃ № ⌥ ‼); the few glyphs wider than 1 em inside a full-width range (‱ U+2031,
+U+21EA, U+26AE-26AF, U+26CD, U+26DF, U+26F4) have their own widths. A second run: none wider.
+In code the stack is Menlo, which draws box drawing and block elements at 602, so those stay
+614 there. ™ © ® ↔ ℹ with U+FE0F are emoji clusters (1000), alone ™ is 1100, © and ® are
+Latin-1 letters' width, ↔ is a full-width arrow.
 
 ### Line breaking
 
@@ -417,7 +452,8 @@ phrases (文節), not between arbitrary characters.
 | Deck header (generated first slide) | `title` (below) |
 | `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
-| Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
+| No title, one `image` or `video` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
+| Title + one `image` or `video` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
 | Title + one `table` | `table` |
@@ -441,6 +477,102 @@ Placement rules: the title sits at the same position on every content slide, and
 body is top-aligned under it, so the audience's eye does not search for the start of
 each slide. Statement, section and title layouts are centered. Images need no intrinsic
 size: lispresen computes the box, the browser fits the image inside it.
+
+#### Full-bleed and split images
+
+An image in the body box keeps the safe area's margins around it, so a photograph cannot
+fill the screen, nor run to the slide's edge beside text. Two layouts take an image out of
+the body and give it a part of the canvas, edge to edge:
+
+```lisp
+(slide (image "venue.jpg" :alt "会場"))                       ; full, by its shape
+(slide :layout :full (image "chart.png" :alt "..." :fit :contain))
+(slide :title "t" :layout :image-left (image "p.jpg" :alt "...") (ul ...))
+(slide :title "t" :layout :image-right (ul ...) (image "p.jpg" :alt "..." :share 1/3))
+```
+
+- `full`: the image covers the whole canvas (`object-fit: cover`, centered, cut at the
+  edges its aspect does not match), or with `:fit :contain` is shown whole on the theme
+  background. A slide with no title, one `image` without `:caption` and no source or
+  callout takes it automatically; `:layout :full` on any other slide is a warning and
+  the slide keeps its own layout.
+- `image-left` / `image-right`: the slide's one `image` outside columns takes the left or
+  right `:share` of the canvas width (`1/3`, `1/2` or `2/3`; half by default), top to
+  bottom, covering it or, with `:fit :contain`, shown whole in it. The kicker, the title,
+  the body, the source, the footer and the page number are laid out in the rest less the
+  112 px side margins, as on any slide in a narrower content width: 736 px at half of
+  16:9, 1056 at a third, 416 at two thirds (496, 736 and 256 on 4:3, where two thirds
+  leave room for a word or two). The fit solver sees nothing new, the narrower body it
+  handles for columns. The slide writes the region as `--left`, `--width` and `--right`
+  on its element, which the stylesheet places those elements and a run's output overlay
+  by. A slide without exactly one such image, or whose image has a `:caption` or a
+  callout, is a warning and keeps its own layout. A split is never chosen by shape: a
+  title and an image with other blocks stay a `standard` slide whose image shares the
+  body.
+- **No text on a picture.** The contrast lint cannot check a color against an image, so
+  text never stands on one. A full slide has no title, caption, source or callout by the
+  rule above, and drops the page number and the footer as the title slide does. The
+  progress bar stays along the bottom edge: it is a 6 px bar in the accent color, no
+  text. A caption on a full-bleed or split image is refused rather than set on the
+  picture or in a band under it, which would take the edge back; a credit goes in the
+  notes or in a split slide's source line.
+- `:fit` on an image in the body box, or `:share` anywhere but a split slide, is a
+  warning: an image in the body box is always shown whole.
+- Print, the overview and the presenter thumbnails show these slides like any other: the
+  image is part of the slide. The page image draws the title slide and is unaffected, and
+  so is `--embed`, which inlines the image as it does in the body.
+
+#### Video
+
+A recorded demo is the fallback of every live demo, and an animated GIF a poor one (no
+sound, no pause, files ten times larger). `(video "demo.mp4" :alt "..." [:caption "t"]
+[:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` is an image to the layout:
+lispresen computes the box and the browser fits the video in it (`object-fit`), so the
+fit solver needs no intrinsic size and sees an image. It takes every place and option an
+`image` does (the body, `full`, `image-left` / `image-right`, `:fit`, `:share`,
+`:caption`, a callout), with the same rules and diagnostics, which name it a video.
+`:alt` is required as for images; it becomes the element's `aria-label`.
+
+- `:autoplay t` means "play when the slide is entered": the player calls `play()` when a
+  page move enters the slide and `pause()` on every video of a slide it leaves. The
+  element has no `autoplay` attribute, which would play every video on page load, hidden
+  slides included; the slide the page opens on does not play either, nor does a step
+  advance inside the slide, so a video the speaker paused stays paused. A video that is
+  a step, or stands in one (`(video ... :step t)`, a stepped column), plays when its step
+  is revealed instead, and pauses when going back hides it. A paused video
+  that is entered again resumes where it stopped; one that ended starts over.
+- A browser allows `play()` with sound only in a window that has had a user gesture
+  (Chrome's autoplay policy; a muted video always plays). A key press, a click or a tap
+  in the slides window counts, so presenting from that window always plays; moving from
+  the presenter window gives the slides window no gesture, and the speaker presses `F`
+  there first. A refused `play()` leaves the video paused and logs a warning. This is
+  the documented policy, not a measurement: under browser automation a script call
+  counts as a gesture (2026-10-24, Chrome via DevTools MCP), so it is checked by hand.
+- A click or tap on a video plays or pauses it, and the page does not move (Touch,
+  below; measured 2026-10-24 in Chrome, as were play on entering, pause on leaving,
+  resuming on re-entry, no play on page load, the poster in the overview and the
+  presenter window, and a click forwarded from it); a double-click on it does not toggle full screen. Space, the arrows and the
+  other keys keep moving slides: the element has no `controls` in the player, so it
+  never takes focus and its keyboard shortcuts never compete with the deck's. The HTML
+  has `controls`, which the player removes, so the page without JavaScript plays it from
+  the browser's own controls.
+- The element is `<video src preload="metadata" playsinline>`, with `poster`, `loop` and
+  `muted` from the options and `data-autoplay` for the player. `preload="metadata"`
+  reads the size and the first frame, not the whole file, so a deck of several demos
+  opens without reading them; `playsinline` keeps iOS from opening it full screen. In the
+  body box it is as wide as the box (`width: 100%`), not its own width as an image is,
+  so its box does not change when the metadata arrives: the bubble of a callout is
+  placed against that box, and `object-position: right` sets the picture against the
+  bubble's strip.
+- Print, the overview and the presenter thumbnails copy the slide, so they show the
+  poster, or the first frame the copy loaded; Safari may load no frame before playing
+  (not measured), so a deck for Safari sets `:poster`. A click on the video in the presenter window's current slide
+  plays or pauses it in the slides window, over the `BroadcastChannel`; the presenter's
+  copy itself never plays, so the sound comes from one window.
+- `--embed` inlines `mp4` (`video/mp4`) and `webm` (`video/webm`), the formats every
+  current browser plays, and the poster as an image. The page holds the base64 of the
+  whole file, a third larger, and the browser parses all of it before the first slide
+  shows, so a video over 20 MB is a warning.
 
 ### Fit solver
 
@@ -481,6 +613,7 @@ and a maximum, the widest of their unwrapped widths:
 | Block | Minimum | Maximum |
 |-------|---------|---------|
 | text, list, quote | the widest unbreakable unit, plus the indent | the text set on one line, plus the indent |
+| formula | its box at the body size | the same |
 | code | the longest line, plus padding; runnable code at least its buttons, 320 + 2 x 12 px | the same |
 | console transcript | the longest command line, plus padding | the longest line, plus padding |
 | table | the sum of its columns' minima | the sum of their maxima |
@@ -634,40 +767,148 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
   whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
 
-No diagram has steps of its own yet; a step callout on one works as on any block.
+A diagram is revealed whole by `:step t` (Page advances, below); its boxes, bars and
+cells have no steps of their own, and a step callout on one works as on any block.
+
+### Formulas
+
+```lisp
+(p "計算量は " (math (O (* n (log n)))) " で済む")
+(math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a))))
+(math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+```
+
+A formula belongs in the deck as text for the reasons a diagram does, and prefix
+notation is already a formula's tree, so `(math expr...)` needs no second syntax: the
+operators are named as Lisp names them (`+ - * / = < <= expt`), a symbol is a variable
+or a Greek letter or symbol by name, a string is text, a ratio a fraction. The README
+lists every form. In block position a `math` is a display formula, a figure centered in
+its region like a diagram; inside text it is an inline formula, one character of the run
+as wide as its box (`*formula-char*`, a private-use code point), so it wraps with the
+text and never breaks inside.
+
+- **Layout.** `math.lisp` lays the tree out into boxes once, at parse time, in milli-em
+  of the font size the formula will be set at: a box has a width, an ascent and a
+  descent, and places its glyphs (centered in boxes measured from the width table),
+  rules and stretched delimiters from its left edge and baseline. The layout is
+  independent of the size, so the fit solver sees a box that scales: a display formula
+  is set at the body size and steps down with it, an inline one takes its run's size.
+  Fractions sit on the math axis, scripts are 0.7 and 0.5 of their base's size with
+  TeX's shifts and spacing classes (thin, medium and thick spaces between ordinary
+  symbols, operators and relations, none in scripts), large operators grow 1.4 times
+  with their limits below and above in display style and as scripts in text style
+  (an integral's always beside it), a delimiter is the glyph while its content is no
+  taller than a line and else the glyph stretched vertically about the axis to cover it,
+  and the radical sign is the √ glyph stretched the same way under an overbar. A sum
+  used as a factor, after a minus sign or as the base of a script is parenthesized, as a
+  writer would.
+- **Vertical metrics**, measured on Hiragino Sans in Chrome 155 on 2026-10-24
+  (`measureText`'s ink box at 1000 px): x-height 545, capitals 766, digits 780,
+  descenders 210, the axis 276 above the baseline (the middle of + and =), parentheses
+  778 above and 159 below, √ 905 above and 74 below; the font's ascent and descent are
+  880 and 120. Each glyph's ink (`*glyph-extents*`, letters by their shape) sets the box
+  of a text atom, so a fraction bar clears its numerator by the gap intended, not by a
+  line box. The calibration page checks these against the browser.
+- **Output.** An inline SVG (`<svg class="mx" role="img" aria-label="...">`) of `<text>`
+  elements at the model's positions (`text-anchor: middle`, italic by class, a smaller
+  `font-size` for scripts), `<rect>`s for rules and a `transform="scale(1 k)"` on a
+  stretched delimiter, every coordinate in em of the element's own font size, so an
+  inline formula follows the text around it. Why SVG and not positioned spans: an inline
+  formula's parts rise above and hang below its line, and positioned spans would be
+  boxes that extend the body's scrollable overflow, which the runtime check reads as an
+  overflow and steps the slide down for; SVG content is ink, not boxes. The inline SVG
+  is 1 px high with its top edge on the baseline (`margin-bottom: -1px`, the baseline
+  of an inline SVG being its bottom margin edge), so it changes no line; its glyphs may
+  reach 1.3 em above and 0.6 em below the baseline before meeting the lines around it,
+  which is the warning that a taller formula belongs in a block. A display formula's SVG
+  is as tall as its box. The scale factor is printed from an integer, as every number
+  is.
+- **Why not MathML Core.** Chrome, Safari and Firefox render it, but its layout depends
+  on the math font the machine has (macOS ships none; Chrome then sets fractions and
+  radicals from fallback heuristics), so lispresen could not know a formula's box and
+  the fit solver would not be exact. The box layout is exact by construction and the
+  runtime check leaves it as written.
+- **Accessibility.** The `aria-label` is a spoken form generated from the tree (`x
+  equals (minus b plus or minus the square root of b squared minus 4 a c) over (2 a)`;
+  the subtree of a `role="img"` is not read).
+- **Callouts.** A `say` around a display formula points at its box; `:at` is not
+  supported on a formula. An inline formula inside a `say` is its anchor's character.
+- **Diagnostics.** A malformed form (a float, `(/ a)`, `(= a)`, a matrix row that is not
+  a list, a keyword) is an error and drops the formula; a display formula wider than its
+  region at the smallest body size is an error naming its width; an inline formula
+  reaching past the limits above is a warning.
+- A template passes its parameters into a formula, and a list inside one that looks like
+  a use is laid out, not expanded, as in a cells datum.
+
+Checked 2026-10-24 in Chrome 155 through DevTools: the golden deck's formula slide and a
+deck of quadratic, piecewise, summation, limit, matrix, integral, binomial, radical and
+symbol formulas, inline and as blocks, in all four built-in themes, the runtime check
+making no correction; the calibration page's formula metrics agree with the browser's
+ink within 10 milli-em and two paragraphs holding inline formulas wrap as counted. Safari
+was not measured: its JavaScript from Apple Events is off on this machine.
 
 ### Page advances
 
 ```lisp
 (ul :step t "一つ目" "二つ目")
 (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))
+(bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788))
+(lead :step t "結論は最後に出す")
 ```
 
 A slide's steps are what its page advances reveal: each item of a `(ul :step t ...)` or
 `(ol :step t ...)` (a nested list comes with its item, unless it has `:step` of its own),
-each step of a code block's `:steps`, and each step callout. They are numbered in the
-order they are written, a callout after the steps of what it wraps, since a comment
-follows what it is about; the parser records them as it reads (`number-steps`).
+each block with `:step t`, each step of a code block's `:steps`, and each step callout.
+They are numbered in the order they are written, a block before what it holds and a
+callout after the steps of what it wraps, since a comment follows what it is about; the
+parser records them as it reads (`number-steps`).
+
+- `:step t` reveals a whole block: `p` (a bare string is written `(p :step t ...)`),
+  `lead`, `quote`, `image`, `video`, `table`, `flow`, `cells`, `bars`, a display `math`,
+  `code` and `column`. A stepped code block appears first; its `:steps` walk its lines
+  after it. Only a list steps its parts, because its items are the units a talk reveals
+  one by one and nothing joins them. A table's rows, a flow's boxes and a chart's bars
+  are revealed with their block: a flow's arrow belongs to two boxes, a bar's length is
+  read against the others and a table's column widths come from every row, so their
+  parts stepping alone would need rules of their own for what shows with which part; a
+  deck that wants them one by one splits the block into slides.
+- A callout that is no step but stands in a stepped item or block, or wraps a stepped
+  block, takes that step: its bubble appears with what it points at instead of pointing
+  at a hidden one.
+- Where a step makes no sense it is an error, not ignored: `(notes :step t ...)` (notes
+  are not on the slide), `(source :step t ...)` (the source line shows with its slide),
+  and the only block of an untitled slide, a statement or a full-bleed image, which
+  would open the slide empty. The step is dropped and the rest of the form kept.
 
 - `:steps` lists steps of a code block; a step is a string, naming the first line that
   holds it as `:at` does, `(FIRST LAST)`, lines of the block as shown counted from 1, or
   a list of those. A step brings its lines forward and fades the others to 35%; the last
   step reached stays until the slide is left. Lines are named by text first for the same
   reason `:at` is: a line added above does not shift them.
-- The HTML carries the numbers: `data-steps` on the slide, `data-step` on an item or a
-  bubble, `data-focus` on a stepped code block and, on each of its lines (a `<span
+- The HTML carries the numbers: `data-steps` on the slide, `data-step` on an item, a
+  block's element (a runnable code block's `.codebox`, a split slide's image) or a
+  bubble, `data-focus` on a code block with `:steps` and, on each of its lines (a `<span
   class="ln">`, the highlight spans closed and opened again at a line end), `data-hot`
   with the steps that bring it forward.
 - The player hides every step of a slide entered forward; each page advance (→, ↓,
   space, PageDown, Enter, a tap, a swipe) reveals the next, the slide's last moves on, and going
   back undoes the last one revealed before it moves to the previous slide, which it
-  enters with every step taken. Hidden items keep their room (`visibility: hidden`), so
-  nothing moves.
+  enters with every step taken. Hidden items and blocks keep their room (`visibility:
+  hidden`), and the fit solver sizes the slide with every step shown, so nothing moves.
 - The presenter window and the audience window share the step with the slide number;
   the presenter's views show what is still hidden faded. The overview, print and the
   page without JavaScript show every step and no faded line. Editing a block ends its
   fading: its text is highlighted anew, without line spans, until Reset restores the
   deck's markup.
+
+Stepped blocks checked 2026-10-24 in Chrome through DevTools, over HTTP: the golden deck's
+slide and a deck of a stepped autoplay video, a split slide's stepped image, a stepped
+column, table, runnable code and cells with a callout reveal in order, keep every box
+where it was, and hide again going back; the video stays paused when its slide is
+entered, plays when its step is revealed, pauses when going back hides it, and plays on
+entering backward. `?check` makes no correction; the overview, print and the handout
+print (headless Chrome `--print-to-pdf`) show every step; the presenter window follows
+steps both ways and shows the hidden ones, and the next slide's, faded.
 
 ### Code morph
 
@@ -1007,8 +1248,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1080,8 +1321,12 @@ One file containing:
 - The player script: canvas scaling, navigation (arrow keys, space, PageUp/PageDown for
   clickers, Home/End, tap, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
   below),
-  the runtime check, a presenter window (`P`, below), and the runnable-code worker,
-  included only when the deck has runnable code.
+  the runtime check, a presenter window (`P`, below), the runnable-code worker,
+  included only when the deck has runnable code, and the playing of videos, included
+  only when the deck has one.
+- A video as `<video src="demo.mp4" aria-label="..." preload="metadata" playsinline
+  controls>` in its `figure`, with `poster`, `loop`, `muted` and `data-autoplay` from
+  its options (Video, above); the player removes `controls`.
 - Callouts as `<div class="say" role="note" data-side="below" style="left:...;top:...">`
   after the body, each named by its anchor's `aria-describedby` (an inline anchor is a
   `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
@@ -1093,12 +1338,15 @@ One file containing:
   them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
   dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
+- A formula as `<svg class="mx" role="img" aria-label="...">` of `<text>` and `<rect>`
+  elements in em coordinates (Formulas, above); a display formula's in a `<figure
+  class="math">`.
 - A footer as `<p class="footer">` after the source, placed by the stylesheet at the left
   of the bottom band.
 - A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
   of the safe area; with `:progress`, a `<div id="progress">` after the slides in the
   canvas.
-- Speaker notes in `<aside class="notes">`, hidden in the audience view.
+- Speaker notes in `<aside class="notes">`, hidden in the audience view and in the default print.
 
 ### Overview and presenter window
 
@@ -1111,7 +1359,17 @@ the next one, the notes, a timer (click to reset), Start, and with runnable code
 state and a runtime reset. Navigation in either window moves the other; the windows talk
 over a `BroadcastChannel` named after the file's path. The presenter's copy of the current
 slide shows the audience window's edits and outputs, and its Run and Reset act in the
-audience window, where the code runs.
+audience window, where the code runs; so does a click on a video there, which plays or
+pauses it in the audience window.
+
+`?notes` turns print into a handout: the player adds `html.handout` and an `@page` of the
+canvas width and twice its height, so a page holds the slide at full size (nothing the fit
+solver placed moves; the slide's clip is lifted below only) and its notes under it, in 36px
+black text over the white page. The page is the canvas width with extra height, not A4,
+because the slide keeps its pixels and the PDF viewer scales the page whole; the notes box
+is as tall as the slide and clips what does not fit. A slide without notes prints alone on
+its page. `?notes&print` also opens the print dialog once the fonts are ready; the presenter
+window's "Print with notes" button opens that URL. Steps print revealed, as in the default print.
 
 ### Touch
 
@@ -1125,7 +1383,7 @@ same picture, so there is no second, scrolling layout to keep in step with it.
   the touch's default action (`preventDefault`), so no click or `dblclick` follows it.
 - A tap on something that does something itself is left to it: links, buttons, form
   fields, `[tabindex]`, `[contenteditable]`, a runnable code block (a tap edits it) and its
-  output. A tap while text is selected clears the selection, and one while the editor has
+  output, and a video (a tap plays or pauses it). A tap while text is selected clears the selection, and one while the editor has
   focus leaves the editor, instead of moving.
 - A horizontal swipe over 50 px moves as before; a touch is a swipe or a tap, never both.
   Two fingers, a pinch-zoomed page (`visualViewport.scale` above 1), or the editor with
@@ -1146,6 +1404,11 @@ Presenting is done in full screen; the windowed view is for preparation.
   screen changes only the scale, never the layout the solver computed. The letterbox
   around a canvas whose aspect differs from the screen is the theme background.
 - In full screen the cursor and toolbar hide after 2 s without mouse movement.
+- The screen must not sleep during a talk: while in full screen, and in the presenter window
+  for as long as it is open, the player holds `navigator.wakeLock.request('screen')`. It is
+  released on leaving full screen; the browser drops it when the page is hidden, so the
+  player requests it again on `visibilitychange` to visible. Where the API is missing or
+  refused (no secure context, battery saver) nothing happens and nothing is shown.
 - `Esc` exits full screen in every browser, and a page cannot stop that, which conflicts
   with `Esc` leaving the code editor. Where the Keyboard Lock API exists (Chromium), the
   player locks `Escape` while in full screen, so `Esc` leaves the editor and a held `Esc`
@@ -1166,8 +1429,8 @@ Presenting is done in full screen; the windowed view is for preparation.
   true; full screen itself is refused under browser automation (as `F` is there), so it
   is checked by hand.
 
-Images are referenced by their relative path, so the output is written next to the deck
-by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
+Images and videos are referenced by their relative path, so the output is written next to
+the deck by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
 the HTML file stands alone:
 
 - A relative path resolves against the deck's directory (the working directory when the
@@ -1176,8 +1439,9 @@ the HTML file stands alone:
   2026-10-22 on the interpreter, JVM, both WASM backends and SBCL, with bytes 0, 128 and
   255); the WASM backends need the directory preopened (`wasmtime run --dir .`).
 - The MIME type comes from the extension: `png`, `jpg` / `jpeg`, `gif`, `webp`, `avif`,
-  `svg`. Another extension, or a file that cannot be read, is an error and leaves the
-  path in place.
+  `svg`, and for a video `mp4` and `webm` (a video's `:poster` is an image). Another
+  extension, or a file that cannot be read, is an error and leaves the path in place; a
+  video over 20 MB is a warning (Video, above).
 - The base64 is computed in `embed.lisp` with integer arithmetic, not by a host library,
   so every backend writes the same characters.
 - A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
@@ -1340,11 +1604,10 @@ key names of `rontolisp --version`. It leaves out rontolisp's `buildTimestamp` a
   checkout has all of these. An environment variable set by the workflow would need
   setting by hand for every local build. `#.` would read the same files; a macro keeps
   the reading in ordinary functions.
-- The root is found from the file being compiled: `*load-truename*`, bound in a file a
-  literal `load` splices (relative to the compiler's working directory on the compile
-  path, absolute elsewhere), never in the top-level file. So a use sits in a top-level
-  form of a loaded file; the interpreter expands a function body's macros when it first
-  runs, outside the load.
+- The root is found from the file being compiled: `*load-truename*`, the absolute path
+  of the file being loaded or spliced. So a use sits in a top-level form of a loaded
+  file; the interpreter expands a function body's macros when it first runs, outside the
+  load.
 - Outside a repository (a copy of `lispresen/` alone) each is `unknown`, and the build
   succeeds.
 
@@ -1365,8 +1628,8 @@ it takes none of the rendering options; a deck file named `new` is rendered as `
   as comments), sections, a list with notes, a statement, inline forms, runnable code,
   columns with a callout, a table and a flow. An image is a comment: the deck would name
   a file `new` does not write.
-- The date is today in UTC. rontolisp decodes time as GMT on every backend (WASI has no
-  time zone), so SBCL is asked for UTC too, and the deck is the same on every backend.
+- The date is today in the local time zone: `decode-universal-time` without a zone, which
+  every backend resolves locally. `check.sh` masks the date, so its legs need no pinned `TZ`.
 - An existing file is never replaced without `--force`: `open` with `:if-exists nil`,
   so nothing can come between the check and the write. `-` writes to standard output.
 
@@ -1459,6 +1722,7 @@ lispresen/
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
+    math.lisp            formulas: parsing, box layout, the spoken form, the SVG
     layout.lisp          layout selection, type scale, fit solver
     lint.lisp            readability checks, contrast ratio
     theme.lisp           built-in themes, theme overrides
@@ -1490,6 +1754,7 @@ lispresen/
     intro.png            its golden page image
     fonts/               the page image's fonts: BIZ UDPGothic subsets, OFL.txt
     pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
+    photo.svg            the picture of its full-bleed and split slides
     logo.svg             its title slide's logo
     fib.lisp             the code file one of its slides shows lines of
   tools/
@@ -1533,11 +1798,16 @@ before committing a change under `lispresen/`.
   embedded SVG logo and a QR code (drawn as the page image too, with the description and
   page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
-  numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
-  revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
-  chart with a source line under it, a progress bar, `:layout` and
-  `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
-  line, a flow box, a cells atom and a bar; one on an image; and a step one named by
+  numeric columns), every inline form, an embedded PNG, a full-bleed slide and a split one
+  (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
+  with an embedded poster, ordered and unordered lists, one
+  revealed by steps, a bar chart, a formula with a callout and a lead revealed whole by
+  `:step t`, a flow, two cells drawings in columns (one with dotted pairs), a bar
+  chart with a source line under it, three inline formulas in a paragraph and two display
+  formulas (a case analysis, a sum with a fraction), a progress bar, `:layout` and
+  `:class`, and ten callouts (two inline ones, one of them a step; by `:at`, a code
+  line, a flow box, a cells atom and a bar; one on an image, two on formulas, one of them
+  revealed with its stepped formula; and a step one named by
   `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
   by line), so the highlighter, the emitted player, template expansion, diagram drawing,
   callout placement and the binary read, UTF-8 decoding and base64 are in the
@@ -1546,39 +1816,48 @@ before committing a change under `lispresen/`.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
-  line breaking at their exact boundaries, step selection, the hard-floor error, the
+  line breaking at their exact boundaries, step selection, the hard-floor error, the layout a lone untitled image takes and
+  the text region of a split slide (a video in it), the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   the QR encoder against the standard's examples and its version boundaries, the title
   slide's logo and QR code, the preview tags (none without the options, every one with
   them, an image lispresen does not draw), URL resolution and the preview diagnostics
   (a font that cannot be read or is not TrueType, a missing glyph, a logo left out),
   numeric column detection, parser diagnostics with line
-  numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
-  with dotted pairs and a list that looks like a template use, the callout sides on a flow
+  numbers (`#.` and dotted lists among them), the reader keeping a symbol's case and
+  tags and options matching whatever theirs, the balanced rows of a flow, a cells datum
+  with dotted pairs, `|a b|` and a list that looks like a template use, a formula's box at
+  two sizes (a fraction, a script, a radical, a matrix), an inline formula as one
+  character of its run, the emitted SVG and spoken form, the formula diagnostics and a
+  template passing a parameter into a formula, the callout sides on a flow
   box, a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
   a source takes and its diagnostics, the agenda, its place at `(agenda)` and their
   slide numbers and diagnostics, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
-  order of a slide's page advances (items, code lines, a bubble after what it wraps) and
+  order of a slide's page advances (items, blocks, code lines, a bubble after what it
+  wraps, a bubble revealed with its stepped block) and
   a highlight string across a line end, the morph pairing (a moved form, a string
-  token split at a line end inside `:steps` lines) and its diagnostics, the callout and
-  `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
+  token split at a line end inside `:steps` lines) and its diagnostics, the callout,
+  `:step` and `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
   check values, deflate and a whole PNG against what zlib reads, the
-  embedding diagnostics, code files (UTF-8 up to four bytes, `:lines`, the language by
+  embedding diagnostics (a video, its poster and the size warning), code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics), the highlighting of every language from a table of
   (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
-  the font stacks or the player change): the page `tools/calibrate.lisp` writes must
-  report no paragraph where the model predicts fewer lines than the browser; a deck with
+  the font stacks, the formula metrics or the player change): the page `tools/calibrate.lisp` writes must
+  report no paragraph where the model predicts fewer lines than the browser, no character,
+  emoji or symbol wider than the model and no formula metric off by more than 10 milli-em; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout; the
   presenter window must follow navigation both ways, every kind of step included, show edits
   and outputs, and forward Run; a callout must sit beside its anchor after the runtime
   check; a deck of three versions of a function must morph stepping forward and back,
   driven from either window, and switch at once on a jump, under reduced motion and
-  after an edit; Start must put the audience window in full screen on the other display,
+  after an edit; a video with `:autoplay` must play on entering its slide and pause on
+leaving it, a click must play and pause it without moving the slide, and the presenter
+window must show its poster and forward a click on it; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.
@@ -1602,7 +1881,7 @@ arm64).
 
 ## Open points
 
-Verified in phase 1: a literal `load` of files holding `defpackage` / `in-package`,
+Verified in phase 1: a `load` of files holding `defpackage` / `in-package`,
 nested two levels (`cli.lisp` -> `src/all.lisp` -> `src/*.lisp`), inlines on every
 compiled backend, and the compiled runtime reader reads Japanese decks as the interpreter
 does (the golden check). Verified in phase 2 (Chrome 155, 2026-10-22): the hosted runtime

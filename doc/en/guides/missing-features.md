@@ -38,8 +38,11 @@ Lisp:
   compiled programs;
 - `multiple-value-call` with a built-in `#'name` keeps the wrapper's fixed
   arity — pass a user function or `lambda` for other argument counts;
-- other built-ins with secondary values in CL (`decode-universal-time`, the
-  `truncate` family's remainder on a ratio, ...) remain single-value —
+- other built-ins with secondary values in CL (the `truncate` family's
+  remainder on a ratio, ...) remain single-value —
+  [`decode-universal-time`](../reference/functions/decode-universal-time.md) and
+  [`get-decoded-time`](../reference/functions/get-decoded-time.md) do answer
+  all nine values,
   [`find-symbol`](../reference/functions/find-symbol.md) and
   [`intern`](../reference/functions/intern.md) do answer the accessibility
   status,

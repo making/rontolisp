@@ -103,21 +103,21 @@
     (table :header (\"種類\" \"フォーム\" \"数\")
            :row-header t :align (:left :left :right)
            :caption \"デッキの要素は、どれもリストとして書く\"
-      (\"図\" (tt \"flow cells bars\") \"3\")
+      (\"図と数式\" (tt \"flow cells bars math\") \"4\")
       ...
-      ((cell :colspan 2 \"合計\") \"28\"))"))
+      ((cell :colspan 2 \"合計\") \"30\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
          :row-header t :align (:left :left :right)
          :caption "デッキの要素は、どれもリストとして書く"
     ("トップレベル" (tt "deck section slide agenda define") "5")
-    ("ブロック" (tt "p lead ul ol code quote column image table") "9")
+    ("ブロック" (tt "p lead ul ol code quote column image video table") "10")
     ("部品" (tt "li cell") "2")
-    ("図" (tt "flow cells bars") "3")
+    ("図と数式" (tt "flow cells bars math") "4")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "28")))
+    ((cell :colspan 2 "合計") "30")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -264,6 +264,25 @@
           (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
                 "DESIGN.md") ")"))
 
+(slide :title "数式" :kicker "書き方"
+  (p "前置記法の木がそのまま数式になる。段落の中でも、ブロックとしても書ける。")
+  (sexp "
+    (p \"計算量は \" (math (O (* n (log n)))) \" で済む\")
+    (math (= (fib n)
+             (cases (n (< n 2))
+                    ((+ (fib (- n 1)) (fib (- n 2))) \"otherwise\"))))
+    (say \"上下に範囲が付く\"
+      (math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6))))"))
+
+;; A formula is laid out from its S-expression: inline in a paragraph, or as a block
+;; centered in the body; a callout points at the whole block.
+(slide :title "数式" :kicker "表示例"
+  (p "計算量は " (math (O (* n (log n)))) " で済む。分数や添字も "
+     (math (/ 1 (sqrt n))) " や " (math (_ x i)) " のように行の中に収まる。")
+  (math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+  (say "上下に範囲が付く"
+    (math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6)))))
+
 (slide :title "画像" :kicker "書き方"
   (p "画像は残りの場所に収まる。" (tt "--embed") " で HTML に埋め込む。")
   (sexp "
@@ -277,6 +296,43 @@
     (image "pipeline.png"
            :alt "read, parse, segment, layout, lint, emit の六段階"
            :caption "PNG はテーマの色に従わない")))
+
+(slide :title "画面いっぱいの画像" :kicker "書き方"
+  (p "題も本文もなく画像だけを置くと、画像で画面を覆う。次のスライドが表示例。")
+  (ul (li (tt ":fit :contain") " なら切り取らず、全体を背景の上に収める")
+      "写真の上に文字は置かない。ページ番号も出さない")
+  (sexp "
+    (slide (image \"photo.svg\" :alt \"夕暮れの山並み\"))"))
+
+(slide (image "photo.svg" :alt "夕暮れの山並みの絵"))
+
+(slide :title "画像と文章を並べる" :kicker "書き方"
+  (p (tt ":layout :image-left") " か " (tt ":image-right") " で、画像を画面の端まで広げる。")
+  (sexp "
+    (slide :title \"画像と文章を並べる\" :layout :image-right
+      (ul \"画像は上下と横の端まで届く\" ...)
+      (image \"photo.svg\" :alt \"夕暮れの山並み\" :share 1/3))"))
+
+(slide :title "画像と文章を並べる" :kicker "表示例" :layout :image-right
+  (ul "画像は上下と横の端まで届く"
+      (li "幅は " (tt ":share") " の 1/3, 1/2, 2/3 から選ぶ")
+      "題と本文は残りの幅に収める")
+  (image "photo.svg" :alt "夕暮れの山並みの絵" :share 1/3))
+
+;; demo.mp4 is a REPL session drawn with ffmpeg (drawtext), 480x270, 5 s, no sound;
+;; demo-poster.png is its last frame in 16 colors.
+(slide :title "録画したデモ" :kicker "書き方"
+  (p "動画は画像と同じ場所に収まる。" (tt "--embed") " で HTML に埋め込む。")
+  (ul (li (tt ":autoplay t") " なら、スライドに入ると再生し、出ると止める")
+      "クリックかタップで再生と一時停止を切り替える"
+      (li "印刷と一覧には " (tt ":poster") " の画像が出る"))
+  (sexp "
+    (video \"demo.mp4\" :alt \"REPL で fib を呼ぶ\"
+           :poster \"demo-poster.png\" :autoplay t :muted t :loop t)"))
+
+(slide :title "録画したデモ" :kicker "表示例"
+  (video "demo.mp4" :alt "REPL で (fib 30) と (map fib (range 10)) を評価する"
+         :poster "demo-poster.png" :autoplay t :muted t :loop t))
 
 (slide :title "テンプレート" :kicker "書き方"
   (p (tt "define") " で名前を付け、使う所を本体で置き換える。評価はしない。")
@@ -321,10 +377,10 @@
   (table :header ("スライドの形" "レイアウト")
          :caption ":layout で選ぶこともできる"
     ("題がなく、段落が一つ" (tt "statement"))
-    ("題と画像が一つ" (tt "image"))
-    ("題とコードが一つ" (tt "code"))
-    ("題と表が一つ" (tt "table"))
-    ("題と引用が一つ" (tt "quote"))
+    ("題がなく、画像か動画が一つ" (tt "full"))
+    ("題と画像か動画が一つ" (tt "image"))
+    ("題とコード、表、引用のどれか一つ"
+     (cell (tt "code") " " (tt "table") " " (tt "quote")))
     ((cell (tt "column") " を含む") (tt "columns"))
     ("それ以外" (tt "standard"))))
 
@@ -399,6 +455,22 @@
       (li (say "項目の後に出る" :step t "吹き出し")))
   (p "→ で順に出し、← で一つずつ戻す。"
      (tt "(deck :callouts :step)") " ならどの吹き出しも送りで出る。"))
+
+(slide :title "ブロックを丸ごと送りで出す" :kicker "書き方"
+  (p "段落、画像、動画、表、引用、図、数式、コード、列も " (tt ":step t")
+     " で送りの一つになる。")
+  (sexp "
+    (bars :step t :unit \" KB\" ...)
+    (lead :step t \"結論は最後に出す\")")
+  (p "図と表は一度に全体が出る。吹き出しは包んだブロックと一緒に出る。"))
+
+;; The chart and then the conclusion each take a page advance; the formula's callout is
+;; no step, so it comes with the formula.
+(slide :title "ブロックを丸ごと送りで出す" :kicker "表示例"
+  (p "測った値を見せてから、結論を出す。")
+  (bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("ネイティブ" "6,700"))
+  (say "jar の何倍か" (math :step t (approx (/ 6700 297) 23)))
+  (lead :step t "→ 配るなら jar が一番小さい"))
 
 (slide :title "コードを動かす" :kicker "書き方"
   (p "Lisp、Scheme、Clojure のコードはスライドの上で動く。")

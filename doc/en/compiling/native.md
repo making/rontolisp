@@ -79,15 +79,47 @@ interpreter and the JVM build, the peer's address and port included; the files
 a handler serves are read from the file system as in any program
 ([Files](#files)).
 
+## TCP Sockets
+
+The [`rontolisp:tcp-*` functions](../guides/tcp-sockets.md) and the usocket
+shim work in an executable as they do on the interpreter and the JVM: the
+runner opens the sockets, `host` may be a name or an address literal, every
+call blocks until it is done, `tcp-set-timeout` sets a real read deadline, and
+a failure signals an error with the same text (`tcp-connect: cannot connect to
+127.0.0.1:1: Connection refused`), which the usocket shim re-signals as
+`usocket:socket-error`. So a program that talks to PostgreSQL (cl-postgres) or
+Redis over the shim runs from an executable. Like the component, the
+executable reads a socket one chunk at a time, so `listen` answers whether a
+chunk already read holds bytes, and `usocket:wait-for-input` claims readiness
+at once. The TLS client and server functions (`tls-connect`, `tls-upgrade`,
+`tls-listen`) stay interpreter, JVM and, for the client half, component only.
+
+```lisp
+(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+       (port (rontolisp:tcp-local-port listener))
+       (client (rontolisp:tcp-connect "127.0.0.1" port))
+       (server (rontolisp:tcp-accept listener)))
+  (write-line "hello" client)
+  (print (read-line server)))
+```
+
+```
+"hello"
+```
+
+A program that opens sockets starts with the same larger runner a fetching
+one does ([Size and Speed](#size-and-speed)).
+
 ## Flags
 
 Every flag of the default WASM output applies (`--simd`, `--optimize`,
 `--dynamic`, ...). The flags that ask for a different kind of module are
 refused by name: `--component`, `--no-wasi`, `--no-gc`, `--host-random`,
 `--host-fetch`, `--host-boundary`, `--reentrant` and `--emit-js-glue`. So is an
-`-o` name ending in `.wasm`, `.class`, `.jar` or `.war`. A program that fetches
-or serves needs no flag: the runner answers `fetch` and the server itself
-([HTTP](#http), [Serving HTTP](#serving-http)).
+`-o` name ending in `.wasm`, `.class`, `.jar` or `.war`. A program that fetches,
+serves or opens sockets needs no flag: the runner answers `fetch`, the server
+and the sockets itself ([HTTP](#http), [Serving HTTP](#serving-http),
+[TCP Sockets](#tcp-sockets)).
 
 ## Where It Runs
 
@@ -133,6 +165,6 @@ other target such a program is a compile error naming the reference.
 
 An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,
 1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.1 MB for `hello` on Linux
-x86_64, 2.3 MB for a 28 KB module. The runner of a program that fetches or serves HTTP is
-3.3 MB on Linux x86_64 and 2.9 MB on Linux aarch64. It starts in about 10 ms and runs at
-about the speed of `wasmtime run` on the same module.
+x86_64, 2.3 MB for a 28 KB module. The runner of a program that fetches, serves HTTP or
+opens TCP sockets is 3.3 MB on Linux x86_64 and 2.9 MB on Linux aarch64. It starts in
+about 10 ms and runs at about the speed of `wasmtime run` on the same module.

@@ -70,12 +70,17 @@ top right corner.")
 
 (defun safe-height () (- *canvas-height* *margin-top* *margin-bottom*))
 
-;;; The layout result of one slide. BODY-TOP and BODY-HEIGHT place the body box; the
-;;; sizes are px. QR places the title slide's QR code and the URL under it as (LEFT TOP
-;;; SIZE WIDTH ALIGN), WIDTH being the wider of the two. OVERFLOW is true
-;;; when the slide does not fit even at the hard floor.
+;;; The layout result of one slide. LEFT and WIDTH place the text region, the content
+;;; width of the safe area but on a split slide; BODY-TOP and BODY-HEIGHT place the body
+;;; box; the sizes are px. BLEED is (FIGURE LEFT WIDTH), the image of a full or split
+;;; slide and the part of the canvas width it covers, top to bottom. QR places the title
+;;; slide's QR code and the URL under it as (LEFT TOP SIZE WIDTH ALIGN), WIDTH being the
+;;; wider of the two. OVERFLOW is true when the slide does not fit even at the hard floor.
 (defstruct fit
   layout
+  left
+  width
+  bleed
   title-size
   title-lines
   body-top
@@ -143,10 +148,19 @@ language is never run, whatever its :run says."
 (defun cite-text (q)
   (concatenate 'string (string (code-char #x2014)) " " (quotation-cite q)))
 
+(defun full-p (slide)
+  (let ((fit (slide-fit slide))) (and fit (equal (fit-layout fit) "full"))))
+
+(defun page-number-shown-p (deck slide)
+  "Whether SLIDE shows its page number: not on the title slide, nor over a full-bleed
+image, where it would be text on a picture."
+  (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title))
+       (not (full-p slide))))
+
 (defun footer-shown-p (deck slide)
-  "Whether SLIDE carries the deck's footer line: not the title slide, as the page number."
+  "Whether SLIDE carries the deck's footer line: not where it would show no page number."
   (and (deck-footer deck) (eq (slide-footer slide) :deck)
-       (not (eq (slide-kind slide) :title))))
+       (not (eq (slide-kind slide) :title)) (not (full-p slide))))
 
 (defun footer-width (deck)
   "The px the footer line has: the content width less the widest page number and a gap."
@@ -183,7 +197,29 @@ language is never run, whatever its :run says."
 ;;; --- layout selection --------------------------------------------------------------
 
 (defparameter *layouts*
-  '("standard" "statement" "code" "image" "table" "quote" "columns"))
+  '("standard" "statement" "code" "image" "table" "quote" "columns" "full"
+    "image-left" "image-right"))
+
+(defparameter *split-layouts* '("image-left" "image-right"))
+
+(defun lone-image-p (slide)
+  "True when SLIDE is one image to fill the canvas: no title, source or callout, and an
+(image ...) or (video ...) without a caption as its only block. Text on a picture is left out, since no
+lint can check its contrast."
+  (let ((blocks (slide-blocks slide)))
+    (and (null (slide-title slide)) (null (slide-source slide))
+         (null (slide-callouts slide)) (= (length blocks) 1)
+         (figure-p (car blocks)) (null (figure-caption (car blocks))))))
+
+(defun split-figure (slide)
+  "The image a split slide sets beside its text: its one (image ...) or (video ...) outside
+columns, when that has no caption and no callout points at it; nil otherwise."
+  (let ((figures (remove-if-not #'figure-p (slide-blocks slide))))
+    (and (= (length figures) 1)
+         (null (figure-caption (car figures)))
+         (notany (lambda (c) (eq (callout-target c) (car figures)))
+                 (slide-callouts slide))
+         (car figures))))
 
 (defun automatic-layout (slide)
   "The layout SLIDE's shape asks for. A statement's centered, balanced lines are not where
@@ -193,6 +229,7 @@ the model puts them, so a slide with callouts never takes it."
                 (para-p (car blocks)) (not (para-lead (car blocks)))
                 (null (slide-callouts slide)))
            "statement")
+          ((lone-image-p slide) "full")
           ((some #'column-row-p blocks) "columns")
           ((/= (length blocks) 1) "standard")
           ((figure-p (car blocks)) "image")
@@ -210,6 +247,18 @@ the model puts them, so a slide with callouts never takes it."
            (report :warning (format nil "unknown layout :~a; using :~a"
                                     requested automatic))
            automatic)
+          ((equal requested "full")
+           (report :warning
+                   "the full layout needs an (image ...) or (video ...) without :caption as the only block, and no title, source or callout")
+           automatic)
+          ((member requested *split-layouts* :test #'equal)
+           (if (split-figure slide)
+               requested
+               (progn
+                 (report :warning (format nil
+                                   "the ~a layout needs one (image ...) or (video ...) outside columns, without :caption or a callout on it"
+                                   requested))
+                 automatic)))
           ((member "statement" (list requested automatic) :test #'equal)
            (report :warning
                    "the statement layout needs exactly one (p ...), no title and no callouts")
@@ -546,6 +595,7 @@ the second of an image, which takes whatever width it is given."
                (column-bounds b (step-at *table-steps* k))
              (values (reduce #'+ mins) (reduce #'+ maxs))))
           ((diagram-p b) (diagram-bounds b (step-at *diagram-steps* k)))
+          ((formula-p b) (let ((w (formula-width b s))) (values w w)))
           (t (values 0 0)))))
 
 (defun row-widths (row k c width)
@@ -602,7 +652,11 @@ of columns as its tallest column."
              (if ts (setf h th) (setf ok nil))))
           ((diagram-p b)
            (multiple-value-bind (ds d) (diagram-fit b k width)
-             (if ds (setf h (drawing-height d)) (setf ok nil)))))
+             (if ds (setf h (drawing-height d)) (setf ok nil))))
+          ((formula-p b)
+           ;; A display formula is set at the body size, so it steps down with it.
+           (setf h (formula-height b s))
+           (when (> (formula-width b s) width) (setf ok nil))))
     (values h ok)))
 
 (defun blocks-height (blocks k c width body-height)
@@ -819,26 +873,76 @@ when every corner is taken."
               "the QR code covers text of the title slide in every corner; shorten the title")
       (subseq (place (car (last *qr-steps*)) :bottom-right) 0 5))))
 
-(defun source-height (deck slide)
+(defun source-height (slide width)
   "The height SLIDE's source line takes from the room above it, the gap included; 0
-without one. The line stands at the bottom of the safe area, wrapped in the content
-width."
+without one. The line stands at the bottom of the safe area, wrapped in the WIDTH of the
+text region."
   (if (slide-source-run slide)
       (+ *source-gap*
-         (* *source-lh*
-            (run-lines (slide-source-run slide) *source-size*
-                       (content-width deck))))
+         (* *source-lh* (run-lines (slide-source-run slide) *source-size* width)))
       0))
+
+(defun share-width (deck figure)
+  "The px of the canvas width the image of a split slide takes: its :share, half by
+default."
+  (destructuring-bind (n d) (or (figure-share figure) '(1 2))
+    (floor (* (canvas-width deck) n) d)))
+
+(defun place-bleed (deck slide fit)
+  "Takes the image of the full or split slide SLIDE out of its blocks into FIT, with the
+part of the canvas width it covers, and narrows the text region of a split slide to the
+rest less the side margins."
+  (let* ((layout (fit-layout fit))
+         (full (equal layout "full"))
+         (cw (canvas-width deck))
+         (figure (if full (car (slide-blocks slide)) (split-figure slide)))
+         (iw (if full cw (share-width deck figure))))
+    (setf (slide-blocks slide) (remove figure (slide-blocks slide))
+          (fit-bleed fit)
+          (list figure (if (equal layout "image-right") (- cw iw) 0) iw))
+    (unless full
+      (setf (fit-width fit) (- cw iw (* 2 *margin-x*)))
+      (when (equal layout "image-left") (setf (fit-left fit) (+ iw *margin-x*))))
+    (when (and full (figure-share figure))
+      (report-image-option figure ":share"))))
+
+(defun report-image-option (figure option)
+  (report :warning (format nil "~a ~a takes ~a only on ~a slide" (figure-noun figure)
+                           (figure-src figure) option
+                           (if (equal option ":fit")
+                               "a :full, :image-left or :image-right"
+                               "an :image-left or :image-right"))))
 
 (defun fit-slide (deck slide)
   "Lay out SLIDE and store the result in its FIT slot."
   (prepare-runs deck slide)
-  (let* ((width (content-width deck))
-         (layout (choose-layout slide))
-         (fit (make-fit :layout layout))
-         (source (source-height deck slide)))
+  (let* ((layout (choose-layout slide))
+         (fit
+          (make-fit :layout layout :left *margin-x* :width (content-width deck))))
     (setf (slide-fit slide) fit)
-    (cond ((equal layout "title")
+    ;; Its one block, a step, would leave the slide empty until the first advance.
+    (when (and (member layout '("full" "statement") :test #'equal)
+               (block-step (car (slide-blocks slide)) (slide-steps slide)))
+      (report :error ":step on the only block of an untitled slide would open it empty")
+      (setf (slide-steps slide) nil (slide-step-count slide) 0))
+    (when (or (equal layout "full")
+              (member layout *split-layouts* :test #'equal))
+      (place-bleed deck slide fit))
+    ;; An image left in the body is fitted into its box, which :fit and :share leave alone.
+    (dolist (b (region-blocks (slide-blocks slide)))
+      (when (figure-p b)
+        (when (figure-fit b) (report-image-option b ":fit"))
+        (when (figure-share b) (report-image-option b ":share"))))
+    (fit-region deck slide fit)
+    fit))
+
+(defun fit-region (deck slide fit)
+  "Fits SLIDE's text into the region FIT gives it, by FIT's layout; a full slide has none."
+  (let* ((layout (fit-layout fit))
+         (width (fit-width fit))
+         (source (source-height slide width)))
+    (cond ((equal layout "full"))
+          ((equal layout "title")
            (multiple-value-bind (s overflow) (fit-centered
                                               (slide-title-run slide) width 2
                                               (- (safe-height)
@@ -871,8 +975,7 @@ width."
                    (incf top (+ (* lines (title-lh s)) *title-gap*))))
                (setf (fit-body-top fit) top (fit-body-height fit)
                      (- *canvas-height* *margin-bottom* top source))
-               (fit-body slide fit width))))
-    fit))
+               (fit-body slide fit width))))))
 
 ;;; --- callouts ----------------------------------------------------------------------
 ;;;
@@ -1133,6 +1236,12 @@ layout gives it to them."
                    (setf h (drawing-height d) box
                          (list dx top (+ dx (drawing-width d))
                                (+ top (drawing-height d)))))))
+              ((formula-p b)
+               ;; Centered in its region, as the stylesheet centers it.
+               (let* ((w (min width (formula-width b s)))
+                      (dx (+ x (floor (- width w) 2))))
+                 (setf h (formula-height b s) box (list dx top (+ dx w) (+ top h)))
+                 (obstacle box)))
               ((figure-p b)
                (setf h (floor rest growing) box
                      (figure-geometry b s x top width h)))
@@ -1295,9 +1404,9 @@ found room."
                      collect (callout-width co))))
           (setf (figure-strip b)
                 (and widths (+ (reduce #'max widths) *tail-reach*))))))
-    (blocks-geometry blocks k c *margin-x* top width height)
+    (blocks-geometry blocks k c (fit-left fit) top width height)
     (place-callouts (remove-if-not #'callout-fragments callouts)
-                    (list *margin-x* top (+ *margin-x* width) (+ top height))
+                    (list (fit-left fit) top (+ (fit-left fit) width) (+ top height))
                     final)))
 
 (defun fit-callouts (slide fit k width)

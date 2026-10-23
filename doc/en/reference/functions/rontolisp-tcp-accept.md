@@ -36,6 +36,10 @@ program never blocks for long:
   body a pending accept suspends only its own task, so other tasks (a
   `rontolisp:wait-for` timer, another request) keep running. Returns
   `nil` if accepting fails. Call-time error in Preview 1 (core-module) mode.
+- **Native executable** (`--native`): as on the interpreter and the JVM -- the
+  runner accepts, blocking the program until a client connects, and a value
+  that is not an open listener handle signals the same `simple-error`
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
 - **Browser playground**: not supported.
 
 ## Limitations

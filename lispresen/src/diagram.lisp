@@ -242,15 +242,11 @@ less than its least room."
 ;;; --- cells ---------------------------------------------------------------------------
 
 (defun atom-label (x)
-  "How cells writes the atom X: symbols in lower case unless written with lower case,
+  "How cells writes the atom X: symbols as written (the reader keeps their case),
 integers, ratios, strings and characters. Nil for any other atom, whose printing (a
 float's above all) is not the same on every backend."
   (cond ((symbolp x)
-         (let ((name (symbol-name x)))
-           (concatenate 'string (if (keywordp x) ":" "")
-                        (if (string= name (string-upcase name))
-                            (string-downcase name)
-                            name))))
+         (concatenate 'string (if (keywordp x) ":" "") (symbol-name x)))
         ((integerp x) (format nil "~d" x))
         ((rationalp x) (format nil "~d/~d" (numerator x) (denominator x)))
         ((stringp x)

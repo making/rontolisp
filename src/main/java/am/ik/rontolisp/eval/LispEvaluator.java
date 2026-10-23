@@ -3977,11 +3977,14 @@ public final class LispEvaluator {
 		// A COMPONENT is loaded by its resolved path -- that is what real ASDF hands
 		// load, and it is what makes *load-pathname* equal asdf:component-pathname, the
 		// correlation rove's file-to-package map is built on. A plain load keeps the
-		// spelling it was called with, like CL.
+		// spelling it was called with, like CL. The truename is what truename answers
+		// for the file -- absolute, links resolved -- so a path merged onto it names
+		// the same file wherever the load runs from (LoadInliner splices the same).
 		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
 		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
 		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(systemName != null ? resolved : rawPath));
-		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(resolved));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR,
+				new LispString(this.sourceLoader.canonicalPath(resolved)));
 		try {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
@@ -4039,7 +4042,8 @@ public final class LispEvaluator {
 	 * datum it resolves against this evaluator -- and a spliced system's replayed
 	 * top-level form -- sees the load context the interpreter would have established, and
 	 * the compiled program's run-time value (the assignments the bracket lowers to)
-	 * agrees with it by construction.
+	 * agrees with it by construction. The command line calls it too, around the entry
+	 * file it reads itself.
 	 * @param pathname the {@code *load-pathname*} value (the spelling {@code load} was
 	 * called with; a component's resolved path)
 	 * @param truename the {@code *load-truename*} value (the path it resolved to)

@@ -309,8 +309,9 @@
 | `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。どのバックエンドもプログラム内部の生成器(インタプリタとJVMは `ThreadLocalRandom`、WASMは組み込みの生成器)から draw し、ホストがある場合はそのエントロピー(Preview 1モードではWASIの `random_get`、`--component` モードでは `wasi:random@0.3.0`)で実行ごとに一度シードされるため、列は実行ごとに異なります |
 | `make-random-state` | `(make-random-state t)` | 常に `nil` -- random-state オブジェクトは存在しません。`random` は省略可能な state 引数を受理して無視するため、保存して渡し直すイディオムはそのまま動きます |
 | `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。すべてのバックエンドで整数です(WASMはPreview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0` を読みます) |
-| `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- 分解された時刻要素からユニバーサルタイムへ。タイムゾーン省略時はローカルではなく GMT |
-| `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。`daylight-p` は常に nil |
+| `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- 分解された時刻要素からユニバーサルタイムへ。タイムゾーン省略時は夏時間を含むローカルゾーン |
+| `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。ゾーン省略時はローカルゾーンで分解 |
+| `get-decoded-time` | `(get-decoded-time)` | 現在時刻をローカルゾーンでの 9 個の分解値として返す |
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
 | `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 と `--no-wasi` 以外は本物のホストタイマー。Preview 1 はクロックをビジーウェイト、`--no-wasi` はシグナル) |

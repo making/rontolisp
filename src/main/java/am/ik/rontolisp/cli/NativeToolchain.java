@@ -159,9 +159,10 @@ final class NativeToolchain {
 
 	/**
 	 * The runner stub of {@code platform} an output starts with: the plain one, or the
-	 * NETWORK runner ({@value #NETWORK_STUB}), the same runner built with the host a
-	 * program that fetches imports ({@code rlhttp}) -- TLS included, which is why no
-	 * other output carries it (.kb/native-output.md, "The network runner").
+	 * NETWORK runner ({@value #NETWORK_STUB}), the same runner built with the hosts a
+	 * program that fetches or serves HTTP ({@code rlhttp}) or opens TCP sockets
+	 * ({@code rltcp}) imports -- TLS included, which is why no other output carries it
+	 * (.kb/native-output.md, "The network runner").
 	 * @param platform one of {@link NativeTarget#PLATFORMS}
 	 * @param network whether the module imports what only the network runner answers
 	 * @return the stub's bytes
@@ -177,9 +178,9 @@ final class NativeToolchain {
 		String platform = key.substring(0, key.indexOf('/'));
 		byte[] stub = resource(key);
 		if (stub == null && key.endsWith("/" + NETWORK_STUB)) {
-			throw new UnsupportedOperationException("--native: this program fetches (rontolisp:fetch), whose host is"
-					+ " the network runner, and this build of rontolisp carries no " + NETWORK_STUB + " for " + platform
-					+ "; `rontolisp-native/build.sh` builds it beside " + PLAIN_STUB);
+			throw new UnsupportedOperationException("--native: this program fetches, serves HTTP or opens TCP sockets,"
+					+ " whose host is the network runner, and this build of rontolisp carries no " + NETWORK_STUB
+					+ " for " + platform + "; `rontolisp-native/build.sh` builds it beside " + PLAIN_STUB);
 		}
 		if (stub == null) {
 			List<String> carried = NativeTarget.PLATFORMS.stream()

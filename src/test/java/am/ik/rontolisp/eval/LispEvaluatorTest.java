@@ -10517,6 +10517,8 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.STANDARD_STREAMS_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 	}
 
 	@Test

@@ -45,9 +45,28 @@ rontolisp app.lisp --native -o app
 
 ランナーは接続をそれぞれ専用のスレッドで読み(リクエストのヘッダーとボディ全体。ボディは `Content-Length` でも chunked でもかまいません)、HTTP/1.1 のとおり接続を keep-alive し、1 分間何も来ない接続を閉じます。アプリケーションはプログラムの唯一のスレッドで 1 リクエストずつ応答し、レスポンスは `Content-Length` 付きでまとめて送られます。そのため `clackup`、`run-server`、`http-handler` は戻りません: `:use-thread` や `:join? false` があってもプログラムを先へ進める別のスレッドがなく、サーバーはプロセスとともに止まります。リクエストはインタプリタや JVM が組み立てるものと同じで、相手のアドレスとポートも入ります。ハンドラが配信するファイルは、ほかのプログラムと同じくファイルシステムから読みます([ファイル](#files))。
 
+## TCP ソケット
+
+[`rontolisp:tcp-*` 関数](../guides/tcp-sockets.md)と usocket シムは、実行ファイルでもインタプリタや JVM と同じように動きます: ソケットを開くのはランナーで、`host` にはホスト名もアドレスリテラルも指定でき、各呼び出しは完了までブロックし、`tcp-set-timeout` は実際の読み取りデッドラインを設定し、失敗は同じテキストのエラーをシグナルします(`tcp-connect: cannot connect to 127.0.0.1:1: Connection refused`)。usocket シムはそれを `usocket:socket-error` として再シグナルします。そのため、シム経由で PostgreSQL(cl-postgres)や Redis と話すプログラムも実行ファイルから動きます。コンポーネントと同じく、実行ファイルはソケットをチャンク単位で読むので、`listen` は読み込み済みのチャンクにバイトが残っているかを答え、`usocket:wait-for-input` は即座に読み取り可能と答えます。TLS のクライアント関数とサーバー関数(`tls-connect`、`tls-upgrade`、`tls-listen`)はインタプリタと JVM、クライアント側はコンポーネントのみのままです。
+
+```lisp
+(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+       (port (rontolisp:tcp-local-port listener))
+       (client (rontolisp:tcp-connect "127.0.0.1" port))
+       (server (rontolisp:tcp-accept listener)))
+  (write-line "hello" client)
+  (print (read-line server)))
+```
+
+```
+"hello"
+```
+
+ソケットを開くプログラムは、fetch するプログラムと同じ大きいランナーから始まります([サイズと速度](#size-and-speed))。
+
 ## フラグ
 
-デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。fetch や配信をするプログラムにフラグは要りません。リクエストの送信も配信もランナー自身が行います([HTTP](#http)、[HTTP の配信](#serving-http))。
+デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。fetch、配信、ソケットを使うプログラムにフラグは要りません。リクエストの送信も配信もソケットもランナー自身が行います([HTTP](#http)、[HTTP の配信](#serving-http)、[TCP ソケット](#tcp-sockets))。
 
 ## 動作環境
 
@@ -69,4 +88,4 @@ Apple シリコン (`macos-aarch64`) では、実行ファイルは `objc`、`ap
 
 ## サイズと速度
 
-実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch や配信をするプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。
+実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch、配信、TCP ソケットを使うプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

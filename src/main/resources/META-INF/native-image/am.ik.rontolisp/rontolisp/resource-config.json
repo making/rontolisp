@@ -393,6 +393,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LocalTimeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/localtime\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/environment\\.wit"
@@ -420,6 +426,12 @@
           "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/sockets\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/runner-sockets\\.lisp"
       },
       {
         "condition": {

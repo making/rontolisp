@@ -50,6 +50,11 @@ html:not(.js) #progress{display:none}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
+figure video{flex:1 1 0;min-height:0;width:100%;object-fit:contain}
+html.js video{cursor:pointer}
+figure.bleed{position:absolute;top:0;height:100%;display:block}
+.bleed img,.bleed video{display:block;width:100%;height:100%;max-width:none;object-fit:cover}
+.bleed.contain img,.bleed.contain video{object-fit:contain}
 figcaption{color:var(--muted);text-align:center}
 table{flex:none;border-collapse:collapse;table-layout:fixed;font-size:var(--table);line-height:var(--table-lh)}
 caption{caption-side:top;text-align:left;color:var(--muted);padding-bottom:var(--cell-y)}
@@ -157,7 +162,15 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 span.dg-l{font-family:MONO;white-space:pre}
 .dg-t,.dg-v{text-align:left}
 .dg-v{white-space:nowrap}
+figure.math{flex:none;display:block;align-self:center;line-height:0}
+svg.mx{overflow:visible;font-weight:400}
+figure.math>svg.mx{display:block}
+.mx text{fill:currentColor;text-anchor:middle;white-space:pre}
+.mx rect,.mx polygon{fill:currentColor}
+.mx .i{font-style:italic}
+.mx .b{font-weight:700}
 figure.pointed{align-items:flex-end}
+figure.pointed video{object-position:right}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
 #stage.pointer #fs{opacity:1}
@@ -210,20 +223,22 @@ html:not(.js) #fs{display:none}
                    :initial-value *stylesheet*) out)
     (write-theme-style theme out)
     ;; The canvas-dependent geometry.
-    (format out ".slide{width:~dpx;height:~dpx}~%" width *canvas-height*)
-    (format out ".kicker,.title,.body,.centered,.source{left:~dpx;width:~dpx}~%"
-            *margin-x* content)
+    ;; The text region, which a split slide moves beside its image (SLIDE-STYLE).
+    (format out ".slide{width:~dpx;height:~dpx;--left:~dpx;--width:~dpx;--right:~dpx}~%"
+            width *canvas-height* *margin-x* content *margin-x*)
+    (format out
+            ".kicker,.title,.body,.centered,.source,.out{left:var(--left);width:var(--width)}~%")
     (format out ".source{bottom:~dpx}~%" *margin-bottom*)
     (format out ".kicker{top:~dpx}~%" (- *margin-top* *kicker-lh* 8))
     (format out ".title,.centered{top:~dpx}~%" *margin-top*)
     (format out ".centered{height:~dpx}~%" (safe-height))
-    (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
-            *margin-x* content)
-    (format out ".footer{left:~dpx;width:~dpx}~%" *margin-x* (footer-width deck))
+    (format out ".page{right:var(--right)}~%")
+    (format out ".footer{left:var(--left);width:calc(var(--width) - ~dpx)}~%"
+            (- content (footer-width deck)))
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
-            width *canvas-height*)))
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}html.handout .slide{overflow:visible;clip-path:inset(0 0 -~dpx 0);margin-bottom:~dpx}html.handout .notes{display:block;position:absolute;left:var(--left);width:var(--width);top:~dpx;height:~dpx;overflow:hidden;box-sizing:border-box;padding-top:48px;color:#000;font-size:36px;line-height:1.6;white-space:pre-wrap}}~%"
+            width *canvas-height* *canvas-height* *canvas-height* *canvas-height* *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
 
@@ -303,6 +318,10 @@ line with the character after it when that is no boundary, as Chrome breaks afte
                         (write-string "<code>" out)
                         (chars (second n))
                         (write-string "</code>" out))
+                       ((eq (car n) :math)
+                        ;; One character of the run stands for it.
+                        (write-formula (second n) out)
+                        (incf i))
                        ((eq (car n) :link)
                         (write-string "<a href=\"" out)
                         (write-escaped (second n) out)
@@ -314,6 +333,14 @@ line with the character after it when that is no boundary, as Chrome breaks afte
 (defun write-text (s run out) (write-inlines (list s) run out))
 
 ;;; --- blocks ------------------------------------------------------------------------
+
+(defvar *slide-steps* nil "The steps of the slide being written.")
+
+(defun write-step (b out)
+  "The data-step attribute of the block B when a page advance reveals it, which the player
+hides it until; nothing otherwise."
+  (let ((k (block-step b *slide-steps*)))
+    (when k (format out " data-step=\"~d\"" k))))
 
 (defun write-described-by (b out)
   "The aria-describedby attribute naming the bubbles of the callouts pointing at the
@@ -404,11 +431,13 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (when (code-block-fresh b) (write-string " data-fresh" out))
       (when (code-block-stdin b)
         (write-attribute "data-stdin" (code-block-stdin b) out))
+      (write-step b out)
       (write-string ">" out))
     (write-string
      (if (console-p b) "<pre class=\"code console\"" "<pre class=\"code\"") out)
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
+    (unless run (write-step b out))
     (write-described-by b out)
     (when (code-block-step-numbers b)
       (format out " data-focus=\"~{~d~^ ~}\"" (code-block-step-numbers b)))
@@ -421,6 +450,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 
 (defun write-quote (q out)
   (write-string "<figure class=\"quote\"" out)
+  (write-step q out)
   (write-described-by q out)
   (write-string "><blockquote><p>" out)
   (write-inlines (quotation-inlines q) (quotation-run q) out)
@@ -437,22 +467,50 @@ takes a share of the room the other blocks leave, as the image does."
   (format out "<div class=\"columns~:[~; grow~]\">~%" (grows-p r))
   (loop for c in (column-row-columns r)
         for width in (column-row-widths r)
-        do (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
+        do (write-string "<div class=\"column\"" out)
+          (write-step c out)
+          (format out " style=\"width:~dpx\">~%" width)
           (dolist (b (column-blocks c)) (write-block b out))
           (format out "</div>~%"))
   (format out "</div>~%"))
+
+(defun write-media (b out)
+  "The <img> of the image B, or the <video> of a video. A video has no autoplay attribute,
+which would play it on page load: the player plays it when its slide is entered. Its
+controls, which the player removes, let a page without the script still play it."
+  (cond ((figure-video b)
+         (write-string "<video" out)
+         (write-attribute "src" (figure-src b) out)
+         (when (figure-poster b) (write-attribute "poster" (figure-poster b) out))
+         (when (figure-alt b) (write-attribute "aria-label" (figure-alt b) out))
+         (format out " preload=\"metadata\" playsinline controls~:[~; loop~]~:[~; muted~]~:[~; data-autoplay~]></video>"
+                 (figure-loop b) (figure-muted b) (figure-autoplay b)))
+        (t
+         (write-string "<img src=\"" out)
+         (write-escaped (figure-src b) out)
+         (write-string "\" alt=\"" out)
+         (write-escaped (or (figure-alt b) "") out)
+         (write-string "\">" out))))
+
+(defun write-bleed (bleed out)
+  "The image of a full or split slide, covering its part of the canvas top to bottom, or
+shown whole on the background with :fit :contain."
+  (destructuring-bind (b left width) bleed
+    (format out "<figure class=\"bleed~:[~; contain~]\"" (figure-fit b))
+    (write-step b out)
+    (format out " style=\"left:~dpx;width:~dpx\">" left width)
+    (write-media b out)
+    (format out "</figure>~%")))
 
 (defun write-figure (b out)
   (write-string "<figure" out)
   (when (figure-strip b)
     (format out " class=\"pointed\" style=\"margin-right:~dpx\""
             (figure-strip b)))
+  (write-step b out)
   (write-described-by b out)
-  (write-string "><img src=\"" out)
-  (write-escaped (figure-src b) out)
-  (write-string "\" alt=\"" out)
-  (write-escaped (or (figure-alt b) "") out)
-  (write-string "\">" out)
+  (write-string ">" out)
+  (write-media b out)
   (when (figure-caption b)
     (write-string "<figcaption>" out)
     (write-text (figure-caption b) (figure-caption-run b) out)
@@ -477,6 +535,7 @@ the list it draws."
     (format out
      " style=\"width:~dpx;height:~dpx;--dg:~dpx;--dg-lh:~dpx;--dg-x:~dpx\"" w h
      s (dg-lh s) (dg-pad-x s))
+    (write-step b out)
     (write-described-by b out)
     (format out
      ">~%<svg class=\"dg-art\" width=\"~d\" height=\"~d\" aria-hidden=\"true\">"
@@ -559,6 +618,7 @@ the list it draws."
             "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\""
             s (table-lh s) (cell-pad-x s) (cell-pad-y s)
             (reduce #'+ (table-block-widths b)))
+    (write-step b out)
     (write-described-by b out)
     (write-string ">" out)
     (when (table-block-caption b)
@@ -580,6 +640,7 @@ the list it draws."
 (defun write-block (b out)
   (cond ((para-p b)
          (write-string (if (para-lead b) "<p class=\"lead\"" "<p") out)
+         (write-step b out)
          (write-described-by b out)
          (write-string ">" out)
          (write-inlines (para-inlines b) (para-run b) out)
@@ -590,12 +651,23 @@ the list it draws."
         ((quotation-p b) (write-quote b out))
         ((table-block-p b) (write-table b out))
         ((diagram-p b) (write-diagram b out))
+        ((formula-p b)
+         (write-string "<figure class=\"math\"" out)
+         (write-step b out)
+         (write-described-by b out)
+         (write-string ">" out)
+         (write-formula b out)
+         (format out "</figure>~%"))
         ((column-row-p b) (write-columns b out))))
 
 ;;; --- slides ------------------------------------------------------------------------
 
-(defun slide-style (fit)
+(defun slide-style (deck fit)
   (with-output-to-string (s)
+    ;; The text region of a split slide, beside its image.
+    (unless (= (fit-width fit) (content-width deck))
+      (format s "--left:~dpx;--width:~dpx;--right:~dpx;" (fit-left fit) (fit-width fit)
+              (- (canvas-width deck) (fit-left fit) (fit-width fit))))
     (when (fit-title-size fit)
       (format s "--title:~dpx;--title-lh:~dpx;" (fit-title-size fit)
               (title-lh (fit-title-size fit))))
@@ -661,7 +733,8 @@ corner the fit solver chose."
 (defun write-slide (deck slide out)
   (let* ((fit (slide-fit slide))
          (layout (fit-layout fit))
-         (*slide-callouts* (slide-callouts slide)))
+         (*slide-callouts* (slide-callouts slide))
+         (*slide-steps* (slide-steps slide)))
     (format out "<section class=\"slide layout-~a" layout)
     (when (stringp (slide-class slide))
       (write-char #\Space out)
@@ -670,8 +743,10 @@ corner the fit solver chose."
     (format out "\" id=\"s~d\"" (slide-number slide))
     (when (> (slide-step-count slide) 0)
       (format out " data-steps=\"~d\"" (slide-step-count slide)))
-    (format out " style=\"~a\">~%" (slide-style fit))
-    (cond ((equal layout "title") (write-title-slide deck slide out))
+    (format out " style=\"~a\">~%" (slide-style deck fit))
+    (when (fit-bleed fit) (write-bleed (fit-bleed fit) out))
+    (cond ((equal layout "full"))
+          ((equal layout "title") (write-title-slide deck slide out))
           ((equal layout "section")
            (write-string "<div class=\"centered\"><h1 class=\"section-title\">"
                          out)
@@ -680,7 +755,7 @@ corner the fit solver chose."
            (format out "</h1></div>~%"))
           ((equal layout "statement")
            (let ((p (car (slide-blocks slide)))
-                 (source (source-height deck slide)))
+                 (source (source-height slide (fit-width fit))))
              (write-string "<div class=\"centered\"" out)
              (when (> source 0)
                (format out " style=\"height:~dpx\"" (- (safe-height) source)))
@@ -709,7 +784,7 @@ corner the fit solver chose."
       (write-string "<p class=\"footer\">" out)
       (write-inlines (deck-footer deck) (deck-footer-run deck) out)
       (format out "</p>~%"))
-    (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
+    (when (page-number-shown-p deck slide)
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
       (write-string "<aside class=\"notes\">" out)
@@ -744,9 +819,10 @@ corner the fit solver chose."
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)
   (write-config deck out)
-  (format out "<script>(function(){~a~a~a~a})();</script>~%</body>~%</html>~%"
+  (format out "<script>(function(){~a~a~a~a~a})();</script>~%</body>~%</html>~%"
           *player-script* (if (deck-runnable-p deck) *runner-script* "")
           (if (some #'slide-callouts (deck-slides deck)) *say-script* "")
+          (if (deck-video-p deck) *video-script* "")
           *start-script*))
 
 (defun write-meta (attribute name content out)
@@ -776,6 +852,15 @@ link preview is built from; nothing for a deck that sets neither."
       (write-meta "name" "twitter:card" (if image "summary_large_image" "summary") out))))
 
 (defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
+
+(defun deck-video-p (deck)
+  "True when a slide of DECK holds a video, in its body or beside it."
+  (some (lambda (slide)
+          (let ((bleed (fit-bleed (slide-fit slide))))
+            (or (and bleed (figure-video (first bleed)))
+                (some (lambda (b) (and (figure-p b) (figure-video b)))
+                      (region-blocks (slide-blocks slide))))))
+        (deck-slides deck)))
 
 (defun deck-runnable-p (deck)
   (some (lambda (slide)

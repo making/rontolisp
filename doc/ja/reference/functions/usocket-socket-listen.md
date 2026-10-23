@@ -25,5 +25,8 @@ listen します。`port` が `usocket:*auto-port*`(`0`)なら空いている
 
 - **インタープリタ**と **JVM**: フル対応。
 - **WASM**: コンポーネントモードのみ。バインド失敗は `nil` を返します。
-  Preview 1 はコンパイルエラーです。
+  素の Preview 1 `.wasm` は呼び出し時にエラーを通知します。
+- **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じくフル対応
+  -- バインド失敗は `usocket:socket-error` を通知します
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
 - **ブラウザプレイグラウンド**: 非対応。

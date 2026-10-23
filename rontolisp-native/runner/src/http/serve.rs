@@ -82,7 +82,7 @@ impl Drop for Handle {
 }
 
 /// An I/O error as the JDK words one: the OS's text, without Rust's `(os error N)`.
-fn reason(e: &io::Error) -> String {
+pub(crate) fn reason(e: &io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {
         Some(at) if text.ends_with(')') => text[..at].to_owned(),

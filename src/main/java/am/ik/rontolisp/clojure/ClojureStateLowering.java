@@ -40,6 +40,50 @@ final class ClojureStateLowering {
 	}
 
 	/**
+	 * A state verb -- atom, volatile, ref, agent, exception data, struct, thread bindings
+	 * -- as a function value, or null when the name is none of them.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @return the value form, or null
+	 */
+	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
+		return switch (name) {
+			case "atom" -> atomValue(ctx);
+			case "volatile!" -> volatileValue();
+			case "deref" -> derefValue(ctx);
+			case "swap!", "vswap!" -> swapValue(ctx, name);
+			case "reset!", "vreset!" -> resetValue(ctx, name);
+			case "compare-and-set!" -> compareAndSetValue(ctx);
+			case "swap-vals!", "reset-vals!" -> swapValsValue(ctx, name);
+			case "add-watch", "remove-watch", "set-validator!", "get-validator" -> watchVerbValue(name);
+			case "ref" -> refValue(ctx);
+			case "alter" -> alterValue(ctx, "alter");
+			case "commute" -> alterValue(ctx, "commute");
+			case "ref-set" -> refSetValue(ctx);
+			case "agent" -> agentValue();
+			case "agent-error", "agent-errors", "clear-agent-errors", "restart-agent", "set-error-handler!",
+					"set-error-mode!", "error-handler", "error-mode" ->
+				agentVerbValue(name);
+			case "send" -> sendValue(ctx, "send");
+			case "send-off" -> sendValue(ctx, "send-off");
+			case "await" -> awaitValue(ctx);
+			case "await-for" -> awaitForValue(ctx);
+			case "ensure" -> ensureValue(ctx);
+			case "shutdown-agents" -> shutdownAgentsValue();
+			case "ex-data" -> exHelperValue(ctx, EX_DATA);
+			case "ex-message" -> exHelperValue(ctx, EX_MESSAGE);
+			case "ex-cause" -> exHelperValue(ctx, EX_CAUSE);
+			case "Throwable->map" -> exHelperValue(ctx, THROWABLE_TO_MAP);
+			case "StackTraceElement->vec" -> stackTraceElementVecValue(ctx);
+			case "ex-info" -> exInfoValue(ctx);
+			case "struct" -> structValue(ctx);
+			case "struct-map" -> structMapValue(ctx);
+			case "push-thread-bindings", "pop-thread-bindings" -> threadBindingsValue(name);
+			default -> null;
+		};
+	}
+
+	/**
 	 * The {@code try} body lowered behind the barrier: the depth grows while it lowers,
 	 * so a {@code recur} inside one trips the barrier no matter where the {@code try}
 	 * itself sits. The body is never tail position either.

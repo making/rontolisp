@@ -112,13 +112,24 @@ class WasmSocketsRewriteTest {
 	}
 
 	@Test
-	void anUnknownShapeIsLeftForThePublicNameToReport() {
+	void anUnknownShapeOrAListThatIsNoCallKeepsItsHead() {
 		// A non-literal keyword (or a stray positional argument) is NOT quietly routed
 		// somewhere: the call keeps its public head so the error names the built-in the
 		// program actually wrote.
 		assertThat(rewriteInDefun("(read-sequence seq s :junk 1)")).contains("(READ-SEQUENCE ");
 		assertThat(rewriteInDefun("(write-sequence seq s :junk 1)")).contains("(WRITE-SEQUENCE ");
 		assertThat(rewriteInDefun("(read-line s nil nil nil nil)")).contains("(READ-LINE ");
+		// A list where no form goes is no call at all: a lexical variable named like a
+		// stream built-in (legal, CLHS 11.1.2.1.2.1), a case key, a loop pattern. Read as
+		// a call, (let ((close s)) ...) bound %io-close and left close unbound, and
+		// (case k (close 1)) never matched close. The binding's value form is still code.
+		assertThat(rewriteTopLevel("(let ((close s) (read-line (read-line s))) (list close read-line))"))
+			.contains("(CLOSE S)", "(READ-LINE (RONTOLISP:AWAIT (RONTOLISP::%READ-LINE-FUTURE S)))")
+			.doesNotContain("%IO-");
+		assertThat(rewriteInDefun("(case s (close 1) ((listen) 2))")).doesNotContain("%IO-");
+		assertThat(rewriteInDefun(
+				"(dolist (close seq) (symbol-macrolet ((listen close)) (loop for (read-char) in seq collect listen)))"))
+			.doesNotContain("%IO-");
 	}
 
 }

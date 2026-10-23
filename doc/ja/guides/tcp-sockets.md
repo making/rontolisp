@@ -30,7 +30,10 @@
 | [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md) | PEM ファイルから**暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen-pem cert-file key-file port &optional host)` |
 
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
-> ソケットクラスを使い、ホスト名とIPリテラルの両方を受け付けます。WASM
+> ソケットクラスを使い、ホスト名とIPリテラルの両方を受け付けます。
+> [ネイティブ実行ファイル](../compiling/native.md#tcp-sockets) (`--native`) も
+> 同じで、そのランナーがソケットを開きます。素の `.wasm` にはソケットがありません:
+> それ以外の WASM
 > バックエンドは **componentモード専用** です (`--component`、
 > `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでも
 > コンパイルは通りますが呼び出し時エラーになり、ホストはIPv4リテラルでなければならず、component
@@ -755,7 +758,7 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   `socket-connect`/`socket-listen`/`socket-accept` の失敗は型付きの
   `usocket:socket-error` を通知します(メッセージは保持)。そのため
   `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
-  が動作します。サブタイプ(`connection-refused-error` など)も定義されますが、
+  が動作します(ネイティブ実行ファイルでも同様です)。サブタイプ(`connection-refused-error` など)も定義されますが、
   再通知は常に `socket-error` を使います(そちらを捕捉してください)。WASM
   コンポーネントバックエンドでは connect/accept の失敗はシグナルせず `nil`
   ハンドルを返すため、そこでは `handler-case` パターンには捕捉対象がありません
@@ -765,14 +768,16 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   インタープリタと JVM では実際のソケット単位の読み取りデッドラインを設定します
   ([`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md)
   経由)。タイムアウトした読み取りは `usocket:timeout-error` ではなく通常の
-  捕捉可能な `error` を通知し、ゲッターは設定した秒数を読み返せます。WASM
-  バックエンドでは、決して発火しないタイムアウトを黙って据え付ける代わりに、
+  捕捉可能な `error` を通知し、ゲッターは設定した秒数を読み返せます。
+  ネイティブ実行ファイルもデッドラインを設定します。WASM
+  コンポーネントでは、決して発火しないタイムアウトを黙って据え付ける代わりに、
   書き込み自体がエラーを通知します。その他のオプションは黙って無視される
   ことなくエラーを通知します。
 - **`wait-for-input` は `listen` ベースのポーリングです**: インタープリタと
   JVM では本物の待機です(`listen` がカーネルの受信バッファに問い合わせ、
   データが届くか `:timeout` が経過するまで 10 ms ごとにポーリングします。
-  `:ready-only` も動作します)。WASM バックエンドでは、何もバッファされて
+  `:ready-only` も動作します)。WASM バックエンド(ネイティブ実行ファイルを
+  含む)では、何もバッファされて
   いないときは即座に「読み取り可能」を主張して戻ります — どのみち読み取りは
   ブロックするため、よくある wait してから read するループは同じように
   振る舞いますが、`:timeout` によるポーリングはそこでは守れません。
@@ -785,7 +790,8 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   (tcp コンポーネントは常に exception-handling モードでコンパイルされます)。互換性の
   ためのキーワード引数(`:element-type`、`:timeout`、`:nodelay`、
   `:reuse-address` など)は受理して無視します。
-- **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと
+- **バックエンド**: インタープリタ、JVM、ネイティブ実行ファイルはフル対応。
+  `.wasm` は tcp 組み込みと
   同じくコンポーネント専用で、アドレス系・peer 系アクセサはそこでも実際の
   アドレスとポートを返します(失敗時はエラーを通知せず `nil` を返します)。
 

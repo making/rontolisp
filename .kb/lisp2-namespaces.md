@@ -99,3 +99,25 @@ symbol-function unexport unuse-package use-package`; JVM, P1 and component ident
   `rontolisp-natives-are-function-values`).
 - `--component`'s sockets rewrite (`WasmSocketsRewrite`) runs before the wrappers exist, so
   `#'close` of a socket stream skips its `%io-close` bookkeeping, as `#'listen` does.
+
+## A lexical variable named like a function
+
+CLHS 11.1.2.1.2.1 lets a program lexically bind any `cl` symbol that is not a variable, so
+`(let ((close s)) close)` and `(dolist (read-line l) ...)` are legal and must not meet the
+function. The front-end passes that rename CALL sites (`ShadowedBuiltins`, `GrayStreamsLibrary`,
+`WasmSocketsRewrite`) all walk through `compiler.CallSiteWalk`, which offers a rewriter only the
+lists in code positions and keeps a binding's variable, a lambda list, a `case` key, a
+`handler-case` clause head, a `cond` clause (every element a form), a `loop` destructuring
+pattern after `for`/`as`/`with`, a slot spec's name and options, `declare`, `the`'s type, a
+setf place's head, quoted data and `defmacro`. The walk sees the built-in macros unexpanded,
+so their shapes are in it too; a new rewrite of call heads walks through it rather than its
+own copy.
+
+Until 2026-10-24 each pass had its own walk, and they had drifted: the socket rewrite knew no
+binding form at all, so a `--component` program splicing socket I/O (any program reading stdin
+and sleeping, or taking `#'read-line` and `#'sleep`) failed `(let ((close s)) ...)` with
+`Cannot compile symbol: CLOSE` and silently compiled `(case k (close 1))` against the key
+`%IO-CLOSE`; the Gray rewrite failed `(dolist (read-line l) ...)` on the three compiled
+backends. Pinned by `WasmSocketsRewriteTest#anUnknownShapeOrAListThatIsNoCallKeepsItsHead`,
+`GrayStreamsLibraryTest#aProgramBindingNoStandardStreamKeepsItsStreamlessCallsAndItsNonCalls`
+and `StandardFunctionValueCompileTest` (its every-value program binds `close`).

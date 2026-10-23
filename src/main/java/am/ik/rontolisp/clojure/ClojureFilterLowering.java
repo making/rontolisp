@@ -39,6 +39,44 @@ final class ClojureFilterLowering {
 	}
 
 	/**
+	 * A filter verb as a function value, or null when the name is none of them.
+	 * @param ctx the hub
+	 * @param name the Clojure name
+	 * @return the value form, or null
+	 */
+	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
+		return switch (name) {
+			case "keep" -> keepValue(ctx);
+			case "keep-indexed" -> indexedValue(ctx, true);
+			case "map-indexed" -> indexedValue(ctx, false);
+			case "every?" -> everyValue(ctx);
+			case "some" -> someValue(ctx);
+			case "remove" -> removeValue(ctx);
+			case "distinct" -> distinctValue();
+			case "partition" -> partitionValue();
+			case "take-while" -> takeWhileValue(ctx);
+			case "drop-while" -> dropWhileValue(ctx);
+			case "interleave" -> interleaveValue();
+			case "interpose" -> interposeValue();
+			case "zipmap" -> zipmapValue(ctx);
+			case "group-by" -> groupByValue(ctx);
+			case "sort" -> sortValue(ctx);
+			case "sort-by" -> sortByValue(ctx);
+			case "last" -> lastValue(ctx);
+			case "butlast" -> butlastValue(ctx);
+			case "second" -> secondValue(ctx);
+			case "mapv" -> mapvValue(ctx);
+			case "filterv" -> filtervValue(ctx);
+			case "mapcat" -> mapcatValue(ctx);
+			case "ffirst" -> ffirstValue(ctx);
+			case "nfirst" -> nfirstValue(ctx);
+			case "fnext" -> fnextValue(ctx);
+			case "nnext" -> nnextValue(ctx);
+			default -> null;
+		};
+	}
+
+	/**
 	 * {@code keep}: the non-nil results of the function over the collection, through the
 	 * spliced {@code rontolisp::%clojure-keep}. {@code false} is kept (only nil drops),
 	 * and a signalling function signals -- {@code (keep inc [1 nil 2])} throws, like the

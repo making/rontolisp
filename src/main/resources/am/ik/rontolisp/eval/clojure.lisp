@@ -10888,13 +10888,15 @@
       (rontolisp::%clojure-transient-p x)))
 
 (defun rontolisp::%clojure-is-ifn (x)
-  "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
-   IFn, like the oracle's, unless its body implements it."
+  "ifn?: a function, keyword, symbol, map, set, vector, var or an unbound var's
+   root (the oracle's Var$Unbound is an AFn). A record is no IFn, like the
+   oracle's, unless its body implements it."
   (or (functionp x) (rontolisp::%clojure-keyword-p x)
       (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)
-      (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)))
+      (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)
+      (rontolisp::%clojure-unbound-p x)))
 
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
@@ -16178,6 +16180,30 @@
   "ns-unalias as a value."
   (rontolisp::%clojure-check-arity args 2 2 "ns-unalias")
   (rontolisp::%clojure-ns-unalias-here (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-load-libs-v (name args)
+  "require or use (NAME) as a value: libraries load while the program lowers,
+   so any spec refuses at run time; of none, the oracle's own refusal."
+  (if (null args)
+      (rontolisp::%clojure-exception "Nothing specified to load")
+      (rontolisp::%clojure-unsupported-operation-exception
+       (format nil
+               "~A of computed specs is not supported at run time: libraries load while the program lowers"
+               name))))
+
+(defun rontolisp::%clojure-require-v (&rest args)
+  "require as a value."
+  (rontolisp::%clojure-load-libs-v "require" args))
+
+(defun rontolisp::%clojure-use-v (&rest args)
+  "use as a value."
+  (rontolisp::%clojure-load-libs-v "use" args))
+
+(defun rontolisp::%clojure-in-ns-v (&rest args)
+  "in-ns as a value: refused -- namespaces switch while the program lowers."
+  (rontolisp::%clojure-check-arity args 1 1 "in-ns")
+  (rontolisp::%clojure-unsupported-operation-exception
+   "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
 
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result

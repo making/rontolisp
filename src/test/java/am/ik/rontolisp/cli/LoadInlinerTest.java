@@ -10,6 +10,7 @@ import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.DistTestSupport;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
@@ -501,7 +502,7 @@ class LoadInlinerTest {
 	}
 
 	@Test
-	void quickloadDownloadsAndSplicesTheComponentFiles(@TempDir Path home) {
+	void quickloadDownloadsAndSplicesTheComponentFiles(@TempDir Path home) throws Exception {
 		// The downloaded system's component file is spliced in exactly like
 		// asdf:load-system (the download happens here, at compile time).
 		List<LispVal> result = LoadInliner.inline(
@@ -509,13 +510,15 @@ class LoadInlinerTest {
 				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
 				quicklispClient(home, "(defun mylib-answer () 42)"));
 		// The component's load-context marker carries the path inside the temporary
-		// quicklisp cache, so it is matched rather than spelled out.
+		// quicklisp cache, so it is matched rather than spelled out: the pathname as
+		// resolved, the truename with links resolved (macOS's /var is /private/var).
 		assertThat(result.stream().map(LispVal::print).filter(form -> !form.startsWith("(%BEGIN-FILE ")))
 			.containsExactly("(%BEGIN-SYSTEM \"mylib\")", "(DEFUN MYLIB-ANSWER NIL 42)", "(%END-FILE)", "(%END-SYSTEM)",
 					"'|mylib|", "(PRINT (MYLIB-ANSWER))");
 		assertThat(result.stream().map(LispVal::print).filter(form -> form.startsWith("(%BEGIN-FILE ")))
 			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
-			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home + "/quicklisp/software/mylib-1.0/mylib.lisp\")");
+			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home.toRealPath()
+					+ "/quicklisp/software/mylib-1.0/mylib.lisp\")");
 	}
 
 	@Test
@@ -624,14 +627,14 @@ class LoadInlinerTest {
 	}
 
 	@Test
-	void readEvalLoadContextRestoresTheEnclosingFileAndIsNilOutsideEveryLoad() throws Exception {
+	void readEvalLoadContextRestoresTheEnclosingFileAndIsTheEntryFilesAtTopLevel() throws Exception {
 		// The brackets nest with the loads (see inlineIsRecursive), so a #. in the outer
 		// file AFTER the nested load reads the outer file again, and one in the entry
-		// program -- which no bracket covers -- reads nil, exactly as on the
-		// interpreter.
+		// file reads the entry's own context -- the entry is the file being loaded, as
+		// the interpreter binds it. A program that is no file's has none (nil), which
+		// LoadContextE2eTest pins.
 		// The entry program has a #. of its own, so it needs the marker read the CLI
-		// gives
-		// a source textually containing one.
+		// gives a source textually containing one.
 		List<LispVal> read = LispReader
 			.readAllWithReadEvalMarkers("(load \"a.lisp\") (print (list (a-first) (b-where) (a-after)))"
 					+ " (print #.(format nil \"~A\" *load-truename*))", Features.JVM);
@@ -640,10 +643,46 @@ class LoadInlinerTest {
 						"(defvar +a1+ #.(format nil \"~A\" *load-truename*)) (load \"b.lisp\")"
 								+ " (defvar +a2+ #.(format nil \"~A\" *load-truename*))"
 								+ " (defun a-first () +a1+) (defun a-after () +a2+)",
-						"b.lisp", "(defvar +b+ #.(format nil \"~A\" *load-truename*)) (defun b-where () +b+)"))));
+						"b.lisp", "(defvar +b+ #.(format nil \"~A\" *load-truename*)) (defun b-where () +b+)")),
+				null, List.of(), Features.JVM, DistClient.createDefault(), SourceStandards.DEFAULT, "main.lisp"));
 		byte[] classBytes = new JvmLispCompiler("TestReadEvalNestedLoadContext").compile(program);
 		assertThat(runMain(classBytes, "TestReadEvalNestedLoadContext"))
-			.isEqualTo("(\"a.lisp\" \"b.lisp\" \"a.lisp\")\n\"NIL\"");
+			.isEqualTo("(\"a.lisp\" \"b.lisp\" \"a.lisp\")\n\"main.lisp\"");
+	}
+
+	@Test
+	void aLoadPathBuiltFromTheLoadContextSplicesLikeALiteral() {
+		// The portable spelling of a relative load: merged onto the loading file's
+		// truename, which the compiler knows -- in the entry file and in every spliced
+		// one. Each shape reduces to the file a literal path would name; one the context
+		// cannot answer stays a run-time load.
+		Map<String, String> files = Map.of("/p/app/src/a.lisp", "(load (merge-pathnames \"b.lisp\" *load-truename*))",
+				"/p/app/src/b.lisp", "(defun b () 2)", "/p/app/src/c.lisp", "(defun c () 3)", "/p/app/src/d.lisp",
+				"(defun d () 4)", "/p/app/src/e.lisp", "(defun e () 5)");
+		List<LispVal> program = LispReader.readAllFromString("""
+				(load (merge-pathnames "src/a.lisp" *load-truename*))
+				(load (uiop:merge-pathnames* "src/c.lisp" (or *compile-file-truename* cl:*load-truename*)))
+				(require :d (uiop:subpathname *load-truename* "src/d.lisp"))
+				(load (merge-pathnames "src/e.lisp" *load-pathname*))
+				(load (merge-pathnames "x.lisp" (user-dir)))
+				""");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(files), "/p/app", List.of(), Features.JVM,
+				DistClient.createDefault(), SourceStandards.DEFAULT, "/p/app/main.lisp");
+		assertThat(result.stream().map(LispVal::print)).containsExactly(
+				"(%BEGIN-FILE \"/p/app/main.lisp\" \"/p/app/main.lisp\")",
+				"(%BEGIN-FILE \"/p/app/src/a.lisp\" \"/p/app/src/a.lisp\")",
+				"(%BEGIN-FILE \"/p/app/src/b.lisp\" \"/p/app/src/b.lisp\")", "(DEFUN B NIL 2)", "(%END-FILE)",
+				"(%END-FILE)", "(%BEGIN-FILE \"/p/app/src/c.lisp\" \"/p/app/src/c.lisp\")", "(DEFUN C NIL 3)",
+				"(%END-FILE)", "(%BEGIN-FILE \"/p/app/src/d.lisp\" \"/p/app/src/d.lisp\")", "(DEFUN D NIL 4)",
+				"(%END-FILE)", "(%BEGIN-FILE \"/p/app/src/e.lisp\" \"/p/app/src/e.lisp\")", "(DEFUN E NIL 5)",
+				"(%END-FILE)", "(LOAD (MERGE-PATHNAMES \"x.lisp\" (USER-DIR)))", "(%END-FILE)");
+		// Outside every file the variables are nil, as at run time: the merge leaves the
+		// path relative, and it resolves against the entry's directory like a literal.
+		List<LispVal> noFile = LoadInliner.inline(
+				LispReader.readAllFromString("(load (merge-pathnames \"src/b.lisp\" *load-truename*))"),
+				loaderOf(files), "/p/app");
+		assertThat(noFile.stream().map(LispVal::print))
+			.containsExactly("(%BEGIN-FILE \"src/b.lisp\" \"/p/app/src/b.lisp\")", "(DEFUN B NIL 2)", "(%END-FILE)");
 	}
 
 	@Test

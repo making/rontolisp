@@ -18341,11 +18341,12 @@ cases:
       ;; The language features (ql:quickload "local-time") needs, exercised
       ;; without the asdf load -- local-time's own tree lives in the quicklisp
       ;; cache, so the end-to-end run is manual (see .kb/asdf.md).
-      ;; 1. The load-context pathname variables. All four are nil on the compile
-      ;;    backends (nothing is loaded or compile-file'd at run time), which is
-      ;;    what local-time's (or *compile-file-truename* *load-truename*)
-      ;;    zoneinfo lookup reads.
-      (print (list *load-pathname* *load-truename*
+      ;; 1. The load-context pathname variables. The two compile-file ones are
+      ;;    nil on every backend (nothing is compile-file'd), so local-time's
+      ;;    (or *compile-file-truename* *load-truename*) zoneinfo lookup reads
+      ;;    the load one -- which names the file being loaded, this program's
+      ;;    own file included.
+      (print (list (stringp *load-pathname*) (stringp *load-truename*)
                    *compile-file-pathname* *compile-file-truename*))
       ;; 2. merge-pathnames -- the ANSI spelling of the namestring merge.
       (print (list (merge-pathnames "zoneinfo/" "/opt/local-time/")
@@ -18379,7 +18380,7 @@ cases:
                (error () :fell-back)))
       (print (probe-file "no-such-file-here.txt"))
     expected: |
-      (NIL NIL NIL NIL)
+      (T T NIL NIL)
       (#P"/opt/local-time/zoneinfo/" #P"/opt/b.txt" #P"/abs/x")
       (#\Z NIL 3 (2 30) 6)
       (#*1011 #(7 8 9) #(#\a #\b #\c))
@@ -28029,10 +28030,22 @@ cases:
       (print (> (get-universal-time) 3786825600))
       (print (integerp (get-internal-real-time)))
       (print (integerp (get-internal-run-time)))
+      ;; Without a zone the codec takes the local one, whatever TZ this run has: the
+      ;; zone and daylight flag a decode returns encode the same instant back, and so
+      ;; does the decoded wall clock alone. An explicit zone is the zone.
+      (multiple-value-bind (s mi h d mo y dow dst tz) (decode-universal-time 3993062400)
+        (print (list (rationalp tz) (integerp dow)
+                     (= 3993062400 (- (encode-universal-time s mi h d mo y tz) (if dst 3600 0)))
+                     (= 3993062400 (encode-universal-time s mi h d mo y)))))
+      (print (multiple-value-list (decode-universal-time 3993062400 -9)))
+      (print (length (multiple-value-list (get-decoded-time))))
     expected: |
       T
       T
       T
+      (T T T T)
+      (0 0 9 15 7 2026 2 NIL -9)
+      9
   - name: signum
     source: |
       (print (signum -5))

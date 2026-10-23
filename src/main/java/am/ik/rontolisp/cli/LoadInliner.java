@@ -44,14 +44,17 @@ import org.jspecify.annotations.Nullable;
  * concatenated.
  *
  * <p>
- * Only a top-level call whose operator is {@code load} and whose single argument is a
- * string literal is inlined; a {@code load} with a computed argument, or one nested
- * inside another form, is left untouched (it still runs at runtime via the embedded
- * reader, e.g. under {@code --dynamic}). Inlining is recursive (a loaded file may load
- * another) and guards against cycles. A relative path is resolved against the directory
- * of the file doing the load (the entry source for top-level loads), matching the runtime
- * {@code load} (see {@link SourceLoader#resolve}); the resolved path is then read by the
- * supplied {@link SourceLoader}.
+ * Only a top-level call whose operator is {@code load} and whose argument is a string
+ * literal -- or reduces to one in the loading file's context, the portable
+ * {@code (load (merge-pathnames "x.lisp" *load-truename*))} -- is inlined; a {@code load}
+ * with any other computed argument, or one nested inside another form, is left untouched
+ * (it still runs at runtime via the embedded reader, e.g. under {@code --dynamic}). The
+ * entry file is bracketed with its load context like every spliced file, so the variables
+ * hold its path while its forms run, as on the interpreter. Inlining is recursive (a
+ * loaded file may load another) and guards against cycles. A relative path is resolved
+ * against the directory of the file doing the load (the entry source for top-level
+ * loads), matching the runtime {@code load} (see {@link SourceLoader#resolve}); the
+ * resolved path is then read by the supplied {@link SourceLoader}.
  *
  * <p>
  * The same pass implements the compile-time side of {@code require}/{@code provide}
@@ -181,6 +184,30 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, DistClient dists, SourceStandards standards) {
+		return inline(program, loader, baseDir, systemPath, features, dists, standards, null);
+	}
+
+	/**
+	 * Same as
+	 * {@link #inline(List, SourceLoader, String, List, Features, DistClient, SourceStandards)}
+	 * for a program read from a Common Lisp file: the program is the file being loaded,
+	 * so it is bracketed with its own load context as a loaded file is --
+	 * {@code *load-pathname*} the path as given, {@code *load-truename*} its truename --
+	 * which the interpreter binds around the same file.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @param entryFile the file the program was read from, or {@code null} for a program
+	 * that is no file's (standard input, {@code -e}, a generated program)
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
 		List<LispVal> result = new ArrayList<>();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
@@ -188,7 +215,15 @@ public final class LoadInliner {
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
 				baseDir, standards);
-		expandInto(program, result, ctx, baseDir);
+		if (entryFile == null) {
+			expandInto(program, result, ctx, new Origin(baseDir, null, null));
+		}
+		else {
+			String truename = loader.canonicalPath(entryFile);
+			result.add(beginFile(entryFile, truename));
+			expandInto(program, result, ctx, new Origin(baseDir, entryFile, truename));
+			result.add(marker(LispNames.END_FILE));
+		}
 		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
 		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the
@@ -220,7 +255,16 @@ public final class LoadInliner {
 			@Nullable String entryBaseDir, SourceStandards standards) {
 	}
 
-	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
+	/**
+	 * Where the forms being expanded come from: the directory a relative path in them
+	 * resolves against, and the file's load context (both {@code null} outside every
+	 * file), which a computed {@code load} path is folded with.
+	 */
+	private record Origin(@Nullable String baseDir, @Nullable String pathname, @Nullable String truename) {
+	}
+
+	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, Origin origin) {
+		String baseDir = origin.baseDir();
 		for (LispVal form : forms) {
 			if (WitImportDirective.isDirective(form)) {
 				// A wit-import names its .wit relative to the file that WRITES it, like
@@ -311,7 +355,11 @@ public final class LoadInliner {
 				out.add(quotedSymbol(provideName));
 				continue;
 			}
-			RequireForm require = requireForm(form);
+			// A path argument that is not a literal may still be one here: the portable
+			// idiom builds it from this file's load context, which is known.
+			PathFolder folder = arg -> CompileTimePathnameFolder.foldLoadPath(arg, ctx.systems(), origin.pathname(),
+					origin.truename());
+			RequireForm require = requireForm(form, folder);
 			String rawPath = null;
 			if (require != null) {
 				if (ctx.provided().contains(require.name())) {
@@ -328,7 +376,7 @@ public final class LoadInliner {
 			}
 			LoadForm load = null;
 			if (require == null) {
-				load = loadForm(form);
+				load = loadForm(form, folder);
 				rawPath = load == null ? null : load.path();
 			}
 			if (rawPath == null) {
@@ -423,11 +471,15 @@ public final class LoadInliner {
 		// resolved to. The bracket is emitted unconditionally and lowered (or dropped)
 		// once the whole program is in view -- this pass cannot yet know whether
 		// anything reads the variables, because the libraries spliced after it may.
-		out.add(beginFile(pathname, path));
+		// The truename is the file's absolute path, links resolved -- what truename
+		// answers for it -- so a path merged onto it names the same file wherever the
+		// load runs from.
+		String truename = ctx.loader().canonicalPath(path);
+		out.add(beginFile(pathname, truename));
 		if (bracket) {
 			out.add(marker(LispNames.PUSH_PACKAGE));
 		}
-		expandInto(forms, out, ctx, SourceLoader.parentDir(path));
+		expandInto(forms, out, ctx, new Origin(SourceLoader.parentDir(path), pathname, truename));
 		if (bracket) {
 			out.add(marker(LispNames.POP_PACKAGE));
 		}
@@ -735,7 +787,7 @@ public final class LoadInliner {
 	 * progress output and is read as UTF-8 either way); {@code :if-does-not-exist} is the
 	 * one that changes what this pass does.
 	 */
-	@Nullable private static LoadForm loadForm(LispVal form) {
+	@Nullable private static LoadForm loadForm(LispVal form, PathFolder folder) {
 		if (!(form instanceof LispCons cons)) {
 			return null;
 		}
@@ -743,8 +795,12 @@ public final class LoadInliner {
 		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.LOAD.equals(op.name())) {
 			return null;
 		}
-		// A literal path is a string or a #P"..." pathname value.
+		// A literal path is a string or a #P"..." pathname value; a computed one counts
+		// when the loading file's context reduces it to one.
 		String path = am.ik.rontolisp.eval.PathnameOps.designatorNamestring(items.get(1));
+		if (path == null) {
+			path = folder.fold(items.get(1));
+		}
 		if (path == null) {
 			return null;
 		}
@@ -798,9 +854,10 @@ public final class LoadInliner {
 	/**
 	 * If {@code form} is a top-level {@code (require NAME)} or
 	 * {@code (require NAME "path.lisp")}, returns the parsed directive; otherwise returns
-	 * {@code null}. Like {@code provide}, a non-literal argument is a hard error.
+	 * {@code null}. Like {@code provide}, a non-literal argument is a hard error -- but a
+	 * path the loading file's context reduces to a literal is one ({@link PathFolder}).
 	 */
-	@Nullable private static RequireForm requireForm(LispVal form) {
+	@Nullable private static RequireForm requireForm(LispVal form, PathFolder folder) {
 		List<LispVal> items = operatorForm(form, LispNames.REQUIRE);
 		if (items == null) {
 			return null;
@@ -812,11 +869,12 @@ public final class LoadInliner {
 		String name = moduleDesignator(LispNames.REQUIRE, items.get(1), form);
 		String path = null;
 		if (items.size() == 3) {
-			if (!(items.get(2) instanceof LispString str)) {
-				throw new IllegalStateException(
-						LispNames.REQUIRE + " expects a string-literal file path: " + form.print());
+			path = items.get(2) instanceof LispString str ? str.value() : folder.fold(items.get(2));
+			if (path == null) {
+				throw new IllegalStateException(LispNames.REQUIRE
+						+ " expects a file path known at compile time (a string literal, or one merged onto"
+						+ " *load-truename*): " + form.print());
 			}
-			path = str.value();
 		}
 		return new RequireForm(name, path);
 	}
@@ -928,6 +986,21 @@ public final class LoadInliner {
 	}
 
 	private record RequireForm(String name, @Nullable String path) {
+	}
+
+	/**
+	 * Reduces a computed {@code load} / {@code require} path in the loading file's
+	 * context ({@link CompileTimePathnameFolder#foldLoadPath}).
+	 */
+	@FunctionalInterface
+	private interface PathFolder {
+
+		/**
+		 * @param arg the path argument
+		 * @return its namestring, or {@code null} when it is not known at compile time
+		 */
+		@Nullable String fold(LispVal arg);
+
 	}
 
 }

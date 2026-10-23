@@ -49,7 +49,10 @@ class StandardFunctionValueCompileTest {
 				source.append("\n   #'|").append(name).append('|');
 			}
 		}
-		source.append("))\n(print (length (every-value)))\n");
+		// The values bound to a lexical variable named like one of them: with #'read-line
+		// and #'sleep the component splices its socket I/O, whose call-site rewrite read
+		// the binding (close (every-value)) as a call of close.
+		source.append("))\n(let ((close (every-value)))\n  (print (length close)))\n");
 		Path file = dir.resolve("every-value.lisp");
 		Files.writeString(file, source);
 		ByteArrayOutputStream err = new ByteArrayOutputStream();

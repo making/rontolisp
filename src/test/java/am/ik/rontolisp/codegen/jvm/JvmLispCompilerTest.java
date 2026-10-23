@@ -9958,6 +9958,8 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM)))
 			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STANDARD_STREAMS_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 	}
 
 	@Test

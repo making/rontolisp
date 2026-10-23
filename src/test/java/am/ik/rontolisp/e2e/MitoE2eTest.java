@@ -234,7 +234,7 @@ class MitoE2eTest {
 		ExecResult result = WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isNotZero();
 		assertThat(result.getStderr() + result.getStdout()).as("stderr: %s", result.getStderr())
-			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend or");
+			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend");
 	}
 
 	// The DAO round trip. `spec` exists only to pin the generated DDL: table-definition

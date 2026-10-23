@@ -41,6 +41,7 @@ import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
+import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceSession;
@@ -771,7 +772,10 @@ public final class RontoLispCli {
 				.javaClassPath(javaClassPath::add)
 				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
 				.build());
-			for (LispVal form : frontend.program()) {
+			// The load-context brackets are lowered as every backend lowers them first:
+			// to the assignments a program reading the variables needs, and to nothing
+			// otherwise -- a marker is no Common Lisp to read back.
+			for (LispVal form : LispMacroExpander.lowerLoadContextMarkers(frontend.program())) {
 				// A (%struct-definition (defstruct ...)) marker is compile-path
 				// bookkeeping
 				// the BACKENDS consume (LispMacroExpander.expandTopLevelDefinitions); the
@@ -831,12 +835,24 @@ public final class RontoLispCli {
 			exprs = evaluator.clojureProgram(exprs);
 		}
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+		// A Common Lisp entry file is the file being loaded: its forms -- and its #.
+		// data, resolved just before each form runs -- see *load-pathname* (the path as
+		// given) and *load-truename* (its truename), as the compile paths' bracket
+		// around the same file does (LoadInliner).
+		String loadedFile = language == SourceLanguage.COMMON_LISP ? entryFile : null;
+		boolean entryContext = loadedFile != null;
+		if (loadedFile != null) {
+			evaluator.pushLoadContext(loadedFile, evaluator.sourceLoader().canonicalPath(loadedFile));
+		}
 		try {
 			for (LispVal expr : exprs) {
 				evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 			}
 		}
 		finally {
+			if (entryContext) {
+				evaluator.popLoadContext();
+			}
 			// The program has ended -- by its last form, by quit/exit (LispExitSignal) or
 			// by an uncaught condition -- so an output file it never closed gets what it
 			// still buffers, as it does on the other three backends.
@@ -1238,10 +1254,12 @@ public final class RontoLispCli {
 			else if (nativeTarget != null) {
 				// Only the executable is written: the .wasm and its precompiled form
 				// never leave memory. The runner is the one the module's imports need:
-				// a fetch's rlhttp only the network runner answers.
+				// a fetch's or a server's rlhttp and a socket's rltcp only the network
+				// runner answers.
 				NativeToolchain toolchain = NativeToolchain.load();
-				boolean network = WasmLispCompiler.importModules(bytes)
-					.contains(FetchResponseShape.RUNNER_IMPORT_MODULE);
+				java.util.Set<String> imports = WasmLispCompiler.importModules(bytes);
+				boolean network = imports.contains(FetchResponseShape.RUNNER_IMPORT_MODULE)
+						|| imports.contains(SocketsLibrary.RUNNER_IMPORT_MODULE);
 				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform(), network),
 						toolchain.precompile(bytes, nativeTarget)));
 			}

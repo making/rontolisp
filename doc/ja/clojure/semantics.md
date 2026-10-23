@@ -257,7 +257,9 @@ require した名前空間、REPL の前の入力のもの）であり、oracle 
 リスト・ベクター・マップ・セットの中に列を継ぎ足します。各 `x#` は syntax-quote
 ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
 の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
-splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
+splice はエラーです。値としての `unquote` と `unquote-splicing` は、oracle と同じく、その var の未束縛のルートを
+返します（`ifn?` は `true`、`fn?` は `false`、`str` は `Unbound: #'clojure.core/unquote`。呼ぶと
+`Attempting to call unbound fn: #'clojure.core/unquote` を投げます）。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
 いずれも展開結果を mangle されたデータそのものとして返すため、quote したフォームとの
 `=` が成り立ち、表示は oracle と同じ小文字綴りになります。`gensym` は
 評価ごとに新しい uninterned シンボルを返します。

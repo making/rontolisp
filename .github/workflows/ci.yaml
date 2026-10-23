@@ -15,6 +15,7 @@ on:
     # bump needs this workflow.
     - .mvn/**
     - .github/workflows/ci.yaml
+    - .github/scripts/move-snapshot-tag.sh
   pull_request:
     branches:
     - develop
@@ -266,11 +267,14 @@ jobs:
         # NativeOutputE2eTest compiles through the binary's --native (its resources
         # and FFM downcalls) and diffs the output against wasmtime run; FetchSpecE2eTest
         # runs the fetch corpus on every transport, the native leg through the binary's
-        # network runner. ClojureNativeLoweringE2eTest requires the binary to lower the
-        # Clojure corpus to the IR the JVM does: it reads a host form's class from the
-        # JDK's class files, where its own image holds only part of the JDK.
+        # network runner. NativeTcpTest runs the socket loopback programs in a --native
+        # executable, through the same network runner's rltcp host (it skips where no
+        # host pair is on the classpath, which is every other job). ClojureNativeLoweringE2eTest
+        # requires the binary to lower the Clojure corpus to the IR the JVM does: it
+        # reads a host form's class from the JDK's class files, where its own image
+        # holds only part of the JDK.
         ./mvnw -V --no-transfer-progress \
-          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest,ClojureNativeLoweringE2eTest' -DfailIfNoTests=false \
+          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest,NativeTcpTest,ClojureNativeLoweringE2eTest' -DfailIfNoTests=false \
           -Drontolisp.binary="$PWD/target/rontolisp" \
           -Drontolisp.native.required=true \
           test
@@ -296,6 +300,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # move-snapshot-tag.sh dispatches a run of the tip when a workflow change overtook this one
+      actions: write
     steps:
     - uses: actions/checkout@v7
     - name: Set up GraalVM 25
@@ -352,20 +358,18 @@ jobs:
     # releases/download/<version>/rontolisp-*, so they 404 for as long as that
     # lasts. Updating in place makes a failed run degrade to "assets are one commit
     # stale" rather than "the download links are dead".
+    #
+    # GITHUB_TOKEN may not point a ref at a commit whose workflows differ from develop's
+    # tip, so a run a workflow change overtook publishes nothing and hands over to a run
+    # of the tip; one older than the tag's commit publishes nothing either (the script).
     - name: Move the snapshot tag to this commit
+      id: tag
       if: steps.version.outputs.is_snapshot == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
-        VERSION: ${{ steps.version.outputs.version }}
-      run: |
-        set -e
-        # Force-update the ref; if the tag does not exist yet (first run, or a
-        # previous run deleted it), create it.
-        gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/${VERSION}" \
-          -f "sha=${{ github.sha }}" -F force=true \
-        || gh api -X POST "repos/${{ github.repository }}/git/refs" \
-             -f "ref=refs/tags/${VERSION}" -f "sha=${{ github.sha }}"
+      run: .github/scripts/move-snapshot-tag.sh "${{ steps.version.outputs.version }}"
     - name: Create release
+      if: steps.tag.outputs.publish != 'false'
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ steps.version.outputs.version }}

@@ -27,7 +27,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Core language and evaluation
 
 - [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, an assignment of an unbound name (function body or top level) as a global, `%` prefix, JVM method mangling, WASM rec-groups
-- [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
+- [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split; a lexical variable named like a function and the one call-site walk (`CallSiteWalk`) every call-head rewrite takes
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
 - [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend; an operation applies, and signals, only after its arguments -- on the compiled fast paths too (SBCL's pairwise n-ary arithmetic is the one difference)
@@ -106,7 +106,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [binary-sequence-io.md](binary-sequence-io.md) -- `read-sequence`/`write-sequence` over a packed buffer in one native transfer
 - [character-sequence-io.md](character-sequence-io.md) -- `read-sequence` into a string: a block of storage units per host read, never one read per character
 - [directory-listing.md](directory-listing.md) -- the one `%list-directory` primitive and the Lisp spellings above it
-- [load-inliner.md](load-inliner.md) -- compile-time `load` inlining, `require`/`provide`
+- [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (a path merged onto `*load-truename*` included), `require`/`provide`, the load-context brackets (the entry file's too; an absolute truename)
 
 ## Errors and concurrency
 
@@ -120,7 +120,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP and the `FetchResponseShape` plist; its transports (JDK, `wasi:http`, `--host-fetch`, the `--native` runner) and the cross-backend corpus (with the Clojure client's) with its known divergences
 - [http-server.md](http-server.md) -- the server-side HTTP value model since the Clack cutover
-- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS
+- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host)
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*`
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`
 - [lack.md](lack.md) -- the lack request/response + middleware ecosystem
@@ -196,7 +196,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [linalg-blas.md](linalg-blas.md) -- `--blas`: the matrix product on a tuned CBLAS from the OS
 - [simd-parallel.md](simd-parallel.md) -- `--parallel` over the `--simd` matrix products
 - [gpu.md](gpu.md) -- `--gpu` and `am.ik.gpu`, the never-throwing declining device layer
-- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the CPU baseline and `--native-target` (and why SSE2 / Armv8.0 cost nothing), the network runner (`rlrun-net`) a fetching program starts with, the numbers
+- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the CPU baseline and `--native-target` (and why SSE2 / Armv8.0 cost nothing), the network runner (`rlrun-net`) a fetching, serving or socket-opening program starts with, the numbers
 - [native-downcalls.md](native-downcalls.md) -- `src/native/java`: the binary's downcalls through SubstrateVM's AOT route instead of the interpreted FFM handle; what took it (`--blas`) and what was measured not to (`--gpu`, objc)
 - [vec.md](vec.md) -- the `vec` package, the packed float-array type, and its `--simd`/`--no-gc` acceleration layers
 - [quantized-matrix.md](quantized-matrix.md) -- `rontolisp:quantized-matrix`: ggml's Q8_0 held verbatim, and the integer-dot GEMV that is the defun bit for bit
@@ -216,8 +216,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [dists.md](dists.md) -- the download half of `ql:quickload`; `am.ik.artifact`, the fetch-and-cache layer every downloader shares (size + MD5 verification, timeouts, tar.gz/zip, atomic install)
 - [git-fetcher.md](git-fetcher.md) -- `am.ik.artifact.GitFetcher`: a repository at a full sha into the cache through the `git` CLI (why not forge archives), the clone/checkout layout and key, tag checks, the resolver's questions (a revision's commit, a tag, the descendant of two commits), the refusals
 - [maven-resolver.md](maven-resolver.md) -- `am.ik.maven`: Maven coordinates to descriptors, a collected graph (every version seen; selection is the caller's) and jars, through the `~/.m2` local repository; Maven 3.9's model building replicated (profiles, inheritance, interpolation, BOM imports, the super POM, build sections and their plugin merges, a `pom.xml` file with its `relativePath` parents, the validation levels and the strict reader) and measured against Maven itself (the oracle files, a real `~/.m2` sweep); the hand-written MXParser-compatible XML reader and why not `java.xml`; the deliberate differences; `maven-metadata.xml` (ranges with backtracking, SNAPSHOT, LATEST/RELEASE) cached under the update policy with Maven's tracking files; `settings.xml` mirrors, proxies, servers (credentials, headers, encrypted passwords) and the global file
-- [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins and the environment-enquiry family
+- [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins, the universal-time codec and the local time zone per backend, and the environment-enquiry family
 - [architecture.md](architecture.md) -- the pipeline, the language-independent libraries, the package dependency graph and the per-package import rules, the `CompileFrontend.expand` no-restatement rule and its drift history, requirements
-- [session-workflow.md](session-workflow.md) -- builds outside the root reactor, the CI deploy job (Maven 3.10 credential scoping, the `sonatype-central` server id), waiting for a long run and the three false greens, working beside other sessions on `develop` (`.todo` number claims), the after-task checks
+- [session-workflow.md](session-workflow.md) -- builds outside the root reactor, the CI deploy job (Maven 3.10 credential scoping, the `sonatype-central` server id), the release jobs' snapshot tag (why GITHUB_TOKEN cannot always move it), waiting for a long run and the three false greens, working beside other sessions on `develop` (`.todo` number claims), the after-task checks
 - [documentation-site.md](documentation-site.md) -- doc site layout, fence conventions, search index, build/preview
 - [directory-rename.md](directory-rename.md) -- moving a directory: the things that break outside the rename's own diff (a location-scoped ignore rule, a citation vs. a member, the relative paths INSIDE what moved when the depth changes, a re-flowed javadoc line, a fixture lookup that turns into a skip), the walk-defined corpus behind them, and `PathCitationTest` as the machine half

@@ -29,9 +29,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * {@code --native -o prog} against {@code wasmtime run} of the same program's
  * {@code .wasm}: a slice of {@code ci-spec.yaml} (arithmetic to CLOS, plus the relative
- * and absolute file-system cases the stub's two preopens serve), program arguments, and
- * an uncaught error's exit status. The runner is expected to print what wasmtime prints
- * and exit as it exits (.kb/native-output.md).
+ * and absolute file-system cases the stub's two preopens serve), program arguments, the
+ * local time zone (the runner's C library against the module's own reader), and an
+ * uncaught error's exit status. The runner is expected to print what wasmtime prints and
+ * exit as it exits (.kb/native-output.md).
  *
  * <p>
  * The compiler is this JVM's {@link RontoLispCli}, or the binary
@@ -110,6 +111,39 @@ class NativeOutputE2eTest {
 				""");
 		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
 		assertThat(run.stdout()).isEqualTo("\"from above\"\nNIL\n");
+	}
+
+	@Test
+	void theLocalTimeZoneIsTheOneTzNamesAsWasmtimeGivenTheZoneFilesDecodesIt() throws Exception {
+		// The runner answers the zone from the host C library (rltime); the .wasm reads
+		// the same zone file itself when wasmtime grants it the variable and the
+		// directory. Both decode New York's 2026 transitions and Lord Howe's half-hour
+		// daylight saving time alike.
+		Path zoneinfo = Path.of("/usr/share/zoneinfo");
+		assumeTrue(Files.isRegularFile(zoneinfo.resolve("America/New_York")), "no zone files in " + zoneinfo);
+		Path dir = Files.createDirectories(this.tempDir.resolve("tz"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, """
+				(dolist (ut '(3981941999 3981942000 4002499800 4002503400 3993062400))
+				  (print (multiple-value-list (decode-universal-time ut))))
+				(print (list (encode-universal-time 0 30 2 8 3 2026) (encode-universal-time 0 30 1 1 11 2026)))
+				""");
+		Path exe = dir.resolve("prog");
+		compileNative(src, exe);
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path module = dir.resolve("prog.wasm");
+		compile(src, module);
+		for (String tz : List.of("America/New_York", "Australia/Lord_Howe")) {
+			Run expected = exec(dir,
+					List.of("wasmtime", "run", "--env", "TZ=" + tz, "--dir", zoneinfo.toString(), module.toString()),
+					Map.of());
+			Run actual = exec(dir, List.of(exe.toString()), Map.of("TZ", tz));
+			assertThat(expected.exit()).as("wasmtime's exit status; stderr: %s", expected.stderr()).isZero();
+			assertThat(actual.stdout()).as(tz).isEqualTo(expected.stdout());
+			assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		}
+		assertThat(exec(dir, List.of(exe.toString()), Map.of("TZ", "America/New_York")).stdout())
+			.contains("(0 0 3 8 3 2026 6 T 5)");
 	}
 
 	@Test
@@ -329,13 +363,18 @@ class NativeOutputE2eTest {
 	}
 
 	private static Run exec(Path dir, List<String> command) throws Exception {
+		return exec(dir, command, Map.of());
+	}
+
+	private static Run exec(Path dir, List<String> command, Map<String, String> environment) throws Exception {
 		Path stdout = dir.resolve("stdout.log");
 		Path stderr = dir.resolve("stderr.log");
-		Process process = new ProcessBuilder(command).directory(dir.toFile())
+		ProcessBuilder builder = new ProcessBuilder(command).directory(dir.toFile())
 			.redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile()))
 			.redirectOutput(stdout.toFile())
-			.redirectError(stderr.toFile())
-			.start();
+			.redirectError(stderr.toFile());
+		builder.environment().putAll(environment);
+		Process process = builder.start();
 		if (!process.waitFor(300, TimeUnit.SECONDS)) {
 			process.destroyForcibly().waitFor();
 			throw new IllegalStateException("timed out: " + String.join(" ", command));

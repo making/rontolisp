@@ -11,8 +11,10 @@ They return bidirectional stream VALUES in the same handle space as file streams
 work on sockets on every backend. The print family to a socket is deliberately NOT part of that
 surface anywhere. Blocking and synchronous, except that on `--component` a read inside an ASYNC body
 is promoted to a real suspension point. Reads are byte-at-a-time on interpreter/JVM; the component
-holds one host CHUNK per socket (documented divergence). `read-line` answers `nil` at peer close;
-`read` does not work on sockets. Errors: interpreter/JVM signal, the WASM component returns `nil`.
+and a `--native` executable hold one host CHUNK per socket (documented divergence). `read-line`
+answers `nil` at peer close; `read` does not work on sockets. Errors: interpreter/JVM and `--native`
+signal (one text), the WASM component returns `nil`; a plain Preview 1 `.wasm` has no sockets
+(call-time error).
 
 ## Argument refusals (interpreter and JVM, one condition and text)
 Every argument is checked, in argument order, before the host acts. A host, path or password that is
@@ -60,15 +62,67 @@ Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling
   `_writeString` arm is NOT in `_writeStr`, the sink shared with the print family — a branch one
   level down would ship a program that works on two backends and traps on `--component`. Same reason
   the interpreter's arm sits in the `write-string` built-in, not `emitTo`.
-- WASM: component-only. Preview 1 lowers each tcp call site to a CALL-TIME error
+- WASM: a plain Preview 1 `.wasm` lowers each tcp call site to a CALL-TIME error
   (`LispMacroExpander.callTimeUnsupportedStub`) so a spliced library's dead socket layer still
-  compiles; under `--component` the names fall through to the ordinary call path and resolve against
-  `eval/sockets.lisp` (wit-imported `wasi:sockets/types@0.3.0`, `eval/sockets.wit` = vendored
-  types.wit plus transparent `sock-stream`/`sock-future`/`accept-stream` aliases), spliced by
-  `eval/SocketsLibrary` (triggers on a tcp-* OR any `usocket:` reference). Handle is an integer
-  >= 200 but the table is LISP state (`rontolisp::*sock-table*`); the old `sock.*` seam at core
-  indices 8-11 is gone, so `FUNC_START` = `IMPORT_FUNC_COUNT` (8).
+  compiles; where a provider is spliced (`Ctx.socketsSpliced`, the `%io-read-line` marker --
+  NOT the function table: a native taken as a value registers a wrapper under its own name whose
+  body is the call site, so a table test looped `#'rontolisp:tcp-connect` on Preview 1) the names
+  fall through to the ordinary call path
+  and resolve against the spliced defuns. `--component`: `eval/sockets.lisp` (wit-imported
+  `wasi:sockets/types@0.3.0`, `eval/sockets.wit` = vendored types.wit plus transparent
+  `sock-stream`/`sock-future`/`accept-stream` aliases); `--native`: `eval/runner-sockets.lisp`
+  ("--native: the runner's sockets" below). Both spliced by `eval/SocketsLibrary` (triggers on a
+  tcp-* OR any `usocket:` reference; the runner shape under `CompileFrontend.Options.runnerHosted()`).
+  Handle is an integer >= 200 but the table is LISP state (`rontolisp::*sock-table*`); the old
+  `sock.*` seam at core indices 8-11 is gone, so `FUNC_START` = `IMPORT_FUNC_COUNT` (8).
 - JVM gate `usesSockets` = any `tcp-*` OR `tls-connect`/`tls-listen`/`%tls-listen-p12`.
+
+## --native: the runner's sockets (since 2026-10-24)
+A `--native` executable is the Preview 1 module plus the runner, so the RUNNER owns the sockets
+and the module owns the dispatch layer: `runner-sockets.lisp` is a SECOND PROVIDER of the
+`%io-*`/`%...-future` names sockets.lisp provides a component, over twelve `rltcp` imports the
+network runner answers (`rontolisp-native/runner/src/tcp.rs`; `connect`/`listen` (host string,
+port), `accept`, `read` (the `:bytes` caller-buffer shape), `write` (`:octets`: an octet vector
+or a string's raw bytes), `close`, `localPort`/`localAddress`/`peerAddress`/`peerPort`,
+`setTimeout`, `lastError`). The host is a `std::net` stream or listener per number; every call
+BLOCKS the module's one thread (no scheduler on Preview 1), a host name resolves as the JDK
+resolves one, and a failure answers -1 leaving the OS's text (`serve.rs`'s `reason`, no
+`(os error N)`; a read past its deadline is `Read timed out`, the JDK's words).
+- **Same names, same shapes, different blocking**: the `%...-future` twins are PLAIN defuns
+  answering settled values (the degenerate Preview 1 `await` passes a non-future through), so
+  `WasmSocketsRewrite`'s async promotion and sync dispatch both land on blocking code; nothing
+  calls `%future-force`. The rewrite and `builtinDispatchAliases` run on every wasm-GC module and
+  key on the spliced `%io-read-line`, no longer on `component`. `StdinLibrary` splices nothing
+  (not a component): the non-socket arms go straight to the `%...-raw` aliases, which compile on
+  both wasm-GC targets now (the `--component` gate on them and on `%str-byte-*`/`%str-from-byte`
+  went on 2026-10-24).
+- **Errors SIGNAL with the interpreter's texts** (`OP: cannot connect to H:P: MSG`, `OP: cannot
+  listen on H|*:P: MSG`, `OP: MSG`, `OP expects a ... handle`), composed in Lisp from
+  `lastError`; the port/host argument checks are messages, not `type-error`s. ONE signalling
+  site, `rontolisp::%sock-fail`, whose NAME is an EH-mode trigger (`WasmLispCompiler.usesEhForm`,
+  `LispNames.SOCK_FAIL_INTERNAL`, the usocket guard's pattern) -- a Preview 1 `%error` outside EH
+  mode is a bare `unreachable` carrying no text, and the component gets EH mode from
+  sockets.lisp's handler-case forms. Consequences: a usocket program's `%usock-guard` expands to
+  the handler-case arm (`ctx.ehMode`), so the shim re-signals typed `usocket:socket-error` here as
+  on the interpreter/JVM; an uncaught failure prints `Unhandled condition: tcp-connect: cannot
+  connect to ...` and exits 134.
+- **Reads**: one 8 KiB `(unsigned-byte 8)` chunk buffer per connected socket, filled by `read`,
+  walked with `aref`; lines and characters assembled from bytes exactly as sockets.lisp does
+  (`%str-from-byte`/`%string-concat`). `tcp-set-timeout` is REAL (`set_read_timeout`; a timed-out
+  read signals `read-line: Read timed out` out of the stream built-in). `listen` sees the chunk
+  only; `usocket:wait-for-input` keeps the WASM immediate-readiness branch (`:rontolisp-wasm` is
+  on `*features*`). `write-sequence` of a non-string vector copies the range into an octet vector
+  (no per-byte string concat). TLS stays off (`tls-connect`/`tls-upgrade` keep the Preview 1
+  error; the runner's rustls is the fetch client's only).
+- **The stub**: a module importing `rltcp` starts with `rlrun-net` like one importing `rlhttp`
+  (`RontoLispCli`, `SocketsLibrary.RUNNER_IMPORT_MODULE`; the plain stub exits 1 naming it). The
+  host lives under the runner's `net` feature (std::net adds no dependency; one network runner).
+- Pins: `NativeTcpTest` (the imports; one executable running the loopback programs of the
+  `componentTcp*`/`componentUsocket*` tests with the error texts -- skips without the host pair),
+  `NativeFetchTest#theOutputStartsWithTheRunnerItsModuleNeeds` (Linux), the Rust `tcp::tests`
+  (`build.sh --test`), `StdinLibraryTest#theThreeDispatchSplicesDefineTheSameNamesAndShapes`.
+  Not run anywhere automatically: cl-postgres over the shim from an executable (`ClPostgresE2eTest`
+  has no native leg).
 
 ## TLS
 Clients run on interpreter, JVM and the WASM component; the listeners are interpreter/JVM only,
@@ -186,7 +240,7 @@ so fetch+tcp and serve+tcp compose in one component.
   tuple layout and `emitAsyncStartBody` stores each argument via `emitLowerAt`.
 - **Two surfaces**: sync tcp defuns force their async internals with `%future-force` (a binding of
   `_sched_loop`, OFF_SCHED_LOOP); ASYNC bodies get the await promotion from `WasmSocketsRewrite`
-  (component-only, right after the async-sugar rewrite, gated on the spliced `%io-read-line` defun) —
+  (every wasm-GC module, right after the async-sugar rewrite, gated on the spliced `%io-read-line` defun) —
   `(read-line s)` -> `(await (%read-line-future s))`, `tcp-connect`/`tcp-accept` ->
   `%tcp-connect-f`/`%tcp-accept-f` (nil-on-failure, so both surfaces agree). In SYNC context the same
   calls rewrite onto the `%io-*` dispatch defuns, which branch: socket handle -> chunked reads /
@@ -223,11 +277,11 @@ so fetch+tcp and serve+tcp compose in one component.
   `*standard-output*` at the original call site) — the first two had that lowering, but
   it ran at `WasmExprCompiler` time, AFTER this pass. An unrecognized shape is deliberately left
   UNREWRITTEN so the error names the built-in the program wrote.
-- **Two alternative dispatch providers; widening one without the other breaks every program on the
-  other**: sockets.lisp and `stdin-dispatch.lisp` (`StdinLibrary`, for an async component reading
-  stdin but never a socket). Exactly one is spliced and the rewrite picks its target by call SHAPE
-  without knowing which it got. `./mvnw test` does NOT catch it;
-  `StdinLibraryTest#theTwoDispatchSplicesDefineTheSameNamesAndShapes` compares the two
+- **Three alternative dispatch providers; widening one without the others breaks every program on
+  the others**: sockets.lisp, `stdin-dispatch.lisp` (`StdinLibrary`, for an async component reading
+  stdin but never a socket) and `runner-sockets.lisp` (`--native`). Exactly one is spliced and the
+  rewrite picks its target by call SHAPE without knowing which it got. `./mvnw test` does NOT catch
+  it; `StdinLibraryTest#theThreeDispatchSplicesDefineTheSameNamesAndShapes` compares the three
   name -> (required/optional) maps.
 - **`terpri` on a socket carries the same arm** (measured 2026-09-23, all four): the
   interpreter branches on `socketEntry` inside the `terpri` built-in, the JVM routes
@@ -358,11 +412,12 @@ resource next to `ShimLibraries`, the package seeded in `PackageRegistry`, the s
   dexador's exact `(:import-from :cl+ssl ...)` list is the export set.
 
 ## Not supported
-UDP; hostname resolution on WASM (which caps the component TLS story — a real `https://` host needs
-its IP by hand plus `tls-upgrade` with the DNS name); TLS servers on WASM (permanent, client-only
+UDP; hostname resolution on the WASM component (which caps the component TLS story — a real
+`https://` host needs its IP by hand plus `tls-upgrade` with the DNS name; a `--native` executable
+resolves through the runner); TLS on `--native` and TLS servers on WASM (permanent, client-only
 proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); a TLS handshake deadline on
-the component (`.todo/415`); `--no-gc`; the browser playground; `(do () ...)`-style
-empty do bindings in examples (pre-existing `expandDo` limitation).
+the component (`.todo/415`); `--no-gc`; a plain Preview 1 `.wasm`; the browser playground;
+`(do () ...)`-style empty do bindings in examples (pre-existing `expandDo` limitation).
 
 ## Socket tests
 - **A test listens on the address its client connects to: `127.0.0.1`.** macOS lets `127.0.0.1:P`
@@ -396,7 +451,8 @@ the wasmtime container), `#componentTlsUpgradeAttemptsARealHandshakeAndRejectsAn
 REAL handshake against an in-container `openssl s_server`), `#componentTlsFetchesARealHostOverHttps`
 (opt-in `RONTOLISP_HTTP_E2E=1`); `WasmSocketsRewriteTest`;
 `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`; `LoadInlinerTest`;
-`LispEvaluatorAsdfTest`. The one test taking the shim to a real server is `ClPostgresE2eTest` (runs
+`LispEvaluatorAsdfTest`; `NativeTcpTest` (the `--native` runner, "--native: the runner's sockets").
+The one test taking the shim to a real server is `ClPostgresE2eTest` (runs
 by DEFAULT, all 13 legs; Docker is its only gate): verbatim cl-postgres over the usocket shim against
 a Testcontainers PostgreSQL, on the interpreter, the JVM and a component. The single-threaded echo
 choreography (listen 0 -> tcp-local-port -> connect -> write -> accept -> read) never deadlocks

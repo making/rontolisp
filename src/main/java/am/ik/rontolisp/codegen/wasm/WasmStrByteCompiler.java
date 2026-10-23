@@ -19,7 +19,10 @@ import am.ik.wasm.Instruction;
  * sockets.lisp's chunk-buffer bookkeeping therefore walks the chunk's bytes through these
  * accessors (the bytes ARE the wire), and {@code write-byte} builds its one-byte payload
  * with {@code %str-from-byte} so the write path's raw {@code $str_bytes} copy puts
- * exactly that byte on the wire. Deliberately undocumented, component-only.
+ * exactly that byte on the wire. The {@code --native} runner's provider
+ * ({@code runner-sockets.lisp}, a Preview 1 module) assembles its lines and characters
+ * from wire bytes the same way, so the accessors compile on both wasm-GC targets.
+ * Deliberately undocumented: the names exist only post-splice.
  */
 final class WasmStrByteCompiler {
 
@@ -27,9 +30,6 @@ final class WasmStrByteCompiler {
 	}
 
 	static void compile(String member, LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (!ctx.component) {
-			throw new UnsupportedOperationException("rontolisp::" + member + " is an internal --component binding");
-		}
 		List<LispVal> args = cons.toList();
 		switch (member) {
 			case LispNames.STR_BYTE_LENGTH_INTERNAL -> {

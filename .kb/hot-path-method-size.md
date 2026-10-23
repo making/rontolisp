@@ -16,6 +16,14 @@ divisor, `reduce`, `sort`). The tail-call loop (`.kb/interpreter-tail-calls.md`)
 back toward the cliff, and by 2026-10-04 the arms no loop body runs had moved out of it
 (`.kb/interpreter-tail-calls.md`, "The operator table is three methods").
 
+## The Clojure lowering's value table
+`ClojureLowering.valueOf` (a builtin named as a value, one string `switch` over every name with a
+value form) crossed the limit at `8e37e4a0b`. The state verbs (atom, ref, agent, `ex-*`, struct,
+thread bindings) and the filter verbs moved into `ClojureStateLowering.valueOf` and
+`ClojureFilterLowering.valueOf`, chained from its `default` ahead of the core-macro check, the
+precedence an explicit arm had: 5,618 + 1,408 + 909 bytes (2026-10-24). A new value arm goes
+into the slice its call lowering lives in, not the hub.
+
 ## Dispatch tables (`_invoke_<arity>`, `_lookup`)
 - `JvmRuntimeBuilder.buildDispatchMethods` emits one dispatcher per call arity; a variadic
   function matches every arity at or above its required count, so tables grow fast.
@@ -123,6 +131,8 @@ Not covered: `Jvm/WasmExprCompiler.compileCons` (19-20 KB) and the two `compile`
 run once per AST node at COMPILE time and stay over.
 
 ## Tests
+- `HugeMethodTest`: every method of the main classes under 8,000 bytes but its run-once list
+  (per-compile and class-initializer methods); a dispatcher crossing it is sliced, never listed.
 - `LispEvaluatorHotMethodSizeTest`; `JvmLibraryMethodSizeTest` (ironclad compile, plus a
   clack/ningle case via `JvmSourceCompiler` gated on `RONTOLISP_NINGLE_E2E=1`). **Neither case
   allows a method by name**; only `_top$0` / `_top$1` / `<clinit>` are over.

@@ -43,4 +43,8 @@ Error: TCP-PEER-ADDRESS expects a connected socket handle
   合わないハンドルではエラーを通知せず `nil` を返します(splice された
   usocket プログラムがそのまま動くようにするためです)。Preview 1
   (コアモジュール)モードでは他の tcp 組み込みと同様、呼び出し時エラーです。
+- **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じです --
+  実際のアドレスとポートを返し、種類の合わないハンドルには上の
+  `simple-error` を通知します
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
 - **ブラウザプレイグラウンド**: 非対応。

@@ -82,8 +82,9 @@ class NativeFetchTest {
 
 	/**
 	 * The runner is picked by what the finished module imports: {@code rlrun-net} for a
-	 * fetch's {@code rlhttp}, the plain {@code rlrun} otherwise. On Linux the output is
-	 * the stub with the module appended, so it starts with the stub's bytes.
+	 * fetch's {@code rlhttp} or a socket's {@code rltcp}, the plain {@code rlrun}
+	 * otherwise. On Linux the output is the stub with the module appended, so it starts
+	 * with the stub's bytes.
 	 */
 	@Test
 	void theOutputStartsWithTheRunnerItsModuleNeeds() throws Exception {
@@ -93,9 +94,11 @@ class NativeFetchTest {
 		String host = Objects.requireNonNull(NativeTarget.hostPlatform());
 		NativeToolchain toolchain = NativeToolchain.load();
 		byte[] fetching = nativeOutput("fetching", "(print (rontolisp:futurep (rontolisp:fetch \"http://h/\")))");
+		byte[] sockets = nativeOutput("sockets", "(print (rontolisp:tcp-local-port (rontolisp:tcp-listen 0)))");
 		byte[] plain = nativeOutput("plain", "(print 1)");
 		byte[] network = toolchain.stub(host, true);
 		assertThat(Arrays.copyOf(fetching, network.length)).isEqualTo(network);
+		assertThat(Arrays.copyOf(sockets, network.length)).isEqualTo(network);
 		byte[] stub = toolchain.stub(host);
 		assertThat(Arrays.copyOf(plain, stub.length)).isEqualTo(stub);
 		assertThat(plain.length).isLessThan(network.length);

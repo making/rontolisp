@@ -3411,6 +3411,17 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.TARGET_MACHINE_TYPE, args, 0);
 			return new LispString("JVM");
 		}));
+		// %local-time-offset: the local zone at a Unix instant (offset east of UTC in
+		// seconds, doubled, plus 1 under daylight saving time), behind the prelude's
+		// encode-/decode-universal-time and get-decoded-time. The JVM's default zone.
+		env.defineFunction(LispNames.LOCAL_TIME_OFFSET, new LispFunction(LispNames.LOCAL_TIME_OFFSET, args -> {
+			requireArgCount(LispNames.LOCAL_TIME_OFFSET, args, 1);
+			if (!(args.get(0) instanceof LispInteger seconds)) {
+				throw new LispEvalException(
+						LispNames.LOCAL_TIME_OFFSET + " expects an integer, got: " + args.get(0).print());
+			}
+			return new LispInteger(LocalTimeZone.offset(seconds.value()));
+		}));
 		// %host-exit: end the process with a status code. uiop:quit is Lisp over this
 		// (uiop-image.lisp) and finishes the output streams first, so the four backends
 		// share one definition of what quitting means. Here it is a SIGNAL rather than a

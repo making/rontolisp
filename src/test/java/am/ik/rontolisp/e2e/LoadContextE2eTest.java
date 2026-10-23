@@ -1,7 +1,23 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+
+import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * The load-context variables per SPLICED file ({@code .kb/load-inliner.md}): on all four
@@ -22,6 +38,14 @@ import java.util.List;
  * what makes the portable {@code (or *compile-file-pathname* *load-truename*)} idiom find
  * a data file shipping beside the source that reads it. Fixture:
  * {@code src/test/resources/load-context-demo}.
+ *
+ * <p>
+ * {@code *load-truename*} is the file's truename -- absolute -- on every path, and an
+ * ENTRY file is a file being loaded too (the exercise above is no file's, so its top
+ * level reads nil). Together they make the portable
+ * {@code (load (merge-pathnames "src/a.lisp" *load-truename*))} name the same file on the
+ * interpreter as on SBCL, and let the compilers fold it and splice the file
+ * ({@link #thePortableLoadIdiomSplicesTheEntrysSourcesOnEveryBackend}).
  */
 class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 
@@ -57,9 +81,10 @@ class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 			(print *helper-pathname*)
 			(print (ends-with *helper-truename* "/src/helper.lisp"))
 			(print (ends-with *one-truename* "/src/one.lisp"))
-			;; A plain top-level load resolves against the working directory, so both
-			;; halves are the path as written.
-			(print (list *plain-pathname* *plain-truename*))
+			;; A plain top-level load resolves against the working directory: the
+			;; pathname is the path as written, the truename that file's absolute path.
+			(print (list *plain-pathname* (ends-with *plain-truename* "/load-context-demo/plain.lisp")
+			             (char= #\\/ (char *plain-truename* 0))))
 			;; READ time: a #. datum inside a loaded file sees that file's context, and
 			;; the value it captured is byte-identical with the run-time pair -- for a
 			;; component, for a load nested inside one, and for a plain load.
@@ -72,7 +97,7 @@ class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 			""".formatted(PLAIN_FILE);
 
 	private static final List<String> EXPECTED = List.of("(NIL NIL)", "(NIL NIL)", "T", "T", "T", "\"helper.lisp\"",
-			"T", "T", "(\"" + PLAIN_FILE + "\" \"" + PLAIN_FILE + "\")", "T", "T", "T", "\"lc-demo-data\"");
+			"T", "T", "(\"" + PLAIN_FILE + "\" T T)", "T", "T", "T", "\"lc-demo-data\"");
 
 	@Override
 	protected String systemDir() {
@@ -92,6 +117,79 @@ class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 	@Override
 	protected String artifactName() {
 		return "TestLoadContext";
+	}
+
+	/**
+	 * The multi-file program a standard Common Lisp runs too: the entry names its sources
+	 * relative to its own truename, the way SBCL needs (it resolves a relative
+	 * {@code load} against the working directory), and so does a source loading the next.
+	 * The interpreter runs it with the entry bound like any loaded file; the compilers
+	 * fold every path and splice the files, so the class and both modules run with
+	 * {@code src/} deleted -- the modules with no directory granted at all.
+	 */
+	@Test
+	void thePortableLoadIdiomSplicesTheEntrysSourcesOnEveryBackend(@TempDir Path dir) throws Exception {
+		Path app = Files.createDirectories(dir.resolve("app"));
+		Path src = Files.createDirectories(app.resolve("src"));
+		Files.writeString(app.resolve("main.lisp"), """
+				(load (merge-pathnames "src/a.lisp" *load-truename*))
+				(print (greet "world"))
+				(print (list *load-pathname* *load-truename*))
+				""");
+		Files.writeString(src.resolve("a.lisp"), """
+				(load (uiop:merge-pathnames* "b.lisp" (or *compile-file-truename* *load-truename*)))
+				(defun greet (who) (format nil "~a, ~a" (salutation) who))
+				(print (list *load-pathname* *load-truename*))
+				""");
+		Files.writeString(src.resolve("b.lisp"), "(defun salutation () \"hello\")\n");
+		String entry = app.resolve("main.lisp").toString();
+		String root = dir.toRealPath().toString();
+		List<String> expected = List.of("(\"%1$s/app/src/a.lisp\" \"%1$s/app/src/a.lisp\")".formatted(root),
+				"\"hello, world\"", "(\"%s\" \"%s/app/main.lisp\")".formatted(entry, root));
+		assertThat(lines(cli(entry))).isEqualTo(expected);
+		cli(entry, "-o", dir.resolve("PortableLoad.class").toString());
+		Path wasm = dir.resolve("portable-load.wasm");
+		cli(entry, "-o", wasm.toString());
+		Path component = dir.resolve("portable-load-component.wasm");
+		cli(entry, "-o", component.toString(), "--component");
+		Files.delete(src.resolve("a.lisp"));
+		Files.delete(src.resolve("b.lisp"));
+		Files.delete(src);
+		assertThat(lines(runClass(dir, "PortableLoad"))).isEqualTo(expected);
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		for (Path module : List.of(wasm, component)) {
+			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+					"exceptions=y", module.toString());
+			assertThat(run.exitCode()).as("%s: %s", module, run.stderr()).isZero();
+			assertThat(lines(run.stdout())).as("%s", module).isEqualTo(expected);
+		}
+	}
+
+	private static String cli(String... args) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		CliStack.call("portable-load", () -> {
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out, true, StandardCharsets.UTF_8))
+				.run(args);
+			return null;
+		});
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	private static List<String> lines(String output) {
+		return output.lines().map(String::strip).filter(line -> !line.isEmpty()).toList();
+	}
+
+	private static String runClass(Path dir, String name) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader()); var _ = ThreadStdio.out(out)) {
+			CliStack.call("portable-load", () -> {
+				Method main = loader.loadClass(name).getMethod("main", String[].class);
+				main.invoke(null, (Object) new String[0]);
+				return null;
+			});
+		}
+		return out.toString(StandardCharsets.UTF_8);
 	}
 
 }

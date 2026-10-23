@@ -55,5 +55,9 @@ connect、相手が読む前に write):
 
 - **インタープリタ**と **JVM**: フル対応(`rontolisp:tcp-connect` に委譲)。
 - **WASM**: コンポーネントモード(`--component`)のみ、IPv4 リテラルのみ。
-  接続失敗は `nil` を返します。Preview 1 はコンパイルエラーです。
+  接続失敗は `nil` を返します。素の Preview 1 `.wasm` は呼び出し時に
+  エラーを通知します。
+- **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じくフル対応
+  -- 接続失敗は `usocket:socket-error` を通知します
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
 - **ブラウザプレイグラウンド**: 非対応。

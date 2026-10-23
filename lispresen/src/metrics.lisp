@@ -10,13 +10,100 @@
   "True for a code point Japanese fonts set full-width."
   (or (<= #x1100 code #x115F) (<= #x2010 code #x203B) ; dashes, quotes, ellipsis, reference mark
       (<= #x2190 code #x21FF)                         ; arrows
+      (<= #x2400 code #x259F)                         ; control pictures, box drawing, blocks
       (<= #x2460 code #x24FF)                         ; circled numbers
       (<= #x25A0 code #x26FF)                         ; geometric shapes, symbols
       (<= #x2E80 code #x303E) (<= #x3041 code #x33FF) (<= #x3400 code #x4DBF)
       (<= #x4E00 code #x9FFF) (<= #xA000 code #xA4CF) (<= #xAC00 code #xD7A3)
       (<= #xF900 code #xFAFF) (<= #xFE30 code #xFE4F) (<= #xFF00 code #xFF60)
       (<= #xFFE0 code #xFFE6) (<= #x1F300 code #x1F64F)
-      (<= #x1F900 code #x1F9FF) (<= #x20000 code #x3FFFD)))
+      (<= #x1F900 code #x1F9FF) (<= #x20000 code #x3FFFD)
+      ;; Emoji the color emoji face sets 1 em, measured in Chrome (DESIGN.md).
+      (<= #x2700 code #x27BF)                         ; dingbats
+      (<= #x231A code #x231B) (<= #x23E9 code #x23EC) (<= #x23EF code #x23F3) (<= #x23F8 code #x23FA)
+      (<= #x2B05 code #x2B07) (<= #x2B1B code #x2B1C) (= code #x2B50) (= code #x2B55)
+      (<= #x1F1E6 code #x1F1FF)                       ; regional indicators
+      (<= #x1F650 code #x1F6FF)                       ; transport and map, ornaments
+      (<= #x1FA00 code #x1FAFF)
+      ;; Symbols Chrome sets exactly 1 em: Letterlike, Roman numerals, ‼ ⁇ ⁈ ⁉, ⌥.
+      (find code '(#x203C #x2103 #x2105 #x2109 #x2113 #x2116 #x2121 #x212B #x2325))
+      (<= #x2047 code #x2049) (<= #x2160 code #x217F)
+      ;; Greek: Hiragino sets every letter 1 em, no accented or archaic one wider
+      ;; (measured 2026-10-24, both weights).
+      (<= #x0370 code #x03FF) (= code #x220F)))
+
+(defparameter *measured-symbol-widths*
+  '((#x2211 . 722) (#x222B . 391) (#x221A . 583) (#x221E . 700) (#x2264 . 510)
+    (#x2265 . 510) (#x2260 . 700) (#x2248 . 700) (#x2208 . 700) (#x2209 . 700)
+    (#x22C5 . 450) (#x2212 . 700) (#xB1 . 700) (#x2213 . 700) (#xD7 . 700) (#xF7 . 700)
+    (#x2202 . 661) (#x2207 . 843) (#x2032 . 251) (#x2308 . 614) (#x2309 . 614)
+    (#x230A . 614) (#x230B . 614) (#x27E8 . 374) (#x27E9 . 374) (#x2200 . 808)
+    (#x2203 . 808) (#xAC . 700) (#x2227 . 700) (#x2228 . 700) (#x222A . 700)
+    (#x2229 . 700) (#x2282 . 700) (#x2283 . 700) (#x2286 . 700) (#x2287 . 700)
+    (#x2205 . 942) (#x211D . 614) (#x2115 . 614) (#x2124 . 614) (#x211A . 794)
+    (#x2102 . 737) (#x2218 . 363) (#x2261 . 700) (#x223C . 622) (#x221D . 700)
+    (#x210F . 659) (#xB0 . 346) (#x2234 . 700) (#x2235 . 700) (#x2295 . 928)
+    (#x2297 . 928) (#x2C6 . 510) (#xAF . 510) (#x2D9 . 510) (#x2DC . 622)
+    (#x226A . 700) (#x226B . 700) (#x22A5 . 700) (#x2225 . 700) (#x2216 . 820)
+    (#x2220 . 700))
+  "Milli-em widths of the symbols formulas set: the wider of weights 400 and 700,
+measured in Chrome 155 on Hiragino Sans on 2026-10-24, plus the 2% margin. The block
+widths below over-estimate them by up to half, which would space a formula out.")
+
+(defun wider-than-em-width (code)
+  "Milli-em width of a symbol inside a full-width range that Chrome sets wider than 1 em,
+plus the 2% margin, or NIL."
+  (cond ((= code #x2031) 1450)                      ; ‱
+        ((= code #x21EA) 1210)                      ; ⇪
+        ((<= #x26AE code #x26AF) 1150)
+        ((= code #x26CD) 1060)
+        ((= code #x26DF) 1290)
+        ((= code #x26F4) 1140)))
+
+(defun symbol-width (code)
+  "Milli-em width of a symbol outside the full-width ranges that the font stack sets
+wider than a Latin letter, or NIL. Each block takes the widest glyph measured in it
+(Chrome 155, both weights) plus the 2% margin, except the few common symbols listed."
+  (cond ((<= #x2040 code #x205F) 1130)              ; the rest of general punctuation
+        ((<= #x2900 code #x29FF) 1020)              ; supplemental arrows and math
+        ((= code #x2122) 1100)                      ; ™
+        ((= code #x2318) 900)                       ; ⌘
+        ((member code '(#xBC #xBD #xBE)) 950)       ; ¼ ½ ¾
+        ((member code '(#xC6 #xE6 #x152 #x153)) 1200)
+        ((<= #x20A0 code #x20CF) 1200)              ; currency
+        ((<= #x2100 code #x214F) 1200)              ; letterlike
+        ((<= #x2150 code #x218F) 1300)              ; number forms
+        ((<= #x2200 code #x22FF) 1200)              ; mathematical operators
+        ((<= #x2300 code #x23FF) 1400)              ; technical
+        ((<= #x27C0 code #x27FF) 1200)              ; supplemental math and arrows
+        ((<= #x2A00 code #x2AFF) 1550)              ; supplemental operators
+        ((<= #x2B00 code #x2BFF) 1650)              ; arrows and shapes
+        ((<= #x1F000 code #x1F2FF) 1060)))          ; tiles, cards, enclosed letters
+
+(defun cluster-end (text i)
+  "The index after the emoji cluster TEXT starts at I, or I + 1 when the character at I
+starts none. A cluster is one glyph: a flag (two regional indicators), a character with
+a variation selector, a skin tone modifier or a keycap mark, and the characters a
+zero width joiner joins to it."
+  (let* ((n (length text)) (j (1+ i)) (code (char-code (char text i))) (special nil))
+    (flet ((code-at (k) (and (< k n) (char-code (char text k)))))
+      (cond ((<= #x1F1E6 code #x1F1FF)
+             (when (and (code-at j) (<= #x1F1E6 (code-at j) #x1F1FF))
+               (incf j)
+               (setf special t)))
+            ((or (> code 127) (find (char text i) "#*0123456789")))
+            (t (return-from cluster-end j)))
+      (loop
+        (let ((c (code-at j)))
+          (cond ((and c (or (= c #xFE0F) (= c #x20E3) (<= #x1F3FB c #x1F3FF)
+                            (<= #xE0020 c #xE007F)))
+                 (incf j)
+                 (setf special t))
+                ((and (eql c #x200D) (code-at (1+ j)) (> code 127))
+                 (incf j 2)
+                 (setf special t))
+                (t (return)))))
+      (if special j (1+ i)))))
 
 (defun parse-widths (s)
   (coerce (mapcar #'parse-integer (split-spaces s)) 'simple-vector))
@@ -39,15 +126,21 @@
 exactly 1 em in every face of the stack; proportional ones carry a 2% margin for
 sub-pixel rounding and faces other than the measured one. A character outside ASCII and
 the full-width ranges takes the width of a wide Latin letter."
-  (if (wide-code-p code)
-      1000
+  (cond
+    ((<= #x23ED code #x23EE) 1020)      ; the two emoji Chrome sets 1003 milli-em
+    ((and (eq style :mono) (<= #x2500 code #x259F)) 614) ; Menlo draws boxes at 602
+    ((and (not (eq style :mono)) (cdr (assoc code *measured-symbol-widths*))))
+    ((wider-than-em-width code))
+    ((wide-code-p code) 1000)
+    ((and (not (eq style :mono)) (symbol-width code)))
+    (t
       (ceiling (* (cond ((eq style :mono) 602)
                         ((<= 32 code 126)
                          (svref (if (eq style :bold)
                                     *ascii-bold-widths*
                                     *ascii-widths*) (- code 32)))
                         ((eq style :bold) 840)
-                        (t 800)) 102) 100)))
+                        (t 800)) 102) 100))))
 
 (defun px (milli size)
   "MILLI milli-em at SIZE px, in milli-px."
@@ -108,10 +201,16 @@ opening an aside and code are not such a word."
 ;;; each callout whose anchor is the characters START below END.
 (defstruct run text styles breaks widths units anchors)
 
+(defparameter *formula-char*
+  (code-char #xE000)
+  "The character that stands for an inline formula in a run's text: a private-use code
+point no deck writes, as wide as the formula's box.")
+
 (defun flatten-inlines (inlines bold)
   "The text of INLINES, the style of each of its characters, the anchors of the callouts
-in it, and the indices of the characters inline code or a marker pads, one per side."
-  (let ((styles nil) (anchors nil) (pads nil) (i 0))
+in it, the indices of the characters inline code or a marker pads, one per side, and the
+(INDEX . WIDTH) of each inline formula, which stands as one character of its width."
+  (let ((styles nil) (anchors nil) (pads nil) (boxes nil) (i 0))
     (values (with-output-to-string (out)
               (labels ((chars (s style)
                          (loop for c across s
@@ -122,6 +221,9 @@ in it, and the indices of the characters inline code or a marker pads, one per s
                        (walk (nodes style)
                          (dolist (n nodes)
                            (cond ((stringp n) (chars n style))
+                                 ((eq (car n) :math)
+                                  (push (cons i (mbox-width (formula-box (second n)))) boxes)
+                                  (chars (string *formula-char*) style))
                                  ((eq (car n) :tt)
                                   (let ((start i))
                                     (chars (second n) :mono)
@@ -138,7 +240,7 @@ in it, and the indices of the characters inline code or a marker pads, one per s
                                     (push (list (second n) start i) anchors)))
                                  (t (walk (second n) style))))))
                 (walk inlines (if bold :bold :normal))))
-            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads)))
+            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads boxes)))
 
 (defun compute-units (text breaks widths)
   (let ((n (length text)) (units nil) (start 0))
@@ -155,18 +257,27 @@ in it, and the indices of the characters inline code or a marker pads, one per s
 
 (defun make-text-run (inlines &key bold)
   "The run of INLINES; BOLD sets the whole text bold, as a title is."
-  (multiple-value-bind (text styles anchors pads) (flatten-inlines inlines bold)
+  (multiple-value-bind (text styles anchors pads boxes) (flatten-inlines inlines bold)
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
-           (widths (make-array n :initial-element 0)))
+           (widths (make-array n :initial-element 0))
+           (inside (make-array n :initial-element nil)))
       (dolist (i pads) (incf (svref widths i) *inline-pad*))
+      (let ((i 0))
+        (loop while (< i n)
+              do (let ((e (cluster-end text i)))
+                   (incf (svref widths i)
+                         (cond ((> e (1+ i)) 1000)
+                               ((assoc i boxes) (cdr (assoc i boxes)))
+                               (t (char-width (char-code (char text i)) (svref styles i)))))
+                   (loop for k from (1+ i) below e do (setf (svref inside k) t))
+                   (setf i e))))
       (dotimes (i n)
-        (incf (svref widths i)
-              (char-width (char-code (char text i)) (svref styles i)))
         (when (> i 0)
           (setf (svref breaks i)
-                (cond ((number-space-p text styles i) nil)
+                (cond ((svref inside i) nil)
+                      ((number-space-p text styles i) nil)
                       ((char= (char text (1- i)) #\Space) t)
                       ((char= (char text i) #\Space) nil)
                       ((inside-number-p text i) nil)
@@ -201,7 +312,7 @@ order, and the width of its last line."
           end
           do
             (let ((cw (px (svref widths j) size)))
-              (cond ((and (> count 0) (> (+ cur cw) limit))
+              (cond ((and (> count 0) (> cw 0) (> (+ cur cw) limit))
                      (if (and (> count 1) (no-start-p (char text j)))
                          (setf cur (+ prev cw) count 2 starts
                                (cons (1- j) starts))
@@ -258,21 +369,34 @@ excluded unless SPACES is true."
       (incf total (+ (px (third u) size) last-wsp)))
     (milli-px->px (- total last-wsp))))
 
+(defun mono-widths (line)
+  "The milli-em width of each character of a line of code; an emoji cluster is its
+first character's, the rest zero."
+  (let ((widths (make-array (length line) :initial-element 0)) (i 0))
+    (loop while (< i (length line))
+          do (let ((e (cluster-end line i)))
+               (setf (svref widths i)
+                     (if (> e (1+ i))
+                         1000
+                         (char-width (char-code (char line i)) :mono))
+                     i e)))
+    widths))
+
 (defun mono-width (line size)
   "The px width of a line of code at SIZE."
   (let ((m 0))
-    (loop for c across line do (incf m (char-width (char-code c) :mono)))
+    (loop for w across (mono-widths line) do (incf m w))
     (milli-px->px (px m size))))
 
 (defun mono-wrap (line size avail)
   "The index of the first character of each row a line of code takes at SIZE px when it
 wraps between any two characters into AVAIL px, as a terminal wraps it."
   (let ((limit (* avail 1000)) (starts (list 0)) (cur 0))
-    (loop for c across line
+    (loop for mw across (mono-widths line)
           for i from 0
           do
-            (let ((w (px (char-width (char-code c) :mono) size)))
-              (when (and (> cur 0) (> (+ cur w) limit))
+            (let ((w (px mw size)))
+              (when (and (> cur 0) (> w 0) (> (+ cur w) limit))
                 (push i starts)
                 (setf cur 0))
               (incf cur w)))

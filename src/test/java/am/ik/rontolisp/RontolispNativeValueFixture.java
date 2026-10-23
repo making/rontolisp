@@ -106,9 +106,9 @@ public final class RontolispNativeValueFixture {
 
 	/** What {@link #NO_SOCKET_PROGRAM} prints. */
 	public static final String NO_SOCKET_EXPECTED = String.join("\n",
-			"\"rontolisp:TCP-CONNECT requires the interpreter, the JVM backend or --component"
+			"\"rontolisp:TCP-CONNECT requires the interpreter, the JVM backend, --component or --native"
 					+ " (no host socket API is wired on Preview 1 WASM)\"",
-			"\"rontolisp:TCP-LOCAL-PORT requires the interpreter, the JVM backend or --component"
+			"\"rontolisp:TCP-LOCAL-PORT requires the interpreter, the JVM backend, --component or --native"
 					+ " (no host socket API is wired on Preview 1 WASM)\"");
 
 	/** {@code wait-for} and {@code fetch}. */

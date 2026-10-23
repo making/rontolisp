@@ -115,7 +115,7 @@ Read `references/deck-format.md` now if it is not already in context. The essent
 - One `(deck ...)` header, then top-level `(section "...")`, `(slide ...)`, `(agenda)` and
   `(define ...)` forms, each read separately, so every diagnostic has a line number.
 - A slide is blocks top to bottom: strings (paragraphs), `ul`/`ol`, `code`, `table`,
-  `image`, `quote`, `column`s, diagrams (`flow`, `bars`, `cells`), `notes`, `source`.
+  `image`, `video`, `quote`, `column`s, diagrams (`flow`, `bars`, `cells`), `notes`, `source`.
 - No coordinates or font sizes exist in the format. When content does not fit, the fix is
   less content per slide, not styling.
 - Plan the talk as sections of a few slides; one idea per slide, at most 6 list items.
@@ -130,7 +130,7 @@ Lint first, then render:
 ```bash
 lispresen talk.lisp --check --strict   # report only; exit 1 on any warning or error
 lispresen talk.lisp                    # writes talk.html (and :page-image, if set)
-lispresen talk.lisp --embed            # images inlined as data: URIs: the HTML stands alone
+lispresen talk.lisp --embed            # images and videos inlined as data: URIs: the HTML stands alone
 ```
 
 Diagnostics go to standard error, one per line:
@@ -176,8 +176,8 @@ presenter window (notes, timer), `E` or a click edits runnable code, `Ctrl+Enter
 
 - `lispresen talk.lisp --check --strict` prints nothing and exits 0.
 - The browser check reports `no corrections`.
-- Every `image` file exists beside the deck (or the deck was rendered with `--embed`),
-  and every image has `:alt`.
+- Every `image` and `video` file exists beside the deck (or the deck was rendered with
+  `--embed`), and every one has `:alt`.
 - The title slide (`:title`, `:author`, `:date`) and the agenda read as intended.
 - Runnable code (`:lang "lisp"`, `"scheme"`, `"clojure"`) loads a 35 MB runtime from the
   network when the deck opens. If the talk does not run code live, use `:run nil` on the
