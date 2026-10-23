@@ -1048,26 +1048,27 @@ else if(c===BS)emit('s',tend(Math.min(n,i+2)));
 else if(delim(c))emit(null,i+1);
 else{j=tend(i);emit(cls(j),j);}}
 return o;}
-var orig=[],state=[],rt='loading',worker=null,busy=-1,queue=[],timer=null,editing=null;
+var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
 var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
-function workerMain(B){fetch(B+'rontoplayground.js').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' for '+r.url);return r.text();})
-.then(function(t){importScripts(URL.createObjectURL(new Blob([t],{type:'text/javascript'})));
-var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
-.then(function(){onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
+function workerMain(B){Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
+.then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
 catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({id:m.id,v:v});};postMessage({ready:1});})
 .catch(function(x){postMessage({fail:String(x)});});}
 function label(k){k.dataset.state=rt;k.textContent=rt==='ready'?'Run':rt==='loading'?'Loading':'Failed';
-k.title=rt==='ready'?'Run (Ctrl+Enter)':rt==='loading'?'Loading the runtime; a run waits for it':'The runtime did not load; Run retries';}
+k.title=rt==='ready'?'Run (Ctrl+Enter)':rt==='loading'?'Loading the runtime; a run waits for it':why+'; Run retries';}
 function setRt(s){rt=s;d.querySelectorAll('.tools .run').forEach(label);
-d.querySelectorAll('.rt').forEach(function(e){e.dataset.state=s;e.textContent='runtime: '+s;});if(!presenter)send({t:'rt',s:s});}
-function startWorker(){if(worker)worker.terminate();busy=-1;clearTimeout(timer);setRt('loading');
-var src='('+workerMain.toString()+')('+JSON.stringify(base)+')';
-worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
+d.querySelectorAll('.rt').forEach(function(e){e.dataset.state=s;e.textContent='runtime: '+s;e.title=s==='failed'?why:'';});if(!presenter)send({t:'rt',s:s,why:why});}
+function fail(g,text){if(g!==gen)return;why=text;console.error('lispresen: '+text);setRt('failed');
+queue.forEach(function(i){output(i,text,true);});queue=[];}
+function startWorker(){if(worker)worker.terminate();worker=null;busy=-1;clearTimeout(timer);setRt('loading');var g=++gen;
+fetch(base+'rontoplayground.js').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' for '+r.url);return r.text();})
+.then(function(t){if(g!==gen)return;
+worker=new Worker(URL.createObjectURL(new Blob([t,NL+';('+workerMain.toString()+')('+JSON.stringify(base)+')'],{type:'text/javascript'})));
 worker.onmessage=function(e){var m=e.data;if(m.ready){setRt('ready');pump();}
-else if(m.fail){setRt('failed');console.error('lispresen: the runtime did not load from '+base+': '+m.fail);
-queue.forEach(function(i){output(i,'the runtime did not load from '+base,true);});queue=[];}
-else done(m.id,m.v);};
-worker.onerror=function(e){setRt('failed');console.error('lispresen: runtime worker: '+e.message);};}
+else if(m.fail)fail(g,'the runtime did not start from '+base+': '+m.fail);else done(m.id,m.v);};
+worker.onerror=function(e){fail(g,'the runtime did not start from '+base+': '+e.message);};})
+.catch(function(x){fail(g,!worker&&base.indexOf('file:')===0?'a deck opened as a file cannot fetch the runtime from '+base+
+'; serve the deck over HTTP (jwebserver) or use :runtime :hosted':'the runtime did not load from '+base+': '+x);});}
 function codeOf(b){return b.querySelector('pre.code').textContent;}
 function output(i,text,err,wait){var s=state[i];s.out=text;s.err=!!err;s.busy=!!wait;s.open=true;paint(boxes[i],s);share(i);}
 function outOf(b){var os=b.closest('.slide').querySelectorAll('.out');for(var k=0;k<os.length;k++)if(os[k].dataset.o===b.dataset.i)return os[k];}
@@ -1126,7 +1127,7 @@ tools(b,function(){send({t:'run',i:i});},function(){send({t:'reset',i:i});});});
 hooks.key.push(function(k){return scrollOut(d.querySelector('.pv-cur'),k);});
 hooks.key.push(function(k){var open=k==='Escape'?openOn(cur):[];
 open.forEach(function(b){send({t:'hide',i:+b.dataset.i});});return open.length>0;});
-hooks.msg.push(function(m){if(m.t==='rt')setRt(m.s);else if(m.t==='code'){state[m.i]=m.s;
+hooks.msg.push(function(m){if(m.t==='rt'){why=m.why||'';setRt(m.s);}else if(m.t==='code'){state[m.i]=m.s;
 d.querySelectorAll('#pv .codebox').forEach(function(b){if(+b.dataset.i===m.i)apply(b,m.s);});}});
 send({t:'hello'});}
 else{boxes.forEach(function(b,i){tools(b,function(){run(b);},function(){reset(i);});
@@ -1138,7 +1139,7 @@ open.forEach(function(b){hide(+b.dataset.i);});return open.length>0;});
 hooks.key.push(function(k){if(k!=='e'&&k!=='E')return false;var b=slides[cur].querySelector('.codebox.runnable');if(b)edit(b);return !!b;});
 hooks.msg.push(function(m){if(m.t==='run')run(boxes[m.i]);else if(m.t==='reset')reset(m.i);else if(m.t==='hide')hide(m.i);
 else if(m.t==='reset-rt')startWorker();});
-hooks.hello.push(function(){send({t:'rt',s:rt});boxes.forEach(function(b,i){share(i);});});
+hooks.hello.push(function(){send({t:'rt',s:rt,why:why});boxes.forEach(function(b,i){share(i);});});
 d.addEventListener('fullscreenchange',function(){var kb=navigator.keyboard;if(!kb||!kb.lock)return;
 if(d.fullscreenElement)kb.lock(['Escape']).catch(function(){});else kb.unlock();});
 startWorker();}

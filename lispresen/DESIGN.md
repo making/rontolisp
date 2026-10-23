@@ -816,7 +816,7 @@ Where it is loaded from is the deck's `:runtime` (or `--runtime`):
 | Value | Source | Needs |
 |-------|--------|-------|
 | `:hosted` (default) | `https://making.github.io/rontolisp/` | network; tracks `develop` |
-| `"dir/"` | a directory beside the deck holding the two runtime files | serving the deck over HTTP (`jwebserver`), since the runtime fetches its `.wasm` and `file://` cannot |
+| `"dir/"` | a directory beside the deck holding the two runtime files | serving the deck over HTTP (`jwebserver`): a page opened from `file://` cannot `fetch` local files (Chrome 155 and Safari 26.3), so the player reports that in the output instead of running |
 | `:none` | -- | code is static |
 
 The hosted files are served with `Access-Control-Allow-Origin: *` (checked 2026-10-22),
@@ -830,12 +830,19 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   long computation does not freeze slide navigation, and a runaway program can be
   stopped: after `:timeout` (default 10 s) the player terminates the worker and starts a
   new one, and the output says that earlier definitions are gone. A Worker cannot be
-  constructed from a cross-origin URL, so the player builds it from a Blob. That worker
-  `fetch`es `rontoplayground.js`, imports it from a Blob URL and sets `config.wasm_path`
-  to the absolute `.wasm` URL. `importScripts` of the hosted URL itself fails in Chrome
-  with a bare `NetworkError` (measured 2026-10-22, Chrome 155; the cross-origin script's
-  error is muted, so the cause is not visible), while the same text imported from a Blob
-  URL runs; the `fetch` needs the CORS header the hosted files carry.
+  constructed from a cross-origin URL, so the player builds it from a Blob: the page
+  `fetch`es `rontoplayground.js` and puts its text, followed by the worker's own code, in
+  one Blob, and the worker sets `config.wasm_path` to the absolute `.wasm` URL. The script
+  cannot be loaded into the worker by URL: `importScripts` of the hosted URL fails in
+  Chrome with a bare `NetworkError` (measured 2026-10-22, Chrome 155; the cross-origin
+  script's error is muted), and `importScripts` of a Blob URL made inside the worker fails
+  the same way in Safari when the deck is opened from `file://` (measured 2026-10-23,
+  Safari 26.3: the page's origin is `null`, so is the worker's, and its nested Blob URL
+  does not load). An indirect `eval` of the text is no way out either, since the script
+  is `'use strict'` and its `var GraalVM` would stay local to the `eval`. The `fetch`es
+  need the CORS header the hosted files carry. A failure is reported with its cause in
+  the output of a waiting run, the Run button's tooltip and the presenter window; for a
+  runtime directory and a deck opened from `file://` it says to serve the deck over HTTP.
 - One run at a time: Run on another block while one runs queues it, and a run started
   before the runtime is ready waits for it.
 - When the deck contains runnable code, the worker starts loading as soon as the deck
@@ -1284,6 +1291,15 @@ code in a 344 px column, in a column whose first line is its longest at 28 px, i
 code columns and at full width with a long first line: with each label (Loading, Failed,
 Run) no code text meets the buttons, every panel is as tall as the model counted, the
 editor's padding equals the panel's, and the runtime check makes no correction.
+
+Runtime from `file://` (2026-10-23, Chrome 155 through DevTools and Safari 26.3 through
+`safaridriver`): a deck with Lisp, Scheme and Clojure blocks and an infinite loop, on the
+hosted runtime and on a runtime directory, each opened over HTTP and as a file. Three of
+the four run every block, share definitions and recover from the timeout in both
+browsers; the runtime directory opened as a file fails in both, with the message to serve
+the deck over HTTP in the output, the Run button's tooltip and the presenter window.
+Before the Blob carried the script's text, the hosted runtime opened as a file failed in
+Safari only, at the worker's `importScripts`.
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.

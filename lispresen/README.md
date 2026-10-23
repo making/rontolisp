@@ -273,7 +273,8 @@ next.
 
 The runtime is rontolisp's browser build, about 35 MB. By default it loads from
 `https://making.github.io/rontolisp/` when the deck opens, so presenting needs the
-network. To present offline, build it and put it beside the deck:
+network; the deck may be opened as a file or over HTTP. To present offline, build it and
+put it beside the deck:
 
 ```bash
 ./mvnw -Pweb -DskipTests package                 # needs GraalVM with Web Image (web/README.md)
@@ -281,6 +282,9 @@ mkdir -p talk/runtime && cp web/dist/rontoplayground.js* talk/runtime/
 java -jar $JAR lispresen/cli.lisp -- talk/talk.lisp --runtime runtime/
 jwebserver -d "$PWD/talk"                        # the runtime is fetched, so not from file://
 ```
+
+Opened as a file, such a deck does not run its code: browsers do not fetch local files,
+and Run says so.
 
 `--runtime none` (or `:runtime :none`) renders the code as static text.
 
