@@ -34,9 +34,12 @@
     (ok
      (equal (lispresen::phrases "rontolispで作るプレゼンツール")
             '("rontolispで" "作る" "プレゼンツール"))))
-  (testing "a phrase boundary becomes <wbr>, a space does not need one"
-    (let ((html (lispresen:render "(slide \"聴衆が読みやすいプレゼン in HTML\")")))
-      (ok (contains html "聴衆が<wbr>読みやすい<wbr>プレゼン in HTML"))))
+  (testing "a phrase boundary becomes <wbr>, before an element starting there; a space
+does not need one"
+    (let ((html
+           (lispresen:render
+            "(slide (p \"聴衆が読みやすい\" (mark \"プレゼン\") \" in HTML\"))")))
+      (ok (contains html "聴衆が<wbr>読みやすい<wbr><mark>プレゼン</mark> in HTML"))))
   (testing "a space that is no boundary is a no-break space, and a dash keeps the
 character after it, which Chrome breaks before"
     (let ((html
@@ -61,11 +64,14 @@ character after it, which Chrome breaks before"
       (ok (= (lispresen::run-lines run 100 418) 2))
       (ok (= (lispresen::run-min-width run 100) 204))
       (ok (= (lispresen::run-full-width run 100) 419))))
-  (testing "inline code breaks at every one of its spaces, a number's too"
+  (testing "inline code breaks at every one of its spaces, a number's too; its padding
+widens its first and last character"
+    ;; A monospace character is 615 milli-em, the padding 125 on each end.
     (let ((run
            (lispresen::make-text-run
             (list "x " (list :tt "read-from-string 1 x")))))
-      (ok (equal (mapcar #'first (lispresen::run-units run)) '(0 2 19 21)))))
+      (ok (equal (lispresen::run-units run)
+                 '((0 2 571 340) (2 19 9965 615) (19 21 615 615) (21 22 740 0))))))
   (testing "a number keeps the word after its space and the joiners inside it"
     (let ((run
            (lispresen::make-text-run

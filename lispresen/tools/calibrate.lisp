@@ -2,8 +2,8 @@
 ;;;;
 ;;;;   rontolisp lispresen/tools/calibrate.lisp -- calibrate.html
 ;;;;
-;;;; Writes a page of sample paragraphs (Japanese, Latin, mixed, bold, inline code,
-;;;; brackets) at several sizes and widths, each carrying the line count the model
+;;;; Writes a page of sample paragraphs (Japanese, Latin, mixed, bold, inline code, a
+;;;; marker, brackets) at several sizes and widths, each carrying the line count the model
 ;;;; predicts. Opened in a browser, the page compares them with the lines it renders and
 ;;;; prints the result at the top. The model must never predict fewer lines than the
 ;;;; browser renders; predicting one more is the margin's cost. The page also sets every
@@ -19,7 +19,8 @@
    (list
     "rontolispはCommon Lispのサブセットで、インタプリタ、JVM、WebAssemblyの三つのバックエンドで同じプログラムを実行できる。発表では、それぞれの仕組みと性能を比べながら、実際にコードを動かして違いを確かめる。")
    (list
-    "聴衆が読みやすいプレゼンテーションを作るために、文字の大きさと配置をツールが自動で調整し、最小の大きさでも収まらないスライドはエラーとして報告する。")
+    "聴衆が読みやすいプレゼンテーションを作るために、" (list :mark (list "文字の大きさと配置"))
+    "をツールが自動で調整し、最小の大きさでも収まらないスライドはエラーとして報告する。")
    (list
     "The quick brown fox jumps over the lazy dog while WebAssembly modules compile ahead of time and the JVM warms up its just-in-time compiler.")
    (list "Use " (list :tt "read-from-string") " with " (list :tt ":start")
@@ -55,8 +56,8 @@ document.getElementById('result').textContent=ps.length+' paragraphs; model unde
                        :if-exists :supersede
                        :if-does-not-exist :create)
     (format out
-            "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><style>body{margin:16px;font-family:~a}code{font-family:~a;font-size:1em;line-height:1}p{word-break:keep-all;overflow-wrap:anywhere;line-break:strict;margin:0 0 20px}#result{font:16px monospace;margin-bottom:24px}</style></head><body><div id=\"result\">measuring...</div>~%"
-            *font-stack* *mono-stack*)
+            "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><style>body{margin:16px;font-family:~a}code{font-family:~a;font-size:1em;line-height:1}code,mark{padding:0 ~a}p{word-break:keep-all;overflow-wrap:anywhere;line-break:strict;margin:0 0 20px}#result{font:16px monospace;margin-bottom:24px}</style></head><body><div id=\"result\">measuring...</div>~%"
+            *font-stack* *mono-stack* (milli-em-string *inline-pad*))
     (dolist (width '(1696 1100 700))
       (dolist (s '(56 48 40 120))
         (dolist (sample *samples*)

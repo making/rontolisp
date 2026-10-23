@@ -300,6 +300,20 @@ Width of a code point, in milli-em:
 | Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Other proportional characters | 800 (bold 840), plus 2% |
+| Inline code (`tt`) and a marker (`mark`) | 125 more on the element's first character and on its last, its padding |
+
+Inline code and a marker carry `padding: 0 .125em` (with a `.2em` corner), so their
+background does not end flush with the first and last glyph, while a slide gives up an
+eighth of an em on each side and no more. The browser slices the box at a line break
+(`box-decoration-break: slice`, the default), so the padding stays at the element's two
+ends wherever the lines break, and the model adds it to those two characters. `clone`
+would put it on every line fragment, which makes a width depend on where the line broke;
+an identifier breaks only at its spaces anyway. Adjacent elements pad each other, a
+quarter em between them, and nested ones (`(mark (tt "x"))`) add both. The amount is
+an exact binary fraction, so no browser rounds it differently from the model. Measured
+on 2026-10-23 with the calibration page, which pads its inline code and has a marker
+sample: never fewer lines than Chrome or Safari, one more in 18 and 11; the golden deck
+needs no runtime correction in either browser in any built-in theme.
 
 Japanese text is exact under the fonts above. Latin glyphs differ per face, and
 Hiragino's are the widest of the stack (its digits are 657, against Noto Sans JP's
@@ -339,7 +353,9 @@ phrases (文節), not between arbitrary characters.
 - lispresen emits `<wbr>` at each boundary and styles text with `word-break: keep-all;
   overflow-wrap: anywhere`. The browser then breaks only where the model breaks, in
   every browser, rather than where its own segmenter (`word-break: auto-phrase`, Chrome
-  only) would.
+  only) would. A boundary where an element starts gets its `<wbr>` before the element's
+  tag, not inside it, so an element's start padding moves to the next line with its text
+  rather than ending the line, as the model puts it on the first character.
 - Under `keep-all` the browser still breaks after closing punctuation (`、。」』）！？`)
   and before an opening bracket, which are not letters to it; the model takes those
   opportunities too, or it predicts lines the browser does not need.

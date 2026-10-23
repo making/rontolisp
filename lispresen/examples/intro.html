@@ -23,13 +23,13 @@ h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line
 ul,ol{padding-left:var(--indent)}
 li+li,li>ul,li>ol{margin-top:var(--item-gap)}
 li::marker{color:var(--accent)}
-code{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:1em;line-height:1}
-p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg);border-radius:.2em}
+code{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:1em;line-height:1;padding:0 .125em;border-radius:.2em}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg)}
 pre{flex:none;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
 pre.console{white-space:pre-wrap;line-break:anywhere}
-pre code{line-height:inherit}
+pre code{line-height:inherit;padding:0}
 strong{font-weight:700}
-mark{background:var(--mark);color:inherit}
+mark{background:var(--mark);color:inherit;padding:0 .125em;border-radius:.2em}
 .accent{color:var(--accent)}
 .lead{color:var(--muted)}
 .agenda>li{color:var(--muted)}
@@ -188,9 +188,9 @@ html:not(.js) #fs{display:none}
 <p class="kicker">lispresen とは</p>
 <h1 class="title">S式の<wbr>デッキから HTML を<wbr>一つ<wbr>作る</h1>
 <div class="body" style="top:232px;height:776px">
-<figure class="dg" style="width:1387px;height:100px;--dg:48px;--dg-lh:68px;--dg-x:28px">
-<svg class="dg-art" width="1387" height="100" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="322" height="100" rx="12"/><rect class="dg-b" x="394" y="0" width="279" height="100" rx="12"/><rect class="dg-b" x="745" y="0" width="322" height="100" rx="12"/><rect class="dg-b" x="1139" y="0" width="248" height="100" rx="12"/><rect class="dg-f" x="4" y="4" width="314" height="92" rx="8"/><rect class="dg-f" x="398" y="4" width="271" height="92" rx="8"/><rect class="dg-f" x="749" y="4" width="314" height="92" rx="8"/><rect class="dg-f" x="1143" y="4" width="240" height="92" rx="8"/><rect class="dg-e" x="330" y="48" width="37" height="4"/><polygon class="dg-e" points="367,38 386,50 367,62"/><rect class="dg-e" x="681" y="48" width="37" height="4"/><polygon class="dg-e" points="718,38 737,50 718,62"/><rect class="dg-e" x="1075" y="48" width="37" height="4"/><polygon class="dg-e" points="1112,38 1131,50 1112,62"/></svg>
-<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:322px;height:100px;padding-top:16px"><code>talk.lisp</code></li><li class="dg-l" style="left:394px;top:0px;width:279px;height:100px;padding-top:16px">lispresen</li><li class="dg-l" style="left:745px;top:0px;width:322px;height:100px;padding-top:16px"><code>talk.html</code></li><li class="dg-l" style="left:1139px;top:0px;width:248px;height:100px;padding-top:16px">ブラウザ</li></ol>
+<figure class="dg" style="width:1411px;height:100px;--dg:48px;--dg-lh:68px;--dg-x:28px">
+<svg class="dg-art" width="1411" height="100" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="334" height="100" rx="12"/><rect class="dg-b" x="406" y="0" width="279" height="100" rx="12"/><rect class="dg-b" x="757" y="0" width="334" height="100" rx="12"/><rect class="dg-b" x="1163" y="0" width="248" height="100" rx="12"/><rect class="dg-f" x="4" y="4" width="326" height="92" rx="8"/><rect class="dg-f" x="410" y="4" width="271" height="92" rx="8"/><rect class="dg-f" x="761" y="4" width="326" height="92" rx="8"/><rect class="dg-f" x="1167" y="4" width="240" height="92" rx="8"/><rect class="dg-e" x="342" y="48" width="37" height="4"/><polygon class="dg-e" points="379,38 398,50 379,62"/><rect class="dg-e" x="693" y="48" width="37" height="4"/><polygon class="dg-e" points="730,38 749,50 730,62"/><rect class="dg-e" x="1099" y="48" width="37" height="4"/><polygon class="dg-e" points="1136,38 1155,50 1136,62"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:334px;height:100px;padding-top:16px"><code>talk.lisp</code></li><li class="dg-l" style="left:406px;top:0px;width:279px;height:100px;padding-top:16px">lispresen</li><li class="dg-l" style="left:757px;top:0px;width:334px;height:100px;padding-top:16px"><code>talk.html</code></li><li class="dg-l" style="left:1163px;top:0px;width:248px;height:100px;padding-top:16px">ブラウザ</li></ol>
 </figure>
 <ul><li>書き手は<wbr>内容だけを<wbr>書く</li><li>文字の<wbr>大きさと<wbr>配置は lispresen が<wbr>決める</li><li>できた HTML ファイル一つで<wbr>発表できる</li></ul>
 </div>
@@ -277,7 +277,7 @@ html:not(.js) #fs{display:none}
 <h1 class="title">文字の<wbr>装飾</h1>
 <div class="body" style="top:232px;height:776px">
 <p class="lead">lead は<wbr>控えめな<wbr>色の<wbr>段落</p>
-<p><strong>太字</strong>、<em><wbr>italic</em>、<code><wbr>(code)</code>、<mark><wbr>マーカー</mark>、<span class="accent"><wbr>アクセント色</span>、<a href="https://github.com/making/rontolisp"><wbr>リンク</a></p>
+<p><strong>太字</strong>、<wbr><em>italic</em>、<wbr><code>(code)</code>、<wbr><mark>マーカー</mark>、<wbr><span class="accent">アクセント色</span>、<wbr><a href="https://github.com/making/rontolisp">リンク</a></p>
 </div>
 <div class="page">12</div>
 </section>
@@ -299,7 +299,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">表示例</p>
 <h1 class="title">表</h1>
 <div class="body" style="top:232px;height:776px">
-<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>デッキの<wbr>要素は、<wbr>どれも<wbr>リストと<wbr>して<wbr>書く</caption><colgroup><col style="width:316px"><col style="width:1189px"><col style="width:191px"></colgroup><thead><tr><th scope="col">種類</th><th scope="col">フォーム</th><th scope="col" class="right">数</th></tr></thead><tbody><tr><th scope="row">トップレベル</th><td><code>deck section slide define</code></td><td class="right">4</td></tr><tr><th scope="row">ブロック</th><td><code>p lead ul ol code quote column image table</code></td><td class="right">9</td></tr><tr><th scope="row">部品</th><td><code>li cell</code></td><td class="right">2</td></tr><tr><th scope="row">図</th><td><code>flow cells bars</code></td><td class="right">3</td></tr><tr><th scope="row">インライン</th><td><code>b i tt mark accent link</code></td><td class="right">6</td></tr><tr><th scope="row">注釈</th><td><code>say notes source</code></td><td class="right">3</td></tr><tr><th scope="row" colspan="2">合計</th><td class="right">27</td></tr></tbody></table>
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>デッキの<wbr>要素は、<wbr>どれも<wbr>リストと<wbr>して<wbr>書く</caption><colgroup><col style="width:316px"><col style="width:1200px"><col style="width:180px"></colgroup><thead><tr><th scope="col">種類</th><th scope="col">フォーム</th><th scope="col" class="right">数</th></tr></thead><tbody><tr><th scope="row">トップレベル</th><td><code>deck section slide define</code></td><td class="right">4</td></tr><tr><th scope="row">ブロック</th><td><code>p lead ul ol code quote column image table</code></td><td class="right">9</td></tr><tr><th scope="row">部品</th><td><code>li cell</code></td><td class="right">2</td></tr><tr><th scope="row">図</th><td><code>flow cells bars</code></td><td class="right">3</td></tr><tr><th scope="row">インライン</th><td><code>b i tt mark accent link</code></td><td class="right">6</td></tr><tr><th scope="row">注釈</th><td><code>say notes source</code></td><td class="right">3</td></tr><tr><th scope="row" colspan="2">合計</th><td class="right">27</td></tr></tbody></table>
 </div>
 <div class="page">14</div>
 </section>
@@ -328,7 +328,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">書き方</p>
 <h1 class="title">コードと<wbr>コンソール</h1>
 <div class="body" style="top:232px;height:776px">
-<p>文字列の<wbr>共通の<wbr>字下げは<wbr>取り除く。<code><wbr>console</code> は<wbr>シェルの<wbr>記録と<wbr>して<wbr>描く。</p>
+<p>文字列の<wbr>共通の<wbr>字下げは<wbr>取り除く。<wbr><code>console</code> は<wbr>シェルの<wbr>記録と<wbr>して<wbr>描く。</p>
 <pre class="code" data-lang="lisp"><code>(code <span class="hl-k">:lang</span> <span class="hl-s">&quot;lisp&quot;</span> <span class="hl-k">:run</span> <span class="hl-n">nil</span> <span class="hl-s">&quot;
   (defun square (x)
     (* x x))&quot;</span>)
@@ -400,7 +400,7 @@ html:not(.js) #fs{display:none}
 <pre class="code" data-lang="lisp" aria-describedby="s22c2"><code>(<span class="hl-d">defun</span> fib (n)
   (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) n (+ (fib (- n <span class="hl-n">1</span>)) (fib (- n <span class="hl-n">2</span>)))))</code></pre>
 </div>
-<div class="say" id="s22c1" role="note" data-side="right" style="left:852px;top:338px;width:599px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>BudouX の<wbr>モデルで<wbr>決める</p></div>
+<div class="say" id="s22c1" role="note" data-side="right" style="left:866px;top:338px;width:599px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>BudouX の<wbr>モデルで<wbr>決める</p></div>
 <div class="say" id="s22c2" role="note" data-side="below" data-at="(&lt; n 2)" style="left:112px;top:629px;width:564px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:276px"><p>n が 2&nbsp;未満なら n を<wbr>返す</p></div>
 <div class="page">22</div>
 </section>
@@ -467,7 +467,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">書き方</p>
 <h1 class="title">画像</h1>
 <div class="body" style="top:232px;height:776px">
-<p>画像は<wbr>残りの<wbr>場所に<wbr>収まる。<code><wbr><span class="nw">--e</span>mbed</code> で HTML に<wbr>埋め込む。</p>
+<p>画像は<wbr>残りの<wbr>場所に<wbr>収まる。<wbr><code><span class="nw">--e</span>mbed</code> で HTML に<wbr>埋め込む。</p>
 <pre class="code" data-lang="lisp"><code>(say <span class="hl-s">&quot;--embed で HTML に埋め込んだ&quot;</span>
   (image <span class="hl-s">&quot;pipeline.png&quot;</span>
          <span class="hl-k">:alt</span> <span class="hl-s">&quot;read から emit までの六段階&quot;</span>
@@ -565,7 +565,7 @@ html:not(.js) #fs{display:none}
 <div class="body" style="top:232px;height:776px">
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> java -jar lispresen.jar talk.lisp --check
 <span class="hl-c">talk.lisp:42: slide 7 &quot;比較&quot;: warning: a list with 8 items is hard to follow; keep it to 6</span></code></pre>
-<ul><li>診断には<wbr>行番号が<wbr>付く。<code><wbr><span class="nw">--s</span>trict</code> なら<wbr>警告でも<wbr>失敗する</li><li>文字色と<wbr>背景の<wbr>コントラストも<wbr>検査する</li></ul>
+<ul><li>診断には<wbr>行番号が<wbr>付く。<wbr><code><span class="nw">--s</span>trict</code> なら<wbr>警告でも<wbr>失敗する</li><li>文字色と<wbr>背景の<wbr>コントラストも<wbr>検査する</li></ul>
 </div>
 <div class="page">37</div>
 </section>
@@ -644,7 +644,7 @@ html:not(.js) #fs{display:none}
 <h1 class="title">ページ送りで<wbr>一つずつ<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li data-step="1">リストの<wbr>項目</li><li data-step="2">コードの<wbr>行</li><li data-step="3"><span aria-describedby="s46c1">吹き出し</span></li></ol>
-<p>→ で<wbr>順に<wbr>出し、<wbr>← で<wbr>一つずつ戻す。<code><wbr>(deck :callouts :step)</code> ならどの<wbr>吹き出しも<wbr>送りで<wbr>出る。</p>
+<p>→ で<wbr>順に<wbr>出し、<wbr>← で<wbr>一つずつ戻す。<wbr><code>(deck :callouts :step)</code> ならどの<wbr>吹き出しも<wbr>送りで<wbr>出る。</p>
 </div>
 <div class="say step" id="s46c1" role="note" data-side="right" data-step="4" style="left:440px;top:436px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>項目の<wbr>後に<wbr>出る</p></div>
 <div class="page">46</div>
@@ -788,7 +788,7 @@ html:not(.js) #fs{display:none}
 <div class="body" style="top:232px;height:776px">
 <p class="lead">この<wbr>デッキは :light を<wbr>基に、<wbr>コードの<wbr>色だけ :dark に<wbr>した</p>
 <pre class="code" data-lang="lisp"><code>(list <span class="hl-s">&quot;string&quot;</span> <span class="hl-k">:keyword</span> <span class="hl-n">42</span> <span class="hl-n">nil</span>) <span class="hl-c">; a comment</span></code></pre>
-<p>本文の <code>tt</code>、<mark><wbr>マーカー</mark>、<span class="accent"><wbr>アクセント色</span> も<wbr>同じ<wbr>テーマの<wbr>色で<wbr>描く。</p>
+<p>本文の <code>tt</code>、<wbr><mark>マーカー</mark>、<wbr><span class="accent">アクセント色</span> も<wbr>同じ<wbr>テーマの<wbr>色で<wbr>描く。</p>
 <p><code><span class="nw">--t</span>heme midnight</code> を<wbr>付けて<wbr>描き直すと、<wbr>この<wbr>デッキが<wbr>紺と<wbr>金に<wbr>なる。</p>
 </div>
 <div class="page">58</div>
@@ -837,7 +837,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">どの<wbr>バックエンドでも<wbr>同じ HTML</h1>
 <div class="body" style="top:232px;height:776px">
-<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>check.sh が<wbr>六つの<wbr>出力を<wbr>バイト単位で<wbr>比べる</caption><colgroup><col style="width:524px"><col style="width:524px"><col style="width:648px"></colgroup><thead><tr><th scope="col">バックエンド</th><th scope="col">成果物</th><th scope="col">実行</th></tr></thead><tbody><tr><td>インタプリタ</td><td>なし</td><td><code>rontolisp cli.lisp</code></td></tr><tr><td>JVM</td><td><code>.jar</code></td><td><code>java <span class="nw">-j</span>ar</code></td></tr><tr><td>WASM</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>WASM component</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>ネイティブ</td><td>実行ファイル</td><td><code>./lispresen</code></td></tr><tr><td>SBCL</td><td>なし</td><td><code>sbcl <span class="nw">--s</span>cript cli.lisp</code></td></tr><tr><td>ブラウザ</td><td colspan="2"><code>web/</code> の<wbr>エディタが<wbr>入力の<wbr>たびに<wbr>描き直す</td></tr></tbody></table>
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>check.sh が<wbr>六つの<wbr>出力を<wbr>バイト単位で<wbr>比べる</caption><colgroup><col style="width:519px"><col style="width:518px"><col style="width:659px"></colgroup><thead><tr><th scope="col">バックエンド</th><th scope="col">成果物</th><th scope="col">実行</th></tr></thead><tbody><tr><td>インタプリタ</td><td>なし</td><td><code>rontolisp cli.lisp</code></td></tr><tr><td>JVM</td><td><code>.jar</code></td><td><code>java <span class="nw">-j</span>ar</code></td></tr><tr><td>WASM</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>WASM component</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>ネイティブ</td><td>実行ファイル</td><td><code>./lispresen</code></td></tr><tr><td>SBCL</td><td>なし</td><td><code>sbcl <span class="nw">--s</span>cript cli.lisp</code></td></tr><tr><td>ブラウザ</td><td colspan="2"><code>web/</code> の<wbr>エディタが<wbr>入力の<wbr>たびに<wbr>描き直す</td></tr></tbody></table>
 </div>
 <div class="page">63</div>
 </section>
@@ -885,7 +885,7 @@ html:not(.js) #fs{display:none}
 <span class="hl-k">$</span> JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 <span class="hl-k">$</span> java -jar $JAR lispresen/cli.lisp -- talk.lisp
 <span class="hl-k">$</span> open talk.html</code></pre>
-<p>見本は<wbr>この<wbr>デッキ、<code><wbr>lispresen/examples/intro.lisp</code>。</p>
+<p>見本は<wbr>この<wbr>デッキ、<wbr><code>lispresen/examples/intro.lisp</code>。</p>
 </div>
 <div class="page">67</div>
 </section>

@@ -93,26 +93,43 @@ opening an aside and code are not such a word."
 
 ;;; --- runs ----------------------------------------------------------------------
 
+;;; Inline code and a marker take this much padding on each side, a hair of room between
+;;; their background and the text. The browser slices the box at a line break
+;;; (box-decoration-break: slice), so the padding goes on the element's first and last
+;;; character wherever the lines break, and the model adds it to their widths.
+(defparameter *inline-pad* 125
+  "Milli-em of horizontal padding on each side of inline code and a marker.")
+
 ;;; A paragraph's text with what wrapping needs. STYLES holds :normal, :bold or :mono
 ;;; per character, BREAKS is true at I when a line may start at character I, WIDTHS is
-;;; milli-em per character, and UNITS lists (START END W WSP) for each stretch between
-;;; break opportunities, W excluding and WSP being its trailing spaces. ANCHORS lists
-;;; (CALLOUT START END) for each callout whose anchor is the characters START below END.
+;;; milli-em per character, the padding of the elements it starts or ends included, and
+;;; UNITS lists (START END W WSP) for each stretch between break opportunities, W
+;;; excluding and WSP being its trailing spaces. ANCHORS lists (CALLOUT START END) for
+;;; each callout whose anchor is the characters START below END.
 (defstruct run text styles breaks widths units anchors)
 
 (defun flatten-inlines (inlines bold)
-  "The text of INLINES, the style of each of its characters, and the anchors of the
-callouts in it."
-  (let ((styles nil) (anchors nil) (i 0))
+  "The text of INLINES, the style of each of its characters, the anchors of the callouts
+in it, and the indices of the characters inline code or a marker pads, one per side."
+  (let ((styles nil) (anchors nil) (pads nil) (i 0))
     (values (with-output-to-string (out)
               (labels ((chars (s style)
                          (loop for c across s
                                do (write-char c out) (push style styles)
                                  (incf i)))
+                       (padded (start)
+                         (when (> i start) (push start pads) (push (1- i) pads)))
                        (walk (nodes style)
                          (dolist (n nodes)
                            (cond ((stringp n) (chars n style))
-                                 ((eq (car n) :tt) (chars (second n) :mono))
+                                 ((eq (car n) :tt)
+                                  (let ((start i))
+                                    (chars (second n) :mono)
+                                    (padded start)))
+                                 ((eq (car n) :mark)
+                                  (let ((start i))
+                                    (walk (second n) style)
+                                    (padded start)))
                                  ((eq (car n) :b) (walk (second n) :bold))
                                  ((eq (car n) :link) (walk (third n) style))
                                  ((eq (car n) :say)
@@ -121,7 +138,7 @@ callouts in it."
                                     (push (list (second n) start i) anchors)))
                                  (t (walk (second n) style))))))
                 (walk inlines (if bold :bold :normal))))
-            (coerce (nreverse styles) 'simple-vector) (nreverse anchors))))
+            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads)))
 
 (defun compute-units (text breaks widths)
   (let ((n (length text)) (units nil) (start 0))
@@ -138,13 +155,14 @@ callouts in it."
 
 (defun make-text-run (inlines &key bold)
   "The run of INLINES; BOLD sets the whole text bold, as a title is."
-  (multiple-value-bind (text styles anchors) (flatten-inlines inlines bold)
+  (multiple-value-bind (text styles anchors pads) (flatten-inlines inlines bold)
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
            (widths (make-array n :initial-element 0)))
+      (dolist (i pads) (incf (svref widths i) *inline-pad*))
       (dotimes (i n)
-        (setf (svref widths i)
+        (incf (svref widths i)
               (char-width (char-code (char text i)) (svref styles i)))
         (when (> i 0)
           (setf (svref breaks i)

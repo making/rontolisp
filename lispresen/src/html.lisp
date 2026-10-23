@@ -31,13 +31,13 @@ h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line
 ul,ol{padding-left:var(--indent)}
 li+li,li>ul,li>ol{margin-top:var(--item-gap)}
 li::marker{color:var(--accent)}
-code{font-family:MONO;font-size:1em;line-height:1}
-p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg);border-radius:.2em}
+code{font-family:MONO;font-size:1em;line-height:1;padding:0 INLINE-PAD;border-radius:.2em}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg)}
 pre{flex:none;font-family:MONO;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
 pre.console{white-space:pre-wrap;line-break:anywhere}
-pre code{line-height:inherit}
+pre code{line-height:inherit;padding:0}
 strong{font-weight:700}
-mark{background:var(--mark);color:inherit}
+mark{background:var(--mark);color:inherit;padding:0 INLINE-PAD;border-radius:.2em}
 .accent{color:var(--accent)}
 .lead{color:var(--muted)}
 .agenda>li{color:var(--muted)}
@@ -176,12 +176,17 @@ html:not(.js) #fs{display:none}
 
 (defun px-string (n) (format nil "~dpx" n))
 
+(defun milli-em-string (n)
+  "N milli-em as a CSS length, .125em for 125."
+  (format nil ".~3,'0dem" n))
+
 (defun write-stylesheet (deck theme out)
   (let ((width (canvas-width deck)) (content (content-width deck)))
     (write-theme-css theme out)
     (write-string (reduce
                    (lambda (s pair) (replace-all s (first pair) (second pair)))
                    (list (list "FONTS" *font-stack*) (list "MONO" *mono-stack*)
+                         (list "INLINE-PAD" (milli-em-string *inline-pad*))
                          (list "META-LH" (px-string (body-lh *meta-size*)))
                          (list "META" (px-string *meta-size*))
                          (list "PAGE" (px-string *page-number-size*))
@@ -235,8 +240,17 @@ html:not(.js) #fs{display:none}
 space, a no-break space for a space that is no boundary (1 時間), and a dash kept on one
 line with the character after it when that is no boundary, as Chrome breaks after a dash
 (2026-10-22, end-to-end) and Safari and the model do not."
-  (let ((text (run-text run)) (breaks (run-breaks run)) (i 0) (nowrap nil))
-    (labels ((glued-p (k)
+  (let ((text (run-text run)) (breaks (run-breaks run)) (i 0) (nowrap nil) (wbr 0))
+    (labels ((boundary ()
+               ;; A <wbr> before the character at I, once: an element starting there
+               ;; writes it before its tag, so the element's padding moves to the next
+               ;; line with its text instead of ending the line.
+               (when (and (< wbr i (length text)) (svref breaks i)
+                          (char/= (char text (1- i)) #\Space)
+                          (char/= (char text i) #\Space))
+                 (write-string "<wbr>" out)
+                 (setf wbr i)))
+             (glued-p (k)
                (and (< k (length text)) (not (svref breaks k))
                     (char/= (char text k) #\Space)))
              (chars (s)
@@ -245,10 +259,7 @@ line with the character after it when that is no boundary, as Chrome breaks afte
                      do
                        (let ((dash (and (find c "-‐–") (< j (length s))
                                         (glued-p (1+ i)))))
-                         (when (and (> i 0) (svref breaks i)
-                                    (char/= (char text (1- i)) #\Space)
-                                    (char/= c #\Space))
-                           (write-string "<wbr>" out))
+                         (boundary)
                          (when (and dash (not nowrap))
                            (write-string "<span class=\"nw\">" out)
                            (setf nowrap t))
@@ -265,6 +276,7 @@ line with the character after it when that is no boundary, as Chrome breaks afte
                (format out "</~a>" tag))
              (walk (nodes)
                (dolist (n nodes)
+                 (unless (stringp n) (boundary))
                  (cond ((stringp n) (chars n))
                        ((eq (car n) :b) (wrap "strong" (second n)))
                        ((eq (car n) :i) (wrap "em" (second n)))
