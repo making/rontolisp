@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rontolisp deep dive</title>
+<meta name="description" content="rontolisp の内部: 一つのコアフォームの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルまで">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.html">
+<meta property="og:title" content="rontolisp deep dive">
+<meta property="og:description" content="rontolisp の内部: 一つのコアフォームの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルまで">
+<meta property="og:image" content="https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="675">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--accent:#0b5cad;--code-bg:#22272e;--code-fg:#e6e8eb;--code-muted:#9aa3ad;--head-bg:#e3ebf6;--rule:#d0d7de;--mark:#fff0a0;--hl-str:#96d0ff;--hl-kw:#6cb6ff;--hl-def:#f47067;--hl-const:#dcbdfb;}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--fg)}
+body{font-family:'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif}
+#stage{position:fixed;inset:0;overflow:hidden;background:var(--bg)}
+#deck{position:absolute;left:0;top:0;transform-origin:0 0}
+.slide{position:absolute;left:0;top:0;overflow:hidden;background:var(--bg);display:none}
+.slide.active{display:block}
+html:not(.js) #stage{position:static;overflow:visible}
+html:not(.js) #deck{position:static}
+html:not(.js) .slide{display:block;position:relative;margin-bottom:32px}
+h1,p,li,th,td,caption,figcaption{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}
+.nw{white-space:nowrap}
+.title{position:absolute;font-size:var(--title);line-height:var(--title-lh);font-weight:700;text-wrap:balance}
+.body{position:absolute;display:flex;flex-direction:column;gap:var(--gap);font-size:var(--body);line-height:var(--body-lh)}
+ul,ol{padding-left:var(--indent)}
+li+li,li>ul,li>ol{margin-top:var(--item-gap)}
+li::marker{color:var(--accent)}
+code{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:1em;line-height:1;padding:0 .125em;border-radius:.2em}
+p code,li code,th code,td code{background:var(--code-bg);color:var(--code-fg)}
+pre{flex:none;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);padding:var(--code-pad);background:var(--code-bg);color:var(--code-fg);border-radius:12px;white-space:pre;overflow:hidden}
+pre.console{white-space:pre-wrap;line-break:anywhere}
+pre code{line-height:inherit;padding:0}
+strong{font-weight:700}
+mark{background:var(--mark);color:inherit;padding:0 .125em;border-radius:.2em}
+.accent{color:var(--accent)}
+.lead{color:var(--muted)}
+.agenda>li{color:var(--muted)}
+.agenda>li.current{color:var(--accent);font-weight:700}
+.source{position:absolute;font-size:32px;line-height:40px;color:var(--muted)}
+#progress{position:absolute;left:0;bottom:0;width:0;height:6px;background:var(--accent)}
+html:not(.js) #progress{display:none}
+.kicker{position:absolute;font-size:32px;line-height:40px;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+a{color:var(--accent)}
+figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
+figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
+figcaption{color:var(--muted);text-align:center}
+table{flex:none;border-collapse:collapse;table-layout:fixed;font-size:var(--table);line-height:var(--table-lh)}
+caption{caption-side:top;text-align:left;color:var(--muted);padding-bottom:var(--cell-y)}
+th,td{padding:var(--cell-y) var(--cell-x);text-align:left;vertical-align:top}
+thead th{background:var(--head-bg);box-shadow:1px 0 var(--head-bg)}
+tbody th,tbody td{box-shadow:inset 0 -1px var(--rule)}
+th{font-weight:700}
+.right{text-align:right;font-variant-numeric:tabular-nums}
+.center{text-align:center}
+.centered{position:absolute;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.statement,.section-title,.deck-title{font-size:var(--stmt);line-height:var(--stmt-lh);font-weight:700;text-wrap:balance}
+.section-title{color:var(--accent)}
+.deck-meta{font-size:40px;line-height:60px;color:var(--muted)}
+.deck-title+.deck-meta{margin-top:48px}
+.logo{height:160px;max-width:100%;object-fit:contain;margin-bottom:48px}
+.qr{position:absolute;display:flex;flex-direction:column;gap:8px;font-size:24px;line-height:34px;white-space:nowrap}
+.qr.right{align-items:flex-end}
+.qr a{color:var(--muted)}
+.page{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.notes{display:none}
+.overflow{outline:8px solid #d1242f;outline-offset:-8px}
+.slide.measure{display:block;visibility:hidden}
+html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
+#chk{position:fixed;right:8px;top:8px;max-width:60%;max-height:60%;overflow:auto;z-index:20;padding:8px 12px;background:rgba(0,0,0,.8);color:#fff;font:14px/1.5 Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre-wrap}
+.hl-c{color:var(--code-muted)}
+.hl-s{color:var(--hl-str)}
+.hl-k{color:var(--hl-kw)}
+.hl-d{color:var(--hl-def)}
+.hl-n{color:var(--hl-const)}
+.codebox{flex:none;position:relative}
+.out{position:absolute;z-index:5;display:none;border:3px solid var(--accent);border-radius:12px;background:var(--code-bg);box-shadow:0 16px 48px rgba(0,0,0,.35)}
+.out.open{display:flex;flex-direction:column}
+.out pre{flex:0 1 auto;min-height:0;margin:0;background:none;border-radius:0;padding:var(--code-pad);padding-right:96px;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);color:var(--code-fg);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.out pre::-webkit-scrollbar{width:20px}
+.out pre::-webkit-scrollbar-thumb{background:var(--code-muted);background-clip:padding-box;border:5px solid transparent;border-radius:10px}
+.out.err pre{color:var(--hl-def)}
+.out.busy pre{color:var(--code-muted)}
+.out button{position:absolute;top:8px;right:8px;width:64px;height:64px;border:0;border-radius:10px;background:none;color:var(--code-muted);font:400 48px/1 'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif;cursor:pointer}
+.codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--code-fg);font-family:Menlo,Consolas,'BIZ UDGothic',monospace;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
+.codebox textarea::selection{background:var(--mark)}
+.runnable pre.code{cursor:text}
+.tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
+.band>pre.code,.band>textarea{padding-top:calc(60px + var(--code-pad))}
+.tools button{font:700 28px/1 'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:var(--bg);cursor:pointer;opacity:.85}
+.tools button+button{background:var(--rule);color:var(--fg)}
+.tools .run[data-state=loading]{background:var(--rule);color:var(--muted)}
+.tools .run[data-state=failed]{background:var(--hl-def)}
+.pv-bar .rt{color:var(--muted)}
+.pv-bar .rt[data-state=failed]{color:var(--hl-def)}
+.quote{flex:none;display:block;border-left:8px solid var(--accent);padding-left:calc(var(--indent) - 8px)}
+.quote figcaption{margin-top:var(--item-gap);text-align:left}
+.columns{flex:none;display:flex;column-gap:80px}
+.columns.grow{flex:1 1 0;min-height:0}
+.column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
+#ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
+.thumb{position:relative;overflow:clip;outline:1px solid var(--rule);cursor:pointer}
+.thumb.sel{outline:4px solid var(--accent)}
+.thumb>.slide{transform-origin:0 0}
+.thumb>.slide .page,#ov .tools,#ov .out{display:none}
+html.ov #stage,html.presenter #stage{visibility:hidden}
+#pv{position:fixed;inset:0;display:grid;grid-template-columns:60% 1fr;grid-template-rows:auto auto 1fr;gap:16px;padding:16px;font-size:18px;line-height:1.5}
+.pv-bar{grid-column:1/3;display:flex;gap:16px;align-items:center}
+.pv-timer{font:700 32px Menlo,Consolas,'BIZ UDGothic',monospace;cursor:pointer}
+.pv-bar button{font:inherit;padding:4px 14px}
+.pv-cur{grid-row:2/4}
+.pv-cur>.thumb{cursor:default}
+.pv-next>.thumb{opacity:.85}
+.pv-notes{overflow:auto;font-size:24px;line-height:1.6;white-space:pre-wrap}
+.say{position:absolute;z-index:4;display:flex;flex-direction:column;justify-content:center;border:3px solid var(--accent);border-radius:16px;background:var(--head-bg);padding:var(--say-y) var(--say-x);font-size:var(--say);line-height:var(--say-lh);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.say::before,.say::after{content:'';position:absolute}
+.say::before{background:var(--accent)}
+.say::after{background:var(--head-bg)}
+.say[data-side=below]::before,.say[data-side=above]::before{left:calc(var(--tail) - 18px);width:36px;height:32px}
+.say[data-side=below]::after,.say[data-side=above]::after{left:calc(var(--tail) - 16px);width:32px;height:29px}
+.say[data-side=below]::before{top:-35px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=below]::after{top:-29px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.say[data-side=above]::before{bottom:-35px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=above]::after{bottom:-29px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.say[data-side=right]::before,.say[data-side=left]::before{top:calc(var(--tail) - 18px);width:32px;height:36px}
+.say[data-side=right]::after,.say[data-side=left]::after{top:calc(var(--tail) - 16px);width:29px;height:32px}
+.say[data-side=right]::before{left:-35px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=right]::after{left:-29px;clip-path:polygon(0 50%,100% 0,100% 100%)}
+.say[data-side=left]::before{right:-35px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say[data-side=left]::after{right:-29px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.say.front{z-index:6}
+.slide.editing .say,.pending{visibility:hidden}
+#ov .pending{visibility:visible}
+#pv .pending{visibility:visible;opacity:.35}
+.ln.dim{opacity:.35}
+.slide.editing .ln.dim{opacity:1}
+.tk{display:inline-block;transform-origin:0 0}
+pre.mo{overflow:visible;background:none;box-shadow:none}
+.mb{position:absolute}
+.mg{position:absolute;z-index:3;font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre;transform-origin:0 0}
+figure.dg{flex:none;display:block;position:relative;align-self:center}
+.dg-art{position:absolute;left:0;top:0;overflow:visible}
+.dg-b{fill:var(--accent)}
+.dg-f{fill:var(--head-bg)}
+.dg-e{fill:var(--fg)}
+.dg-flow{padding:0}
+.dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
+.dg-flow>.dg-l{padding:0 var(--dg-x)}
+span.dg-l{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre}
+.dg-t,.dg-v{text-align:left}
+.dg-v{white-space:nowrap}
+figure.pointed{align-items:flex-end}
+figure.pointed figcaption{align-self:stretch}
+#fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
+#stage.pointer #fs{opacity:1}
+#stage.idle{cursor:none}
+html:not(.js) #fs{display:none}
+.slide{width:1920px;height:1080px}
+.kicker,.title,.body,.centered,.source{left:112px;width:1696px}
+.source{bottom:72px}
+.kicker{top:32px}
+.title,.centered{top:80px}
+.centered{height:928px}
+.page{right:112px}.out{left:112px;width:1696px}
+.thumb{aspect-ratio:1920/1080}
+@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
+</style>
+</head>
+<body>
+<div id="stage">
+<div id="deck" style="width:1920px;height:1080px">
+<section class="slide layout-title" id="s1" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><img class="logo" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIj48cmVjdCB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgcng9IjI0IiBmaWxsPSIjMGI1Y2FkIi8+PHBhdGggZD0iTTM4IDMwIFEyNCA2MCAzOCA5MCBNODIgMzAgUTk2IDYwIDgyIDkwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTUwIDQwIEw3MCA4MCBNNjAgNjAgTDUwIDgwIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+Cg==" alt="rontolisp"><h1 class="deck-title">rontolisp deep dive</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>3</p></div>
+<div class="qr right" style="left:1350px;top:686px;width:458px"><svg class="qr-code" viewBox="0 0 37 37" width="280" height="280" role="img" aria-label="QR code: https://github.com/making/rontolisp" shape-rendering="crispEdges"><rect width="37" height="37" fill="#fff"/><path fill="#000" d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM19 4h6v1h-6zM26 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM14 5h3v1h-3zM18 5h2v1h-2zM21 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM14 6h1v1h-1zM17 6h3v1h-3zM22 6h1v1h-1zM26 6h1v1h-1zM28 6h3v1h-3zM32 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h4v1h-4zM21 7h1v1h-1zM23 7h1v1h-1zM26 7h1v1h-1zM28 7h3v1h-3zM32 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM17 8h1v1h-1zM23 8h1v1h-1zM26 8h1v1h-1zM28 8h3v1h-3zM32 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h5v1h-5zM26 9h1v1h-1zM32 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h7v1h-7zM12 11h2v1h-2zM15 11h1v1h-1zM17 11h2v1h-2zM21 11h1v1h-1zM24 11h1v1h-1zM4 12h1v1h-1zM6 12h2v1h-2zM9 12h3v1h-3zM13 12h1v1h-1zM15 12h4v1h-4zM21 12h3v1h-3zM26 12h1v1h-1zM29 12h1v1h-1zM31 12h2v1h-2zM4 13h1v1h-1zM6 13h1v1h-1zM11 13h2v1h-2zM15 13h2v1h-2zM20 13h1v1h-1zM22 13h3v1h-3zM26 13h3v1h-3zM32 13h1v1h-1zM5 14h2v1h-2zM8 14h1v1h-1zM10 14h1v1h-1zM13 14h1v1h-1zM15 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM30 14h2v1h-2zM7 15h3v1h-3zM11 15h1v1h-1zM13 15h8v1h-8zM22 15h5v1h-5zM28 15h1v1h-1zM32 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM10 16h4v1h-4zM15 16h2v1h-2zM19 16h5v1h-5zM29 16h2v1h-2zM6 17h2v1h-2zM9 17h1v1h-1zM12 17h1v1h-1zM14 17h4v1h-4zM19 17h2v1h-2zM23 17h1v1h-1zM26 17h1v1h-1zM30 17h3v1h-3zM4 18h2v1h-2zM7 18h1v1h-1zM10 18h1v1h-1zM13 18h2v1h-2zM16 18h1v1h-1zM18 18h1v1h-1zM21 18h4v1h-4zM26 18h1v1h-1zM30 18h3v1h-3zM4 19h5v1h-5zM11 19h7v1h-7zM19 19h1v1h-1zM23 19h6v1h-6zM31 19h1v1h-1zM5 20h4v1h-4zM10 20h3v1h-3zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h1v1h-1zM22 20h3v1h-3zM28 20h2v1h-2zM31 20h1v1h-1zM5 21h4v1h-4zM11 21h3v1h-3zM15 21h1v1h-1zM17 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM27 21h1v1h-1zM29 21h3v1h-3zM4 22h1v1h-1zM6 22h1v1h-1zM8 22h1v1h-1zM10 22h4v1h-4zM15 22h1v1h-1zM19 22h1v1h-1zM21 22h2v1h-2zM24 22h1v1h-1zM26 22h3v1h-3zM30 22h1v1h-1zM7 23h2v1h-2zM12 23h1v1h-1zM16 23h1v1h-1zM20 23h2v1h-2zM26 23h3v1h-3zM30 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h2v1h-2zM12 24h1v1h-1zM14 24h2v1h-2zM17 24h1v1h-1zM19 24h4v1h-4zM24 24h7v1h-7zM12 25h1v1h-1zM14 25h1v1h-1zM17 25h2v1h-2zM20 25h3v1h-3zM24 25h1v1h-1zM28 25h5v1h-5zM4 26h7v1h-7zM12 26h1v1h-1zM14 26h1v1h-1zM16 26h2v1h-2zM20 26h1v1h-1zM22 26h3v1h-3zM26 26h1v1h-1zM28 26h2v1h-2zM31 26h1v1h-1zM4 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM28 27h2v1h-2zM31 27h1v1h-1zM4 28h1v1h-1zM6 28h3v1h-3zM10 28h1v1h-1zM13 28h4v1h-4zM18 28h1v1h-1zM21 28h1v1h-1zM24 28h5v1h-5zM30 28h2v1h-2zM4 29h1v1h-1zM6 29h3v1h-3zM10 29h1v1h-1zM12 29h1v1h-1zM14 29h3v1h-3zM18 29h3v1h-3zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h3v1h-3zM32 29h1v1h-1zM4 30h1v1h-1zM6 30h3v1h-3zM10 30h1v1h-1zM12 30h1v1h-1zM18 30h1v1h-1zM20 30h3v1h-3zM24 30h1v1h-1zM27 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM13 31h2v1h-2zM16 31h5v1h-5zM22 31h1v1h-1zM24 31h2v1h-2zM27 31h1v1h-1zM29 31h1v1h-1zM31 31h1v1h-1zM4 32h7v1h-7zM12 32h4v1h-4zM18 32h1v1h-1zM20 32h1v1h-1zM22 32h5v1h-5zM31 32h1v1h-1z"/></svg><p><a href="https://github.com/making/rontolisp">https://github.com/making/rontolisp</a></p></div>
+</section>
+<section class="slide layout-standard" id="s2" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">2</div>
+</section>
+<section class="slide layout-standard" id="s3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li class="current">ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">3</div>
+</section>
+<section class="slide layout-standard" id="s4" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">一つの<wbr>パイプライン、<wbr>四つの<wbr>バックエンド</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1505px;height:100px;--dg:48px;--dg-lh:68px;--dg-x:28px">
+<svg class="dg-art" width="1505" height="100" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="200" height="100" rx="12"/><rect class="dg-b" x="272" y="0" width="344" height="100" rx="12"/><rect class="dg-b" x="688" y="0" width="296" height="100" rx="12"/><rect class="dg-b" x="1056" y="0" width="449" height="100" rx="12"/><rect class="dg-f" x="4" y="4" width="192" height="92" rx="8"/><rect class="dg-f" x="276" y="4" width="336" height="92" rx="8"/><rect class="dg-f" x="692" y="4" width="288" height="92" rx="8"/><rect class="dg-f" x="1060" y="4" width="441" height="92" rx="8"/><rect class="dg-e" x="208" y="48" width="37" height="4"/><polygon class="dg-e" points="245,38 264,50 245,62"/><rect class="dg-e" x="624" y="48" width="37" height="4"/><polygon class="dg-e" points="661,38 680,50 661,62"/><rect class="dg-e" x="992" y="48" width="37" height="4"/><polygon class="dg-e" points="1029,38 1048,50 1029,62"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:200px;height:100px;padding-top:16px">ソース</li><li class="dg-l" style="left:272px;top:0px;width:344px;height:100px;padding-top:16px">コアフォーム</li><li class="dg-l" style="left:688px;top:0px;width:296px;height:100px;padding-top:16px">マクロ展開</li><li class="dg-l" style="left:1056px;top:0px;width:449px;height:100px;padding-top:16px">評価 / コンパイル</li></ol>
+</figure>
+<ul><li><code>SourceLanguage</code> が<wbr>言語ごとに<wbr>読み込み、<wbr>コアフォームに<wbr>下げる</li><li>インタプリタ (<code>LispEvaluator</code>) が<wbr>評価し、<wbr>JVM と WASM の<wbr>コンパイラが<wbr>バイト列に<wbr>する</li><li>WASM は Preview 1&nbsp;と<wbr>コンポーネントの<wbr>二通りで、<wbr>合わせて<wbr>四つ</li></ul>
+</div>
+<p class="source">.kb/architecture.md (Pipeline), .kb/running<span class="nw">-b</span>ackends.md</p>
+<div class="page">4</div>
+</section>
+<section class="slide layout-standard" id="s5" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">IR は<wbr>コアフォームの<wbr>リスト</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" role="img" aria-label="(if (&lt; x 0) neg pos)" style="width:1066px;height:300px;--dg:48px;--dg-lh:68px;--dg-x:28px" aria-describedby="s5c1">
+<svg class="dg-art" width="1066" height="300" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="136" height="68"/><rect class="dg-b" x="184" y="0" width="136" height="68"/><rect class="dg-b" x="184" y="116" width="136" height="68"/><rect class="dg-b" x="368" y="116" width="136" height="68"/><rect class="dg-b" x="552" y="116" width="136" height="68"/><rect class="dg-b" x="746" y="0" width="136" height="68"/><rect class="dg-b" x="930" y="0" width="136" height="68"/><rect class="dg-f" x="4" y="4" width="62" height="60"/><rect class="dg-f" x="70" y="4" width="62" height="60"/><rect class="dg-f" x="188" y="4" width="62" height="60"/><rect class="dg-f" x="254" y="4" width="62" height="60"/><rect class="dg-f" x="188" y="120" width="62" height="60"/><rect class="dg-f" x="254" y="120" width="62" height="60"/><rect class="dg-f" x="372" y="120" width="62" height="60"/><rect class="dg-f" x="438" y="120" width="62" height="60"/><rect class="dg-f" x="556" y="120" width="62" height="60"/><rect class="dg-f" x="622" y="120" width="62" height="60"/><rect class="dg-f" x="750" y="4" width="62" height="60"/><rect class="dg-f" x="816" y="4" width="62" height="60"/><rect class="dg-f" x="934" y="4" width="62" height="60"/><rect class="dg-f" x="1000" y="4" width="62" height="60"/><circle class="dg-e" cx="34" cy="34" r="6"/><rect class="dg-e" x="32" y="34" width="4" height="63"/><polygon class="dg-e" points="22,97 34,116 46,97"/><circle class="dg-e" cx="102" cy="34" r="6"/><rect class="dg-e" x="102" y="32" width="63" height="4"/><polygon class="dg-e" points="165,22 184,34 165,46"/><circle class="dg-e" cx="218" cy="34" r="6"/><rect class="dg-e" x="216" y="34" width="4" height="63"/><polygon class="dg-e" points="206,97 218,116 230,97"/><circle class="dg-e" cx="218" cy="150" r="6"/><rect class="dg-e" x="216" y="150" width="4" height="63"/><polygon class="dg-e" points="206,213 218,232 230,213"/><circle class="dg-e" cx="286" cy="150" r="6"/><rect class="dg-e" x="286" y="148" width="63" height="4"/><polygon class="dg-e" points="349,138 368,150 349,162"/><circle class="dg-e" cx="402" cy="150" r="6"/><rect class="dg-e" x="400" y="150" width="4" height="63"/><polygon class="dg-e" points="390,213 402,232 414,213"/><circle class="dg-e" cx="470" cy="150" r="6"/><rect class="dg-e" x="470" y="148" width="63" height="4"/><polygon class="dg-e" points="533,138 552,150 533,162"/><circle class="dg-e" cx="586" cy="150" r="6"/><rect class="dg-e" x="584" y="150" width="4" height="63"/><polygon class="dg-e" points="574,213 586,232 598,213"/><polygon class="dg-e" points="622,180 628,180 684,120 678,120"/><circle class="dg-e" cx="286" cy="34" r="6"/><rect class="dg-e" x="286" y="32" width="441" height="4"/><polygon class="dg-e" points="727,22 746,34 727,46"/><circle class="dg-e" cx="780" cy="34" r="6"/><rect class="dg-e" x="778" y="34" width="4" height="63"/><polygon class="dg-e" points="768,97 780,116 792,97"/><circle class="dg-e" cx="848" cy="34" r="6"/><rect class="dg-e" x="848" y="32" width="63" height="4"/><polygon class="dg-e" points="911,22 930,34 911,46"/><circle class="dg-e" cx="964" cy="34" r="6"/><rect class="dg-e" x="962" y="34" width="4" height="63"/><polygon class="dg-e" points="952,97 964,116 976,97"/><polygon class="dg-e" points="1000,64 1006,64 1062,4 1056,4"/></svg>
+<span class="dg-l" style="left:4px;top:116px;width:60px;height:68px">if</span><span class="dg-l" style="left:203px;top:232px;width:30px;height:68px">&lt;</span><span class="dg-l" style="left:387px;top:232px;width:30px;height:68px">x</span><span class="dg-l" style="left:571px;top:232px;width:30px;height:68px">0</span><span class="dg-l" style="left:736px;top:116px;width:89px;height:68px">neg</span><span class="dg-l" style="left:920px;top:116px;width:89px;height:68px">pos</span>
+</figure>
+<ul><li>言語が<wbr>作る <code>List&lt;LispVal&gt;</code> が<wbr>そのまま IR に<wbr>なる</li><li>その<wbr>下に<wbr>別の<wbr>中間表現は<wbr>ない</li></ul>
+</div>
+<div class="say" id="s5c1" role="note" data-side="below" data-at="if" style="left:112px;top:452px;width:490px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:346px"><p>先頭の<wbr>名前で<wbr>分岐する</p></div>
+<p class="source">.kb/source<span class="nw">-l</span>anguage.md, .kb/scheme<span class="nw">-f</span>rontend.md</p>
+<div class="page">5</div>
+</section>
+<section class="slide layout-standard" id="s6" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">ソースから<wbr>フォームへの<wbr>入口は<wbr>一つ</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code>SourceLanguage</code> が、<wbr>ユーザーの<wbr>ソースを<wbr>フォームに<wbr>する<wbr>唯一の<wbr>入口である。</p>
+<ul><li>言語は<wbr>ファイルごとに<wbr>拡張子で<wbr>決まる (<code>.lisp</code>、<code>.scm</code>、<code>.clj</code>、<code>.cljc</code>)</li><li><code>(load ...)</code> した<wbr>ファイルは、<wbr>その<wbr>ファイルの<wbr>拡張子の<wbr>言語で<wbr>読む</li><li>入口の<wbr>ファイルだけは <code><span class="nw">--s</span>ource<span class="nw">-l</span>anguage</code> で<wbr>言語を<wbr>指定できる</li><li>入口の<wbr>外で <code>LispReader</code> を<wbr>呼ぶ<wbr>クラスが<wbr>ない<wbr>ことを、<wbr><code>SourceLanguageSeamTest</code> が<wbr>確かめる</li></ul>
+</div>
+<p class="source">.kb/source<span class="nw">-l</span>anguage.md</p>
+<div class="page">6</div>
+</section>
+<section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">組み込みマクロは<wbr>コアフォームに<wbr>下がる</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code>cond</code>、<wbr><code>and</code>、<wbr><code>or</code>、<wbr><code>setf</code> などは、<wbr><code>if</code>、<wbr><code>let</code>、<wbr><code>progn</code>、<wbr><code>setq</code> などに<wbr>展開される。</p>
+<pre class="code" data-lang="lisp"><code><span class="tk">(</span><span class="tk hl-d">defun</span> <span class="tk">sign</span> <span class="tk">(</span><span class="tk">x</span><span class="tk">)</span>
+  <span class="tk">(</span><span class="tk hl-d">cond</span> <span class="tk">(</span><span class="tk">(</span><span class="tk">&lt;</span> <span class="tk">x</span> <span class="tk hl-n">0</span><span class="tk">)</span> <span class="tk">&#39;</span><span class="tk">neg</span><span class="tk">)</span>
+        <span class="tk">(</span><span class="tk">(</span><span class="tk">=</span> <span class="tk">x</span> <span class="tk hl-n">0</span><span class="tk">)</span> <span class="tk">&#39;</span><span class="tk">zero</span><span class="tk">)</span>
+        <span class="tk">(</span><span class="tk hl-n">t</span> <span class="tk">&#39;</span><span class="tk">pos</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span></code></pre>
+</div>
+<p class="source">.kb/architecture.md (Pipeline)</p>
+<div class="page">7</div>
+</section>
+<section class="slide layout-standard" id="s8" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">組み込みマクロは<wbr>コアフォームに<wbr>下がる</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code><span class="nw">--d</span>ump<span class="nw">-i</span>r</code> は<wbr>バックエンドに<wbr>渡る<wbr>最終形を<wbr>出力する。</p>
+<pre class="code" data-lang="lisp" data-morph><code><span class="tk" data-m="0">(</span><span class="tk hl-d" data-m="1">defun</span> <span class="tk" data-m="2">sign</span> <span class="tk" data-m="3">(</span><span class="tk" data-m="4">x</span><span class="tk" data-m="5">)</span>
+  <span class="tk" data-m="6">(</span><span class="tk hl-d">if</span> <span class="tk" data-m="9">(</span><span class="tk" data-m="10">&lt;</span> <span class="tk" data-m="11">x</span> <span class="tk hl-n" data-m="12">0</span><span class="tk" data-m="13">)</span> <span class="tk" data-m="14">&#39;</span><span class="tk" data-m="15">neg</span>
+      <span class="tk" data-m="17">(</span><span class="tk hl-d">if</span> <span class="tk" data-m="18">(</span><span class="tk" data-m="19">=</span> <span class="tk" data-m="20">x</span> <span class="tk hl-n" data-m="21">0</span><span class="tk" data-m="22">)</span> <span class="tk" data-m="23">&#39;</span><span class="tk" data-m="24">zero</span> <span class="tk" data-m="28">&#39;</span><span class="tk" data-m="29">pos</span><span class="tk" data-m="30">)</span><span class="tk" data-m="31">)</span><span class="tk" data-m="32">)</span></code></pre>
+</div>
+<p class="source"><code>rontolisp sign.lisp <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>3)</p>
+<div class="page">8</div>
+</section>
+<section class="slide layout-standard" id="s9" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">ソースから<wbr>コアフォームへ</p>
+<h1 class="title">マクロ展開を<wbr>その<wbr>場で<wbr>見る</h1>
+<div class="body" style="top:232px;height:712px">
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code"><code>(<span class="hl-d">defmacro</span> swap (a b)
+  `(<span class="hl-d">let</span> ((tmp ,a)) (<span class="hl-d">setq</span> ,a ,b) (<span class="hl-d">setq</span> ,b tmp)))
+(print (macroexpand-1 &#39;(swap x y)))
+(macroexpand &#39;(<span class="hl-d">cond</span> ((&lt; x <span class="hl-n">0</span>) &#39;neg) (<span class="hl-n">t</span> &#39;pos)))</code></pre></div>
+<ul><li>バッククォートは<wbr>読み込みの<wbr>時点で list、<wbr>append、<wbr>cons、<wbr>quote に<wbr>展開する</li><li>コンパイルパスでは <code>UserMacroExpander</code> が <code>defmacro</code> を<wbr>マクロ用の<wbr>インタプリタで<wbr>評価し、<wbr>呼び出しを<wbr>展開してから<wbr>定義を<wbr>取り除く</li></ul>
+</div>
+<p class="source">.kb/defmacro<span class="nw">-b</span>ackquote.md</p>
+<div class="page">9</div>
+</section>
+<section class="slide layout-standard" id="s10" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li class="current">CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">10</div>
+</section>
+<section class="slide layout-standard" id="s11" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">CompileFrontend.expand</p>
+<h1 class="title">コンパイルパスの<wbr>前段は<wbr>一か<wbr>所に<wbr>ある</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1173px;height:268px;--dg:44px;--dg-lh:62px;--dg-x:26px">
+<svg class="dg-art" width="1173" height="268" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="228" height="90" rx="12"/><rect class="dg-b" x="294" y="0" width="493" height="90" rx="12"/><rect class="dg-b" x="0" y="178" width="404" height="90" rx="12"/><rect class="dg-b" x="470" y="178" width="409" height="90" rx="12"/><rect class="dg-b" x="945" y="178" width="228" height="90" rx="12"/><rect class="dg-f" x="4" y="4" width="220" height="82" rx="8"/><rect class="dg-f" x="298" y="4" width="485" height="82" rx="8"/><rect class="dg-f" x="4" y="182" width="396" height="82" rx="8"/><rect class="dg-f" x="474" y="182" width="401" height="82" rx="8"/><rect class="dg-f" x="949" y="182" width="220" height="82" rx="8"/><rect class="dg-e" x="235" y="43" width="35" height="4"/><polygon class="dg-e" points="270,34 287,45 270,56"/><rect class="dg-e" x="539" y="97" width="4" height="39"/><rect class="dg-e" x="200" y="132" width="343" height="4"/><rect class="dg-e" x="200" y="132" width="4" height="22"/><polygon class="dg-e" points="191,154 202,171 213,154"/><rect class="dg-e" x="411" y="221" width="35" height="4"/><polygon class="dg-e" points="446,212 463,223 446,234"/><rect class="dg-e" x="886" y="221" width="35" height="4"/><polygon class="dg-e" points="921,212 938,223 921,234"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:228px;height:90px;padding-top:14px">読み込み</li><li class="dg-l" style="left:294px;top:0px;width:493px;height:90px;padding-top:14px"><code>(load ...) の展開</code></li><li class="dg-l" style="left:0px;top:178px;width:404px;height:90px;padding-top:14px">ライブラリの<wbr>接合</li><li class="dg-l" style="left:470px;top:178px;width:409px;height:90px;padding-top:14px">WIT の lowering</li><li class="dg-l" style="left:945px;top:178px;width:228px;height:90px;padding-top:14px">刈り込み</li></ol>
+</figure>
+<ul><li>すべての<wbr>バックエンドと<wbr>埋め込み側が <code>CompileFrontend</code> を<wbr>通る</li><li>パスの<wbr>並びは <code>CompileFrontend.expand</code> にだけ<wbr>書き、<wbr>ほかの<wbr>場所で<wbr>書き直さない</li><li>テストも <code>CompileFrontendAccess</code> から<wbr>前段に<wbr>入る</li></ul>
+</div>
+<p class="source">.kb/architecture.md (Package rules)</p>
+<div class="page">11</div>
+</section>
+<section class="slide layout-standard" id="s12" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">CompileFrontend.expand</p>
+<h1 class="title">接合は<wbr>入れ子の<wbr>呼び出しで<wbr>書く</h1>
+<div class="body" style="top:232px;height:712px">
+<pre class="code" aria-describedby="s12c1"><code>languages = InflateLibrary.process(
+  ClojureLibrary.process(
+    SchemeLibrary.process(
+      UserMacroExpander.expand(...), ...), ...), ...);
+...
+program = LibraryDefunPruner.prune(program);</code></pre>
+<p>並びに<wbr>意味が<wbr>ある。<wbr>Scheme の<wbr>実行時ライブラリは、<wbr>それが<wbr>使う<wbr>文字列比較を<wbr>含む<wbr>プレリュードの<wbr>内側に<wbr>接合する。</p>
+</div>
+<div class="say" id="s12c1" role="note" data-side="right" data-at="prune(program);" style="left:1361px;top:554px;width:446px;height:82px;--say:40px;--say-lh:56px;--say-x:20px;--say-y:10px;--tail:38px"><p>使わない<wbr>定義を<wbr>落とす</p></div>
+<p class="source">src/main/java/am/ik/rontolisp/cli/CompileFrontend.java からの<wbr>抜粋, .kb/scheme<span class="nw">-f</span>rontend.md</p>
+<div class="page">12</div>
+</section>
+<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">CompileFrontend.expand</p>
+<h1 class="title">書き直しを<wbr>禁じた<wbr>経緯</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">二つの<wbr>コーパス検査が、<wbr>パスの<wbr>並びを<wbr>写して<wbr>持っていた</p>
+<ul><li><code>tokenizer:</code> の<wbr>ケースが <code>ci<span class="nw">-s</span>pec.yaml</code> に<wbr>入った<wbr>時点で 8&nbsp;パス、<wbr>直した<wbr>時点で 10&nbsp;パス遅れていた</li><li>名前を<wbr>数えても<wbr>見えない<wbr>位置の<wbr>ずれも<wbr>あった (<code>VecLibrary</code>)</li><li><code>JvmOsrBackedgeCorpusTest</code> は 2026<span class="nw">-0</span>9<span class="nw">-1</span>9&nbsp;まで<wbr>写しを<wbr>持ち、<wbr>11&nbsp;の<wbr>接合に<wbr>遅れ、<wbr>成功する<wbr>たびに<wbr>警告を 10&nbsp;行出していた</li></ul>
+</div>
+<p class="source">.kb/architecture.md (Package rules)</p>
+<div class="page">13</div>
+</section>
+<section class="slide layout-standard" id="s14" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li class="current">インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">14</div>
+</section>
+<section class="slide layout-standard" id="s15" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">既定の<wbr>実行経路は<wbr>インタプリタ</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code><span class="nw">-o</span></code> の<wbr>ない <code>rontolisp app.lisp</code> は <code>LispEvaluator</code> で<wbr>動かす。<wbr>そう<wbr>決めてある。</p>
+<table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">測った<wbr>もの</th><th scope="col">値</th></tr></thead><tbody><tr><td>インタプリタの<wbr>ループ (SBCL 比)</td><td>20〜240&nbsp;倍遅い</td></tr><tr><td><code>java <span class="nw">-j</span>ar</code> の<wbr>コンパイルの<wbr>固定費</td><td>約 0.6&nbsp;秒</td></tr><tr><td>前段 (温まった<wbr>後)</td><td>約 4&nbsp;ms</td></tr><tr><td>JVM の<wbr>コード生成 (温まった<wbr>後)</td><td>約 140&nbsp;ms</td></tr><tr><td>ネイティブバイナリの<wbr>コンパイル全体</td><td>約 0.16&nbsp;秒</td></tr></tbody></table>
+</div>
+<p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
+<div class="page">15</div>
+</section>
+<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">実行エンジンを<wbr>自動で<wbr>切り<wbr>替えない<wbr>理由</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li>固定費の<wbr>大半は、<wbr>コンパイラ自身の<wbr>クラスロードと JIT の<wbr>ウォームアップ</li><li>メモリ上で<wbr>コンパイルして<wbr>実行すると、<wbr><code>java <span class="nw">-j</span>ar</code> で <code>(print &#39;hi)</code> が 2.2&nbsp;倍遅くなる</li><li>ネイティブバイナリは、<wbr>実行時に<wbr>クラスを<wbr>定義できない</li><li>エンジンを<wbr>切り<wbr>替えると、<wbr>経路の<wbr>間の<wbr>差が<wbr>そのまま<wbr>挙動の<wbr>変化に<wbr>なる</li></ul>
+</div>
+<p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
+<div class="page">16</div>
+</section>
+<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">自由変数の<wbr>解析が<wbr>一つ<wbr>抜けると</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code>FreeVarAnalyzer</code> が<wbr>フォームの<wbr>一部を<wbr>読み飛ばしても、<wbr>コンパイルエラーには<wbr>ならない。<wbr>結果は<wbr>三通りに<wbr>分かれる。</p>
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">結果</th></tr></thead><tbody><tr><td>インタプリタ</td><td>正しい (環境ごと<wbr>捕捉する)</td></tr><tr><td>JVM</td><td>新しい<wbr>コピーを<wbr>読み、<wbr>黙って<wbr>誤る</td></tr><tr><td>WASM</td><td>コンパイル時に<wbr>拒否する</td></tr></tbody></table>
+</div>
+<p class="source">.kb/core<span class="nw">-r</span>epresentation.md (Three<span class="nw">-p</span>ass compilation)</p>
+<div class="page">17</div>
+</section>
+<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">JVM: クラスファイルを JDK の API で<wbr>書く</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">ASM などの<wbr>ライブラリは<wbr>使わず、<wbr><code>java.lang.classfile</code> で<wbr>書く</p>
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">形式の<wbr>上限</th><th scope="col">超えた<wbr>とき</th></tr></thead><tbody><tr><td>分岐オフセット (16&nbsp;ビット)</td><td><code>goto_w</code> で<wbr>書く</td></tr><tr><td>メソッドの<wbr>コード (65,535&nbsp;B)</td><td>メソッド名を<wbr>挙げて<wbr>拒否する</td></tr><tr><td>定数プール (65,534&nbsp;項目)</td><td><code>$PartN</code> の<wbr>クラスに<wbr>分ける</td></tr><tr><td><code>CONSTANT_Utf8</code> (65,535&nbsp;B)</td><td>分割して<wbr>連結する</td></tr></tbody></table>
+</div>
+<p class="source">.kb/jvm<span class="nw">-m</span>ethod<span class="nw">-s</span>ize<span class="nw">-l</span>imits.md, doc/ja/compiling/jvm.md</p>
+<div class="page">18</div>
+</section>
+<section class="slide layout-table" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">末尾呼び出しの<wbr>実装は<wbr>経路ごとに<wbr>違う</h1>
+<div class="body" style="top:232px;height:712px">
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>どれも<wbr>定数スタックで<wbr>動き、<wbr>出力は<wbr>変わらない</caption><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">仕組み</th></tr></thead><tbody><tr><td>インタプリタ</td><td><code>eval</code> の<wbr>ループで、<wbr>末尾の<wbr>フォームが<wbr>フレームを<wbr>置き換える</td></tr><tr><td>JVM</td><td>自分への<wbr>末尾呼び出しは<wbr>メソッドの<wbr>先頭への <code>goto</code>。<wbr>関数値を<wbr>通すものは 64&nbsp;個を<wbr>超えると<wbr>トランポリン</td></tr><tr><td>WASM</td><td>末尾位置の<wbr>呼び出しを<wbr>すべて <code>return_call</code> で<wbr>出す</td></tr></tbody></table>
+</div>
+<p class="source">.kb/interpreter<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-s</span>elf<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-t</span>ail<span class="nw">-b</span>ounce.md, .kb/wasm<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md</p>
+<div class="page">19</div>
+</section>
+<section class="slide layout-standard" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">インタプリタと JVM</p>
+<h1 class="title">定数スタックで<wbr>回す</h1>
+<div class="body" style="top:232px;height:712px">
+<p>ブラウザで<wbr>動く<wbr>インタプリタでも、<wbr>末尾呼び出しは<wbr>フレームを<wbr>積まない。</p>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s20c1"><code>(<span class="hl-d">defun</span> count-down (n)
+  (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) &#39;done (count-down (- n <span class="hl-n">1</span>))))
+(count-down <span class="hl-n">100000</span>)</code></pre></div>
+</div>
+<div class="say" id="s20c1" role="note" data-side="below" data-at="(count-down 100000)" style="left:143px;top:677px;width:497px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:245px"><p>Run で DONE が<wbr>返る</p></div>
+<p class="source">.kb/interpreter<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md</p>
+<div class="page">20</div>
+</section>
+<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li class="current">WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">21</div>
+</section>
+<section class="slide layout-standard" id="s22" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">WASM: 値は GC ヒープに<wbr>置く</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li>整数は <code>i31ref</code>。<wbr>fixnum の<wbr>範囲を<wbr>超えると 64&nbsp;ビットの<wbr>構造体、<wbr>さらに<wbr>超えると<wbr>多倍長整数</li><li>浮動小数点数は<wbr>構造体に<wbr>ボックス化する</li><li>文字列は<wbr>バイトの<wbr>配列 (<code>$str_bytes</code>)</li><li>モジュールは<wbr>アロケータを<wbr>持たない</li><li><code><span class="nw">--n</span>o<span class="nw">-g</span>c</code> は<wbr>純粋計算の<wbr>サブセットを、<wbr>スカラーと<wbr>リニアメモリの<wbr>文字列に<wbr>下げる</li></ul>
+</div>
+<p class="source">doc/ja/compiling/wasm.md, .kb/wasm<span class="nw">-g</span>c<span class="nw">-s</span>trings.md, size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md</p>
+<div class="page">22</div>
+</section>
+<section class="slide layout-standard" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">例外処理は<wbr>プログラムが<wbr>使う<wbr>ときだけ</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li><code>handler<span class="nw">-c</span>ase</code>、<wbr><code>ignore<span class="nw">-e</span>rrors</code>、<wbr><code>unwind<span class="nw">-p</span>rotect</code> を<wbr>含む<wbr>プログラムだけを EH モードで<wbr>コンパイルする</li><li>EH モードでは<wbr>タグ <code>$lisp<span class="nw">-c</span>ond</code> を<wbr>一つ<wbr>置き、<wbr><code>try_table</code> と <code>throw</code> で<wbr>捕まえる</li><li>それ以外の<wbr>プログラムは、<wbr>EH を<wbr>知らない<wbr>ビルドと<wbr>バイト単位で<wbr>同じに<wbr>なる</li><li><code>ref.cast</code> の<wbr>失敗のような trap は<wbr>捕まえられない</li></ul>
+</div>
+<p class="source">.kb/error<span class="nw">-h</span>andling.md (WASM EH<span class="nw">-m</span>ode specifics)</p>
+<div class="page">23</div>
+</section>
+<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">着地パッドで<wbr>局所変数を<wbr>読み直す</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">コーパス全体が、<wbr>コードの<wbr>大きさに<wbr>よって <code>cast failure</code> で<wbr>落ちたり<wbr>通ったりした</p>
+<ul><li>Cranelift が<wbr>局所変数を、<wbr>呼び出しの<wbr>前に<wbr>評価した<wbr>引数と<wbr>して<wbr>着地パッドに<wbr>渡していた</li><li>呼び出しの<wbr>間に<wbr>コピー GC が<wbr>オブジェクトを<wbr>動かすと、<wbr>パッドは<wbr>古い<wbr>参照を<wbr>受け取る</li><li>対策と<wbr>して、<wbr>パッドの<wbr>最初で、<wbr>その後に<wbr>使う<wbr>局所変数を<wbr>読み直す</li></ul>
+</div>
+<p class="source">.kb/wasm<span class="nw">-l</span>anding<span class="nw">-p</span>ad<span class="nw">-r</span>efresh.md, .kb/wasi<span class="nw">-c</span>omponent.md</p>
+<div class="page">24</div>
+<aside class="notes">3,590 行の実行の 3,587 行目で trap した。GC の事前拡張がコードの大きさに比例するので、ケースを一つ足すだけで結果が変わった。</aside>
+</section>
+<section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">コンポーネントは Preview 1&nbsp;の<wbr>コアを<wbr>包む</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1402px;height:152px;--dg:44px;--dg-lh:62px;--dg-x:26px">
+<svg class="dg-art" width="1402" height="152" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="521" height="152" rx="12"/><rect class="dg-b" x="587" y="0" width="228" height="152" rx="12"/><rect class="dg-b" x="881" y="0" width="521" height="152" rx="12"/><rect class="dg-f" x="4" y="4" width="513" height="144" rx="8"/><rect class="dg-f" x="591" y="4" width="220" height="144" rx="8"/><rect class="dg-f" x="885" y="4" width="513" height="144" rx="8"/><rect class="dg-e" x="528" y="74" width="35" height="4"/><polygon class="dg-e" points="563,65 580,76 563,87"/><rect class="dg-e" x="822" y="74" width="35" height="4"/><polygon class="dg-e" points="857,65 874,76 857,87"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:521px;height:152px;padding-top:14px">コアモジュール (Preview 1)</li><li class="dg-l" style="left:587px;top:0px;width:228px;height:152px;padding-top:45px">アダプタ</li><li class="dg-l" style="left:881px;top:0px;width:521px;height:152px;padding-top:14px">WASI 0.3&nbsp;の<wbr>コンポーネント</li></ol>
+</figure>
+<ul><li>コアモジュールは Preview 1&nbsp;の<wbr>出力と<wbr>同じ<wbr>ものを<wbr>使う</li><li>アダプタが <code>wasi_snapshot_preview1</code> の 15&nbsp;関数を、<wbr>WASI 0.3&nbsp;の stream と future で<wbr>実装する</li><li><code><span class="nw">--o</span>ptimize</code> は<wbr>使う<wbr>インタフェースだけを<wbr>残す。<wbr><code>(print &quot;Hello World!&quot;)</code> では 11&nbsp;から 3&nbsp;に、<wbr>7,690&nbsp;B から 2,138&nbsp;B に<wbr>なる</li></ul>
+</div>
+<p class="source">.kb/wasi<span class="nw">-c</span>omponent.md</p>
+<div class="page">25</div>
+</section>
+<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">大きさは<wbr>刈り込みで<wbr>決まる</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">chipz で gunzip する<wbr>プログラムの <code>.wasm</code></p>
+<figure class="dg" style="width:1696px;height:398px;--dg:44px;--dg-lh:62px;--dg-x:26px" aria-describedby="s26c1">
+<svg class="dg-art" width="1696" height="398" aria-hidden="true"><rect class="dg-b" x="591" y="11" width="838" height="62"/><rect class="dg-b" x="591" y="95" width="203" height="62"/><rect class="dg-b" x="591" y="179" width="155" height="62"/><rect class="dg-b" x="591" y="294" width="161" height="62"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:11px;width:565px;height:62px"><span class="nw">--o</span>ptimize=off</p><p class="dg-l dg-v" style="left:1455px;top:11px;width:241px;height:62px">550,484 B</p><p class="dg-l dg-t" style="left:0px;top:95px;width:565px;height:62px"><span class="nw">--o</span>ptimize (既定)</p><p class="dg-l dg-v" style="left:820px;top:95px;width:240px;height:62px">133,689 B</p><p class="dg-l dg-t" style="left:0px;top:179px;width:565px;height:62px"><span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:772px;top:179px;width:240px;height:62px">102,171 B</p><p class="dg-l dg-t" style="left:0px;top:263px;width:565px;height:124px"><span class="nw">--c</span>omponent <span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:778px;top:294px;width:240px;height:62px">106,355 B</p>
+</figure>
+<p>Hello, World! だけを<wbr>出す<wbr>プログラムは 271,101&nbsp;B から 480&nbsp;B に<wbr>なる。</p>
+</div>
+<div class="say" id="s26c1" role="note" data-side="right" data-at="--optimize (既定)" style="left:1208px;top:433px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>既定で<wbr>刈り込む</p></div>
+<p class="source">size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md (2026<span class="nw">-1</span>0<span class="nw">-1</span>5&nbsp;測定)</p>
+<div class="page">26</div>
+<aside class="notes">大きさは一つの量ではない。バイト列を動かすと、生のサイズは減り gzip 後のサイズは増えることがある (.kb/size-measurement.md)。</aside>
+</section>
+<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">ネイティブ実行ファイル</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1662px;height:138px;--dg:40px;--dg-lh:56px;--dg-x:24px">
+<svg class="dg-art" width="1662" height="138" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="181" height="138" rx="12"/><rect class="dg-b" x="241" y="0" width="525" height="138" rx="12"/><rect class="dg-b" x="826" y="0" width="488" height="138" rx="12"/><rect class="dg-b" x="1374" y="0" width="288" height="138" rx="12"/><rect class="dg-f" x="4" y="4" width="173" height="130" rx="8"/><rect class="dg-f" x="245" y="4" width="517" height="130" rx="8"/><rect class="dg-f" x="830" y="4" width="480" height="130" rx="8"/><rect class="dg-f" x="1378" y="4" width="280" height="130" rx="8"/><rect class="dg-e" x="187" y="67" width="32" height="4"/><polygon class="dg-e" points="219,59 235,69 219,79"/><rect class="dg-e" x="772" y="67" width="32" height="4"/><polygon class="dg-e" points="804,59 820,69 804,79"/><rect class="dg-e" x="1320" y="67" width="32" height="4"/><polygon class="dg-e" points="1352,59 1368,69 1352,79"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:181px;height:138px;padding-top:41px"><code>.wasm</code></li><li class="dg-l" style="left:241px;top:0px;width:525px;height:138px;padding-top:13px">wasmtime で<wbr>プリコンパイル</li><li class="dg-l" style="left:826px;top:0px;width:488px;height:138px;padding-top:41px">ランナーの<wbr>後ろに<wbr>付ける</li><li class="dg-l" style="left:1374px;top:0px;width:288px;height:138px;padding-top:41px">実行ファイル</li></ol>
+</figure>
+<ul><li>Linux では <code>stub ++ module ++ 長さ ++ &quot;RLNATIVE&quot;</code>、<wbr>macOS では<wbr>署名した Mach<span class="nw">-O</span> の<wbr>中に<wbr>モジュールを<wbr>置く</li><li>プリコンパイラと<wbr>ランナーは<wbr>同じ wasmtime の<wbr>設定で<wbr>作り、<wbr>指紋が<wbr>違えば<wbr>書き出す前に<wbr>拒否する</li><li>Rust の<wbr>ワークスペース (<code>rontolisp<span class="nw">-n</span>ative/</code>) は Maven の<wbr>外に<wbr>あり、<wbr>コアは<wbr>依存を<wbr>持たないまま</li></ul>
+</div>
+<p class="source">.kb/native<span class="nw">-o</span>utput.md</p>
+<div class="page">27</div>
+</section>
+<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">ランナーの<wbr>大きさ</h1>
+<div class="body" style="top:232px;height:712px">
+<figure class="dg" style="width:1696px;height:276px;--dg:48px;--dg-lh:68px;--dg-x:28px">
+<svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-b" x="382" y="12" width="1109" height="68"/><rect class="dg-b" x="382" y="104" width="1003" height="68"/><rect class="dg-b" x="382" y="196" width="897" height="68"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:12px;width:354px;height:68px">Linux x86_64</p><p class="dg-l dg-v" style="left:1519px;top:12px;width:177px;height:68px">2.1 MB</p><p class="dg-l dg-t" style="left:0px;top:104px;width:354px;height:68px">Linux aarch64</p><p class="dg-l dg-v" style="left:1413px;top:104px;width:177px;height:68px">1.9 MB</p><p class="dg-l dg-t" style="left:0px;top:196px;width:354px;height:68px">macOS</p><p class="dg-l dg-v" style="left:1307px;top:196px;width:177px;height:68px">1.7 MB</p>
+</figure>
+<ul><li>実行ファイルは、<wbr>ランナーに <code>.wasm</code> の<wbr>約 11&nbsp;倍を<wbr>足した<wbr>大きさ</li><li>起動は<wbr>約 10&nbsp;ms で、<wbr><code>wasmtime run</code> と<wbr>ほぼ<wbr>同じ<wbr>速度で<wbr>動く</li></ul>
+</div>
+<p class="source">doc/ja/compiling/native.md (サイズと<wbr>速度)</p>
+<div class="page">28</div>
+</section>
+<section class="slide layout-standard" id="s29" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li class="current">三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
+</div>
+<div class="page">29</div>
+</section>
+<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
+<h1 class="title">Scheme と Clojure も<wbr>コアフォームに<wbr>下げる</h1>
+<div class="body" style="top:336px;height:608px">
+<ul><li>どの<wbr>バックエンドも、<wbr>Scheme や Clojure の<wbr>名前を<wbr>知らない</li><li>バックエンドは<wbr>演算子の<wbr>名前で<wbr>分岐し、<wbr><code>FreeVarAnalyzer</code> も<wbr>同じ<wbr>名前を<wbr>見る<wbr>手書きの<wbr>走査</li><li>知らない<wbr>先頭が<wbr>来ると、<wbr>エラーに<wbr>ならずに<wbr>三通りに<wbr>分かれる</li><li>実行時の<wbr>補助関数は Common Lisp の<wbr>ソースで、<wbr>使わない<wbr>定義は<wbr>刈り込む</li></ul>
+</div>
+<p class="source">.kb/scheme<span class="nw">-f</span>rontend.md, .kb/clojure<span class="nw">-f</span>rontend.md</p>
+<div class="page">30</div>
+</section>
+<section class="slide layout-code" id="s31" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
+<h1 class="title">Scheme の<wbr>末尾再帰</h1>
+<div class="body" style="top:232px;height:712px">
+<pre class="code" data-lang="scheme"><code><span class="tk">(</span><span class="tk hl-d">define</span> <span class="tk">(</span><span class="tk">sum</span> <span class="tk">n</span> <span class="tk">acc</span><span class="tk">)</span>
+  <span class="tk">(</span><span class="tk hl-d">if</span> <span class="tk">(</span><span class="tk">=</span> <span class="tk">n</span> <span class="tk hl-n">0</span><span class="tk">)</span>
+      <span class="tk">acc</span>
+      <span class="tk">(</span><span class="tk">sum</span> <span class="tk">(</span><span class="tk">-</span> <span class="tk">n</span> <span class="tk hl-n">1</span><span class="tk">)</span> <span class="tk">(</span><span class="tk">+</span> <span class="tk">acc</span> <span class="tk">n</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span></code></pre>
+</div>
+<p class="source">.kb/scheme<span class="nw">-f</span>rontend.md</p>
+<div class="page">31</div>
+</section>
+<section class="slide layout-code" id="s32" style="--title:80px;--title-lh:104px;--body:44px;--body-lh:66px;--gap:26px;--indent:53px;--item-gap:11px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
+<h1 class="title">Scheme の<wbr>末尾再帰</h1>
+<div class="body" style="top:232px;height:712px">
+<pre class="code" data-lang="lisp" data-morph><code><span class="tk" data-m="0">(</span><span class="tk hl-d">defun</span> <span class="tk">|sum|</span> <span class="tk" data-m="2">(</span><span class="tk">%scm-c1</span> <span class="tk">%scm-c2</span><span class="tk" data-m="6">)</span>
+  <span class="tk">(</span><span class="tk hl-d">let</span> <span class="tk">(</span><span class="tk">(</span><span class="tk">|n|</span> <span class="tk">%scm-c1</span><span class="tk">)</span> <span class="tk">(</span><span class="tk">|acc|</span> <span class="tk">%scm-c2</span><span class="tk">)</span> <span class="tk">(</span><span class="tk">%scm-r4</span> <span class="tk hl-n">nil</span><span class="tk">)</span><span class="tk">)</span>
+    <span class="tk">(</span><span class="tk">tagbody</span>
+     <span class="tk">%scm-l3</span>
+       <span class="tk" data-m="7">(</span><span class="tk hl-d" data-m="8">if</span> <span class="tk" data-m="9">(</span><span class="tk" data-m="10">=</span> <span class="tk">|n|</span> <span class="tk hl-n" data-m="12">0</span><span class="tk" data-m="13">)</span>
+           <span class="tk" data-m="15">(</span><span class="tk hl-d">setq</span> <span class="tk">%scm-r4</span> <span class="tk">|acc|</span><span class="tk">)</span>
+           <span class="tk">(</span><span class="tk hl-d">progn</span>
+             <span class="tk">(</span><span class="tk hl-d">let</span> <span class="tk">(</span><span class="tk">(</span><span class="tk">|__psetq_0|</span> <span class="tk" data-m="17">(</span><span class="tk" data-m="18">-</span> <span class="tk">|n|</span> <span class="tk hl-n" data-m="20">1</span><span class="tk" data-m="21">)</span><span class="tk">)</span>
+                   <span class="tk">(</span><span class="tk">|__psetq_1|</span> <span class="tk" data-m="22">(</span><span class="tk" data-m="23">+</span> <span class="tk">|acc|</span> <span class="tk">|n|</span><span class="tk" data-m="26">)</span><span class="tk" data-m="27">)</span><span class="tk" data-m="28">)</span>
+               <span class="tk">(</span><span class="tk hl-d">setq</span> <span class="tk">|n|</span> <span class="tk">|__psetq_0|</span><span class="tk">)</span>
+               <span class="tk">(</span><span class="tk hl-d">setq</span> <span class="tk">|acc|</span> <span class="tk">|__psetq_1|</span><span class="tk">)</span>
+               <span class="tk hl-n">nil</span><span class="tk">)</span>
+             <span class="tk">(</span><span class="tk">go</span> <span class="tk">%scm-l3</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span>
+    <span class="tk">%scm-r4</span><span class="tk">)</span><span class="tk" data-m="29">)</span></code></pre>
+</div>
+<p class="source"><code>rontolisp sum.scm <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>3)</p>
+<div class="page">32</div>
+</section>
+<section class="slide layout-columns" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
+<h1 class="title">同じ<wbr>インタプリタで<wbr>動かす</h1>
+<div class="body" style="top:232px;height:712px">
+<div class="columns">
+<div class="column" style="width:808px">
+<div class="codebox runnable band" data-lang="scheme" data-timeout="10"><pre class="code"><code>(<span class="hl-d">define</span> (sum n acc)
+  (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>)
+      acc
+      (sum (- n <span class="hl-n">1</span>) (+ acc n))))
+(display (sum <span class="hl-n">100000</span> <span class="hl-n">0</span>))</code></pre></div>
+</div>
+<div class="column" style="width:808px">
+<div class="codebox runnable" data-lang="clojure" data-timeout="10"><pre class="code"><code>(<span class="hl-d">loop</span> [i <span class="hl-n">0</span> acc <span class="hl-n">0</span>]
+  (<span class="hl-d">if</span> (= i <span class="hl-n">100000</span>)
+    acc
+    (<span class="hl-d">recur</span> (inc i) (+ acc i))))</code></pre></div>
+</div>
+</div>
+<p>この<wbr>ページの<wbr>ランタイムは、<wbr>三つの<wbr>フロントエンドを<wbr>持つインタプリタ一つ。<wbr>Run で 5000050000&nbsp;と 4999950000&nbsp;が<wbr>返る。</p>
+</div>
+<p class="source">lispresen/DESIGN.md (Runtime)</p>
+<div class="page">33</div>
+</section>
+<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
+<h1 class="title">Clojure を clj と<wbr>突き合わせる</h1>
+<div class="body" style="top:232px;height:712px">
+<p class="lead">117&nbsp;の<wbr>式を clj 1.12.6.1673&nbsp;と<wbr>各バックエンドで<wbr>評価し、<wbr>印字を<wbr>比べる。<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>1&nbsp;の<wbr>初回で<wbr>差は<wbr>なかった</p>
+<figure class="dg" style="width:1696px;height:504px;--dg:44px;--dg-lh:62px;--dg-x:26px">
+<svg class="dg-art" width="1696" height="504" aria-hidden="true"><rect class="dg-b" x="329" y="11" width="1280" height="62"/><rect class="dg-b" x="329" y="95" width="230" height="62"/><rect class="dg-b" x="329" y="179" width="100" height="62"/><rect class="dg-b" x="329" y="263" width="28" height="62"/><rect class="dg-b" x="329" y="347" width="28" height="62"/><rect class="dg-b" x="329" y="431" width="14" height="62"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:11px;width:303px;height:62px">clojure.core</p><p class="dg-l dg-v" style="left:1635px;top:11px;width:61px;height:62px">89</p><p class="dg-l dg-t" style="left:0px;top:95px;width:303px;height:62px">clojure.string</p><p class="dg-l dg-v" style="left:585px;top:95px;width:61px;height:62px">16</p><p class="dg-l dg-t" style="left:0px;top:179px;width:303px;height:62px">clojure.set</p><p class="dg-l dg-v" style="left:455px;top:179px;width:31px;height:62px">7</p><p class="dg-l dg-t" style="left:0px;top:263px;width:303px;height:62px">clojure.walk</p><p class="dg-l dg-v" style="left:383px;top:263px;width:31px;height:62px">2</p><p class="dg-l dg-t" style="left:0px;top:347px;width:303px;height:62px">clojure.pprint</p><p class="dg-l dg-v" style="left:383px;top:347px;width:31px;height:62px">2</p><p class="dg-l dg-t" style="left:0px;top:431px;width:303px;height:62px">clojure.data</p><p class="dg-l dg-v" style="left:369px;top:431px;width:31px;height:62px">1</p>
+</figure>
+</div>
+<p class="source">.kb/clojure<span class="nw">-f</span>rontend.md (Differential parity harness)</p>
+<div class="page">34</div>
+</section>
+<section class="slide layout-standard" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li class="current">検証と<wbr>依存</li></ol>
+</div>
+<div class="page">35</div>
+</section>
+<section class="slide layout-standard" id="s36" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">検証と<wbr>依存</p>
+<h1 class="title">「検証した」<wbr>は<wbr>四つで<wbr>動かした<wbr>こと</h1>
+<div class="body" style="top:232px;height:712px">
+<pre class="code console" data-lang="console"><code><span class="hl-k">$</span> java -jar $JAR test.lisp
+<span class="hl-k">$</span> java -jar $JAR test.lisp -o Prog.class &amp;&amp; java Prog
+<span class="hl-k">$</span> java -jar $JAR test.lisp -o test.wasm &amp;&amp; wasmtime run test.wasm
+<span class="hl-k">$</span> java -jar $JAR test.lisp -o c.wasm --component &amp;&amp; wasmtime run c.wasm</code></pre>
+<p>コンポーネントは<wbr>別の I/O アダプタを<wbr>使うので、<wbr>Preview 1&nbsp;と<wbr>食い<wbr>違うことがある。</p>
+</div>
+<p class="source">.kb/running<span class="nw">-b</span>ackends.md, CLAUDE.md</p>
+<div class="page">36</div>
+</section>
+<section class="slide layout-standard" id="s37" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">検証と<wbr>依存</p>
+<h1 class="title">ci<span class="nw">-s</span>pec.yaml は<wbr>一つの<wbr>プログラムと<wbr>して<wbr>流す</h1>
+<div class="body" style="top:336px;height:608px">
+<ul><li>ケースを<wbr>つなげて<wbr>一つの<wbr>プログラムにし、<wbr>バックエンドごとに<wbr>一度だけ<wbr>実行して、<wbr>出力を<wbr>ケースに<wbr>切り分ける</li><li>各バックエンドで、<wbr>既定と <code><span class="nw">--s</span>imd</code> の<wbr>二回流す</li><li><code>./mvnw test</code> は <code>CiSpecE2eTest</code> を<wbr>飛ばす。<wbr>CI の<wbr>ネイティブジョブで<wbr>動く</li><li>2026<span class="nw">-1</span>0<span class="nw">-1</span>7&nbsp;に、<wbr>コーパスと<wbr>重複する 373&nbsp;の<wbr>テストメソッドを<wbr>消し、<wbr>298&nbsp;組の JVM と WASM の<wbr>対を<wbr>ケースに<wbr>移した</li></ul>
+</div>
+<p class="source">src/test/resources/ci<span class="nw">-s</span>pec.yaml (1,354&nbsp;ケース、<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>3&nbsp;に<wbr>数えた), .kb/test<span class="nw">-e</span>xecution.md</p>
+<div class="page">37</div>
+</section>
+<section class="slide layout-standard" id="s38" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">検証と<wbr>依存</p>
+<h1 class="title">出力は<wbr>プログラムだけで<wbr>決まる</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li>同じ<wbr>ソースと<wbr>同じ<wbr>ビルドなら、<wbr>何度コンパイルしても<wbr>同じ<wbr>バイト列に<wbr>なる</li><li><code>Map.of</code> や <code>Set.of</code> の<wbr>反復の<wbr>順序は、<wbr>JVM を<wbr>起動する<wbr>たびに<wbr>変わる</li><li>6&nbsp;行の<wbr>プログラムを 8&nbsp;回コンパイルして、<code>.class</code> も <code>.wasm</code> も 3&nbsp;種類できたことがある</li><li>順序を<wbr>持つ<wbr>引数は <code>SequencedSet</code> で<wbr>型付けする</li></ul>
+</div>
+<p class="source">.kb/emitted<span class="nw">-o</span>utput<span class="nw">-d</span>eterminism.md</p>
+<div class="page">38</div>
+</section>
+<section class="slide layout-columns" id="s39" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">検証と<wbr>依存</p>
+<h1 class="title">コアは<wbr>外部依存を<wbr>持たない</h1>
+<div class="body" style="top:232px;height:712px">
+<div class="columns">
+<div class="column" style="width:944px">
+<pre class="code"><code>cli -&gt; eval, compiler, codegen.*, ...
+codegen.jvm -&gt; compiler, runtime, ...
+codegen.wasm -&gt; compiler, am.ik.wasm, ...
+eval -&gt; macro, compiler, reader, ...
+macro -&gt; reader
+runtime -&gt; (nothing)</code></pre>
+</div>
+<div class="column" style="width:672px">
+<ul><li>reader、<wbr>eval、<wbr>codegen、<wbr><code>am.ik.*</code> は<wbr>外部ライブラリを<wbr>使わない</li><li><code>runtime</code> は<wbr>出力に<wbr>コピーされるので<wbr>何も import しない</li><li>循環が<wbr>ない<wbr>ことを <code>PackageCycleTest</code> が<wbr>確かめる</li></ul>
+</div>
+</div>
+</div>
+<p class="source">.kb/architecture.md (Package dependency direction, Requirements)</p>
+<div class="page">39</div>
+</section>
+<section class="slide layout-standard" id="s40" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<p class="kicker">検証と<wbr>依存</p>
+<h1 class="title">ブラウザで<wbr>動く rontolisp</h1>
+<div class="body" style="top:232px;height:712px">
+<ul><li>GraalVM Native Image の Web Image で、<wbr>rontolisp 自体を WebAssembly に<wbr>する</li><li>インタプリタも、<wbr>JVM と WASM の<wbr>コンパイラも、<wbr>ブラウザの<wbr>中で<wbr>動く</li><li>ファイルシステムが<wbr>ないので、<wbr>ファイルを<wbr>読むコンパイル時の<wbr>パスは <code>SourceLoader</code> を<wbr>通す</li><li>この<wbr>デッキの Run も、<wbr>この<wbr>ブラウザ版 (約 35&nbsp;MB) で<wbr>動いている</li></ul>
+</div>
+<p class="source">web/README.md, .kb/architecture.md, lispresen/README.md</p>
+<div class="page">40</div>
+</section>
+<section class="slide layout-statement" id="s41" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><p class="statement">どの<wbr>経路を<wbr>通っても<wbr>同じ<wbr>答えを<wbr>出す<wbr>ことを、<wbr>一つの<wbr>コーパスで<wbr>確かめ続ける。</p></div>
+<div class="page">41</div>
+</section>
+<div id="progress" aria-hidden="true"></div>
+</div>
+<button id="fs" title="Full screen (F)" aria-label="Full screen"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+</div>
+<script type="application/json" id="lp">{"runtime":"https://making.github.io/rontolisp/","top":80,"bottom":72,"gap":48,"steps":{"title":[80,72,64,56],"body":[56,52,48,44,40],"code":[44,40,36,32,28],"table":[48,44,40,36],"stmt":[120,104,88,72,56]},"say":{"reach":36,"half":18,"inset":34,"clear":12,"border":3}}</script>
+<script>(function(){
+var d=document,de=d.documentElement;de.classList.add('js');
+var cfg=JSON.parse(d.getElementById('lp').textContent);
+var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs'),pg=d.getElementById('progress');
+var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
+var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
+var params=new URLSearchParams(location.search),presenter=params.has('presenter');
+var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
+var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
+function send(m){if(chan)chan.postMessage(m);}
+function fit(){var s=Math.min(innerWidth/W,innerHeight/H);
+deck.style.transform='translate('+(innerWidth-W*s)/2+'px,'+(innerHeight-H*s)/2+'px) scale('+s+')';}
+function steps(i){return +slides[i].dataset.steps||0;}
+function focus(sl,k){sl.querySelectorAll('pre[data-focus]').forEach(function(p){var c=0;
+p.dataset.focus.split(' ').forEach(function(x){if(+x<=k&&+x>c)c=+x;});
+p.querySelectorAll('.ln').forEach(function(l){l.classList.toggle('dim',c>0&&(' '+(l.dataset.hot||'')+' ').indexOf(' '+c+' ')<0);});});}
+var RM=window.matchMedia?matchMedia('(prefers-reduced-motion: reduce)'):null,mo=[],mgen=0;
+function unmorph(){mgen++;mo.forEach(function(x){if(x.cancel)x.cancel();else x.remove();});mo=[];
+deck.querySelectorAll('pre.mo').forEach(function(p){p.classList.remove('mo');});}
+function snap(sl){var p=sl.querySelector('pre.code');if(!p||!p.querySelector('.tk'))return null;
+var o=sl.getBoundingClientRect(),z=o.width/W,cs=getComputedStyle(p);
+function at(e){var r=e.getBoundingClientRect();return {l:(r.left-o.left)/z,t:(r.top-o.top)/z,w:r.width/z,h:r.height/z};}
+return {pre:p,box:at(p),fs:cs.fontSize,lh:cs.lineHeight,toks:Array.prototype.map.call(p.querySelectorAll('.tk'),function(e){
+var l=e.closest('.dim');return {e:e,r:at(e),o:l?+getComputedStyle(l).opacity:1};})};}
+function grab(a,b){if(a<0||Math.abs(a-b)!==1||presenter||(RM&&RM.matches)||!Element.prototype.animate)return null;
+var fw=b>a;if(!slides[fw?b:a].querySelector('pre[data-morph]'))return null;var A=snap(slides[a]);
+return A&&function(){var B=snap(slides[b]),L=[];if(!B)return;B.toks.forEach(function(t,j){L[j]=fw&&t.e.dataset.m?+t.e.dataset.m:-1;});
+if(!fw)A.toks.forEach(function(t,j){if(t.e.dataset.m)L[+t.e.dataset.m]=j;});play(A,B,L);};}
+function play(A,B,L){var sl=B.pre.closest('.slide'),cs=getComputedStyle(B.pre),used=[],g=++mgen,bg=d.createElement('div'),last;
+function run(e,f){var x=e.animate(f,{duration:600,easing:'ease-in-out'});mo.push(x);return x;}
+function box(r){return {left:r.l+'px',top:r.t+'px',width:r.w+'px',height:r.h+'px'};}
+bg.className='mb';bg.style.cssText='left:'+B.box.l+'px;top:'+B.box.t+'px;width:'+B.box.w+'px;height:'+B.box.h+'px;background:'+cs.backgroundColor+';border-radius:'+cs.borderRadius+';box-shadow:'+cs.boxShadow;
+sl.insertBefore(bg,sl.firstChild);mo.push(bg);B.pre.classList.add('mo');last=run(bg,[box(A.box),box(B.box)]);
+B.toks.forEach(function(t,j){var s=L[j]>=0?A.toks[L[j]]:null;if(!s){run(t.e,[{opacity:0},{opacity:0,offset:.4},{opacity:1}]);return;}used[L[j]]=1;
+run(t.e,[{transform:'translate('+(s.r.l-t.r.l)+'px,'+(s.r.t-t.r.t)+'px) scale('+(t.r.w?s.r.w/t.r.w:1)+')',opacity:Math.min(1,s.o/t.o)},{transform:'none',opacity:1}]);});
+A.toks.forEach(function(s,j){if(used[j])return;var x=d.createElement('span');x.className='mg';x.textContent=s.e.textContent;
+x.style.cssText='left:'+s.r.l+'px;top:'+s.r.t+'px;font-size:'+A.fs+';line-height:'+A.lh+';opacity:0;color:'+getComputedStyle(s.e).color;
+sl.appendChild(x);mo.push(x);run(x,[{opacity:s.o},{opacity:0,offset:.6},{opacity:0}]);});
+last.finished.then(function(){if(g===mgen)unmorph();},function(){});}
+function show(i,quiet,k,dir){if(!slides.length)return;i=Math.max(0,Math.min(slides.length-1,i));
+var n=steps(i);k=k===undefined?0:k<0?n:Math.min(k,n);if(i===cur&&k===shown)return;
+var same=i===cur,m=null;if(!same){unmorph();if(dir)m=grab(cur,i);if(cur>=0)slides[cur].classList.remove('active');cur=i;slides[cur].classList.add('active');
+try{if(location.hash!=='#'+(cur+1))history.replaceState(null,'','#'+(cur+1));}catch(e){}
+if(pg)pg.style.width=(cur+1)*100/slides.length+'%';}
+slides[cur].querySelectorAll('[data-step]').forEach(function(e){var s=+e.dataset.step;e.classList.toggle('pending',s>k);
+if(same&&s>shown&&s<=k&&e.classList.contains('say'))e.classList.add('front');});focus(slides[cur],k);shown=k;if(m)m();
+if(!quiet)send({t:'go',i:cur,k:shown,m:same?0:dir||0});hooks.go.forEach(function(f){f(cur);});}
+function move(dir){var n=steps(cur);if(dir>0&&shown<n)show(cur,false,shown+1);else if(dir<0&&shown>0)show(cur,false,shown-1);
+else if(cur+dir>=0&&cur+dir<slides.length)show(cur+dir,false,dir<0?-1:0,dir);}
+function fromHash(){var n=parseInt(location.hash.slice(1),10);return n>0?n-1:0;}
+function toggleFull(){if(d.fullscreenElement){d.exitFullscreen();}else if(stage.requestFullscreen){stage.requestFullscreen();}}
+function wake(){stage.classList.add('pointer');stage.classList.remove('idle');clearTimeout(idle);
+idle=setTimeout(function(){stage.classList.remove('pointer');if(d.fullscreenElement)stage.classList.add('idle');},2000);}
+function thumb(i,live){var t=d.createElement('div');t.className='thumb';var c=slides[i].cloneNode(true);
+c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');t.appendChild(c);return t;}
+function scaleThumbs(root){root.querySelectorAll('.thumb').forEach(function(t){t.firstChild.style.transform='scale('+t.clientWidth/W+')';});}
+var ov=null,sel=0;
+function mark(){Array.prototype.forEach.call(ov.children,function(t,i){t.classList.toggle('sel',i===sel);});
+ov.children[sel].scrollIntoView({block:'nearest'});}
+function openOverview(){unmorph();if(ov)ov.remove();ov=d.createElement('div');ov.id='ov';
+slides.forEach(function(s,i){var t=thumb(i);t.onclick=function(){closeOverview();show(i);};ov.appendChild(t);});
+d.body.appendChild(ov);de.classList.add('ov');scaleThumbs(ov);sel=Math.max(cur,0);mark();}
+function closeOverview(){de.classList.remove('ov');if(ov){ov.remove();ov=null;}}
+function overviewKey(k){var t=ov.children,cols=0;while(cols<t.length&&t[cols].offsetTop===t[0].offsetTop)cols++;
+if(k==='ArrowRight')sel++;else if(k==='ArrowLeft')sel--;else if(k==='ArrowDown')sel+=cols;else if(k==='ArrowUp')sel-=cols;
+else if(k==='Enter'||k===' '){var i=sel;closeOverview();show(i);return true;}
+else if(k==='o'||k==='O'||k==='Escape'){closeOverview();return true;}else return false;
+sel=Math.max(0,Math.min(t.length-1,sel));mark();return true;}
+function openPresenter(){var u=location.href.split('#')[0];
+window.pw=open(u+(u.indexOf('?')<0?'?':'&')+'presenter#'+(cur+1),'lispresen-presenter','popup,width=1280,height=800');}
+d.addEventListener('keydown',function(e){if(e.altKey||e.ctrlKey||e.metaKey)return;
+var tg=e.target.tagName;if(tg==='TEXTAREA'||tg==='INPUT')return;var k=e.key;
+if(ov){if(overviewKey(k))e.preventDefault();return;}
+if(hooks.key.some(function(f){return f(k);})){e.preventDefault();return;}
+if(k==='ArrowRight'||k==='ArrowDown'||k==='PageDown'||k===' '||k==='Enter')move(1);
+else if(k==='ArrowLeft'||k==='ArrowUp'||k==='PageUp'||k==='Backspace')move(-1);
+else if(k==='Home')show(0);else if(k==='End')show(slides.length-1);
+else if((k==='f'||k==='F')&&!presenter)toggleFull();
+else if(k==='o'||k==='O')openOverview();
+else if((k==='p'||k==='P')&&!presenter)openPresenter();
+else if(k==='Escape'&&d.fullscreenElement)d.exitFullscreen();else return;e.preventDefault();});
+async function startHere(m){var o={};if(m.screen&&window.getScreenDetails){try{var sd=await getScreenDetails();
+sd.screens.forEach(function(s){if(s.left===m.screen.left&&s.top===m.screen.top)o.screen=s;});}catch(e){}}
+try{await stage.requestFullscreen(o);}catch(e){console.warn('lispresen: press F in this window for full screen',e);}}
+if(chan)chan.onmessage=function(e){var m=e.data;if(m.t==='go')show(m.i,true,m.k,m.m);
+else if(m.t==='hello'&&!presenter){send({t:'go',i:cur,k:shown});hooks.hello.forEach(function(f){f();});}
+hooks.msg.forEach(function(f){f(m);});};
+addEventListener('message',function(e){if(e.source===window.pw&&e.data&&e.data.t==='start')startHere(e.data);});
+function pad(n){return (n<10?'0':'')+n;}
+function buildPresenter(){de.classList.add('presenter');var pv=d.createElement('div');pv.id='pv';
+var bar=d.createElement('div');bar.className='pv-bar';var timer=d.createElement('span');timer.className='pv-timer';
+timer.title='Click to reset';var count=d.createElement('span');var start=d.createElement('button');start.textContent='Start';
+start.title='Full screen on the other display';bar.append(timer,count,start);
+var cu=d.createElement('div');cu.className='pv-cur';var nx=d.createElement('div');nx.className='pv-next';
+var notes=d.createElement('div');notes.className='pv-notes';pv.append(bar,cu,nx,notes);d.body.appendChild(pv);
+hooks.bar.forEach(function(f){f(bar);});
+var t0=Date.now();function tick(){var s=Math.floor((Date.now()-t0)/1000);timer.textContent=pad(Math.floor(s/60))+':'+pad(s%60);}
+setInterval(tick,500);tick();timer.onclick=function(){t0=Date.now();tick();};
+start.onclick=async function(){t0=Date.now();tick();var m={t:'start'};
+if(window.getScreenDetails){try{var ps=await navigator.permissions.query({name:'window-management'});
+if(ps.state==='granted'){var sd=await getScreenDetails();
+var other=sd.screens.filter(function(s){return s!==sd.currentScreen;})[0];if(other)m.screen={left:other.left,top:other.top};}
+else if(ps.state==='prompt')getScreenDetails().catch(function(){});}catch(e){}}
+var w=window.opener,o=/^https?:$/.test(location.protocol)?location.origin:'*';if(!w||w.closed)return;
+try{if(o==='*')throw 0;w.postMessage(m,{targetOrigin:o,delegate:'fullscreen'});}catch(e){w.postMessage(m,o);}};
+function render(i){cu.replaceChildren(thumb(i,true));
+nx.replaceChildren(i+1<slides.length?thumb(i+1):'');var a=slides[i].querySelector('.notes');notes.textContent=a?a.textContent:'';
+count.textContent=(i+1)+' / '+slides.length;scaleThumbs(pv);hooks.thumb.forEach(function(f){f(cu);});}
+hooks.go.push(render);addEventListener('resize',function(){scaleThumbs(pv);});}
+function px(st,name){return parseInt(st.getPropertyValue(name),10);}
+function next(list,v){var i=list.indexOf(v);return i>=0&&i<list.length-1?list[i+1]:0;}
+function setVars(st,vs){for(var k in vs)st.setProperty('--'+k,vs[k]+'px');}
+function bodyVars(s){return {'body':s,'body-lh':Math.ceil(s*15/10),'gap':Math.floor(s*3/5),'indent':Math.ceil(s*12/10),'item-gap':Math.floor(s/4)};}
+function codeVars(c){return {'code':c,'code-lh':Math.ceil(c*14/10),'code-pad':Math.floor(c/2)};}
+function tableVars(s){return {'table':s,'table-lh':Math.ceil(s*14/10),'cell-x':Math.floor(s*3/5),'cell-y':Math.floor(s/4)};}
+function over(el){return el.scrollHeight>el.clientHeight+1;}
+function check(){var log=[];slides.forEach(function(sl,i){var st=sl.style,notes=[];sl.classList.add('measure');
+var t=sl.querySelector(':scope>.title'),b=sl.querySelector(':scope>.body'),c=sl.querySelector(':scope>.centered'),s;
+if(t&&b){var room=parseInt(b.style.top,10)-cfg.top-cfg.gap;
+while(t.offsetHeight>room+1&&(s=next(cfg.steps.title,px(st,'--title')))){notes.push('title '+px(st,'--title')+'px -> '+s+'px');
+setVars(st,{'title':s,'title-lh':Math.ceil(s*13/10)});}}
+if(b){var regions=[b].concat(Array.prototype.slice.call(b.querySelectorAll('.column')));
+while(regions.some(over)){var moved=false;
+if((s=next(cfg.steps.body,px(st,'--body')))){notes.push('body '+px(st,'--body')+'px -> '+s+'px');setVars(st,bodyVars(s));moved=true;}
+if(b.querySelector('pre')&&(s=next(cfg.steps.code,px(st,'--code')))){notes.push('code '+px(st,'--code')+'px -> '+s+'px');setVars(st,codeVars(s));moved=true;}
+b.querySelectorAll('table').forEach(function(tb){var ts=next(cfg.steps.table,px(tb.style,'--table'));
+if(ts){notes.push('table '+px(tb.style,'--table')+'px -> '+ts+'px');setVars(tb.style,tableVars(ts));moved=true;}});
+if(!moved)break;}
+if(regions.some(over)){sl.classList.add('overflow');notes.push('overflows at the smallest sizes');}}
+if(c){while(over(c)&&(s=next(cfg.steps.stmt,px(st,'--stmt')))){notes.push('text '+px(st,'--stmt')+'px -> '+s+'px');
+setVars(st,{'stmt':s,'stmt-lh':Math.ceil(s*135/100)});}}
+hooks.place.forEach(function(f){f(sl,notes);});sl.classList.remove('measure');if(notes.length){sl.classList.add('corrected');
+notes.forEach(function(n){var line='slide '+(i+1)+': '+n;console.warn('lispresen: '+line);log.push(line);});}});
+if(params.has('check')&&!presenter){de.classList.add('check');var o=d.createElement('div');o.id='chk';
+o.textContent='runtime check: '+(log.length?NL+log.join(NL):'no corrections');d.body.appendChild(o);}}
+
+var boxes=Array.prototype.slice.call(d.querySelectorAll('#deck .codebox.runnable'));
+var BS=String.fromCharCode(92),DQ=String.fromCharCode(34);
+var HEADS=' lambda fn let let* letrec letfn flet labels if when unless cond case and or loop do dolist dotimes progn begin quote setf setq set! recur try catch handler-case unwind-protect block return-from multiple-value-bind destructuring-bind ns in-package require ';
+var CONSTS=' nil t true false #t #f #true #false ';
+function delim(c){return [32,9,10,13,12].indexOf(c.charCodeAt(0))>=0||('()[]{};`,'+DQ+String.fromCharCode(39)).indexOf(c)>=0;}
+function esc(s){var o='';for(var i=0;i<s.length;i++){var c=s[i];o+=c==='&'?'&amp;':c==='<'?'&lt;':c==='>'?'&gt;':c===DQ?'&quot;':c===String.fromCharCode(39)?'&#39;':c;}return o;}
+function highlight(t){var n=t.length,i=0,o='';
+function emit(k,e){var s=esc(t.slice(i,e));o+=k?'<span class=hl-'+k+'>'+s+'</span>':s;i=e;}
+function tend(j){while(j<n&&!delim(t[j]))j++;return j;}
+function cls(j){var k=t.slice(i,j).toLowerCase();if(k[0]===':')return 'k';if(CONSTS.indexOf(' '+k+' ')>=0)return 'n';
+var c=k[0],dg=function(x){return x>='0'&&x<='9';};if(dg(c)||(k.length>1&&'+-.'.indexOf(c)>=0&&dg(k[1])))return 'n';
+if(i>0&&t[i-1]==='('&&((k.length>3&&k.slice(0,3)==='def')||HEADS.indexOf(' '+k+' ')>=0))return 'd';return null;}
+while(i<n){var c=t[i],nx=i+1<n?t[i+1]:'',e,j;
+if(c===';'){e=t.indexOf(NL,i);emit('c',e<0?n:e);}
+else if(c==='#'&&nx==='|'){e=t.indexOf('|#',i+2);emit('c',e<0?n:e+2);}
+else if(c===DQ){j=i+1;while(j<n){if(t[j]===BS)j+=2;else if(t[j]===DQ){j++;break;}else j++;}emit('s',Math.min(j,n));}
+else if(c==='#'&&nx===BS)emit('s',tend(Math.min(n,i+3)));
+else if(c===BS)emit('s',tend(Math.min(n,i+2)));
+else if(delim(c))emit(null,i+1);
+else{j=tend(i);emit(cls(j),j);}}
+return o;}
+var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
+var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
+function workerMain(B){Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
+.then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
+catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({id:m.id,v:v});};postMessage({ready:1});})
+.catch(function(x){postMessage({fail:String(x)});});}
+function label(k){k.dataset.state=rt;k.textContent=rt==='ready'?'Run':rt==='loading'?'Loading':'Failed';
+k.title=rt==='ready'?'Run (Ctrl+Enter)':rt==='loading'?'Loading the runtime; a run waits for it':why+'; Run retries';}
+function setRt(s){rt=s;d.querySelectorAll('.tools .run').forEach(label);
+d.querySelectorAll('.rt').forEach(function(e){e.dataset.state=s;e.textContent='runtime: '+s;e.title=s==='failed'?why:'';});if(!presenter)send({t:'rt',s:s,why:why});}
+function fail(g,text){if(g!==gen)return;why=text;console.error('lispresen: '+text);setRt('failed');
+queue.forEach(function(i){output(i,text,true);});queue=[];}
+function startWorker(){if(worker)worker.terminate();worker=null;busy=-1;clearTimeout(timer);setRt('loading');var g=++gen;
+fetch(base+'rontoplayground.js').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' for '+r.url);return r.text();})
+.then(function(t){if(g!==gen)return;
+worker=new Worker(URL.createObjectURL(new Blob([t,NL+';('+workerMain.toString()+')('+JSON.stringify(base)+')'],{type:'text/javascript'})));
+worker.onmessage=function(e){var m=e.data;if(m.ready){setRt('ready');pump();}
+else if(m.fail)fail(g,'the runtime did not start from '+base+': '+m.fail);else done(m.id,m.v);};
+worker.onerror=function(e){fail(g,'the runtime did not start from '+base+': '+e.message);};})
+.catch(function(x){fail(g,!worker&&base.indexOf('file:')===0?'a deck opened as a file cannot fetch the runtime from '+base+
+'; serve the deck over HTTP (jwebserver) or use :runtime :hosted':'the runtime did not load from '+base+': '+x);});}
+function codeOf(b){return b.querySelector('pre.code').textContent;}
+function output(i,text,err,wait){var s=state[i];s.out=text;s.err=!!err;s.busy=!!wait;s.open=true;paint(boxes[i],s);share(i);}
+function outOf(b){var os=b.closest('.slide').querySelectorAll('.out');for(var k=0;k<os.length;k++)if(os[k].dataset.o===b.dataset.i)return os[k];}
+function place(b,o){var body=b.offsetParent;if(!body)return;var sl=b.closest('.slide'),st=sl.style;
+var top=body.offsetTop+b.offsetTop+b.offsetHeight+16,pre=b.querySelector('[aria-describedby]'),ids=pre?pre.getAttribute('aria-describedby').split(' '):[],room;
+sl.querySelectorAll(':scope>.say').forEach(function(c){if(ids.indexOf(c.id)>=0&&!c.classList.contains('pending')&&c.style.display!=='none')
+top=Math.max(top,c.offsetTop+c.offsetHeight+16);});room=H-cfg.bottom-top;
+if(room>=3*px(st,'--code-lh')+2*px(st,'--code-pad')){o.style.top=top+'px';o.style.bottom='auto';o.style.maxHeight=room+'px';}
+else{o.style.top='auto';o.style.bottom=cfg.bottom+'px';o.style.maxHeight=Math.floor(H*45/100)+'px';}}
+function paint(b,s){var o=outOf(b);o.firstChild.textContent=s.out;o.classList.toggle('err',s.err);o.classList.toggle('busy',s.busy);
+o.classList.toggle('open',s.open);if(s.open)place(b,o);
+if(s.busy)b.closest('.slide').querySelectorAll('.say.front').forEach(function(c){c.classList.remove('front');});}
+function scrollOut(root,k){if(k!=='ArrowDown'&&k!=='ArrowUp')return false;var o=root&&root.querySelector('.out.open pre');if(!o)return false;
+var step=3*px(o.closest('.slide').style,'--code-lh');
+if(k==='ArrowDown'?o.scrollTop+o.clientHeight<o.scrollHeight-1:o.scrollTop>0){o.scrollTop+=k==='ArrowDown'?step:-step;return true;}return false;}
+function hide(i){state[i].open=false;paint(boxes[i],state[i]);share(i);}
+function share(i){send({t:'code',i:i,s:state[i]});}
+function run(b){var i=+b.dataset.i;if(busy===i||queue.indexOf(i)>=0)return;queue.push(i);
+output(i,rt==='ready'?'running...':'waiting for the runtime...',false,true);if(rt==='failed')startWorker();else pump();}
+function pump(){if(busy>=0||!queue.length||rt!=='ready')return;var i=queue.shift(),b=boxes[i];busy=i;
+worker.postMessage({id:i,lang:b.dataset.lang.toLowerCase(),src:codeOf(b),fresh:b.hasAttribute('data-fresh'),stdin:b.dataset.stdin||''});
+var secs=+b.dataset.timeout||10;timer=setTimeout(function(){output(i,'timed out after '+secs+' s; the runtime restarted, so earlier definitions are gone',true);startWorker();},secs*1000);}
+function done(i,v){clearTimeout(timer);busy=-1;var err=typeof v==='string'&&v.indexOf('ERROR:')===0;output(i,err?v.slice(6).trim():String(v),err);pump();}
+function setCode(b,text,html){b.querySelector('pre.code code').innerHTML=html||highlight(text);var i=+b.dataset.i;state[i].text=text;share(i);
+var sl=b.closest('.slide');hooks.place.forEach(function(f){f(sl,[]);});}
+function reset(i){leave();setCode(boxes[i],orig[i].text,orig[i].html);focus(slides[cur],shown);hide(i);}
+function leave(){if(!editing)return;var ta=editing.querySelector('textarea');editing.closest('.slide').classList.remove('editing');editing=null;if(ta)ta.remove();}
+function edit(b){if(editing===b)return;leave();editing=b;b.closest('.slide').classList.add('editing');var pre=b.querySelector('pre.code'),ta=d.createElement('textarea');
+ta.value=codeOf(b);ta.spellcheck=false;ta.setAttribute('wrap','off');ta.style.height=pre.offsetHeight+'px';b.appendChild(ta);ta.focus();
+ta.addEventListener('input',function(){setCode(b,ta.value);});
+ta.addEventListener('scroll',function(){pre.scrollTop=ta.scrollTop;pre.scrollLeft=ta.scrollLeft;});
+ta.addEventListener('keydown',function(e){e.stopPropagation();
+if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run(b);}
+else if(e.key==='Escape'){e.preventDefault();leave();}
+else if(e.key==='Tab'){e.preventDefault();ta.setRangeText('  ',ta.selectionStart,ta.selectionEnd,'end');setCode(b,ta.value);}});
+ta.addEventListener('blur',function(){setTimeout(function(){if(editing===b&&d.activeElement!==ta)leave();},0);});}
+function tools(b,onRun,onReset){var t=d.createElement('div');t.className='tools';
+[['Run','Run (Ctrl+Enter)',onRun],['Reset','Restore the code',onReset]].forEach(function(x){var k=d.createElement('button');
+k.textContent=x[0];k.title=x[1];if(x[2]===onRun){k.className='run';label(k);}k.addEventListener('mousedown',function(e){e.preventDefault();});
+k.addEventListener('click',function(e){e.stopPropagation();x[2]();});t.appendChild(k);});b.appendChild(t);
+b.addEventListener('dblclick',function(e){e.stopPropagation();});}
+function apply(b,s){if(!s)return;b.querySelector('pre.code code').innerHTML=highlight(s.text);paint(b,s);}
+function openOn(i){return boxes.filter(function(b){return state[+b.dataset.i].open&&slides[i].contains(b);});}
+boxes.forEach(function(b,i){b.dataset.i=i;orig[i]={text:codeOf(b),html:b.querySelector('pre.code code').innerHTML};state[i]={text:orig[i].text,out:'',err:false,busy:false,open:false};
+var o=d.createElement('div');o.className='out';o.dataset.o=i;o.setAttribute('aria-live','polite');
+var c=d.createElement('button');c.textContent=String.fromCharCode(215);c.title='Close (Esc)';
+o.append(d.createElement('pre'),c);b.closest('.slide').appendChild(o);});
+hooks.go.push(function(i){openOn(i).forEach(function(b){place(b,outOf(b));});});
+if(presenter){var rtl=d.createElement('span');
+hooks.bar.push(function(bar){var r=d.createElement('button');r.textContent='Reset runtime';r.title='Start a new interpreter';
+r.onclick=function(){send({t:'reset-rt'});};rtl.className='rt';rtl.dataset.state=rt;rtl.textContent='runtime: '+rt;bar.append(rtl,r);});
+hooks.thumb.push(function(root){root.querySelectorAll('.codebox.runnable').forEach(function(b){var i=+b.dataset.i;
+var old=b.querySelector('.tools');if(old)old.remove();apply(b,state[i]);
+outOf(b).lastChild.onclick=function(){send({t:'hide',i:i});};
+tools(b,function(){send({t:'run',i:i});},function(){send({t:'reset',i:i});});});});
+hooks.key.push(function(k){return scrollOut(d.querySelector('.pv-cur'),k);});
+hooks.key.push(function(k){var open=k==='Escape'?openOn(cur):[];
+open.forEach(function(b){send({t:'hide',i:+b.dataset.i});});return open.length>0;});
+hooks.msg.push(function(m){if(m.t==='rt'){why=m.why||'';setRt(m.s);}else if(m.t==='code'){state[m.i]=m.s;
+d.querySelectorAll('#pv .codebox').forEach(function(b){if(+b.dataset.i===m.i)apply(b,m.s);});}});
+send({t:'hello'});}
+else{boxes.forEach(function(b,i){tools(b,function(){run(b);},function(){reset(i);});
+outOf(b).lastChild.onclick=function(){hide(i);};
+b.querySelector('pre.code').addEventListener('click',function(){edit(b);});});
+hooks.key.push(function(k){return scrollOut(slides[cur],k);});
+hooks.key.push(function(k){var open=k==='Escape'?openOn(cur):[];
+open.forEach(function(b){hide(+b.dataset.i);});return open.length>0;});
+hooks.key.push(function(k){if(k!=='e'&&k!=='E')return false;var b=slides[cur].querySelector('.codebox.runnable');if(b)edit(b);return !!b;});
+hooks.msg.push(function(m){if(m.t==='run')run(boxes[m.i]);else if(m.t==='reset')reset(m.i);else if(m.t==='hide')hide(m.i);
+else if(m.t==='reset-rt')startWorker();});
+hooks.hello.push(function(){send({t:'rt',s:rt,why:why});boxes.forEach(function(b,i){share(i);});});
+d.addEventListener('fullscreenchange',function(){var kb=navigator.keyboard;if(!kb||!kb.lock)return;
+if(d.fullscreenElement)kb.lock(['Escape']).catch(function(){});else kb.unlock();});
+startWorker();}
+
+var SAY=cfg.say;
+function cbox(r,o,k){return {l:Math.round((r.left-o.left)/k),t:Math.round((r.top-o.top)/k),r:Math.round((r.right-o.left)/k),b:Math.round((r.bottom-o.top)/k)};}
+function crects(list,o,k){var a=[];for(var j=0;j<list.length;j++)if(list[j].width>=1&&list[j].height>=1)a.push(cbox(list[j],o,k));return a;}
+function cunion(a){if(!a.length)return a;var u={l:a[0].l,t:a[0].t,r:a[0].r,b:a[0].b};
+a.forEach(function(r){u.l=Math.min(u.l,r.l);u.t=Math.min(u.t,r.t);u.r=Math.max(u.r,r.r);u.b=Math.max(u.b,r.b);});return [u];}
+function ctext(root,o,k){var a=[],w=d.createTreeWalker(root,NodeFilter.SHOW_TEXT),rg=d.createRange(),n;
+while((n=w.nextNode())){if(n.parentElement.closest('.say,.notes,.out'))continue;rg.selectNodeContents(n);a=a.concat(crects(rg.getClientRects(),o,k));}return a;}
+function cmeet(a,b){return a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;}
+function canchor(sl,c,o,k){var el=null,at=c.dataset.at;sl.querySelectorAll('[aria-describedby]').forEach(function(e){
+if(!el&&e.getAttribute('aria-describedby').split(' ').indexOf(c.id)>=0)el=e;});if(!el)return [];
+if(el.classList.contains('dg')){var r=el,ls,j;if(at!==undefined){r=null;ls=el.querySelectorAll('.dg-l:not(.dg-v)');
+for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent===at)r=ls[j];for(j=0;j<ls.length&&!r;j++)if(ls[j].textContent.indexOf(at)>=0)r=ls[j];
+if(r&&r.classList.contains('dg-t'))r=r.nextElementSibling;}
+return r?[cbox(r.getBoundingClientRect(),o,k)]:[];}
+if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.createRange(),w=d.createTreeWalker(el,NodeFilter.SHOW_TEXT),n;if(i<0)return [];
+while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
+return cunion(crects(rg.getClientRects(),o,k));}
+if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
+return cunion(ctext(el,o,k));}
+function cobstacles(sl,o,k){var a=ctext(sl,o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img'),fr=cbox(f.getBoundingClientRect(),o,k);
+if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
+sl.querySelectorAll('.tools,.dg-art>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
+function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
+function along(a,ext,lo,hi){return [a-Math.floor(ext/2),a-I,a-ext+I].map(function(p){return Math.max(lo,Math.min(hi-ext,p));});}
+ax=fl.r;ay=Math.floor((fl.t+fl.b)/2);along(ay,h,bd.t,bd.b).forEach(function(y){out.push({side:'right',x:ax+R,y:y,tail:ay-y,tb:{l:ax,t:ay-HB,r:ax+R,b:ay+HB}});});
+ax=Math.floor((fl.l+fl.r)/2);ay=fl.b;along(ax,w,bd.l,bd.r).forEach(function(x){out.push({side:'below',x:x,y:ay+R,tail:ax-x,tb:{l:ax-HB,t:ay,r:ax+HB,b:ay+R}});});
+ax=Math.floor((f1.l+f1.r)/2);ay=f1.t;along(ax,w,bd.l,bd.r).forEach(function(x){out.push({side:'above',x:x,y:ay-R-h,tail:ax-x,tb:{l:ax-HB,t:ay-R,r:ax+HB,b:ay}});});
+ax=f1.l;ay=Math.floor((f1.t+f1.b)/2);along(ay,h,bd.t,bd.b).forEach(function(y){out.push({side:'left',x:ax-R-w,y:y,tail:ay-y,tb:{l:ax-R,t:ay-HB,r:ax,b:ay+HB}});});
+return out;}
+function cfree(p,w,h,obs,bd){var C=SAY.clear,I=SAY.inset,g={l:p.x-C,t:p.y-C,r:p.x+w+C,b:p.y+h+C};
+return bd.l<=p.x&&p.x+w<=bd.r&&bd.t<=p.y&&p.y+h<=bd.b&&I<=p.tail&&p.tail<=(p.side==='right'||p.side==='left'?h:w)-I&&
+!obs.some(function(r){return cmeet(g,r)||cmeet(p.tb,r);});}
+function callouts(sl,notes){var cs=sl.querySelectorAll(':scope>.say'),body=sl.querySelector(':scope>.body');if(!cs.length||!body||!sl.offsetWidth)return;
+var o=sl.getBoundingClientRect(),k=o.width/W,bd=cbox(body.getBoundingClientRect(),o,k),obs=cobstacles(sl,o,k);
+Array.prototype.forEach.call(cs,function(c,j){var f=canchor(sl,c,o,k),w=c.offsetWidth,h=c.offsetHeight,ps,p=null,q,x,y;
+c.style.display=f.length?'':'none';if(!f.length)return;ps=ccands(f,w,h,bd);
+for(q=0;q<ps.length&&!p;q++)if(cfree(ps[q],w,h,obs,bd))p=ps[q];
+if(!p){if(!c.classList.contains('overflow')){c.classList.add('overflow');notes.push('callout '+(j+1)+' has no room');}}
+else{if(c.dataset.side!==p.side)notes.push('callout '+(j+1)+' '+c.dataset.side+' -> '+p.side);
+c.classList.remove('overflow');c.dataset.side=p.side;c.style.left=p.x+'px';c.style.top=p.y+'px';c.style.setProperty('--tail',(p.tail-SAY.border)+'px');}
+x=parseInt(c.style.left,10);y=parseInt(c.style.top,10);obs.push({l:x,t:y,r:x+w,b:y+h});if(p)obs.push(p.tb);});}
+hooks.place.push(callouts);
+
+addEventListener('resize',fit);
+d.addEventListener('fullscreenchange',function(){fit();wake();});
+addEventListener('hashchange',function(){show(fromHash());});
+stage.addEventListener('dblclick',toggleFull);
+fs.addEventListener('click',function(e){e.stopPropagation();fs.blur();toggleFull();});
+fs.addEventListener('dblclick',function(e){e.stopPropagation();});
+stage.addEventListener('mousemove',wake);
+stage.addEventListener('touchstart',function(e){x0=e.touches[0].clientX;},{passive:true});
+stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0;x0=null;
+if(Math.abs(dx)>50)move(dx<0?1:-1);});
+window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
+if(presenter)buildPresenter();
+deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});
+fit();show(fromHash(),presenter);
+if(d.fonts&&d.fonts.ready)d.fonts.ready.then(check);else check();
+})();</script>
+</body>
+</html>
