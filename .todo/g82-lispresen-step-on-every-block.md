@@ -37,5 +37,5 @@ the existing steps:
 - The model, HTML and player handle the new steps; the unit test for steps is extended
   (no new deftest unless no existing one can reach it).
 - README.md, DESIGN.md, `skills/lispresen/references/deck-format.md` and
-  `examples/intro.lisp` (a demo slide, golden updated) describe it.
+  `lispresen/examples/intro.lisp` (a demo slide, golden updated) describe it.
 - Checked in a browser, including `?check` reporting no corrections.
