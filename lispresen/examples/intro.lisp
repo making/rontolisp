@@ -1,8 +1,9 @@
 ;;;; intro.lisp -- a talk introducing lispresen, and the golden input of check.sh.
 ;;;;
-;;;; Each feature comes as a pair of slides: the first shows the deck code that writes it,
-;;;; the next shows the result. A feature the player provides gets instructions and then a
-;;;; slide to try it on.
+;;;; Each feature comes as a pair of slides under one title, the kicker telling them apart:
+;;;; 書き方 shows the deck code that writes it and 表示例 the result on the next slide. A
+;;;; feature the player provides gets 使い方, its instructions, and then 試す, a slide to try
+;;;; it on. The pair's kicker replaces the deck's section kicker.
 
 (deck :title "lispresen: S式で書くプレゼンテーション"
       :author "rontolisp"
@@ -58,7 +59,7 @@
 
 (section "デッキを書く")
 
-(slide :title "段落と箇条書きの書き方"
+(slide :title "段落と箇条書き" :kicker "書き方"
   (p (tt "slide") " の中に、ブロックを上から順に並べる。")
   (sexp "
     (slide :title \"段落と箇条書き\"
@@ -68,14 +69,14 @@
       (ol \"ol は番号付き\" \"7 項目からは警告する\")
       (notes \"発表者ウィンドウにだけ出る。\"))"))
 
-(slide :title "段落と箇条書き"
+(slide :title "段落と箇条書き" :kicker "表示例"
   "文字列だけでも段落になる。"
   (ul "ul は記号付きの箇条書き"
       (li "入れ子は" (ul "二段まで")))
   (ol "ol は番号付き" "7 項目からは警告する")
   (notes "発表者ウィンドウにだけ出る。"))
 
-(slide :title "文字の装飾の書き方"
+(slide :title "文字の装飾" :kicker "書き方"
   (p "装飾もフォームで書き、段落の中に並べる。")
   (sexp "
     (lead \"lead は控えめな色の段落\")
@@ -83,26 +84,26 @@
        (mark \"マーカー\") \"、\" (accent \"アクセント色\") \"、\"
        (link \"https://github.com/making/rontolisp\" \"リンク\"))"))
 
-(slide :title "文字の装飾"
+(slide :title "文字の装飾" :kicker "表示例"
   (lead "lead は控えめな色の段落")
   (p (b "太字") "、" (i "italic") "、" (tt "(code)") "、"
      (mark "マーカー") "、" (accent "アクセント色") "、"
      (link "https://github.com/making/rontolisp" "リンク")))
 
-(slide :title "表の書き方"
+(slide :title "表" :kicker "書き方"
   (p "行はセルのリスト。数値だけの列は右に揃う。")
   (sexp "
     (table :header (\"種類\" \"フォーム\" \"数\")
            :row-header t :align (:left :left :right)
-           :caption \"どれもリストとして書く\"
+           :caption \"デッキの要素は、どれもリストとして書く\"
       (\"図\" (tt \"flow cells bars\") \"3\")
       ...
       ((cell :colspan 2 \"合計\") \"27\"))"))
 
-(slide :title "デッキの要素"
+(slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
          :row-header t :align (:left :left :right)
-         :caption "どれもリストとして書く"
+         :caption "デッキの要素は、どれもリストとして書く"
     ("トップレベル" (tt "deck section slide define") "4")
     ("ブロック" (tt "p lead ul ol code quote column image table") "9")
     ("部品" (tt "li cell") "2")
@@ -111,7 +112,7 @@
     ("注釈" (tt "say notes source") "3")
     ((cell :colspan 2 "合計") "27")))
 
-(slide :title "引用と出典の書き方"
+(slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
   (sexp "
     (quote :cite \"Alan J. Perlis\"
@@ -119,13 +120,13 @@
     (source \"Alan J. Perlis, \" (i \"Epigrams on Programming\")
             \", SIGPLAN Notices 17(9), 1982\")"))
 
-(slide :title "考え方を変える言語"
+(slide :title "引用と出典" :kicker "表示例"
   (quote :cite "Alan J. Perlis"
     "A language that doesn't affect the way you think about programming is not worth knowing.")
   (source "Alan J. Perlis, " (i "Epigrams on Programming")
           ", SIGPLAN Notices 17(9), 1982"))
 
-(slide :title "コードの書き方"
+(slide :title "コードとコンソール" :kicker "書き方"
   (p "文字列の共通の字下げは取り除く。" (tt "console") " はシェルの記録として描く。")
   (sexp "
     (code :lang \"lisp\" :run nil \"
@@ -135,7 +136,7 @@
       $ lispresen/check.sh
       ok   interpreter\")"))
 
-(slide :title "コードとコンソール"
+(slide :title "コードとコンソール" :kicker "表示例"
   (code :lang "lisp" :run nil "
     (defun square (x)
       (* x x))")
@@ -145,7 +146,7 @@
     ok   jvm
     skip native: the jar carries no precompiler for this platform (linux-x86_64)"))
 
-(slide :title "段組みの書き方"
+(slide :title "段組み" :kicker "書き方"
   (p "続けて書いた " (tt "column") " が横に並ぶ。前後のブロックは全幅になる。")
   (sexp "
     (lead (b \"問題\") \" ... → \" (b (accent \"解決\")) \" ...\")
@@ -155,7 +156,7 @@
       (ul \"コードの列は ...\" \"残りを ...\"))"))
 
 ;; A lead above a row of columns; the columns' widths come from their content.
-(slide :title "列の幅は内容で決まる"
+(slide :title "段組み" :kicker "表示例"
   (lead (b "問題") " 等幅の列ではコードの行が収まらない → "
         (b (accent "解決")) " 列ごとに必要な幅を測って配分する")
   (column
@@ -165,7 +166,7 @@
     (ul "コードの列は最長の行が収まる幅を取る"
         "残りを文章の列が使う")))
 
-(slide :title "吹き出しの書き方"
+(slide :title "吹き出し" :kicker "書き方"
   (p "指す先を " (tt "say") " で包む。コードの中は " (tt ":at") " の文字列で指す。")
   (sexp "
     (li \"日本語の改行は \"
@@ -173,7 +174,7 @@
     (say \"n が 2 未満なら n を返す\" :at \"(< n 2)\"
       (code :lang \"lisp\" :run nil \"...\"))"))
 
-(slide :title "吹き出しで指す"
+(slide :title "吹き出し" :kicker "表示例"
   (ul "置き場所は lispresen が探す"
       (li "日本語の改行は " (say "BudouX のモデルで決める" (mark "文節ごと"))))
   (say "n が 2 未満なら n を返す" :at "(< n 2)"
@@ -181,18 +182,20 @@
       (defun fib (n)
         (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))")))
 
-(slide :title "流れ図の書き方"
+(slide :title "流れ図" :kicker "書き方"
   (p "箱を左から右へ矢印でつなぐ。" (tt ":at") " で箱の一つを指せる。")
   (sexp "
+    (lead \"lispresen の処理の流れ\")
     (say \"テンプレートもここで展開する\" :at \"parse\"
       (flow \"read\" \"parse\" \"segment\"
             \"layout\" \"lint\" \"emit\"))"))
 
-(slide :title "lispresen の処理の流れ"
+(slide :title "流れ図" :kicker "表示例"
+  (lead "lispresen の処理の流れ")
   (say "テンプレートもここで展開する" :at "parse"
     (flow "read" "parse" "segment" "layout" "lint" "emit")))
 
-(slide :title "コンスセルの書き方"
+(slide :title "コンスセル" :kicker "書き方"
   (p (tt "cells") " はリストを箱と矢印で描く。ドット対も描ける。")
   (sexp "
     (column
@@ -201,13 +204,13 @@
     (column (cells '((a . 1) (b . 2))))"))
 
 ;; The cdr chain on one row, each car below its cell, a dotted pair's cdr to its right.
-(slide :title "スライドもリスト"
+(slide :title "コンスセル" :kicker "表示例"
   (column
     (say "car はセルの下に描く" :at "slide"
       (cells '(slide :title "t" (p "x")))))
   (column (cells '((a . 1) (b . 2)))))
 
-(slide :title "画像の書き方"
+(slide :title "画像" :kicker "書き方"
   (p "画像は残りの場所に収まる。" (tt "--embed") " で HTML に埋め込む。")
   (sexp "
     (say \"--embed で HTML に埋め込んだ\"
@@ -215,27 +218,26 @@
              :alt \"read から emit までの六段階\"
              :caption \"PNG はテーマの色に従わない\"))"))
 
-(slide :title "画像"
+(slide :title "画像" :kicker "表示例"
   (say "--embed で HTML に埋め込んだ"
     (image "pipeline.png"
            :alt "read, parse, segment, layout, lint, emit の六段階"
            :caption "PNG はテーマの色に従わない")))
 
-(slide :title "テンプレートの書き方"
+(slide :title "テンプレート" :kicker "書き方"
   (p (tt "define") " で名前を付け、使う所を本体で置き換える。評価はしない。")
   (sexp "
     (define side (head &rest points)
       (column (p (b head)) (ul points)))
 
-    (slide :title \"インタプリタとコンパイラ\"
-      (side \"インタプリタ\" \"起動が速い\" \"eval が完全\")
-      (side \"コンパイラ\" \"実行が速い\" \"成果物が一つ\"))"))
+    (side \"インタプリタ\" \"起動が速い\" \"eval が完全\")
+    (side \"コンパイラ\" \"実行が速い\" \"成果物が一つ\")"))
 
 ;; A template: a use is replaced by the body, &rest spliced where it appears.
 (define side (head &rest points)
   (column (p (b head)) (ul points)))
 
-(slide :title "インタプリタとコンパイラ"
+(slide :title "テンプレート" :kicker "表示例"
   (side "インタプリタ" "起動が速い" "eval が完全")
   (side "コンパイラ" "実行が速い" "成果物が一つ"))
 
@@ -272,8 +274,8 @@
     ((cell (tt "column") " を含む") (tt "columns"))
     ("それ以外" (tt "standard"))))
 
-(slide :title "一文だけのスライドの書き方"
-  (p "題を付けずに段落を一つだけ置くと、大きな文字で中央に置く。")
+(slide :title "一文だけのスライド" :kicker "書き方"
+  (p "題を付けずに段落を一つだけ置くと、大きな文字で中央に置く。次のスライドが表示例。")
   (sexp "
     (slide \"読みやすさは、書き手ではなくツールが守る。\")"))
 
@@ -286,13 +288,13 @@
   (ul (li "診断には行番号が付く。" (tt "--strict") " なら警告でも失敗する")
       "文字色と背景のコントラストも検査する"))
 
-(slide :title "発表するマシンのフォントで測り直す"
+(slide :title "フォントで測り直す" :kicker "使い方"
   (p "発表するマシンのフォントは、lispresen が幅を測ったフォントと違うことがある。")
   (ul "開いたときに、各スライドの高さを測る"
       "はみ出す所だけ、段を一つずつ下げる"
       (li "URL に " (tt "?check") " を付けると、下げた所を一覧する")))
 
-(slide :title "測り直しを確かめる"
+(slide :title "フォントで測り直す" :kicker "試す"
   (ol (li "URL の末尾に " (tt "?check") " を付けて開き直す")
       (li "右上に " (tt "runtime check: no corrections") " と出れば、補正はない")))
 
@@ -300,7 +302,7 @@
 
 (section "発表する")
 
-(slide :title "キー操作"
+(slide :title "キー操作" :kicker "使い方"
   (table :header ("キー" "動作")
          :caption "スワイプでも送れる。印刷すると 1 枚 1 ページの PDF になる"
     ((tt "→ ↓ Space PageDown") "次へ")
@@ -311,13 +313,13 @@
     ((tt "P") "発表者ウィンドウ")
     ((tt "E") "コードの編集")))
 
-(slide :title "操作してみる"
+(slide :title "キー操作" :kicker "試す"
   (ol "← で一枚戻り、→ で戻ってくる"
       "O で一覧を開き、矢印で選んで Enter で開く"
       "F で全画面にし、もう一度 F で戻る"
       (li "URL の末尾を " (tt "#5") " にして開き直す")))
 
-(slide :title "発表者ウィンドウ"
+(slide :title "発表者ウィンドウ" :kicker "使い方"
   (p (tt "P") " で開く。どちらのウィンドウで送っても、もう一方が付いてくる。")
   (sexp "(notes \"このノートは発表者ウィンドウにだけ出る。\")")
   (ul "今のスライドと次のスライド"
@@ -325,26 +327,26 @@
       "タイマー (クリックで 0 に戻る)"
       "Start で、もう一つのディスプレイに全画面で映す"))
 
-(slide :title "発表者ウィンドウを開く"
+(slide :title "発表者ウィンドウ" :kicker "試す"
   (ol "P を押す"
       "このスライドのノートを読む"
       "→ で送り、こちらのウィンドウも進むことを確かめる")
   (notes "このノートは発表者ウィンドウにだけ出る。"))
 
-(slide :title "ページ送りの書き方"
+(slide :title "ページ送りで一つずつ見せる" :kicker "書き方"
   (p "ページ送りのたびに一つずつ見せる。隠れている間も場所を取る。")
   (sexp "
     (ol :step t \"リストの項目\" \"コードの行\"
         (li (say \"項目の後に出る\" :step t \"吹き出し\")))
     (code :steps ((1 2) \"(fib 20)\") ...)"))
 
-(slide :title "一つずつ見せる"
+(slide :title "ページ送りで一つずつ見せる" :kicker "表示例"
   (ol :step t "リストの項目" "コードの行"
       (li (say "項目の後に出る" :step t "吹き出し")))
   (p "→ で順に出し、← で一つずつ戻す。"
      (tt "(deck :callouts :step)") " ならどの吹き出しも送りで出る。"))
 
-(slide :title "コードを動かす書き方"
+(slide :title "コードを動かす" :kicker "書き方"
   (p "Lisp、Scheme、Clojure のコードはスライドの上で動く。")
   (sexp "
     (say \"Run で 6765 が出る\" :at \"(fib 20)\" :step t
@@ -356,7 +358,7 @@
 
 ;; Page advances bring the definition forward, then the call, then the callout on it; the
 ;; code is lines of a file beside the deck, its language from the extension.
-(slide :title "その場で動かす"
+(slide :title "コードを動かす" :kicker "表示例"
   (say "Run で 6765 が出る" :at "(fib 20)" :step t
     (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)")))
   (notes "Run を押す。続けて (fib 25) に書き換えて実行し、Reset で戻す。"))
@@ -365,11 +367,12 @@
   (p "同じ言語のコードは定義を共有する。前のスライドで Run してから実行する。")
   (code :lang "lisp" "(mapcar #'fib '(1 2 3 4 5 6 7 8 9 10))"))
 
-(slide :title "書き換えを動きで見せる書き方"
+(slide :title "書き換えを動きで見せる" :kicker "書き方"
   (p (tt ":morph t") " のスライドに入ると、前のスライドの最初のコードから変わる。")
   (sexp "
-    (slide :title \"ループで書き直す\" :morph t
+    (slide :title \"...\" :morph t
       (code :lang \"lisp\" \"
+        ;; ループで書き直す
         (defun fib (n)
           (loop for a = 0 then b
                 and b = 1 then (+ a b)
@@ -377,16 +380,18 @@
                 finally (return a)))\"))")
   (p "共通のトークンは移動し、消えるものは薄れ、増えるものは現れる。"))
 
-(slide :title "再帰で書く"
+(slide :title "書き換えを動きで見せる" :kicker "表示例"
   (code :lang "lisp" "
+    ;; 再帰で書く
     (defun fib (n)
       (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
     (fib 20)"))
 
 ;; :morph: on a page advance the code changes from the previous slide's, the tokens the
 ;; two share moving to their new place.
-(slide :title "ループで書き直す" :morph t
+(slide :title "書き換えを動きで見せる" :kicker "表示例" :morph t
   (code :lang "lisp" "
+    ;; ループで書き直す
     (defun fib (n)
       (loop for a = 0 then b
             and b = 1 then (+ a b)
@@ -394,14 +399,14 @@
             finally (return a)))
     (fib 20)"))
 
-(slide :title "Clojure と Scheme の書き方"
+(slide :title "Clojure と Scheme" :kicker "書き方"
   (p (tt ":timeout") " 秒で止める。" (tt ":fresh t") " は新しいインタプリタで、"
      (tt ":stdin") " を標準入力にして動かす。")
   (sexp "
     (code :lang \"clojure\" :timeout 5 \"...\")
     (code :lang \"scheme\" :fresh t :stdin \"3 4\" \"...\")"))
 
-(slide :title "Clojure と Scheme"
+(slide :title "Clojure と Scheme" :kicker "表示例"
   (column
     (code :lang "clojure" :timeout 5 "
       (defn square [x] (* x x)) ; a comment
@@ -425,7 +430,7 @@
 
 (section "見た目を選ぶ")
 
-(slide :title "テーマの書き方"
+(slide :title "テーマ" :kicker "書き方"
   (p "組み込みは " (tt ":light") "、" (tt ":dark") "、" (tt ":high-contrast") "、"
      (tt ":midnight") "。個々の色は名前で差し替える。")
   (sexp "
@@ -434,7 +439,7 @@
     (deck :theme (theme :base :light :code :dark))")
   (p "文字色はどれも、背景とのコントラスト比 4.5:1 以上を検査する。"))
 
-(slide :title "明るい地に暗いコード"
+(slide :title "テーマ" :kicker "表示例"
   (lead "このデッキは :light を基に、コードの色だけ :dark にした")
   (code :lang "lisp" :run nil "
     (list \"string\" :keyword 42 nil) ; a comment")
@@ -442,7 +447,7 @@
      " も同じテーマの色で描く。")
   (p (tt "--theme midnight") " を付けて描き直すと、このデッキが紺と金になる。"))
 
-(slide :title "道しるべの書き方"
+(slide :title "道しるべ" :kicker "書き方"
   (p "表紙、目次、題の上の小見出し、進み具合はデッキの冒頭で決める。")
   (sexp "
     (deck :title \"lispresen\" :author \"rontolisp\"
@@ -450,13 +455,13 @@
           :url \"https://github.com/making/rontolisp\"
           :agenda \"話の流れ\" :kicker :section
           :progress t :page-numbers t)
-    (slide :kicker \"スライドごとにも書ける\" ...)
+    (slide :kicker \"試す\" ...)
     (slide :kicker nil ...)"))
 
-(slide :title "道しるべを確かめる" :kicker "スライドごとにも書ける"
+(slide :title "道しるべ" :kicker "試す"
   (ol (li "Home で表紙に戻り、ロゴと URL の QR コードを見る")
       "節の始まりの目次では、今の節が強調される"
-      "題の上の小見出しは節の題。このスライドだけ別の文にした"
+      (li "題の上の小見出しは節の題。" (tt ":kicker") " で変えられる")
       "下端のバーとページ番号が今の位置を示す"))
 
 ;;; --- outputs and backends ---------------------------------------------------------
@@ -481,9 +486,10 @@
     ("SBCL" "なし" (tt "sbcl --script cli.lisp"))
     ("ブラウザ" (cell :colspan 2 (tt "web/") " のエディタが入力のたびに描き直す"))))
 
-(slide :title "棒グラフの書き方"
+(slide :title "棒グラフ" :kicker "書き方"
   (p "値は整数か、文字列で書いた小数。単位は書いたとおりに付く。")
   (sexp "
+    (lead \"コンパイルした CLI の大きさ\")
     (say \"JVM なしで動く\" :at \"ネイティブ\"
       (bars :unit \" KB\" (\"JVM (jar)\" 297) (\"WASM\" 788)
             (\"WASM component\" 796) (\"ネイティブ\" \"6,700\")))
@@ -491,7 +497,8 @@
 
 ;; A bar chart: a value is an integer or a decimal written as a string, the unit written
 ;; after it; the callout names a bar by its label. The source stands at the bottom.
-(slide :title "コンパイルした CLI の大きさ"
+(slide :title "棒グラフ" :kicker "表示例"
+  (lead "コンパイルした CLI の大きさ")
   (say "JVM なしで動く" :at "ネイティブ"
     (bars :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("WASM component" 796)
           ("ネイティブ" "6,700")))

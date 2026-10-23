@@ -1175,16 +1175,18 @@ before committing a change under `lispresen/`.
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
   `examples/`, so its files resolve), and requires each output to equal
   `examples/intro.html` byte for byte. The golden deck is a talk introducing lispresen
-  that shows each feature twice, as the deck code on one slide and as the result on the
-  next. It has runnable Lisp, Scheme (`:fresh`, `:stdin`) and Clojure (`:timeout`)
-  blocks, a columns slide built from a `&rest` template and a template the samples of deck
-  code go through, a lead above a row of a code column and a list column, console
-  transcripts, dark code panels (`:code :dark`), section kickers (one replaced, one
-  dropped), a named agenda, a title slide with an embedded SVG logo and a QR code, a
-  statement, a code morph, a quote with a source, tables (a row header, `:align`, a
-  `:colspan` cell, numeric columns), every inline form, an embedded PNG, ordered and
-  unordered lists, one revealed by steps, a flow, two cells drawings in columns (one with
-  dotted pairs), a bar chart with a source line under it, a progress bar, `:layout` and
+  that shows each feature twice under one title, as the deck code on one slide (kicker
+  `書き方`) and as the result on the next (`表示例`); a player feature gets its
+  instructions (`使い方`) and a slide to try it on (`試す`). It has runnable Lisp, Scheme
+  (`:fresh`, `:stdin`) and Clojure (`:timeout`) blocks, a columns slide built from a
+  `&rest` template and a template the samples of deck code go through, a lead above a row
+  of a code column and a list column, console transcripts, dark code panels
+  (`:code :dark`), section kickers (replaced on the paired slides, dropped on one), a
+  named agenda, a title slide with an embedded SVG logo and a QR code, a statement, a
+  code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
+  numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
+  revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
+  chart with a source line under it, a progress bar, `:layout` and
   `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
   line, a flow box, a cells atom and a bar; one on an image; and a step one named by
   `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
