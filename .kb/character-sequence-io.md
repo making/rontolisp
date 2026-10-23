@@ -127,19 +127,22 @@ sequence of up to three boundary bytes); `WasmLispCompilerIntegrationTest`
 `#everyBoundaryByteTripleDecodesAsJavasDecoderOnEveryCharacterRead` (every triple run
 together, 65,856 bytes, through the five read paths on both wasm targets);
 `readSequenceOverACharacterBufferDecodesABlockAtATime` in `LispEvaluatorTest` /
-`JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`; and the per-backend COST pins
-`evalReadSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes` /
-`compileReadSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes` /
-`readSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes`, which read the same 1,048,576
-characters as bytes and as characters off one file and bound the second by the first -- a
-self-calibrating ratio, so no machine-dependent millisecond budget is written down. The
-wasm pin runs the timed pair three times and pools the attempts -- cheapest string leg
-against the most generous byte leg, bound formula unchanged (2026-09-24, after the plain
-any-attempt-passes retry of `.todo/822` still failed once on CI near the bound's edge):
-contention only ever ADDS to a leg's time, so the min string leg is that
-leg's true cost and the max byte leg is the loosest honest denominator, while a
-per-character `fd_read` regression raises every attempt by ~1000x and its min still
-misses the bound by three orders of magnitude.
+`JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`, which also pin the COST
+invariant by protocol state instead of a clock: a direct `(%read-sequence-chars (make-string 2)
+in 0 nil)` over a file stream answers `2` (a decline answers NIL), and on the JVM a
+`read-sequence` in a defun compiles to exactly one `_readSeqChars` call (the shared
+expansion carries the arm). Neither catches a block arm that engages but reads one unit per
+host call; that is left to review.
+
+**The wall-clock cost pins were removed 2026-10-23.** `evalReadSequenceIntoAString...`,
+`compileReadSequenceIntoAString...` and the wasm `readSequenceIntoAString...` bounded the
+string leg by `500 + 6 * bytes` ms. Measured 2026-10-23 (local Mac, compiled class): JVM block
+arm 16 ms, the per-character `read-char` loop 56 ms; interpreter 12 ms against 473 ms. Both
+loops stay under the bound's 500 ms floor, so neither pin could fail on the regression it
+named. The JVM
+pin failed CI 22 times between 2026-10-07 and 2026-10-23 (string leg 507-938 ms against a
+0-13 ms byte leg, i.e. a ~500 ms absolute budget on a loaded 4-vCPU runner with methods
+CONCURRENT) with no product change; the wasm pin had flaked before its 2026-09-24 pooling.
 
 Related: `.kb/binary-sequence-io.md`, `.kb/string-accumulate-cost.md`,
 `.kb/string-index-cost.md`, `.kb/read-load-streams.md`, `.kb/adjustable-arrays.md`.

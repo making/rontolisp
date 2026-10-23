@@ -13615,6 +13615,9 @@ class WasmLispCompilerIntegrationTest {
 		// lost, :start/:end honoured, and the fd left exactly where the last character
 		// ended. Both the scalar and the --simd representation, and the --component
 		// adapter's fd_read.
+		// The last line proves the block arm took the read by its protocol state, not a
+		// clock: _read_seq_chars answers this buffer and fd with a fill position where a
+		// decline would answer NIL.
 		String code = """
 				(with-open-file (out "cs.txt" :direction :output :if-exists :supersede)
 				  (write-string (make-string 8191 :initial-element #\\x) out)
@@ -13632,9 +13635,10 @@ class WasmLispCompilerIntegrationTest {
 				        (tail (make-string 5 :initial-element #\\.)))
 				    (print (read-sequence head in))
 				    (print (read-sequence tail in :start 1 :end 4))
-				    (print (list head tail))))
+				    (print (list head tail))
+				    (print (%read-sequence-chars (make-string 2) in 0 nil))))
 				""";
-		String expected = "8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")";
+		String expected = "8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")\n2";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunWithDir(code, true, false)).isEqualTo(expected);
 		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
@@ -13774,48 +13778,6 @@ class WasmLispCompilerIntegrationTest {
 				"(" + decoded.size() + " " + all + " T)");
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
-	}
-
-	// Reading a file INTO A STRING may not cost one fd_read per character: the character
-	// arm of read-sequence used to read 1 to 4 bytes per code point through the WASI
-	// import, which made uiop:read-file-string 23x the cost of reading the same file as
-	// bytes (.kb/character-sequence-io.md). Both halves move the same 1,048,576
-	// characters off the same file; only the element type differs. The string leg's
-	// loaded-machine spread crosses the bound intermittently on CI (parallel JUnit on
-	// 4 CPUs with a cold wasmtime), while a per-character fd_read regression misses
-	// the bound on EVERY attempt. The bound formula is unchanged; what changed after
-	// a plain 3-attempt retry still failed once (CI run 35934234937:
-	// 786 ms against a 734 ms bound, all attempts over) is how the attempts are
-	// POOLED: the cheapest string leg against the most generous byte leg. Contention
-	// only ever ADDS to a leg's time, so the min string leg is that leg's true cost
-	// and the max byte leg is the loosest honest denominator -- and a per-character
-	// regression raises every attempt by ~1000x, so its min still misses the bound by
-	// three orders of magnitude and the pin keeps its teeth.
-	@Test
-	void readSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes() throws Exception {
-		String code = """
-				(with-open-file (out "cost.txt" :direction :output :if-exists :supersede)
-				  (write-string (make-string 1048576 :initial-element #\\y) out))
-				(defvar *t0* (get-internal-real-time))
-				(with-open-file (in "cost.txt" :element-type '(unsigned-byte 8))
-				  (read-sequence (make-array 1048576 :element-type '(unsigned-byte 8)) in))
-				(defvar *t1* (get-internal-real-time))
-				(with-open-file (in "cost.txt")
-				  (read-sequence (make-string 1048576) in))
-				(print (- *t1* *t0*))
-				(print (- (get-internal-real-time) *t1*))
-				""";
-		long bestChars = Long.MAX_VALUE;
-		long bestBytes = 0;
-		for (int attempt = 0; attempt < 3; attempt++) {
-			String[] lines = compileAndRunWithDir(code).split("\n");
-			bestBytes = Math.max(bestBytes, Long.parseLong(lines[0].trim()));
-			bestChars = Math.min(bestChars, Long.parseLong(lines[1].trim()));
-		}
-		assertThat(bestChars)
-			.as("1,048,576 characters read into a string (%d ms, cheapest of 3 attempts) "
-					+ "against the same file read into a byte vector (%d ms, slowest of 3)", bestChars, bestBytes)
-			.isLessThanOrEqualTo(500 + 6 * bestBytes);
 	}
 
 	@Test

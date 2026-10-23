@@ -2165,34 +2165,6 @@ class LispEvaluatorTest {
 			.isLessThanOrEqualTo(500 + 6 * shortString);
 	}
 
-	// Reading a file INTO A STRING may not cost a microsecond per character: the
-	// character arm of read-sequence used to decode and store one code point per host
-	// read, which made uiop:read-file-string 13x the cost of reading the same file as
-	// bytes (.kb/character-sequence-io.md). Both halves below move the same 1,048,576
-	// characters off the same file; only the element type differs.
-	@Test
-	void evalReadSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes(@TempDir Path tempDir) {
-		String file = tempDir.resolve("cost.txt").toString().replace("\\", "\\\\");
-		String output = evalMulti("""
-				(with-open-file (out "%s" :direction :output :if-exists :supersede)
-				  (write-string (make-string 1048576 :initial-element #\\y) out))
-				(let ((t0 (get-internal-real-time)))
-				  (with-open-file (in "%s" :element-type '(unsigned-byte 8))
-				    (read-sequence (make-array 1048576 :element-type '(unsigned-byte 8)) in))
-				  (let ((t1 (get-internal-real-time)))
-				    (with-open-file (in "%s")
-				      (read-sequence (make-string 1048576) in))
-				    (list (- t1 t0) (- (get-internal-real-time) t1))))
-				""".formatted(file, file, file)).print();
-		String[] halves = output.replace("(", "").replace(")", "").trim().split("\\s+");
-		long bytes = Long.parseLong(halves[0]);
-		long chars = Long.parseLong(halves[1]);
-		assertThat(chars)
-			.as("1,048,576 characters read into a string (%d ms) against the same file read "
-					+ "into a byte vector (%d ms)", chars, bytes)
-			.isLessThanOrEqualTo(500 + 6 * bytes);
-	}
-
 	@Test
 	void evalSubseqList() {
 		assertThat(eval("(subseq '(1 2 3 4 5) 1 3)").print()).isEqualTo("(2 3)");
@@ -12209,6 +12181,9 @@ class LispEvaluatorTest {
 		// stream left exactly where the last character ended. The 8,191 leading
 		// characters put the non-BMP one ON the 8,192-unit block boundary, which is the
 		// case a per-character read cannot get wrong and a block read can.
+		// The last line proves the block arm took the read by its protocol state, not a
+		// clock: the primitive answers this buffer and stream with a fill position, where
+		// a decline would answer NIL.
 		String file = tempDir.resolve("cs.txt").toString().replace("\\", "\\\\");
 		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(captured, true, StandardCharsets.UTF_8));
@@ -12229,12 +12204,13 @@ class LispEvaluatorTest {
 				        (tail (make-string 5 :initial-element #\\.)))
 				    (print (read-sequence head in))
 				    (print (read-sequence tail in :start 1 :end 4))
-				    (print (list head tail))))
+				    (print (list head tail))
+				    (print (%%read-sequence-chars (make-string 2) in 0 nil))))
 				""".formatted(file, file, file))) {
 			evaluator.eval(expr);
 		}
 		assertThat(captured.toString(StandardCharsets.UTF_8).trim())
-			.isEqualTo("8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")");
+			.isEqualTo("8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")\n2");
 	}
 
 	@Test

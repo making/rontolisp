@@ -28,9 +28,3 @@ weigh (measure, do not reason):
 - Mind the runtime cost: the native leg spends ~7 min on the corpus; a second
   whole pass in `test` pays it again on every push. The `--simd` second axis is
   native-leg-only and need not join the cheap pass.
-
-## Do not confuse with
-
-- The flaky `readSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes`
-  bound (fixed by pooling, `e0cf28d43`) -- that one is a loaded-runner timing
-  spread, not this gate.

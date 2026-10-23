@@ -6573,6 +6573,10 @@ class JvmLispCompilerTest {
 		// than lost, :start/:end honoured, and the stream left exactly where the last
 		// character ended. The 8,191 leading characters put the non-BMP one ON the
 		// 8,192-unit block boundary, which is the case the block read can get wrong.
+		// Since the loop answers the same characters, what proves the block arm took the
+		// read is its protocol state, not a clock: the expansion routes a read-sequence
+		// that may see characters through _readSeqChars, and the primitive answers this
+		// buffer and stream with a fill position where a decline would answer NIL.
 		String file = tempDir.resolve("cs.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
 				(with-open-file (out "%s" :direction :output :if-exists :supersede)
@@ -6591,37 +6595,14 @@ class JvmLispCompilerTest {
 				        (tail (make-string 5 :initial-element #\\.)))
 				    (print (read-sequence head in))
 				    (print (read-sequence tail in :start 1 :end 4))
-				    (print (list head tail))))
+				    (print (list head tail))
+				    (print (%%read-sequence-chars (make-string 2) in 0 nil))))
 				""".formatted(file, file, file)))
-			.isEqualTo("8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")");
-	}
-
-	// Reading a file INTO A STRING may not cost one host read per character: the
-	// character arm of read-sequence used to store one code point per read-char, which
-	// made uiop:read-file-string twice the cost of reading the same file as bytes
-	// (.kb/character-sequence-io.md). Both halves move the same 1,048,576 characters off
-	// the same file; only the element type differs.
-	@Test
-	void compileReadSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes() throws Exception {
-		String file = tempDir.resolve("cost.txt").toString().replace("\\", "\\\\");
-		String[] lines = compileAndRun("""
-				(with-open-file (out "%s" :direction :output :if-exists :supersede)
-				  (write-string (make-string 1048576 :initial-element #\\y) out))
-				(defvar *t0* (get-internal-real-time))
-				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
-				  (read-sequence (make-array 1048576 :element-type '(unsigned-byte 8)) in))
-				(defvar *t1* (get-internal-real-time))
-				(with-open-file (in "%s")
-				  (read-sequence (make-string 1048576) in))
-				(print (- *t1* *t0*))
-				(print (- (get-internal-real-time) *t1*))
-				""".formatted(file, file, file)).split("\n");
-		long bytes = Long.parseLong(lines[0].trim());
-		long chars = Long.parseLong(lines[1].trim());
-		assertThat(chars)
-			.as("1,048,576 characters read into a string (%d ms) against the same file read "
-					+ "into a byte vector (%d ms)", chars, bytes)
-			.isLessThanOrEqualTo(500 + 6 * bytes);
+			.isEqualTo("8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")\n2");
+		assertThat(ownCallsIn(compileToBytes("""
+				(defun fill-chars (buf in) (read-sequence buf in))
+				(print (fill-chars (make-string 1) *standard-input*))
+				"""), "FILL-CHARS", "_readSeqChars")).isOne();
 	}
 
 	@Test
