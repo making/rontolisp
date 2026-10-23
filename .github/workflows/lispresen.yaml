@@ -3,8 +3,8 @@ name: lispresen native executables
 # Builds lispresen as a native executable (`cli.lisp --native`) on each release platform,
 # requires each to render examples/intro.lisp to the golden HTML and PNG, and publishes them
 # on a prerelease of their own, `lispresen-<version>`. rontolisp is not built here: each
-# platform compiles with the rontolisp binary of the `<version>` release that ci.yaml
-# publishes, which carries that platform's --native pair (.kb/native-output.md).
+# platform compiles with the rontolisp binary the `<version>` release holds at that moment
+# (ci.yaml publishes it; it carries that platform's --native pair, .kb/native-output.md).
 on:
   push:
     branches:
@@ -22,33 +22,15 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
-
-env:
-  # The rontolisp sources a rontolisp binary is built from. A binary built from other
-  # sources than this commit's may compile lispresen differently from the golden output.
-  RONTOLISP_SOURCES: src/main rontolisp-native pom.xml
 
 jobs:
-  # Picks the rontolisp release to compile with. A push that changes rontolisp and
-  # lispresen together starts ci.yaml too, whose release comes about 80 minutes later;
-  # until it does, the published binary is the previous one. This job waits for a release
-  # built from this commit's rontolisp sources while a ci.yaml run on develop may still
-  # publish one, and otherwise goes on with the published binary: the golden check below
-  # then decides, and names the binary's commit when it fails.
-  rontolisp:
+  version:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
     outputs:
       version: ${{ steps.version.outputs.version }}
       is_snapshot: ${{ steps.version.outputs.is_snapshot }}
-      commit: ${{ steps.release.outputs.commit }}
-      current: ${{ steps.release.outputs.current }}
     steps:
     - uses: actions/checkout@v7
-      with:
-        # The release's commit is compared with this one.
-        fetch-depth: 0
     - name: Read the version
       id: version
       run: |
@@ -61,69 +43,8 @@ jobs:
         fi
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
-    - name: Wait for a rontolisp release of this commit's sources
-      id: release
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO: ${{ github.repository }}
-        VERSION: ${{ steps.version.outputs.version }}
-      run: |
-        set -euo pipefail
-        # The commit the release's tag names (empty without the tag). ci.yaml moves the
-        # tag BEFORE it uploads the binaries, so the tag alone does not say they are there.
-        tagged() {
-          gh api "repos/$REPO/git/ref/tags/$VERSION" --jq .object.sha 2> /dev/null || true
-        }
-        # The conclusions of the `release` job of every ci.yaml run of a commit.
-        release_jobs() {
-          gh api "repos/$REPO/actions/workflows/ci.yaml/runs?head_sha=$1" --jq '.workflow_runs[].id' |
-            while read -r id; do
-              gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
-                --jq '[.jobs[] | select(.name == "release")][0] | "\(.status) \(.conclusion)"'
-            done
-        }
-        # True when the release holds binaries built from this commit's rontolisp sources.
-        read -ra sources <<< "$RONTOLISP_SOURCES"
-        current() {
-          local sha=$1
-          [[ -n $sha ]] && git cat-file -e "$sha^{commit}" 2> /dev/null \
-            && git diff --quiet "$sha" "$GITHUB_SHA" -- "${sources[@]}" \
-            && release_jobs "$sha" | grep -x 'completed success' > /dev/null
-        }
-        # True while a ci.yaml run on develop has not finished its `release` job, so the
-        # release may still move.
-        pending() {
-          gh run list -R "$REPO" --workflow ci.yaml --branch develop --limit 20 \
-              --json databaseId,status --jq '.[] | select(.status != "completed") | .databaseId' |
-            while read -r id; do
-              gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
-                --jq '[.jobs[] | select(.name == "release")][0].status // "absent"'
-            done | grep -vx completed > /dev/null
-        }
-        deadline=$((SECONDS + 150 * 60))
-        while true; do
-          sha=$(tagged)
-          if current "$sha"; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-            echo "rontolisp $VERSION is built from $sha, whose rontolisp sources are this commit's"
-            break
-          fi
-          if ! pending; then
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::rontolisp $VERSION (${sha:-no tag}) is not built from this commit's rontolisp sources, and no ci.yaml run on develop is about to release one"
-            break
-          fi
-          if (( SECONDS > deadline )); then
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::gave up waiting for a rontolisp $VERSION release of this commit's rontolisp sources (now ${sha:-no tag})"
-            break
-          fi
-          echo "rontolisp $VERSION is at ${sha:-no tag}; a ci.yaml run is still to release, waiting"
-          sleep 60
-        done
-        echo "commit=$sha" >> "$GITHUB_OUTPUT"
   build:
-    needs: rontolisp
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -136,46 +57,34 @@ jobs:
     - uses: actions/checkout@v7
     - name: Download rontolisp
       env:
-        GH_TOKEN: ${{ github.token }}
-        VERSION: ${{ needs.rontolisp.outputs.version }}
+        URL: https://github.com/${{ github.repository }}/releases/download/${{ needs.version.outputs.version }}/rontolisp-${{ matrix.name }}
       run: |
         set -euo pipefail
-        gh release download "$VERSION" -R "${{ github.repository }}" -p "rontolisp-${{ matrix.name }}" -D "$RUNNER_TEMP/bin"
-        chmod +x "$RUNNER_TEMP/bin/rontolisp-${{ matrix.name }}"
-        "$RUNNER_TEMP/bin/rontolisp-${{ matrix.name }}" -v | tee "$RUNNER_TEMP/rontolisp-version.json"
+        curl -fsSL -o "$RUNNER_TEMP/rontolisp" "$URL"
+        chmod +x "$RUNNER_TEMP/rontolisp"
+        "$RUNNER_TEMP/rontolisp" -v
     - name: Build lispresen
       run: |
-        "$RUNNER_TEMP/bin/rontolisp-${{ matrix.name }}" lispresen/cli.lisp --native -o "lispresen-${{ matrix.name }}"
+        "$RUNNER_TEMP/rontolisp" lispresen/cli.lisp --native -o "lispresen-${{ matrix.name }}"
         ls -l "lispresen-${{ matrix.name }}"
     # The same check lispresen/check.sh makes of every backend: the deck renders to
-    # examples/intro.html and intro.png byte for byte, with no diagnostic.
+    # examples/intro.html and intro.png byte for byte, with no diagnostic. The golden files
+    # come from develop's rontolisp; a published rontolisp older than a change lispresen
+    # depends on fails here and publishes nothing, until a later run.
     - name: Render the intro deck
-      env:
-        COMMIT: ${{ needs.rontolisp.outputs.commit }}
-        CURRENT: ${{ needs.rontolisp.outputs.current }}
-      run: |
-        if lispresen/check.sh --exe "$PWD/lispresen-${{ matrix.name }}"; then
-          exit 0
-        fi
-        built=$(sed -n 's/.*"gitCommit": *"\([^"]*\)".*/\1/p' "$RUNNER_TEMP/rontolisp-version.json")
-        if [[ $CURRENT == true && -n $built && $COMMIT == "$built"* ]]; then
-          echo "::error::lispresen differs from examples/intro.html or intro.png, compiled by a rontolisp built from this commit's rontolisp sources ($built)"
-        else
-          echo "::error::lispresen differs from examples/intro.html or intro.png, compiled by a rontolisp built from $built, whose rontolisp sources are not this commit's: run this workflow again once ci.yaml has released this commit"
-        fi
-        exit 1
+      run: lispresen/check.sh --exe "$PWD/lispresen-${{ matrix.name }}"
     - name: Upload the executable
       uses: actions/upload-artifact@v7
       with:
         name: lispresen-${{ matrix.name }}
         path: lispresen-${{ matrix.name }}
   release:
-    needs: [rontolisp, build]
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      TAG: lispresen-${{ needs.rontolisp.outputs.version }}
+      TAG: lispresen-${{ needs.version.outputs.version }}
     steps:
     - name: Download the executables
       uses: actions/download-artifact@v8
@@ -189,7 +98,7 @@ jobs:
     # --cleanup-tag`): a failed create then leaves the install commands in
     # lispresen/README.md pointing at nothing (ci.yaml, "Move the snapshot tag").
     - name: Move the snapshot tag to this commit
-      if: needs.rontolisp.outputs.is_snapshot == 'true'
+      if: needs.version.outputs.is_snapshot == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -204,9 +113,9 @@ jobs:
       with:
         tag_name: ${{ env.TAG }}
         target_commitish: ${{ github.sha }}
-        prerelease: ${{ needs.rontolisp.outputs.is_snapshot }}
+        prerelease: ${{ needs.version.outputs.is_snapshot }}
         make_latest: false
-        name: ${{ needs.rontolisp.outputs.is_snapshot == 'true' && format('lispresen {0} (snapshot)', needs.rontolisp.outputs.version) || format('lispresen {0}', needs.rontolisp.outputs.version) }}
+        name: ${{ needs.version.outputs.is_snapshot == 'true' && format('lispresen {0} (snapshot)', needs.version.outputs.version) || format('lispresen {0}', needs.version.outputs.version) }}
         body: |
           lispresen as a native executable, built from ${{ github.sha }}; see [lispresen/README.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/lispresen/README.md#install).
         files: |

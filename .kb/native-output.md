@@ -129,13 +129,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   request's binary carries its own pair only; its cross-target tests skip.
 - **lispresen's executables** (`.github/workflows/lispresen.yaml`, since 2026-10-23): on a
   push to `develop` that changes `lispresen/**`, each platform's runner downloads the
-  `rontolisp-<os>-<arch>` binary of the `<version>` release, compiles `lispresen/cli.lisp
-  --native`, requires `lispresen/check.sh --exe` to match the golden deck and image, and
-  publishes `lispresen-<os>-<arch>` on the prerelease `lispresen-<version>` (its own tag, moved
-  in place like `release`'s, never "Latest"). It reads the binary's commit from `-v`
-  (`gitCommit`) and waits, while a `ci.yaml` run on `develop` has not finished `release`, for a
-  release whose `src/main`, `rontolisp-native` and `pom.xml` equal the pushed commit's. Renaming
-  the release assets, its tag or the `release` job breaks it.
+  `rontolisp-<os>-<arch>` binary the `<version>` release holds at that moment (no wait for a
+  release of the pushed commit), compiles `lispresen/cli.lisp --native`, requires
+  `lispresen/check.sh --exe` to match the golden deck and image, and publishes
+  `lispresen-<os>-<arch>` on the prerelease `lispresen-<version>` (its own tag, moved in place
+  like `release`'s, never "Latest"). Renaming the release assets or its tag breaks it.
 - **Cache**: `dlopen` needs a file. The shim is extracted to
   `<cache>/native/<sha256 16 hex>/<lib>` via temp file + atomic move; a file of the right
   size there is reused. `<cache>` = `-Drontolisp.native.cache`, else an absolute

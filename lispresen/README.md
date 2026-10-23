@@ -212,8 +212,9 @@ lispresen talk.lisp                                             # writes talk.ht
 ```
 
 On Linux the file is `lispresen-linux-amd64` or `lispresen-linux-arm64`. On macOS, a file
-downloaded with a browser is quarantined and refused at start-up;
-`xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that.
+downloaded with a browser is quarantined and killed at start-up;
+`xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that (`wget` and `curl` set no
+quarantine).
 
 ## Running
 
