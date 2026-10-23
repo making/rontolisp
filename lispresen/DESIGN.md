@@ -54,6 +54,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :author "Toshiaki Maki"
       :date "2026-10-22"
       :theme :light            ; :light | :dark | :high-contrast | :midnight | (theme ...), below
+      :lang "ja"               ; the page's <html lang>, a BCP 47 tag; "ja" by default
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
       :callouts :shown         ; :shown | :step, below
@@ -1044,7 +1045,7 @@ display face would need its own width table.
 
 One file containing:
 
-- `<html lang="ja">` and the slides as `<section class="slide layout-standard"
+- `<html lang="ja">` (the deck's `:lang`, `ja` by default; a tag of letters, digits and `-`, else an error) and the slides as `<section class="slide layout-standard"
   style="--body:52px ...">` elements with semantic markup (`h1`, `ul`, `pre><code`,
   `figure`, `blockquote`). A kicker is a `<p class="kicker">` before the `h1`, a row of
   columns a `<div class="columns">` in the body holding `<div class="column"
@@ -1333,7 +1334,10 @@ it takes none of the rendering options; a deck file named `new` is rendered as `
   built (`build-text`, as above), so they are decks that render and review as written,
   with no string escaping. `:date "YYYY-MM-DD"` is replaced by the date.
 - Japanese by default, as the tuning targets Japanese decks; `--lang en` for English.
-  The comments are English in both, as the README they point to is.
+  The comments are English in both, as the README they point to is. The English deck
+  sets `:lang "en"`. `:lang` changes the declaration only: phrase segmentation stays
+  BudouX's Japanese model. An inline `(lang ...)` form for a phrase in another language
+  is not added; the page-level tag is what assistive technology needs first.
 - Each shows the header (`:description`; `:theme`, `:url`, `:page-url` and `:page-image`
   as comments), sections, a list with notes, a statement, inline forms, runnable code,
   columns with a callout, a table and a flow. An image is a comment: the deck would name

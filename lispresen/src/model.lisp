@@ -32,6 +32,7 @@
   page-image
   page-image-font
   description
+  lang
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -953,6 +954,18 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
     (report :error ":runtime must be :hosted, :none or a URL string")
     nil)))
 
+(defun parse-lang-option (opts)
+  "The :lang of the deck header: a BCP 47 tag of letters, digits and hyphens, or nil."
+  (let ((v (string-option opts "LANG" "deck")))
+    (cond ((null v) nil)
+          ((and (plusp (length v))
+                (every (lambda (c) (or (char= c #\-) (and (< (char-code c) 128) (alphanumericp c))))
+                       v))
+           v)
+          (t
+           (report :error ":lang of deck must be a language tag of letters, digits and -")
+           nil))))
+
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
@@ -961,11 +974,12 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                                                     "KICKER" "AGENDA" "LOGO"
                                                     "URL" "PROGRESS" "PAGE-URL"
                                                     "PAGE-IMAGE" "PAGE-IMAGE-FONT"
-                                                    "DESCRIPTION") "deck")
+                                                    "DESCRIPTION" "LANG") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
                :date (string-option opts "DATE" "deck")
+               :lang (parse-lang-option opts)
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))

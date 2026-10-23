@@ -40,6 +40,7 @@ keyword starts the content.
 | `:logo (image "logo.svg" :alt "...")` | image above the title |
 | `:url "https://..."` | QR code of the URL, with the URL, in a free corner of the title slide |
 | `:theme` | `:light` (default), `:dark`, `:high-contrast`, `:midnight`, or `(theme ...)` below |
+| `:lang "en"` | the page's `<html lang>` (BCP 47 tag, default `ja`); set it for a non-Japanese deck; declaration only, phrase breaking stays Japanese |
 | `:aspect` | `:16x9` (default) or `:4x3` |
 | `:agenda t` / `:agenda "Title"` | agenda slide listing the sections; each section divider shows it with that section highlighted |
 | `:footer "text"` | one line at the left of the bottom band on every slide but the title slide (a hashtag, a handle, a label); `(slide :footer nil)` drops it |

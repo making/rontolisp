@@ -724,8 +724,10 @@ corner the fit solver chose."
   "<svg viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/></svg>")
 
 (defun write-deck (deck theme out)
-  (format out
-   "<!DOCTYPE html>~%<html lang=\"ja\">~%<head>~%<meta charset=\"utf-8\">~%")
+  (write-string "<!DOCTYPE html>
+<html lang=\"" out)
+  (write-escaped (or (deck-lang deck) "ja") out)
+  (format out "\">~%<head>~%<meta charset=\"utf-8\">~%")
   (format out
    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">~%")
   (write-string "<title>" out)

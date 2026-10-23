@@ -460,6 +460,10 @@ diagnostics"
       ;; No preview options, no tags: the head is as before.
       (ok (contains html "</title>
 <style>")))
+    (ok (contains (lispresen:render "(deck :lang \"en-US\")") "<html lang=\"en-US\">"))
+    (ok (contains (lispresen:render "(deck)") "<html lang=\"ja\">"))
+    (ok (equal (render-diagnostics "(deck :lang \"en\\\"x\")")
+               '((:error 1 ":lang of deck must be a language tag of letters, digits and -"))))
     (ok (contains (lispresen:render "(deck :title \"t&\" :description \"d\"
   :page-url \"https://e.x/a/t.html\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
                   "<title>t&amp;</title>
