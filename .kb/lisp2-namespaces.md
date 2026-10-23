@@ -62,8 +62,7 @@ symbol-function unexport unuse-package use-package`; JVM, P1 and component ident
 - All are REFERENCE-GATED: the bodies reach runtimes a source scan turns on by the operator's
   name, and a program that takes none as a value is untouched. The scans that see the body
   only after the gates were taught the reference: `usesRuntimeFunctionBox` counts
-  `#'symbol-function`/`#'fdefinition`, `callsLoadWithIfDoesNotExist` counts `#'load`/`'load`
-  (the `probe-file` splice), wasm's `usesEval` counts `makesComputedSynonymStream` -- whose
+  `#'symbol-function`/`#'fdefinition`, wasm's `usesEval` counts `makesComputedSynonymStream` -- whose
   computed arm traps on P1 and the component even in call position before 2026-10-07.
 - `FunctionDesignators.normalizeBuiltinDesignators` rewrites a literal
   `(symbol-function 'name)` / `(fdefinition 'name)` of a reference-gated name to `#'name`

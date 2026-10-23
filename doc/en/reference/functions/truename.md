@@ -13,10 +13,12 @@ leads: with `d` a link to `x/y`, `(truename "d/../f.txt")` is `#P"x/f.txt"`.
 Nothing is made absolute -- a relative path answers a path relative to the working
 directory, which a WASM module cannot name -- and a trailing `/` is kept. When you
 want an existence answer without the condition, use [`probe-file`](probe-file.md),
-which returns `nil` instead of signalling and answers the path as given.
+which answers the same pathname and returns `nil` instead of signalling.
 
-On both WASM backends a link whose target is absolute is not followed (the WASI host
-refuses it), so such a path is not there.
+On both WASM backends a link is resolved only where the module can read it, through a
+preopened directory, and a link whose target is absolute is not followed (the WASI
+host refuses it), so such a path is not there ([`probe-file`](probe-file.md) has the
+details).
 
 ```lisp
 (ignore-errors (truename "definitely-missing.txt"))   ; => NIL

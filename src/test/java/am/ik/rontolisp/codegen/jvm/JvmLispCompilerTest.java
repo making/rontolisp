@@ -5490,29 +5490,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void probeFileAnswersThePathOrNil() throws Exception {
+	void probeFileAnswersTheTruenameOrNil() throws Exception {
+		// The truename, as SBCL's (macOS's /var resolves); the first-class function and
+		// uiop:file-exists-p answer the same.
 		String file = tempDir.resolve("probe.txt").toString().replace("\\", "\\\\");
 		String missing = tempDir.resolve("absent.txt").toString().replace("\\", "\\\\");
+		String real = "#P\"" + tempDir.toRealPath().resolve("probe.txt") + "\"";
 		assertThat(compileAndRun("""
-				(with-open-file (out "%s" :direction :output) (write-line "x" out))
-				(print (probe-file "%s"))
-				(print (probe-file "%s"))
-				(print (if (probe-file "%s") 'yes 'no))
-				""".formatted(file, file, missing, missing)))
-			.isEqualTo("#P\"" + tempDir.resolve("probe.txt") + "\"\nNIL\nNO");
-	}
-
-	@Test
-	void probeFileAsFunctionValueAndViaUiop() throws Exception {
-		String file = tempDir.resolve("fc.txt").toString().replace("\\", "\\\\");
-		String missing = tempDir.resolve("fc-absent.txt").toString().replace("\\", "\\\\");
-		assertThat(compileAndRun("""
-				(with-open-file (out "%s" :direction :output) (write-line "x" out))
-				(print (mapcar #'probe-file (list "%s" "%s")))
-				(print (uiop:file-exists-p "%s"))
-				(print (uiop:file-exists-p "%s"))
-				""".formatted(file, file, missing, file, missing)))
-			.isEqualTo("(#P\"" + tempDir.resolve("fc.txt") + "\" NIL)\n#P\"" + tempDir.resolve("fc.txt") + "\"\nNIL");
+				(with-open-file (out "%1$s" :direction :output) (write-line "x" out))
+				(print (probe-file "%1$s"))
+				(print (if (probe-file "%2$s") 'yes 'no))
+				(print (mapcar #'probe-file (list "%1$s" "%2$s")))
+				(print (uiop:file-exists-p "%1$s"))
+				(print (uiop:file-exists-p "%2$s"))
+				""".formatted(file, missing))).isEqualTo(real + "\nNO\n(" + real + " NIL)\n" + real + "\nNIL");
 	}
 
 	@Test
@@ -5539,6 +5530,7 @@ class JvmLispCompilerTest {
 			(print (rel (truename (tl "dl/../a.txt"))))
 			(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
 			(print (rel (probe-file (tl "in"))))
+			(print (rel (uiop:directory-exists-p (tl "dl"))))
 			(print (with-open-file (s (tl "in")) (read-line s)))
 			(print (handler-case (truename (tl "none")) (file-error () :missing)))
 			(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
@@ -5549,7 +5541,8 @@ class JvmLispCompilerTest {
 			"tl/d/f.txt"
 			"tl/a.txt"
 			"tl/a.txt"
-			"tl/in"
+			"tl/a.txt"
+			"tl/d/"
 			"a"
 			:MISSING
 			"tl/d/new.txt\"""";
@@ -5754,7 +5747,8 @@ class JvmLispCompilerTest {
 			.isEqualTo(("(#P\"%sa.txt\" #P\"%sb.txt\" #P\"%ssub/\")\n" + "(#P\"%sa.txt\" #P\"%sb.txt\")\n"
 					+ "(#P\"%ssub/\")\n" + "(#P\"%s\")\n" + "NIL\n" + "#P\"%s\"\n" + "NIL\n"
 					+ "(#P\"%sa.txt\" #P\"%sb.txt\")\n" + "(#P\"%ssub/\")\n" + "(#P\"%s\" #P\"%ssub/\")")
-				.formatted(d, d, d, d, d, d, d, d, d, d, d, d, d));
+				// uiop:directory-exists-p answers the truename (macOS's /var resolves)
+				.formatted(d, d, d, d, d, d, d, root.toRealPath() + "/", d, d, d, d, d));
 	}
 
 	@Test
@@ -5879,7 +5873,7 @@ class JvmLispCompilerTest {
 				(print (probe-file "%s/b.txt"))
 				(print (handler-case (rename-file "%s/nope.txt" "c.txt") (error () :signalled)))
 				""".formatted(dir, dir, dir, dir)))
-			.isEqualTo(("#P\"%s/b.txt\"\nNIL\n#P\"%s/b.txt\"\n:SIGNALLED").formatted(root, root));
+			.isEqualTo(("#P\"%s/b.txt\"\nNIL\n#P\"%s/b.txt\"\n:SIGNALLED").formatted(root, root.toRealPath()));
 	}
 
 	@Test

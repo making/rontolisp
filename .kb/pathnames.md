@@ -109,11 +109,24 @@ All prelude Lisp, so the four backends run ONE definition each.
   `mayCreateInstances`, so mentioning it flips the instance gate like a `#P` does.
   `uiop:get-pathname-defaults` reads this special (`.kb/uiop.md`).
 
-- **`probe-file` answers the argument spelling; `truename` the physical one.** SBCL's
-  `probe-file` also resolves links (macOS `/var` -> `/private/var`); ours does not (2026-10-23),
-  because resolving would move every `probe-file` caller onto `%real-path`, and a WASI
-  preopen need not cover the physical path. Tests that compare `truename` with a `@TempDir`
-  use `toRealPath()`.
+- **`probe-file` answers the truename, as SBCL's does** (2026-10-23): `(%probe-file
+  (%real-path ns))`, and `truename` is `probe-file` plus the `file-error`. On macOS a
+  `@TempDir` under `/var` answers `/private/var`, so tests comparing either with a temp path
+  use `toRealPath()`. `uiop:directory-exists-p` answers the resolved spelling too; `uiop:file-exists-p`
+  lowers onto `probe-file`. **On WASM the walk resolves only what the preopens let the module
+  read** -- `%read-link` of a path no preopen covers (`/tmp` under `--dir /tmp`) answers nil,
+  an absolute target is refused -- so the answer is always a path the module can open, and no
+  mapping back through the preopen table is needed: under `--dir /tmp`,
+  `/tmp/f` answers `/tmp/f`; under `--dir /`, `/private/tmp/f`. A relative target that climbs
+  out of every preopen resolves to a path no preopen covers, so the probe answers nil -- the
+  host would refuse that escape through the link anyway.
+- **Callers asking only "is it there" use `%probe-file`, not `probe-file`**: the `open` /
+  `load` existence guards (`LispMacroExpander.existenceProbe`, over `coercePathArg`'s unwrap,
+  so a guard needs no prelude splice and walks no link) and `%directory-in`. ci-spec
+  `runtime-absolute-path-open-probe-and-load` pins the openable answer rather than its
+  host-dependent spelling.
+- **Still SBCL gaps**: a directory named without a trailing `/` is answered without one (SBCL
+  adds it), and `directory` answers the matched spelling, not truenames.
 
 ## Tests
 `LispReaderTest#readPathname*`; `LispEvaluatorTest#pathname*` plus its wild-pathname,

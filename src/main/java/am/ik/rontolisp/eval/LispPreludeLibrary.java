@@ -2300,15 +2300,11 @@ public final class LispPreludeLibrary {
 				        ((%obj-is %ns-path '%PATHNAME) (%obj-ref %ns-path 0))
 				        (t (error "NAMESTRING: not a pathname designator: ~S" %ns-path))))
 				""");
-		// truename: the path with its symbolic links resolved (%real-path), then asked
-		// whether it exists -- the resolved spelling, since a WASI host opens a path's
-		// last component without following a link in it.
+		// truename: probe-file plus the signal on a missing file.
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
-				  (let ((%tn-real (%real-path (namestring %tn-path))))
-				    (if (%probe-file %tn-real)
-				        (pathname %tn-real)
-				        (%file-error %tn-path (format nil "TRUENAME: no such file ~A" %tn-path)))))
+				  (or (probe-file %tn-path)
+				      (%file-error %tn-path (format nil "TRUENAME: no such file ~A" %tn-path))))
 				""");
 		// %real-path: the realpath(3) walk over the one per-backend primitive,
 		// %read-link,
@@ -2360,14 +2356,16 @@ public final class LispPreludeLibrary {
 				              (%rp-abs %rp-s)
 				              (t "./"))))))
 				""");
-		// probe-file: the pathname VALUE over the namestring the %probe-file primitive
-		// answers (the primitive stays string-in/string-out per backend), nil when the
-		// file is not there. Takes both designator spellings, like every path-taking
+		// probe-file: the truename as a pathname VALUE, nil when the file is not there --
+		// the path with its symbolic links resolved (%real-path), then asked whether it
+		// exists. The RESOLVED spelling is the one probed: on WASM the walk follows only
+		// the links the module can read through its preopens, so the answer is a path the
+		// module can open. Takes both designator spellings, like every path-taking
 		// operator.
 		SOURCES.put(LispNames.PROBE_FILE, """
 				(defun probe-file (%pf-path)
-				  (let ((%pf-r (%probe-file (namestring %pf-path))))
-				    (if %pf-r (pathname %pf-r) nil)))
+				  (let ((%pf-real (%real-path (namestring %pf-path))))
+				    (if (%probe-file %pf-real) (pathname %pf-real) nil)))
 				""");
 		// The directory-LISTING family: one Lisp rendering of the pattern, prefix,
 		// kind and ordering rules over the single per-backend primitive
@@ -2491,7 +2489,7 @@ public final class LispPreludeLibrary {
 				      (let* ((%din-p (concatenate 'string %din-d %din-n))
 				             (%din-f (%dir-namestring %din-p)))
 				        (cond ((%list-directory (if (string= %din-f "") "." %din-f)) (list %din-f))
-				              ((and (string/= %din-n "") (probe-file %din-p)) (list %din-p))
+				              ((and (string/= %din-n "") (%probe-file %din-p)) (list %din-p))
 				              (t nil)))))
 				""");
 		SOURCES.put(LispNames.DIRECTORY_SUBDIRS, """
@@ -5047,16 +5045,10 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program);
 		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
-			// The second producer is load's :if-does-not-exist option: the guard that
-			// reads it is built by LispMacroExpander.lowerLoadOptions inside the
-			// expression compilers, after this pass, so the surface fact -- the option
-			// being written at all -- is what selection can see.
-			// The third is open's existence guard (:if-exists / :if-does-not-exist /
-			// :direction :probe), built by LispMacroExpander.lowerRuntimeOpenOptions in
-			// the same place and read the same way.
-			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical)
-					|| am.ik.rontolisp.macro.LispMacroExpander.callsLoadWithIfDoesNotExist(program)
-					|| am.ik.rontolisp.macro.LispMacroExpander.callsOpenWithExistenceGuard(program);
+			// uiop:file-exists-p lowers onto probe-file after this pass. The open / load
+			// existence guards, built inside the expression compilers, call the
+			// %probe-file primitive instead and need no entry.
+			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {
 			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)

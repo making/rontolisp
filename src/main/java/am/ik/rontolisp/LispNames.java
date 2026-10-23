@@ -4722,19 +4722,20 @@ public final class LispNames {
 	public static final String CLOSE = "CLOSE";
 
 	/**
-	 * The {@code probe-file} built-in function: a PATHNAME value when the file exists,
-	 * {@code nil} otherwise. Prelude Lisp over {@link #PROBE_FILE_INTERNAL} -- the
-	 * primitive answers the namestring, the prelude wraps it in the pathname value
-	 * ({@code LispLayout.PATHNAME}) -- and it takes both designator spellings. It is the
-	 * existence probe (the {@code open} / {@code load} guards' one question), so it
-	 * resolves no symbolic link and makes nothing absolute: its answer carries the
-	 * argument namestring itself, where {@link #TRUENAME} resolves the links.
+	 * The {@code probe-file} built-in function: the truename as a PATHNAME value when the
+	 * file exists, {@code nil} otherwise -- every symbolic link resolved and every
+	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), nothing made
+	 * absolute, as SBCL resolves them. Prelude Lisp over {@link #PROBE_FILE_INTERNAL},
+	 * which probes the resolved namestring; takes both designator spellings.
+	 * {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load} existence
+	 * guards ask the primitive directly: they need no truename.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
 
 	/**
-	 * The {@code %probe-file} internal primitive behind {@link #PROBE_FILE}: takes a
-	 * namestring, answers it back when the file exists and {@code nil} otherwise. The one
+	 * The {@code %probe-file} internal primitive behind {@link #PROBE_FILE} and the
+	 * {@code open} / {@code load} existence guards: takes a namestring, answers it back
+	 * when the file exists and {@code nil} otherwise, resolving no link itself. The one
 	 * file primitive that does NOT signal on a missing path, so it is the only way to ask
 	 * the question on WASM (where a failed {@code open} traps rather than signalling,
 	 * which no {@code handler-case} can catch). Stays string-in/string-out on every
@@ -4757,7 +4758,7 @@ public final class LispNames {
 	 * {@code .} and {@code ..} taken out. A relative path stays relative to the working
 	 * directory (no backend needs to know it), an absolute one absolute; a component that
 	 * does not exist is kept as spelled. One Lisp definition on all four backends, behind
-	 * {@link #TRUENAME} and the Clojure front end's canonical paths.
+	 * {@link #PROBE_FILE}, {@link #TRUENAME} and the Clojure front end's canonical paths.
 	 */
 	public static final String REAL_PATH_INTERNAL = "%REAL-PATH";
 
@@ -8861,8 +8862,8 @@ public final class LispNames {
 
 	/**
 	 * {@code truename} (CL) -- the canonical namestring of an EXISTING file, signalling a
-	 * {@code file-error} when it does not exist: every symbolic link resolved and every
-	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}). Nothing is made
+	 * {@code file-error} when it does not exist: {@link #PROBE_FILE}'s answer, every
+	 * symbolic link resolved and every {@code .} / {@code ..} taken out. Nothing is made
 	 * absolute -- a relative argument answers a path relative to the working directory,
 	 * which no WASM backend can name -- and the signal is how the
 	 * {@code (ignore-errors (truename ...))} existence-probe idiom works.
@@ -10936,8 +10937,8 @@ public final class LispNames {
 
 	/**
 	 * {@code uiop:directory-exists-p} -- the directory twin of {@link #FILE_EXISTS_P}:
-	 * the namestring (with a trailing {@code /}) when the path names an existing
-	 * DIRECTORY, nil otherwise. Answered through
+	 * the truename (with a trailing {@code /}, links resolved) when the path names an
+	 * existing DIRECTORY, nil otherwise. Answered through
 	 * {@link am.ik.rontolisp.eval.SourceLoader} like {@link #PROBE_FILE}, so a host
 	 * without a filesystem (the browser playground) answers nil rather than failing.
 	 * local-time's {@code reread-timezone-repository} validates its repository root with

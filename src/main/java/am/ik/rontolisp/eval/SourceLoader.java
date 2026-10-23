@@ -32,7 +32,7 @@ public interface SourceLoader {
 	String load(String path) throws IOException;
 
 	/**
-	 * Whether a file exists at the given path -- what {@code probe-file} answers. The
+	 * Whether a file exists at the given path -- what {@code %probe-file} answers. The
 	 * default derives it from {@link #load} (a failed read means "not there"), the same
 	 * "attempt to read" pattern {@code AsdfSystems.locate} uses, so an alternative loader
 	 * (the browser playground's in-memory map) answers correctly without implementing

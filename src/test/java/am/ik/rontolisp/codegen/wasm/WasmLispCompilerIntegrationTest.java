@@ -11165,9 +11165,10 @@ class WasmLispCompilerIntegrationTest {
 		// (LispEvaluatorTest#truenameResolvesEverySymbolicLinkInThePath) on both
 		// backends, over the injected path_readlink (the adapter's over readlink-at
 		// under --component). Every target is RELATIVE: a WASI host follows no absolute
-		// one. probe-file and the open through tl/in also pin that a link in the LAST
-		// component is followed (path_open's symlink_follow), which both backends
-		// refused until then -- a path naming a link read as missing.
+		// one. probe-file and uiop:directory-exists-p answer the same truename, and the
+		// open through tl/in pins that a link in the LAST component is followed
+		// (path_open's symlink_follow), which both backends refused until then -- a path
+		// naming a link read as missing.
 		ExecResult staged = wasmtime.execInContainer("bash", "-c",
 				"cd " + workDir() + " && rm -rf tl && mkdir -p tl/d && echo a > tl/a.txt && echo f > tl/d/f.txt"
 						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up");
@@ -11181,6 +11182,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (rel (truename (tl "dl/../a.txt"))))
 				(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
 				(print (rel (probe-file (tl "in"))))
+				(print (rel (uiop:directory-exists-p (tl "dl"))))
 				(print (with-open-file (s (tl "in")) (read-line s)))
 				(print (handler-case (truename (tl "none")) (file-error () :missing)))
 				(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
@@ -11190,7 +11192,8 @@ class WasmLispCompilerIntegrationTest {
 				"tl/d/f.txt"
 				"tl/a.txt"
 				"tl/a.txt"
-				"tl/in"
+				"tl/a.txt"
+				"tl/d/"
 				"a"
 				:MISSING
 				"tl/d/new.txt\"""";
