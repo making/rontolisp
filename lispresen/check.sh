@@ -5,15 +5,18 @@
 # examples/intro.png byte for byte and the deck to raise no diagnostic, --version to print
 # the pom.xml version and the commit checked out, and the starter deck `new` writes to be
 # the same on every leg but for its date and to render without a diagnostic under
-# --strict; then runs the unit tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
+# --strict, and `serve` to answer the deck's page (the same on every leg that serves),
+# its build version and its image, where the two WASM legs refuse it; then runs the unit
+# tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
 # in portable Common Lisp, with rontolisp-only code behind #+rontolisp.
 #
 #   lispresen/check.sh            # verify
 #   lispresen/check.sh --update   # rewrite the golden HTML and PNG from the interpreter first
 #   lispresen/check.sh --exe PATH # verify only the lispresen executable at PATH (no jar needed)
 #
-# Needs the executable jar (./mvnw package; RONTOLISP_JAR overrides its path), java and
-# wasmtime; the SBCL leg is skipped when sbcl is not on PATH. The unit tests stay on
+# Needs the executable jar (./mvnw package; RONTOLISP_JAR overrides its path), java,
+# wasmtime, curl and python3 (a free port); the SBCL leg is skipped when sbcl is not on
+# PATH. The unit tests stay on
 # rontolisp: rove on SBCL needs bordeaux-threads, which is not vendored here.
 set -euo pipefail
 
@@ -74,6 +77,41 @@ check() {
     failed=1
     { echo "the starter deck:"; cat "$work/$name.new.err"; } >> "$log"
   fi
+  # serve: a WASM module accepts no connection, so those two legs must refuse it; every
+  # other leg serves the page (the first one's is the one the others must equal), the
+  # build's version and the image the page names, until it is stopped.
+  case $name in
+    wasm | wasm-component)
+      if (cd "$dir" && "$@" serve intro.lisp) > "$work/$name.serve.err" 2>&1 \
+          || ! grep -q 'serve needs a server socket' "$work/$name.serve.err"; then
+        failed=1
+        { echo "serve was not refused:"; cat "$work/$name.serve.err"; } >> "$log"
+      fi
+      ;;
+    *)
+      local port pid url
+      port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+      url=http://127.0.0.1:$port
+      (cd "$dir" && exec "$@" serve intro.lisp --port "$port") > "$work/$name.serve.err" 2>&1 &
+      pid=$!
+      if curl -fs --retry 120 --retry-connrefused --retry-delay 1 -o "$work/$name.served.html" "$url/" \
+          && [[ $(curl -fsS "$url/__lispresen/version") == 1 ]] \
+          && curl -fsS -o "$work/$name.served.png" "$url/pipeline.png" \
+          && cmp -s "$here/examples/pipeline.png" "$work/$name.served.png" \
+          && grep -q "/__lispresen/version" "$work/$name.served.html"; then
+        [[ -f $work/served.html ]] || cp "$work/$name.served.html" "$work/served.html"
+        if ! cmp -s "$work/served.html" "$work/$name.served.html"; then
+          failed=1
+          echo "the served page differs from the first leg's" >> "$log"
+        fi
+      else
+        failed=1
+        { echo "serve:"; cat "$work/$name.serve.err"; } >> "$log"
+      fi
+      kill "$pid" 2> /dev/null || true
+      wait "$pid" 2> /dev/null || true
+      ;;
+  esac
   if [[ -z $failed ]]; then
     echo "ok   $name"
   else

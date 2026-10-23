@@ -1307,6 +1307,7 @@ CLI:
 ```
 lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 lispresen new FILE [--lang ja|en] [--force]
+lispresen serve DECK [--port N] [--host ADDR] [--theme NAME] [--runtime URL|hosted|none]
 lispresen --version
 ```
 
@@ -1316,7 +1317,7 @@ lispresen --version
 - `--check` lints without writing output. `--strict` makes warnings fail.
 - Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
 - Diagnostics go to `*error-output*`.
-- `new` and `--version` are below.
+- `new`, `serve` and `--version` are below.
 
 ### Build information
 
@@ -1380,6 +1381,62 @@ arguments and results are allocated by a bump allocator that is never reset (abo
 per render of the golden deck), so the page instantiates the compiled module again once
 its memory passes 64 MB. `lispresen.wasm` is built, not committed.
 
+### Serve
+
+`lispresen serve DECK` serves the deck's page over HTTP and keeps it current while the
+deck is edited. A subcommand, as `new` is: it takes the rendering options that change
+the page (`--theme`, `--runtime`) and none that write files (`-o`, `--embed`, `--check`,
+`--strict` are unknown options there).
+
+- **The application is Clack's** (`src/serve.lisp`: the environment plist in, `(status
+  headers body)` out), and each host serves it with the server it has: Clack's
+  `clack.handler.rontolisp:run` on rontolisp (the built-in shim system, loaded with
+  `asdf:load-system`), which binds an address where the interpreter's and the JVM's own
+  server can and is the `--native` runner's server in a native executable; SBCL's
+  `sb-bsd-sockets` (one connection at a time, `Connection: close`) on SBCL. One
+  application, two transports; nothing in serve.lisp knows which.
+- **No WASM leg serves.** Preview 1 accepts no connection, and a component's server is
+  its host's (`wasmtime serve`, which would make the whole CLI a served component with no
+  `run`, re-run per instance, with no argument list). Both refuse at once, exit 1, without
+  building. The clack handler is read only `#+(or (and rontolisp (not rontolisp-wasm))
+  rontolisp-native)`, so neither WASM module carries it.
+- **Change detection is a poll the browser drives.** The page asks `/__lispresen/version`
+  every 500 ms; that request (and one for `/`) compares the deck's TEXT with the last
+  build's (`file-write-date` has whole seconds on every backend, and two saves in one
+  second are common) and the write dates of the files the build read (`read-file`
+  records them: the code files) and rebuilds on a difference; a file the browser was
+  served (an image) that changed only moves the version. Polling from the browser rather
+  than a server timer: no backend but the JVM ones has a thread to run one, and no change
+  needs noticing while no page is open. A long poll or server-sent events would hold a
+  connection the single-threaded transports (SBCL's loop, the module behind the native
+  runner) answer one at a time.
+- **The version, not a timestamp, is what moves**: a counter of builds and file changes,
+  so a rebuild that produced the same bytes (a comment edited) still reloads, which is
+  what the person saving expects to see.
+- **The reload keeps the slide.** The player keeps it in the URL (`#N`), but a build that
+  lost slides (an unbalanced parenthesis swallows the rest of the deck) clamps to its last
+  one and rewrites the hash, so the script carries the slide the viewer chose through the
+  reload in `sessionStorage` and sets `#N` before reloading; it follows the viewer when
+  they move.
+- **Diagnostics** go to standard error per build (`lispresen: built DECK: E errors, W
+  warnings`, then the lines `--check` prints) and, after a build with any, into a panel
+  over the slides (a `<pre>` fixed at the bottom, red for errors and amber for warnings,
+  hidden in print and by a click). A deck that cannot be read at all at a poll (an editor
+  replacing the file) keeps the last build.
+- **render's output is untouched**: the script and the panel are put in before `</body>`
+  of the HTML `render` answered, in serve only, so the golden deck and `lispresen DECK`
+  are byte-identical to before. Nothing is written: no HTML, no page image (`render`
+  runs without `:page-image`).
+- **Files beside the deck** are served at their relative paths (a `..` or empty segment
+  answers 404), so images need no `--embed` and a `--runtime` directory loads over HTTP.
+  `Cache-Control: no-store` on every answer, so a reload fetches a changed image.
+- **127.0.0.1 by default**: a deck in progress is not for the network; `--host 0.0.0.0`
+  opts in. `--open` is not offered: no rontolisp backend can start a process
+  (`uiop:run-program` is not implemented, and WASM has no processes), so the URL is
+  printed instead.
+- The application holds a lock around a request's rebuild (`rontolisp:with-mutex`): the
+  interpreter and the JVM answer each request on a thread of its own.
+
 ## Directory layout
 
 ```
@@ -1387,7 +1444,8 @@ lispresen/
   DESIGN.md              this file
   README.md              usage, offline runtime setup
   check.sh               cross-backend golden check + unit tests
-  cli.lisp               CLI host: arguments, file I/O, exit status, new, --version
+  cli.lisp               CLI host: arguments, file I/O, exit status, new, serve's
+                         transports, --version
   src/
     all.lisp             loads the sources below in order, but build and starter
     package.lisp         defpackage lispresen
@@ -1414,6 +1472,7 @@ lispresen/
     morph.lisp           the token pairing of a :morph slide's code
     lispresen.lisp       render
     starter.lisp         the starter deck lispresen new writes (CLI only)
+    serve.lisp           what lispresen serve answers: the page, rebuilds (CLI only)
   starter/
     ja.lisp, en.lisp     the starter decks, read in when lispresen is built
   skills/lispresen/
@@ -1458,8 +1517,10 @@ before committing a change under `lispresen/`.
   is written), and requires each output to equal `examples/intro.html` and each page image
   `examples/intro.png` byte for byte. Each leg must also print the `--version` line of
   the pom version and the commit checked out, and write a starter deck that renders with
-  no diagnostic under `--strict` and equals the first leg's but for its date (the
-  workflow runs the same check, `--exe`, on each published executable). The golden deck is a talk introducing lispresen
+  no diagnostic under `--strict` and equals the first leg's but for its date, and serve
+  the deck (`serve` on a free port, the page equal to the first serving leg's, the version
+  `1`, the image byte for byte) where the two WASM legs must refuse it (the workflow runs
+  the same check, `--exe`, on each published executable). The golden deck is a talk introducing lispresen
   that shows each feature twice under one title, as the deck code on one slide (kicker
   `書き方`) and as the result on the next (`表示例`); a player feature gets its
   instructions (`使い方`) and a slide to try it on (`試す`). It has runnable Lisp, Scheme
@@ -1533,7 +1594,11 @@ before committing a change under `lispresen/`.
 
 All three phases are implemented, and callouts after them. The compiled CLI is 297 KB as a jar, 788 KB as a WASM
 module, 796 KB as a component and 6.7 MB as a native executable (macOS arm64, measured
-2026-10-22 after phase 3); the BudouX weights are 17 KB of source.
+2026-10-22 after phase 3); the BudouX weights are 17 KB of source. By 2026-10-24 the
+deck format had grown it to a 1.58 MB WASM module and a 12.5 MB native executable, and
+serve took them to 1.62 MB (serve.lisp alone: no WASM module carries a server) and
+17.2 MB (the Clack handler, the server value model and the runner that serves; macOS
+arm64).
 
 ## Open points
 

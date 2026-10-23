@@ -9,8 +9,9 @@
 #+rontolisp (load "../src/all.lisp")
 #+rontolisp (load "../src/build.lisp")
 #+rontolisp (load "../src/starter.lisp")
+#+rontolisp (load "../src/serve.lisp")
 #-rontolisp
-(dolist (name '("all" "build" "starter"))
+(dolist (name '("all" "build" "starter" "serve"))
   (load (merge-pathnames (format nil "../src/~a.lisp" name) *load-truename*)))
 (asdf:load-system :rove)
 
@@ -827,5 +828,73 @@ y\\\")\"))
                                         :title "x"
                                         :message "m"))
           "t.lisp:3: slide 2 \"x\": warning: m")))
+
+(defun spit (path text)
+  (with-open-file (s path :direction :output :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string text s)))
+
+(defun slurp-octets (path)
+  (handler-case (with-open-file (s path :element-type '(unsigned-byte 8))
+                  (let ((v (make-array (file-length s)
+                                       :element-type '(unsigned-byte 8))))
+                    (read-sequence v s)
+                    v))
+    (error () nil)))
+
+(defun request (served path &optional (method :get))
+  "The response to a request for PATH as (STATUS CONTENT-TYPE BODY), BODY a string for a
+text type."
+  (destructuring-bind (status headers body)
+      (lispresen:served-respond served (list :request-method method :path-info path))
+    (let ((type (getf headers :content-type)))
+      (list status type
+            (if (search "image/" type) body (lispresen::utf-8-string body))))))
+
+(deftest serve
+  ;; The deck is written beside the example deck's image (check.sh runs the tests from
+  ;; this directory), so its page names a file serve hands out.
+  (let ((deck "../examples/serve-test.lisp")
+        (*error-output* (make-string-output-stream)))
+    (spit deck "(slide :title \"a\" (image \"pipeline.png\" :alt \"p\"))")
+    (unwind-protect
+         (let ((served
+                (lispresen:make-served deck :read-octets #'slurp-octets)))
+           (testing "the page is render's HTML with the reload script before </body>, and
+no panel without diagnostics"
+             (destructuring-bind (status type page) (request served "/")
+               (ok (= status 200))
+               (ok (equal type "text/html; charset=utf-8"))
+               (let* ((html (lispresen:render (uiop:read-file-string deck)))
+                      (at (search "</body>" html)))
+                 (ok (= (search (subseq html 0 at) page) 0))
+                 (ok (string= (subseq page (- (length page) (- (length html) at)))
+                              (subseq html at))))
+               (ok (contains page "var v='1'"))
+               (ok (not (contains page "lispresen-serve\""))))
+             (ok (equal (request served "/__lispresen/version")
+                        '(200 "text/plain; charset=utf-8" "1"))))
+           (testing "a file beside the deck is served as it is; one outside it is not"
+             (destructuring-bind (status type body) (request served "/pipeline.png")
+               (ok (= status 200))
+               (ok (equal type "image/png"))
+               (ok (equalp body (slurp-octets "../examples/pipeline.png"))))
+             (ok (= (first (request served "/../cli.lisp")) 404))
+             (ok (= (first (request served "/fonts//OFL.txt")) 404))
+             (ok (= (first (request served "/missing.png")) 404))
+             (ok (= (first (request served "/" :post)) 405)))
+           (testing "an edit rebuilds and moves the version; a build with diagnostics
+carries the panel, and the next good one drops it"
+             (spit deck "(slide :title \"a\" (b \"unclosed\")")
+             (ok (equal (third (request served "/__lispresen/version")) "2"))
+             (let ((page (third (request served "/"))))
+               (ok (contains page "var v='2'"))
+               (ok (contains page "lispresen serve: 1 error, 0 warnings"))
+               (ok (contains page "serve-test.lisp:1: error: cannot read this form")))
+             (ok (equal (third (request served "/__lispresen/version")) "2"))
+             (spit deck "(slide :title \"b\")")
+             (ok (equal (third (request served "/__lispresen/version")) "3"))
+             (ok (not (contains (third (request served "/")) "lispresen-serve\"")))))
+      (delete-file deck))))
 
 (uiop:quit (if (run-suite :lispresen-test) 0 1))

@@ -73,7 +73,8 @@ jobs:
     # The same check lispresen/check.sh makes of every backend: the deck renders to
     # examples/intro.html and intro.png byte for byte, with no diagnostic; --version prints
     # the pom.xml version and this commit (github.sha, checked out); the starter deck
-    # renders with no diagnostic. The golden files come from develop's rontolisp; a
+    # renders with no diagnostic; serve answers the page, its version and its image
+    # (the runner's HTTP server). The golden files come from develop's rontolisp; a
     # published rontolisp older than a change lispresen depends on fails here and
     # publishes nothing, until a later run.
     - name: Check the executable

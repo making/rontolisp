@@ -213,6 +213,7 @@ wget https://github.com/making/rontolisp/releases/download/lispresen-0.1.0-SNAPS
 chmod +x lispresen-darwin-arm64
 sudo mv lispresen-darwin-arm64 /usr/local/bin/lispresen
 lispresen new talk.lisp                                         # a starter deck
+lispresen serve talk.lisp                                       # http://127.0.0.1:8000/, reloaded as you edit
 lispresen talk.lisp                                             # writes talk.html
 ```
 
@@ -278,6 +279,7 @@ sbcl --script lispresen/cli.lisp talk.lisp
 ```
 lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 lispresen new FILE [--lang ja|en] [--force]
+lispresen serve DECK [--port N] [--host ADDR] [--theme NAME] [--runtime URL|hosted|none]
 lispresen --version
 ```
 
@@ -292,6 +294,29 @@ success, 1 errors (or warnings under `--strict`), 2 usage.
 `new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
 with `--lang en`, dated today in UTC. An existing `FILE` is left alone and reported unless
 `--force` is given. A deck file named `new` is rendered as `./new`.
+
+`serve` serves the deck's page at `http://127.0.0.1:8000/` until it is stopped (Ctrl-C)
+and keeps it current while you edit: open the URL in a browser, save the deck, and the
+page reloads with the new build on the slide it showed. `--port` and `--host` choose
+where it listens (only this machine by default; `--host 0.0.0.0` lets a phone on the same
+network open it), `--theme` and `--runtime` are the rendering options above.
+
+- The page is the HTML `lispresen DECK` writes, plus a script that asks the server every
+  half second whether the build changed. Each ask compares the deck's text and the dates
+  of the files the build read (the code files `(code :file ...)` names) with what they
+  were and rebuilds on a difference; an image or other file the page loaded that
+  changed reloads the page without a rebuild. Nothing is rebuilt while no browser asks.
+- The files beside the deck are served at their relative paths, so images need no
+  `--embed`, and a `--runtime` directory beside the deck loads over HTTP. Nothing is
+  written to disk: no HTML, no page image.
+- Each build's diagnostics go to standard error as above. In the browser, a build with
+  any shows them in a panel over the slides (a click hides it); the next build without
+  any removes it. A deck that stops reading (an unbalanced parenthesis) still shows the
+  slides before the error, and the page returns to the slide you were on when it is fixed.
+
+`serve` runs on the native executable, the interpreter, the JVM and SBCL. A WASM module
+(Preview 1 or a component) cannot accept a connection, so there it exits with status 1
+saying so.
 
 `--version` prints the version and the commit lispresen was built from, in the shape of
 `rontolisp --version`:
@@ -412,8 +437,8 @@ never breaks inside (`2026-10-22`, `1,000`).
 ## Development
 
 ```bash
-lispresen/check.sh            # every backend against the golden deck and image, --version and
-                              # the starter deck, then the unit tests
+lispresen/check.sh            # every backend against the golden deck and image, --version,
+                              # the starter deck and serve, then the unit tests
 lispresen/check.sh --update   # regenerate examples/intro.html and intro.png first
 ```
 
