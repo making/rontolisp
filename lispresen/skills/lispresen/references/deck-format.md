@@ -70,8 +70,8 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `"text"` or `(p inline...)` | paragraph |
 | `(lead inline...)` | paragraph in the muted color, e.g. above columns |
 | `(ul item...)`, `(ol item...)` | list; an item is a string, an inline form or `(li inline... [nested list])`; `:step t` reveals one item per advance |
-| `(code [:lang "lisp"] "text")` | code block; common indentation removed. `lisp`, `scheme`, `clojure` are highlighted and runnable; `console` is a shell transcript (`$ ` lines are commands); any other `:lang` is plain |
-| `(code :file "fib.lisp" [:lines (4 6)])` | code from a UTF-8 file beside the deck |
+| `(code [:lang "lisp"] "text")` | code block; common indentation removed. `lisp`, `scheme`, `clojure` are highlighted and runnable; `console` is a shell transcript (`$ ` lines are commands); `java`, `kotlin`, `javascript`/`js`, `typescript`/`ts`, `c`, `cpp`, `go`, `rust`, `python`/`py`, `bash`/`sh`, `sql`, `json`, `yaml`/`yml` are highlighted, never run; any other `:lang` is plain |
+| `(code :file "fib.lisp" [:lines (4 6)])` | code from a UTF-8 file beside the deck; `:lang` defaults by extension (`.lisp`, `.java`, `.py`, `.sh`, `.json`, ...) |
 | `(quote [:cite "who"] inline...)` | quotation |
 | `(column block...)` | consecutive columns stand side by side; widths come from content |
 | `(image "path" :alt "text" [:caption "text"])` | image fitted into the remaining space |
