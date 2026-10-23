@@ -136,6 +136,10 @@ public final class ClojureLibrary {
 			        (rontolisp::%clojure-agent-pump agent))))
 			""";
 
+	private static final String HELPER_PREFIX = "%CLOJURE-";
+
+	private static final String NAMESPACE_VAR_PREFIX = "c%clojure.";
+
 	@Nullable private static volatile Set<String> functionNames;
 
 	private ClojureLibrary() {
@@ -172,6 +176,26 @@ public final class ClojureLibrary {
 	 * @return {@code true} when the library defines the function
 	 */
 	public static boolean isClojureFunction(String symbolName) {
+		return mayDefine(symbolName) && functionNames().contains(symbolName);
+	}
+
+	/**
+	 * Whether the name can be one the library defines, answered from its spelling alone:
+	 * every definition is a {@code rontolisp} {@code %clojure-} helper or a var of a
+	 * {@code clojure.*} namespace ({@code clojure.test}'s {@code *testing-vars*}). The
+	 * interpreter asks {@link #isClojureFunction} for every function name it resolves for
+	 * the first time and the compile path for every symbol of a program, so any other
+	 * name must not read the library ({@code .kb/source-language.md}, "The run-time
+	 * libraries' name gate").
+	 * @param symbolName the symbol name, in its canonical spelling
+	 * @return {@code false} when the library cannot define the name
+	 */
+	static boolean mayDefine(String symbolName) {
+		return symbolName.startsWith(NAMESPACE_VAR_PREFIX)
+				|| LispSymbol.memberName(symbolName).startsWith(HELPER_PREFIX);
+	}
+
+	private static Set<String> functionNames() {
 		Set<String> names = functionNames;
 		if (names == null) {
 			names = new HashSet<>();
@@ -181,9 +205,14 @@ public final class ClojureLibrary {
 					names.add(name.name());
 				}
 			}
+			for (String name : names) {
+				if (!mayDefine(name)) {
+					throw new IllegalStateException("clojure.lisp defines " + name + ", which mayDefine refuses");
+				}
+			}
 			functionNames = names;
 		}
-		return names.contains(symbolName);
+		return names;
 	}
 
 	/**

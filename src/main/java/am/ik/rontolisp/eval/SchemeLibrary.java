@@ -111,6 +111,8 @@ public final class SchemeLibrary {
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
+	private static final String NAME_PREFIX = "%SCHEME-";
+
 	@Nullable private static volatile Set<String> functionNames;
 
 	private SchemeLibrary() {
@@ -202,6 +204,25 @@ public final class SchemeLibrary {
 	 * @return {@code true} when the library defines the function
 	 */
 	public static boolean isSchemeFunction(String symbolName) {
+		return mayDefine(symbolName) && functionNames().contains(symbolName);
+	}
+
+	/**
+	 * Whether the name can be one the library defines, answered from its spelling alone:
+	 * every definition, generated ones included, is a {@code rontolisp} {@code %scheme-}
+	 * name. The interpreter asks {@link #isSchemeFunction} for every function name it
+	 * resolves for the first time and the compile path for every symbol of a program, so
+	 * any other name must not read the library and generate its run-time table: that took
+	 * a Common Lisp program's first prelude call from 0.2 s to 0.6 s
+	 * ({@code .kb/source-language.md}, "The run-time libraries' name gate").
+	 * @param symbolName the symbol name, in its canonical spelling
+	 * @return {@code false} when the library cannot define the name
+	 */
+	static boolean mayDefine(String symbolName) {
+		return LispSymbol.memberName(symbolName).startsWith(NAME_PREFIX);
+	}
+
+	private static Set<String> functionNames() {
 		Set<String> names = functionNames;
 		if (names == null) {
 			names = new HashSet<>();
@@ -211,9 +232,14 @@ public final class SchemeLibrary {
 					names.add(name.name());
 				}
 			}
+			for (String name : names) {
+				if (!mayDefine(name)) {
+					throw new IllegalStateException("scheme.lisp defines " + name + ", which mayDefine refuses");
+				}
+			}
 			functionNames = names;
 		}
-		return names.contains(symbolName);
+		return names;
 	}
 
 	/**
