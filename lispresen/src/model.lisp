@@ -93,8 +93,17 @@
   steps
   step-numbers
   morph)
+;;; An (image ...) or, with VIDEO true, a (video ...): the layout treats both alike.
 ;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
-(defstruct figure src alt caption caption-run strip)
+;;; FIT is :contain when an image filling the slide or a side of it is shown whole on the
+;;; background, nil to cover its area (the :fit option); SHARE is the (NUMERATOR
+;;; DENOMINATOR) of the canvas width it takes beside text, nil for half (the :share option).
+;;; POSTER, LOOP, MUTED and AUTOPLAY are a video's options; AUTOPLAY plays it when its
+;;; slide is entered.
+(defstruct figure src alt caption caption-run strip fit share video poster loop muted
+  autoplay)
+
+(defun figure-noun (f) (if (figure-video f) "video" "image"))
 (defstruct table-block
   header
   rows
@@ -493,21 +502,52 @@ those. Nil after reporting a malformed one."
             steps)))
 
 (defun parse-image (form)
-  (let ((src (cadr form)))
+  "The figure of an (image ...) or a (video ...) FORM, or nil after reporting."
+  (let* ((src (cadr form))
+         (video (equal (form-tag form) "VIDEO"))
+         (noun (if video "video" "image")))
     (if (not (stringp src))
         (progn
-          (report :error "(image ...) takes the image path first")
+          (report :error (format nil "(~a ...) takes the ~:*~a path first" noun))
           nil)
         (multiple-value-bind (opts rest)
-            (split-options (cddr form) '("ALT" "CAPTION") "image")
+            (split-options (cddr form)
+                           (append '("ALT" "CAPTION" "FIT" "SHARE")
+                                   (and video '("POSTER" "LOOP" "MUTED" "AUTOPLAY")))
+                           noun)
           (when rest
-            (report :error "(image ...) takes only a path and options"))
-          (let ((alt (string-option opts "ALT" "image")))
+            (report :error (format nil "(~a ...) takes only a path and options" noun)))
+          (let ((alt (string-option opts "ALT" noun)))
             (unless alt
-              (report :warning (format nil "image ~a has no :alt" src)))
+              (report :warning (format nil "~a ~a has no :alt" noun src)))
             (make-figure :src src
                          :alt alt
-                         :caption (string-option opts "CAPTION" "image")))))))
+                         :caption (string-option opts "CAPTION" noun)
+                         :fit (parse-image-fit (opt opts "FIT") noun)
+                         :share (parse-image-share (opt opts "SHARE") noun)
+                         :video video
+                         :poster (and video (raw-string-option opts "POSTER" noun))
+                         :loop (and (opt opts "LOOP") t)
+                         :muted (and (opt opts "MUTED") t)
+                         :autoplay (and (opt opts "AUTOPLAY") t)))))))
+
+(defun parse-image-fit (x noun)
+  "The :fit of an image or video: :contain, or nil for :cover and when absent."
+  (cond ((null x) nil)
+        ((equal (symbol-value-name x) "COVER") nil)
+        ((equal (symbol-value-name x) "CONTAIN") :contain)
+        (t (report :error (format nil ":fit of ~a must be :cover or :contain" noun)) nil)))
+
+(defparameter *image-shares* '((1 3) (1 2) (2 3)))
+
+(defun parse-image-share (x noun)
+  "The :share of an image or video as (NUMERATOR DENOMINATOR), or nil when absent."
+  (cond ((null x) nil)
+        ((and (rationalp x) (not (integerp x))
+              (member (list (numerator x) (denominator x)) *image-shares*
+                      :test #'equal))
+         (list (numerator x) (denominator x)))
+        (t (report :error (format nil ":share of ~a must be 1/3, 1/2 or 2/3" noun)) nil)))
 
 (defun parse-cell (x)
   (if (equal (form-tag x) "CELL")
@@ -767,7 +807,7 @@ holding it; nil when none does."
       (position-if (lambda (s) (search at s)) texts)))
 
 (defparameter *anchor-blocks*
-  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -816,7 +856,7 @@ callout points at, or else a paragraph holding it as inline content."
                  ((equal tag "SAY") (parse-block-say x in-column))
                  ((list-tag-p x) (parse-list x))
                  ((equal tag "CODE") (parse-code x))
-                 ((equal tag "IMAGE") (parse-image x))
+                 ((member tag '("IMAGE" "VIDEO") :test #'equal) (parse-image x))
                  ((equal tag "TABLE") (parse-table x))
                  ((equal tag "QUOTE") (parse-quote x))
                  ((equal tag "COLUMN") (parse-column x in-column))

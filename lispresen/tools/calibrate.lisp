@@ -32,8 +32,21 @@
    (list
     (list :b (list "lispresen: S式で書くプレゼンテーションとBold Latin Titles of a Deck")))
    (list "「かぎ括弧」『二重かぎ括弧』（丸括弧）、そして句読点。、が行頭に来ないように禁則処理を確かめるための少し長めの文章をここに書いておく。")
+   (list "デプロイ完了 ✅ 速度は 🚀 倍、失敗は ❌ 件。開発者 👨‍💻 と 🇯🇵 の利用者が ❤️ を送った。")
    (list
     "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")))
+
+(defparameter *emoji*
+  '("🚀" "✅" "✨" "❌" "⚠️" "❤️" "⭐" "😀" "🔥" "📦" "✔️" "➡️" "⏭" "🙏" "🫠" "🩷" "🇯🇵" "🇺🇸"
+    "👨‍💻" "👨‍👩‍👧‍👦" "👍🏽" "1️⃣" "☀️" "✂️" "🗓️" "🧠")
+  "Emoji and emoji sequences the page sets alone and compares with the model's width.")
+
+(defun symbol-table ()
+  "Flat list of (code normal-width bold-width) for Latin-1 symbols, punctuation and
+symbol blocks up to U+2BFF, and the tiles and enclosed letters of U+1F000-1F2FF."
+  (loop for (a b) in '((#xA0 #xFF) (#x2000 #x2BFF) (#x1F000 #x1F2FF))
+        append (loop for c from a to b
+                     append (list c (char-width c :normal) (char-width c :bold)))))
 
 (defparameter *check-script*
   "
@@ -45,9 +58,21 @@ var wide=[];[['400',MODEL.normal],['700',MODEL.bold]].forEach(function(t){for(va
 var s=document.createElement('span');s.style.cssText='font-size:1000px;white-space:pre;font-weight:'+t[0];
 s.textContent=String.fromCharCode(c).repeat(20);document.body.appendChild(s);var w=s.getBoundingClientRect().width/20;s.remove();
 if(w>t[1][c-32])wide.push(t[0]+' '+String.fromCharCode(c)+' '+Math.round(w)+'>'+t[1][c-32]);}});
+var emo=[];EMOJI.forEach(function(e){['400','700'].forEach(function(t){var s=document.createElement('span');
+s.style.cssText='font-size:1000px;white-space:pre;font-weight:'+t+';font-family:'+getComputedStyle(document.body).fontFamily;
+s.textContent=e[0].repeat(20);document.body.appendChild(s);var w=s.getBoundingClientRect().width/20;s.remove();
+if(w>e[1])emo.push(e[0]+' '+t+' '+Math.round(w)+'>'+e[1]);});});
+var sym=[],host=document.createElement('div');document.body.appendChild(host);
+SYMBOLS.forEach(function(e){var ch=String.fromCodePoint(e[0]);if(/\p{Cn}|\p{C}|\p{M}|\p{Z}/u.test(ch))return;
+[['400',e[1]],['700',e[2]]].forEach(function(t){var s=document.createElement('span');
+s.style.cssText='font-size:1000px;white-space:pre;font-weight:'+t[0]+';font-family:'+getComputedStyle(document.body).fontFamily;
+s.textContent=ch.repeat(4);host.appendChild(s);var w=s.getBoundingClientRect().width/4;s.remove();
+if(w>t[1]+0.5)sym.push(e[0].toString(16)+' '+t[0]+' '+Math.round(w)+'>'+t[1]);});});
 document.getElementById('result').textContent=ps.length+' paragraphs; model under browser: '+under.length+
 (under.length?' ('+under.join('; ')+')':'')+'; model one or more lines over: '+over+
-'; characters wider than the model: '+wide.length+(wide.length?' ('+wide.join('; ')+')':'');});
+'; characters wider than the model: '+wide.length+(wide.length?' ('+wide.join('; ')+')':'')+
+'; emoji wider than the model: '+emo.length+(emo.length?' ('+emo.join('; ')+')':'')+
+'; symbols wider than the model: '+sym.length+(sym.length?' ('+sym.join('; ')+')':'');});
 ")
 
 (defun write-calibration (path)
@@ -69,9 +94,12 @@ document.getElementById('result').textContent=ps.length+' paragraphs; model unde
             (format out "</p>~%")))))
     ;; The model's milli-em width of each printable ASCII character, margin included.
     (format out
-            "<script>var MODEL={normal:[~{~d~^,~}],bold:[~{~d~^,~}]};~a</script></body></html>~%"
+            "<script>var MODEL={normal:[~{~d~^,~}],bold:[~{~d~^,~}]},EMOJI=[~{[\"~a\",~d]~^,~}],SYMBOLS=[~{[~d,~d,~d]~^,~}];~a</script></body></html>~%"
             (loop for c from 32 to 126 collect (char-width c :normal))
             (loop for c from 32 to 126 collect (char-width c :bold))
+            (loop for e in *emoji*
+                  append (list e (run-full-width (make-text-run (list e)) 1000)))
+            (symbol-table)
             *check-script*)))
 
 (write-calibration (or (car (uiop:command-line-arguments)) "calibrate.html"))

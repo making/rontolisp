@@ -70,6 +70,24 @@ character after it, which Chrome breaks before"
     (let ((run (lispresen::make-text-run (list "一二三四五六七八九十"))))
       (ok (= (lispresen::run-lines run 56 560) 1))
       (ok (= (lispresen::run-lines run 56 559) 2))))
+  (testing "an emoji is 1 em and a sequence is one glyph that no line breaks inside"
+    ;; rocket, check mark, flag, ZWJ sequence, skin tone, keycap: 6 em at 100 px.
+    (let ((run (lispresen::make-text-run
+                (list (format nil "~a~a~a~a~a~a" (code-char #x1F680) (code-char #x2705)
+                              (coerce (list (code-char #x1F1EF) (code-char #x1F1F5)) 'string)
+                              (coerce (list (code-char #x1F468) (code-char #x200D)
+                                            (code-char #x1F4BB)) 'string)
+                              (coerce (list (code-char #x1F44D) (code-char #x1F3FD)) 'string)
+                              (coerce (list #\1 (code-char #xFE0F) (code-char #x20E3))
+                                      'string))))))
+      (ok (= (lispresen::run-full-width run 100) 600))
+      (ok (equal (lispresen::wrap-run run 100 250) '(0 2 7)))
+      (ok (= (lispresen::mono-width (lispresen::run-text run) 100) 600))
+      ;; Symbols Chrome sets wider than a Latin letter: ™, box drawing (614 in code).
+      (ok (equal (list (lispresen::char-width #x2122 :normal)
+                       (lispresen::char-width #x2500 :normal)
+                       (lispresen::char-width #x2500 :mono))
+                 '(1100 1000 614)))))
   (testing "Latin breaks at spaces, and a space ending a line takes no width"
     ;; aaa = 3 x 604 milli-em, the space 340, bbb = 3 x 677: 418.3 px at 100 px.
     (let ((run (lispresen::make-text-run (list "aaa bbb"))))
@@ -175,6 +193,31 @@ widens its first and last character"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")
                "layout-statement\" id=\"s1\" style=\"--stmt:120px")))
+  (testing "a lone untitled image fills the canvas; a split slide fits its text beside one,
+a video as an image"
+    (multiple-value-bind (html diagnostics)
+        (lispresen:render "(deck :page-numbers t)
+(slide (image \"a.jpg\" :alt \"a\"))
+(slide :title \"t\" :layout :image-left (video \"b.mp4\" :alt \"b\" :poster \"b.png\" :muted t :autoplay t) \"x\")
+(slide :title \"t\" :layout :image-right \"x\" (image \"c.jpg\" :alt \"c\" :share 1/3 :fit :contain))
+(slide :title \"t\" :layout :full (image \"d.jpg\" :alt \"d\"))
+(slide :layout :image-left (image \"e.jpg\" :alt \"e\" :caption \"c\") (video \"f.mp4\" :alt \"f\" :fit :fill))")
+      ;; No page number over the picture.
+      (ok (contains html "layout-full\" id=\"s1\" style=\"\">
+<figure class=\"bleed\" style=\"left:0px;width:1920px\"><img src=\"a.jpg\" alt=\"a\"></figure>
+</section>"))
+      ;; Half the 1920 px canvas, then the 112 px margins on both sides of the text.
+      (ok (contains html "style=\"--left:1072px;--width:736px;--right:112px;"))
+      ;; Played by the player on entering the slide, never by an autoplay attribute.
+      (ok (contains html "<figure class=\"bleed\" style=\"left:0px;width:960px\"><video src=\"b.mp4\" poster=\"b.png\" aria-label=\"b\" preload=\"metadata\" playsinline controls muted data-autoplay></video></figure>"))
+      (ok (contains html "<div class=\"body\" style=\"top:232px;height:776px\">
+<p>x</p>"))
+      (ok (contains html "style=\"--left:112px;--width:1056px;--right:752px;"))
+      (ok (contains html "<figure class=\"bleed contain\" style=\"left:1280px;width:640px\">"))
+      (ok (equal (mapcar #'lispresen::diagnostic-message diagnostics)
+                 '("the full layout needs an (image ...) or (video ...) without :caption as the only block, and no title, source or callout"
+                   ":fit of video must be :cover or :contain"
+                   "the image-left layout needs one (image ...) or (video ...) outside columns, without :caption or a callout on it")))))
   (testing "a source line takes its height and a gap out of the body or the statement"
     ;; Body: 1080 - 72 - (80 + 104 + 48) = 776, less 24 + 40; statement: 928 - 64.
     (let ((html
@@ -631,25 +674,30 @@ and libpng read them"
                     0 69 104 253 22 0 0 0 6 80 76 84 69 255 255 255 11 92 173 231 254 241
                     146 0 0 0 14 73 68 65 84 120 1 99 96 96 100 96 100 0 0 0 12 0 3 107
                     249 235 188 0 0 0 0 73 69 78 68 174 66 96 130)))))
-  (testing "local images become data: URIs typed by extension, in columns too"
-    (multiple-value-bind (html diagnostics) (lispresen:render "(slide :title \"a\" (image \"a.bmp\" :alt \"x\"))
+  (testing "local images and videos become data: URIs typed by extension, in columns too;
+a large video is reported"
+    (multiple-value-bind (html diagnostics)
+        (let ((lispresen::*embed-video-limit* 2))
+          (lispresen:render "(slide :title \"a\" (image \"a.bmp\" :alt \"x\"))
 (slide :title \"b\" (image \"b.png\" :alt \"x\"))
 (slide :title \"c\" (image \"https://example.com/c.png\" :alt \"x\"))
-(slide :title \"d\" (column (image \"d.SVG\" :alt \"x\")))"
-                                                              :read-file
-                                                              (lambda (src)
-                                                                (and (string=
-                                                                      src
-                                                                      "d.SVG")
-                                                                     (vector 60
-                                                                      115 62)))
-                                                              :embed t)
+(slide :title \"d\" (column (image \"d.SVG\" :alt \"x\")))
+(slide :title \"e\" (video \"e.webm\" :alt \"x\" :poster \"e.bmp\") (video \"f.mov\" :alt \"x\"))"
+                            :read-file
+                            (lambda (src)
+                              (and (member src '("d.SVG" "e.webm") :test #'string=)
+                                   (vector 60 115 62)))
+                            :embed t))
       (ok (contains html "src=\"data:image/svg+xml;base64,PHM+\""))
+      (ok (contains html "<video src=\"data:video/webm;base64,PHM+\" poster=\"e.bmp\""))
       (ok
        (equal (mapcar #'lispresen::diagnostic-message diagnostics)
               '("cannot embed image a.bmp: unknown type; use .png, .jpg, .jpeg, .gif, .webp, .avif, .svg"
                 "cannot embed image b.png: cannot read it"
-                "image https://example.com/c.png is a URL; only local files are embedded")))))
+                "image https://example.com/c.png is a URL; only local files are embedded"
+                "video e.webm is 0 MB, which makes the embedded HTML slow to open; shorten or compress it"
+                "cannot embed poster e.bmp: unknown type; use .png, .jpg, .jpeg, .gif, .webp, .avif, .svg"
+                "cannot embed video f.mov: unknown type; use .mp4, .webm")))))
   (testing "code files are read as UTF-8, by line range, the language by extension"
     (let ((a
            (concatenate 'vector (map 'vector #'char-code ";x

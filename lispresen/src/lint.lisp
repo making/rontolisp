@@ -55,12 +55,17 @@
                                     (diagram-size b) *diagram-floor*))))))
 
 (defun lint-footer (deck)
-  "Reports once a footer that does not fit on one line beside the page number."
+  "Reports once a footer that does not fit on one line beside the page number, in the
+text region of a slide that shows it."
   (when (and (deck-footer-run deck)
-             (some (lambda (s) (footer-shown-p deck s)) (deck-slides deck))
-             (> (run-lines (deck-footer-run deck) *page-number-size*
-                           (footer-width deck))
-                1))
+             (some (lambda (s)
+                     (and (footer-shown-p deck s)
+                          (> (run-lines (deck-footer-run deck) *page-number-size*
+                                        (- (fit-width (slide-fit s))
+                                           (- (content-width deck)
+                                              (footer-width deck))))
+                             1)))
+                   (deck-slides deck)))
     (report :warning
             "the footer does not fit on one line beside the page number and is cut; shorten it")))
 
@@ -71,14 +76,14 @@
              (report
               :warning "a kicker stands above a title; this slide has none"))
             ((> (run-lines (slide-kicker-run slide) *kicker-size*
-                           (content-width deck)) 1)
+                           (fit-width fit)) 1)
              (report
               :warning
               "the kicker does not fit on one line and is cut; shorten it"))))
     (when (slide-source-run slide)
       (let ((lines
              (run-lines (slide-source-run slide) *source-size*
-                        (content-width deck))))
+                        (fit-width fit))))
         (when (> lines 2)
           (report :warning (format nil
                                    "the source takes ~d lines; keep it to 2"
@@ -100,7 +105,7 @@
           (report :warning (format nil
                                    "code at ~dpx (floor ~dpx); shorten the lines or the block"
                                    (fit-code-size fit) *code-floor*))))
-      (lint-blocks (slide-blocks slide) fit (content-width deck)))
+      (lint-blocks (slide-blocks slide) fit (fit-width fit)))
     ;; The callouts of a slide share one size.
     (let ((c (car (slide-callouts slide))))
       (when (and c (< (callout-size c) *say-floor*))

@@ -8,12 +8,13 @@
 ;;;; from the previous slide's on a page advance. *RUNNER-SCRIPT*, included only when the deck
 ;;;; has runnable code, runs code blocks on the playground runtime in a Web Worker.
 ;;;; *SAY-SCRIPT*, included only when the deck has callouts, places their bubbles again on
-;;;; the geometry the browser drew. The slides are laid out without any of them; they only
-;;;; present and correct them.
+;;;; the geometry the browser drew. *VIDEO-SCRIPT*, included only when the deck has a
+;;;; video, plays and pauses videos as slides are entered and left, and on a click. The
+;;;; slides are laid out without any of them; they only present and correct them.
 ;;;;
 ;;;; They are written without double quotes and backslashes so they sit in a Lisp string
-;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY START })(); the
-;;;; runner and the callouts extend the player through HOOKS.
+;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY VIDEO START })(); the
+;;;; runner, the callouts and the videos extend the player through HOOKS.
 
 (in-package :lispresen)
 
@@ -24,7 +25,7 @@ var cfg=JSON.parse(d.getElementById('lp').textContent);
 var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs'),pg=d.getElementById('progress');
 var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
 var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
-var params=new URLSearchParams(location.search),presenter=params.has('presenter');
+var params=new URLSearchParams(location.search),presenter=params.has('presenter'),handout=params.has('notes');
 var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
 var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
 function send(m){if(chan)chan.postMessage(m);}
@@ -110,7 +111,10 @@ function pad(n){return (n<10?'0':'')+n;}
 function buildPresenter(){de.classList.add('presenter');var pv=d.createElement('div');pv.id='pv';
 var bar=d.createElement('div');bar.className='pv-bar';var timer=d.createElement('span');timer.className='pv-timer';
 timer.title='Click to reset';var count=d.createElement('span');var start=d.createElement('button');start.textContent='Start';
-start.title='Full screen on the other display';bar.append(timer,count,start);
+start.title='Full screen on the other display';
+var pn=d.createElement('button');pn.textContent='Print with notes';pn.title='Slides with their notes below, one per page';
+pn.onclick=function(){var u=location.href.split('#')[0].replace(/[?&]presenter/,'');open(u+(u.indexOf('?')<0?'?':'&')+'notes&print','lispresen-handout');};
+bar.append(timer,count,start,pn);
 var cu=d.createElement('div');cu.className='pv-cur';var nx=d.createElement('div');nx.className='pv-next';
 var notes=d.createElement('div');notes.className='pv-notes';pv.append(bar,cu,nx,notes);d.body.appendChild(pv);
 hooks.bar.forEach(function(f){f(bar);});
@@ -303,11 +307,11 @@ if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.cre
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
 return cunion(crects(rg.getClientRects(),o,k));}
 if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
-if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
 if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
 return cunion(ctext(el,o,k));}
 function cobstacles(sl,o,k){var a=ctext(sl,o,k);
-sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img'),fr=cbox(f.getBoundingClientRect(),o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video'),fr=cbox(f.getBoundingClientRect(),o,k);
 if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
 sl.querySelectorAll('.tools,.dg-art>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
 function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
@@ -332,10 +336,32 @@ x=parseInt(c.style.left,10);y=parseInt(c.style.top,10);obs.push({l:x,t:y,r:x+w,b
 hooks.place.push(callouts);
 ")
 
+(defparameter *video-script*
+  "
+var vids=Array.prototype.slice.call(deck.querySelectorAll('video')),vat=-1;
+vids.forEach(function(v,i){v.controls=false;v.dataset.v=i;});
+function vplay(v){var p=v.play();if(p&&p.catch)p.catch(function(e){console.warn('lispresen: the browser did not play the video',e);});}
+function vtoggle(v){if(v.paused)vplay(v);else v.pause();}
+function vclick(v,f){v.addEventListener('click',function(e){e.stopPropagation();f();});v.addEventListener('dblclick',function(e){e.stopPropagation();});}
+if(presenter)hooks.thumb.push(function(root){root.querySelectorAll('video').forEach(function(v){vclick(v,function(){send({t:'video',i:+v.dataset.v});});});});
+else{vids.forEach(function(v){vclick(v,function(){vtoggle(v);});});
+hooks.go.push(function(i){if(i===vat)return;var entered=vat>=0;vat=i;
+vids.forEach(function(v){if(!v.paused&&!slides[i].contains(v))v.pause();});
+if(entered)slides[i].querySelectorAll('video[data-autoplay]').forEach(vplay);});
+hooks.msg.push(function(m){if(m.t==='video'&&vids[m.i])vtoggle(vids[m.i]);});}
+")
+
 (defparameter *start-script*
   "
 addEventListener('resize',fit);
-d.addEventListener('fullscreenchange',function(){fit();wake();});
+d.addEventListener('fullscreenchange',function(){fit();wake();keepAwake();});
+var wl=null,wlBusy=false;
+function keepAwake(){var want=presenter||!!d.fullscreenElement;
+if(!want){if(wl){wl.release().catch(function(){});wl=null;}return;}
+if(wl||wlBusy||d.visibilityState!=='visible'||!navigator.wakeLock)return;wlBusy=true;
+navigator.wakeLock.request('screen').then(function(s){wlBusy=false;wl=s;
+s.addEventListener('release',function(){if(wl===s)wl=null;});keepAwake();},function(){wlBusy=false;});}
+d.addEventListener('visibilitychange',keepAwake);
 addEventListener('hashchange',function(){show(fromHash());});
 var y0=0,t0=0,tt=0,TAPPABLE='a,button,input,textarea,select,label,summary,video,audio,iframe,[contenteditable],[tabindex],.codebox.runnable,.out';
 function typing(){var a=d.activeElement;return !!a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'||a.isContentEditable);}
@@ -353,6 +379,10 @@ if(Math.abs(dx)>10||Math.abs(dy)>10||tt-t0>500||ov||presenter||e.target.closest(
 e.preventDefault();wake();move(p.clientX<stage.clientWidth/3?-1:1);});
 window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
 if(presenter)buildPresenter();
+keepAwake();
+if(handout&&!presenter){de.classList.add('handout');var ps=d.createElement('style');
+ps.textContent='@media print{@page{size:'+W+'px '+2*H+'px;margin:0}}';d.head.appendChild(ps);
+if(params.has('print'))addEventListener('load',function(){(d.fonts&&d.fonts.ready?d.fonts.ready:Promise.resolve()).then(function(){setTimeout(print,300);});});}
 deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});
 fit();show(fromHash(),presenter);
 if(d.fonts&&d.fonts.ready)d.fonts.ready.then(check);else check();

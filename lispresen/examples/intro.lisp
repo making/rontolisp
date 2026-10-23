@@ -105,19 +105,19 @@
            :caption \"デッキの要素は、どれもリストとして書く\"
       (\"図\" (tt \"flow cells bars\") \"3\")
       ...
-      ((cell :colspan 2 \"合計\") \"28\"))"))
+      ((cell :colspan 2 \"合計\") \"29\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
          :row-header t :align (:left :left :right)
          :caption "デッキの要素は、どれもリストとして書く"
     ("トップレベル" (tt "deck section slide agenda define") "5")
-    ("ブロック" (tt "p lead ul ol code quote column image table") "9")
+    ("ブロック" (tt "p lead ul ol code quote column image video table") "10")
     ("部品" (tt "li cell") "2")
     ("図" (tt "flow cells bars") "3")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "28")))
+    ((cell :colspan 2 "合計") "29")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -278,6 +278,43 @@
            :alt "read, parse, segment, layout, lint, emit の六段階"
            :caption "PNG はテーマの色に従わない")))
 
+(slide :title "画面いっぱいの画像" :kicker "書き方"
+  (p "題も本文もなく画像だけを置くと、画像で画面を覆う。次のスライドが表示例。")
+  (ul (li (tt ":fit :contain") " なら切り取らず、全体を背景の上に収める")
+      "写真の上に文字は置かない。ページ番号も出さない")
+  (sexp "
+    (slide (image \"photo.svg\" :alt \"夕暮れの山並み\"))"))
+
+(slide (image "photo.svg" :alt "夕暮れの山並みの絵"))
+
+(slide :title "画像と文章を並べる" :kicker "書き方"
+  (p (tt ":layout :image-left") " か " (tt ":image-right") " で、画像を画面の端まで広げる。")
+  (sexp "
+    (slide :title \"画像と文章を並べる\" :layout :image-right
+      (ul \"画像は上下と横の端まで届く\" ...)
+      (image \"photo.svg\" :alt \"夕暮れの山並み\" :share 1/3))"))
+
+(slide :title "画像と文章を並べる" :kicker "表示例" :layout :image-right
+  (ul "画像は上下と横の端まで届く"
+      (li "幅は " (tt ":share") " の 1/3, 1/2, 2/3 から選ぶ")
+      "題と本文は残りの幅に収める")
+  (image "photo.svg" :alt "夕暮れの山並みの絵" :share 1/3))
+
+;; demo.mp4 is a REPL session drawn with ffmpeg (drawtext), 480x270, 5 s, no sound;
+;; demo-poster.png is its last frame in 16 colors.
+(slide :title "録画したデモ" :kicker "書き方"
+  (p "動画は画像と同じ場所に収まる。" (tt "--embed") " で HTML に埋め込む。")
+  (ul (li (tt ":autoplay t") " なら、スライドに入ると再生し、出ると止める")
+      "クリックかタップで再生と一時停止を切り替える"
+      (li "印刷と一覧には " (tt ":poster") " の画像が出る"))
+  (sexp "
+    (video \"demo.mp4\" :alt \"REPL で fib を呼ぶ\"
+           :poster \"demo-poster.png\" :autoplay t :muted t :loop t)"))
+
+(slide :title "録画したデモ" :kicker "表示例"
+  (video "demo.mp4" :alt "REPL で (fib 30) と (map fib (range 10)) を評価する"
+         :poster "demo-poster.png" :autoplay t :muted t :loop t))
+
 (slide :title "テンプレート" :kicker "書き方"
   (p (tt "define") " で名前を付け、使う所を本体で置き換える。評価はしない。")
   (sexp "
@@ -321,10 +358,10 @@
   (table :header ("スライドの形" "レイアウト")
          :caption ":layout で選ぶこともできる"
     ("題がなく、段落が一つ" (tt "statement"))
-    ("題と画像が一つ" (tt "image"))
-    ("題とコードが一つ" (tt "code"))
-    ("題と表が一つ" (tt "table"))
-    ("題と引用が一つ" (tt "quote"))
+    ("題がなく、画像か動画が一つ" (tt "full"))
+    ("題と画像か動画が一つ" (tt "image"))
+    ("題とコード、表、引用のどれか一つ"
+     (cell (tt "code") " " (tt "table") " " (tt "quote")))
     ((cell (tt "column") " を含む") (tt "columns"))
     ("それ以外" (tt "standard"))))
 

@@ -1,8 +1,10 @@
-;;;; embed.lisp -- the files a deck names: code read as text, images inlined as data: URIs.
+;;;; embed.lisp -- the files a deck names: code read as text, images and videos inlined as
+;;;; data: URIs.
 ;;;;
 ;;;; RENDER does no I/O, so the host passes the function that reads a file's bytes. Code
-;;;; is decoded from UTF-8 here; an image's MIME type comes from the extension, and its
-;;;; base64 is computed here, so every backend produces the same characters.
+;;;; is decoded from UTF-8 here; an image's or a video's MIME type comes from the
+;;;; extension, and its base64 is computed here, so every backend produces the same
+;;;; characters.
 
 (in-package :lispresen)
 
@@ -97,10 +99,14 @@ LAST); nil after reporting when the file cannot be read or is not UTF-8."
     ("svg" . "image/svg+xml"))
   "Image file extensions and their MIME types.")
 
-(defun image-type (src)
-  "The MIME type of the image file SRC by its extension, or nil."
-  (let ((ext (extension src)))
-    (and ext (cdr (assoc ext *image-types* :test #'string-equal)))))
+(defparameter *video-types*
+  '(("mp4" . "video/mp4") ("webm" . "video/webm"))
+  "Video file extensions and their MIME types: the two every current browser plays.")
+
+(defparameter *embed-video-limit*
+  (* 20 1024 1024)
+  "The bytes of a video above which embedding it is reported. Its base64 is a third
+larger, and the browser parses the whole page before it shows the first slide.")
 
 (defun url-p (src)
   "True when SRC starts with a URL scheme (two or more characters, then a colon)."
@@ -132,28 +138,48 @@ LAST); nil after reporting when the file cannot be read or is not UTF-8."
                                          (logand (ash w (* -6 (- 3 k))) 63)))
                                     out)))))))
 
-(defun embed-figure (figure)
-  "Replaces the source of FIGURE with a data: URI of the image file's bytes."
-  (let* ((src (figure-src figure)) (type (image-type src)))
+(defun embedded (src types noun &optional limit)
+  "A data: URI of the file SRC typed by its extension in TYPES, or nil: after reporting
+when it cannot be embedded, and for a URL, which stays as it is. A file of more than
+LIMIT bytes is reported."
+  (let ((type (let ((ext (extension src)))
+                (and ext (cdr (assoc ext types :test #'string-equal))))))
     (cond ((url-p src)
            (unless (string-equal (subseq src 0 (position #\: src)) "data")
              (report :warning (format nil
-                                      "image ~a is a URL; only local files are embedded"
-                                      src))))
+                                      "~a ~a is a URL; only local files are embedded"
+                                      noun src)))
+           nil)
           ((null type)
            (report :error (format nil
-                                  "cannot embed image ~a: unknown type; use ~{.~a~^, ~}"
-                                  src (mapcar #'car *image-types*))))
+                                  "cannot embed ~a ~a: unknown type; use ~{.~a~^, ~}"
+                                  noun src (mapcar #'car types)))
+           nil)
           (t
            (let ((octets (and *read-file* (funcall *read-file* src))))
-             (if octets
-                 (setf (figure-src figure)
-                  (concatenate 'string "data:" type ";base64," (base64 octets)))
-                 (report :error (format nil
-                                        "cannot embed image ~a: cannot read it"
-                                        src))))))))
+             (cond ((null octets)
+                    (report :error (format nil "cannot embed ~a ~a: cannot read it"
+                                           noun src))
+                    nil)
+                   (t
+                    (when (and limit (> (length octets) limit))
+                      (report :warning
+                              (format nil
+                                      "~a ~a is ~d MB, which makes the embedded HTML slow to open; shorten or compress it"
+                                      noun src (floor (length octets) (* 1024 1024)))))
+                    (concatenate 'string "data:" type ";base64," (base64 octets)))))))))
+
+(defun embed-figure (figure)
+  "Replaces the source of FIGURE, and a video's poster, with data: URIs of the files."
+  (let ((uri (if (figure-video figure)
+                 (embedded (figure-src figure) *video-types* "video" *embed-video-limit*)
+                 (embedded (figure-src figure) *image-types* "image"))))
+    (when uri (setf (figure-src figure) uri)))
+  (when (figure-poster figure)
+    (let ((uri (embedded (figure-poster figure) *image-types* "poster")))
+      (when uri (setf (figure-poster figure) uri)))))
 
 (defun embed-images (slide)
-  "Embeds every image of SLIDE, inside columns too."
+  "Embeds every image and video of SLIDE, inside columns too."
   (dolist (b (region-blocks (slide-blocks slide)))
     (when (figure-p b) (embed-figure b))))

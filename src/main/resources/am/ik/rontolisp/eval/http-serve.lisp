@@ -99,27 +99,47 @@
 ;; nothing was answered); respond sends the response the head and the body
 ;; handed over before it make up.
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-listen :from "rlhttp" :as "serve"
-                       :params '(:string :s32) :returns :s32)
+(rontolisp:wasm-import 'rontolisp::%http-serve-listen
+                       :from "rlhttp"
+                       :as "serve"
+                       :params '(:string :s32)
+                       :returns :s32)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-error :from "rlhttp"
-                       :as "serveError" :params '() :returns :string)
+(rontolisp:wasm-import 'rontolisp::%http-serve-error
+                       :from "rlhttp"
+                       :as "serveError"
+                       :params '()
+                       :returns :string)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-next :from "rlhttp"
-                       :as "nextRequest" :params '(:s32) :returns :extern)
+(rontolisp:wasm-import 'rontolisp::%http-serve-next
+                       :from "rlhttp"
+                       :as "nextRequest"
+                       :params '(:s32)
+                       :returns :extern)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-head :from "rlhttp"
-                       :as "requestHead" :params '(:extern) :returns :string)
+(rontolisp:wasm-import 'rontolisp::%http-serve-head
+                       :from "rlhttp"
+                       :as "requestHead"
+                       :params '(:extern)
+                       :returns :string)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-read-body :from "rlhttp"
-                       :as "readRequestBody" :params '(:extern) :returns :bytes)
+(rontolisp:wasm-import 'rontolisp::%http-serve-read-body
+                       :from "rlhttp"
+                       :as "readRequestBody"
+                       :params '(:extern)
+                       :returns :bytes)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-write-body :from "rlhttp"
-                       :as "writeResponseBody" :params '(:extern :bytes)
+(rontolisp:wasm-import 'rontolisp::%http-serve-write-body
+                       :from "rlhttp"
+                       :as "writeResponseBody"
+                       :params '(:extern :bytes)
                        :returns :void)
 #+rontolisp-native
-(rontolisp:wasm-import 'rontolisp::%http-serve-respond :from "rlhttp"
-                       :as "respond" :params '(:extern :string) :returns :void)
+(rontolisp:wasm-import 'rontolisp::%http-serve-respond
+                       :from "rlhttp"
+                       :as "respond"
+                       :params '(:extern :string)
+                       :returns :void)
 
 ;; One request: the reactor transport over the exchange, its body pulled through
 ;; the reactor's one receive buffer (as the :raw-body BUFFERED asks for) and handed
@@ -127,28 +147,32 @@
 #+rontolisp-native
 (defun rontolisp::%http-serve-exchange (app exchange buffered)
   (rontolisp::%http-serve-respond exchange
-   (rontolisp::%http-reactor-handle app
-    (rontolisp::%http-serve-head exchange)
-    (lambda ()
-      (let ((buf (rontolisp::%http-reactor-buffer 65536)))
-        (rontolisp::%http-reactor-chunk buf
-         (rontolisp::%http-serve-read-body exchange buf))))
-    buffered
-    (lambda (chunk)
-      (rontolisp::%http-serve-write-body exchange
-       (rontolisp::%http-reactor-octets chunk))))))
+                                  (rontolisp::%http-reactor-handle app
+                                   (rontolisp::%http-serve-head exchange)
+                                   (lambda ()
+                                     (let ((buf
+                                            (rontolisp::%http-reactor-buffer
+                                             65536)))
+                                       (rontolisp::%http-reactor-chunk buf
+                                        (rontolisp::%http-serve-read-body
+                                         exchange buf)))) buffered
+                                   (lambda (chunk)
+                                     (rontolisp::%http-serve-write-body exchange
+                                      (rontolisp::%http-reactor-octets
+                                       chunk))))))
 
 ;; RAW-BODY is the adapters' :buffered unless the rontolisp:http-handler directive
 ;; asked for its own default, :stream (HttpReactorInliner.lowerHttpHandlerForRunner
 ;; lowers the directive to this call).
 #+rontolisp-native
-(defun rontolisp::%http-serve (app port address join &optional (raw-body :buffered))
+(defun rontolisp::%http-serve
+    (app port address join &optional (raw-body :buffered))
   (declare (ignore join))
   (let ((server (rontolisp::%http-serve-listen (or address "") port))
         (buffered (eq raw-body :buffered)))
     (when (< server 0)
-      (error (concatenate 'string "http server: "
-                          (rontolisp::%http-serve-error))))
+      (error
+       (concatenate 'string "http server: " (rontolisp::%http-serve-error))))
     (loop
       (rontolisp::%http-serve-exchange app (rontolisp::%http-serve-next server)
                                        buffered))))

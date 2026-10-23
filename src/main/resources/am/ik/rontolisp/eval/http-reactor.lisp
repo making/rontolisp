@@ -447,9 +447,9 @@
    (rontolisp::%http-reactor-header-alist (gethash "headers" req))
    (rontolisp::%http-reactor-request-body body (gethash "body" req) buffered)
    (or (gethash "protocol" req) "HTTP/1.1") (gethash "scheme" req)
-   (or (gethash "local-addr" req) "localhost") (or (gethash "local-port" req) 80)
-   (gethash "remote-addr" req) (gethash "remote-port" req)
-   (or (gethash "script-name" req) "")))
+   (or (gethash "local-addr" req) "localhost")
+   (or (gethash "local-port" req) 80) (gethash "remote-addr" req)
+   (gethash "remote-port" req) (or (gethash "script-name" req) "")))
 
 (defun rontolisp::%http-reactor-write (sink chunk)
   ;; One response chunk out, RESOLVED. A host writer that suspends answers a
