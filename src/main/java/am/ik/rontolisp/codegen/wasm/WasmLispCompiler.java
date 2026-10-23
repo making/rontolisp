@@ -1730,7 +1730,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	// _probe_file ((ref null eq) path) -> (ref null eq): the path when it names an
-	// existing file, null otherwise. Deliberately NOT part of the _open block above:
+	// existing file, in directory form for a directory, null otherwise. Deliberately NOT
+	// part of the _open block above:
 	// _open TRAPS on a non-zero path_open errno, which no handler-case can catch, so
 	// the probe needs its own body whose errno branch answers nil instead.
 	static final int FUNC_PROBE_FILE = FUNC_T_SYM + 1;

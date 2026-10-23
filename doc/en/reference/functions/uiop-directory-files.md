@@ -2,10 +2,11 @@
 
 `(uiop:directory-files pathspec &optional pattern)`
 
-The non-directory entries of a directory: `(directory "<pathspec>/*.*")` with the
-subdirectories dropped. `pathspec` names the directory itself (with or without a
-trailing `/`) -- the wildcard is supplied here, so this is the "just list it"
-spelling.
+The non-directory entries of a directory: `(directory "<pathspec>/*.*"
+:resolve-symlinks nil)` with the subdirectories dropped -- each entry spelled as
+listed, a symbolic link by its own name, as upstream UIOP asks of SBCL.
+`pathspec` names the directory itself (with or without a trailing `/`) -- the
+wildcard is supplied here, so this is the "just list it" spelling.
 
 `pattern` is UIOP's own optional second argument, the namestring of a
 name-and-type wildcard. It is appended to the directory and matched exactly as

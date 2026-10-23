@@ -786,22 +786,33 @@ final class WasmIoRuntimeBuilder {
 
 	/**
 	 * Builds the _probe_file(path) function body: the path when it names an existing
-	 * file, {@code ref.null eq} (nil) otherwise. Same staging and {@code path_open} call
-	 * as {@link #buildOpenBody()} in read mode, with the two differences that make it a
+	 * file, the path in directory form (one trailing {@code /} added) when it names a
+	 * directory, {@code ref.null eq} (nil) otherwise. Same staging and {@code path_open}
+	 * call as {@link #buildOpenBody()} in read mode, with the differences that make it a
 	 * probe rather than an open: a non-zero errno answers nil instead of trapping (a wasm
 	 * trap is not catchable, which is exactly why {@code (handler-case (open ...))}
-	 * cannot stand in for this on WASM), and a successful open is closed again via
-	 * {@code fd_close} so probing leaks no descriptor.
+	 * cannot stand in for this on WASM), the open descriptor is asked its file type
+	 * through {@code fd_filestat_get} (the stat the other two backends make with
+	 * {@code isDirectory}), and it is closed again via {@code fd_close} so probing leaks
+	 * no descriptor.
+	 *
+	 * <p>
+	 * The staged path keeps a spare byte after its closing quote and the 64-byte
+	 * {@code filestat} sits 8-aligned after that, so the directory form is the staged
+	 * bytes with {@code /"} written over the quote, read back by {@code _str_fresh}.
 	 * @return the function body bytes
 	 */
 	static byte[] buildProbeFileBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2
-		w.write(1);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, FS=3, ERR=4, TYPE=5 ; ref
+		// local: STR=6
 		w.write(2);
+		w.write(5);
 		w.write(Type.I32);
-		final int PATH = 0, OFF = 1, PLEN = 2;
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int PATH = 0, OFF = 1, PLEN = 2, FS = 3, ERR = 4, TYPE = 5, STR = 6;
 
 		// Stage the path bytes into linear scratch exactly as _open does (see there for
 		// why HEAP_PTR is advanced over the staging for the duration of the call).
@@ -813,15 +824,26 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, PLEN);
-		// HEAP_PTR = align8(off + plen + 2)
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		// fs = align8(off + plen + 3): the quoted path, one spare byte, then the record
+		// (8-aligned, or a checking host rejects it -- see _file_length);
+		// HEAP_PTR = fs + FILESTAT_BYTES, the memory grown to cover it
 		getLocal(w, OFF);
 		getLocal(w, PLEN);
 		w.write(Instruction.I32_ADD);
-		i32(w, 2 + 7);
+		i32(w, 3 + 7);
 		w.write(Instruction.I32_ADD);
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
+		setLocal(w, FS);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, FS);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, FS);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath, oflags=0,
 		// fs_rights_base=FD_READ=2, fs_rights_inheriting=0, fdflags=0,
@@ -836,24 +858,73 @@ final class WasmIoRuntimeBuilder {
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
-		// pop the staged path (PLEN is free now: reuse it for the errno)
-		setLocal(w, PLEN);
+		setLocal(w, ERR);
+		// if errno != 0: pop the staging, return nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		getLocal(w, OFF);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// if errno != 0: return nil
-		getLocal(w, PLEN);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
+		emitNil(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// close the descriptor the probe just opened, then answer with the path itself
+		// type = fd_filestat_get(fd, fs) == 0 ? fs.filetype : 0 (unknown reads as a file)
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		getLocal(w, FS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_FILESTAT_GET);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, FS);
+		w.write(Instruction.I32_LOAD8_U, 0x00, FILESTAT_FILETYPE_OFFSET);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		setLocal(w, TYPE);
+		// close the descriptor the probe just opened
 		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
 		w.write(Instruction.DROP);
+		// str = path, or -- a directory spelled without its trailing slash -- the
+		// directory form, built while the staging is held: memory[off+1+plen] = '/',
+		// memory[off+2+plen] = '"', _str_fresh(off, plen + 3)
 		getLocal(w, PATH);
+		setLocal(w, STR);
+		getLocal(w, TYPE);
+		i32(w, FILETYPE_DIRECTORY);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_STORE8, 0x00, 0x01);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x02);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		w.write(Instruction.END);
+		// pop the staging and answer
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1233,6 +1304,9 @@ final class WasmIoRuntimeBuilder {
 
 	/** Seconds from the Common Lisp epoch (1900) to the Unix one (1970). */
 	private static final long UNIVERSAL_TIME_UNIX_EPOCH = 2208988800L;
+
+	/** preview1 {@code filetype::directory}. */
+	private static final int FILETYPE_DIRECTORY = 3;
 
 	/** preview1 {@code filetype::regular_file}. */
 	private static final int FILETYPE_REGULAR_FILE = 4;

@@ -1655,11 +1655,15 @@ final class JvmIoRuntimeBuilder {
 	 * {@code _probeFile(Object path) -> path | null}. Whether the path names an existing
 	 * file: the quotes are stripped the way {@code _open} does, and the answer is the
 	 * ORIGINAL (still quoted) path value so the caller gets a Lisp string back (the
-	 * prelude {@code probe-file} resolves links before it asks). Unlike {@code _open}
-	 * this never throws on a missing path; that is the whole point of the primitive.
+	 * prelude {@code probe-file} resolves links before it asks) -- in directory form (one
+	 * trailing {@code /} added) when the path names a directory. A path spelled with a
+	 * trailing {@code /} that names a file answers null, as the WASM hosts' open does
+	 * ({@code File} drops the separator, so the rule is spelled here). Unlike
+	 * {@code _open} this never throws on a missing path; that is the whole point of the
+	 * primitive.
 	 */
 	private MethodCode buildProbeFile() {
-		// Slots: 0=path (Object), 1=p (String)
+		// Slots: 0=path (Object), 1=p (String), 2=f (File), 3=slashed (int)
 		MethodCode code = new MethodCode();
 		// p = ((String) path).substring(1, length - 1);
 		code.aload(0);
@@ -1674,19 +1678,63 @@ final class JvmIoRuntimeBuilder {
 		code.isub();
 		code.invokevirtual(this.stringSubstring);
 		code.astore(1);
-		// if (!new File(p).exists()) return null;
+		// f = new File(p); if (!f.exists()) return null;
 		code.new_(this.fileClass);
 		code.dup();
 		code.aload(1);
 		code.invokespecial(this.fileInit);
+		code.astore(2);
+		code.aload(2);
 		code.invokevirtual(this.fileExists);
 		MethodCode.Label ifMissing = code.newLabel();
 		code.ifne(ifMissing);
 		code.aconst_null();
 		code.areturn();
 		code.labelBinding(ifMissing);
-		// return path;
+		// slashed = p.charAt(p.length() - 1) == '/' (an existing path is never empty)
+		code.aload(1);
+		code.aload(1);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringCharAt);
+		code.loadConstant('/');
+		MethodCode.Label notSlashed = code.newLabel();
+		MethodCode.Label slashedKnown = code.newLabel();
+		code.if_icmpne(notSlashed);
+		code.iconst_1();
+		code.istore(3);
+		code.goto_(slashedKnown);
+		code.labelBinding(notSlashed);
+		code.iconst_0();
+		code.istore(3);
+		code.labelBinding(slashedKnown);
+		// if (!f.isDirectory()) return slashed ? null : path;
+		code.aload(2);
+		code.invokevirtual(this.cp.methodRef(this.fileClass, "isDirectory", "()Z"));
+		MethodCode.Label isDirectory = code.newLabel();
+		code.ifne(isDirectory);
+		code.iload(3);
+		MethodCode.Label fileAsSpelled = code.newLabel();
+		code.ifeq(fileAsSpelled);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(fileAsSpelled);
 		code.aload(0);
+		code.areturn();
+		code.labelBinding(isDirectory);
+		// if (slashed) return path; return "\"" + p + "/\"";
+		code.iload(3);
+		MethodCode.Label addSlash = code.newLabel();
+		code.ifeq(addSlash);
+		code.aload(0);
+		code.areturn();
+		code.labelBinding(addSlash);
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.cp.stringEntry("/\""));
+		code.invokevirtual(this.stringConcat);
 		code.areturn();
 		return code;
 	}

@@ -4724,22 +4724,34 @@ public final class LispNames {
 	/**
 	 * The {@code probe-file} built-in function: the truename as a PATHNAME value when the
 	 * file exists, {@code nil} otherwise -- every symbolic link resolved and every
-	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), nothing made
-	 * absolute, as SBCL resolves them. Prelude Lisp over {@link #PROBE_FILE_INTERNAL},
-	 * which probes the resolved namestring; takes both designator spellings.
-	 * {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load} existence
-	 * guards ask the primitive directly: they need no truename.
+	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), a directory in
+	 * directory form whatever the spelling, nothing made absolute, as SBCL resolves them.
+	 * Prelude Lisp over {@link #PROBE_TRUENAME_INTERNAL}; takes both designator
+	 * spellings. {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load}
+	 * existence guards ask the primitive directly: they need no truename.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
 
 	/**
+	 * The {@code %probe-truename} internal prelude function: {@link #PROBE_FILE}'s answer
+	 * as a namestring, nil when nothing is there -- the path resolved by
+	 * {@link #REAL_PATH_INTERNAL} and asked of {@link #PROBE_FILE_INTERNAL}, or, for a
+	 * link whose target is missing, the link itself with its directory resolved (SBCL's
+	 * answer). {@link #DIRECTORY} resolves each link it lists through it.
+	 */
+	public static final String PROBE_TRUENAME_INTERNAL = "%PROBE-TRUENAME";
+
+	/**
 	 * The {@code %probe-file} internal primitive behind {@link #PROBE_FILE} and the
 	 * {@code open} / {@code load} existence guards: takes a namestring, answers it back
-	 * when the file exists and {@code nil} otherwise, resolving no link itself. The one
-	 * file primitive that does NOT signal on a missing path, so it is the only way to ask
-	 * the question on WASM (where a failed {@code open} traps rather than signalling,
-	 * which no {@code handler-case} can catch). Stays string-in/string-out on every
-	 * backend; the pathname wrapping lives in the prelude {@code probe-file}.
+	 * when the file exists -- in directory form (one trailing {@code /} added) when it
+	 * names a directory -- and {@code nil} otherwise, also for a file spelled with a
+	 * trailing {@code /}. Links are followed but resolve into no spelling: the answer is
+	 * the path as given. The one file primitive that does NOT signal on a missing path,
+	 * so it is the only way to ask the question on WASM (where a failed {@code open}
+	 * traps rather than signalling, which no {@code handler-case} can catch). Stays
+	 * string-in/string-out on every backend; the pathname wrapping lives in the prelude
+	 * {@code probe-file}.
 	 */
 	public static final String PROBE_FILE_INTERNAL = "%PROBE-FILE";
 
@@ -5107,21 +5119,23 @@ public final class LispNames {
 	public static final String Y_OR_N_P = "Y-OR-N-P";
 
 	/**
-	 * The {@code directory} built-in, in ANSI's shape: the pathnames MATCHING the
-	 * pathspec, sorted with {@code string<} so every backend answers in the same order
-	 * whatever the host's readdir order is, and nil when nothing matches (it never
-	 * signals). Lisp source over {@link #LIST_DIRECTORY}.
+	 * The {@code directory} built-in, in ANSI's shape: the TRUENAMES of the files
+	 * MATCHING the pathspec, each once, sorted with {@code string<} so every backend
+	 * answers in the same order whatever the host's readdir order is, and nil when
+	 * nothing matches (it never signals). Lisp source over {@link #LIST_DIRECTORY}.
+	 * SBCL's {@code :resolve-symlinks} key: nil keeps the matched spellings, a link to a
+	 * directory in directory form and a dangling link dropped.
 	 * <ul>
 	 * <li>A wild NAME component -- {@code "src/*.lisp"}, {@code "src/*"},
 	 * {@code "src/*.*"} -- lists the directory and keeps the entries the pattern matches
 	 * ({@link #WILD_MATCH}; {@code "*.*"} matches every entry, including one with no
-	 * type, which is what CL means by it). Each answer keeps the pathspec's own directory
-	 * prefix, so it is directly openable, and a subdirectory carries a trailing
+	 * type, which is what CL means by it). A link is matched by its own name and answered
+	 * by its truename ({@link #PROBE_TRUENAME_INTERNAL}); a directory carries a trailing
 	 * {@code /}.</li>
 	 * <li>A non-wild pathspec designates ITSELF, as in CL: {@code "src/f.lisp"} answers
-	 * {@code ("src/f.lisp")} when the file exists, and a directory answers itself in
-	 * directory form ({@code "src"} and {@code "src/"} both give {@code ("src/")}) --
-	 * listing it is {@code "src/*.*"}, not {@code "src/"}.</li>
+	 * its truename when the file exists, and a directory answers itself in directory form
+	 * ({@code "src"} and {@code "src/"} both give {@code ("src/")}) -- listing it is
+	 * {@code "src/*.*"}, not {@code "src/"}.</li>
 	 * <li>A wild DIRECTORY component expands the prefix before the name is matched
 	 * ({@link #WILD_DIRS}): {@code "src/*}{@code /f.lisp"} walks one level, and
 	 * {@code "src/**}{@code /*.lisp"} walks the whole subtree including {@code src/}
@@ -5141,8 +5155,8 @@ public final class LispNames {
 
 	/**
 	 * The {@code %directory-subdirs} internal helper: the SUBDIRECTORY entries of one
-	 * directory prefix (each with its trailing {@code /}), sorted. The one step
-	 * {@link #WILD_DIRS} descends by.
+	 * directory prefix (each with its trailing {@code /}), a link to a directory among
+	 * them, sorted. The one step {@link #WILD_DIRS} descends by.
 	 */
 	public static final String DIRECTORY_SUBDIRS = "%DIRECTORY-SUBDIRS";
 
@@ -10921,10 +10935,10 @@ public final class LispNames {
 	public static final String MERGE_PATHNAMES_STAR = "MERGE-PATHNAMES*";
 
 	/**
-	 * {@code uiop:file-exists-p} -- not a stub: its contract is {@link #PROBE_FILE}'s
-	 * (the truename on success, nil otherwise), so the 1-argument call lowers onto
-	 * {@code probe-file} in {@code LispMacroExpander.expandUiopStubCall} and runs on
-	 * every backend. postmodern's {@code execute-file.lisp} has five of them.
+	 * {@code uiop:file-exists-p} -- not a stub: {@link #PROBE_FILE}'s truename when it
+	 * names a FILE, nil for a directory, a dangling link or nothing (upstream's
+	 * contract), Lisp in {@code uiop-filesystem.lisp} on every backend. postmodern's
+	 * {@code execute-file.lisp} has five of them.
 	 */
 	public static final String FILE_EXISTS_P = "FILE-EXISTS-P";
 
@@ -10937,8 +10951,8 @@ public final class LispNames {
 
 	/**
 	 * {@code uiop:directory-exists-p} -- the directory twin of {@link #FILE_EXISTS_P}:
-	 * the truename (with a trailing {@code /}, links resolved) when the path names an
-	 * existing DIRECTORY, nil otherwise. Answered through
+	 * {@link #PROBE_FILE}'s truename (with a trailing {@code /}, links resolved) when the
+	 * path names an existing DIRECTORY, nil otherwise. Answered through
 	 * {@link am.ik.rontolisp.eval.SourceLoader} like {@link #PROBE_FILE}, so a host
 	 * without a filesystem (the browser playground) answers nil rather than failing.
 	 * local-time's {@code reread-timezone-repository} validates its repository root with

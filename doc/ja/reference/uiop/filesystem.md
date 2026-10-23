@@ -8,12 +8,12 @@
 
 | 関数 | 答え |
 |----------|--------|
-| `uiop:file-exists-p` | ファイルが存在すればそのパス名、存在しなければ `nil` — すべてのバックエンドで `probe-file` に落とされる、`probe-file` と同じ契約 |
+| `uiop:file-exists-p` | `probe-file` の真名がファイルを指せばそれ、ディレクトリを指すか何も無ければ `nil` |
 | `uiop:directory-exists-p` | ディレクトリが存在すれば（末尾に `/` を付け、シンボリックリンクを解決した）真名、存在しなければ `nil` — `file-exists-p` のディレクトリ版であり、空のディレクトリと存在しないディレクトリを区別できる唯一の手段 |
 | `uiop:probe-file*` | 指定子を解析して検査する。何か存在すれば解析したパス名（`:truename t` では真名 (truename)）、存在しなければ `nil` — ワイルドカードのような `ensure-pathname` が拒否する指定子も `nil` |
 | `uiop:truename*` | `nil` を許す `truename`。ファイルが存在すれば真名（ディレクトリ形でも試す。一部の処理系の `truename` は末尾の区切り文字がないと失敗するため）、存在しなければ `nil` — `nil` には `nil` |
-| `uiop:directory*` | `directory` そのもの — 処理系ごとのシンボリックリンク用キーは受け付けて捨てられる。`directory` は各エントリを解決せず名前のまま返し、本家がそれらのキーで求めるのもその答えであるため |
-| `uiop:directory-files` | ディレクトリの非ディレクトリエントリ — サブディレクトリを除いた `(directory "db/*.*")`。省略可能な第 2 引数は名前と型だけのワイルドカードの名前文字列で、`directory` のマッチとまったく同じく絞り込む。省略時はすべてを列挙し、ディレクトリ成分を持つパターンはエラー |
+| `uiop:directory*` | 呼び出し側が自分で渡さない限り `:resolve-symlinks nil` を付けた `directory` — 本家が SBCL に求めるとおり、各エントリを名前のまま返し、シンボリックリンクを解決しない。ほかのキーは受け付けて捨てる |
+| `uiop:directory-files` | ディレクトリの非ディレクトリエントリ — サブディレクトリを除いた `(directory "db/*.*" :resolve-symlinks nil)`。省略可能な第 2 引数は名前と型だけのワイルドカードの名前文字列で、`directory` のマッチとまったく同じく絞り込む。省略時はすべてを列挙し、ディレクトリ成分を持つパターンはエラー |
 | `uiop:subdirectories` | ディレクトリのサブディレクトリ。各々末尾に `/` を付ける |
 | `uiop:collect-sub*directories` | ディレクトリツリーを走査する。`collectp` が `collector` に渡すものを決め、`recursep` が降りるものを決める。渡されるディレクトリはルートを含めすべてディレクトリ形 |
 | `uiop:filter-logical-directory-results` | エントリをそのまま返す — 論理パス名はここには存在できない（`logical-pathname-p` はすべてのバックエンドで `nil`）ため、取り除くものがない |

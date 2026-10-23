@@ -2,14 +2,14 @@
 
 `(uiop:file-exists-p pathname)`
 
-ファイルが存在するかどうかを答えます。存在すればそのパス名を、存在しなければ `nil` を
-返します。ASDF/UIOP 側の名前で呼ばれる [`probe-file`](probe-file.md) そのもの
-（契約も挙動も同じ）であり、すべてのバックエンドでその基本操作へ落とされるため、
-UIOP 流の綴りを使うライブラリ（たとえば postmodern の `execute-file`）にシムは
-不要です。
+ファイルが存在するかどうかを答えます。存在すればそのパス名を、存在しないか、パス名が
+ディレクトリを指す場合は `nil` を返します。本家 UIOP の契約と同じなので、UIOP 流の
+綴りを使うライブラリ（たとえば postmodern の `execute-file`）にシムは不要です。
+ディレクトリ版は [`uiop:directory-exists-p`](uiop-directory-exists-p.md) です。
 
-成功時に返るパス名は、`probe-file` と同じく真名 (truename) です。シンボリックリンクを
-すべて解決し、絶対パス化は行いません。ディレクトリも存在すると見なされます。
+成功時に返るパス名は、[`probe-file`](probe-file.md) と同じく真名 (truename) です。
+シンボリックリンクをすべて解決し、絶対パス化は行いません。指す先が存在しないリンクは、
+`probe-file` と同じくリンク自身を返します。
 
 ```lisp
 (uiop:file-exists-p "definitely-missing.txt")   ; => NIL
@@ -17,6 +17,5 @@ UIOP 流の綴りを使うライブラリ（たとえば postmodern の `execute
 
 ## バックエンドサポート
 
-4 つすべてのバックエンドで動作します。インタプリタは `probe-file` に委譲する
-グローバル関数を登録し、コンパイルパスは 1 引数の呼び出しを `probe-file` の呼び出しへ
-書き換えます。
+4 つすべてのバックエンドで動作します。`probe-file` の上に書かれた rontolisp ソースに
+よる 1 つの定義で、ディレクトリは真名の末尾の `/` で見分けます。

@@ -11168,10 +11168,12 @@ class WasmLispCompilerIntegrationTest {
 		// one. probe-file and uiop:directory-exists-p answer the same truename, and the
 		// open through tl/in pins that a link in the LAST component is followed
 		// (path_open's symlink_follow), which both backends refused until then -- a path
-		// naming a link read as missing.
+		// naming a link read as missing. fd_readdir reports dl and up as links, not
+		// directories: the directory forms of the :resolve-symlinks nil listing pin
+		// that the walk asks each link where it leads.
 		ExecResult staged = wasmtime.execInContainer("bash", "-c",
 				"cd " + workDir() + " && rm -rf tl && mkdir -p tl/d && echo a > tl/a.txt && echo f > tl/d/f.txt"
-						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up");
+						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up && ln -s none tl/dang");
 		assertThat(staged.getExitCode()).as(staged.getStderr()).isZero();
 		String code = """
 				(defvar *b* "")
@@ -11186,6 +11188,12 @@ class WasmLispCompilerIntegrationTest {
 				(print (with-open-file (s (tl "in")) (read-line s)))
 				(print (handler-case (truename (tl "none")) (file-error () :missing)))
 				(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+				(print (rel (truename (tl "dl"))))
+				(print (rel (probe-file (tl "dang"))))
+				(print (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang")))))
+				(print (mapcar #'rel (directory (tl "*"))))
+				(print (mapcar #'rel (directory (tl "*") :resolve-symlinks nil)))
+				(print (mapcar #'rel (uiop:subdirectories (tl ""))))
 				""";
 		String expected = """
 				"tl/a.txt"
@@ -11196,7 +11204,13 @@ class WasmLispCompilerIntegrationTest {
 				"tl/d/"
 				"a"
 				:MISSING
-				"tl/d/new.txt\"""";
+				"tl/d/new.txt"
+				"tl/d/"
+				"tl/dang"
+				(NIL "tl/dang")
+				("tl/a.txt" "tl/d/" "tl/dang")
+				("tl/d/" "tl/dl/" "tl/in" "tl/up/")
+				("tl/d/" "tl/dl/" "tl/up/")""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
 	}
@@ -12882,7 +12896,7 @@ class WasmLispCompilerIntegrationTest {
 			(print (directory "./dl-*.txt"))
 			(print (remove-if-not (lambda (x)
 			                        (let ((n (namestring x)))
-			                          (and (> (length n) 5) (string= (subseq n 0 5) "./dl-"))))
+			                          (and (> (length n) 3) (string= (subseq n 0 3) "dl-"))))
 			                      (directory "./*.*")))
 			(print (uiop:directory-exists-p "."))
 			(print (uiop:directory-exists-p "dl-a.txt"))
@@ -12891,8 +12905,8 @@ class WasmLispCompilerIntegrationTest {
 			""";
 
 	private static final String DIRECTORY_LISTING_EXPECTED = """
-			(#P"./dl-a.txt" #P"./dl-b.txt")
-			(#P"./dl-a.txt" #P"./dl-b.txt")
+			(#P"dl-a.txt" #P"dl-b.txt")
+			(#P"dl-a.txt" #P"dl-b.txt")
 			#P"./"
 			NIL
 			NIL
@@ -12921,7 +12935,7 @@ class WasmLispCompilerIntegrationTest {
 				  (print (first all))
 				  (print (car (last all))))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n#P\"./many-1000.txt\"\n#P\"./many-1399.txt\"");
+		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n#P\"many-1000.txt\"\n#P\"many-1399.txt\"");
 	}
 
 	@Test
@@ -12955,9 +12969,9 @@ class WasmLispCompilerIntegrationTest {
 			(T NIL)
 			"/x/b/d/c.fasl"
 			"/x/c.fasl"
-			(#P"./wt/b/c/deep.lisp" #P"./wt/b/mid.lisp" #P"./wt/top.lisp")
-			(#P"./wt/b/mid.lisp")
-			(#P"./wt/" #P"./wt/b/" #P"./wt/b/c/" #P"./wt/d/")
+			(#P"wt/b/c/deep.lisp" #P"wt/b/mid.lisp" #P"wt/top.lisp")
+			(#P"wt/b/mid.lisp")
+			(#P"wt/" #P"wt/b/" #P"wt/b/c/" #P"wt/d/")
 			NIL""";
 
 	private static final String WILD_TREE_MKDIR = "mkdir -p wt/b/c wt/d && echo 1 > wt/top.lisp"

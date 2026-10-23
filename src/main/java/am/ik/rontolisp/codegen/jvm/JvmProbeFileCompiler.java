@@ -10,10 +10,10 @@ import am.ik.rontolisp.LispVal;
 
 /**
  * Compiles the {@code %probe-file} internal primitive: the namestring when the file
- * exists, nil otherwise. The path argument is compiled to a runtime string and passed to
- * the {@code _probeFile} runtime helper, which answers without opening anything (so a
- * missing path never signals). The public {@code probe-file} is prelude Lisp over this,
- * wrapping the answer in a pathname value.
+ * exists (in directory form when it is a directory), nil otherwise. The path argument is
+ * compiled to a runtime string and passed to the {@code _probeFile} runtime helper, which
+ * answers without opening anything (so a missing path never signals). The public
+ * {@code probe-file} is prelude Lisp over this, wrapping the answer in a pathname value.
  */
 final class JvmProbeFileCompiler {
 

@@ -327,10 +327,15 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   caches `-1` and `$path_open` turns that into an errno. Hit `probe-file` too.
 - **`%probe-file` stays a string-in/string-out PRIMITIVE**, not `open` in a `handler-case`: nil is
   cheaper than catching a condition, works outside EH mode, and `--no-gc` rejects catching. Public
-  `probe-file` is prelude Lisp over it (`uiop:file-exists-p` lowers onto it), probing the
-  `%real-path` spelling (next bullet). Contract: the namestring as given when the file exists
-  (no link resolved, nothing absolutized), nil otherwise; a directory counts as existing, and
-  so does a link whose target does. Interpreter goes through the installed **`SourceLoader.exists`**,
+  `probe-file` is prelude Lisp over it, probing the `%real-path` spelling (next bullet).
+  Contract: the namestring as given when the file exists (no link resolved, nothing
+  absolutized), in DIRECTORY form (one `/` added) when it is a directory, nil otherwise --
+  also for a FILE spelled with a trailing `/` (POSIX's ENOTDIR, which both WASM hosts give at
+  `path_open`; `File`/`Path.of` drop the separator, so the JVM and the interpreter spell the
+  rule). A link counts when its target does. The kind comes from the stat each backend has:
+  `isDirectory` (JVM `_probeFile`, `SourceLoader.isDirectory`), `fd_filestat_get` on the
+  descriptor the WASM probe already opened (filetype 3), the directory form built from the
+  staged path bytes with `/"` written over the closing quote. Interpreter goes through the installed **`SourceLoader.exists`**,
   never `Files` directly, so the playground's in-memory loader answers (`fileSystem()` OVERRIDES with
   `Files.exists` — a read is wrong for a file that exists but is not decodable text). JVM
   `_probeFile` + `JvmProbeFileCompiler`; WASM `_probe_file` (`FUNC_PROBE_FILE` after `FUNC_T_SYM` as

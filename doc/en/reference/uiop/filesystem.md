@@ -13,12 +13,12 @@ Every name is reachable through either spelling: `uiop:probe-file*` and
 
 | Function | What it answers |
 |----------|-----------------|
-| `uiop:file-exists-p` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
+| `uiop:file-exists-p` | `probe-file`'s truename when it names a FILE, `nil` for a directory or nothing |
 | `uiop:directory-exists-p` | the truename (with a trailing `/`, symbolic links resolved) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
 | `uiop:probe-file*` | parse the designator and probe: the parsed pathname when something is there (`:truename t` answers its truename instead), `nil` otherwise — including for a designator `ensure-pathname` rejects, such as a wildcard |
 | `uiop:truename*` | the nil-tolerant `truename`: the truename when the file exists (trying the directory form too, where a missing trailing separator defeats some implementations' `truename`), `nil` otherwise — and `nil` for `nil` |
-| `uiop:directory*` | `directory` — upstream's per-implementation symlink keys are accepted and dropped: `directory` answers each entry as named, never resolved, which is what upstream asks for with them |
-| `uiop:directory-files` | the non-directory entries of a directory — `(directory "db/*.*")` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
+| `uiop:directory*` | `directory` with `:resolve-symlinks nil` unless the caller passes its own, as upstream asks of SBCL: each entry as named, a symbolic link unresolved. Other keys are accepted and dropped |
+| `uiop:directory-files` | the non-directory entries of a directory — `(directory "db/*.*" :resolve-symlinks nil)` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
 | `uiop:subdirectories` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
 | `uiop:filter-logical-directory-results` | its entries unchanged — logical pathnames cannot exist here (`logical-pathname-p` is `nil` on every backend), so there is nothing to filter |

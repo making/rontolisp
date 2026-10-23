@@ -12530,7 +12530,11 @@ cases:
     # takes . and .. out, a .. after a link from where the link LEADS; a relative
     # path stays relative. probe-file and uiop:directory-exists-p answer the same
     # truename (as SBCL's do), and a link in the last component opens through on
-    # every backend. The e95-links/ tree is staged by the driver
+    # every backend. A directory answers in directory form however it is spelled, a
+    # dangling link answers itself, and directory answers each match's truename once;
+    # :resolve-symlinks nil keeps the matched names, a link to a directory in
+    # directory form (WASM's fd_readdir reports it as a link) and the dangling one
+    # dropped -- SBCL 2.6.5's answers. The e95-links/ tree is staged by the driver
     # (CorpusFixtures.stageSymlinkTree): no backend creates a link.
     source: |
       (print (namestring (truename "e95-links/in")))
@@ -12543,6 +12547,11 @@ cases:
       (print (with-open-file (s "e95-links/in") (read-line s)))
       (print (handler-case (truename "e95-links/none") (file-error () :missing)))
       (print (namestring (uiop:resolve-symlinks "e95-links/dl/new.txt")))
+      (print (list (truename "e95-links/dl") (probe-file "e95-links/d") (probe-file "e95-links/a.txt/")))
+      (print (list (probe-file "e95-links/dang") (uiop:file-exists-p "e95-links/dl")))
+      (print (directory "e95-links/*"))
+      (print (directory "e95-links/*" :resolve-symlinks nil))
+      (print (uiop:subdirectories "e95-links/"))
     expected: |
       "e95-links/a.txt"
       "e95-links/d/f.txt"
@@ -12554,6 +12563,11 @@ cases:
       "a"
       :MISSING
       "e95-links/d/new.txt"
+      (#P"e95-links/d/" #P"e95-links/d/" #P"e95-links/a.txt")
+      (#P"e95-links/dang" NIL)
+      (#P"e95-links/a.txt" #P"e95-links/d/" #P"e95-links/dang")
+      (#P"e95-links/d/" #P"e95-links/dl/" #P"e95-links/in" #P"e95-links/up/")
+      (#P"e95-links/d/" #P"e95-links/dl/" #P"e95-links/up/")
   - name: runtime-absolute-path-open-probe-and-load
     source: |
       ;; An ABSOLUTE path BUILT AT RUN TIME opens, probes and loads the same on all
@@ -12582,8 +12596,9 @@ cases:
   - name: directory-listing-and-uiop-walkers
     source: |
       ;; The whole matching family over the one %list-directory primitive: ANSI wild
-      ;; components, sorted, the pathspec's own directory prefix kept, subdirectories
-      ;; carrying a trailing "/", every entry a PATHNAME value. The entries
+      ;; components, sorted, subdirectories carrying a trailing "/", every entry a
+      ;; PATHNAME value -- directory's a truename (so "./" is taken out), the uiop
+      ;; walkers' the spelling they listed (upstream's :resolve-symlinks nil). The entries
       ;; are written by this case so the answer does not depend on what else the run
       ;;       directory holds. The "./*.*" and (uiop:directory-files ".") reads are ONE
       ;; FLAT listing of the run directory, kept deliberately: anchoring their
@@ -12594,8 +12609,8 @@ cases:
       (with-open-file (out "dls-a.txt" :direction :output) (write-line "a" out))
       (defun dls-ours (paths)
         (remove-if-not (lambda (p)
-                         (let ((n (namestring p)))
-                           (and (> (length n) 6) (string= (subseq n 0 6) "./dls-"))))
+                         (let ((n (file-namestring p)))
+                           (and (> (length n) 4) (string= (subseq n 0 4) "dls-"))))
                        paths))
       (print (directory "./dls-*.txt"))
       (print (directory #P"./dls-?.txt"))
@@ -12619,9 +12634,9 @@ cases:
       (print (uiop:truename* "dls-missing.txt"))
       (print (dls-ours (uiop:directory* "./*.txt")))
     expected: |
-      (#P"./dls-a.txt" #P"./dls-b.txt")
-      (#P"./dls-a.txt" #P"./dls-b.txt")
-      (#P"./dls-a.txt" #P"./dls-b.txt")
+      (#P"dls-a.txt" #P"dls-b.txt")
+      (#P"dls-a.txt" #P"dls-b.txt")
+      (#P"dls-a.txt" #P"dls-b.txt")
       (#P"./dls-a.txt" #P"./dls-b.txt")
       #P"./"
       NIL
@@ -20549,7 +20564,7 @@ cases:
       (T T NIL NIL)
       "/x/b/d/c.fasl"
       "/x/c.fasl"
-      (#P"./wpc-sub/wpc-a.txt" #P"./wpc-sub/wpc-b.txt")
+      (#P"wpc-sub/wpc-a.txt" #P"wpc-sub/wpc-b.txt")
       NIL
 
   - name: clos-reinitialize

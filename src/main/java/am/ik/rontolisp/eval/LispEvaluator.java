@@ -2018,8 +2018,12 @@ public final class LispEvaluator {
 		// %probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
 		// host without a filesystem (the browser playground's in-memory loader) answers
 		// from whatever IT can load. Working-directory-relative like open, not resolved
-		// against the load stack. String-in/string-out; the public probe-file is prelude
-		// Lisp that coerces a pathname argument and wraps the answer in a pathname value.
+		// against the load stack. String-in/string-out: the path itself for a file, in
+		// directory form (one trailing /) for a directory, nil for nothing -- and for a
+		// file spelled with a trailing /, which names no file on the WASM hosts either
+		// (Path.of drops the separator, so the rule is spelled here). The public
+		// probe-file is prelude Lisp that resolves the links first and wraps the answer
+		// in a pathname value.
 		this.globalEnv.defineFunction(LispNames.PROBE_FILE_INTERNAL,
 				new LispFunction(LispNames.PROBE_FILE_INTERNAL, args -> {
 					if (args.size() != 1) {
@@ -2030,7 +2034,15 @@ public final class LispEvaluator {
 						throw new LispEvalException(LispNames.PROBE_FILE_INTERNAL + " expects a string pathname");
 					}
 					// The namestring as given; probe-file resolves its links first.
-					return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
+					String p = path.value();
+					if (!this.sourceLoader.exists(p)) {
+						return LispNil.INSTANCE;
+					}
+					boolean slashed = p.endsWith("/");
+					if (!this.sourceLoader.isDirectory(p)) {
+						return slashed ? LispNil.INSTANCE : path;
+					}
+					return slashed ? path : new LispString(p + "/");
 				}));
 		// %read-link: the same SourceLoader mediation as %probe-file,
 		// string-in/string-out:

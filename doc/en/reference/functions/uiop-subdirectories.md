@@ -2,9 +2,10 @@
 
 `(uiop:subdirectories pathspec)`
 
-The subdirectories of a directory, each with its trailing `/`: the
+The subdirectories of a directory, each with its trailing `/` and a link to a
+directory among them under its own name: the
 [`uiop:directory-files`](uiop-directory-files.md) twin, over the same
-`(directory "<pathspec>/*.*")`, and what
+`(directory "<pathspec>/*.*" :resolve-symlinks nil)`, and what
 [`uiop:collect-sub*directories`](uiop-collect-sub-directories.md) recurses
 through.
 

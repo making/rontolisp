@@ -53,6 +53,19 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * Whether the path names a DIRECTORY, symbolic links followed -- what makes
+	 * {@code %probe-file} answer a path in directory form. Like {@link #exists} it must
+	 * never throw. The default derives it from {@link #listDirectory}, so a loader that
+	 * lists directories answers this too, and one that is not a filesystem (the browser
+	 * playground's in-memory map) has none.
+	 * @param path the path to probe
+	 * @return {@code true} when the path names an existing directory
+	 */
+	default boolean isDirectory(String path) {
+		return listDirectory(path) != null;
+	}
+
+	/**
 	 * Lists a DIRECTORY -- what the {@code %list-directory} primitive behind
 	 * {@code directory} / {@code uiop:directory-exists-p} answers. Returns the entry
 	 * NAMES (no path prefix), a subdirectory's carrying a trailing {@code /}, in whatever
@@ -297,6 +310,16 @@ public interface SourceLoader {
 				catch (RuntimeException ex) {
 					// An unrepresentable path (a NUL byte, say) is not an existing
 					// file -- probe-file answers nil rather than signalling.
+					return false;
+				}
+			}
+
+			@Override
+			public boolean isDirectory(String path) {
+				try {
+					return Files.isDirectory(Path.of(path));
+				}
+				catch (RuntimeException ex) {
 					return false;
 				}
 			}

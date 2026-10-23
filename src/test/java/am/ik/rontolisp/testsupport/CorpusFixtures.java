@@ -117,9 +117,9 @@ public final class CorpusFixtures {
 
 	/**
 	 * Stages the {@code truename-resolves-symbolic-links} tree: a file, a directory and
-	 * three symbolic links, each target RELATIVE (a WASI host follows no absolute one).
-	 * No backend creates a link, so the driver does. Idempotent: an existing tree is left
-	 * as it is.
+	 * four symbolic links -- one of them dangling -- each target RELATIVE (a WASI host
+	 * follows no absolute one). No backend creates a link, so the driver does.
+	 * Idempotent: an existing tree is left as it is.
 	 * @param runDir the working directory the corpus program runs with
 	 * @throws IOException if the tree cannot be staged
 	 */
@@ -134,6 +134,7 @@ public final class CorpusFixtures {
 		Files.createSymbolicLink(dir.resolve("in"), Path.of("a.txt"));
 		Files.createSymbolicLink(dir.resolve("dl"), Path.of("d"));
 		Files.createSymbolicLink(dir.resolve("up"), Path.of("../" + SYMLINK_DIR + "/d"));
+		Files.createSymbolicLink(dir.resolve("dang"), Path.of("none"));
 	}
 
 	/**

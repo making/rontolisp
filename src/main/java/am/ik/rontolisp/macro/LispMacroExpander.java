@@ -13898,11 +13898,10 @@ public final class LispMacroExpander {
 	 * Lowers a {@code uiop} call whose operator is not an ordinary function call of a
 	 * spliced definition. Three kinds:
 	 * <ul>
-	 * <li>the FOLDS -- {@code file-exists-p} onto {@code probe-file},
-	 * {@code namestring}/{@code native-namestring} onto {@code cl:namestring} and
-	 * {@code symbol-call} onto a runtime {@code intern} + {@code funcall}. Each has a
-	 * Lisp definition too ({@code eval.UiopLibrary}); the fold is what keeps a direct
-	 * call from dragging it in;</li>
+	 * <li>the FOLDS -- {@code namestring}/{@code native-namestring} onto
+	 * {@code cl:namestring} and {@code symbol-call} onto a runtime {@code intern} +
+	 * {@code funcall}. Each has a Lisp definition too ({@code eval.UiopLibrary}); the
+	 * fold is what keeps a direct call from dragging it in;</li>
 	 * <li>a MACRO nothing implements yet: it lowers to {@code uiop:not-implemented-error}
 	 * with its argument forms DROPPED, because a macro that does nothing must not
 	 * evaluate the forms it was handed (an unimplemented
@@ -13959,13 +13958,6 @@ public final class LispMacroExpander {
 			// pathname stringify method and trivial-mimes' mime-probe call it on real
 			// pathname values now that #P"..." denotes one.
 			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
-		}
-		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.FILE_EXISTS_P) && parts.size() == 2) {
-			// Not a stub either: uiop:file-exists-p IS probe-file (same contract -- the
-			// truename on success, nil otherwise), so it lowers onto the primitive on
-			// every backend. Only the 1-argument shape (the one real uiop exports) is
-			// answered.
-			return listToCons(List.of(new LispSymbol(LispNames.PROBE_FILE), parts.get(1)));
 		}
 		return expandUnimplementedUiopMacro(cons);
 	}

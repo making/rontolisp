@@ -11,7 +11,9 @@ The value on success is the path with every symbolic link in it resolved and
 every `.` and `..` taken out, a `..` after a link counting from where the link
 leads: with `d` a link to `x/y`, `(truename "d/../f.txt")` is `#P"x/f.txt"`.
 Nothing is made absolute -- a relative path answers a path relative to the working
-directory, which a WASM module cannot name -- and a trailing `/` is kept. When you
+directory, which a WASM module cannot name. A directory answers in directory form
+(with its trailing `/`) whatever the spelling, and a link whose target is missing
+answers the link itself, as SBCL's does. When you
 want an existence answer without the condition, use [`probe-file`](probe-file.md),
 which answers the same pathname and returns `nil` instead of signalling.
 

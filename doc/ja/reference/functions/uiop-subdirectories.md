@@ -2,9 +2,10 @@
 
 `(uiop:subdirectories pathspec)`
 
-ディレクトリのサブディレクトリを、それぞれ末尾の `/` を付けて返します。
+ディレクトリのサブディレクトリを、それぞれ末尾の `/` を付けて返します。ディレクトリへの
+リンクもリンク自身の名前で含まれます。
 [`uiop:directory-files`](uiop-directory-files.md) の対になる関数で、同じ
-`(directory "<pathspec>/*.*")` の上に定義されています。
+`(directory "<pathspec>/*.*" :resolve-symlinks nil)` の上に定義されています。
 [`uiop:collect-sub*directories`](uiop-collect-sub-directories.md) が再帰に使うのも
 これです。
 

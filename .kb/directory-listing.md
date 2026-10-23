@@ -7,18 +7,28 @@ entry, never touching a backend.
 ## The family
 `%dir-namestring` (pathname -> DIRECTORY form), `%wild-match` (`*` any run, `?` one char, `**/` any
 depth), `%pathname-typed-p`, `%directory-subdirs`, `%wild-dirs`, `%directory-in` -> `directory` ->
-`uiop:directory-files`, `uiop:subdirectories`, `uiop:collect-sub*directories`,
-`uiop:directory-exists-p`. `pathname-directory` and `constantly` landed with the family.
+`uiop:directory-files`, `uiop:subdirectories`, `uiop:collect-sub*directories`.
+`uiop:directory-exists-p` left the family on 2026-10-23: it is `probe-file`'s answer in
+directory form, a stat rather than a listing. `pathname-directory` and `constantly` landed
+with the family.
 
 ## Primitive contract
 `(%list-directory "dir/")` -> `nil` when the path is not a readable directory, else `(t . names)`,
 each name BARE with a trailing `/` when itself a directory.
-- The leading `t` is load-bearing: `uiop:directory-exists-p` must tell empty from missing.
+- The leading `t` tells an empty directory from a missing one (`%directory-in` resolves the
+  directory only when it is there; the Clojure front end's `File.list` answers nil vs `[]`).
 - It never signals (as `probe-file`): a WASM trap is not catchable.
 - Host order is kept; `directory` sorts with `string<` in shared Lisp.
 - `.` and `..` never appear -- preview1 `fd_readdir` YIELDS them and the WASM P1 runtime drops
   them, else `collect-sub*directories` walks its own parent forever.
 - An unreadable directory reads as absent, matching the WASM backends.
+- **A link to a directory is marked `/` on the interpreter and the JVM only** (`isDirectory`
+  follows it); `fd_readdir` and `read-directory` report the LINK's type, so both WASM backends
+  list it bare. The Lisp above never trusts the mark for a link: `%directory-subdirs` and
+  `%directory-in` ask an unmarked entry `%read-link`, and a link `%probe-file`'s kind answer.
+  Fixing the WASM primitive instead would need a stat per link entry against the LISTED
+  descriptor, which the component adapter's `path_open` / `path_filestat_get` (preopen fds
+  only) cannot take.
 
 | backend | how |
 | --- | --- |
@@ -48,7 +58,16 @@ each name BARE with a trailing `/` when itself a directory.
 
 ## `directory` IS ANSI's `directory`
 - `"d/*"` is a wild NAME with NO type (matches `sub` and `README`, not `a.txt`); `"d/*.*"` matches
-  everything (`%pathname-typed-p`). A non-wild pathspec designates ITSELF.
+  everything (`%pathname-typed-p`). A non-wild pathspec designates ITSELF (`%probe-truename`).
+- **The answers are TRUENAMES, deduplicated after the sort** (2026-10-23, SBCL's
+  `:resolve-symlinks t`): an entry is MATCHED by its listed name, then the directory is
+  resolved once (`%real-path`) and each entry asked `%read-link` -- a non-link is the resolved
+  directory plus its name, a link goes through `%probe-truename` (a dangling one answers
+  itself). So `./x` answers `x`, and a link and its target come back once. One `%read-link`
+  per entry is the cost (SBCL pays a realpath per entry). `:resolve-symlinks nil` keeps the
+  matched spelling, a link asked `%probe-file` for its form, a dangling one DROPPED (SBCL
+  2.6.5 drops it there and keeps it under `t`). The uiop walkers (`directory-files`,
+  `subdirectories`, `directory*`) pass nil, as upstream's `directory*` does on SBCL.
 - DIRECTORY components ARE wild: the pathspec splits at its last `/`, a wildcard prefix goes through
   `%wild-dirs`, and `%directory-in` runs in each, so wild and non-wild share IDENTICAL name matching.
   A `**` component contributes the base BEFORE descending (`:wild-inferiors` matches zero levels).
@@ -76,8 +95,9 @@ definition; `cli/CompileTimePathnameFolder` is the compile-time literal-shape ha
 `JvmLispCompilerTest#directoryMatchesPathnamesAndDrivesTheUiopWalkers`;
 `WasmLispCompilerIntegrationTest#directoryListsEntriesOverFdReaddir`,
 `#directoryListingResumesPastOneReaddirRound`, `#componentDirectoryListing[WithoutAPreopenAnswersNil]`,
-`#wildDirectoryComponentsDriveTheRecursiveWalk`; ci-spec `directory-listing-and-uiop-walkers`,
-`wild-pathnames`. Trees are built with `mkdir` in the CONTAINER -- kept harness-staged
+`#wildDirectoryComponentsDriveTheRecursiveWalk`; links: `#truenameResolvesEverySymbolicLinkInThePath`
+in the interpreter, JVM and WASM suites; ci-spec `directory-listing-and-uiop-walkers`,
+`wild-pathnames`, `truename-resolves-symbolic-links`. Trees are built with `mkdir` in the CONTAINER -- kept harness-staged
 even though both WASM backends can create directories since `.todo/257` (the walk pins
 LISTING over a known tree, not creation). `wild-pathnames`' walk is the zero-level branch over a HARNESS-STAGED `./wpc-sub/`
 (`testsupport/CorpusFixtures`, driven by `CiSpecE2eTest` and `JvmDeadMethodEliminationCorpusTest`, both through

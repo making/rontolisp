@@ -27864,10 +27864,9 @@
 
 (defun rontolisp::%clojure-io-directory-p (f)
   "Whether the File F names a directory."
-  (let ((p (rontolisp::%clojure-io-path f)))
-    (and (> (length p) 0)
-         (%list-directory (if (string= p "/") p (concatenate 'string p "/")))
-         t)))
+  (let* ((p (rontolisp::%clojure-io-path f))
+         (k (and (> (length p) 0) (%probe-file p))))
+    (and k (char= (char k (- (length k) 1)) #\/))))
 
 (defun rontolisp::%clojure-io-regular-p (f)
   "Whether the File F names something that exists and is no directory."

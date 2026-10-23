@@ -57,7 +57,7 @@ Definitions live in `uiop-<sub-package>.lisp` beside the class (`package`, `util
 - NOT stubbed (something else defines them): `JAVA_DEFINED` (`add-package-local-nickname`, consumed
   at RESOLVE time by `PackageResolver`), `LispMacroExpander.hasUiopMacroExpansion` (`if-let`,
   `with-temporary-file`, `with-deprecation`, `define-package`), and the fold-carrying members
-  (`file-exists-p`, `native-namestring`, `symbol-call`), which keep a Lisp definition so `#'name`
+  (`native-namestring`, `symbol-call`), which keep a Lisp definition so `#'name`
   is a value. **A Java-only member has no VALUE the compile paths can materialize** — that is why
   `symbol-call` left `JAVA_DEFINED`.
 - **Resources are read with the TARGET backend's `Features`**: `UiopLibrary.process(program,
@@ -203,8 +203,10 @@ pruned per INTERFACE, checked by `WitOracleE2eTest`). A `--no-wasi` reactor answ
 `uiop/filesystem` (32/32, `uiop-filesystem.lisp` except the one macro) — the read side is
 Lisp over the two primitives every backend already carries: `probe-file*`/`truename*` over
 `probe-file` (a designator `ensure-pathname` rejects answers nil through `ignore-errors`,
-exactly like a file that is not there), `directory*` over `directory` (upstream's
-per-implementation symlink keys accepted and dropped), `filter-logical-directory-results`
+exactly like a file that is not there), `directory*` over `directory` with
+`:resolve-symlinks nil` unless the caller passes its own (upstream's SBCL key; the other
+keys accepted and dropped) -- `directory-files`/`subdirectories` list the same way, so a
+link keeps its name in every uiop walk -- `filter-logical-directory-results`
 the passthrough it is where `logical-pathname-p` is nil, `safe-file-write-date` over
 `file-write-date` with the missing-file `file-error` swallowed. `parse-native-namestring` is `parse-unix-namestring` plus
 the `ensure-pathname` constraints (`os-unix-p` is t outright, so native IS Unix and the
@@ -228,7 +230,9 @@ on all four** (2026-10-09): `truenamize` (and `resolve-symlinks` over it) is
 as spelled" is the answer upstream's walk up the parents reaches, so `*resolve-symlinks*`
 defaults to t as upstream's does. `probe-file* :truename t` answers `truename`;
 `file-exists-p` and `directory-exists-p` answer resolved spellings, as upstream's do over
-SBCL (`.kb/pathnames.md`).
+SBCL (`.kb/pathnames.md`), and are upstream's split of `probe-file`'s answer by its
+directory form: `file-exists-p` of a directory is nil (no compile-path fold onto
+`probe-file` since 2026-10-23 -- that fold could not say nil there).
 `lisp-implementation-directory` is nil (no install directory exists
 to name) and `lisp-implementation-pathname-p` follows it. **`with-current-directory`
 inherits `chdir`'s decision and invents no second one**: `call-with-current-directory`

@@ -11422,19 +11422,21 @@ class LispEvaluatorTest {
 		// The truename, as SBCL's: the links above the temp directory resolve too
 		// (macOS's /var). A file that is not decodable text and a directory exist too
 		// -- the SourceLoader-mediated probe must not degrade to "can I read this as a
-		// string?". The first-class function and uiop:file-exists-p answer the same.
+		// string?"; the directory answers in directory form, and a file spelled with a
+		// trailing slash answers as the file (SBCL's answers). The first-class function
+		// and uiop:file-exists-p answer the same.
 		Path real = tempDir.toRealPath();
 		Files.writeString(tempDir.resolve("there.txt"), "x\n");
 		Files.write(tempDir.resolve("blob.bin"), new byte[] { (byte) 0xFF, (byte) 0xFE, 0x00, (byte) 0x80 });
 		String dir = tempDir.toString().replace("\\", "\\\\");
 		assertThat(evalMulti("""
 				(list (probe-file "%1$s/there.txt") (probe-file "%1$s/nope.txt") (if (probe-file "%1$s/nope.txt") 1 2)
-				      (probe-file "%1$s/blob.bin") (probe-file "%1$s")
+				      (probe-file "%1$s/blob.bin") (probe-file "%1$s") (probe-file "%1$s/there.txt/")
 				      (mapcar #'probe-file (list "%1$s/there.txt" "%1$s/nope.txt"))
 				      (uiop:file-exists-p "%1$s/there.txt") (uiop:file-exists-p "%1$s/nope.txt"))
 				""".formatted(dir)).print())
-			.isEqualTo(("(#P\"%1$s/there.txt\" NIL 2 #P\"%1$s/blob.bin\" #P\"%1$s\" (#P\"%1$s/there.txt\" NIL)"
-					+ " #P\"%1$s/there.txt\" NIL)")
+			.isEqualTo(("(#P\"%1$s/there.txt\" NIL 2 #P\"%1$s/blob.bin\" #P\"%1$s/\" #P\"%1$s/there.txt\""
+					+ " (#P\"%1$s/there.txt\" NIL) #P\"%1$s/there.txt\" NIL)")
 				.formatted(real));
 	}
 
@@ -11460,26 +11462,28 @@ class LispEvaluatorTest {
 		// Every expectation here was checked against SBCL on the same tree: `directory`
 		// MATCHES a pathspec, it does not simply list a directory. A wild name component
 		// with no type ("*") therefore matches only untyped entries, which is why the
-		// two subdirectories come back and the two .txt files do not.
+		// two subdirectories come back and the two .txt files do not. The answers are
+		// truenames (macOS's /var resolves).
 		Files.writeString(tempDir.resolve("b.txt"), "b\n");
 		Files.writeString(tempDir.resolve("a.txt"), "a\n");
 		Files.createDirectory(tempDir.resolve("sub"));
 		Files.createDirectory(tempDir.resolve("empty"));
 		String dir = tempDir.toString().replace("\\", "\\\\");
-		assertThat(eval("(directory \"" + dir + "/*.*\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\""
-				+ tempDir + "/b.txt\" #P\"" + tempDir + "/empty/\" #P\"" + tempDir + "/sub/\")");
+		Path real = tempDir.toRealPath();
+		assertThat(eval("(directory \"" + dir + "/*.*\")").print()).isEqualTo("(#P\"" + real + "/a.txt\" #P\"" + real
+				+ "/b.txt\" #P\"" + real + "/empty/\" #P\"" + real + "/sub/\")");
 		assertThat(eval("(directory \"" + dir + "/*\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/empty/\" #P\"" + tempDir + "/sub/\")");
+			.isEqualTo("(#P\"" + real + "/empty/\" #P\"" + real + "/sub/\")");
 		assertThat(eval("(directory \"" + dir + "/*.txt\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/b.txt\")");
+			.isEqualTo("(#P\"" + real + "/a.txt\" #P\"" + real + "/b.txt\")");
 		assertThat(eval("(directory \"" + dir + "/?.txt\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/b.txt\")");
+			.isEqualTo("(#P\"" + real + "/a.txt\" #P\"" + real + "/b.txt\")");
 		assertThat(eval("(directory \"" + dir + "/a*\")")).isEqualTo(LispNil.INSTANCE);
 		// A non-wild pathspec designates ITSELF: a directory in directory form, a file
 		// as given, and nothing at all when it does not exist.
-		assertThat(eval("(directory \"" + dir + "/\")").print()).isEqualTo("(#P\"" + tempDir + "/\")");
-		assertThat(eval("(directory \"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/\")");
-		assertThat(eval("(directory \"" + dir + "/a.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(directory \"" + dir + "/\")").print()).isEqualTo("(#P\"" + real + "/\")");
+		assertThat(eval("(directory \"" + dir + "\")").print()).isEqualTo("(#P\"" + real + "/\")");
+		assertThat(eval("(directory \"" + dir + "/a.txt\")").print()).isEqualTo("(#P\"" + real + "/a.txt\")");
 		assertThat(eval("(directory \"" + dir + "/nope.txt\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(directory \"" + dir + "/empty/*.*\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(directory \"" + dir + "/nope/*.*\")")).isEqualTo(LispNil.INSTANCE);
@@ -11523,15 +11527,16 @@ class LispEvaluatorTest {
 		Files.writeString(tempDir.resolve("a/b/c/deep.lisp"), "3\n");
 		Files.writeString(tempDir.resolve("a/d/x.txt"), "4\n");
 		String dir = tempDir.toString().replace("\\", "\\\\");
-		assertThat(eval("(directory \"" + dir + "/a/**/*.lisp\")").print()).isEqualTo("(#P\"" + tempDir
-				+ "/a/b/c/deep.lisp\" #P\"" + tempDir + "/a/b/mid.lisp\" #P\"" + tempDir + "/a/top.lisp\")");
+		Path real = tempDir.toRealPath();
+		assertThat(eval("(directory \"" + dir + "/a/**/*.lisp\")").print()).isEqualTo(
+				"(#P\"" + real + "/a/b/c/deep.lisp\" #P\"" + real + "/a/b/mid.lisp\" #P\"" + real + "/a/top.lisp\")");
 		assertThat(eval("(directory \"" + dir + "/a/*/*.lisp\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/a/b/mid.lisp\")");
-		assertThat(eval("(directory \"" + dir + "/**/*.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a/d/x.txt\")");
-		assertThat(eval("(directory \"" + dir + "/a/**/\")").print()).isEqualTo("(#P\"" + tempDir + "/a/\" #P\""
-				+ tempDir + "/a/b/\" #P\"" + tempDir + "/a/b/c/\" #P\"" + tempDir + "/a/d/\")");
+			.isEqualTo("(#P\"" + real + "/a/b/mid.lisp\")");
+		assertThat(eval("(directory \"" + dir + "/**/*.txt\")").print()).isEqualTo("(#P\"" + real + "/a/d/x.txt\")");
+		assertThat(eval("(directory \"" + dir + "/a/**/\")").print()).isEqualTo(
+				"(#P\"" + real + "/a/\" #P\"" + real + "/a/b/\" #P\"" + real + "/a/b/c/\" #P\"" + real + "/a/d/\")");
 		assertThat(eval("(directory \"" + dir + "/a/*/\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/a/b/\" #P\"" + tempDir + "/a/d/\")");
+			.isEqualTo("(#P\"" + real + "/a/b/\" #P\"" + real + "/a/d/\")");
 		assertThat(eval("(directory \"" + dir + "/nope/**/*.lisp\")")).isEqualTo(LispNil.INSTANCE);
 	}
 
@@ -11629,9 +11634,10 @@ class LispEvaluatorTest {
 		Files.writeString(tempDir.resolve("a.txt"), "a\n");
 		Files.createDirectory(tempDir.resolve("sub"));
 		String dir = tempDir.toString().replace("\\", "\\\\");
+		Path real = tempDir.toRealPath();
 		assertThat(eval("(directory \"" + dir + "/*.*\")").print())
-			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/sub/\")");
-		assertThat(eval("(directory #P\"" + dir + "/*.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
+			.isEqualTo("(#P\"" + real + "/a.txt\" #P\"" + real + "/sub/\")");
+		assertThat(eval("(directory #P\"" + dir + "/*.txt\")").print()).isEqualTo("(#P\"" + real + "/a.txt\")");
 		assertThat(eval("(uiop:directory-files #P\"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
 		assertThat(eval("(uiop:subdirectories #P\"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/sub/\")");
 		assertThat(eval("(uiop:directory-exists-p #P\"" + dir + "\")").print())
@@ -25991,7 +25997,12 @@ class LispEvaluatorTest {
 		// directory, a .. after a link (taken from where the link LEADS), a link reached
 		// from a .. walk; probe-file and uiop:directory-exists-p answer the same
 		// truename, a link opens through, and uiop:resolve-symlinks keeps a missing last
-		// part as spelled.
+		// part as spelled. A link to a directory answers in directory form (so
+		// uiop:file-exists-p says nil), a dangling link answers itself; directory
+		// matches each link by its name and answers each truename once, and
+		// :resolve-symlinks nil (uiop's walkers) keeps the names -- a link to a
+		// directory in directory form, the dangling one dropped. Every answer after the
+		// uiop:resolve-symlinks one is SBCL 2.6.5's on this tree.
 		Path base = tempDir.toRealPath();
 		Files.createDirectories(base.resolve("tl/d"));
 		Files.writeString(base.resolve("tl/a.txt"), "a\n");
@@ -25999,6 +26010,7 @@ class LispEvaluatorTest {
 		Files.createSymbolicLink(base.resolve("tl/in"), Path.of("a.txt"));
 		Files.createSymbolicLink(base.resolve("tl/dl"), Path.of("d"));
 		Files.createSymbolicLink(base.resolve("tl/up"), Path.of("../tl/d"));
+		Files.createSymbolicLink(base.resolve("tl/dang"), Path.of("none"));
 		assertThat(evalMulti("""
 				(defvar *b* "%s/")
 				(defun tl (x) (concatenate 'string *b* "tl/" x))
@@ -26011,10 +26023,17 @@ class LispEvaluatorTest {
 				      (rel (uiop:directory-exists-p (tl "dl")))
 				      (with-open-file (s (tl "in")) (read-line s))
 				      (handler-case (truename (tl "none")) (file-error () :missing))
-				      (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+				      (rel (uiop:resolve-symlinks (tl "dl/new.txt")))
+				      (rel (truename (tl "dl")))
+				      (rel (probe-file (tl "dang")))
+				      (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang"))))
+				      (mapcar #'rel (directory (tl "*")))
+				      (mapcar #'rel (directory (tl "*") :resolve-symlinks nil))
+				      (mapcar #'rel (uiop:subdirectories (tl ""))))
 				""".formatted(base)).print())
 			.isEqualTo("(\"tl/a.txt\" \"tl/d/f.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/d/\" \"a\" :MISSING"
-					+ " \"tl/d/new.txt\")");
+					+ " \"tl/d/new.txt\" \"tl/d/\" \"tl/dang\" (NIL \"tl/dang\") (\"tl/a.txt\" \"tl/d/\" \"tl/dang\")"
+					+ " (\"tl/d/\" \"tl/dl/\" \"tl/in\" \"tl/up/\") (\"tl/d/\" \"tl/dl/\" \"tl/up/\"))");
 	}
 
 	@Test

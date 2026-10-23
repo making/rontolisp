@@ -61,9 +61,8 @@ import org.jspecify.annotations.Nullable;
  * ({@code if-let}, {@code with-temporary-file}, {@code with-deprecation},
  * {@code define-package});</li>
  * <li>the folds {@code LispMacroExpander.expandUiopStubCall} performs
- * ({@code file-exists-p}, {@code native-namestring}, {@code symbol-call}) -- those DO
- * carry a Lisp definition here as well, so {@code #'uiop:file-exists-p} is a value like
- * any other.</li>
+ * ({@code native-namestring}, {@code symbol-call}) -- those DO carry a Lisp definition
+ * here as well, so {@code #'uiop:native-namestring} is a value like any other.</li>
  * </ul>
  *
  * <p>
@@ -103,8 +102,8 @@ public final class UiopLibrary {
 	 * has no value the compile paths can materialize, so {@code #'uiop:symbol-call} --
 	 * dexador's backend dispatch -- did not compile at all. It carries a Lisp definition
 	 * now ({@code uiop-package.lisp}) beside the call-position fold, exactly as
-	 * {@code file-exists-p} does; the interpreter's Java built-in resolves first, so the
-	 * definition never loads there.
+	 * {@code native-namestring} does; the interpreter's Java built-in resolves first, so
+	 * the definition never loads there.
 	 */
 	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 			LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME);

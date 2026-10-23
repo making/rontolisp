@@ -5518,6 +5518,7 @@ class JvmLispCompilerTest {
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/in"), java.nio.file.Path.of("a.txt"));
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dl"), java.nio.file.Path.of("d"));
 		java.nio.file.Files.createSymbolicLink(base.resolve("tl/up"), java.nio.file.Path.of("../tl/d"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dang"), java.nio.file.Path.of("none"));
 		assertThat(compileAndRun(TRUENAME_THROUGH_LINKS.formatted(base + "/"))).isEqualTo(TRUENAME_THROUGH_LINKS_OUT);
 	}
 
@@ -5534,6 +5535,12 @@ class JvmLispCompilerTest {
 			(print (with-open-file (s (tl "in")) (read-line s)))
 			(print (handler-case (truename (tl "none")) (file-error () :missing)))
 			(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+			(print (rel (truename (tl "dl"))))
+			(print (rel (probe-file (tl "dang"))))
+			(print (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang")))))
+			(print (mapcar #'rel (directory (tl "*"))))
+			(print (mapcar #'rel (directory (tl "*") :resolve-symlinks nil)))
+			(print (mapcar #'rel (uiop:subdirectories (tl ""))))
 			""";
 
 	private static final String TRUENAME_THROUGH_LINKS_OUT = """
@@ -5545,7 +5552,13 @@ class JvmLispCompilerTest {
 			"tl/d/"
 			"a"
 			:MISSING
-			"tl/d/new.txt\"""";
+			"tl/d/new.txt"
+			"tl/d/"
+			"tl/dang"
+			(NIL "tl/dang")
+			("tl/a.txt" "tl/d/" "tl/dang")
+			("tl/d/" "tl/dl/" "tl/in" "tl/up/")
+			("tl/d/" "tl/dl/" "tl/up/")""";
 
 	@Test
 	void compileAndRunUiopFilesystemProbeWalkAndMutate() throws Exception {
@@ -5727,6 +5740,7 @@ class JvmLispCompilerTest {
 		java.nio.file.Files.createDirectory(root.resolve("sub"));
 		java.nio.file.Files.writeString(root.resolve("sub/c.txt"), "c\n");
 		String d = root + "/";
+		String r = root.toRealPath() + "/";
 		// Same shape as the interpreter test, whose expectations were checked against
 		// SBCL.
 		assertThat(compileAndRun("""
@@ -5747,8 +5761,9 @@ class JvmLispCompilerTest {
 			.isEqualTo(("(#P\"%sa.txt\" #P\"%sb.txt\" #P\"%ssub/\")\n" + "(#P\"%sa.txt\" #P\"%sb.txt\")\n"
 					+ "(#P\"%ssub/\")\n" + "(#P\"%s\")\n" + "NIL\n" + "#P\"%s\"\n" + "NIL\n"
 					+ "(#P\"%sa.txt\" #P\"%sb.txt\")\n" + "(#P\"%ssub/\")\n" + "(#P\"%s\" #P\"%ssub/\")")
-				// uiop:directory-exists-p answers the truename (macOS's /var resolves)
-				.formatted(d, d, d, d, d, d, d, root.toRealPath() + "/", d, d, d, d, d));
+				// directory and uiop:directory-exists-p answer truenames (macOS's /var
+				// resolves); the uiop walkers keep the spelling they listed
+				.formatted(r, r, r, r, r, r, r, r, d, d, d, d, d));
 	}
 
 	@Test
@@ -5762,7 +5777,7 @@ class JvmLispCompilerTest {
 		java.nio.file.Files.writeString(root.resolve("a/b/c/deep.lisp"), "3\n");
 		java.nio.file.Files.writeString(root.resolve("a/d/x.txt"), "4\n");
 		String dir = root.toString().replace("\\", "\\\\");
-		String d = root + "/";
+		String d = root.toRealPath() + "/";
 		assertThat(compileAndRun("""
 				(print (namestring (make-pathname :directory '(:absolute "a" :wild-inferiors)
 				                                  :name :wild :type "lisp")))

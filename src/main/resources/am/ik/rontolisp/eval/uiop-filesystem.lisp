@@ -1,37 +1,42 @@
 ;;;; uiop/filesystem -- probe and list the file system. Canonical shape; see .kb/uiop.md.
 
-;; file-exists-p IS probe-file (same contract: the truename on success, nil
-;; otherwise). Both compile paths additionally FOLD a direct call onto the
-;; probe-file primitive (LispMacroExpander.expandUiopStubCall), so this
-;; definition is what a first-class #'uiop:file-exists-p resolves to.
-(defun uiop/filesystem:file-exists-p (%fep-path) (probe-file %fep-path))
+;; file-exists-p is upstream's: probe-file's truename unless it names a
+;; DIRECTORY (a truename in directory form) -- a dangling link included, which
+;; probe-file answers as itself.
+(defun uiop/filesystem:file-exists-p (%fep-path)
+  (let ((%fep-t (probe-file %fep-path)))
+    (and %fep-t
+         (let ((%fep-s (namestring %fep-t)))
+           (char/= (char %fep-s (- (length %fep-s) 1)) #\/)) %fep-t)))
 
 ;; A rontolisp namestring IS the host spelling (no backend translates), so the
-;; native namestring is cl:namestring. Folded on the compile paths like
-;; file-exists-p above.
+;; native namestring is cl:namestring. Both compile paths FOLD a direct call
+;; onto it (LispMacroExpander.expandUiopStubCall), so this definition is what a
+;; first-class #'uiop:native-namestring resolves to.
 (defun uiop/filesystem:native-namestring (%nns-path) (namestring %nns-path))
 
-;; The directory's truename, as probe-file answers a file's: its links resolved,
-;; the resolved spelling listed. "" (the working directory) stays "".
+;; upstream's too: probe-file's truename when it names a DIRECTORY (directory
+;; form, links resolved), nil for a file or nothing.
 (defun uiop/filesystem:directory-exists-p (%de-path)
-  (let* ((%de-d (%dir-namestring %de-path))
-         (%de-r (if (string= %de-d "") "" (%real-path %de-d))))
-    (if (%list-directory (if (string= %de-r "") "." %de-r))
-        (pathname %de-r)
-        nil)))
+  (let ((%de-t (probe-file (%dir-namestring %de-path))))
+    (and %de-t
+         (let ((%de-s (namestring %de-t)))
+           (char= (char %de-s (- (length %de-s) 1)) #\/)) %de-t)))
 
 ;; The optional PATTERN is UIOP's own second argument: a name-and-type wildcard
 ;; (never a directory one -- real UIOP signals "Invalid file pattern" for that and
 ;; so does this), appended to the directory and matched by the same `directory`
 ;; rules. mito's migration reader spells it (uiop:directory-files dir "*.up.sql").
+;; Links stay unresolved here and in subdirectories, as upstream's directory*
+;; asks SBCL for (:resolve-symlinks nil).
 (defun uiop/filesystem:directory-files (%df-dir &optional (%df-pat "*.*"))
   (when (position #\/ (%path-ns %df-pat))
     (error "Invalid file pattern ~S" %df-pat))
   (let ((%df-acc nil))
     (dolist (%df-e
              (directory
-              (concatenate 'string (%dir-namestring %df-dir)
-                           (%path-ns %df-pat))))
+              (concatenate 'string (%dir-namestring %df-dir) (%path-ns %df-pat))
+              :resolve-symlinks nil))
       (let ((%df-s (namestring %df-e)))
         (unless (char= (char %df-s (- (length %df-s) 1)) #\/)
           (setq %df-acc (cons %df-e %df-acc)))))
@@ -40,7 +45,8 @@
 (defun uiop/filesystem:subdirectories (%sd-dir)
   (let ((%sd-acc nil))
     (dolist (%sd-e
-             (directory (concatenate 'string (%dir-namestring %sd-dir) "*.*")))
+             (directory (concatenate 'string (%dir-namestring %sd-dir) "*.*")
+                        :resolve-symlinks nil))
       (let ((%sd-s (namestring %sd-e)))
         (when (char= (char %sd-s (- (length %sd-s) 1)) #\/)
           (setq %sd-acc (cons %sd-e %sd-acc)))))
@@ -77,16 +83,16 @@
 
 ;;;; Probing: truename*, probe-file*, directory* and safe-file-write-date.
 ;;;; Upstream's per-implementation stat dance collapses here: probe-file is the
-;;;; one existence probe on every backend (a directory counts as existing, the
-;;;; answer has its symlinks resolved, nothing is absolutized), truename is
+;;;; one existence probe on every backend (a directory counts as existing and
+;;;; answers in directory form, the answer has its symlinks resolved, nothing is
+;;;; absolutized), truename is
 ;;;; probe-file plus a signal, and directory is the one listing over
 ;;;; %list-directory (.kb/directory-listing.md). So probe-file* parses, probes,
 ;;;; and answers either the parsed pathname or its truename; truename* is the
 ;;;; nil-tolerant truename that also tries the directory form (a missing trailing separator
 ;;;; defeats some implementations' truename, and the fallback keeps this total
-;;;; where upstream needs it); directory* is directory with the
-;;;; symlink-resolution keys upstream passes dropped (nothing here resolves
-;;;; them); safe-file-write-date is file-write-date with the missing-file
+;;;; where upstream needs it); directory* is directory with links left
+;;;; unresolved, as upstream asks of SBCL; safe-file-write-date is file-write-date with the missing-file
 ;;;; file-error swallowed -- nil on both WASM backends, where file-write-date
 ;;;; itself is nil (.kb/read-load-streams.md).
 (defun uiop/filesystem:truename* (%tns-p)
@@ -119,13 +125,14 @@
             (truename %pfp-x)
             (and (probe-file %pfp-x) %pfp-x))))))
 
-;; Upstream forwards its keys to directory (per-implementation symlink knobs);
-;; there is nothing to forward to here -- directory takes the pathspec alone
-;; and nothing resolves symlinks -- so they are accepted and dropped.
-(defun uiop/filesystem:directory*
-    (%ds-spec &rest %ds-keys &key &allow-other-keys)
+;; Upstream appends SBCL's (:resolve-symlinks nil) to the caller's keys, so a
+;; caller's own :resolve-symlinks wins; directory knows no other key, so the
+;; rest are accepted and dropped.
+(defun uiop/filesystem:directory* (%ds-spec &rest %ds-keys &key
+                                            ((:resolve-symlinks %ds-rs) nil)
+                                            &allow-other-keys)
   (declare (ignore %ds-keys))
-  (directory %ds-spec))
+  (directory %ds-spec :resolve-symlinks %ds-rs))
 
 ;; Logical pathnames cannot exist (logical-pathname-p is nil on every backend,
 ;; .kb/uiop.md), so there is nothing to filter and no merger to call: the

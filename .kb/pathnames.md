@@ -37,7 +37,7 @@ with `(pathname ...)`.
 - String-typed internals: `%pathname-split`, `%dir-namestring`, `%wild-match`,
   `%wild-captures`, `%wild-component-p`, `%wild-inferiors-at`,
   `%pathname-directory-component`, `%path-dir-parts`, `%wild-dirs`, `%directory-subdirs`,
-  `%directory-in`, `%temp-file-name`, `%probe-file`, `%read-link`, `%real-path`, `%list-directory`, `%delete-file`,
+  `%directory-in`, `%temp-file-name`, `%probe-file`, `%probe-truename`, `%read-link`, `%real-path`, `%list-directory`, `%delete-file`,
   `%make-directories`, `%rename-file`.
 - Consumers unwrap: interpreter built-ins via `PathnameOps.designatorNamestring`; the
   compile paths wrap `open`/`load`/`file-write-date`'s path argument in
@@ -46,9 +46,7 @@ with `(pathname ...)`.
 - Deliberately still namestrings: `asdf:system-source-directory` / `component-pathname` /
   `system-relative-pathname` answers (`.kb/asdf.md`), `ensure-directories-exist`'s value,
   `uiop:with-temporary-file`'s `:pathname` binding. `uiop:native-namestring` =
-  `namestring`; uiop lowerings run AFTER the prelude splice, so
-  `LispPreludeLibrary.referencedBySurfaceForm` splices `probe-file` for a program spelling
-  only `uiop:file-exists-p`. `probe-file`'s `BuiltinFunctionWrappers` entry is GONE; the
+  `namestring`. `probe-file`'s `BuiltinFunctionWrappers` entry is GONE; the
   prelude defun serves `#'probe-file`.
 - `CompileTimePathnameFolder` folds `make-pathname` / `uiop:merge-pathnames*` to a pathname
   literal and records them for the `defparameter` substitution; `LoadInliner` inlines
@@ -109,11 +107,16 @@ All prelude Lisp, so the four backends run ONE definition each.
   `mayCreateInstances`, so mentioning it flips the instance gate like a `#P` does.
   `uiop:get-pathname-defaults` reads this special (`.kb/uiop.md`).
 
-- **`probe-file` answers the truename, as SBCL's does** (2026-10-23): `(%probe-file
-  (%real-path ns))`, and `truename` is `probe-file` plus the `file-error`. On macOS a
+- **`probe-file` answers the truename, as SBCL's does** (2026-10-23): `%probe-truename` is
+  `(%probe-file (bare (%real-path ns)))` -- the trailing `/` dropped before the probe, so
+  `%probe-file`'s kind answer decides the form: a directory in DIRECTORY form however it is
+  spelled (`d`, `d/`, a link to `d` all `d/`), `f/` naming a file `f` (SBCL's answers) --
+  and `truename` is `probe-file` plus the `file-error`. A link whose target is missing
+  answers ITSELF, its directory resolved (SBCL's fallback when realpath fails); `directory`
+  lists a dangling link through the same fallback. On macOS a
   `@TempDir` under `/var` answers `/private/var`, so tests comparing either with a temp path
-  use `toRealPath()`. `uiop:directory-exists-p` answers the resolved spelling too; `uiop:file-exists-p`
-  lowers onto `probe-file`. **On WASM the walk resolves only what the preopens let the module
+  -- and `directory`'s answers -- use `toRealPath()`. `uiop:directory-exists-p` /
+  `uiop:file-exists-p` split `probe-file`'s answer by its form. **On WASM the walk resolves only what the preopens let the module
   read** -- `%read-link` of a path no preopen covers (`/tmp` under `--dir /tmp`) answers nil,
   an absolute target is refused -- so the answer is always a path the module can open, and no
   mapping back through the preopen table is needed: under `--dir /tmp`,
@@ -122,11 +125,14 @@ All prelude Lisp, so the four backends run ONE definition each.
   host would refuse that escape through the link anyway.
 - **Callers asking only "is it there" use `%probe-file`, not `probe-file`**: the `open` /
   `load` existence guards (`LispMacroExpander.existenceProbe`, over `coercePathArg`'s unwrap,
-  so a guard needs no prelude splice and walks no link) and `%directory-in`. ci-spec
+  so a guard needs no prelude splice and walks no link) and `%directory-in`'s
+  `:resolve-symlinks nil` arm. ci-spec
   `runtime-absolute-path-open-probe-and-load` pins the openable answer rather than its
   host-dependent spelling.
-- **Still SBCL gaps**: a directory named without a trailing `/` is answered without one (SBCL
-  adds it), and `directory` answers the matched spelling, not truenames.
+- **`directory` answers truenames, each once** (2026-10-23; `.kb/directory-listing.md`), and
+  `:resolve-symlinks nil` keeps the matched spellings. Remaining lite edges: nothing is made
+  absolute, and with `:resolve-symlinks nil` a `..` in the pathspec stays as spelled (SBCL
+  still takes it out).
 
 ## Tests
 `LispReaderTest#readPathname*`; `LispEvaluatorTest#pathname*` plus its wild-pathname,
@@ -134,7 +140,11 @@ All prelude Lisp, so the four backends run ONE definition each.
 `directoryFamilyAnswersPathnames` cases; `LispPreludeLibraryTest` (PathnameOps agreement
 pins); `Jvm/WasmLispCompilerTest`'s `pathnameAlgebraOverTheFlatNamestring`,
 `wildPathnameComponentsBuildMatchTranslateAndWalk`,
-`namestringHalvesNstringCaseAndEnvironmentEnquiry` and twins; ci-spec
+`namestringHalvesNstringCaseAndEnvironmentEnquiry` and twins; the truename/link tree
+`truenameResolvesEverySymbolicLinkInThePath` in all three suites (interpreter, JVM, both
+WASM; SBCL-checked directory forms, dangling link, `directory` with and without
+`:resolve-symlinks`); ci-spec `truename-resolves-symbolic-links` (the same over the staged
+`e95-links/`),
 `pathname-algebra-over-the-flat-namestring`, `pathname-family-and-broadcast-streams`,
 `lite-builtins-residue`, `probe-file-existing-and-missing`,
 `directory-listing-and-uiop-walkers`,

@@ -2356,16 +2356,38 @@ public final class LispPreludeLibrary {
 				              (%rp-abs %rp-s)
 				              (t "./"))))))
 				""");
-		// probe-file: the truename as a pathname VALUE, nil when the file is not there --
-		// the path with its symbolic links resolved (%real-path), then asked whether it
-		// exists. The RESOLVED spelling is the one probed: on WASM the walk follows only
-		// the links the module can read through its preopens, so the answer is a path the
-		// module can open. Takes both designator spellings, like every path-taking
+		// %probe-truename: probe-file's answer as a namestring, nil when nothing is there
+		// -- the path with its symbolic links resolved (%real-path), its trailing slash
+		// dropped, then asked of %probe-file, which answers a directory in directory form
+		// whatever the spelling ("d", "d/" and a link to d all give "d/"; "f/" naming a
+		// file gives "f"), as SBCL's truename does. The RESOLVED spelling is the one
+		// probed: on WASM the walk follows only the links the module can read through
+		// its preopens, so the answer is a path the module can open. A link whose target
+		// is missing answers ITSELF, its directory resolved -- SBCL's fallback when
+		// realpath fails, and what makes directory list a dangling link.
+		SOURCES.put(LispNames.PROBE_TRUENAME_INTERNAL, """
+				(defun %probe-truename (%pt-ns)
+				  (flet ((%pt-bare (%pt-s)
+				           (let ((%pt-n (length %pt-s)))
+				             (if (and (> %pt-n 1) (char= (char %pt-s (- %pt-n 1)) #\\/))
+				                 (subseq %pt-s 0 (- %pt-n 1))
+				                 %pt-s))))
+				    (or (%probe-file (%pt-bare (%real-path %pt-ns)))
+				        (let* ((%pt-b (%pt-bare %pt-ns))
+				               (%pt-s (position #\\/ %pt-b :from-end t))
+				               (%pt-name (if %pt-s (subseq %pt-b (+ %pt-s 1)) %pt-b)))
+				          (unless (or (string= %pt-name "") (string= %pt-name ".") (string= %pt-name ".."))
+				            (let* ((%pt-d (if %pt-s (%real-path (subseq %pt-b 0 (+ %pt-s 1))) ""))
+				                   (%pt-l (concatenate 'string (if (string= %pt-d "./") "" %pt-d) %pt-name)))
+				              (and (%read-link %pt-l) %pt-l)))))))
+				""");
+		// probe-file: the truename as a pathname VALUE (%probe-truename), nil when the
+		// file is not there. Takes both designator spellings, like every path-taking
 		// operator.
 		SOURCES.put(LispNames.PROBE_FILE, """
 				(defun probe-file (%pf-path)
-				  (let ((%pf-real (%real-path (namestring %pf-path))))
-				    (if (%probe-file %pf-real) (pathname %pf-real) nil)))
+				  (let ((%pf-t (%probe-truename (namestring %pf-path))))
+				    (if %pf-t (pathname %pf-t) nil)))
 				""");
 		// The directory-LISTING family: one Lisp rendering of the pattern, prefix,
 		// kind and ordering rules over the single per-backend primitive
@@ -2471,34 +2493,66 @@ public final class LispPreludeLibrary {
 		// prefix that the final (name) component matches, or the pathspec itself when
 		// that component is not wild. Split out of directory so the wild-DIRECTORY walk
 		// below runs the identical name matching in every directory it expanded to.
+		// The NAME is matched as listed (a link by its own name, as SBCL matches); the
+		// answer is then, with %din-rs, the entry's truename: the directory resolved
+		// once,
+		// and an entry that is itself a link (one %read-link per entry) resolved through
+		// %probe-truename -- a dangling one answers itself. Without %din-rs the matched
+		// spelling is kept, except that a link is asked where it leads: a link to a
+		// directory answers in directory form (a WASM listing reports the link, not
+		// its target) and a dangling one is dropped, as SBCL's :resolve-symlinks nil
+		// does.
 		SOURCES.put(LispNames.DIRECTORY_IN, """
-				(defun %directory-in (%din-d %din-n)
+				(defun %directory-in (%din-d %din-n %din-rs)
 				  (if (or (position #\\* %din-n) (position #\\? %din-n))
-				      (let ((%din-e (%list-directory (if (string= %din-d "") "." %din-d)))
-				            (%din-acc nil))
+				      (let* ((%din-e (%list-directory (if (string= %din-d "") "." %din-d)))
+				             (%din-r (if (and %din-e %din-rs (string/= %din-d ""))
+				                         (let ((%din-q (%real-path %din-d)))
+				                           (if (string= %din-q "./") "" %din-q))
+				                         %din-d))
+				             (%din-acc nil))
 				        (dolist (%din-x (cdr %din-e))
-				          (let ((%din-b (if (char= (char %din-x (- (length %din-x) 1)) #\\/)
-				                            (subseq %din-x 0 (- (length %din-x) 1))
-				                            %din-x)))
+				          (let* ((%din-sl (char= (char %din-x (- (length %din-x) 1)) #\\/))
+				                 (%din-b (if %din-sl (subseq %din-x 0 (- (length %din-x) 1)) %din-x)))
 				            (when (or (string= %din-n "*.*")
 				                      (and (%wild-match %din-n %din-b)
 				                           (or (%pathname-typed-p %din-n)
 				                               (not (%pathname-typed-p %din-b)))))
-				              (setq %din-acc (cons (concatenate 'string %din-d %din-x) %din-acc)))))
+				              (let* ((%din-l (concatenate 'string %din-r %din-b))
+				                     (%din-y (cond ((and %din-sl (not %din-rs))
+				                                    (concatenate 'string %din-d %din-x))
+				                                   ((not (%read-link %din-l))
+				                                    (concatenate 'string %din-r %din-x))
+				                                   (%din-rs (%probe-truename %din-l))
+				                                   (t (%probe-file %din-l)))))
+				                (when %din-y (setq %din-acc (cons %din-y %din-acc)))))))
 				        %din-acc)
 				      (let* ((%din-p (concatenate 'string %din-d %din-n))
-				             (%din-f (%dir-namestring %din-p)))
-				        (cond ((%list-directory (if (string= %din-f "") "." %din-f)) (list %din-f))
-				              ((and (string/= %din-n "") (%probe-file %din-p)) (list %din-p))
-				              (t nil)))))
+				             (%din-y (if %din-rs
+				                         (%probe-truename %din-p)
+				                         (let ((%din-k (length %din-p)))
+				                           (%probe-file
+				                            (cond ((= %din-k 0) ".")
+				                                  ((and (> %din-k 1) (char= (char %din-p (- %din-k 1)) #\\/))
+				                                   (subseq %din-p 0 (- %din-k 1)))
+				                                  (t %din-p)))))))
+				        (and %din-y (list %din-y)))))
 				""");
+		// %directory-subdirs: the subdirectories of one prefix, a link to a directory
+		// among them -- a WASM listing reports the link, not its target, so an entry
+		// listed without a slash that is a link is asked where it leads.
 		SOURCES.put(LispNames.DIRECTORY_SUBDIRS, """
 				(defun %directory-subdirs (%dsd-base)
 				  (let ((%dsd-e (%list-directory (if (string= %dsd-base "") "." %dsd-base)))
 				        (%dsd-acc nil))
 				    (dolist (%dsd-x (cdr %dsd-e))
-				      (when (char= (char %dsd-x (- (length %dsd-x) 1)) #\\/)
-				        (setq %dsd-acc (cons %dsd-x %dsd-acc))))
+				      (if (char= (char %dsd-x (- (length %dsd-x) 1)) #\\/)
+				          (setq %dsd-acc (cons %dsd-x %dsd-acc))
+				          (let ((%dsd-p (concatenate 'string %dsd-base %dsd-x)))
+				            (when (%read-link %dsd-p)
+				              (let ((%dsd-k (%probe-file %dsd-p)))
+				                (when (and %dsd-k (char= (char %dsd-k (- (length %dsd-k) 1)) #\\/))
+				                  (setq %dsd-acc (cons (concatenate 'string %dsd-x "/") %dsd-acc))))))))
 				    (sort %dsd-acc #'string<)))
 				""");
 		SOURCES.put(LispNames.PATH_DIR_PARTS, """
@@ -2543,23 +2597,26 @@ public final class LispPreludeLibrary {
 				              (t (%wild-dirs (concatenate 'string %wd-base %wd-c "/") %wd-rest))))))
 				""");
 		SOURCES.put(LispNames.DIRECTORY, """
-				(defun directory (%dir-spec)
+				(defun directory (%dir-spec &key ((:resolve-symlinks %dir-rs) t))
 				  (let* ((%dir-x (%path-ns %dir-spec))
 				         (%dir-p (if (stringp %dir-x) %dir-x ""))
 				         (%dir-s (position #\\/ %dir-p :from-end t))
 				         (%dir-d (if %dir-s (subseq %dir-p 0 (+ %dir-s 1)) ""))
-				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p)))
-				    (mapcar #'pathname
-				            (sort (if (%wild-component-p %dir-d)
-				                      (let ((%dir-acc nil))
-				                        (dolist (%dir-b (%wild-dirs
-				                                          (if (char= (char %dir-d 0) #\\/) "/" "")
-				                                          (%path-dir-parts %dir-d)))
-				                          (setq %dir-acc
-				                                (append %dir-acc (%directory-in %dir-b %dir-n))))
-				                        %dir-acc)
-				                      (%directory-in %dir-d %dir-n))
-				                  #'string<))))
+				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p))
+				         (%dir-acc nil))
+				    (dolist (%dir-e (sort (if (%wild-component-p %dir-d)
+				                              (let ((%dir-m nil))
+				                                (dolist (%dir-b (%wild-dirs
+				                                                  (if (char= (char %dir-d 0) #\\/) "/" "")
+				                                                  (%path-dir-parts %dir-d)))
+				                                  (setq %dir-m
+				                                        (append %dir-m (%directory-in %dir-b %dir-n %dir-rs))))
+				                                %dir-m)
+				                              (%directory-in %dir-d %dir-n %dir-rs))
+				                          #'string<))
+				      (unless (and %dir-acc (string= %dir-e (car %dir-acc)))
+				        (setq %dir-acc (cons %dir-e %dir-acc))))
+				    (mapcar #'pathname (nreverse %dir-acc))))
 				""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
@@ -4943,8 +5000,8 @@ public final class LispPreludeLibrary {
 			return referencesName(program, LispNames.UIOP_WITH_OUTPUT_QUALIFIED, canonical);
 		}
 		// The uiop lowerings expandUiopStubCall performs inside the expression
-		// compilers, after this pass: uiop:file-exists-p becomes (probe-file x) and
-		// uiop:namestring / uiop:native-namestring become (namestring x), so a program
+		// compilers, after this pass: uiop:namestring / uiop:native-namestring become
+		// (namestring x), so a program
 		// spelling only the uiop name must still splice the CL definition.
 		// %stream-target has the same timing problem three times over: the compile-path
 		// seams insert the call inside the expression compilers, and gray.lisp's
@@ -5043,12 +5100,6 @@ public final class LispPreludeLibrary {
 		// *package* alone never binds one, and must not pay for them.
 		if (LispNames.PRINT_CASE_FOLD_INTERNAL.equals(entry) || LispNames.PRINT_RADIXED_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program);
-		}
-		if (LispNames.PROBE_FILE.equals(entry)) {
-			// uiop:file-exists-p lowers onto probe-file after this pass. The open / load
-			// existence guards, built inside the expression compilers, call the
-			// %probe-file primitive instead and need no entry.
-			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {
 			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)
