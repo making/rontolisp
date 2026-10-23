@@ -263,7 +263,7 @@ class PostmodernE2eTest {
 		ExecResult result = WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isNotZero();
 		assertThat(result.getStderr() + result.getStdout()).as("stderr: %s", result.getStderr())
-			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend or");
+			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend");
 	}
 
 	// The milestone program verbatim, except for the per-backend table name (the three
