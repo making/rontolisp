@@ -69,7 +69,9 @@ th{font-weight:700}
 .qr{position:absolute;display:flex;flex-direction:column;gap:8px;font-size:24px;line-height:34px;white-space:nowrap}
 .qr.right{align-items:flex-end}
 .qr a{color:var(--muted)}
-.page{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.page,.footer{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.footer{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.footer a{color:inherit}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
 .slide.measure{display:block;visibility:hidden}
@@ -169,6 +171,7 @@ html:not(.js) #fs{display:none}
 .title,.centered{top:80px}
 .centered{height:928px}
 .page{right:112px}.out{left:112px;width:1696px}
+.footer{left:112px;width:1615px}
 .thumb{aspect-ratio:1920/1080}
 @media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
 </style>

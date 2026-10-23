@@ -54,6 +54,16 @@
                                     "diagram labels at ~dpx (floor ~dpx); draw fewer boxes or a shorter list"
                                     (diagram-size b) *diagram-floor*))))))
 
+(defun lint-footer (deck)
+  "Reports once a footer that does not fit on one line beside the page number."
+  (when (and (deck-footer-run deck)
+             (some (lambda (s) (footer-shown-p deck s)) (deck-slides deck))
+             (> (run-lines (deck-footer-run deck) *page-number-size*
+                           (footer-width deck))
+                1))
+    (report :warning
+            "the footer does not fit on one line beside the page number and is cut; shorten it")))
+
 (defun lint-slide (deck slide)
   (let ((fit (slide-fit slide)))
     (when (slide-kicker-run slide)

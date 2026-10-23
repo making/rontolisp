@@ -30,6 +30,7 @@
 (defparameter *column-gap* 80)
 (defparameter *meta-size* 40)
 (defparameter *page-number-size* 24)
+(defparameter *footer-gap* 48)
 (defparameter *kicker-size* 32)
 (defparameter *kicker-lh* 40)
 (defparameter *logo-height* 160)
@@ -140,7 +141,26 @@ top right corner.")
 (defun cite-text (q)
   (concatenate 'string (string (code-char #x2014)) " " (quotation-cite q)))
 
+(defun footer-shown-p (deck slide)
+  "Whether SLIDE carries the deck's footer line: not the title slide, as the page number."
+  (and (deck-footer deck) (eq (slide-footer slide) :deck)
+       (not (eq (slide-kind slide) :title))))
+
+(defun footer-width (deck)
+  "The px the footer line has: the content width less the widest page number and a gap."
+  (if (deck-page-numbers deck)
+      (- (content-width deck)
+         (run-full-width
+          (make-text-run
+           (list (make-string (length (format nil "~d" (length (deck-slides deck))))
+                              :initial-element #\9)))
+          *page-number-size*)
+         *footer-gap*)
+      (content-width deck)))
+
 (defun prepare-runs (deck slide)
+  (when (and (deck-footer deck) (null (deck-footer-run deck)))
+    (setf (deck-footer-run deck) (make-text-run (deck-footer deck))))
   (when (slide-title slide)
     (setf (slide-title-run slide)
           (make-text-run (list (slide-title slide)) :bold t)))

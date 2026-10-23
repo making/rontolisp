@@ -40,10 +40,10 @@ a few slides showing the main forms, each with a comment on how it is written.
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :description :page-url :page-image :page-image-font)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck; `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :footer :description :page-url :page-image :page-image-font :lang)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck, `:footer "text"` (or `("text " (link ...))`) sets one line at the left of the bottom band on every slide but the title slide, a hashtag, a handle or a confidentiality label; `:lang "en"` is the page's `<html lang>` tag (a BCP 47 tag, default `ja`; it changes the declaration only, phrase breaking stays Japanese); `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
 | `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
-| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
@@ -220,6 +220,34 @@ On Linux the file is `lispresen-linux-amd64` or `lispresen-linux-arm64`. On macO
 downloaded with a browser is quarantined and killed at start-up;
 `xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that (`wget` and `curl` set no
 quarantine).
+
+## A skill for AI agents
+
+[skills/lispresen](skills/lispresen/SKILL.md) is a skill for Claude Code (and other agents
+that read `SKILL.md`): it installs lispresen where it is missing, starts from `lispresen
+new`, writes and renders the deck, fixes what the diagnostics report and checks the result
+in a browser. It is published as a plugin in the rontolisp marketplace:
+
+```bash
+claude plugin marketplace add https://making.github.io/rontolisp/skill/marketplace.json
+claude plugin install lispresen@rontolisp
+```
+
+Inside a session the same steps are `/plugin marketplace add ...` and `/plugin install
+lispresen@rontolisp`; `claude plugin update lispresen@rontolisp` takes a newer version.
+Claude Code uses the skill when asked for slides made with lispresen, or on
+`/lispresen:lispresen`.
+
+Without the plugin system, copy the directory into `~/.claude/skills/` (every project) or
+a project's `.claude/skills/`; nothing updates that copy:
+
+```bash
+dir=~/.claude/skills/lispresen
+base=https://raw.githubusercontent.com/making/rontolisp/develop/lispresen/skills/lispresen
+mkdir -p $dir/references
+curl -fsSL -o $dir/SKILL.md $base/SKILL.md
+curl -fsSL -o $dir/references/deck-format.md $base/references/deck-format.md
+```
 
 ## Running
 

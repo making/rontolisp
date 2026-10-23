@@ -115,7 +115,7 @@ run only in `pages.yaml` (which builds it WITHOUT `-DskipTests` on purpose) or v
 same `web/dist` (never deleting it), then the skill, then deploys.
 
 ## The agent skill (`docs-tool` `skill` mode)
-`rontolisp-docgen.jar skill --source doc --out web/dist/skill` writes `rontolisp/SKILL.md` +
+`rontolisp-docgen.jar skill --source doc --out web/dist/skill [--plugin DIR@VERSION]` writes `rontolisp/SKILL.md` +
 `rontolisp/references/**`, a `.tar.gz`, a `.skill` zip, `rontolisp-full.md`,
 `VERSION`/`version.json` and an install page to `https://making.github.io/rontolisp/skill/`.
 
@@ -128,6 +128,14 @@ doc page instead. Nothing is committed back to the repo.
   plugin entry is an absolute `archive` URL, deliberately unversioned and without `sha256`.
   `claude plugin` rejects a non-https or loopback archive URL, so the install can only be
   exercised deployed. Secondary: the bare `.tar.gz`, which nothing updates for you.
+- **`--plugin DIR@VERSION` adds a hand-written skill** (`lispresen/skills/lispresen`) to the
+  same marketplace as `<name>-plugin.zip`, zipped as it is: the directory stays the only
+  copy, and the install id is `lispresen@rontolisp` (one `marketplace add` for every skill
+  in the repo). Its version is `<major.minor>.<git rev-list --count HEAD -- lispresen/skills
+  SkillGen.java>`, computed in `pages.yaml`; no content digest, since only those paths can
+  change it. Local check without touching real settings: `HOME=$T CLAUDE_CONFIG_DIR=$T/.claude
+  claude plugin marketplace add <dir with .claude-plugin/marketplace.json, relative sources
+  to the unzipped plugins>` then `plugin install` (passed 2026-10-24, Claude Code 2.1.309).
 - Install page = `SkillGen.INSTALL_GUIDE` (`doc/<lang>/getting-started/agent-skill.md`)
   rendered into the `skill/index.html` chrome; its artifact links are absolute in the Markdown
   because they must work from both places.

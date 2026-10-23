@@ -460,6 +460,10 @@ diagnostics"
       ;; No preview options, no tags: the head is as before.
       (ok (contains html "</title>
 <style>")))
+    (ok (contains (lispresen:render "(deck :lang \"en-US\")") "<html lang=\"en-US\">"))
+    (ok (contains (lispresen:render "(deck)") "<html lang=\"ja\">"))
+    (ok (equal (render-diagnostics "(deck :lang \"en\\\"x\")")
+               '((:error 1 ":lang of deck must be a language tag of letters, digits and -"))))
     (ok (contains (lispresen:render "(deck :title \"t&\" :description \"d\"
   :page-url \"https://e.x/a/t.html\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
                   "<title>t&amp;</title>
@@ -629,6 +633,22 @@ and libpng read them"
             (:warning 3 "a kicker stands above a title; this slide has none")
             (:error 4
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
+  (testing "a deck footer is a line on every slide but the title slide and the dropped"
+    (let ((html (lispresen:render
+                 "(deck :title \"d\" :page-numbers t :footer (\"#talk \" (link \"https://e.org\" \"@me\")))
+(slide :title \"a\" \"x\")
+(slide :title \"b\" :footer nil \"y\")")))
+      (let* ((part "<p class=\"footer\">#talk <a href=\"https://e.org\">@me</a></p>")
+             (at (search part html)))
+        (ok (and at (not (search part html :start2 (1+ at))))))
+      (ok (contains html ".footer{left:")))
+    (ok
+     (equal (render-diagnostics
+             "(deck :footer \"かかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかか\")
+(slide :title \"t\" :footer 1 \"b\")")
+            '((:warning 1
+               "the footer does not fit on one line beside the page number and is cut; shorten it")
+              (:error 2 ":footer of slide must be nil")))))
   (ok
    (equal (render-diagnostics
            "(slide :title \"t\" (source (say \"c\" \"a\")) (source \"b\") (column (source \"c\")))

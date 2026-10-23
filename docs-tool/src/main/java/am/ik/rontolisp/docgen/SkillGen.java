@@ -46,14 +46,23 @@ import com.vladsch.flexmark.util.data.MutableDataSet;
  *   rontolisp-skill.tar.gz    -&gt; ~/.claude/skills/
  *   rontolisp.skill           the same tree as a zip
  *   rontolisp-full.md         everything concatenated, for agents without a skill loader
+ *   rontolisp-plugin.zip      the skill as a Claude Code plugin
+ *   &lt;name&gt;-plugin.zip         each {@code --plugin} skill as a plugin of its own
+ *   marketplace.json          the marketplace listing every plugin above
  * </pre>
  *
  * Usage:
  *
  * <pre>
  * java -jar rontolisp-docgen.jar skill --source doc --out web/dist/skill \
- *      [--lang en] [--version 0.1.42] [--commit abc1234] [--site-base URL]
+ *      [--lang en] [--version 0.1.42] [--commit abc1234] [--site-base URL] \
+ *      [--plugin lispresen/skills/lispresen@0.1.3]...
  * </pre>
+ *
+ * A {@code --plugin} is a hand-written skill directory elsewhere in the repository,
+ * published through the same marketplace so that one {@code marketplace add} offers every
+ * skill the repository has. It is packaged as it is, so the directory stays its only
+ * copy.
  */
 public final class SkillGen {
 
@@ -137,6 +146,25 @@ public final class SkillGen {
 
 	private final String previousHash;
 
+	private final List<SkillPlugin> plugins = new ArrayList<>();
+
+	/**
+	 * A skill directory packaged as a plugin of its own, at the version the caller gives:
+	 * the caller knows what can change it, the generator does not.
+	 */
+	record SkillPlugin(Path dir, String version) {
+
+		/** {@code DIR@VERSION}, as {@code --plugin} takes it. */
+		static SkillPlugin parse(String spec) {
+			int at = spec.lastIndexOf('@');
+			if (at <= 0 || at == spec.length() - 1) {
+				throw new IllegalArgumentException("--plugin takes DIR@VERSION: " + spec);
+			}
+			return new SkillPlugin(Path.of(spec.substring(0, at)), spec.substring(at + 1));
+		}
+
+	}
+
 	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase) {
 		this(source, out, lang, version, commit, siteBase, null, DEFAULT_REPO_BASE, null, null);
 	}
@@ -160,6 +188,12 @@ public final class SkillGen {
 		this.repoBase = repoBase;
 	}
 
+	/** Adds a skill directory to publish as its own plugin in the marketplace. */
+	public SkillGen plugin(Path dir, String version) {
+		this.plugins.add(new SkillPlugin(dir, version));
+		return this;
+	}
+
 	public static void main(String[] args) throws IOException {
 		Path source = Path.of("doc");
 		Path out = Path.of("web/dist/skill");
@@ -171,6 +205,7 @@ public final class SkillGen {
 		String repoBase = DEFAULT_REPO_BASE;
 		String previousVersion = null;
 		String previousHash = null;
+		List<SkillPlugin> plugins = new ArrayList<>();
 		for (int i = 0; i < args.length - 1; i++) {
 			switch (args[i]) {
 				case "--source" -> source = Path.of(args[++i]);
@@ -183,12 +218,15 @@ public final class SkillGen {
 				case "--repo-base" -> repoBase = args[++i];
 				case "--previous-version" -> previousVersion = args[++i];
 				case "--previous-hash" -> previousHash = args[++i];
+				case "--plugin" -> plugins.add(SkillPlugin.parse(args[++i]));
 				default -> {
 				}
 			}
 		}
-		new SkillGen(source, out, lang, version, commit, siteBase, examples, repoBase, previousVersion, previousHash)
-			.generate();
+		SkillGen generator = new SkillGen(source, out, lang, version, commit, siteBase, examples, repoBase,
+				previousVersion, previousHash);
+		plugins.forEach(plugin -> generator.plugin(plugin.dir(), plugin.version()));
+		generator.generate();
 	}
 
 	/** Writes the whole bundle. */
@@ -258,12 +296,19 @@ public final class SkillGen {
 		// path that keeps itself up to date.
 		String summary = frontmatterDescription(skill);
 		Map<String, byte[]> plugin = new LinkedHashMap<>();
-		plugin.put(".claude-plugin/plugin.json", pluginJson(summary, resolved).getBytes(StandardCharsets.UTF_8));
+		String homepage = this.siteBase + "/docs/en/getting-started/agent-skill.html";
+		plugin.put(".claude-plugin/plugin.json",
+				pluginJson(SKILL_NAME, summary, resolved, homepage).getBytes(StandardCharsets.UTF_8));
 		for (Map.Entry<String, byte[]> entry : archive.entrySet()) {
 			plugin.put("skills/" + entry.getKey(), entry.getValue());
 		}
 		writeZip(this.out.resolve(PLUGIN_ZIP), plugin);
-		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary, resolved),
+		List<String> entries = new ArrayList<>();
+		entries.add(marketplaceEntry(SKILL_NAME, summary, resolved, homepage));
+		for (SkillPlugin extra : this.plugins) {
+			entries.add(writeSkillPlugin(extra));
+		}
+		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(resolved, entries),
 				StandardCharsets.UTF_8);
 
 		System.out.println("Generated skill " + SKILL_NAME + " " + resolved
@@ -724,25 +769,79 @@ public final class SkillGen {
 	 * stated once.
 	 */
 	static String frontmatterDescription(String skill) throws IOException {
-		Matcher matcher = Pattern.compile("(?ms)^description:[ \t]*>?-?[ \t]*\r?\n(.*?)^\\w", Pattern.MULTILINE)
-			.matcher(skill);
-		if (!matcher.find()) {
-			throw new IOException("The skill template no longer has a folded `description:` in its frontmatter");
+		Matcher folded = Pattern.compile("(?ms)^description:[ \t]*>?-?[ \t]*\r?\n(.*?)^\\w").matcher(skill);
+		Matcher inline = Pattern.compile("(?m)^description:[ \t]*([^>|\\s].*)$").matcher(skill);
+		String text;
+		if (inline.find()) {
+			text = inline.group(1);
 		}
-		String folded = matcher.group(1).replaceAll("\\s+", " ").trim();
-		int stop = folded.indexOf(". ");
-		return stop < 0 ? folded : folded.substring(0, stop + 1).trim();
+		else if (folded.find()) {
+			text = folded.group(1);
+		}
+		else {
+			throw new IOException("The skill has no `description:` in its frontmatter");
+		}
+		text = text.replaceAll("\\s+", " ").trim();
+		int stop = text.indexOf(". ");
+		return stop < 0 ? text : text.substring(0, stop + 1).trim();
 	}
 
-	private String pluginJson(String summary, String version) {
+	/** The skill's frontmatter {@code name}. */
+	static String frontmatterName(String skill) throws IOException {
+		Matcher matcher = Pattern.compile("(?m)^name:[ \t]*(\\S+)[ \t]*$").matcher(skill);
+		if (!matcher.find()) {
+			throw new IOException("The skill has no `name:` in its frontmatter");
+		}
+		return matcher.group(1);
+	}
+
+	/**
+	 * Packages a hand-written skill directory as {@code <name>-plugin.zip}, every file as
+	 * it is, and returns its marketplace entry. The plugin is named after the skill, so
+	 * the install id reads {@code <skill>@rontolisp}.
+	 */
+	private String writeSkillPlugin(SkillPlugin extra) throws IOException {
+		Path dir = extra.dir();
+		String skill = Files.readString(dir.resolve("SKILL.md"), StandardCharsets.UTF_8);
+		String name = frontmatterName(skill);
+		if (!name.equals(dir.getFileName().toString())) {
+			throw new IOException("Skill " + name + " must sit in a directory of that name, not " + dir);
+		}
+		if (name.equals(SKILL_NAME)) {
+			throw new IOException("A --plugin cannot take the generated skill's name: " + name);
+		}
+		String summary = frontmatterDescription(skill);
+		// The repository root is the one holding doc/, wherever the generator runs from.
+		Path root = this.source.toAbsolutePath().normalize().getParent();
+		String homepage = this.repoBase + "/"
+				+ root.relativize(dir.toAbsolutePath().normalize()).toString().replace('\\', '/');
+		Map<String, byte[]> plugin = new LinkedHashMap<>();
+		plugin.put(".claude-plugin/plugin.json",
+				pluginJson(name, summary, extra.version(), homepage).getBytes(StandardCharsets.UTF_8));
+		try (Stream<Path> files = Files.walk(dir)) {
+			for (Path file : files.filter(Files::isRegularFile).sorted().toList()) {
+				plugin.put("skills/" + name + "/" + dir.relativize(file).toString().replace('\\', '/'),
+						Files.readAllBytes(file));
+			}
+		}
+		writeZip(this.out.resolve(name + "-plugin.zip"), plugin);
+		System.out.println("Packaged skill " + name + " " + extra.version() + " from " + dir);
+		return marketplaceEntry(name, summary, extra.version(), homepage);
+	}
+
+	private String pluginJson(String name, String summary, String version, String homepage) {
 		return """
 				{
 				  "name": "%s",
 				  "description": "%s",
 				  "version": "%s",
-				  "homepage": "%s/docs/en/getting-started/agent-skill.html"
+				  "author": {
+				    "name": "%s"
+				  },
+				  "license": "Apache-2.0",
+				  "homepage": "%s"
 				}
-				""".formatted(SKILL_NAME, jsonEscape(summary), version, this.siteBase);
+				""".formatted(name, jsonEscape(summary), version, ownerName(), homepage);
 	}
 
 	/**
@@ -753,32 +852,37 @@ public final class SkillGen {
 	 * resolves, and the version it then installs is the one inside the archive's
 	 * {@code plugin.json}.
 	 */
-	private String marketplaceJson(String summary, String version) {
+	private String marketplaceJson(String version, List<String> entries) {
 		return """
 				{
 				  "name": "%s",
 				  "owner": {
 				    "name": "%s"
 				  },
-				  "metadata": {
-				    "description": "The rontolisp documentation, packaged for coding agents",
-				    "version": "%s"
-				  },
+				  "description": "Agent skills from the rontolisp repository",
+				  "version": "%s",
 				  "plugins": [
-				    {
-				      "name": "%s",
-				      "description": "%s",
-				      "version": "%s",
-				      "homepage": "%s/docs/en/getting-started/agent-skill.html",
-				      "source": {
-				        "source": "archive",
-				        "url": "%s/skill/%s"
-				      }
-				    }
+				%s
 				  ]
 				}
-				""".formatted(SKILL_NAME, ownerName(), version, SKILL_NAME, jsonEscape(summary), version, this.siteBase,
-				this.siteBase, PLUGIN_ZIP);
+				""".formatted(SKILL_NAME, ownerName(), version, String.join(",\n", entries));
+	}
+
+	/** One plugin of the marketplace, fetched as the archive of that name next to it. */
+	private String marketplaceEntry(String name, String summary, String version, String homepage) {
+		return """
+				{
+				  "name": "%s",
+				  "description": "%s",
+				  "version": "%s",
+				  "homepage": "%s",
+				  "source": {
+				    "source": "archive",
+				    "url": "%s/skill/%s-plugin.zip"
+				  }
+				}""".formatted(name, jsonEscape(summary), version, homepage, this.siteBase, name)
+			.indent(4)
+			.stripTrailing();
 	}
 
 	/** The site's GitHub user, read off the site URL rather than hard-coded twice. */

@@ -20,6 +20,8 @@
   aspect
   runtime
   page-numbers
+  footer
+  footer-run
   callouts
   kicker
   agenda
@@ -30,6 +32,7 @@
   page-image
   page-image-font
   description
+  lang
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -40,7 +43,8 @@
 ;;; lists what a page advance reveals, in source order (stepped items, code blocks with
 ;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS). MORPH
 ;;; is the :morph option: its first code block changes from the previous slide's. SOURCE
-;;; holds the inline content of its (source ...) line, SOURCE-RUN its run.
+;;; holds the inline content of its (source ...) line, SOURCE-RUN its run. FOOTER is
+;;; :deck (the deck's footer line shows) or nil (the slide drops it).
 (defstruct slide
   number
   line
@@ -55,6 +59,7 @@
   callouts
   kicker
   kicker-run
+  (footer :deck)
   meta
   steps
   (step-count 0)
@@ -856,7 +861,7 @@ callout points at, or else a paragraph holding it as inline content."
 
 (defun parse-slide (form number line)
   (multiple-value-bind (opts body)
-      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS" "MORPH")
+      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS" "MORPH" "FOOTER")
                      "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
@@ -885,6 +890,7 @@ callout points at, or else a paragraph holding it as inline content."
        :kicker (if (assoc "KICKER" opts :test #'string=)
                    (string-option opts "KICKER" "slide")
                    :deck)
+       :footer (parse-slide-footer opts)
        :callouts (reverse *callouts*)
        :steps (reverse *steps*)
        :layout (let ((l (opt opts "LAYOUT")))
@@ -948,23 +954,37 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
     (report :error ":runtime must be :hosted, :none or a URL string")
     nil)))
 
+(defun parse-lang-option (opts)
+  "The :lang of the deck header: a BCP 47 tag of letters, digits and hyphens, or nil."
+  (let ((v (string-option opts "LANG" "deck")))
+    (cond ((null v) nil)
+          ((and (plusp (length v))
+                (every (lambda (c) (or (char= c #\-) (and (< (char-code c) 128) (alphanumericp c))))
+                       v))
+           v)
+          (t
+           (report :error ":lang of deck must be a language tag of letters, digits and -")
+           nil))))
+
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
-                                                    "PAGE-NUMBERS" "CALLOUTS"
+                                                    "PAGE-NUMBERS" "FOOTER" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
                                                     "URL" "PROGRESS" "PAGE-URL"
                                                     "PAGE-IMAGE" "PAGE-IMAGE-FONT"
-                                                    "DESCRIPTION") "deck")
+                                                    "DESCRIPTION" "LANG") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
                :date (string-option opts "DATE" "deck")
+               :lang (parse-lang-option opts)
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS")
+               :footer (parse-footer-option (opt opts "FOOTER"))
                :callouts (parse-callouts-option (opt opts "CALLOUTS"))
                :kicker (parse-kicker-option (opt opts "KICKER"))
                :logo (let ((l (opt opts "LOGO")))
@@ -1040,6 +1060,25 @@ REF when REF starts with a slash, else REF in BASE's directory."
         (t
          (report :error ":kicker of deck must be :section")
          nil)))
+
+(defun parse-footer-option (x)
+  "The inline content of the deck's :footer, a string, an inline form or a list of
+inlines (\"text \" (link ...)); nil when absent."
+  (when x
+    (let* ((*callouts* nil) (*steps* nil)
+           (nodes (parse-inlines (if (and (consp x) (not (symbolp (car x))))
+                                     x
+                                     (list x)))))
+      (when *callouts* (report :error "a footer takes no callouts"))
+      (strip-callouts nodes))))
+
+(defun parse-slide-footer (opts)
+  "A slide's :footer: :deck, or nil for (slide :footer nil), which drops the deck's."
+  (cond ((not (assoc "FOOTER" opts :test #'string=)) :deck)
+        ((null (opt opts "FOOTER")) nil)
+        (t
+         (report :error ":footer of slide must be nil")
+         :deck)))
 
 (defun parse-callouts-option (x)
   "The deck's :callouts as :step (a page advance shows each bubble) or :shown."

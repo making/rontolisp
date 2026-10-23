@@ -35,6 +35,14 @@ Claude Code はその URL からマーケットプレイスのファイルを読
 何もしなくても新しいバージョンが利用可能になります。バージョンの上がり方は
 [最新に保つ](#staying-current)を参照してください。
 
+同じマーケットプレイスには、rontolisp で書かれたスライドツール
+[lispresen](https://github.com/making/rontolisp/blob/develop/lispresen/README.md)
+のスキルも別のプラグインとして載っています:
+
+```bash
+claude plugin install lispresen@rontolisp
+```
+
 ## プラグインを使わないインストール
 
 スキルはディレクトリであり、Claude Code は `~/.claude/skills`（ユーザー）と
