@@ -393,6 +393,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LocalTimeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/localtime\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/environment\\.wit"
