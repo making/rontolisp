@@ -1197,7 +1197,7 @@ One file containing:
 - A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
   of the safe area; with `:progress`, a `<div id="progress">` after the slides in the
   canvas.
-- Speaker notes in `<aside class="notes">`, hidden in the audience view.
+- Speaker notes in `<aside class="notes">`, hidden in the audience view and in the default print.
 
 ### Overview and presenter window
 
@@ -1212,6 +1212,15 @@ over a `BroadcastChannel` named after the file's path. The presenter's copy of t
 slide shows the audience window's edits and outputs, and its Run and Reset act in the
 audience window, where the code runs; so does a click on a video there, which plays or
 pauses it in the audience window.
+
+`?notes` turns print into a handout: the player adds `html.handout` and an `@page` of the
+canvas width and twice its height, so a page holds the slide at full size (nothing the fit
+solver placed moves; the slide's clip is lifted below only) and its notes under it, in 36px
+black text over the white page. The page is the canvas width with extra height, not A4,
+because the slide keeps its pixels and the PDF viewer scales the page whole; the notes box
+is as tall as the slide and clips what does not fit. A slide without notes prints alone on
+its page. `?notes&print` also opens the print dialog once the fonts are ready; the presenter
+window's "Print with notes" button opens that URL. Steps print revealed, as in the default print.
 
 ### Touch
 

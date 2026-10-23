@@ -80,7 +80,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` | video laid out as an image, same options (Videos, below) |
 | `(table ...)` | table (below) |
 | `(flow ...)`, `(bars ...)`, `(cells ...)` | diagrams (below) |
-| `(notes "text")` | speaker notes, presenter window only |
+| `(notes "text")` | speaker notes: the presenter window, and the handout print (`?notes` in the URL) |
 | `(source inline...)` | one muted line at the bottom naming a source; one per slide |
 | `(say "comment" ... block)` | callout (below) |
 

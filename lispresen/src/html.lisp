@@ -230,8 +230,8 @@ html:not(.js) #fs{display:none}
             (- content (footer-width deck)))
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
-            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
-            width *canvas-height*)))
+            "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}html.handout .slide{overflow:visible;clip-path:inset(0 0 -~dpx 0);margin-bottom:~dpx}html.handout .notes{display:block;position:absolute;left:var(--left);width:var(--width);top:~dpx;height:~dpx;overflow:hidden;box-sizing:border-box;padding-top:48px;color:#000;font-size:36px;line-height:1.6;white-space:pre-wrap}}~%"
+            width *canvas-height* *canvas-height* *canvas-height* *canvas-height* *canvas-height*)))
 
 ;;; --- text ------------------------------------------------------------------------
 
