@@ -101,7 +101,7 @@ html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 .columns.grow{flex:1 1 0;min-height:0}
 .column{flex:none;display:flex;flex-direction:column;gap:var(--gap);min-height:0}
 #ov{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px;align-content:start;padding:24px;overflow:auto;background:var(--bg)}
-.thumb{position:relative;overflow:hidden;outline:1px solid var(--rule);cursor:pointer}
+.thumb{position:relative;overflow:clip;outline:1px solid var(--rule);cursor:pointer}
 .thumb.sel{outline:4px solid var(--accent)}
 .thumb>.slide{transform-origin:0 0}
 .thumb>.slide .page,#ov .tools,#ov .out{display:none}
