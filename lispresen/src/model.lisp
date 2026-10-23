@@ -1088,7 +1088,8 @@ expanded first, so the sections an agenda lists are known before any slide is pa
         (number 0)
         (section nil)
         (expanded nil)
-        (agenda nil))
+        (agenda nil)
+        (marker nil))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
         (setf deck (parse-deck-header (car (car forms))))
@@ -1137,27 +1138,58 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                               :test #'equal)
                   (incf count)))))))
     (setf expanded (nreverse expanded))
-    (when (deck-agenda deck)
-      (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) expanded)
-          (progn
-            ;; The expansion counted the slides without the agenda slide placed here.
-            (dolist (d *diagnostics*)
-              (when (and (diagnostic-slide d) (> (diagnostic-slide d) number))
-                (incf (diagnostic-slide d))))
-            (push (setf agenda
-                        (make-slide :number (incf number)
-                                    :line (deck-line deck)
-                                    :kind :slide)) slides))
-          (let ((*line* (deck-line deck)))
-            (report
-             :warning ":agenda lists the sections, and this deck has none"))))
-    (loop for (form line) in expanded
+    ;; The agenda slide stands where the first (agenda) is, else after the title slide,
+    ;; and lists the sections after it.
+    (let* ((markers
+            (remove-if-not (lambda (e) (equal (form-tag (first e)) "AGENDA"))
+                           expanded))
+           (listed
+            (if markers (cdr (member (first markers) expanded)) expanded)))
+      (setf marker (first markers))
+      (dolist (e markers)
+        (let ((*line* (second e)))
+          (when (rest (first e)) (report :error "(agenda) takes no arguments"))
+          (cond ((not (deck-agenda deck))
+                 (report :warning
+                         "(agenda) places the agenda of (deck :agenda t), which this deck lacks"))
+                ((not (eq e marker))
+                 (report :warning
+                         "the agenda stands at the first (agenda); this one is ignored")))))
+      (when (deck-agenda deck)
+        (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) listed)
+            (let ((at
+                   (+ number 1
+                      (count-if (lambda (e)
+                                  (member (form-tag (first e)) '("SLIDE" "SECTION")
+                                          :test #'equal))
+                                expanded
+                                :end (or (position marker expanded) 0)))))
+              ;; The expansion counted the slides without the agenda slide placed here.
+              (dolist (d *diagnostics*)
+                (when (and (diagnostic-slide d) (>= (diagnostic-slide d) at))
+                  (incf (diagnostic-slide d))))
+              (setf agenda
+                    (make-slide :line (if marker (second marker) (deck-line deck))
+                                :kind :slide))
+              (unless marker
+                (setf (slide-number agenda) (incf number))
+                (push agenda slides)))
+            (let ((*line* (if marker (second marker) (deck-line deck))))
+              (report :warning (if marker
+                                   ":agenda lists the sections after (agenda), and this deck has none"
+                                   ":agenda lists the sections, and this deck has none"))))))
+    (loop for entry in expanded
+          for (form line) = entry
           do
             (let ((tag (form-tag form))
                   (*line* line)
                   (*slide* (1+ number))
                   (*slide-title* nil))
-              (cond ((equal tag "SLIDE")
+              (cond ((equal tag "AGENDA")
+                     (when (and agenda (eq entry marker))
+                       (setf (slide-number agenda) (incf number))
+                       (push agenda slides)))
+                    ((equal tag "SLIDE")
                      (let ((slide (parse-slide form (incf number) line)))
                        (number-steps slide (deck-callouts deck))
                        (when (slide-morph slide) (morph-code slide (car slides)))
@@ -1175,7 +1207,7 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                     (t
                      (let ((*slide* nil))
                        (report :error (format nil
-                                              "expected (slide ...), (section ...) or (define ...), found ~a"
+                                              "expected (slide ...), (section ...), (agenda) or (define ...), found ~a"
                                               (if tag
                                                   (string-downcase tag)
                                                   (prin1-to-string form)))))))))
@@ -1184,5 +1216,6 @@ expanded first, so the sections an agenda lists are known before any slide is pa
       (add-agendas deck agenda
                    (remove-if-not (lambda (s)
                                     (and (eq (slide-kind s) :section)
-                                         (slide-title s))) (deck-slides deck))))
+                                         (slide-title s)))
+                                  (cdr (member agenda (deck-slides deck))))))
     deck))

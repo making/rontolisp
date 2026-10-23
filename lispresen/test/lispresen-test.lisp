@@ -7,7 +7,11 @@
 #-rontolisp (require :asdf)
 
 #+rontolisp (load "../src/all.lisp")
-#-rontolisp (load (merge-pathnames "../src/all.lisp" *load-truename*))
+#+rontolisp (load "../src/build.lisp")
+#+rontolisp (load "../src/starter.lisp")
+#-rontolisp
+(dolist (name '("all" "build" "starter"))
+  (load (merge-pathnames (format nil "../src/~a.lisp" name) *load-truename*)))
 (asdf:load-system :rove)
 
 (defpackage :lispresen-test (:use :cl :rove))
@@ -606,7 +610,7 @@ and libpng read them"
           '((:error 2 "unknown element frob")
             (:error 5 "a table row has 1 cells where the table has 2")
             (:error 6
-             "expected (slide ...), (section ...) or (define ...), found other")
+             "expected (slide ...), (section ...), (agenda) or (define ...), found other")
             (:error 7 "dotted lists outside (cells ...) and #n= labels are not deck syntax")
             (:error 8
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
@@ -651,7 +655,36 @@ and libpng read them"
         (render-diagnostics
          "(deck :agenda t)
 (slide \"x\")")
-        '((:warning 1 ":agenda lists the sections, and this deck has none"))))))
+        '((:warning 1 ":agenda lists the sections, and this deck has none")))))
+    ;; (agenda) places it: the slides and sections before it are not listed.
+    (multiple-value-bind (html diagnostics) (lispresen:render
+                                             "(deck :title \"d\" :agenda t)
+(define s (x) (section x))
+(slide \"opening\")
+(s \"0\")
+(agenda)
+(slide :title \"t\" (s))
+(s \"a\")
+(agenda)")
+      (ok (contains html "<h1 class=\"section-title\">0</h1>"))
+      (ok (contains html "<ol><li>a</li></ol>"))
+      (ok (equal (mapcar (lambda (d)
+                           (list (lispresen::diagnostic-slide d)
+                                 (lispresen::diagnostic-message d)))
+                         diagnostics)
+                 '((5 "template s takes 1 argument, given 0")
+                   (nil "the agenda stands at the first (agenda); this one is ignored")))))
+    (ok
+     (equal
+      (render-diagnostics
+       "(deck :agenda t)
+(section \"a\")
+(agenda 1)")
+      '((:error 3 "(agenda) takes no arguments")
+        (:warning 3 ":agenda lists the sections after (agenda), and this deck has none"))))
+    (ok
+     (equal (render-diagnostics "(agenda)")
+            '((:warning 1 "(agenda) places the agenda of (deck :agenda t), which this deck lacks")))))
   (testing ":morph pairs the tokens of the first code blocks of two slides, a bracket with
 the token beside it, so a form that moved moves whole"
     (multiple-value-bind (html diagnostics)
@@ -682,6 +715,11 @@ y\\\")\"))
 (slide \"x\")")))
       (ok (contains html "--accent:#ffcc00;"))
       (ok (contains html ".layout-statement::before{left:40px"))))
+  (testing "both starter decks render with no diagnostic, dated as asked"
+    (dolist (language '(:ja :en))
+      (let ((deck (lispresen:starter-deck "2026-10-24" language)))
+        (ok (contains deck ":date \"2026-10-24\""))
+        (ok (null (render-diagnostics deck))))))
   (ok
    (equal (lispresen:format-diagnostic "t.lisp"
                                        (lispresen::make-diagnostic

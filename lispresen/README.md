@@ -12,6 +12,9 @@ https://making.github.io/rontolisp/lispresen/intro.html with every push that cha
 
 ## A deck
 
+`lispresen new talk.lisp` writes a starter deck to begin from: the header, sections and
+a few slides showing the main forms, each with a comment on how it is written.
+
 ```lisp
 (deck :title "lispresen" :author "rontolisp" :date "2026-10-22" :page-numbers t)
 
@@ -37,8 +40,9 @@ https://making.github.io/rontolisp/lispresen/intro.html with every push that cha
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :description :page-url :page-image :page-image-font)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck; `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :description :page-url :page-image :page-image-font)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck; `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
+| `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
@@ -208,6 +212,7 @@ on macOS (Apple Silicon):
 wget https://github.com/making/rontolisp/releases/download/lispresen-0.1.0-SNAPSHOT/lispresen-darwin-arm64
 chmod +x lispresen-darwin-arm64
 sudo mv lispresen-darwin-arm64 /usr/local/bin/lispresen
+lispresen new talk.lisp                                         # a starter deck
 lispresen talk.lisp                                             # writes talk.html
 ```
 
@@ -244,6 +249,8 @@ sbcl --script lispresen/cli.lisp talk.lisp
 
 ```
 lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+lispresen new FILE [--lang ja|en] [--force]
+lispresen --version
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
@@ -253,6 +260,22 @@ alone is the whole deck, the page image (Link preview, below) aside. A WASM buil
 only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
+
+`new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
+with `--lang en`, dated today in UTC. An existing `FILE` is left alone and reported unless
+`--force` is given. A deck file named `new` is rendered as `./new`.
+
+`--version` prints the version and the commit lispresen was built from, in the shape of
+`rontolisp --version`:
+
+```
+{"version": "0.1.0-SNAPSHOT", "gitCommit": "42ee82c"}
+```
+
+Both are read when lispresen is built: the version from the repository's `pom.xml` (the
+release `lispresen-<version>` carries the same), the commit from its `.git`. Run on the
+interpreter or SBCL, that is when `cli.lisp` is loaded; a build outside a repository
+reports `unknown`.
 
 ## Presenting
 
@@ -361,7 +384,8 @@ never breaks inside (`2026-10-22`, `1,000`).
 ## Development
 
 ```bash
-lispresen/check.sh            # every backend against the golden deck and image, then the unit tests
+lispresen/check.sh            # every backend against the golden deck and image, --version and
+                              # the starter deck, then the unit tests
 lispresen/check.sh --update   # regenerate examples/intro.html and intro.png first
 ```
 
