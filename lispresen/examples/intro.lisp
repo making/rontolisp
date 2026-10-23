@@ -456,6 +456,22 @@
   (p "→ で順に出し、← で一つずつ戻す。"
      (tt "(deck :callouts :step)") " ならどの吹き出しも送りで出る。"))
 
+(slide :title "ブロックを丸ごと送りで出す" :kicker "書き方"
+  (p "段落、画像、動画、表、引用、図、数式、コード、列も " (tt ":step t")
+     " で送りの一つになる。")
+  (sexp "
+    (bars :step t :unit \" KB\" ...)
+    (lead :step t \"結論は最後に出す\")")
+  (p "図と表は一度に全体が出る。吹き出しは包んだブロックと一緒に出る。"))
+
+;; The chart and then the conclusion each take a page advance; the formula's callout is
+;; no step, so it comes with the formula.
+(slide :title "ブロックを丸ごと送りで出す" :kicker "表示例"
+  (p "測った値を見せてから、結論を出す。")
+  (bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788) ("ネイティブ" "6,700"))
+  (say "jar の何倍か" (math :step t (approx (/ 6700 297) 23)))
+  (lead :step t "→ 配るなら jar が一番小さい"))
+
 (slide :title "コードを動かす" :kicker "書き方"
   (p "Lisp、Scheme、Clojure のコードはスライドの上で動く。")
   (sexp "

@@ -152,6 +152,13 @@ bubble; one with no room is an error. `:step t` shows it on a page advance.
 ## Page advances and morph
 
 - `(ul :step t ...)` reveals items one per advance.
+- `:step t` on any other block (`p`, `lead`, `quote`, `image`, `video`, `table`, `flow`,
+  `cells`, `bars`, `math`, `code`, `column`) reveals it whole on an advance, in source
+  order with the other steps: show the data, then `(lead :step t "the conclusion")`.
+  Hidden blocks keep their room. A table's rows or a diagram's boxes do not step one by
+  one. A non-step callout on a stepped block appears with it; a stepped `:autoplay` video
+  plays when revealed. Not on `notes`, `source` or an untitled slide's only block (it
+  would open empty): an error.
 - `(code :steps ((1 2) "(fib 20)") ...)` brings lines forward: `(1 2)` is lines 1 to 2 of the
   block as shown, a string the first line holding it.
 - `(slide ... :morph t (code ...))` animates its first code block from the previous
@@ -321,6 +328,8 @@ drawn. Leave all of these out for a deck that is not published.
 | `image X has no :alt`, `video X has no :alt` | add `:alt "what it shows"` |
 | `the full layout needs an (image ...) or (video ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
 | `the image-left layout needs one (image ...) or (video ...) outside columns, ...` | keep one image or video, outside `column`, without `:caption` or a callout on it |
+| `:step on the only block of an untitled slide would open it empty` | drop `:step`, give the slide a title, or put what comes first on the slide |
+| `:step does not apply to notes, ...`, `:step does not apply to a source, ...` | drop `:step`: notes are never on the slide, the source shows with it |
 | `image X takes :fit only on a :full, :image-left or :image-right slide` | remove `:fit`; an image in the body is always shown whole |
 | `cannot embed image X: cannot read it` | fix the path (relative to the deck) |
 | `video X is N MB, which makes the embedded HTML slow to open; ...` | shorten or re-encode the video, or render without `--embed` and ship it beside the HTML |

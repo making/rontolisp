@@ -9,7 +9,8 @@
 ;;;; has runnable code, runs code blocks on the playground runtime in a Web Worker.
 ;;;; *SAY-SCRIPT*, included only when the deck has callouts, places their bubbles again on
 ;;;; the geometry the browser drew. *VIDEO-SCRIPT*, included only when the deck has a
-;;;; video, plays and pauses videos as slides are entered and left, and on a click. The
+;;;; video, plays and pauses videos as slides are entered and left and as steps reveal and
+;;;; hide them, and on a click. The
 ;;;; slides are laid out without any of them; they only present and correct them.
 ;;;;
 ;;;; They are written without double quotes and backslashes so they sit in a Lisp string
@@ -338,16 +339,17 @@ hooks.place.push(callouts);
 
 (defparameter *video-script*
   "
-var vids=Array.prototype.slice.call(deck.querySelectorAll('video')),vat=-1;
+var vids=Array.prototype.slice.call(deck.querySelectorAll('video')),vat=-1,vk=0;
 vids.forEach(function(v,i){v.controls=false;v.dataset.v=i;});
 function vplay(v){var p=v.play();if(p&&p.catch)p.catch(function(e){console.warn('lispresen: the browser did not play the video',e);});}
 function vtoggle(v){if(v.paused)vplay(v);else v.pause();}
 function vclick(v,f){v.addEventListener('click',function(e){e.stopPropagation();f();});v.addEventListener('dblclick',function(e){e.stopPropagation();});}
 if(presenter)hooks.thumb.push(function(root){root.querySelectorAll('video').forEach(function(v){vclick(v,function(){send({t:'video',i:+v.dataset.v});});});});
 else{vids.forEach(function(v){vclick(v,function(){vtoggle(v);});});
-hooks.go.push(function(i){if(i===vat)return;var entered=vat>=0;vat=i;
+hooks.go.push(function(i){var entered=vat>=0,moved=i!==vat,k0=vk;vat=i;vk=shown;
 vids.forEach(function(v){if(!v.paused&&!slides[i].contains(v))v.pause();});
-if(entered)slides[i].querySelectorAll('video[data-autoplay]').forEach(vplay);});
+slides[i].querySelectorAll('video').forEach(function(v){var e=v.closest('[data-step]'),s=e?+e.dataset.step:0;
+if(s>shown){if(!v.paused)v.pause();}else if(v.hasAttribute('data-autoplay')&&(moved?entered:s>k0))vplay(v);});});
 hooks.msg.push(function(m){if(m.t==='video'&&vids[m.i])vtoggle(vids[m.i]);});}
 ")
 

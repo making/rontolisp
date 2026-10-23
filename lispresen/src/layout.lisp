@@ -920,6 +920,11 @@ rest less the side margins."
          (fit
           (make-fit :layout layout :left *margin-x* :width (content-width deck))))
     (setf (slide-fit slide) fit)
+    ;; Its one block, a step, would leave the slide empty until the first advance.
+    (when (and (member layout '("full" "statement") :test #'equal)
+               (block-step (car (slide-blocks slide)) (slide-steps slide)))
+      (report :error ":step on the only block of an untitled slide would open it empty")
+      (setf (slide-steps slide) nil (slide-step-count slide) 0))
     (when (or (equal layout "full")
               (member layout *split-layouts* :test #'equal))
       (place-bleed deck slide fit))

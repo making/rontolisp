@@ -44,7 +44,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(section "title")` | a section divider |
 | `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below). `:layout :image-left` or `:image-right` sets the slide's image edge to edge on that side of the canvas and fits the title and the other blocks in the rest (Layout, below) |
-| `"text"`, `(p inline...)` | a paragraph |
+| `"text"`, `(p [:step t] inline...)` | a paragraph; `:step t` on it or on any block below but a list reveals the whole block on a page advance (below) |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
 | `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge; `java`, `kotlin`, `javascript` (`js`), `typescript` (`ts`), `c`, `cpp`, `go`, `rust`, `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`) are highlighted (comments, strings, keywords, numbers and constants; JSON and YAML keys) and never run; any other `:lang` is plain |
@@ -205,9 +205,10 @@ bubble, `:step nil` to opt one out) it appears on a page advance instead.
 ## Page advances
 
 A slide can reveal itself over several page advances: the items of a `(ul :step t ...)`,
-the lines of a `(code :steps ...)`, and step bubbles. Each advance takes the next step of
-the slide in the order they are written, a bubble after the steps of what it wraps,
-before moving on to the next slide; going back undoes them one at a time.
+any block with `:step t`, the lines of a `(code :steps ...)`, and step bubbles. Each
+advance takes the next step of the slide in the order they are written, a bubble after
+the steps of what it wraps, before moving on to the next slide; going back undoes them
+one at a time.
 
 ```lisp
 (slide :title "その場で動かす"
@@ -218,6 +219,21 @@ before moving on to the next slide; going back undoes them one at a time.
 Here the first advance brings the definition forward, the second the call, the third the
 bubble. Nothing moves when a step is revealed: hidden items keep their room. Print and the
 overview show the whole slide; the presenter window shows what is still to come faded.
+
+```lisp
+(slide :title "結果"
+  (p "測った値を見せてから、結論を出す。")
+  (bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788))
+  (lead :step t "配るなら jar が一番小さい"))
+```
+
+`:step t` reveals a whole block: a paragraph (`p`, `lead`), a quote, an image, a video, a
+table, a diagram, a display formula, a code block (its `:steps` then walk its lines) or a
+column. A table's rows and a diagram's boxes or bars come with their block; only a list
+reveals its parts one by one. A bubble that is no step but points at a stepped block, or
+stands in one, appears with it. A video with `:autoplay t` that is a step plays when it
+is revealed. `:step` on `notes`, on `source` or on the only block of an untitled slide
+(which would open empty) is an error.
 
 ## Code morph
 

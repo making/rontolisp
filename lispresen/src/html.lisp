@@ -334,6 +334,14 @@ line with the character after it when that is no boundary, as Chrome breaks afte
 
 ;;; --- blocks ------------------------------------------------------------------------
 
+(defvar *slide-steps* nil "The steps of the slide being written.")
+
+(defun write-step (b out)
+  "The data-step attribute of the block B when a page advance reveals it, which the player
+hides it until; nothing otherwise."
+  (let ((k (block-step b *slide-steps*)))
+    (when k (format out " data-step=\"~d\"" k))))
+
 (defun write-described-by (b out)
   "The aria-describedby attribute naming the bubbles of the callouts pointing at the
 block B, which the player also finds the anchor by; nothing when there are none."
@@ -423,11 +431,13 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
       (when (code-block-fresh b) (write-string " data-fresh" out))
       (when (code-block-stdin b)
         (write-attribute "data-stdin" (code-block-stdin b) out))
+      (write-step b out)
       (write-string ">" out))
     (write-string
      (if (console-p b) "<pre class=\"code console\"" "<pre class=\"code\"") out)
     (when (and (code-block-lang b) (not run))
       (write-attribute "data-lang" (code-block-lang b) out))
+    (unless run (write-step b out))
     (write-described-by b out)
     (when (code-block-step-numbers b)
       (format out " data-focus=\"~{~d~^ ~}\"" (code-block-step-numbers b)))
@@ -440,6 +450,7 @@ to run it. Its output is an overlay the player adds, so it takes no room on the 
 
 (defun write-quote (q out)
   (write-string "<figure class=\"quote\"" out)
+  (write-step q out)
   (write-described-by q out)
   (write-string "><blockquote><p>" out)
   (write-inlines (quotation-inlines q) (quotation-run q) out)
@@ -456,7 +467,9 @@ takes a share of the room the other blocks leave, as the image does."
   (format out "<div class=\"columns~:[~; grow~]\">~%" (grows-p r))
   (loop for c in (column-row-columns r)
         for width in (column-row-widths r)
-        do (format out "<div class=\"column\" style=\"width:~dpx\">~%" width)
+        do (write-string "<div class=\"column\"" out)
+          (write-step c out)
+          (format out " style=\"width:~dpx\">~%" width)
           (dolist (b (column-blocks c)) (write-block b out))
           (format out "</div>~%"))
   (format out "</div>~%"))
@@ -483,8 +496,9 @@ controls, which the player removes, let a page without the script still play it.
   "The image of a full or split slide, covering its part of the canvas top to bottom, or
 shown whole on the background with :fit :contain."
   (destructuring-bind (b left width) bleed
-    (format out "<figure class=\"bleed~:[~; contain~]\" style=\"left:~dpx;width:~dpx\">"
-            (figure-fit b) left width)
+    (format out "<figure class=\"bleed~:[~; contain~]\"" (figure-fit b))
+    (write-step b out)
+    (format out " style=\"left:~dpx;width:~dpx\">" left width)
     (write-media b out)
     (format out "</figure>~%")))
 
@@ -493,6 +507,7 @@ shown whole on the background with :fit :contain."
   (when (figure-strip b)
     (format out " class=\"pointed\" style=\"margin-right:~dpx\""
             (figure-strip b)))
+  (write-step b out)
   (write-described-by b out)
   (write-string ">" out)
   (write-media b out)
@@ -520,6 +535,7 @@ the list it draws."
     (format out
      " style=\"width:~dpx;height:~dpx;--dg:~dpx;--dg-lh:~dpx;--dg-x:~dpx\"" w h
      s (dg-lh s) (dg-pad-x s))
+    (write-step b out)
     (write-described-by b out)
     (format out
      ">~%<svg class=\"dg-art\" width=\"~d\" height=\"~d\" aria-hidden=\"true\">"
@@ -602,6 +618,7 @@ the list it draws."
             "<table style=\"--table:~dpx;--table-lh:~dpx;--cell-x:~dpx;--cell-y:~dpx;width:~dpx\""
             s (table-lh s) (cell-pad-x s) (cell-pad-y s)
             (reduce #'+ (table-block-widths b)))
+    (write-step b out)
     (write-described-by b out)
     (write-string ">" out)
     (when (table-block-caption b)
@@ -623,6 +640,7 @@ the list it draws."
 (defun write-block (b out)
   (cond ((para-p b)
          (write-string (if (para-lead b) "<p class=\"lead\"" "<p") out)
+         (write-step b out)
          (write-described-by b out)
          (write-string ">" out)
          (write-inlines (para-inlines b) (para-run b) out)
@@ -635,6 +653,7 @@ the list it draws."
         ((diagram-p b) (write-diagram b out))
         ((formula-p b)
          (write-string "<figure class=\"math\"" out)
+         (write-step b out)
          (write-described-by b out)
          (write-string ">" out)
          (write-formula b out)
@@ -714,7 +733,8 @@ corner the fit solver chose."
 (defun write-slide (deck slide out)
   (let* ((fit (slide-fit slide))
          (layout (fit-layout fit))
-         (*slide-callouts* (slide-callouts slide)))
+         (*slide-callouts* (slide-callouts slide))
+         (*slide-steps* (slide-steps slide)))
     (format out "<section class=\"slide layout-~a" layout)
     (when (stringp (slide-class slide))
       (write-char #\Space out)

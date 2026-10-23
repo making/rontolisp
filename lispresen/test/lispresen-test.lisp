@@ -313,35 +313,43 @@ a video as an image"
           (ok
            (member message (mapcar #'lispresen::diagnostic-message diagnostics)
                    :test #'equal))))))
-  (testing "page advances reveal in source order: stepped items, the lines of code :steps,
-then step bubbles (by :step or the deck's :callouts) after what they wrap"
+  (testing "page advances reveal in source order: stepped items and blocks, a stepped code
+block before the lines of its :steps, then step bubbles (by :step or the deck's :callouts)
+after what they wrap; a bubble that is no step comes with the stepped block it stands in"
     (let ((html
            (lispresen:render
             "(deck :callouts :step)
 (slide :title \"t\"
   (ul :step t \"x\" (li \"y \" (say \"a\" \"z\")))
   (say \"b\" :step nil \"w\")
-  (say \"c\" (code :lang \"lisp\" :run nil :steps (\"q\" (1 2)) \"(p \\\"s
+  (p :step t \"u \" (say \"d\" :step nil \"v\"))
+  (say \"c\" (code :step t :lang \"lisp\" :run nil :steps (\"q\" (1 2)) \"(p \\\"s
 t\\\")
-q\")))")))
-      (ok (contains html "id=\"s1\" data-steps=\"6\""))
+q\")))
+(slide :title \"t\" (column :step t \"a\") (column (math :step t (= x 1))))")))
+      (ok (contains html "id=\"s1\" data-steps=\"8\""))
       (ok (contains html "<li data-step=\"1\">x</li><li data-step=\"2\">"))
       (ok (contains html "class=\"say step\" id=\"s1c1\" role=\"note\" data-side=\"right\" data-step=\"3\""))
       (ok (contains html "class=\"say\" id=\"s1c2\""))
-      (ok (contains html "data-step=\"6\""))
+      (ok (contains html "<p data-step=\"4\">u "))
+      (ok (contains html "class=\"say step\" id=\"s1c3\" role=\"note\" data-side=\"right\" data-step=\"4\""))
+      (ok (contains html "id=\"s1c4\" role=\"note\" data-side=\"above\" data-step=\"8\""))
+      (ok (contains html "<div class=\"column\" data-step=\"1\""))
+      (ok (contains html "<figure class=\"math\" data-step=\"2\""))
       ;; A string running across a line end is closed and opened again in each line.
       (ok
        (contains html
-        "data-focus=\"4 5\"><code><span class=\"ln\" data-hot=\"5\">(p <span class=\"hl-s\">&quot;s</span></span>
-<span class=\"ln\" data-hot=\"5\"><span class=\"hl-s\">t&quot;</span>)</span>
-<span class=\"ln\" data-hot=\"4\">q</span></code></pre>"))))
-  (testing "malformed callouts"
+        "data-lang=\"lisp\" data-step=\"5\" aria-describedby=\"s1c4\" data-focus=\"6 7\"><code><span class=\"ln\" data-hot=\"7\">(p <span class=\"hl-s\">&quot;s</span></span>
+<span class=\"ln\" data-hot=\"7\"><span class=\"hl-s\">t&quot;</span>)</span>
+<span class=\"ln\" data-hot=\"6\">q</span></code></pre>"))))
+  (testing "malformed callouts and steps"
     (ok
      (equal (render-diagnostics
              "(deck :callouts :later)
 (slide :title \"t\" (say \"a\" :at \"y\" (code \"x\")) (say \"b\" :at \"x\" (p \"x\")))
 (slide :title \"t\" (p (say 1 \"x\") (say \"c\")))
-(slide :title \"t\" (code :steps (\"r\") \"p\") (code :steps ((1 3)) \"p\") (code :steps 3 \"p\"))")
+(slide :title \"t\" (code :steps (\"r\") \"p\") (code :steps ((1 3)) \"p\") (code :steps 3 \"p\"))
+(slide (p :step t \"x\") (notes :step t \"n\") (source :step t \"s\"))")
             '((:error 1 ":callouts must be :shown or :step")
               (:error 2 "the :at text \"y\" is not on a line of the code")
               (:error 2
@@ -351,7 +359,10 @@ q\")))")))
               (:error 4 "the :steps text \"r\" is not on a line of the code")
               (:error 4 ":steps lines 1-3 are not within the 1 line of the code")
               (:error 4
-               ":steps of code must list steps: a string, (FIRST LAST) or a list of them"))))))
+               ":steps of code must list steps: a string, (FIRST LAST) or a list of them")
+              (:error 5 ":step does not apply to notes, which are not on the slide")
+              (:error 5 ":step does not apply to a source, which shows with its slide")
+              (:error 5 ":step on the only block of an untitled slide would open it empty"))))))
 
 (deftest diagrams
   (testing "flow boxes take as few rows as fit, as even as that allows"

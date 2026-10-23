@@ -39,8 +39,8 @@ Goals:
 - One HTML file. Without runnable code it has no network dependency at all.
 
 Non-goals: WYSIWYG editing, slide transitions, free-form positioning, PowerPoint
-export. Builds are page advances that reveal list items, bring code lines forward and show
-callouts (Page advances, below); each takes effect at once, without a transition. The one
+export. Builds are page advances that reveal list items and whole blocks, bring code lines
+forward and show callouts (Page advances, below); each takes effect at once, without a transition. The one
 animation is the code morph (below): a slide that rewrites the previous slide's code
 shows the change as it happens.
 
@@ -109,7 +109,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `math` (an inline formula), `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -539,7 +539,9 @@ fit solver needs no intrinsic size and sees an image. It takes every place and o
   page move enters the slide and `pause()` on every video of a slide it leaves. The
   element has no `autoplay` attribute, which would play every video on page load, hidden
   slides included; the slide the page opens on does not play either, nor does a step
-  advance inside the slide, so a video the speaker paused stays paused. A paused video
+  advance inside the slide, so a video the speaker paused stays paused. A video that is
+  a step, or stands in one (`(video ... :step t)`, a stepped column), plays when its step
+  is revealed instead, and pauses when going back hides it. A paused video
   that is entered again resumes where it stopped; one that ended starts over.
 - A browser allows `play()` with sound only in a window that has had a user gesture
   (Chrome's autoplay policy; a muted video always plays). A key press, a click or a tap
@@ -767,7 +769,8 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
   whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
 
-No diagram has steps of its own yet; a step callout on one works as on any block.
+A diagram is revealed whole by `:step t` (Page advances, below); its boxes, bars and
+cells have no steps of their own, and a step callout on one works as on any block.
 
 ### Formulas
 
@@ -851,33 +854,63 @@ was not measured: its JavaScript from Apple Events is off on this machine.
 ```lisp
 (ul :step t "一つ目" "二つ目")
 (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))
+(bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788))
+(lead :step t "結論は最後に出す")
 ```
 
 A slide's steps are what its page advances reveal: each item of a `(ul :step t ...)` or
 `(ol :step t ...)` (a nested list comes with its item, unless it has `:step` of its own),
-each step of a code block's `:steps`, and each step callout. They are numbered in the
-order they are written, a callout after the steps of what it wraps, since a comment
-follows what it is about; the parser records them as it reads (`number-steps`).
+each block with `:step t`, each step of a code block's `:steps`, and each step callout.
+They are numbered in the order they are written, a block before what it holds and a
+callout after the steps of what it wraps, since a comment follows what it is about; the
+parser records them as it reads (`number-steps`).
+
+- `:step t` reveals a whole block: `p` (a bare string is written `(p :step t ...)`),
+  `lead`, `quote`, `image`, `video`, `table`, `flow`, `cells`, `bars`, a display `math`,
+  `code` and `column`. A stepped code block appears first; its `:steps` walk its lines
+  after it. Only a list steps its parts, because its items are the units a talk reveals
+  one by one and nothing joins them. A table's rows, a flow's boxes and a chart's bars
+  are revealed with their block: a flow's arrow belongs to two boxes, a bar's length is
+  read against the others and a table's column widths come from every row, so their
+  parts stepping alone would need rules of their own for what shows with which part; a
+  deck that wants them one by one splits the block into slides.
+- A callout that is no step but stands in a stepped item or block, or wraps a stepped
+  block, takes that step: its bubble appears with what it points at instead of pointing
+  at a hidden one.
+- Where a step makes no sense it is an error, not ignored: `(notes :step t ...)` (notes
+  are not on the slide), `(source :step t ...)` (the source line shows with its slide),
+  and the only block of an untitled slide, a statement or a full-bleed image, which
+  would open the slide empty. The step is dropped and the rest of the form kept.
 
 - `:steps` lists steps of a code block; a step is a string, naming the first line that
   holds it as `:at` does, `(FIRST LAST)`, lines of the block as shown counted from 1, or
   a list of those. A step brings its lines forward and fades the others to 35%; the last
   step reached stays until the slide is left. Lines are named by text first for the same
   reason `:at` is: a line added above does not shift them.
-- The HTML carries the numbers: `data-steps` on the slide, `data-step` on an item or a
-  bubble, `data-focus` on a stepped code block and, on each of its lines (a `<span
+- The HTML carries the numbers: `data-steps` on the slide, `data-step` on an item, a
+  block's element (a runnable code block's `.codebox`, a split slide's image) or a
+  bubble, `data-focus` on a code block with `:steps` and, on each of its lines (a `<span
   class="ln">`, the highlight spans closed and opened again at a line end), `data-hot`
   with the steps that bring it forward.
 - The player hides every step of a slide entered forward; each page advance (→, ↓,
   space, PageDown, Enter, a tap, a swipe) reveals the next, the slide's last moves on, and going
   back undoes the last one revealed before it moves to the previous slide, which it
-  enters with every step taken. Hidden items keep their room (`visibility: hidden`), so
-  nothing moves.
+  enters with every step taken. Hidden items and blocks keep their room (`visibility:
+  hidden`), and the fit solver sizes the slide with every step shown, so nothing moves.
 - The presenter window and the audience window share the step with the slide number;
   the presenter's views show what is still hidden faded. The overview, print and the
   page without JavaScript show every step and no faded line. Editing a block ends its
   fading: its text is highlighted anew, without line spans, until Reset restores the
   deck's markup.
+
+Stepped blocks checked 2026-10-24 in Chrome through DevTools, over HTTP: the golden deck's
+slide and a deck of a stepped autoplay video, a split slide's stepped image, a stepped
+column, table, runnable code and cells with a callout reveal in order, keep every box
+where it was, and hide again going back; the video stays paused when its slide is
+entered, plays when its step is revealed, pauses when going back hides it, and plays on
+entering backward. `?check` makes no correction; the overview, print and the handout
+print (headless Chrome `--print-to-pdf`) show every step; the presenter window follows
+steps both ways and shows the hidden ones, and the next slide's, faded.
 
 ### Code morph
 
@@ -1710,11 +1743,13 @@ before committing a change under `lispresen/`.
   numeric columns), every inline form, an embedded PNG, a full-bleed slide and a split one
   (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
   with an embedded poster, ordered and unordered lists, one
-  revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
+  revealed by steps, a bar chart, a formula with a callout and a lead revealed whole by
+  `:step t`, a flow, two cells drawings in columns (one with dotted pairs), a bar
   chart with a source line under it, three inline formulas in a paragraph and two display
   formulas (a case analysis, a sum with a fraction), a progress bar, `:layout` and
-  `:class`, and nine callouts (two inline ones, one of them a step; by `:at`, a code
-  line, a flow box, a cells atom and a bar; one on an image, one on a formula; and a step one named by
+  `:class`, and ten callouts (two inline ones, one of them a step; by `:at`, a code
+  line, a flow box, a cells atom and a bar; one on an image, two on formulas, one of them
+  revealed with its stepped formula; and a step one named by
   `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
   by line), so the highlighter, the emitted player, template expansion, diagram drawing,
   callout placement and the binary read, UTF-8 decoding and base64 are in the
@@ -1742,10 +1777,11 @@ before committing a change under `lispresen/`.
   slide numbers and diagnostics, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
-  order of a slide's page advances (items, code lines, a bubble after what it wraps) and
+  order of a slide's page advances (items, blocks, code lines, a bubble after what it
+  wraps, a bubble revealed with its stepped block) and
   a highlight string across a line end, the morph pairing (a moved form, a string
-  token split at a line end inside `:steps` lines) and its diagnostics, the callout and
-  `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
+  token split at a line end inside `:steps` lines) and its diagnostics, the callout,
+  `:step` and `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
   check values, deflate and a whole PNG against what zlib reads, the
   embedding diagnostics (a video, its poster and the size warning), code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics), the highlighting of every language from a table of
