@@ -109,6 +109,12 @@ All prelude Lisp, so the four backends run ONE definition each.
   `mayCreateInstances`, so mentioning it flips the instance gate like a `#P` does.
   `uiop:get-pathname-defaults` reads this special (`.kb/uiop.md`).
 
+- **`probe-file` answers the argument spelling; `truename` the physical one.** SBCL's
+  `probe-file` also resolves links (macOS `/var` -> `/private/var`); ours does not (2026-10-23),
+  because resolving would move every `probe-file` caller onto `%real-path`, and a WASI
+  preopen need not cover the physical path. Tests that compare `truename` with a `@TempDir`
+  use `toRealPath()`.
+
 ## Tests
 `LispReaderTest#readPathname*`; `LispEvaluatorTest#pathname*` plus its wild-pathname,
 `enoughNamestring`, `namestringHalves`, `translatePathname`, `renameFile` and

@@ -11624,7 +11624,9 @@ class LispEvaluatorTest {
 		assertThat(eval("(probe-file \"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
 		assertThat(eval("(probe-file #P\"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
 		assertThat(eval("(probe-file \"" + dir + "/nope\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(truename #P\"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
+		// truename resolves the links above the file, as SBCL's does (macOS's /var).
+		assertThat(eval("(truename #P\"" + dir + "/a.txt\")").print())
+			.isEqualTo("#P\"" + tempDir.toRealPath() + "/a.txt\"");
 		// open / with-open-file / load / delete-file / ensure-directories-exist /
 		// file-write-date take a pathname argument.
 		assertThat(eval("(with-open-file (in #P\"" + dir + "/a.txt\") (read-line in))"))
