@@ -10,6 +10,7 @@
   "True for a code point Japanese fonts set full-width."
   (or (<= #x1100 code #x115F) (<= #x2010 code #x203B) ; dashes, quotes, ellipsis, reference mark
       (<= #x2190 code #x21FF)                         ; arrows
+      (<= #x2400 code #x259F)                         ; control pictures, box drawing, blocks
       (<= #x2460 code #x24FF)                         ; circled numbers
       (<= #x25A0 code #x26FF)                         ; geometric shapes, symbols
       (<= #x2E80 code #x303E) (<= #x3041 code #x33FF) (<= #x3400 code #x4DBF)
@@ -23,7 +24,40 @@
       (<= #x2B05 code #x2B07) (<= #x2B1B code #x2B1C) (= code #x2B50) (= code #x2B55)
       (<= #x1F1E6 code #x1F1FF)                       ; regional indicators
       (<= #x1F650 code #x1F6FF)                       ; transport and map, ornaments
-      (<= #x1FA00 code #x1FAFF)))
+      (<= #x1FA00 code #x1FAFF)
+      ;; Symbols Chrome sets exactly 1 em: Letterlike, Roman numerals, ‼ ⁇ ⁈ ⁉, ⌥.
+      (find code '(#x203C #x2103 #x2105 #x2109 #x2113 #x2116 #x2121 #x212B #x2325))
+      (<= #x2047 code #x2049) (<= #x2160 code #x217F)))
+
+(defun wider-than-em-width (code)
+  "Milli-em width of a symbol inside a full-width range that Chrome sets wider than 1 em,
+plus the 2% margin, or NIL."
+  (cond ((= code #x2031) 1450)                      ; ‱
+        ((= code #x21EA) 1210)                      ; ⇪
+        ((<= #x26AE code #x26AF) 1150)
+        ((= code #x26CD) 1060)
+        ((= code #x26DF) 1290)
+        ((= code #x26F4) 1140)))
+
+(defun symbol-width (code)
+  "Milli-em width of a symbol outside the full-width ranges that the font stack sets
+wider than a Latin letter, or NIL. Each block takes the widest glyph measured in it
+(Chrome 155, both weights) plus the 2% margin, except the few common symbols listed."
+  (cond ((<= #x2040 code #x205F) 1130)              ; the rest of general punctuation
+        ((<= #x2900 code #x29FF) 1020)              ; supplemental arrows and math
+        ((= code #x2122) 1100)                      ; ™
+        ((= code #x2318) 900)                       ; ⌘
+        ((member code '(#xBC #xBD #xBE)) 950)       ; ¼ ½ ¾
+        ((member code '(#xC6 #xE6 #x152 #x153)) 1200)
+        ((<= #x20A0 code #x20CF) 1200)              ; currency
+        ((<= #x2100 code #x214F) 1200)              ; letterlike
+        ((<= #x2150 code #x218F) 1300)              ; number forms
+        ((<= #x2200 code #x22FF) 1200)              ; mathematical operators
+        ((<= #x2300 code #x23FF) 1400)              ; technical
+        ((<= #x27C0 code #x27FF) 1200)              ; supplemental math and arrows
+        ((<= #x2A00 code #x2AFF) 1550)              ; supplemental operators
+        ((<= #x2B00 code #x2BFF) 1650)              ; arrows and shapes
+        ((<= #x1F000 code #x1F2FF) 1060)))          ; tiles, cards, enclosed letters
 
 (defun cluster-end (text i)
   "The index after the emoji cluster TEXT starts at I, or I + 1 when the character at I
@@ -73,7 +107,10 @@ sub-pixel rounding and faces other than the measured one. A character outside AS
 the full-width ranges takes the width of a wide Latin letter."
   (cond
     ((<= #x23ED code #x23EE) 1020)      ; the two emoji Chrome sets 1003 milli-em
+    ((and (eq style :mono) (<= #x2500 code #x259F)) 614) ; Menlo draws boxes at 602
+    ((wider-than-em-width code))
     ((wide-code-p code) 1000)
+    ((and (not (eq style :mono)) (symbol-width code)))
     (t
       (ceiling (* (cond ((eq style :mono) 602)
                         ((<= 32 code 126)

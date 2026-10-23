@@ -82,7 +82,12 @@ character after it, which Chrome breaks before"
                                       'string))))))
       (ok (= (lispresen::run-full-width run 100) 600))
       (ok (equal (lispresen::wrap-run run 100 250) '(0 2 7)))
-      (ok (= (lispresen::mono-width (lispresen::run-text run) 100) 600))))
+      (ok (= (lispresen::mono-width (lispresen::run-text run) 100) 600))
+      ;; Symbols Chrome sets wider than a Latin letter: ™, box drawing (614 in code).
+      (ok (equal (list (lispresen::char-width #x2122 :normal)
+                       (lispresen::char-width #x2500 :normal)
+                       (lispresen::char-width #x2500 :mono))
+                 '(1100 1000 614)))))
   (testing "Latin breaks at spaces, and a space ending a line takes no width"
     ;; aaa = 3 x 604 milli-em, the space 340, bbb = 3 x 677: 418.3 px at 100 px.
     (let ((run (lispresen::make-text-run (list "aaa bbb"))))

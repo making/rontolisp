@@ -332,6 +332,7 @@ Width of a code point, in milli-em:
 | Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Emoji (dingbats, transport and map, U+1FA00-1FAFF, ...) and an emoji sequence (flag, ZWJ, skin tone, variation selector, keycap) | 1000 per glyph, exact; the characters of a sequence after the first take 0 and never break apart |
+| Symbols the font stack sets wider than a Latin letter (™ ⌘ ¼½¾ Æ, Letterlike, number forms, math, technical, supplemental arrows and operators, currency, tiles) | per block, the widest glyph measured plus 2% (900-1650); box drawing and block elements 1000, 614 in code |
 | Other proportional characters | 800 (bold 840), plus 2% |
 | Inline code (`tt`) and a marker (`mark`) | 125 more on the element's first character and on its last, its padding |
 
@@ -383,6 +384,18 @@ wide). The exceptions are ⏭ and ⏮ (U+23ED-23EE), 1003, which take 1020. The 
 page now sets 26 emoji and sequences in both weights and reports any wider than the
 model: none in Chrome (108 paragraphs, never fewer lines, one more in 18). Safari was not
 measured: its JavaScript from Apple Events is off on this machine.
+
+Symbols, same day and browser: the calibration page also sets every assigned character of
+U+00A0-00FF, U+2000-2BFF and U+1F000-1F2FF in both weights and reports any wider than the
+model. The first run found 420 (™ 1004/1070, box drawing and control pictures 1000, ‱ 1378,
+⇪ 1181, U+26DF 1258, ⁇ ‼ ⁉, ¼½¾ 854-929, Æ æ Œ œ 1039-1153, and
+whole blocks of math and technical symbols up to 1612). They now take the block widths in the
+table, or 1000 when every glyph measured exactly 1 em (control pictures, box drawing, Roman
+numerals, ℃ № ⌥ ‼); the few glyphs wider than 1 em inside a full-width range (‱ U+2031,
+U+21EA, U+26AE-26AF, U+26CD, U+26DF, U+26F4) have their own widths. A second run: none wider.
+In code the stack is Menlo, which draws box drawing and block elements at 602, so those stay
+614 there. ™ © ® ↔ ℹ with U+FE0F are emoji clusters (1000), alone ™ is 1100, © and ® are
+Latin-1 letters' width, ↔ is a full-width arrow.
 
 ### Line breaking
 
