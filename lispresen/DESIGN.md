@@ -394,7 +394,9 @@ For each slide:
 3. The body is a vertical stack of full-width blocks and rows of columns. Compute its
    height at each body step: lines x line height, plus block gaps, list indentation
    reducing the available width per nesting level, code sized by both its longest line
-   and its line count (runnable code too: its output is an overlay, below), a table by
+   and its line count (runnable code too: its output is an overlay, below, and its Run
+   and Reset buttons take a band above the rows only where a row would reach them,
+   Runnable code below), a table by
    the column widths and row heights below, a row of columns as its tallest column at
    the widths below. Height is monotonic in size, so the chosen size is the largest step
    that fits.
@@ -421,7 +423,7 @@ and a maximum, the widest of their unwrapped widths:
 | Block | Minimum | Maximum |
 |-------|---------|---------|
 | text, list, quote | the widest unbreakable unit, plus the indent | the text set on one line, plus the indent |
-| code | the longest line, plus padding | the same |
+| code | the longest line, plus padding; runnable code at least its buttons, 320 + 2 x 12 px | the same |
 | console transcript | the longest command line, plus padding | the longest line, plus padding |
 | table | the sum of its columns' minima | the sum of their maxima |
 | image | its caption's widest unit | none: it takes what it gets |
@@ -700,8 +702,9 @@ the geometry the fit solver computed, in canvas px:
   excluded) and as tall as its line height, offset by its alignment (right or centered
   in table cells, centered in figure captions); a list item's first line reaches left
   over its marker;
-- a code line is its monospace width inside the panel's padding, and runnable code adds
-  its Run and Reset buttons (320 x 48 px, 12 px inside the top right corner);
+- a code line is its monospace width inside the panel's padding (below the buttons'
+  band when it has one), and runnable code adds its Run and Reset buttons (320 x 48 px,
+  12 px inside the top right corner);
 - an image is its whole picture area, since its own size is not known at build time;
 - a bubble already placed, with its tail.
 
@@ -773,7 +776,10 @@ arithmetic does; the type scale itself comes from the JSON the emitter writes
 corrections, the player places every callout of the slide again, with the candidates
 above, on measured geometry: the anchor's client rects (the `:at` text through a
 `Range`), the client rects of every text node, the picture areas and the Run and Reset
-buttons; the bubble keeps its size. So the tail lands on the anchor the browser drew. A
+buttons, each rounded to the nearest canvas px (the client rects carry float noise:
+Safari 26.3 at a 0.42 scale reports an image edge at 1043.00005, which rounding outward
+made 1044 and left a bubble written flush against the body's edge no room, 2026-10-23);
+the bubble keeps its size. So the tail lands on the anchor the browser drew. A
 callout that changes side is listed like a step, and one that finds no room keeps its
 static place and is outlined. JavaScript is a correction on top of the static result,
 not a replacement for it, so the deck still lays out correctly with JavaScript disabled
@@ -857,6 +863,17 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   `Esc` in full screen), and Reset restores the deck's markup and closes the output. Run
   and Reset sit in the block's top-right corner; the player adds them, so print and the
   no-script view show none.
+- The buttons take room only where they would cover code. The fit solver counts them as
+  a 320 x 48 px box 12 px inside the corner (`*tools-box*`; the widest label, Loading,
+  makes them 290 px wide in Chrome 155 and 298 px in Safari 26.3, measured 2026-10-23).
+  A runnable block is never narrower than the box and its insets (344 px), and when a row
+  beside the box would come within the panel's padding of it, at the width the block is
+  laid out at, the rows start below the box: the panel's top padding becomes the inset,
+  the box's height and the padding (the block's `band` class), and its height counts it.
+  The band costs a full-width block nothing unless its first line is long; it is what
+  lets a narrow column hold runnable code at all. Reserving width instead would widen
+  every column whose first line is its longest by the buttons, which the golden deck's
+  Clojure and Scheme columns cannot afford at any code size. The editor's `textarea` takes the same padding.
 - The output takes no room on the slide. A first version reserved an output box below
   the code in the fit solver; on a full slide that stepped the code down a size or two,
   which costs more legibility than an output shown only while it matters. The output is
@@ -1260,6 +1277,13 @@ in a column (a zero value among the bars) and a statement with a source lay out 
 runtime check making no correction; every label sets on the lines counted and every
 value in its box in both browsers, and the bubble naming a bar stays below its value, 1 px
 off. The progress bar follows navigation and is absent from the overview.
+
+Run buttons (2026-10-23, Chrome 155 through DevTools and Safari 26.3 through
+`safaridriver`): the golden deck's Clojure and Scheme columns and a deck with runnable
+code in a 344 px column, in a column whose first line is its longest at 28 px, in three
+code columns and at full width with a long first line: with each label (Loading, Failed,
+Run) no code text meets the buttons, every panel is as tall as the model counted, the
+editor's padding equals the panel's, and the runtime check makes no correction.
 
 Checked by hand only, since browser automation refuses full screen: Start placing the
 audience window on another display, and `Esc` under the Keyboard Lock.

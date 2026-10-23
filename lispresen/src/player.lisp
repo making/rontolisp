@@ -277,7 +277,7 @@ startWorker();}
 (defparameter *say-script*
   "
 var SAY=cfg.say;
-function cbox(r,o,k){return {l:Math.floor((r.left-o.left)/k),t:Math.floor((r.top-o.top)/k),r:Math.ceil((r.right-o.left)/k),b:Math.ceil((r.bottom-o.top)/k)};}
+function cbox(r,o,k){return {l:Math.round((r.left-o.left)/k),t:Math.round((r.top-o.top)/k),r:Math.round((r.right-o.left)/k),b:Math.round((r.bottom-o.top)/k)};}
 function crects(list,o,k){var a=[];for(var j=0;j<list.length;j++)if(list[j].width>=1&&list[j].height>=1)a.push(cbox(list[j],o,k));return a;}
 function cunion(a){if(!a.length)return a;var u={l:a[0].l,t:a[0].t,r:a[0].r,b:a[0].b};
 a.forEach(function(r){u.l=Math.min(u.l,r.l);u.t=Math.min(u.t,r.t);u.r=Math.max(u.r,r.r);u.b=Math.max(u.b,r.b);});return [u];}

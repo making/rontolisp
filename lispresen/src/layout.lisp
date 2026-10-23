@@ -42,6 +42,10 @@
 (defparameter *title-block-gap*
   48
   "Between the logo, the title and the lines under it.")
+(defparameter *tools-box*
+  '(320 48 12)
+  "Width, height and inset of the Run and Reset buttons in a runnable code block's
+top right corner.")
 
 (defun title-lh (s) (ceiling (* s 13) 10))
 (defun body-lh (s) (ceiling (* s 15) 10))
@@ -226,8 +230,15 @@ transcript, as a terminal wraps it. Every other line of code is set on one line.
   (reduce #'max (mapcar (lambda (line) (mono-width line c)) lines)
           :initial-value 0))
 
+(defun tools-width ()
+  "The narrowest panel the Run and Reset buttons fit in, inset on both sides."
+  (destructuring-bind (tw th inset) *tools-box*
+    (declare (ignore th))
+    (+ tw (* 2 inset))))
+
 (defun code-fits-p (b c width)
-  (<= (lines-width (fixed-lines b) c) (- width (* 2 (code-pad c)))))
+  (and (<= (lines-width (fixed-lines b) c) (- width (* 2 (code-pad c))))
+       (or (not (code-block-runnable b)) (<= (tools-width) width))))
 
 (defun line-starts (b line c width)
   "The index of the first character of each row LINE of the code block B takes at C px
@@ -236,11 +247,40 @@ in a panel WIDTH px wide."
       (mono-wrap line c (- width (* 2 (code-pad c))))
       (list 0)))
 
+(defun code-rows (b c width)
+  "The rows of the code block B at C px in a panel WIDTH px wide, as (LINE START END)
+lists: a line wrapping at the panel's edge takes several."
+  (loop for line in (code-block-lines b)
+        nconc
+          (loop for (start next) on (line-starts b line c width)
+                collect (list line start (or next (length line))))))
+
+(defun tools-band-p (b c width)
+  "True when the Run and Reset buttons of the code block B, set at C px in a panel WIDTH
+px wide, would come within the panel's padding of a row beside them. The rows then start
+below the buttons (CODE-TOP-PAD)."
+  (and (code-block-runnable b)
+       (destructuring-bind (tw th inset) *tools-box*
+         (let ((pad (code-pad c)))
+           (loop for (line start end) in (code-rows b c width)
+                 for top from pad by (code-lh c)
+                 while (< top (+ inset th))
+                 thereis
+                   (> (+ pad (mono-width (subseq line start end) c) pad)
+                      (- width inset tw)))))))
+
+(defun code-top-pad (b c width)
+  "The padding above the first row of the code block B: the panel's, or the buttons'
+inset and height and the panel's below them when they would meet a row."
+  (if (tools-band-p b c width)
+      (destructuring-bind (tw th inset) *tools-box*
+        (declare (ignore tw))
+        (+ inset th (code-pad c)))
+      (code-pad c)))
+
 (defun code-height (b c width)
-  (+ (* (max 1
-             (loop for line in (code-block-lines b)
-                   sum (length (line-starts b line c width)))) (code-lh c))
-     (* 2 (code-pad c))))
+  (+ (* (max 1 (length (code-rows b c width))) (code-lh c))
+     (code-top-pad b c width) (code-pad c)))
 
 (defun code-size-at (blocks k width)
   "The code size at body step K: the step's size, or a smaller one when a line is too
@@ -468,9 +508,11 @@ the second of an image, which takes whatever width it is given."
                  (setf lo (max lo clo) hi (max hi chi))))
              (values (+ lo (quote-indent s)) (+ hi (quote-indent s)))))
           ((code-block-p b)
-           (let ((pad (* 2 (code-pad c))))
-             (values (+ pad (lines-width (fixed-lines b) c))
-                     (+ pad (lines-width (code-block-lines b) c)))))
+           ;; Runnable code is at least as wide as its Run and Reset buttons.
+           (let ((pad (* 2 (code-pad c)))
+                 (tools (if (code-block-runnable b) (tools-width) 0)))
+             (values (max tools (+ pad (lines-width (fixed-lines b) c)))
+                     (max tools (+ pad (lines-width (code-block-lines b) c))))))
           ((figure-p b)
            (values (if (figure-caption-run b)
                        (run-min-width (figure-caption-run b) s)
@@ -621,6 +663,8 @@ Columns share the slide's sizes, so side-by-side text matches."
       (loop for (rblocks rwidth) in (regions blocks k c width)
             do
               (dolist (b rblocks)
+                (when (code-block-p b)
+                  (setf (code-block-band b) (tools-band-p b c rwidth)))
                 (when (table-block-p b)
                   (multiple-value-bind (s widths) (table-layout b k rwidth)
                     (setf (table-block-size b) s (table-block-widths b) widths
@@ -815,10 +859,6 @@ width."
   "The least distance from the tail's middle to a corner: the 16 px radius and half
 the base.")
 (defparameter *say-clearance* 12 "The free margin around a bubble.")
-(defparameter *tools-box*
-  '(320 48 12)
-  "Width, height and inset of the Run and Reset buttons in a runnable code block's
-top right corner.")
 
 (defun say-lh (s) (ceiling (* s 14) 10))
 (defun say-pad-x (s) (floor s 2))
@@ -909,20 +949,15 @@ the fragments of the callouts anchored in it. Returns the rectangle around its l
                        (item-gap s))))
     (quote-height q s width)))
 
-(defun code-rows (b c width)
-  "The rows of the code block B at C px in a panel WIDTH px wide, as (LINE START END)
-lists: a line wrapping at the panel's edge takes several."
-  (loop for line in (code-block-lines b)
-        nconc
-          (loop for (start next) on (line-starts b line c width)
-                collect (list line start (or next (length line))))))
-
 (defun code-geometry (b c x y width)
   "Records the rows of the code block B at C px from X, Y, its Run and Reset buttons,
 and the fragments of a callout naming a piece of it with :at; returns its height."
-  (let ((pad (code-pad c)) (lh (code-lh c)) (rows (code-rows b c width)))
+  (let ((pad (code-pad c))
+        (top-pad (code-top-pad b c width))
+        (lh (code-lh c))
+        (rows (code-rows b c width)))
     (loop for (line start end) in rows
-          for top from (+ y pad) by lh
+          for top from (+ y top-pad) by lh
           do
             (let ((w (mono-width (subseq line start end) c)))
               (when (> w 0)
@@ -941,7 +976,7 @@ and the fragments of a callout naming a piece of it with :at; returns its height
           ;; One fragment per row the text takes.
           (setf (callout-fragments co)
                 (loop for (l start end) in rows
-                      for top from (+ y pad) by lh
+                      for top from (+ y top-pad) by lh
                       when (and (eq l line) (< (max a start) (min e end)))
                       collect
                         (list
@@ -1009,11 +1044,10 @@ naming a label with :at points at that label's box, its bar's value, or its atom
                (run-geometry (nth i (diagram-runs b)) s (- w (* 2 px)) (dg-lh s)
                              (+ x bx px) (+ y by pad) "center"))
              (push box labels))
-            (:bar-label
-             (destructuring-bind (bx by w h i) (cdr shape)
-               (declare (ignore h))
-               (run-geometry (nth i (diagram-runs b)) s w (dg-lh s) (+ x bx)
-                             (+ y by))))
+            (:bar-label (destructuring-bind (bx by w h i) (cdr shape)
+                          (declare (ignore h))
+                          (run-geometry (nth i (diagram-runs b)) s w (dg-lh s)
+                                        (+ x bx) (+ y by))))
             ;; A bar is named by its label and pointed at by its value.
             ((:atom :value) (push box labels))))))
     (setf labels (nreverse labels))

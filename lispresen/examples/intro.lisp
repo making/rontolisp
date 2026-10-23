@@ -402,13 +402,15 @@
     (code :lang \"scheme\" :fresh t :stdin \"3 4\" \"...\")"))
 
 (slide :title "Clojure と Scheme"
-  (code :lang "clojure" :timeout 5 "
-    (defn square [x] (* x x)) ; a comment
-    (map square (range 10))")
-  (code :lang "scheme" :fresh t :stdin "3 4" "
-    (define (sq x) (* x x))
-    (display (+ (sq (read)) (sq (read))))
-    (newline)"))
+  (column
+    (code :lang "clojure" :timeout 5 "
+      (defn square [x] (* x x)) ; a comment
+      (map square (range 10))"))
+  (column
+    (code :lang "scheme" :fresh t :stdin "3 4" "
+      (define (sq x) (* x x))
+      (display (+ (sq (read)) (sq (read))))
+      (newline)")))
 
 (slide :title "ランタイムの置き場所"
   (lead "ランタイムは rontolisp のブラウザ版で、約 35 MB ある")

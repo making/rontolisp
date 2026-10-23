@@ -82,6 +82,7 @@ html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 .codebox textarea::selection{background:var(--mark)}
 .runnable pre.code{cursor:text}
 .tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
+.band>pre.code,.band>textarea{padding-top:calc(60px + var(--code-pad))}
 .tools button{font:700 28px/1 'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:var(--bg);cursor:pointer;opacity:.85}
 .tools button+button{background:var(--rule);color:var(--fg)}
 .tools .run[data-state=loading]{background:var(--rule);color:var(--muted)}
@@ -728,15 +729,21 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">53</div>
 </section>
-<section class="slide layout-standard" id="s54" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-columns" id="s54" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">発表する</p>
 <h1 class="title">Clojure と Scheme</h1>
 <div class="body" style="top:232px;height:776px">
-<div class="codebox runnable" data-lang="clojure" data-timeout="5"><pre class="code"><code>(<span class="hl-d">defn</span> square [x] (* x x)) <span class="hl-c">; a comment</span>
+<div class="columns">
+<div class="column" style="width:808px">
+<div class="codebox runnable band" data-lang="clojure" data-timeout="5"><pre class="code"><code>(<span class="hl-d">defn</span> square [x] (* x x)) <span class="hl-c">; a comment</span>
 (map square (range <span class="hl-n">10</span>))</code></pre></div>
-<div class="codebox runnable" data-lang="scheme" data-timeout="10" data-fresh data-stdin="3 4"><pre class="code"><code>(<span class="hl-d">define</span> (sq x) (* x x))
+</div>
+<div class="column" style="width:808px">
+<div class="codebox runnable band" data-lang="scheme" data-timeout="10" data-fresh data-stdin="3 4"><pre class="code"><code>(<span class="hl-d">define</span> (sq x) (* x x))
 (display (+ (sq (read)) (sq (read))))
 (newline)</code></pre></div>
+</div>
+</div>
 </div>
 <div class="page">54</div>
 </section>
@@ -1137,7 +1144,7 @@ if(d.fullscreenElement)kb.lock(['Escape']).catch(function(){});else kb.unlock();
 startWorker();}
 
 var SAY=cfg.say;
-function cbox(r,o,k){return {l:Math.floor((r.left-o.left)/k),t:Math.floor((r.top-o.top)/k),r:Math.ceil((r.right-o.left)/k),b:Math.ceil((r.bottom-o.top)/k)};}
+function cbox(r,o,k){return {l:Math.round((r.left-o.left)/k),t:Math.round((r.top-o.top)/k),r:Math.round((r.right-o.left)/k),b:Math.round((r.bottom-o.top)/k)};}
 function crects(list,o,k){var a=[];for(var j=0;j<list.length;j++)if(list[j].width>=1&&list[j].height>=1)a.push(cbox(list[j],o,k));return a;}
 function cunion(a){if(!a.length)return a;var u={l:a[0].l,t:a[0].t,r:a[0].r,b:a[0].b};
 a.forEach(function(r){u.l=Math.min(u.l,r.l);u.t=Math.min(u.t,r.t);u.r=Math.max(u.r,r.r);u.b=Math.max(u.b,r.b);});return [u];}

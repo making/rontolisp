@@ -105,8 +105,9 @@
            (format nil
             "(slide :title \"t\" (code :lang \"lisp\" \"~{(a ~d)~^~%~}\"))"
             (loop for i from 1 to 11 collect i))))
+      ;; Its short lines leave the Run and Reset buttons room beside them.
       (ok (contains (lispresen:render slide) "--code:44px"))
-      (ok (contains (lispresen:render slide) "class=\"codebox"))
+      (ok (contains (lispresen:render slide) "class=\"codebox runnable\""))
       ;; A console's output wraps at the panel's edge instead of stepping the code down:
       ;; 300 characters at 44px take 5 rows of 61.
       (let ((html
@@ -120,6 +121,19 @@
        (not
         (contains (lispresen:render slide :runtime "none")
                   "class=\"codebox")))))
+  (testing "runnable code is as wide as its buttons, its rows below them when they meet"
+    ;; 320 + 2 x 12 px; the band is the 12 px inset and the 48 px buttons, above the
+    ;; 22 px padding at 44px.
+    (let ((html
+           (lispresen:render
+            (format nil
+                    "(slide :title \"t\" (column (code :lang \"lisp\" \"(f)\")) (column ~a))"
+                    *long-item*)))
+          (b (lispresen::make-code-block :lines '("(f)") :runnable t)))
+      (ok (contains html "<div class=\"column\" style=\"width:344px\">"))
+      (ok (contains html "<div class=\"codebox runnable band\""))
+      (ok (= (lispresen::code-height b 44 344) (+ 12 48 22 62 22)))
+      (ok (= (lispresen::code-height b 44 1696) (+ 22 62 22)))))
   (testing "a short untitled paragraph is a statement at the statement scale"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")

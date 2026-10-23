@@ -253,7 +253,8 @@ changed.
 A `code` block in `lisp`, `scheme` or `clojure` runs in the deck: click it (or press `E`)
 to edit, `Ctrl+Enter` or Run to run, Reset to restore it. The output opens in a panel over
 the slide, so running code takes no room from it; long output scrolls (wheel, or `↑` /
-`↓`), and × or `Esc` closes the panel. Blocks of
+`↓`), and × or `Esc` closes the panel. Run and Reset sit in the panel's top-right corner;
+when the first lines would reach them, the code starts below them. Blocks of
 one language share definitions, so a function defined on one slide can be called on the
 next.
 

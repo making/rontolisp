@@ -88,7 +88,8 @@ html.check .corrected{outline:8px solid #bf8700;outline-offset:-8px}
 .codebox textarea{position:absolute;left:0;top:0;width:100%;margin:0;border:0;resize:none;outline:4px solid var(--accent);border-radius:12px;padding:var(--code-pad);background:transparent;color:transparent;caret-color:var(--code-fg);font-family:MONO;font-size:var(--code);line-height:var(--code-lh);white-space:pre;overflow:hidden}
 .codebox textarea::selection{background:var(--mark)}
 .runnable pre.code{cursor:text}
-.tools{position:absolute;top:12px;right:12px;display:flex;gap:12px}
+.tools{position:absolute;top:TOOLS-INSET;right:TOOLS-INSET;display:flex;gap:12px}
+.band>pre.code,.band>textarea{padding-top:calc(TOOLS-BAND + var(--code-pad))}
 .tools button{font:700 28px/1 FONTS;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:var(--bg);cursor:pointer;opacity:.85}
 .tools button+button{background:var(--rule);color:var(--fg)}
 .tools .run[data-state=loading]{background:var(--rule);color:var(--muted)}
@@ -191,7 +192,11 @@ html:not(.js) #fs{display:none}
                          (list "SOURCE-LH" (px-string *source-lh*))
                          (list "SOURCE" (px-string *source-size*))
                          (list "PROGRESS" (px-string *progress-height*))
-                         (list "COLUMN-GAP" (px-string *column-gap*)))
+                         (list "COLUMN-GAP" (px-string *column-gap*))
+                         (list "TOOLS-INSET" (px-string (third *tools-box*)))
+                         (list "TOOLS-BAND"
+                               (px-string (+ (second *tools-box*)
+                                             (third *tools-box*)))))
                    :initial-value *stylesheet*) out)
     (write-theme-style theme out)
     ;; The canvas-dependent geometry.
@@ -358,7 +363,9 @@ runs across a line end is closed there and opened again on the next line."
 to run it. Its output is an overlay the player adds, so it takes no room on the slide."
   (let ((run (code-block-runnable b)))
     (when run
-      (write-string "<div class=\"codebox runnable\"" out)
+      (write-string (if (code-block-band b)
+                        "<div class=\"codebox runnable band\""
+                        "<div class=\"codebox runnable\"") out)
       (write-attribute "data-lang" (string-downcase (code-block-lang b)) out)
       (format out " data-timeout=\"~d\"" (code-block-timeout b))
       (when (code-block-fresh b) (write-string " data-fresh" out))

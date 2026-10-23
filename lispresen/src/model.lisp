@@ -70,12 +70,14 @@
 ;;; forward; STEP-NUMBERS the page advance of each. MORPH is set when a slide's :morph
 ;;; pairs the block (morph.lisp): (:target . PAIRS) for the block that changes, PAIRS the
 ;;; index of the old token each of its tokens continues or nil; :source for the block it
-;;; changes from.
+;;; changes from. BAND is set when the slide is fitted for runnable code whose first rows
+;;; start below its Run and Reset buttons (TOOLS-BAND-P).
 (defstruct code-block
   lang
   lines
   (run t)
   runnable
+  band
   timeout
   fresh
   stdin
