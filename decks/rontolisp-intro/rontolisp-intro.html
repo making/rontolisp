@@ -203,7 +203,20 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">4</div>
 </section>
-<section class="slide layout-columns" id="s5" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<section class="slide layout-standard" id="s5" data-steps="1" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">rontolisp とは</p>
+<h1 class="title">まず<wbr>動かしてみる</h1>
+<div class="body" style="top:232px;height:776px">
+<p>この<wbr>デッキの<wbr>コードは、<wbr>ブラウザ上の rontolisp で<wbr>実行できる。<wbr>クリックして<wbr>編集し、<wbr>Run で<wbr>実行する。</p>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s5c1"><code>(<span class="hl-d">defun</span> fact (n)
+  (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
+(print (fact <span class="hl-n">10</span>))</code></pre></div>
+</div>
+<div class="say step" id="s5c1" role="note" data-side="below" data-step="1" data-at="(fact 10)" style="left:159px;top:677px;width:573px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:283px"><p>Run で 3628800&nbsp;が<wbr>出る</p></div>
+<div class="page">5</div>
+<aside class="notes">Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。</aside>
+</section>
+<section class="slide layout-columns" id="s6" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">rontolisp とは</p>
 <h1 class="title">Common Lisp、<wbr>Scheme、<wbr>Clojure を<wbr>読む</h1>
 <div class="body" style="top:336px;height:672px">
@@ -229,20 +242,7 @@ html:not(.js) #fs{display:none}
 </div>
 <p>どの<wbr>言語の<wbr>ソースも<wbr>同じ<wbr>コアフォームに<wbr>変換するので、<wbr>インタプリタ、<wbr>JVM、<wbr>WASM、<wbr>ネイティブの<wbr>どれでも<wbr>動く。</p>
 </div>
-<div class="page">5</div>
-</section>
-<section class="slide layout-standard" id="s6" data-steps="1" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
-<p class="kicker">rontolisp とは</p>
-<h1 class="title">まず<wbr>動かしてみる</h1>
-<div class="body" style="top:232px;height:776px">
-<p>この<wbr>デッキの<wbr>コードは、<wbr>ブラウザ上の rontolisp で<wbr>実行できる。<wbr>クリックして<wbr>編集し、<wbr>Run で<wbr>実行する。</p>
-<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s6c1"><code>(<span class="hl-d">defun</span> fact (n)
-  (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
-(print (fact <span class="hl-n">10</span>))</code></pre></div>
-</div>
-<div class="say step" id="s6c1" role="note" data-side="below" data-step="1" data-at="(fact 10)" style="left:159px;top:677px;width:573px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:283px"><p>Run で 3628800&nbsp;が<wbr>出る</p></div>
 <div class="page">6</div>
-<aside class="notes">Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。</aside>
 </section>
 <section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>

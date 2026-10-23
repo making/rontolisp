@@ -32,6 +32,15 @@
       (li (b "WASM コンパイラ") " wasm-GC を使った " (tt ".wasm") " を出力する"))
   (p "コアライブラリは外部依存を持たない。JVM と WASM のバイトコードは、ASM などのライブラリを使わずに生成する。"))
 
+(slide :title "まず動かしてみる"
+  (p "このデッキのコードは、ブラウザ上の rontolisp で実行できる。クリックして編集し、Run で実行する。")
+  (say "Run で 3628800 が出る" :at "(fact 10)" :step t
+    (code :lang "lisp" "
+      (defun fact (n)
+        (if (= n 0) 1 (* n (fact (- n 1)))))
+      (print (fact 10))"))
+  (notes "Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。"))
+
 (slide :title "Common Lisp、Scheme、Clojure を読む"
   (column
     (p (b "Common Lisp"))
@@ -52,15 +61,6 @@
       (defn sq [x] (* x x))
       (println (sq 12))"))
   (p "どの言語のソースも同じコアフォームに変換するので、インタプリタ、JVM、WASM、ネイティブのどれでも動く。"))
-
-(slide :title "まず動かしてみる"
-  (p "このデッキのコードは、ブラウザ上の rontolisp で実行できる。クリックして編集し、Run で実行する。")
-  (say "Run で 3628800 が出る" :at "(fact 10)" :step t
-    (code :lang "lisp" "
-      (defun fact (n)
-        (if (= n 0) 1 (* n (fact (- n 1)))))
-      (print (fact 10))"))
-  (notes "Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。"))
 
 ;;; --- getting started --------------------------------------------------------------
 
