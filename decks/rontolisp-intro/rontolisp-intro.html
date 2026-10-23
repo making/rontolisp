@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>rontolisp 入門</title>
-<meta name="description" content="Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する">
+<meta name="description" content="Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから Common Lisp・Scheme・Clojure の各言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html">
 <meta property="og:title" content="rontolisp 入門">
-<meta property="og:description" content="Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する">
+<meta property="og:description" content="Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから Common Lisp・Scheme・Clojure の各言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する">
 <meta property="og:image" content="https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="675">
@@ -203,27 +203,55 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">4</div>
 </section>
-<section class="slide layout-standard" id="s5" data-steps="1" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-columns" id="s5" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<p class="kicker">rontolisp とは</p>
+<h1 class="title">Common Lisp、<wbr>Scheme、<wbr>Clojure を<wbr>読む</h1>
+<div class="body" style="top:336px;height:672px">
+<div class="columns">
+<div class="column" style="width:512px">
+<p><strong>Common Lisp</strong></p>
+<div class="codebox runnable band" data-lang="lisp" data-timeout="10"><pre class="code"><code><span class="hl-c">;; sq.lisp</span>
+(<span class="hl-d">defun</span> sq (x) (* x x))
+(print (sq <span class="hl-n">12</span>))</code></pre></div>
+</div>
+<div class="column" style="width:512px">
+<p><strong>Scheme</strong></p>
+<div class="codebox runnable band" data-lang="scheme" data-timeout="10"><pre class="code"><code><span class="hl-c">;; sq.scm</span>
+(<span class="hl-d">define</span> (sq x) (* x x))
+(display (sq <span class="hl-n">12</span>))</code></pre></div>
+</div>
+<div class="column" style="width:512px">
+<p><strong>Clojure</strong></p>
+<div class="codebox runnable band" data-lang="clojure" data-timeout="10"><pre class="code"><code><span class="hl-c">;; sq.clj</span>
+(<span class="hl-d">defn</span> sq [x] (* x x))
+(println (sq <span class="hl-n">12</span>))</code></pre></div>
+</div>
+</div>
+<p>どの<wbr>言語の<wbr>ソースも<wbr>同じ<wbr>コアフォームに<wbr>変換するので、<wbr>インタプリタ、<wbr>JVM、<wbr>WASM、<wbr>ネイティブの<wbr>どれでも<wbr>動く。</p>
+</div>
+<div class="page">5</div>
+</section>
+<section class="slide layout-standard" id="s6" data-steps="1" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">rontolisp とは</p>
 <h1 class="title">まず<wbr>動かしてみる</h1>
 <div class="body" style="top:232px;height:776px">
 <p>この<wbr>デッキの<wbr>コードは、<wbr>ブラウザ上の rontolisp で<wbr>実行できる。<wbr>クリックして<wbr>編集し、<wbr>Run で<wbr>実行する。</p>
-<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s5c1"><code>(<span class="hl-d">defun</span> fact (n)
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s6c1"><code>(<span class="hl-d">defun</span> fact (n)
   (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
 (print (fact <span class="hl-n">10</span>))</code></pre></div>
 </div>
-<div class="say step" id="s5c1" role="note" data-side="below" data-step="1" data-at="(fact 10)" style="left:159px;top:677px;width:573px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:283px"><p>Run で 3628800&nbsp;が<wbr>出る</p></div>
-<div class="page">5</div>
+<div class="say step" id="s6c1" role="note" data-side="below" data-step="1" data-at="(fact 10)" style="left:159px;top:677px;width:573px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:283px"><p>Run で 3628800&nbsp;が<wbr>出る</p></div>
+<div class="page">6</div>
 <aside class="notes">Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。</aside>
 </section>
-<section class="slide layout-standard" id="s6" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li class="current">インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
 </div>
-<div class="page">6</div>
+<div class="page">7</div>
 </section>
-<section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s8" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
 <h1 class="title">インストール</h1>
 <div class="body" style="top:232px;height:776px">
@@ -235,9 +263,9 @@ html:not(.js) #fs{display:none}
 <span class="hl-k">$</span> rontolisp --version</code></pre>
 <ul><li>Linux の x86<span class="nw">-6</span>4&nbsp;と ARM64&nbsp;向けも<wbr>ある</li><li>Java 25&nbsp;以降が<wbr>あれば、<wbr>実行可能 JAR でも<wbr>動く</li></ul>
 </div>
-<div class="page">7</div>
+<div class="page">8</div>
 </section>
-<section class="slide layout-standard" id="s8" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s9" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
 <h1 class="title">REPL</h1>
 <div class="body" style="top:232px;height:776px">
@@ -252,9 +280,9 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">CL-USER&gt; (quit)</span></code></pre>
 <p>プロンプトには<wbr>現在の<wbr>パッケージ名が<wbr>出る。<wbr>括弧が<wbr>閉じるまで<wbr>複数行を<wbr>読む。</p>
 </div>
-<div class="page">8</div>
+<div class="page">9</div>
 </section>
-<section class="slide layout-columns" id="s9" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-columns" id="s10" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
 <h1 class="title">ファイルを<wbr>実行する</h1>
 <div class="body" style="top:232px;height:776px">
@@ -277,32 +305,32 @@ html:not(.js) #fs{display:none}
 </div>
 </div>
 </div>
-<div class="page">9</div>
+<div class="page">10</div>
 </section>
-<section class="slide layout-table" id="s10" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s11" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">インストールと<wbr>最初の<wbr>実行</p>
 <h1 class="title">コマンドの<wbr>一覧</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:786px"><col style="width:910px"></colgroup><thead><tr><th scope="col">コマンド</th><th scope="col">動作</th></tr></thead><tbody><tr><td><code>rontolisp</code></td><td>REPL</td></tr><tr><td><code>rontolisp app.lisp</code></td><td>ファイルを<wbr>インタプリタで<wbr>実行</td></tr><tr><td><code>rontolisp <span class="nw">-e</span> &quot;(...)&quot;</code></td><td>引数の<wbr>プログラムを<wbr>実行</td></tr><tr><td><code>rontolisp app.lisp <span class="nw">-o</span> OUT</code></td><td>コンパイル。<wbr><code>OUT</code> の<wbr>拡張子で<wbr>出力を<wbr>選ぶ</td></tr><tr><td><code>rontolisp format src/</code></td><td>ソースを<wbr>正規の<wbr>レイアウトに<wbr>インデントし直す</td></tr><tr><td><code>rontolisp test tests/main.lisp</code></td><td>rove の<wbr>テストを<wbr>実行し、<wbr>結果を<wbr>終了コードで<wbr>返す</td></tr></tbody></table>
 </div>
-<div class="page">10</div>
+<div class="page">11</div>
 </section>
-<section class="slide layout-standard" id="s11" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s12" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li class="current">言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
 </div>
-<div class="page">11</div>
+<div class="page">12</div>
 </section>
-<section class="slide layout-table" id="s12" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s13" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">言語</p>
 <h1 class="title">Common Lisp の<wbr>主な<wbr>機能</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:711px"><col style="width:985px"></colgroup><thead><tr><th scope="col">機能</th><th scope="col">主な<wbr>フォーム</th></tr></thead><tbody><tr><td>マクロ</td><td><code>defmacro</code>、<wbr>バッククォート、<wbr><code>macroexpand</code></td></tr><tr><td>CLOS</td><td><code>defclass</code>、<wbr><code>defgeneric</code>、<wbr><code>defmethod</code></td></tr><tr><td>コンディションと<wbr>リスタート</td><td><code>handler<span class="nw">-c</span>ase</code>、<wbr><code>restart<span class="nw">-c</span>ase</code></td></tr><tr><td>多値</td><td><code>values</code>、<wbr><code>multiple<span class="nw">-v</span>alue<span class="nw">-b</span>ind</code></td></tr><tr><td>繰り返し</td><td><code>loop</code>、<wbr><code>dolist</code>、<wbr><code>dotimes</code></td></tr><tr><td>数値</td><td>多倍長整数、<wbr>有理数、<wbr>浮動小数点数</td></tr></tbody></table>
 </div>
-<div class="page">12</div>
+<div class="page">13</div>
 </section>
-<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s14" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">言語</p>
 <h1 class="title">ANSI Common Lisp テストスイート</h1>
 <div class="body" style="top:232px;height:712px">
@@ -310,9 +338,9 @@ html:not(.js) #fs{display:none}
 <ul><li>計測の<wbr>対象は<wbr>インタプリタ</li><li>CI が<wbr>毎日<wbr>スイート全体を<wbr>実行し、<wbr>通過数が<wbr>変わる<wbr>たびに<wbr>結果を<wbr>記録する</li><li>対応する<wbr>機能を<wbr>増やし、<wbr>通過数を<wbr>引き続き上げていく</li></ul>
 </div>
 <p class="source">ansi<span class="nw">-t</span>est/results/interpreter.md (2026<span class="nw">-1</span>0<span class="nw">-2</span>1&nbsp;時点、<wbr>スイートの<wbr>リビジョン ca06bd9)</p>
-<div class="page">13</div>
+<div class="page">14</div>
 </section>
-<section class="slide layout-standard" id="s14" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s15" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">言語</p>
 <h1 class="title">プログラムも<wbr>リスト</h1>
 <div class="body" style="top:232px;height:776px">
@@ -325,9 +353,9 @@ html:not(.js) #fs{display:none}
 (print (macroexpand-1 &#39;(twice (princ <span class="hl-s">&quot;hi &quot;</span>))))
 (twice (princ <span class="hl-s">&quot;hi &quot;</span>))</code></pre></div>
 </div>
-<div class="page">14</div>
+<div class="page">15</div>
 </section>
-<section class="slide layout-code" id="s15" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-code" id="s16" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">言語</p>
 <h1 class="title">CLOS と<wbr>コンディション</h1>
 <div class="body" style="top:232px;height:776px">
@@ -341,13 +369,13 @@ html:not(.js) #fs{display:none}
 (<span class="hl-d">handler-case</span> (/ <span class="hl-n">1</span> <span class="hl-n">0</span>)
   (division-by-zero () <span class="hl-k">:infinity</span>))</code></pre></div>
 </div>
-<div class="page">15</div>
+<div class="page">16</div>
 </section>
-<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">言語</p>
 <h1 class="title">Scheme の<wbr>フロントエンド</h1>
 <div class="body" style="top:232px;height:776px">
-<p><code>.scm</code> の<wbr>ファイルを Scheme と<wbr>して<wbr>読む。<wbr><code>(scheme base)</code> などの R7RS<span class="nw">-s</span>mall の<wbr>ライブラリを<wbr>使える。</p>
+<p>Scheme の<wbr>コードでは、<wbr><code>(scheme base)</code> などの R7RS<span class="nw">-s</span>mall の<wbr>ライブラリを <code>import</code> して<wbr>使う。</p>
 <div class="codebox runnable" data-lang="scheme" data-timeout="10"><pre class="code"><code>(import (scheme base) (scheme write))
 (<span class="hl-d">define</span> (count-up n)
   (<span class="hl-d">let</span> loop ((i <span class="hl-n">0</span>) (acc &#39;()))
@@ -356,38 +384,38 @@ html:not(.js) #fs{display:none}
         (<span class="hl-d">loop</span> (+ i <span class="hl-n">1</span>) (cons (* i i) acc)))))
 (display (count-up <span class="hl-n">5</span>))</code></pre></div>
 </div>
-<div class="page">16</div>
+<div class="page">17</div>
 </section>
-<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">言語</p>
 <h1 class="title">Clojure の<wbr>フロントエンド</h1>
 <div class="body" style="top:232px;height:776px">
-<p><code>.clj</code> と <code>.cljc</code> の<wbr>ファイルを Clojure と<wbr>して<wbr>読む。</p>
+<p>Clojure の<wbr>コードでは、<wbr><code><span class="nw">-&gt;</span>&gt;</code> などの<wbr>スレッディングマクロや、<wbr>シーケンスを<wbr>扱う<wbr>コア関数を<wbr>使える。</p>
 <div class="codebox runnable" data-lang="clojure" data-timeout="10"><pre class="code"><code>(<span class="hl-d">defn</span> fact [n]
   (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) <span class="hl-n">1</span> (* n (fact (- n <span class="hl-n">1</span>)))))
 (println (fact <span class="hl-n">20</span>))
 (println (-&gt;&gt; (range <span class="hl-n">10</span>) (filter odd?) (map #(* % %)) (reduce +)))
 (println (frequencies <span class="hl-s">&quot;mississippi&quot;</span>))</code></pre></div>
 </div>
-<div class="page">17</div>
+<div class="page">18</div>
 </section>
-<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">言語</p>
 <h1 class="title">言語は<wbr>ファイルごとに<wbr>決まる</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">拡張子</th><th scope="col">言語</th></tr></thead><tbody><tr><td><code>.lisp .asd</code></td><td>Common Lisp</td></tr><tr><td><code>.scm</code></td><td>Scheme</td></tr><tr><td><code>.clj .cljc</code></td><td>Clojure</td></tr><tr><td>それ以外</td><td><code><span class="nw">--s</span>ource<span class="nw">-l</span>anguage</code> で<wbr>指定する</td></tr></tbody></table>
-<ul><li>一つの<wbr>プログラムに<wbr>複数の<wbr>言語の<wbr>ファイルを<wbr>混ぜられる</li><li>どの<wbr>言語も<wbr>同じ<wbr>コアフォームに<wbr>変換され、<wbr>すべての<wbr>バックエンドで<wbr>動く</li></ul>
-</div>
-<div class="page">18</div>
-</section>
-<section class="slide layout-standard" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
-<h1 class="title">話の<wbr>流れ</h1>
-<div class="body" style="top:232px;height:776px">
-<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li class="current">バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+<p>一つの<wbr>プログラムに、<wbr>複数の<wbr>言語の<wbr>ファイルを<wbr>混ぜられる。</p>
 </div>
 <div class="page">19</div>
 </section>
 <section class="slide layout-standard" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<h1 class="title">話の<wbr>流れ</h1>
+<div class="body" style="top:232px;height:776px">
+<ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li class="current">バックエンド</li><li>連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
+</div>
+<div class="page">20</div>
+</section>
+<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">一つの<wbr>パイプラインから<wbr>三つの<wbr>実行モードへ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -397,9 +425,9 @@ html:not(.js) #fs{display:none}
 </figure>
 <ul><li>言語の<wbr>違いは<wbr>最初の<wbr>変換で<wbr>吸収する</li><li>バックエンドが<wbr>受け取るのは、<wbr>どの<wbr>言語でも<wbr>同じ<wbr>コアフォーム</li></ul>
 </div>
-<div class="page">20</div>
+<div class="page">21</div>
 </section>
-<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<section class="slide layout-standard" id="s22" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">出力の<wbr>拡張子で<wbr>バックエンドを<wbr>選ぶ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -411,9 +439,9 @@ html:not(.js) #fs{display:none}
 <span class="hl-k">$</span> rontolisp hello.lisp --native -o hello &amp;&amp; ./hello   # ネイティブ</code></pre>
 <p>どの<wbr>形でも <code>(print (+ 1 2))</code> は 3&nbsp;を<wbr>出力する。</p>
 </div>
-<div class="page">21</div>
+<div class="page">22</div>
 </section>
-<section class="slide layout-columns" id="s22" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-columns" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">JVM と WASM</h1>
 <div class="body" style="top:232px;height:776px">
@@ -428,9 +456,9 @@ html:not(.js) #fs{display:none}
 </div>
 </div>
 </div>
-<div class="page">22</div>
+<div class="page">23</div>
 </section>
-<section class="slide layout-standard" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">ネイティブ実行ファイル</h1>
 <div class="body" style="top:232px;height:712px">
@@ -438,23 +466,23 @@ html:not(.js) #fs{display:none}
 <ul><li>実行に wasmtime も JVM も<wbr>要らない</li><li>起動は<wbr>約 10&nbsp;ms</li><li><code><span class="nw">--n</span>ative<span class="nw">-t</span>arget</code> で Linux の x86_64&nbsp;と aarch64、<wbr>macOS の aarch64&nbsp;向けを<wbr>作れる</li></ul>
 </div>
 <p class="source">doc/ja/compiling/native.md</p>
-<div class="page">23</div>
+<div class="page">24</div>
 </section>
-<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">インタプリタと<wbr>コンパイル結果の<wbr>速さ</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">fib ベンチマークの<wbr>実行時間 (短い<wbr>ほど<wbr>速い)</p>
-<figure class="dg" style="width:1696px;height:276px;--dg:48px;--dg-lh:68px;--dg-x:28px" aria-describedby="s24c1">
+<figure class="dg" style="width:1696px;height:276px;--dg:48px;--dg-lh:68px;--dg-x:28px" aria-describedby="s25c1">
 <svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-b" x="316" y="12" width="1117" height="68"/><rect class="dg-b" x="316" y="104" width="12" height="68"/><rect class="dg-b" x="316" y="196" width="44" height="68"/></svg>
 <p class="dg-l dg-t" style="left:0px;top:12px;width:288px;height:68px">インタプリタ</p><p class="dg-l dg-v" style="left:1461px;top:12px;width:235px;height:68px">5,442 ms</p><p class="dg-l dg-t" style="left:0px;top:104px;width:288px;height:68px">JVM</p><p class="dg-l dg-v" style="left:356px;top:104px;width:157px;height:68px">60 ms</p><p class="dg-l dg-t" style="left:0px;top:196px;width:288px;height:68px">WASM</p><p class="dg-l dg-v" style="left:388px;top:196px;width:190px;height:68px">218 ms</p>
 </figure>
 </div>
-<div class="say" id="s24c1" role="note" data-side="below" data-at="インタプリタ" style="left:960px;top:465px;width:848px;height:152px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:727px"><p>ループ中心の<wbr>コードは、<wbr>コンパイルで 20〜200&nbsp;倍速くなる</p></div>
+<div class="say" id="s25c1" role="note" data-side="below" data-at="インタプリタ" style="left:960px;top:465px;width:848px;height:152px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:727px"><p>ループ中心の<wbr>コードは、<wbr>コンパイルで 20〜200&nbsp;倍速くなる</p></div>
 <p class="source">bench<span class="nw">-r</span>eport/results/benchmarks.md (2026<span class="nw">-0</span>9<span class="nw">-0</span>4, Linux x86_64, AMD EPYC 9V74)</p>
-<div class="page">24</div>
+<div class="page">25</div>
 </section>
-<section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">インタプリタは<wbr>試行錯誤に<wbr>使う</h1>
 <div class="body" style="top:232px;height:776px">
@@ -462,24 +490,24 @@ html:not(.js) #fs{display:none}
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> rontolisp program.lisp -o program.jar
 <span class="hl-k">$</span> java -jar program.jar</code></pre>
 </div>
-<div class="page">25</div>
+<div class="page">26</div>
 </section>
-<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">バックエンド</p>
 <h1 class="title">ブラウザで<wbr>動かす</h1>
 <div class="body" style="top:232px;height:776px">
 <ul><li><strong>プレイグラウンド</strong> rontolisp 自体を GraalVM の Web Image で WebAssembly に<wbr>した<wbr>もの。<wbr>REPL と、<code>.class</code> や <code>.wasm</code> への<wbr>コンパイルが<wbr>ブラウザの<wbr>中で<wbr>完結する</li><li><strong>ドキュメント</strong> リファレンスの Lisp の<wbr>例は Run で<wbr>実行できる</li><li><strong>この<wbr>デッキ</strong> 同じ<wbr>ブラウザ版が<wbr>コードを<wbr>実行している</li><li><strong>自分の<wbr>プログラム</strong> WASM に<wbr>コンパイルして<wbr>ページから<wbr>呼ぶ (<code>examples/browser/</code> の<wbr>マインスイーパーや WebGL)</li></ul>
 </div>
-<div class="page">26</div>
+<div class="page">27</div>
 </section>
-<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li class="current">連携と<wbr>ライブラリ</li><li>次の<wbr>一歩</li></ol>
 </div>
-<div class="page">27</div>
+<div class="page">28</div>
 </section>
-<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<section class="slide layout-standard" id="s29" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">連携と<wbr>ライブラリ</p>
 <h1 class="title">Java 連携</h1>
 <div class="body" style="top:232px;height:776px">
@@ -489,9 +517,9 @@ html:not(.js) #fs{display:none}
 (java:field <span class="hl-s">&quot;java.lang.Integer&quot;</span> <span class="hl-s">&quot;MAX_VALUE&quot;</span>)                    <span class="hl-c">; =&gt; 2147483647</span></code></pre>
 <p>JVM 上の<wbr>インタプリタと、<wbr>コンパイルした <code>.class</code> で<wbr>使える。</p>
 </div>
-<div class="page">28</div>
+<div class="page">29</div>
 </section>
-<section class="slide layout-columns" id="s29" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-columns" id="s30" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">連携と<wbr>ライブラリ</p>
 <h1 class="title">ASDF で<wbr>複数ファイルの<wbr>プロジェクトを<wbr>読む</h1>
 <div class="body" style="top:232px;height:776px">
@@ -509,9 +537,9 @@ html:not(.js) #fs{display:none}
 </div>
 </div>
 </div>
-<div class="page">29</div>
+<div class="page">30</div>
 </section>
-<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s31" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">連携と<wbr>ライブラリ</p>
 <h1 class="title">実在の<wbr>ライブラリを<wbr>そのまま<wbr>読む</h1>
 <div class="body" style="top:232px;height:776px">
@@ -522,42 +550,42 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">(&quot;a&quot; &quot;b&quot; &quot;c&quot;)</span></code></pre>
 <ul><li><code>ql:quickload</code> は Quicklisp の<wbr>配布物から<wbr>取得し、<wbr><code>~/.rontolisp/quicklisp/</code> に<wbr>キャッシュする</li><li>alexandria、<wbr>cl<span class="nw">-p</span>pcre、<wbr>cl<span class="nw">-w</span>ho、<wbr>jzon、<wbr>chipz などが、<wbr>上流の<wbr>ソースの<wbr>まま<wbr>インタプリタ、<wbr>JVM、<wbr>WASM で<wbr>動く</li></ul>
 </div>
-<div class="page">30</div>
+<div class="page">31</div>
 </section>
-<section class="slide layout-table" id="s31" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s32" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">連携と<wbr>ライブラリ</p>
 <h1 class="title">その<wbr>ほかの<wbr>組み込みパッケージ</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>使える<wbr>バックエンドは<wbr>パッケージごとに<wbr>異なる。<wbr>詳しくは<wbr>各ガイドに<wbr>ある</caption><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">パッケージ</th><th scope="col">用途</th></tr></thead><tbody><tr><td><code>uiop</code></td><td>環境変数、<wbr>ファイル、<wbr>ディレクトリなど</td></tr><tr><td><code>rove</code>、<wbr><code>rontolisp test</code></td><td>テスト</td></tr><tr><td><code>rontolisp:fetch</code></td><td>HTTP リクエスト</td></tr><tr><td><code>clack</code></td><td>Web アプリケーション</td></tr><tr><td><code>linalg</code>、<wbr><code>torch</code></td><td>線形代数と<wbr>ニューラルネットワーク</td></tr><tr><td><code>cffi</code></td><td>C ライブラリの<wbr>呼び出し (JVM)</td></tr><tr><td><code>objc</code>、<wbr><code>appkit</code></td><td>macOS の GUI</td></tr></tbody></table>
 </div>
-<div class="page">31</div>
+<div class="page">32</div>
 </section>
-<section class="slide layout-standard" id="s32" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>rontolisp とは</li><li>インストールと<wbr>最初の<wbr>実行</li><li>言語</li><li>バックエンド</li><li>連携と<wbr>ライブラリ</li><li class="current">次の<wbr>一歩</li></ol>
 </div>
-<div class="page">32</div>
+<div class="page">33</div>
 </section>
-<section class="slide layout-table" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s34" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">examples ディレクトリ</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:756px"><col style="width:940px"></colgroup><thead><tr><th scope="col">ディレクトリ</th><th scope="col">内容</th></tr></thead><tbody><tr><td><code>console/</code></td><td>アルゴリズムと<wbr>コンソール入出力</td></tr><tr><td><code>scheme/</code> <code>clojure/</code></td><td>Scheme と Clojure の<wbr>プログラム</td></tr><tr><td><code>ml/</code> <code>llm/</code></td><td>数値計算、<wbr>機械学習、<wbr>Llama 2&nbsp;の<wbr>推論</td></tr><tr><td><code>net/</code> <code>db/</code></td><td>ソケット、<wbr>HTTP サーバ、<wbr>PostgreSQL</td></tr><tr><td><code>jvm/</code> <code>macos/</code></td><td>Java 連携、<wbr>Swing、<wbr>Cocoa、<wbr>Metal</td></tr><tr><td><code>browser/</code></td><td>ページで<wbr>動かす WASM</td></tr><tr><td><code>asdf/</code></td><td>実在の<wbr>ライブラリの<wbr>読み込み</td></tr></tbody></table>
 </div>
-<div class="page">33</div>
+<div class="page">34</div>
 </section>
-<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">次の<wbr>一歩</p>
 <h1 class="title">次に<wbr>読むもの</h1>
 <div class="body" style="top:232px;height:776px">
 <ul><li><a href="https://making.github.io/rontolisp/docs/">ドキュメント</a> はじめに、<wbr>コンパイル、<wbr>言語リファレンス、<wbr>ガイド</li><li><a href="https://making.github.io/rontolisp/playground.html">プレイグラウンド</a> インストールせずに<wbr>試す</li><li><a href="https://making.github.io/rontolisp/skill/">エージェントスキル</a> AI コーディングエージェント向けに、<wbr>ドキュメントから<wbr>生成した<wbr>もの</li><li><a href="https://github.com/making/rontolisp">GitHub</a> ソースと <code>examples/</code></li></ul>
 </div>
-<div class="page">34</div>
-</section>
-<section class="slide layout-statement closing" id="s35" style="--stmt:120px;--stmt-lh:162px;">
-<div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
 <div class="page">35</div>
+</section>
+<section class="slide layout-statement closing" id="s36" style="--stmt:120px;--stmt-lh:162px;">
+<div class="centered"><p class="statement">インタプリタで<wbr>試し、<wbr>同じ<wbr>ソースを JVM、<wbr>WASM、<wbr>ネイティブで<wbr>動かす。</p></div>
+<div class="page">36</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>

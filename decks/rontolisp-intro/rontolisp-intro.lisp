@@ -9,7 +9,7 @@
       :author "rontolisp"
       :date "2026-10-23"
       :url "https://github.com/making/rontolisp"
-      :description "Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する"
+      :description "Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから Common Lisp・Scheme・Clojure の各言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する"
       :page-url "https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html"
       :page-image "rontolisp-intro.png"
       :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf")
@@ -31,6 +31,27 @@
       (li (b "JVM コンパイラ") " " (tt ".class") " や " (tt ".jar") " を出力する")
       (li (b "WASM コンパイラ") " wasm-GC を使った " (tt ".wasm") " を出力する"))
   (p "コアライブラリは外部依存を持たない。JVM と WASM のバイトコードは、ASM などのライブラリを使わずに生成する。"))
+
+(slide :title "Common Lisp、Scheme、Clojure を読む"
+  (column
+    (p (b "Common Lisp"))
+    (code :lang "lisp" "
+      ;; sq.lisp
+      (defun sq (x) (* x x))
+      (print (sq 12))"))
+  (column
+    (p (b "Scheme"))
+    (code :lang "scheme" "
+      ;; sq.scm
+      (define (sq x) (* x x))
+      (display (sq 12))"))
+  (column
+    (p (b "Clojure"))
+    (code :lang "clojure" "
+      ;; sq.clj
+      (defn sq [x] (* x x))
+      (println (sq 12))"))
+  (p "どの言語のソースも同じコアフォームに変換するので、インタプリタ、JVM、WASM、ネイティブのどれでも動く。"))
 
 (slide :title "まず動かしてみる"
   (p "このデッキのコードは、ブラウザ上の rontolisp で実行できる。クリックして編集し、Run で実行する。")
@@ -138,7 +159,7 @@
       (division-by-zero () :infinity))"))
 
 (slide :title "Scheme のフロントエンド"
-  (p (tt ".scm") " のファイルを Scheme として読む。" (tt "(scheme base)") " などの R7RS-small のライブラリを使える。")
+  (p "Scheme のコードでは、" (tt "(scheme base)") " などの R7RS-small のライブラリを " (tt "import") " して使う。")
   (code :lang "scheme" "
     (import (scheme base) (scheme write))
     (define (count-up n)
@@ -149,7 +170,7 @@
     (display (count-up 5))"))
 
 (slide :title "Clojure のフロントエンド"
-  (p (tt ".clj") " と " (tt ".cljc") " のファイルを Clojure として読む。")
+  (p "Clojure のコードでは、" (tt "->>") " などのスレッディングマクロや、シーケンスを扱うコア関数を使える。")
   (code :lang "clojure" "
     (defn fact [n]
       (if (< n 2) 1 (* n (fact (- n 1)))))
@@ -163,8 +184,7 @@
     ((tt ".scm") "Scheme")
     ((tt ".clj .cljc") "Clojure")
     ("それ以外" (cell (tt "--source-language") " で指定する")))
-  (ul "一つのプログラムに複数の言語のファイルを混ぜられる"
-      "どの言語も同じコアフォームに変換され、すべてのバックエンドで動く"))
+  (p "一つのプログラムに、複数の言語のファイルを混ぜられる。"))
 
 ;;; --- backends ---------------------------------------------------------------------
 
