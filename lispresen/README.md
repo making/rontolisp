@@ -314,6 +314,9 @@ Home/End and swiping move between slides; on a touch screen, a tap on the left t
 back and anywhere else goes forward. A click or tap on a video plays or pauses it, and
 leaves the slide where it is. `#N` in the URL opens slide N. `F`, a double click
 or the button in the bottom-right corner toggles full screen. `O` shows all slides.
+While the deck is in full screen, and while the presenter window is open, the player holds a
+screen wake lock so the display does not dim or lock mid-talk (browsers that lack the API, or
+refuse it, are left as they are).
 Printing to PDF puts one slide on each page. With `?notes` in the URL it prints a handout:
 each page holds a slide and its notes under it (a slide without notes prints alone), on a page
 as wide as the canvas and twice as tall; notes longer than the area under the slide are cut.

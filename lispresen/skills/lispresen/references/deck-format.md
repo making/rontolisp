@@ -84,6 +84,8 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(source inline...)` | one muted line at the bottom naming a source; one per slide |
 | `(say "comment" ... block)` | callout (below) |
 
+The player needs nothing in the deck to keep the screen awake: it holds a screen wake lock in full screen and in the presenter window.
+
 Inline forms: `(b ...)`, `(i ...)`, `(tt "code")`, `(mark ...)` (highlighter),
 `(accent ...)` (accent color), `(link "url" inline...)`. They nest:
 `(b (accent "solution"))`. Mix strings and forms inside `p`, `li`, table cells:

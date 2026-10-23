@@ -1255,6 +1255,11 @@ Presenting is done in full screen; the windowed view is for preparation.
   screen changes only the scale, never the layout the solver computed. The letterbox
   around a canvas whose aspect differs from the screen is the theme background.
 - In full screen the cursor and toolbar hide after 2 s without mouse movement.
+- The screen must not sleep during a talk: while in full screen, and in the presenter window
+  for as long as it is open, the player holds `navigator.wakeLock.request('screen')`. It is
+  released on leaving full screen; the browser drops it when the page is hidden, so the
+  player requests it again on `visibilitychange` to visible. Where the API is missing or
+  refused (no secure context, battery saver) nothing happens and nothing is shown.
 - `Esc` exits full screen in every browser, and a page cannot stop that, which conflicts
   with `Esc` leaving the code editor. Where the Keyboard Lock API exists (Chromium), the
   player locks `Escape` while in full screen, so `Esc` leaves the editor and a held `Esc`
