@@ -26,6 +26,10 @@
   logo
   url
   progress
+  page-url
+  page-image
+  page-image-font
+  description
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -950,7 +954,9 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                                                     "THEME" "ASPECT" "RUNTIME"
                                                     "PAGE-NUMBERS" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
-                                                    "URL" "PROGRESS") "deck")
+                                                    "URL" "PROGRESS" "PAGE-URL"
+                                                    "PAGE-IMAGE" "PAGE-IMAGE-FONT"
+                                                    "DESCRIPTION") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
@@ -972,6 +978,26 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                          nil)))
                :url (string-option opts "URL" "deck")
                :progress (and (opt opts "PROGRESS") t)
+               :description (string-option opts "DESCRIPTION" "deck")
+               :page-url (let ((u (raw-string-option opts "PAGE-URL" "deck")))
+                           (cond ((or (null u) (absolute-url-p u)) u)
+                                 (t
+                                  (report
+                                   :error
+                                   ":page-url must be an absolute http or https URL")
+                                  nil)))
+               :page-image (raw-string-option opts "PAGE-IMAGE" "deck")
+               :page-image-font (let ((f (opt opts "PAGE-IMAGE-FONT")))
+                                  (cond ((null f) nil)
+                                        ((stringp f) (list f))
+                                        ((and (consp f) (<= (length f) 2)
+                                              (every #'stringp f))
+                                         f)
+                                        (t
+                                         (report
+                                          :error
+                                          ":page-image-font of deck must be a font file or (regular bold)")
+                                         nil)))
                :agenda (let ((a (opt opts "AGENDA")))
                          (cond ((or (null a) (eq a t) (stringp a)) a)
                                (t
@@ -979,6 +1005,33 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
                                  :error
                                  ":agenda of deck must be t or a title string")
                                 nil))))))
+
+;;; A link preview names the page by its absolute URL, and its image likewise; the deck
+;;; may write the image relative to the page, as an <img> on it would be.
+
+(defun absolute-url-p (s)
+  "Whether S is an http or https URL with a host."
+  (let ((p (search "://" s)))
+    (and p
+         (member (subseq s 0 p) '("http" "https") :test #'string-equal)
+         (< (+ p 3) (length s))
+         (not (find (char s (+ p 3)) "/?#"))
+         t)))
+
+(defun resolve-url (base ref)
+  "REF against the absolute URL BASE: REF itself when absolute, BASE's origin followed by
+REF when REF starts with a slash, else REF in BASE's directory."
+  (let* ((host (+ (search "://" base) 3))
+         (path (or (position-if (lambda (c) (find c "/?#")) base :start host)
+                   (length base)))
+         (end (or (position-if (lambda (c) (find c "?#")) base :start path)
+                  (length base)))
+         (slash (position #\/ base :start path :end end :from-end t)))
+    (cond ((search "://" ref) ref)
+          ((and (plusp (length ref)) (char= (char ref 0) #\/))
+           (concatenate 'string (subseq base 0 path) ref))
+          (slash (concatenate 'string (subseq base 0 (1+ slash)) ref))
+          (t (concatenate 'string (subseq base 0 path) "/" ref)))))
 
 (defun parse-kicker-option (x)
   "The deck's :kicker: :section (each slide's kicker is its section's title) or nil."
@@ -1042,11 +1095,28 @@ expanded first, so the sections an agenda lists are known before any slide is pa
         (setf (deck-line deck) *line*))
       (setf forms (cdr forms)))
     (unless deck (setf deck (make-deck)))
-    (when (and (or (deck-logo deck) (deck-url deck)) (null (deck-title deck)))
-      (let ((*line* (deck-line deck)))
+    (let ((*line* (deck-line deck)))
+      (when (and (or (deck-logo deck) (deck-url deck)) (null (deck-title deck)))
         (report
          :warning
-         ":logo and :url are shown on the title slide, which needs a :title")))
+         ":logo and :url are shown on the title slide, which needs a :title"))
+      (let ((image (deck-page-image deck)))
+        (cond ((null image)
+               (when (deck-page-image-font deck)
+                 (report :warning
+                         ":page-image-font draws the :page-image, which this deck lacks")))
+              ((null (deck-page-url deck))
+               (report :warning
+                       ":page-image is the preview of the :page-url, which this deck lacks"))
+              ((drawn-page-image-p deck)
+               (unless (string-equal (or (extension image) "") "png")
+                 (report :error ":page-image is drawn as a PNG; name it .png"))
+               (unless (deck-title deck)
+                 (report :warning
+                         ":page-image draws the title slide, which needs a :title"))
+               (unless (deck-page-image-font deck)
+                 (report :error
+                         ":page-image is drawn in the :page-image-font, which this deck lacks"))))))
     (when (deck-title deck)
       (push (make-slide :number (incf number)
                         :line 1

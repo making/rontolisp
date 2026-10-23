@@ -2,7 +2,8 @@
 ;;;;
 ;;;;   lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
 ;;;;
-;;;; Reads DECK, writes its HTML, prints diagnostics to standard error. Exit status: 0
+;;;; Reads DECK, writes its HTML and the page image a :page-image draws, prints
+;;;; diagnostics to standard error. Exit status: 0
 ;;;; success, 1 errors (or warnings under --strict), 2 usage. Runs unchanged on every
 ;;;; backend:
 ;;;;
@@ -26,7 +27,7 @@
   --runtime R   where runnable code loads the runtime from, overriding the deck's
                 :runtime: a directory URL, hosted (the project site) or none (static code)
   --embed       inline images as data: URIs, so the HTML file stands alone
-  --check       report diagnostics without writing HTML
+  --check       report diagnostics without writing HTML or the page image
   --strict      fail on warnings too")
 
 (defun usage-error (message)
@@ -87,6 +88,28 @@ DECK's directory, or to the working directory when DECK is standard input."
                          :if-does-not-exist :create)
         (write-string html s))))
 
+(defun write-octets (octets path)
+  "Writes OCTETS to the file PATH; nil, reported, when it cannot."
+  (handler-case (with-open-file (s path
+                                   :direction :output
+                                   :element-type '(unsigned-byte 8)
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create)
+                  (write-sequence octets s)
+                  t)
+    (error ()
+      (format *error-output* "lispresen: cannot write ~a~%" path)
+      (finish-output *error-output*)
+      nil)))
+
+(defun beside (target path)
+  "PATH, relative to the directory of the file TARGET, or to the working directory when
+TARGET is standard output."
+  (let ((slash (position #\/ target :from-end t)))
+    (if (and slash (string/= target "-"))
+        (concatenate 'string (subseq target 0 (1+ slash)) path)
+        path)))
+
 (defun main (args)
   (let ((deck nil)
         (out nil)
@@ -124,13 +147,14 @@ DECK's directory, or to the working directory when DECK is standard input."
         (format *error-output* "lispresen: cannot read ~a~%" deck)
         (finish-output *error-output*)
         (uiop:quit 1))
-      (multiple-value-bind (html diagnostics) (lispresen:render source
-                                                                :theme theme
-                                                                :runtime runtime
-                                                                :read-file
-                                                                (file-reader
-                                                                 deck)
-                                                                :embed embed)
+      (multiple-value-bind (html diagnostics image) (lispresen:render source
+                                                                      :theme theme
+                                                                      :runtime runtime
+                                                                      :read-file
+                                                                      (file-reader
+                                                                       deck)
+                                                                      :embed embed
+                                                                      :page-image t)
         (let ((name (if (string= deck "-") "<stdin>" deck))
               (errors 0)
               (warnings 0))
@@ -141,8 +165,13 @@ DECK's directory, or to the working directory when DECK is standard input."
             (write-line (lispresen:format-diagnostic name d) *error-output*))
           (finish-output *error-output*)
           (unless check
-            (write-output html
-             (or out (if (string= deck "-") "-" (default-output deck)))))
+            (let ((target
+                   (or out (if (string= deck "-") "-" (default-output deck)))))
+              (write-output html target)
+              (when (and image
+                         (not (write-octets (second image)
+                                            (beside target (first image)))))
+                (incf errors))))
           (uiop:quit
            (if (or (> errors 0) (and strict (> warnings 0))) 1 0)))))))
 

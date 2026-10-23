@@ -61,6 +61,10 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :agenda t                ; a list of the sections, repeated at each section
       :logo (image "logo.png" :alt "rontolisp")   ; on the title slide
       :url "https://example.com/talk"             ; a QR code of it on the title slide
+      :description "S式で書くプレゼンテーション"     ; the page's description
+      :page-url "https://example.com/talk.html"   ; where this HTML is published
+      :page-image "talk.png"                      ; the title slide, drawn as a PNG
+      :page-image-font ("r.ttf" "b.ttf")          ; the TrueType fonts it is drawn in
       :progress t              ; a bar along the bottom edge, as long as the slide's place
       :page-numbers t)
 
@@ -223,24 +227,28 @@ source string
                                                             metrics.lisp)
   -> lint      readability diagnostics                     (lint.lisp)
   -> emit      HTML + CSS + player JS as one string        (html.lisp, player.lisp)
+  -> draw      the title slide as a PNG, with :page-image  (page-image.lisp, raster.lisp,
+                                                            truetype.lisp, png.lisp)
 ```
 
 The core is a pure function from a string to a string:
 
 ```lisp
-(lispresen:render source &key theme runtime read-file embed) ; => (values html diagnostics)
+(lispresen:render source &key theme runtime read-file embed page-image)
+;; => (values html diagnostics image), IMAGE (path octets) or nil
 ```
 
 It does no I/O, so every host (CLI, browser, a Java caller via `rontolisp:jvm-export`)
 is a thin shell over it. `read-file` is the one place a host reaches in: a function from a
 path the deck names to the file's bytes, nil when it cannot be read. Code files are read
-with it, and under `embed` (the CLI's `--embed`) images too. The browser host passes none,
+with it, and under `embed` (the CLI's `--embed`) images too, and under `page-image` the
+font and the logo of the page image (Link preview, below). The browser host passes none,
 so a `:file` there is an error. A diagnostic is
 `(severity line slide-number message)`.
 Diagnostic messages are in English.
 
 **All layout arithmetic is integer.** Widths are in milli-em, sizes and coordinates in
-canvas pixels. Float printing is the one place backends could plausibly differ, and
+canvas pixels; the page image's in sixteenths of its pixels. Float printing is the one place backends could plausibly differ, and
 integer math removes it from the output by construction. The only float computation, the
 WCAG contrast ratio, feeds a comparison and is printed as a rounded integer.
 
@@ -943,8 +951,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1008,6 +1016,8 @@ One file containing:
   `figure`, `blockquote`). A kicker is a `<p class="kicker">` before the `h1`, a row of
   columns a `<div class="columns">` in the body holding `<div class="column"
   style="width:...px">`s, and `grow` when it takes a share of the height.
+- After the `<title>`, the description and link preview tags of a deck that sets them
+  (Link preview, below).
 - The theme stylesheet: colors as custom properties (`--fg`, `--bg`, `--accent`,
   `--muted`), font stacks, the layout classes, and print CSS (`@page` sized to the
   canvas, one slide per page) for PDF export through the browser's print dialog.
@@ -1093,6 +1103,113 @@ the HTML file stands alone:
 - A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
   the file then does not stand alone.
 
+## Link preview
+
+A deck published on the web says what a link preview shows: `<meta>` tags in the head and,
+when lispresen draws it, a PNG of the title slide beside the HTML.
+
+### Options and tags
+
+| Option | Tags |
+|--------|------|
+| `:description "text"` | `<meta name="description">`, and `og:description` with a page URL |
+| `:page-url "https://..."` | `og:type` (`website`), `og:url`, `og:title` (the deck title, else `lispresen`), `twitter:card` (`summary_large_image` with an image, else `summary`) |
+| `:page-image "intro.png"` | `og:image`, the path resolved against the page URL; for an image lispresen draws, `og:image:width` and `og:image:height` |
+| `:page-image-font "f.ttf"` or `("regular.ttf" "bold.ttf")` | none: the fonts the image is drawn in |
+
+A deck that sets none of them gets no tags, so its output is unchanged. `:page-url` is
+separate from `:url`, neither derived from the other: `:url` is where the title slide's QR
+code sends the audience (the intro deck's goes to the source tree), the page URL is where
+this HTML file is published, and the two are different addresses as often as not. Nor is
+the image derived from the page URL (`.html` to `.png`): a tag naming an image nobody
+wrote is a broken preview, so the deck names it. A relative `:page-image` is drawn by
+lispresen and written at that path beside the HTML; an absolute URL (or a path from the
+root, `/i.png`) is an image hosted elsewhere, named as given and not drawn. X falls back to
+the Open Graph tags for the title, description and image, so only `twitter:card` is
+written.
+
+`render` returns the drawn image as a third value, `(path octets)`, so it stays a pure
+function; the CLI writes it at the path relative to the HTML file (the working directory
+when the HTML goes to standard output), and `--check` writes nothing. Under `--embed` the
+HTML stays self-contained except for the PNG: a crawler fetches `og:image` by URL and takes
+no `data:` URI. The browser editor does not ask for the image, so it reads no font and its
+HTML is the same.
+
+### The page image
+
+1200 x 675 px, the canvas at 5/8. 1200 px is the width Facebook and X ask of a large
+preview; 16:9 is the slide's own shape, so the slide fills the image without bands, and a
+platform that crops to 1.91:1 (1200 x 630) takes 22 px off the top and bottom, inside the
+slide's 80 and 72 px margins (50 and 45 px here). The 5/8 scale makes a canvas px exactly 10
+sub-pixels, so every coordinate stays an integer. A 4:3 deck stands in the middle of the
+same frame (900 px wide), the background filling the sides.
+
+What is drawn follows the title slide as the browser draws it: the background; the
+midnight arcs (the outer half of the ring between each ellipse and one 3 px narrower); the
+logo; each title line and each line under it at the rows `title-rows` gives (the function
+the QR placement uses), broken where the fit solver broke them, centered on its own
+advance width and set on the baseline the font's ascender and descender center in the line
+box, as CSS does; the QR code in the solver's corner, each module edge on a pixel edge as
+`crispEdges` puts it, and its URL under it, underlined at the font's `post` underline
+position. The midnight title's `letter-spacing: -.01em` is applied; its `palt` is not, a
+GPOS feature, and neither is kerning: text is set on the `hmtx` advances.
+
+The logo is drawn when it is an SVG of the subset a mark uses: `svg`, `g`, `rect` (`rx`),
+`circle`, `ellipse`, `line`, `polyline`, `polygon` and `path` with every command but arcs,
+`fill` and `stroke` in `#rgb`, `#rrggbb`, `black` or `white`, `stroke-width` and
+`stroke-linecap`, joins drawn round. An SVG with anything else (a transform, a style, a
+gradient, text, an arc) or a raster logo is left out with a warning rather than drawn
+wrong; decoding PNG or JPEG would take an inflate or a DCT and color conversion for a case
+the intro deck does not have.
+
+### Fonts
+
+Text needs outlines, and lispresen has no font of its own: a Japanese font is megabytes,
+and vendoring one would put them in every compiled artifact for a feature most renders do
+not use. The deck names the font file, relative to the deck as its images are, read
+through the `read-file` the host passes: one file for every line, or a regular and a bold
+one, the title being bold as the slide's is. Only TrueType outlines (`glyf`, quadratic)
+are read; an OpenType font with CFF outlines (`OTTO`, cubic charstrings with their own
+subroutine interpreter) or a collection is an error. `truetype.lisp` reads `head`, `hhea`,
+`hmtx`, `maxp`, `loca`, `cmap` (formats 4 and 12), `post` and `glyf`, composite glyphs
+included; hinting is not run, as a browser on macOS does not run it either.
+
+The intro deck's fonts are BIZ UDPGothic Regular and Bold (Morisawa, SIL Open Font
+License 1.1 with no Reserved Font Name, `examples/fonts/OFL.txt`), from Google Fonts'
+`ofl/bizudpgothic`: TrueType, of the family in the deck's font stack (`BIZ UDGothic` is
+its fixed-pitch sibling), and proportional like Hiragino Sans, which the slides are
+measured on. Each is cut down with `pyftsubset` to ASCII and the characters of the title,
+11 KB instead of 4.6 MB, hints and layout tables dropped (README, Link preview). A character
+the font lacks is drawn as its missing glyph (a box) and reported, so a title edited past
+the subset fails `check.sh` until the subset is cut again.
+
+### Rasterizer and PNG
+
+`raster.lisp` fills polygons in sub-pixels, 16 to a pixel, by the nonzero rule: on four
+sample rows a pixel, each edge's crossing exact to a sixteenth, the covered length summed
+per pixel (0 to 64) and blended onto it in 17 levels. A glyph's quadratic curves, and the
+logo's quadratic and cubic ones, are flattened into lines to within an eighth of a pixel
+(the segment count from the control polygon's second difference); a stroke is the union
+of a quadrilateral per segment and a disc per vertex, each turned the same way so the
+nonzero rule unites them; ellipses and rounded corners come from a 65-entry sine table.
+Integers throughout, `floor` for every division, so every backend draws the same pixels.
+
+The image is an 8-bit palette PNG: each blended color is added to the palette when first
+met (60 colors for the intro deck), the nearest one taken past 256, so a pixel is one byte
+and the encoder handles a third of the bytes RGB would. `png.lisp` writes IHDR, PLTE, one
+IDAT and IEND with their CRC-32, and the zlib stream (Adler-32) as one fixed-Huffman
+deflate block whose matches are the two a drawn slide repeats: the byte before (distance
+1, a run of background) and the row above (distance one row), chosen greedily. The intro
+deck's image is 25.8 KB. Drawing and encoding add about 5 s to a render on the
+interpreter (2026-10-23: 2.4 s to 7.2 s, the encoder 2.1 s of it); the compiled backends
+take a fraction of that.
+
+Checked 2026-10-23 against headless Chrome's screenshot of the title slide at 1200 x 675
+(Chrome 155, Hiragino Sans): the intro deck and a midnight 4:3 deck with a two-line title
+match row for row, the logo, the arcs and the QR code in place; the lines differ only by
+the fonts' widths (BIZ UDPGothic's Latin is wider than Hiragino's), the URL under the QR
+code ending where the browser's ends.
+
 ## Hosts
 
 | Host | Entry | Build and run |
@@ -1112,6 +1229,7 @@ lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--
 ```
 
 - `DECK` and `OUT` accept `-` for stdin / stdout. `OUT` defaults to `DECK` with `.html`.
+- A drawn `:page-image` is written relative to `OUT` (Link preview, above).
 - `--embed` inlines images (HTML output, above).
 - `--check` lints without writing output. `--strict` makes warnings fail.
 - Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
@@ -1151,7 +1269,11 @@ lispresen/
     layout.lisp          layout selection, type scale, fit solver
     lint.lisp            readability checks, contrast ratio
     theme.lisp           built-in themes, theme overrides
-    html.lisp            HTML escaping and emission, stylesheet
+    html.lisp            HTML escaping and emission, stylesheet, preview tags
+    png.lisp             CRC-32, Adler-32, deflate, the PNG file
+    truetype.lisp        glyph outlines and advances from a .ttf
+    raster.lisp          polygon filling, strokes, text, the SVG subset of a logo
+    page-image.lisp      the title slide drawn as the page image
     player.lisp          the player script as a string constant
     highlight.lisp       tokenizer for Lisp / Scheme / Clojure code
     morph.lisp           the token pairing of a :morph slide's code
@@ -1165,6 +1287,8 @@ lispresen/
   examples/
     intro.lisp           a talk introducing lispresen
     intro.html           its golden output, rendered with --embed
+    intro.png            its golden page image
+    fonts/               the page image's fonts: BIZ UDPGothic subsets, OFL.txt
     pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
     logo.svg             its title slide's logo
     fib.lisp             the code file one of its slides shows lines of
@@ -1189,8 +1313,9 @@ before committing a change under `lispresen/`.
   WASM, the WASM component and a native executable (skipped when the jar carries no
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
-  `examples/`, so its files resolve), and requires each output to equal
-  `examples/intro.html` byte for byte. The golden deck is a talk introducing lispresen
+  `examples/`, so its files resolve; each leg in its own copy of it, where the page image
+  is written), and requires each output to equal `examples/intro.html` and each page image
+  `examples/intro.png` byte for byte. The golden deck is a talk introducing lispresen
   that shows each feature twice under one title, as the deck code on one slide (kicker
   `書き方`) and as the result on the next (`表示例`); a player feature gets its
   instructions (`使い方`) and a slide to try it on (`試す`). It has runnable Lisp, Scheme
@@ -1198,7 +1323,8 @@ before committing a change under `lispresen/`.
   `&rest` template and a template the samples of deck code go through, a lead above a row
   of a code column and a list column, console transcripts, dark code panels
   (`:code :dark`), section kickers (replaced on the paired slides, dropped on one), a
-  named agenda, a title slide with an embedded SVG logo and a QR code, a statement, a
+  named agenda, a title slide with an embedded SVG logo and a QR code (drawn as the page
+  image too, with the description and page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
   numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
@@ -1208,14 +1334,17 @@ before committing a change under `lispresen/`.
   `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
   by line), so the highlighter, the emitted player, template expansion, diagram drawing,
   callout placement and the binary read, UTF-8 decoding and base64 are in the
-  comparison.
+  comparison, and in the page image the TrueType reader, the rasterizer, the logo's SVG
+  (a rounded rectangle, quadratic paths and round-capped strokes) and the PNG encoder.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   the QR encoder against the standard's examples and its version boundaries, the title
-  slide's logo and QR code,
+  slide's logo and QR code, the preview tags (none without the options, every one with
+  them, an image lispresen does not draw), URL resolution and the preview diagnostics
+  (a font that cannot be read or is not TrueType, a missing glyph, a logo left out),
   numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
   with dotted pairs and a list that looks like a template use, the callout sides on a flow
@@ -1226,7 +1355,8 @@ before committing a change under `lispresen/`.
   order of a slide's page advances (items, code lines, a bubble after what it wraps) and
   a highlight string across a line end, the morph pairing (a moved form, a string
   token split at a line end inside `:steps` lines) and its diagnostics, the callout and
-  `:steps` diagnostics, the kicker diagnostics, base64 padding, the
+  `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
+  check values, deflate and a whole PNG against what zlib reads, the
   embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics). The golden deck covers
   emission, so HTML is not asserted piecewise.

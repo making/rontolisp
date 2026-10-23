@@ -722,7 +722,9 @@ corner the fit solver chose."
    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">~%")
   (write-string "<title>" out)
   (write-escaped (or (deck-title deck) "lispresen") out)
-  (format out "</title>~%<style>~%")
+  (format out "</title>~%")
+  (write-preview-meta deck out)
+  (format out "<style>~%")
   (write-stylesheet deck theme out)
   (format out "</style>~%</head>~%<body>~%<div id=\"stage\">~%")
   (format out "<div id=\"deck\" style=\"width:~dpx;height:~dpx\">~%"
@@ -739,6 +741,32 @@ corner the fit solver chose."
           *player-script* (if (deck-runnable-p deck) *runner-script* "")
           (if (some #'slide-callouts (deck-slides deck)) *say-script* "")
           *start-script*))
+
+(defun write-meta (attribute name content out)
+  (write-string "<meta" out)
+  (write-attribute attribute name out)
+  (write-attribute "content" content out)
+  (format out ">~%"))
+
+(defun write-preview-meta (deck out)
+  "The page's description and, with a :page-url, the Open Graph and Twitter Card tags a
+link preview is built from; nothing for a deck that sets neither."
+  (let ((description (deck-description deck))
+        (url (deck-page-url deck))
+        (image (deck-page-image deck)))
+    (when description (write-meta "name" "description" description out))
+    (when url
+      (write-meta "property" "og:type" "website" out)
+      (write-meta "property" "og:url" url out)
+      (write-meta "property" "og:title" (or (deck-title deck) "lispresen") out)
+      (when description (write-meta "property" "og:description" description out))
+      (when image
+        (write-meta "property" "og:image" (resolve-url url image) out)
+        (when (drawn-page-image-p deck)
+          (write-meta "property" "og:image:width" (princ-to-string *page-image-width*) out)
+          (write-meta "property" "og:image:height" (princ-to-string *page-image-height*)
+                      out)))
+      (write-meta "name" "twitter:card" (if image "summary_large_image" "summary") out))))
 
 (defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
 

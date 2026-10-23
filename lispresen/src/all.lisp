@@ -23,6 +23,10 @@
 #+rontolisp (load "highlight.lisp")
 #+rontolisp (load "morph.lisp")
 #+rontolisp (load "html.lisp")
+#+rontolisp (load "png.lisp")
+#+rontolisp (load "truetype.lisp")
+#+rontolisp (load "raster.lisp")
+#+rontolisp (load "page-image.lisp")
 #+rontolisp (load "lispresen.lisp")
 
 ;;; One compilation unit, so a call to a function defined in a later file is not
@@ -32,6 +36,7 @@
   (dolist (name
            '("package" "reader" "budoux-ja" "phrase" "metrics" "template"
              "model" "embed" "qr" "diagram" "layout" "lint" "theme" "player"
-             "highlight" "morph" "html" "lispresen"))
+             "highlight" "morph" "html" "png" "truetype" "raster"
+             "page-image" "lispresen"))
     (load
      (merge-pathnames (concatenate 'string name ".lisp") *load-truename*))))

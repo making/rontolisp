@@ -21,6 +21,8 @@
 (defparameter *table-floor* 40)
 
 (defparameter *canvas-height* 1080)
+(defparameter *page-image-width* 1200 "The page image (page-image.lisp), the canvas at 5/8.")
+(defparameter *page-image-height* 675)
 (defparameter *margin-x* 112)
 (defparameter *margin-top* 80)
 (defparameter *margin-bottom* 72)
@@ -699,9 +701,10 @@ columns' minimum widths when nothing fits."
                        (body-lh *meta-size*))))
          0)))
 
-(defun title-rects (deck slide s)
-  "The rectangles the title slide's logo, title and lines under it take at statement size
-S, set as the centered column sets them. The logo counts as the full width, its own
+(defun title-rows (deck slide s)
+  "The rows of the title slide at statement size S, top to bottom, as the centered column
+sets them: (KIND TOP HEIGHT WIDTH RUN START END), KIND :logo, :title or :meta, a line
+being characters START below END of RUN. The logo counts as the full width, its own
 being unknown, and each title line as wide as the widest, which text-wrap: balance may
 even the others up to."
   (let* ((width (content-width deck))
@@ -713,34 +716,43 @@ even the others up to."
                   (milli-px->px
                    (run-span-width run a (or b (length (run-text run))) s))))
          (rows nil))
-    ;; Rows as (WIDTH HEIGHT), nil for a gap, top to bottom.
+    ;; Rows as (KIND HEIGHT WIDTH RUN START END), a gap of no kind, bottom to top.
     (when (deck-logo deck)
-      (push (list width *logo-height*) rows)
-      (push (list 0 *title-block-gap*) rows))
-    (dolist (a starts)
-      (declare (ignorable a))
-      (push (list widest (statement-lh s)) rows))
+      (push (list :logo *logo-height* width) rows)
+      (push (list nil *title-block-gap*) rows))
+    (loop for (a b) on starts
+          do (push (list :title (statement-lh s) widest run a
+                         (or b (length (run-text run))))
+                   rows))
     (when (slide-meta slide)
-      (push (list 0 *title-block-gap*) rows)
+      (push (list nil *title-block-gap*) rows)
       (loop for (nil mrun) in (slide-meta slide)
             do
               (let ((mstarts (wrap-run mrun *meta-size* width)))
                 (loop for (a b) on mstarts
                       do
-                        (push (list (milli-px->px
-                                     (run-span-width mrun a
-                                      (or b (length (run-text mrun)))
-                                      *meta-size*)) (body-lh *meta-size*))
-                              rows)))))
+                        (let ((end (or b (length (run-text mrun)))))
+                          (push (list :meta (body-lh *meta-size*)
+                                      (milli-px->px
+                                       (run-span-width mrun a end *meta-size*))
+                                      mrun a end)
+                                rows))))))
     (setf rows (nreverse rows))
-    (let* ((cx (+ *margin-x* (floor width 2)))
-           (y
-            (+ *margin-top*
-             (floor (- (safe-height) (reduce #'+ (mapcar #'second rows))) 2))))
-      (loop for (w h) in rows
-            when (> w 0)
-            collect (list (- cx (ceiling w 2)) y (+ cx (ceiling w 2)) (+ y h))
-            do (incf y h)))))
+    (let ((y
+           (+ *margin-top*
+              (floor (- (safe-height) (reduce #'+ (mapcar #'second rows))) 2))))
+      (loop for row in rows
+            when (first row)
+            collect (list* (first row) y (cdr row))
+            do (incf y (second row))))))
+
+(defun title-rects (deck slide s)
+  "The rectangles the title slide's logo, title and lines under it take at statement size
+S (TITLE-ROWS)."
+  (let ((cx (+ *margin-x* (floor (content-width deck) 2))))
+    (loop for (nil y h w) in (title-rows deck slide s)
+          when (> w 0)
+          collect (list (- cx (ceiling w 2)) y (+ cx (ceiling w 2)) (+ y h)))))
 
 (defun qr-lh () (ceiling (* *qr-caption-size* 14) 10))
 

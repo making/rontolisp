@@ -37,7 +37,7 @@ https://making.github.io/rontolisp/lispresen/intro.html with every push that cha
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :description :page-url :page-image :page-image-font)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck; `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
 | `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
@@ -230,8 +230,8 @@ lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
 `.html`. Code files are read into the HTML. Images are referenced by their path, relative to the deck; `--embed` puts them in
 the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
-alone is the whole deck. A WASM build reads code files and images only from a directory
-`wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
+alone is the whole deck, the page image (Link preview, below) aside. A WASM build reads and writes files
+only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
 
@@ -291,6 +291,42 @@ and Run says so.
 
 `--runtime none` (or `:runtime :none`) renders the code as static text.
 
+## Link preview
+
+A deck published on the web can say what a link preview shows when its URL is shared:
+
+```lisp
+(deck :title "lispresen: S式で書くプレゼンテーション"
+      :description "S式で書いたデッキから、文字の大きさと配置を決めた HTML を一つ作るプレゼンテーションツール"
+      :page-url "https://making.github.io/rontolisp/lispresen/intro.html"
+      :page-image "intro.png"
+      :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf"))
+```
+
+`:description` is the page's description. `:page-url`, the absolute URL the HTML is
+published at, adds the Open Graph and Twitter Card tags: `og:url`, the title, the
+description and, with `:page-image`, the image as a large card. `:page-url` is where this
+file is; `:url` is where the title slide's QR code sends the audience, often elsewhere. A
+deck that sets none of them gets no tags.
+
+lispresen draws a `:page-image` given as a path relative to the page: the title slide as a
+1200 x 675 PNG, written at that path beside the HTML (with `-o -`, relative to the working
+directory), with the logo (an SVG of simple shapes), the title broken where the slide
+breaks it, the lines under it, the QR code and the theme's colors. Its text is set in the
+TrueType fonts (`.ttf`, glyf outlines; not CFF `.otf`) `:page-image-font` names, relative
+to the deck: one file, or a regular and a bold one for the title. An absolute URL is named
+as given and nothing is drawn. The browser editor draws no image.
+
+`examples/fonts` holds BIZ UDPGothic (SIL Open Font License 1.1, `examples/fonts/OFL.txt`)
+cut down to ASCII and the characters of the intro deck's title. A character the font lacks
+is drawn as a box and reported; to cut a font for another title:
+
+```bash
+pyftsubset BIZUDPGothic-Bold.ttf --unicodes=U+20-7E --text="式で書くプレゼンテーション" \
+  --no-hinting --layout-features= --drop-tables+=DSIG,meta,vhea,vmtx,gasp \
+  --output-file=fonts/BIZUDPGothic-Bold.ttf
+```
+
 ## Layout
 
 Slides are laid out on a fixed 1920 x 1080 canvas (1440 x 1080 for 4:3) that the page
@@ -305,8 +341,8 @@ never breaks inside (`2026-10-22`, `1,000`).
 ## Development
 
 ```bash
-lispresen/check.sh            # every backend against the golden deck, then the unit tests
-lispresen/check.sh --update   # regenerate examples/intro.html first
+lispresen/check.sh            # every backend against the golden deck and image, then the unit tests
+lispresen/check.sh --update   # regenerate examples/intro.html and intro.png first
 ```
 
 `web/` is a browser editor: `web/build.sh` compiles lispresen to a WebAssembly reactor,

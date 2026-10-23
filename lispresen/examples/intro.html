@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>lispresen: S式で書くプレゼンテーション</title>
+<meta name="description" content="S式で書いたデッキから、文字の大きさと配置を決めた HTML を一つ作るプレゼンテーションツール">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://making.github.io/rontolisp/lispresen/intro.html">
+<meta property="og:title" content="lispresen: S式で書くプレゼンテーション">
+<meta property="og:description" content="S式で書いたデッキから、文字の大きさと配置を決めた HTML を一つ作るプレゼンテーションツール">
+<meta property="og:image" content="https://making.github.io/rontolisp/lispresen/intro.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="675">
+<meta name="twitter:card" content="summary_large_image">
 <style>
 :root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--accent:#0b5cad;--code-bg:#22272e;--code-fg:#e6e8eb;--code-muted:#9aa3ad;--head-bg:#e3ebf6;--rule:#d0d7de;--mark:#fff0a0;--hl-str:#96d0ff;--hl-kw:#6cb6ff;--hl-def:#f47067;--hl-const:#dcbdfb;}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -850,12 +859,12 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">63</div>
 </section>
-<section class="slide layout-standard" id="s64" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s64" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">描画は<wbr>文字列から<wbr>文字列への<wbr>関数</h1>
 <div class="body" style="top:232px;height:776px">
-<pre class="code" data-lang="lisp"><code>(lispresen:render source &amp;key theme runtime read-file embed)
-<span class="hl-c">;; =&gt; (values html diagnostics)</span></code></pre>
+<pre class="code" data-lang="lisp"><code>(lispresen:render source &amp;key theme runtime read-file embed page-image)
+<span class="hl-c">;; =&gt; (values html diagnostics image)</span></code></pre>
 <ul><li>入出力を<wbr>しないので、<wbr>CLI からも<wbr>ブラウザからも<wbr>呼べる</li><li>整数だけで<wbr>計算するので、<wbr>どこでも<wbr>同じ<wbr>バイト列に<wbr>なる</li></ul>
 </div>
 <div class="page">64</div>
@@ -879,6 +888,27 @@ html:not(.js) #fs{display:none}
 <div class="page">66</div>
 </section>
 <section class="slide layout-standard" id="s67" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">書き方</p>
+<h1 class="title">リンクの<wbr>プレビュー</h1>
+<div class="body" style="top:232px;height:776px">
+<pre class="code" data-lang="lisp"><code>(deck <span class="hl-k">:title</span> <span class="hl-s">&quot;lispresen&quot;</span>
+      <span class="hl-k">:description</span> <span class="hl-s">&quot;S式で書くプレゼンテーション&quot;</span>
+      <span class="hl-k">:page-url</span> <span class="hl-s">&quot;https://example.com/talk.html&quot;</span>
+      <span class="hl-k">:page-image</span> <span class="hl-s">&quot;talk.png&quot;</span>
+      <span class="hl-k">:page-image-font</span> (<span class="hl-s">&quot;r.ttf&quot;</span> <span class="hl-s">&quot;b.ttf&quot;</span>))</code></pre>
+<ul><li><code>head</code> に <code>og:title</code> や <code>og:image</code> の <code>meta</code> タグを<wbr>書く</li><li>表紙を 1200&nbsp;x 675&nbsp;の PNG に<wbr>描き、<wbr>HTML の<wbr>隣に<wbr>書く</li><li>画像の<wbr>文字は TrueType フォントで<wbr>描く</li></ul>
+</div>
+<div class="page">67</div>
+</section>
+<section class="slide layout-standard" id="s68" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">試す</p>
+<h1 class="title">リンクの<wbr>プレビュー</h1>
+<div class="body" style="top:232px;height:776px">
+<ol><li>この<wbr>デッキの URL を SNS の<wbr>投稿欄に<wbr>貼る</li><li>プレビューに<wbr>表紙の<wbr>画像と<wbr>題、<wbr>説明が<wbr>出る</li><li><a href="https://making.github.io/rontolisp/lispresen/intro.png"><code>intro.png</code></a> を<wbr>開くと、<wbr>描いた<wbr>画像<wbr>その<wbr>ものを<wbr>見られる</li></ol>
+</div>
+<div class="page">68</div>
+</section>
+<section class="slide layout-standard" id="s69" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">始め方</h1>
 <div class="body" style="top:232px;height:776px">
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> ./mvnw package
@@ -887,11 +917,11 @@ html:not(.js) #fs{display:none}
 <span class="hl-k">$</span> open talk.html</code></pre>
 <p>見本は<wbr>この<wbr>デッキ、<wbr><code>lispresen/examples/intro.lisp</code>。</p>
 </div>
-<div class="page">67</div>
+<div class="page">69</div>
 </section>
-<section class="slide layout-statement closing" id="s68" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement closing" id="s70" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">スライドも、<wbr>コードと<wbr>同じように<wbr>書いて、<wbr>レビューして、<wbr>動かす。</p></div>
-<div class="page">68</div>
+<div class="page">70</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>

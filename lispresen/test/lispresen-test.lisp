@@ -26,6 +26,15 @@
 
 (defun contains (html part) (and (search part html) t))
 
+(defparameter *font*
+  ;; check.sh runs the tests from this directory.
+  (with-open-file (s "../examples/fonts/BIZUDPGothic-Regular.ttf"
+                     :element-type '(unsigned-byte 8))
+    (let ((v (make-array (file-length s) :element-type '(unsigned-byte 8))))
+      (read-sequence v s)
+      v))
+  "The example deck's TrueType font, a subset.")
+
 (deftest phrase-boundaries
   (testing "phrases match BudouX's own parser"
     (ok
@@ -436,13 +445,76 @@ q\")))")))
      (equal (mapcar (lambda (n)
                       (lispresen::qr-version (make-list n :initial-element 97)))
                     '(14 15 122 123 213 214)) '(1 2 7 8 10 nil))))
-  (testing "the title slide shows the logo and the URL's QR code; their diagnostics"
+  (testing "the title slide shows the logo and the URL's QR code; the page's preview; their
+diagnostics"
     (let ((html
            (lispresen:render
             "(deck :title \"t\" :logo (image \"l.png\" :alt \"l\") :url \"https://e.x/\")")))
       (ok (contains html "<img class=\"logo\" src=\"l.png\" alt=\"l\">"))
       (ok (contains html "<svg class=\"qr-code\" viewBox=\"0 0 29 29\""))
-      (ok (contains html "<a href=\"https://e.x/\">https://e.x/</a>")))
+      (ok (contains html "<a href=\"https://e.x/\">https://e.x/</a>"))
+      ;; No preview options, no tags: the head is as before.
+      (ok (contains html "</title>
+<style>")))
+    (ok (contains (lispresen:render "(deck :title \"t&\" :description \"d\"
+  :page-url \"https://e.x/a/t.html\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
+                  "<title>t&amp;</title>
+<meta name=\"description\" content=\"d\">
+<meta property=\"og:type\" content=\"website\">
+<meta property=\"og:url\" content=\"https://e.x/a/t.html\">
+<meta property=\"og:title\" content=\"t&amp;\">
+<meta property=\"og:description\" content=\"d\">
+<meta property=\"og:image\" content=\"https://e.x/a/t.png\">
+<meta property=\"og:image:width\" content=\"1200\">
+<meta property=\"og:image:height\" content=\"675\">
+<meta name=\"twitter:card\" content=\"summary_large_image\">
+<style>"))
+    ;; An image lispresen does not draw has no size; no image, the small card.
+    (ok (contains (lispresen:render "(deck :page-url \"https://e.x\" :page-image \"/i.png\")")
+                  "<title>lispresen</title>
+<meta property=\"og:type\" content=\"website\">
+<meta property=\"og:url\" content=\"https://e.x\">
+<meta property=\"og:title\" content=\"lispresen\">
+<meta property=\"og:image\" content=\"https://e.x/i.png\">
+<meta name=\"twitter:card\" content=\"summary_large_image\">
+<style>"))
+    (ok (contains (lispresen:render "(deck :page-url \"https://e.x/\")")
+                  "<meta name=\"twitter:card\" content=\"summary\">"))
+    (ok (equal (mapcar (lambda (r) (lispresen::resolve-url "https://e.x/a/t.html?q=/b#f" r))
+                       '("i.png" "/i.png" "https://c.x/i.png"))
+               '("https://e.x/a/i.png" "https://e.x/i.png" "https://c.x/i.png")))
+    (ok
+     (equal (render-diagnostics
+             "(deck :page-url \"e.x/t.html\" :page-image \"t.png\" :page-image-font 1)")
+            '((:error 1 ":page-url must be an absolute http or https URL")
+              (:error 1 ":page-image-font of deck must be a font file or (regular bold)")
+              (:warning 1 ":page-image is the preview of the :page-url, which this deck lacks"))))
+    (ok
+     (equal (render-diagnostics "(deck :page-url \"https://e.x/\" :page-image \"t.jpg\")")
+            '((:error 1 ":page-image is drawn as a PNG; name it .png")
+              (:warning 1 ":page-image draws the title slide, which needs a :title")
+              (:error 1 ":page-image is drawn in the :page-image-font, which this deck lacks"))))
+    (flet ((drawn (deck)
+             (multiple-value-bind (html diagnostics image)
+                 (lispresen:render deck :page-image t
+                                        :read-file
+                                        (lambda (path)
+                                          (cond ((string= path "f.ttf") *font*)
+                                                ((string= path "h.ttf") (vector 0 1 0 0))
+                                                ((string= path "l.svg")
+                                                 (map 'vector #'char-code
+                                                      "<svg viewBox=\"0 0 1 1\"><rect transform=\"x\"/></svg>")))))
+               (declare (ignore html))
+               (list (first image) (mapcar #'lispresen::diagnostic-message diagnostics)))))
+      (ok (equal (drawn "(deck :title \"t漢\" :logo (image \"l.svg\" :alt \"l\")
+  :page-url \"https://e.x/\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
+                 '("t.png"
+                   ("the page image leaves out logo l.svg: it uses the attribute transform"
+                    "font f.ttf has no glyph for 漢; the page image shows a box"))))
+      (ok (equal (drawn "(deck :title \"t\" :page-url \"https://e.x/\" :page-image \"t.png\"
+  :page-image-font (\"g.ttf\" \"h.ttf\"))")
+                 '(nil ("cannot read font g.ttf"
+                        "font h.ttf is not a TrueType font with glyf outlines")))))
     (ok
      (equal (render-diagnostics
              (format nil "(deck :title \"t\" :url \"~a\")"
@@ -459,6 +531,22 @@ q\")))")))
      (equal (mapcar (lambda (s) (lispresen::base64 (map 'vector #'char-code s)))
                     '("" "f" "fo" "foo" "foob"))
             '("" "Zg==" "Zm8=" "Zm9v" "Zm9vYg=="))))
+  (testing "the PNG writer: the CRC-32 and Adler-32 check values, deflate and a PNG as zlib
+and libpng read them"
+    ;; Compared as lists: the writer's vectors have fill pointers.
+    (flet ((octets (s) (map 'vector #'char-code s))
+           (bytes (v) (coerce v 'list)))
+      (ok (= (lispresen::crc32 (octets "123456789")) #xCBF43926))
+      (ok (= (lispresen::adler32 (octets "Wikipedia")) #x11E60398))
+      ;; A run (distance 1) and a repeat of the row before (distance 3).
+      (ok (equal (bytes (lispresen::deflate (octets "abcabcaaaaaaaaaaaz") 3))
+                 '(120 1 75 76 74 6 33 4 168 2 0 65 79 6 242)))
+      (ok (equal (bytes (lispresen::deflate (octets ""))) '(120 1 3 0 0 0 0 1)))
+      (ok (equal (bytes (lispresen::png-octets 2 2 #(#xFFFFFF #x0B5CAD) #(0 1 1 0)))
+                  '(137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 0 2 0 0 0 2 8 3 0 0
+                    0 69 104 253 22 0 0 0 6 80 76 84 69 255 255 255 11 92 173 231 254 241
+                    146 0 0 0 14 73 68 65 84 120 1 99 96 96 100 96 100 0 0 0 12 0 3 107
+                    249 235 188 0 0 0 0 73 69 78 68 174 66 96 130)))))
   (testing "local images become data: URIs typed by extension, in columns too"
     (multiple-value-bind (html diagnostics) (lispresen:render "(slide :title \"a\" (image \"a.bmp\" :alt \"x\"))
 (slide :title \"b\" (image \"b.png\" :alt \"x\"))

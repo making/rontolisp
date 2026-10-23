@@ -10,6 +10,10 @@
       :date "2026-10-23"
       :logo (image "logo.svg" :alt "rontolisp")
       :url "https://github.com/making/rontolisp/tree/develop/lispresen"
+      :description "S式で書いたデッキから、文字の大きさと配置を決めた HTML を一つ作るプレゼンテーションツール"
+      :page-url "https://making.github.io/rontolisp/lispresen/intro.html"
+      :page-image "intro.png"
+      :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf")
       :theme (theme :base :light :code :dark)
       :aspect :16x9
       :runtime :hosted
@@ -490,8 +494,8 @@
 
 (slide :title "描画は文字列から文字列への関数"
   (sexp "
-    (lispresen:render source &key theme runtime read-file embed)
-    ;; => (values html diagnostics)")
+    (lispresen:render source &key theme runtime read-file embed page-image)
+    ;; => (values html diagnostics image)")
   (ul "入出力をしないので、CLI からもブラウザからも呼べる"
       "整数だけで計算するので、どこでも同じバイト列になる"))
 
@@ -514,6 +518,26 @@
       (li (tt "--embed") " で画像を埋め込み、ファイル一つで完結させる")
       (li (tt "--theme") " でデッキのテーマを差し替える")
       (li "終了コードは 0 が成功、1 がエラー、2 が使い方の誤り")))
+
+;; The preview image is an output of the same run, so the try slide links to the
+;; published one instead of embedding it.
+(slide :title "リンクのプレビュー" :kicker "書き方"
+  (sexp "
+    (deck :title \"lispresen\"
+          :description \"S式で書くプレゼンテーション\"
+          :page-url \"https://example.com/talk.html\"
+          :page-image \"talk.png\"
+          :page-image-font (\"r.ttf\" \"b.ttf\"))")
+  (ul (li (tt "head") " に " (tt "og:title") " や " (tt "og:image") " の "
+          (tt "meta") " タグを書く")
+      (li "表紙を 1200 x 675 の PNG に描き、HTML の隣に書く")
+      (li "画像の文字は TrueType フォントで描く")))
+
+(slide :title "リンクのプレビュー" :kicker "試す"
+  (ol (li "このデッキの URL を SNS の投稿欄に貼る")
+      (li "プレビューに表紙の画像と題、説明が出る")
+      (li (link "https://making.github.io/rontolisp/lispresen/intro.png" (tt "intro.png"))
+          " を開くと、描いた画像そのものを見られる")))
 
 ;; :kicker nil drops the section title the deck puts above this slide's title.
 (slide :title "始め方" :kicker nil
