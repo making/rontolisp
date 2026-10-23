@@ -42,6 +42,9 @@ class SkillGenTest {
 
 	private static final Path EXAMPLES = Path.of("..", "examples");
 
+	/** A hand-written skill published beside the generated one. */
+	private static final Path LISPRESEN_SKILL = Path.of("..", "lispresen", "skills", "lispresen");
+
 	private static SkillGen generator() {
 		return new SkillGen(DOC, out, "en", "1.2.3", "cafe123", "https://example.test/rontolisp", EXAMPLES,
 				"https://repo.test/blob/develop");
@@ -50,7 +53,7 @@ class SkillGenTest {
 	@BeforeAll
 	static void generate() throws IOException {
 		assumeTrue(Files.isDirectory(DOC), "run from the docs-tool module, next to doc/");
-		generator().generate();
+		generator().plugin(LISPRESEN_SKILL, "4.5.6").generate();
 		skillDir = out.resolve(SkillGen.SKILL_NAME);
 		skill = Files.readString(skillDir.resolve("SKILL.md"), StandardCharsets.UTF_8);
 	}
@@ -210,6 +213,25 @@ class SkillGenTest {
 				assertThat((String) plugin.get("description")).isNotBlank();
 			}
 		}
+		// A --plugin skill directory goes in whole, as it is.
+		try (ZipFile zip = new ZipFile(out.resolve("lispresen-plugin.zip").toFile());
+				Stream<Path> files = Files.walk(LISPRESEN_SKILL)) {
+			List<Path> sources = files.filter(Files::isRegularFile).toList();
+			assertThat(sources).hasSizeGreaterThan(1);
+			for (Path file : sources) {
+				String entry = "skills/lispresen/" + LISPRESEN_SKILL.relativize(file).toString().replace('\\', '/');
+				try (InputStream in = zip.getInputStream(zip.getEntry(entry))) {
+					assertThat(in.readAllBytes()).as(entry).isEqualTo(Files.readAllBytes(file));
+				}
+			}
+			assertThat(zip.size()).isEqualTo(sources.size() + 1);
+			try (InputStream in = zip.getInputStream(zip.getEntry(".claude-plugin/plugin.json"))) {
+				Map<String, Object> plugin = new org.yaml.snakeyaml.Yaml().load(in);
+				assertThat(plugin).containsEntry("name", "lispresen")
+					.containsEntry("version", "4.5.6")
+					.containsEntry("homepage", "https://repo.test/blob/develop/lispresen/skills/lispresen");
+			}
+		}
 	}
 
 	@Test
@@ -219,16 +241,19 @@ class SkillGenTest {
 		Map<String, Object> marketplace = new org.yaml.snakeyaml.Yaml().load(json);
 		assertThat(marketplace).containsEntry("name", SkillGen.SKILL_NAME);
 		List<Map<String, Object>> plugins = (List<Map<String, Object>>) marketplace.get("plugins");
-		assertThat(plugins).hasSize(1);
-		Map<String, Object> entry = plugins.get(0);
-		assertThat(entry).containsEntry("name", SkillGen.SKILL_NAME).containsEntry("version", "1.2.3");
+		assertThat(plugins).extracting(entry -> entry.get("name"), entry -> entry.get("version"))
+			.containsExactly(org.assertj.core.groups.Tuple.tuple(SkillGen.SKILL_NAME, "1.2.3"),
+					org.assertj.core.groups.Tuple.tuple("lispresen", "4.5.6"));
 		// Claude Code downloads nothing but this file when the marketplace is added
 		// by URL, so a relative source would have no checkout to resolve against.
-		Object source = entry.get("source");
-		assertThat(source).isInstanceOf(Map.class);
-		Map<String, Object> archive = (Map<String, Object>) source;
-		assertThat(archive).containsEntry("source", "archive");
-		assertThat((String) archive.get("url")).endsWith("/skill/" + SkillGen.PLUGIN_ZIP);
+		for (Map<String, Object> entry : plugins) {
+			assertThat(entry.get("source")).isInstanceOf(Map.class);
+			Map<String, Object> archive = (Map<String, Object>) entry.get("source");
+			assertThat(archive).containsEntry("source", "archive")
+				.containsEntry("url", "https://example.test/rontolisp/skill/" + entry.get("name") + "-plugin.zip");
+			assertThat(out.resolve(entry.get("name") + "-plugin.zip")).exists();
+			assertThat((String) entry.get("description")).isNotBlank().endsWith(".");
+		}
 	}
 
 	@Test
@@ -244,6 +269,8 @@ class SkillGenTest {
 				body
 				""");
 		assertThat(summary).isEqualTo("First sentence about it.");
+		assertThat(SkillGen.frontmatterDescription("---\nname: x\ndescription: Make (a ...) b. Then c.\n---\n"))
+			.isEqualTo("Make (a ...) b.");
 	}
 
 	@Test
