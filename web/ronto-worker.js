@@ -10,8 +10,11 @@
  *   buffer. Blocking a worker is fine; blocking the main thread is not.
  *
  * SharedArrayBuffer needs cross-origin isolation (COOP/COEP); when it is unavailable
- * the Java side falls back to a synchronous XHR per request (no overlap).
+ * the Java side falls back to a synchronous XHR per request (no overlap). The async
+ * path is opt-in: rontoFetchBroker declares that the main thread answers "ronto-fetch"
+ * (playground.html's brokerFetch). Without it, a request would wait forever.
  */
+self.rontoFetchBroker = true;
 importScripts("rontoplayground.js");
 
 const config = new GraalVM.Config();

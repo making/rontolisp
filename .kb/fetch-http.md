@@ -453,6 +453,17 @@ threads (verified against GraalVM 25), so blocking-in-JS is the only way to awai
 `web/coi-serviceworker.min.js` (MIT, vendored). Without isolation -- or on the main thread -- `start`
 returns `"sync"` and the substitution falls back to the synchronous XHR (settled future, no overlap).
 
+**The async path is opt-in: the worker's host sets `self.rontoFetchBroker = true`** (`ronto-worker.js`,
+lispresen's runner), declaring that its main thread answers `{type:"ronto-fetch"}`; without it `start`
+returns `"sync"`. Isolation alone is not consent: the playground registers the service worker at scope
+`/rontolisp/`, so once a browser has opened the playground, every page under it -- the docs and the
+decks -- is isolated. Measured 2026-10-23 (Chrome, Pages): a deck whose runner had no broker posted
+`ronto-fetch`, blocked in `Atomics.wait`, hit its 10 s timeout, and its message handler took the
+request for a result. The docs' Run cells (`doc/assets/docs.js`) run the runtime on the main thread
+and always take the XHR path. A host that sets the flag carries its own copy of the broker
+(`brokerFetch` in `playground.html`, `broker` in `lispresen/src/player.lisp`): a rendered deck is one
+self-contained file, so it cannot load the playground's.
+
 Fetch tests: the cross-backend corpus above; interpreter/JVM use a local `HttpServer` (awaited-twice,
 two-in-flight out-of-order cases); Preview-1 await passthrough in `WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`;
 deterministic component error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`)

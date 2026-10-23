@@ -89,7 +89,11 @@ until the response bytes land in the buffer. `SharedArrayBuffer` needs
 cross-origin isolation (COOP/COEP); GitHub Pages cannot send those headers, so
 `coi-serviceworker.min.js` (vendored, MIT) supplies them via a service worker
 (one automatic reload on first visit). Without isolation the playground falls
-back to a synchronous XHR per request — same behavior, no overlap.
+back to a synchronous XHR per request — same behavior, no overlap. The async
+path is opt-in: the worker sets `self.rontoFetchBroker = true` to declare that
+the page brokers `ronto-fetch` messages. Another page that runs the runtime in a
+worker without setting it gets the synchronous XHR, even when it is isolated
+(the service worker's scope covers every page under `/rontolisp/`).
 
 `compile-run.html` reuses the same `rontoplayground.js` runtime but adds the
 in-browser execution step:

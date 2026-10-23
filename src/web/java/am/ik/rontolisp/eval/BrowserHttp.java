@@ -13,15 +13,19 @@ import org.graalvm.webimage.api.JSString;
  * strategies are used:
  * <ul>
  * <li><strong>Async path</strong> ({@link #start} / {@link #awaitResponse}): when the
- * runtime is inside a Web Worker on a cross-origin-isolated page, {@code start} posts the
- * request (with a growable {@code SharedArrayBuffer}) to the main thread -- which runs
- * the real {@code fetch()} concurrently (see {@code brokerFetch} in
- * {@code playground.html} / {@code ronto-worker.js}) -- and returns a request id
- * immediately, so multiple requests overlap. {@code awaitResponse} then blocks the worker
- * with {@code Atomics.wait} until the response bytes land in the buffer.</li>
- * <li><strong>Sync fallback</strong> ({@link #request}): on the main thread or without
- * cross-origin isolation, a <strong>synchronous</strong> {@code XMLHttpRequest} at fetch
- * time (no overlap).</li>
+ * runtime is inside a Web Worker on a cross-origin-isolated page and the worker's host
+ * has declared a fetch broker ({@code self.rontoFetchBroker = true}), {@code start} posts
+ * the request (with a growable {@code SharedArrayBuffer}) to the main thread -- which
+ * runs the real {@code fetch()} concurrently (see {@code brokerFetch} in
+ * {@code playground.html} / {@code ronto-worker.js}, and lispresen's player) -- and
+ * returns a request id immediately, so multiple requests overlap. {@code awaitResponse}
+ * then blocks the worker with {@code Atomics.wait} until the response bytes land in the
+ * buffer. The declaration is required because nothing else answers the message: a host
+ * that runs the runtime in a worker without a broker would leave {@code awaitResponse}
+ * waiting forever.</li>
+ * <li><strong>Sync fallback</strong> ({@link #request}): on the main thread, without
+ * cross-origin isolation or without a declared broker, a <strong>synchronous</strong>
+ * {@code XMLHttpRequest} at fetch time (no overlap).</li>
  * </ul>
  * Either way the response is marshaled as a single string with three {@code U+0001}
  * -separated fields ({@code status}, raw response headers, body), or {@code "ERR"}
@@ -43,13 +47,15 @@ public final class BrowserHttp {
 	 * @param hasBody {@code "1"} for a text body, {@code "2"} for an octet body (one
 	 * character each below 256), {@code "0"} for none
 	 * @return the request id to pass to {@link #awaitResponse}, or {@code "sync"} when
-	 * the async path is unavailable (not in a worker, or no cross-origin isolation) and
-	 * the caller must fall back to {@link #request}
+	 * the async path is unavailable (not in a worker, no cross-origin isolation, or no
+	 * {@code rontoFetchBroker} declared by the worker's host) and the caller must fall
+	 * back to {@link #request}
 	 */
 	@JS(args = { "method", "url", "reqHeaders", "body", "hasBody" },
 			value = """
 					try {
-					  if (typeof importScripts !== 'function' || typeof SharedArrayBuffer !== 'function'
+					  if (typeof importScripts !== 'function' || globalThis.rontoFetchBroker !== true
+					      || typeof SharedArrayBuffer !== 'function'
 					      || typeof SharedArrayBuffer.prototype.grow !== 'function') {
 					    return 'sync';
 					  }

@@ -19,12 +19,14 @@ import org.graalvm.webimage.api.JSString;
  * <p>
  * Two paths preserve the future API:
  * <ul>
- * <li><strong>Async</strong> (worker + cross-origin isolation): {@code BrowserHttp.start}
+ * <li><strong>Async</strong> (worker + cross-origin isolation + a fetch broker the
+ * worker's host declares): {@code BrowserHttp.start}
  * hands the request to the main-thread fetch broker and returns immediately, so multiple
  * requests genuinely overlap; the returned future is a pending {@link BrowserFuture}
  * whose {@code join()} (reached from {@code rontolisp:await}) blocks the worker via
  * {@code Atomics.wait} until the response arrives and then completes the root.</li>
- * <li><strong>Sync fallback</strong> (main thread, or no cross-origin isolation):
+ * <li><strong>Sync fallback</strong> (main thread, no cross-origin isolation, or no
+ * declared broker):
  * {@code BrowserHttp.start} returns {@code "sync"} and the XHR is performed synchronously
  * at fetch time, yielding an already-settled future -- programs behave the same, requests
  * simply do not overlap.</li>
