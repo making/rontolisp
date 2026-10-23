@@ -1113,7 +1113,7 @@ lispresen/
   test/
     lispresen-test.lisp  rove: segmentation, metrics, solver, parser diagnostics
   examples/
-    intro.lisp           a deck presenting lispresen itself
+    intro.lisp           a talk introducing lispresen
     intro.html           its golden output, rendered with --embed
     pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
     logo.svg             its title slide's logo
@@ -1140,19 +1140,23 @@ before committing a change under `lispresen/`.
   precompiler for the platform), runs it on SBCL as well (skipped without `sbcl`),
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
   `examples/`, so its files resolve), and requires each output to equal
-  `examples/intro.html` byte for byte. The golden deck has runnable Lisp and Clojure
-  blocks, a columns slide built from a `&rest` template, a lead above a row of a code and
-  console column and a list column, dark code panels (`:code :dark`), section kickers, an
-  agenda, a title slide with an embedded SVG logo and a QR code, a
-  code morph, a
-  quote, an embedded PNG, a list revealed by steps, a flow, two cells drawings in columns
-  (one with dotted pairs), a bar chart with a source line under it, a progress bar, and
-  four callouts (an inline one, one naming a box of the flow and one a bar by `:at`, and
-  a step one named by `:at` in runnable code read from a file by `:lines`, which `:steps`
-  brings forward line by line), so the
-  highlighter, the emitted player, template expansion, diagram drawing, callout placement
-  and the binary
-  read, UTF-8 decoding and base64 are in the comparison.
+  `examples/intro.html` byte for byte. The golden deck is a talk introducing lispresen
+  that shows each feature twice, as the deck code on one slide and as the result on the
+  next. It has runnable Lisp, Scheme (`:fresh`, `:stdin`) and Clojure (`:timeout`)
+  blocks, a columns slide built from a `&rest` template and a template the samples of deck
+  code go through, a lead above a row of a code column and a list column, console
+  transcripts, dark code panels (`:code :dark`), section kickers (one replaced, one
+  dropped), a named agenda, a title slide with an embedded SVG logo and a QR code, a
+  statement, a code morph, a quote with a source, tables (a row header, `:align`, a
+  `:colspan` cell, numeric columns), every inline form, an embedded PNG, ordered and
+  unordered lists, one revealed by steps, a flow, two cells drawings in columns (one with
+  dotted pairs), a bar chart with a source line under it, a progress bar, `:layout` and
+  `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
+  line, a flow box, a cells atom and a bar; one on an image; and a step one named by
+  `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
+  by line), so the highlighter, the emitted player, template expansion, diagram drawing,
+  callout placement and the binary read, UTF-8 decoding and base64 are in the
+  comparison.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
