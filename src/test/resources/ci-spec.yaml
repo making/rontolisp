@@ -16239,10 +16239,21 @@ cases:
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))
       (print (equalp #(1) #(1 2)))
       (print (equalp #(1) "x"))
+      ;; fill-pointer vectors compare by their active elements, not capacity
+      (flet ((ci-fpv (n extra)
+               (let ((v (make-array 0 :adjustable t :fill-pointer 0)))
+                 (dotimes (i n) (vector-push-extend i v))
+                 (when extra (vector-push-extend 99 v) (vector-pop v))
+                 v)))
+        (print (list (equalp (ci-fpv 4 nil) (ci-fpv 4 t))
+                     (equalp (ci-fpv 5 nil) (ci-fpv 5 nil))
+                     (equalp (ci-fpv 5 nil) (ci-fpv 6 nil))
+                     (equalp (ci-fpv 3 nil) #(0 1 2)))))
     expected: |
       T
       NIL
       NIL
+      (T T NIL T)
   - name: streamp-standard-output-designator
     source: |
       (print (streamp t))
