@@ -2,8 +2,10 @@
 # Verifies lispresen: renders examples/intro.lisp with --embed (its image sits beside it)
 # on the interpreter, the JVM, WASM, the WASM component, a native executable and SBCL,
 # requires each output to equal examples/intro.html and the page image it draws to equal
-# examples/intro.png byte for byte and the deck to raise no diagnostic, then runs the unit
-# tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
+# examples/intro.png byte for byte and the deck to raise no diagnostic, --version to print
+# the pom.xml version and the commit checked out, and the starter deck `new` writes to be
+# the same on every leg but for its date and to render without a diagnostic under
+# --strict; then runs the unit tests on the interpreter. SBCL is the reference Common Lisp: lispresen is written
 # in portable Common Lisp, with rontolisp-only code behind #+rontolisp.
 #
 #   lispresen/check.sh            # verify
@@ -28,6 +30,12 @@ if [[ ${1:-} == --update ]]; then
   (cd "$here/examples" && java -jar "$jar" "$here/cli.lisp" -- - -o - --embed < "$deck" > "$golden")
 fi
 
+# What --version prints: the version from pom.xml and the commit read when lispresen was
+# built, here the one checked out.
+version=$(awk -F '[<>]' '/<version>/ { print $3; exit }' "$root/pom.xml")
+commit=$(git -C "$root" rev-parse HEAD 2> /dev/null | cut -c 1-7)
+expected_version="{\"version\": \"$version\", \"gitCommit\": \"${commit:-unknown}\"}"
+
 status=0
 check() {
   local name=$1
@@ -37,15 +45,40 @@ check() {
   local dir=$work/$name
   cp -R "$here/examples" "$dir"
   rm -f "$dir/intro.png"
-  if (cd "$dir" && "$@" - -o - --embed < "$deck") > "$work/$name.html" 2> "$work/$name.err" \
+  local failed= log=$work/$name.log
+  : > "$log"
+  if ! { (cd "$dir" && "$@" - -o - --embed < "$deck") > "$work/$name.html" 2> "$work/$name.err" \
       && [[ ! -s $work/$name.err ]] && cmp -s "$golden" "$work/$name.html" \
-      && cmp -s "$golden_png" "$dir/intro.png"; then
+      && cmp -s "$golden_png" "$dir/intro.png"; }; then
+    failed=1
+    { cat "$work/$name.err"
+      cmp "$golden" "$work/$name.html" || true
+      cmp "$golden_png" "$dir/intro.png" || true; } >> "$log"
+  fi
+  local printed
+  printed=$("$@" --version 2>&1) || true
+  if [[ $printed != "$expected_version" ]]; then
+    failed=1
+    echo "--version printed $printed, not $expected_version" >> "$log"
+  fi
+  # The starter deck, its date masked; the first leg's is the one the others must equal.
+  if (cd "$dir" && "$@" new starter.lisp && "$@" starter.lisp --check --strict) > "$work/$name.new.err" 2>&1 \
+      && [[ ! -s $work/$name.new.err ]]; then
+    sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}/YYYY-MM-DD/' "$dir/starter.lisp" > "$work/$name.starter.lisp"
+    [[ -f $work/starter.lisp ]] || cp "$work/$name.starter.lisp" "$work/starter.lisp"
+    if ! cmp -s "$work/starter.lisp" "$work/$name.starter.lisp"; then
+      failed=1
+      diff "$work/starter.lisp" "$work/$name.starter.lisp" >> "$log" || true
+    fi
+  else
+    failed=1
+    { echo "the starter deck:"; cat "$work/$name.new.err"; } >> "$log"
+  fi
+  if [[ -z $failed ]]; then
     echo "ok   $name"
   else
     echo "FAIL $name"
-    cat "$work/$name.err"
-    cmp "$golden" "$work/$name.html" || true
-    cmp "$golden_png" "$dir/intro.png" || true
+    cat "$log"
     status=1
   fi
 }

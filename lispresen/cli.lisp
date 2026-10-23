@@ -1,9 +1,11 @@
 ;;;; cli.lisp -- the lispresen command.
 ;;;;
 ;;;;   lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+;;;;   lispresen new FILE [--lang ja|en] [--force]
+;;;;   lispresen --version
 ;;;;
 ;;;; Reads DECK, writes its HTML and the page image a :page-image draws, prints
-;;;; diagnostics to standard error. Exit status: 0
+;;;; diagnostics to standard error; new writes a starter deck to FILE. Exit status: 0
 ;;;; success, 1 errors (or warnings under --strict), 2 usage. Runs unchanged on every
 ;;;; backend:
 ;;;;
@@ -17,18 +19,29 @@
 
 #-rontolisp (require :asdf)
 
+;;; build.lisp and starter.lisp are the CLI's alone; the browser editor leaves them out.
 #+rontolisp (load "src/all.lisp")
-#-rontolisp (load (merge-pathnames "src/all.lisp" *load-truename*))
+#+rontolisp (load "src/build.lisp")
+#+rontolisp (load "src/starter.lisp")
+#-rontolisp
+(dolist (name '("all" "build" "starter"))
+  (load (merge-pathnames (format nil "src/~a.lisp" name) *load-truename*)))
 
 (defparameter *usage*
   "usage: lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+       lispresen new FILE [--lang ja|en] [--force]
+       lispresen --version
   DECK and OUT may be - for standard input / output; OUT defaults to DECK with .html.
   --theme NAME  light, dark, high-contrast or midnight, overriding the deck's :theme
   --runtime R   where runnable code loads the runtime from, overriding the deck's
                 :runtime: a directory URL, hosted (the project site) or none (static code)
   --embed       inline images as data: URIs, so the HTML file stands alone
   --check       report diagnostics without writing HTML or the page image
-  --strict      fail on warnings too")
+  --strict      fail on warnings too
+  new FILE      write a starter deck to FILE (- for standard output), dated today (UTC)
+  --lang L      the starter deck's language: ja (the default) or en
+  --force       overwrite FILE when it exists
+  --version     print the version and the commit lispresen was built from")
 
 (defun usage-error (message)
   (format *error-output* "lispresen: ~a~%~a~%" message *usage*)
@@ -110,7 +123,55 @@ TARGET is standard output."
         (concatenate 'string (subseq target 0 (1+ slash)) path)
         path)))
 
+(defun today ()
+  "Today's date as YYYY-MM-DD, in UTC: no backend but SBCL knows the local time zone, and
+a starter deck is the same on every one."
+  (multiple-value-bind (second minute hour day month year)
+      (decode-universal-time (get-universal-time) 0)
+    (declare (ignore second minute hour))
+    (format nil "~4,'0d-~2,'0d-~2,'0d" year month day)))
+
+(defun fail (control &rest args)
+  (format *error-output* "lispresen: ~?~%" control args)
+  (finish-output *error-output*)
+  (uiop:quit 1))
+
+(defun new-deck (args)
+  "lispresen new: writes the starter deck to the file ARGS name, never over an existing
+one unless --force is given."
+  (let ((file nil) (language :ja) (force nil))
+    (loop while args
+          do
+            (let ((a (pop args)))
+              (cond ((string= a "--lang")
+                     (let ((lang (pop args)))
+                       (setf language
+                             (cond ((equal lang "ja") :ja)
+                                   ((equal lang "en") :en)
+                                   (t (usage-error "--lang needs ja or en"))))))
+                    ((string= a "--force") (setf force t))
+                    ((and (> (length a) 1) (char= (char a 0) #\-))
+                     (usage-error (format nil "unknown option ~a" a)))
+                    (file (usage-error "give one file"))
+                    (t (setf file a)))))
+    (unless file (usage-error "new needs a file"))
+    (let ((text (lispresen:starter-deck (today) language)))
+      (if (string= file "-")
+          (progn
+            (write-string text)
+            (finish-output))
+          (let ((s (handler-case (open file
+                                       :direction :output
+                                       :if-exists (if force :supersede nil)
+                                       :if-does-not-exist :create)
+                     (error () (fail "cannot write ~a" file)))))
+            (unless s (fail "~a exists; --force overwrites it" file))
+            (write-string text s)
+            (close s))))
+    (uiop:quit 0)))
+
 (defun main (args)
+  (when (equal (first args) "new") (new-deck (rest args)))
   (let ((deck nil)
         (out nil)
         (theme nil)
@@ -136,6 +197,9 @@ TARGET is standard output."
                     ((string= a "--strict") (setf strict t))
                     ((string= a "--help")
                      (write-line *usage*)
+                     (uiop:quit 0))
+                    ((or (string= a "--version") (string= a "-v"))
+                     (write-line (lispresen:version-line))
                      (uiop:quit 0))
                     ((and (> (length a) 1) (char= (char a 0) #\-))
                      (usage-error (format nil "unknown option ~a" a)))

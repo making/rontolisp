@@ -52,7 +52,7 @@ Hello, Clack! GET /hello
 - `:silent t` はバナーを、`:debug nil` はデバッグ通知を抑制します。
 
 `:address` が効くのは**プログラム自身がソケットを持つ**バックエンド —
-インタープリタと JVM — だけです。Servlet war、WASI コンポーネント、リアクタは
+インタープリタ、JVM、ネイティブ実行ファイル — だけです。Servlet war、WASI コンポーネント、リアクタは
 ホスト側 (コンテナ、`wasmtime serve`、Worker) がリスナーを所有するため、
 `:port` と同じく `:address` も無視されます。素の
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
@@ -76,7 +76,7 @@ Hello, Clack! GET /hello
 | `:headers` | 小文字化したヘッダ名をキーとするハッシュテーブル (`:test 'equal`)。重複したリクエストヘッダはワイヤ順に `", "` で結合されます |
 | `:content-type` / `:content-length` | 上のテーブルから (なければ `nil`。`:content-length` は整数) |
 | `:raw-body` | リクエストボディの同期・インメモリな bivalent ストリーム — `read-line`/`read-char` と `read-byte`/`read-sequence` の両方が動き、本物の `file-position` を持ちます (lack-request と http-body が必要とする形)。ボディの無いリクエストでは `nil` |
-| `:remote-addr` / `:remote-port` | インタープリタと JVM では実際のピア。WASI コンポーネントでは `nil` (`wasi:http@0.3.0` はピアのアクセサを公開しません) |
+| `:remote-addr` / `:remote-port` | インタープリタ、JVM、ネイティブ実行ファイルでは実際のピア。WASI コンポーネントでは `nil` (`wasi:http@0.3.0` はピアのアクセサを公開しません) |
 
 レスポンスの `body` は文字列のリスト・
 `(vector (unsigned-byte 8))` (1 バイトずつそのまま書き出されるので、バイナリの
@@ -245,6 +245,14 @@ Hello, Clack!
 - **JVM クラス** — 同じプログラムを `-o App.class` でコンパイルします。serve
   するプログラムの常として自己完結しており、サーバがクラスの隣に出力されます
   (`java -cp . App`。`-o app.jar` なら `java -jar app.jar`)。
+- **ネイティブ実行ファイル** (`--native -o app`) — ソケットは実行ファイルの
+  ランナーが所有し、HTTP/1.1 (接続の keep-alive、chunked のリクエストボディ)
+  を話します。接続はそれぞれランナーのスレッドで読み、アプリケーションは
+  プログラムの唯一のスレッドで 1 リクエストずつ応答します。`:port` と
+  `:address` は有効です。`clackup` は `:use-thread` にかかわらずプロセスが
+  止められるまで配信し、`clack:stop` は意味を持ちません。
+  [ネイティブ実行ファイルへのコンパイル](../compiling/native.md#serving-http)
+  を参照してください。
 - **WASM コンポーネント** (`--component`) — ソケットはホストが所有します:
   `wasmtime serve -S cli=y -S tcp=y
   -S inherit-network=y app.wasm` で実行します。`:port` 引数は無視され、
@@ -277,8 +285,8 @@ Hello, Clack!
 
 上の各行は、すべて同じ 1 ファイルです。
 [`examples/net/hello-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack.lisp)
-は最小の Clack アプリケーションで、一切編集せずに 5 つすべてへコンパイルできます。
-`:port` は環境変数 `PORT` を読みますが、それを見るのはソケットを自分で持つ 2 つの
+は最小の Clack アプリケーションで、一切編集せずに 6 つすべてへコンパイルできます。
+`:port` は環境変数 `PORT` を読みますが、それを見るのはソケットを自分で持つ 3 つの
 トランスポートだけです。
 [`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
 は、その同じファイルを Worker としてデプロイし、ホストごとのコマンドを並べています。
@@ -412,6 +420,11 @@ report を載せた 500 を返します。
   としてのマウントポイントです。これは（パーセントデコードされて）
   `:script-name` になり、`:path-info` は残りの部分だけを持ちます。省略時は
   ルートマウントです。
+- ソケットを自分で持つホストは、`"protocol"`(省略時は `"HTTP/1.1"`)、
+  `"local-addr"` と `"local-port"`(リクエストを受けたアドレス。`Host` ヘッダが
+  ないときの `:server-name` / `:server-port`)、`"remote-port"`(`:remote-port`。
+  省略時は `nil`)を追加できます。ネイティブ実行ファイルのランナーは 4 つとも
+  送ります。
 
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。

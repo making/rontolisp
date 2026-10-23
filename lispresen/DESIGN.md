@@ -54,6 +54,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :author "Toshiaki Maki"
       :date "2026-10-22"
       :theme :light            ; :light | :dark | :high-contrast | :midnight | (theme ...), below
+      :lang "ja"               ; the page's <html lang>, a BCP 47 tag; "ja" by default
       :aspect :16x9            ; :16x9 | :4x3
       :runtime :hosted         ; :hosted | "runtime/" | :none
       :callouts :shown         ; :shown | :step, below
@@ -65,6 +66,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :page-url "https://example.com/talk.html"   ; where this HTML is published
       :page-image "talk.png"                      ; the title slide, drawn as a PNG
       :page-image-font ("r.ttf" "b.ttf")          ; the TrueType fonts it is drawn in
+      :footer "#talk @me"      ; one line at the left of the bottom band, on every slide
       :progress t              ; a bar along the bottom edge, as long as the slide's place
       :page-numbers t)
 
@@ -106,7 +108,7 @@ Elements:
 
 | Kind | Forms |
 |------|-------|
-| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:layout`, `:class`, `:morph`), `define` (below) |
+| Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
 | Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image`, `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
@@ -140,7 +142,10 @@ Rules:
   leading byte order mark dropped) instead, lines FIRST to LAST when `:lines` is given,
   dedented the same way. A relative path resolves against the deck's directory, as an
   image's does (Images, below). `:lang` defaults by extension: `lisp` / `lsp` / `cl`
-  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, none otherwise. The file is read
+  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, and for the other highlighted
+  languages (Runnable code, below) `java`, `kt`, `js` / `mjs`, `ts`, `c` / `h`, `cpp` /
+  `cc` / `hpp`, `go`, `rs`, `py`, `sh` / `bash` / `zsh`, `sql`, `json`, `yaml` / `yml`;
+  none otherwise. The file is read
   while the deck is parsed, with or without `--embed` (the code is part of the page), so
   `:at` and every lint see its lines. A deck can name any file the host can read, so an
   untrusted deck is rendered where it reads nothing else: the browser host, or WASM with
@@ -163,6 +168,16 @@ Rules:
   Template uses are expanded before any slide is parsed, so the sections are known when
   the agenda slide takes its number, and slide numbers in diagnostics count it. A deck
   without sections gets no agenda and a warning.
+- `(agenda)`, a top-level form of the deck, puts the agenda slide there instead, for a
+  talk that opens with slides of its own (who is speaking, why the talk) before saying
+  where it goes. The agenda lists the sections after it; a section before it stays a
+  section divider. A form in the deck body, not a `:agenda` option, because a position is
+  best given where it is: an option would name a slide by number or title, and break when
+  the opening is edited. `:agenda` still turns the agenda on and names it, so a deck
+  without `(agenda)` is laid out as before. `(agenda)` without `:agenda` is a warning and
+  places nothing (the deck might have lost its `:agenda`, or the marker is left over); a
+  second `(agenda)` is a warning and ignored; arguments are an error; no section after it
+  is the no-sections warning. A template can produce it, like a slide.
 - `(source inline...)` on a slide names where its content comes from (a quotation's
   book, a measurement's date): one line in the muted color at the bottom of the safe
   area, above the page number row, 32 px on a 40 px line, wrapped in the content width.
@@ -171,6 +186,15 @@ Rules:
   so a link in it is a link; like a title or a caption it takes no callout. A second
   source on a slide is an error, a source longer than 2 lines a warning. It is a label
   like the page number, outside the body type scale.
+- `(deck :footer inline...)` sets one line on every slide but the title slide, at the left
+  of the bottom band at the page number's size and color: a hashtag, a handle, a
+  confidentiality label. The value is a string, an inline form or a list of inlines
+  (`("#talk " (link "https://e.org" "@me"))`; a link takes the footer's color). It is
+  a label like the page number, outside the body type scale, and takes no room from the
+  body. Its width is the content width less the widest page number and a 48 px gap; one
+  longer than a line is cut with an ellipsis and reported once. `(slide :footer nil)`
+  drops it from a slide. A source stays above the band. It is part of the slide, so print
+  and the overview show it.
 - `(deck :progress t)` draws a 6 px bar in the accent color along the bottom edge of the
   canvas, as wide as the current slide's place in the deck (slide 3 of 20: 15%). The
   player sets its width on every move, so it is no slide's element: the overview and the
@@ -952,6 +976,25 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   `clojure` block, runnable or not; the editor re-highlights on input with the same rules
   ported to the player script, which produce the same markup (checked on a sample of all
   three languages, 2026-10-22). The colors are theme variables.
+- Code in another language a talk shows next to Lisp is highlighted by a second
+  tokenizer driven by a table of rules per language: `java`, `kotlin` (`kt`),
+  `javascript` (`js`), `typescript` (`ts`), `c`, `cpp` (`c++`), `go`, `rust` (`rs`),
+  `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`). A
+  language's rules are its line and block comment delimiters, its string delimiters with
+  their escapes (`\`, or SQL's and YAML's doubled quote) and whether they span lines
+  (Python's triple quotes, Java and Kotlin text blocks, template literals and Go's raw
+  strings, all set as plain strings), `'x'` character literals (C family; a `'` that
+  starts none, a Rust lifetime, is punctuation), its keywords (`hl-k`, compared ignoring
+  case in SQL) and constants (`true`, `null`, `None`; `hl-n`, as numbers are). In JSON and
+  YAML a key is `hl-k`. In shell and YAML a `#` comment opens only at the start of a word
+  (`${#a}`, `a#b`), in YAML a quote too (`it's`), and a string left open ends at the end of
+  its line, so a stray quote colors one line at most. It is no grammar: enough to set
+  comments, strings and keywords apart from the back of the room. Only colors change, so
+  the widths, the fit solver and the layout are the monospace table's as for any code;
+  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. They are never run, whatever
+  `:run` says, and not editable; any other `:lang` is plain `code-fg` text. Checked
+  2026-10-24 in Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in
+  theme, the runtime check making no correction.
 - A `console` block is a shell transcript: a line starting with `$ ` is a command, its
   `$` in the keyword color, and every other line is output, in the comment color. It is
   never runnable. A command line is set on one line like code; an output line longer
@@ -965,7 +1008,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 | Severity | Condition |
 |----------|-----------|
 | error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1024,7 +1067,7 @@ display face would need its own width table.
 
 One file containing:
 
-- `<html lang="ja">` and the slides as `<section class="slide layout-standard"
+- `<html lang="ja">` (the deck's `:lang`, `ja` by default; a tag of letters, digits and `-`, else an error) and the slides as `<section class="slide layout-standard"
   style="--body:52px ...">` elements with semantic markup (`h1`, `ul`, `pre><code`,
   `figure`, `blockquote`). A kicker is a `<p class="kicker">` before the `h1`, a row of
   columns a `<div class="columns">` in the body holding `<div class="column"
@@ -1050,6 +1093,8 @@ One file containing:
   them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
   dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
+- A footer as `<p class="footer">` after the source, placed by the stylesheet at the left
+  of the bottom band.
 - A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
   of the safe area; with `:progress`, a `<div id="progress">` after the slides in the
   canvas.
@@ -1261,6 +1306,8 @@ CLI:
 
 ```
 lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+lispresen new FILE [--lang ja|en] [--force]
+lispresen --version
 ```
 
 - `DECK` and `OUT` accept `-` for stdin / stdout. `OUT` defaults to `DECK` with `.html`.
@@ -1269,6 +1316,58 @@ lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--
 - `--check` lints without writing output. `--strict` makes warnings fail.
 - Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
 - Diagnostics go to `*error-output*`.
+- `new` and `--version` are below.
+
+### Build information
+
+`--version` prints `{"version": "0.1.0-SNAPSHOT", "gitCommit": "42ee82c"}`, the shape and
+key names of `rontolisp --version`. It leaves out rontolisp's `buildTimestamp` and
+`gitBranch`: a timestamp would make two builds of one commit differ, and every leg of
+`check.sh` prints the same line.
+
+- **The version is the repository's `pom.xml`.** lispresen has no release cycle of its
+  own: the workflow builds it with the rontolisp release of the pom version and publishes
+  it as `lispresen-<pom version>`, so a second version number in lispresen could only
+  disagree with the tag.
+- **Both are read when lispresen is built**, by the macro `build-info`
+  (`src/build.lisp`), which expands into a literal: on the compilers when a jar, module or
+  executable is made, on the interpreter and SBCL when the source is loaded, which is
+  when they "build" it. No backend can run a program while it compiles
+  (`uiop:run-program` is not implemented on rontolisp, and WASM has no processes), so
+  the commit is read from `.git` as files: `HEAD`, the loose ref it names or its line in
+  `packed-refs`, through the `.git` file and `commondir` of a linked work tree. A shallow
+  checkout has all of these. An environment variable set by the workflow would need
+  setting by hand for every local build. `#.` would read the same files; a macro keeps
+  the reading in ordinary functions.
+- The root is found from the file being compiled: `*load-truename*`, bound in a file a
+  literal `load` splices (relative to the compiler's working directory on the compile
+  path, absolute elsewhere), never in the top-level file. So a use sits in a top-level
+  form of a loaded file; the interpreter expands a function body's macros when it first
+  runs, outside the load.
+- Outside a repository (a copy of `lispresen/` alone) each is `unknown`, and the build
+  succeeds.
+
+### Starter deck
+
+`lispresen new FILE` writes a deck to begin from. A subcommand, as `cargo new` is, since
+it takes none of the rendering options; a deck file named `new` is rendered as `./new`.
+
+- The decks are `starter/ja.lisp` and `starter/en.lisp`, read into lispresen when it is
+  built (`build-text`, as above), so they are decks that render and review as written,
+  with no string escaping. `:date "YYYY-MM-DD"` is replaced by the date.
+- Japanese by default, as the tuning targets Japanese decks; `--lang en` for English.
+  The comments are English in both, as the README they point to is. The English deck
+  sets `:lang "en"`. `:lang` changes the declaration only: phrase segmentation stays
+  BudouX's Japanese model. An inline `(lang ...)` form for a phrase in another language
+  is not added; the page-level tag is what assistive technology needs first.
+- Each shows the header (`:description`; `:theme`, `:url`, `:page-url` and `:page-image`
+  as comments), sections, a list with notes, a statement, inline forms, runnable code,
+  columns with a callout, a table and a flow. An image is a comment: the deck would name
+  a file `new` does not write.
+- The date is today in UTC. rontolisp decodes time as GMT on every backend (WASI has no
+  time zone), so SBCL is asked for UTC too, and the deck is the same on every backend.
+- An existing file is never replaced without `--force`: `open` with `:if-exists nil`,
+  so nothing can come between the check and the write. `-` writes to standard output.
 
 The browser host is an editor page: the deck source on the left, the rendered deck in an
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
@@ -1288,10 +1387,11 @@ lispresen/
   DESIGN.md              this file
   README.md              usage, offline runtime setup
   check.sh               cross-backend golden check + unit tests
-  cli.lisp               CLI host: arguments, file I/O, exit status
+  cli.lisp               CLI host: arguments, file I/O, exit status, new, --version
   src/
-    all.lisp             loads the sources below in order
+    all.lisp             loads the sources below in order, but build and starter
     package.lisp         defpackage lispresen
+    build.lisp           what the build reads: version, commit, files as text (CLI only)
     reader.lisp          top-level forms with offsets and line numbers
     template.lisp        define templates: substitution on the read forms
     model.lisp           structs and parsing with diagnostics
@@ -1310,9 +1410,15 @@ lispresen/
     raster.lisp          polygon filling, strokes, text, the SVG subset of a logo
     page-image.lisp      the title slide drawn as the page image
     player.lisp          the player script as a string constant
-    highlight.lisp       tokenizer for Lisp / Scheme / Clojure code
+    highlight.lisp       tokenizers: Lisp / Scheme / Clojure, console, other languages
     morph.lisp           the token pairing of a :morph slide's code
     lispresen.lisp       render
+    starter.lisp         the starter deck lispresen new writes (CLI only)
+  starter/
+    ja.lisp, en.lisp     the starter decks, read in when lispresen is built
+  skills/lispresen/
+    SKILL.md             the agent skill: install, write, render, check (README)
+    references/          its condensed deck format and diagnostics
   web/
     lispresen-web.lisp   browser reactor
     index.html           editor page
@@ -1350,16 +1456,21 @@ before committing a change under `lispresen/`.
   renders `examples/intro.lisp` with `--embed` on each through stdin and stdout (from
   `examples/`, so its files resolve; each leg in its own copy of it, where the page image
   is written), and requires each output to equal `examples/intro.html` and each page image
-  `examples/intro.png` byte for byte. The golden deck is a talk introducing lispresen
+  `examples/intro.png` byte for byte. Each leg must also print the `--version` line of
+  the pom version and the commit checked out, and write a starter deck that renders with
+  no diagnostic under `--strict` and equals the first leg's but for its date (the
+  workflow runs the same check, `--exe`, on each published executable). The golden deck is a talk introducing lispresen
   that shows each feature twice under one title, as the deck code on one slide (kicker
   `書き方`) and as the result on the next (`表示例`); a player feature gets its
   instructions (`使い方`) and a slide to try it on (`試す`). It has runnable Lisp, Scheme
   (`:fresh`, `:stdin`) and Clojure (`:timeout`) blocks, a columns slide built from a
   `&rest` template and a template the samples of deck code go through, a lead above a row
-  of a code column and a list column, console transcripts, dark code panels
+  of a code column and a list column, console transcripts, Java, Python and shell
+  blocks, dark code panels
   (`:code :dark`), section kickers (replaced on the paired slides, dropped on one), a
-  named agenda, a title slide with an embedded SVG logo and a QR code (drawn as the page
-  image too, with the description and page URL in the head), a statement, a
+  named agenda placed by `(agenda)` after an opening slide, a title slide with an
+  embedded SVG logo and a QR code (drawn as the page image too, with the description and
+  page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
   numeric columns), every inline form, an embedded PNG, ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
@@ -1384,7 +1495,8 @@ before committing a change under `lispresen/`.
   numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
   with dotted pairs and a list that looks like a template use, the callout sides on a flow
   box, a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
-  a source takes and its diagnostics, the agenda and its slide numbers, template
+  a source takes and its diagnostics, the agenda, its place at `(agenda)` and their
+  slide numbers and diagnostics, template
   expansion and its diagnostics and
   bounds, the side each kind of callout anchor gets, an unplaceable callout, the
   order of a slide's page advances (items, code lines, a bubble after what it wraps) and
@@ -1392,8 +1504,9 @@ before committing a change under `lispresen/`.
   token split at a line end inside `:steps` lines) and its diagnostics, the callout and
   `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
   check values, deflate and a whole PNG against what zlib reads, the
-  embedding diagnostics, and code files (UTF-8 up to four bytes, `:lines`, the language by
-  extension, their diagnostics). The golden deck covers
+  embedding diagnostics, code files (UTF-8 up to four bytes, `:lines`, the language by
+  extension, their diagnostics), the highlighting of every language from a table of
+  (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks or the player change): the page `tools/calibrate.lisp` writes must

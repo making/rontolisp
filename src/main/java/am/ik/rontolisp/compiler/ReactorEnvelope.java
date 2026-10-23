@@ -64,10 +64,13 @@ public final class ReactorEnvelope {
 	 * {@code remote-addr} to nothing; {@code script-name} is the application's mount
 	 * point as a RAW prefix of {@code target}, for a host that mounts the application
 	 * under a path -- absent means root-mounted; {@code call-id} is {@link #CALL_ID_KEY},
-	 * absent everywhere but a {@code --reentrant} streaming build.
+	 * absent everywhere but a {@code --reentrant} streaming build. {@code protocol}
+	 * (default {@code "HTTP/1.1"}), {@code local-addr}, {@code local-port} and
+	 * {@code remote-port} are for a host that owns the socket -- a {@code --native}
+	 * executable's runner fills them -- and absent from a host that has none.
 	 */
-	public static final List<String> REQUEST_KEYS = List.of("method", "target", "headers", "body", "scheme",
-			"remote-addr", "script-name", CALL_ID_KEY);
+	public static final List<String> REQUEST_KEYS = List.of("method", "target", "headers", "body", "protocol", "scheme",
+			"local-addr", "local-port", "remote-addr", "remote-port", "script-name", CALL_ID_KEY);
 
 	/**
 	 * The response head's keys, in the order {@code %http-reactor-envelope} writes them.

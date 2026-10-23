@@ -11,7 +11,9 @@ target's inbound transport ([Ring adapter](ring.md)). The options map:
   the server at once and the program keeps running.
 
 The three matter only where the program owns the socket, the interpreter and the JVM; a
-war, a component and a reactor ignore them and return at once. `:async? true` is refused:
+war, a component and a reactor ignore them and return at once. A native executable binds
+`:port` and `:host` and serves until the process is stopped, whatever `:join?` says: it has
+no second thread to go on with. `:async? true` is refused:
 a three-argument (asynchronous) handler has no respond/raise protocol here. One server per
 process: a second `run-server` replaces the first one's handler on the compiled backends.
 As a value a two-argument function.

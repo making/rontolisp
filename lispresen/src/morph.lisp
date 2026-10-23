@@ -17,13 +17,10 @@ of the two sides of a gap without anchors, multiplied.")
 
 (defun code-tokens (b)
   "The tokens of the code block B as (START END CLASS) in its text: each blank-free run
-of a highlighter segment, so no token holds a blank or a line end. A block that is not
-highlighted is one segment."
+of a highlighter segment, so no token holds a blank or a line end. A block in a language
+without rules is one segment."
   (let* ((text (code-text b))
-         (segments
-          (if (highlighted-p b)
-              (highlight-segments text)
-              (list (list 0 (length text) nil))))
+         (segments (highlight-segments text (code-block-lang b)))
          (tokens nil))
     (loop for (start end class) in segments
           do

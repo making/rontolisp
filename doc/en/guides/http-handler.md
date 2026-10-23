@@ -39,7 +39,7 @@ always all present:
 | `:server-protocol` | a keyword, e.g. `:HTTP/1.1` |
 | `:request-uri` | the raw request target verbatim (still percent-encoded, query included) |
 | `:url-scheme` | `"http"` or `"https"` |
-| `:remote-addr` / `:remote-port` | the real peer on the interpreter and the JVM; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
+| `:remote-addr` / `:remote-port` | the real peer on the interpreter, the JVM and a native executable; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
 | `:headers` | an `equal` hash table keyed by **lowercased** header names — look up with `(gethash "content-type" (getf env :headers))`; repeated headers join with `", "`; never `nil` |
 | `:content-type` / `:content-length` | from that table (`nil` when absent; `:content-length` an integer) |
 | `:raw-body` | the request body (below) |

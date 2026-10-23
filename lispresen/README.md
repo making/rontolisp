@@ -12,6 +12,9 @@ https://making.github.io/rontolisp/lispresen/intro.html with every push that cha
 
 ## A deck
 
+`lispresen new talk.lisp` writes a starter deck to begin from: the header, sections and
+a few slides showing the main forms, each with a comment on how it is written.
+
 ```lisp
 (deck :title "lispresen" :author "rontolisp" :date "2026-10-22" :page-numbers t)
 
@@ -37,14 +40,15 @@ https://making.github.io/rontolisp/lispresen/intro.html with every push that cha
 
 | Form | Meaning |
 |------|---------|
-| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :description :page-url :page-image :page-image-font)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck; `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
+| `(deck :title :author :date :logo :url :theme :aspect :runtime :callouts :kicker :agenda :progress :page-numbers :footer :description :page-url :page-image :page-image-font :lang)` | the header; a `:title` adds a title slide, with `:logo` (an image path or `(image "logo.png" :alt "...")`) above the title and, for `:url`, a QR code of the URL with the URL under it in a corner, placed where it covers no text. `:theme` is `:light`, `:dark`, `:high-contrast`, `:midnight` or `(theme :base :dark :accent "#ff9f43" ...)` (below), `:aspect` `:16x9` or `:4x3`, `:runtime` where runnable code loads its runtime from (below), `:callouts :step` shows every callout on a page advance (below), `:kicker :section` puts each titled slide's section title above its title, `:agenda t` (or a title string) adds a slide listing the sections, after the title slide or at `(agenda)`, and shows each section divider as that list with its section highlighted, `:progress t` draws a thin bar along the bottom edge whose length is the current slide's place in the deck, `:footer "text"` (or `("text " (link ...))`) sets one line at the left of the bottom band on every slide but the title slide, a hashtag, a handle or a confidentiality label; `:lang "en"` is the page's `<html lang>` tag (a BCP 47 tag, default `ja`; it changes the declaration only, phrase breaking stays Japanese); `:description`, `:page-url`, `:page-image` and `:page-image-font` describe the published page to a link preview (below) |
 | `(section "title")` | a section divider |
-| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's). `:morph t` animates its first code block from the previous slide's (below) |
+| `(agenda)` | where the agenda slide of `:agenda` stands, for slides that open the talk before it; it lists only the sections after it |
+| `(slide [:title "t"] [:kicker "k"] [:layout name] [:class "c"] [:morph t] block...)` | a slide; the kicker is a small accent label above the title (`:kicker nil` drops the deck's; `:footer nil` drops the deck's footer). `:morph t` animates its first code block from the previous slide's (below) |
 | `"text"`, `(p inline...)` | a paragraph |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; an item is a string, an inline form or `(li inline... [list])`, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
-| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge |
-| `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj` and their variants) |
+| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme` and `clojure` are highlighted and runnable (below); `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge; `java`, `kotlin`, `javascript` (`js`), `typescript` (`ts`), `c`, `cpp`, `go`, `rust`, `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`) are highlighted (comments, strings, keywords, numbers and constants; JSON and YAML keys) and never run; any other `:lang` is plain |
+| `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj` and their variants, and `.java`, `.kt`, `.js`, `.ts`, `.c`, `.h`, `.cpp`, `.go`, `.rs`, `.py`, `.sh`, `.sql`, `.json`, `.yaml`, `.yml` and the like) |
 | `(code :steps ("(defun" (3 4) ("x" "y")) ...)` | brings lines forward one page advance at a time and fades the rest: a string names the first line holding it, `(3 4)` lines 3 to 4 of the block as shown, a list several of them |
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
@@ -208,6 +212,7 @@ on macOS (Apple Silicon):
 wget https://github.com/making/rontolisp/releases/download/lispresen-0.1.0-SNAPSHOT/lispresen-darwin-arm64
 chmod +x lispresen-darwin-arm64
 sudo mv lispresen-darwin-arm64 /usr/local/bin/lispresen
+lispresen new talk.lisp                                         # a starter deck
 lispresen talk.lisp                                             # writes talk.html
 ```
 
@@ -215,6 +220,34 @@ On Linux the file is `lispresen-linux-amd64` or `lispresen-linux-arm64`. On macO
 downloaded with a browser is quarantined and killed at start-up;
 `xattr -d com.apple.quarantine lispresen-darwin-arm64` lifts that (`wget` and `curl` set no
 quarantine).
+
+## A skill for AI agents
+
+[skills/lispresen](skills/lispresen/SKILL.md) is a skill for Claude Code (and other agents
+that read `SKILL.md`): it installs lispresen where it is missing, starts from `lispresen
+new`, writes and renders the deck, fixes what the diagnostics report and checks the result
+in a browser. It is published as a plugin in the rontolisp marketplace:
+
+```bash
+claude plugin marketplace add https://making.github.io/rontolisp/skill/marketplace.json
+claude plugin install lispresen@rontolisp
+```
+
+Inside a session the same steps are `/plugin marketplace add ...` and `/plugin install
+lispresen@rontolisp`; `claude plugin update lispresen@rontolisp` takes a newer version.
+Claude Code uses the skill when asked for slides made with lispresen, or on
+`/lispresen:lispresen`.
+
+Without the plugin system, copy the directory into `~/.claude/skills/` (every project) or
+a project's `.claude/skills/`; nothing updates that copy:
+
+```bash
+dir=~/.claude/skills/lispresen
+base=https://raw.githubusercontent.com/making/rontolisp/develop/lispresen/skills/lispresen
+mkdir -p $dir/references
+curl -fsSL -o $dir/SKILL.md $base/SKILL.md
+curl -fsSL -o $dir/references/deck-format.md $base/references/deck-format.md
+```
 
 ## Running
 
@@ -244,6 +277,8 @@ sbcl --script lispresen/cli.lisp talk.lisp
 
 ```
 lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+lispresen new FILE [--lang ja|en] [--force]
+lispresen --version
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
@@ -253,6 +288,22 @@ alone is the whole deck, the page image (Link preview, below) aside. A WASM buil
 only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
+
+`new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
+with `--lang en`, dated today in UTC. An existing `FILE` is left alone and reported unless
+`--force` is given. A deck file named `new` is rendered as `./new`.
+
+`--version` prints the version and the commit lispresen was built from, in the shape of
+`rontolisp --version`:
+
+```
+{"version": "0.1.0-SNAPSHOT", "gitCommit": "42ee82c"}
+```
+
+Both are read when lispresen is built: the version from the repository's `pom.xml` (the
+release `lispresen-<version>` carries the same), the commit from its `.git`. Run on the
+interpreter or SBCL, that is when `cli.lisp` is loaded; a build outside a repository
+reports `unknown`.
 
 ## Presenting
 
@@ -361,7 +412,8 @@ never breaks inside (`2026-10-22`, `1,000`).
 ## Development
 
 ```bash
-lispresen/check.sh            # every backend against the golden deck and image, then the unit tests
+lispresen/check.sh            # every backend against the golden deck and image, --version and
+                              # the starter deck, then the unit tests
 lispresen/check.sh --update   # regenerate examples/intro.html and intro.png first
 ```
 

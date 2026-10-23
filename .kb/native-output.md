@@ -222,7 +222,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 ## The network runner
 
 A program that fetches (`.kb/fetch-http.md`, "--native") imports `rlhttp`, which the runner answers
-with an HTTP/1.1 client over rustls + ring (`runner/src/http`, the cargo feature `net`). That client
+with an HTTP/1.1 client over rustls + ring (`runner/src/http`, the cargo feature `net`). A program
+that SERVES (Clack's `:server :rontolisp`, Ring's `run-server`) imports `rlhttp` too, the
+server's fields (`serve`, `nextRequest`, ... -- `runner/src/http/serve.rs`, `.kb/http-server.md`,
+"--native: the runner's server"), so it starts with the same network runner; the server adds
+no dependency (std::net + the client's `httparse`). That client
 costs more than the rest of the stub's growth combined, so it is a SECOND stub, `rlrun-net`, built
 from the same crate with `--features net`, and only a module that imports `rlhttp` starts with it:
 `RontoLispCli` asks `WasmLispCompiler.importModules` of the FINISHED module (after the tree shaker,

@@ -7,7 +7,11 @@
 #-rontolisp (require :asdf)
 
 #+rontolisp (load "../src/all.lisp")
-#-rontolisp (load (merge-pathnames "../src/all.lisp" *load-truename*))
+#+rontolisp (load "../src/build.lisp")
+#+rontolisp (load "../src/starter.lisp")
+#-rontolisp
+(dolist (name '("all" "build" "starter"))
+  (load (merge-pathnames (format nil "../src/~a.lisp" name) *load-truename*)))
 (asdf:load-system :rove)
 
 (defpackage :lispresen-test (:use :cl :rove))
@@ -431,6 +435,82 @@ q\")))")))
 (w \"a\")
 (w \"b\")") '((:error 2 "templates expand to more than 10 forms")))))))
 
+(deftest highlighting
+  (testing "each language's comments, strings, keywords and constants; a comment marker
+in a string and a string in a comment stay what they are inside"
+    (dolist (row
+             '(("lisp" "(defun f (x) \"a ; b\" ; \"c\"
+  (list :k 1 nil #\\a))"
+                (("d" "defun") ("s" "\"a ; b\"") ("c" "; \"c\"") ("k" ":k") ("n" "1")
+                 ("n" "nil") ("s" "#\\a")))
+               ("clojure" "(fn [x] #| \"a\" |# \\b)"
+                (("d" "fn") ("c" "#| \"a\" |#") ("s" "\\b")))
+               ("console" "$ ls -l
+a # \"b\"
+
+$" (("k" "$") ("c" "a # \"b\"") ("k" "$")))
+               ("java" "int n = 0x1F; // \"no\"
+String s = \"// no\\\"\" + 'x' + '\\'' + 1.5; /* \"a\" */ return null;
+var t = \"\"\"
+  a \"b\" // c
+  \"\"\";"
+                (("k" "int") ("n" "0x1F") ("c" "// \"no\"") ("s" "\"// no\\\"\"")
+                 ("s" "'x'") ("s" "'\\''") ("n" "1.5") ("c" "/* \"a\" */") ("k" "return")
+                 ("n" "null") ("k" "var") ("s" "\"\"\"
+  a \"b\" // c
+  \"\"\"")))
+               ("kotlin" "fun f(c: Char = 'x') = \"\"\"raw \\\"\"\" // k"
+                (("k" "fun") ("s" "'x'") ("s" "\"\"\"raw \\\"\"\"") ("c" "// k")))
+               ("javascript" "const s = `a ${x}
+// b`; // 'c'
+let t = 'it\\'s /* no */';"
+                (("k" "const") ("s" "`a ${x}
+// b`") ("c" "// 'c'") ("k" "let") ("s" "'it\\'s /* no */'")))
+               ("ts" "type T = { a: number } // t"
+                (("k" "type") ("k" "number") ("c" "// t")))
+               ("c" "#include <stdio.h>
+char c = '\\n'; /* a
+b */" (("k" "#include") ("k" "char") ("s" "'\\n'") ("c" "/* a
+b */")))
+               ("cpp" "template <typename T> auto p = nullptr;"
+                (("k" "template") ("k" "typename") ("k" "auto") ("n" "nullptr")))
+               ("go" "func f() string { return `a\\` } // g"
+                (("k" "func") ("k" "return") ("s" "`a\\`") ("c" "// g")))
+               ("rust" "fn f<'a>(s: &'a str) -> char { '\\u{41}' }"
+                (("k" "fn") ("s" "'\\u{41}'")))
+               ("python" "def f(s='#'):  # it's
+    return \"\"\"a
+'b'\"\"\" if s else None"
+                (("k" "def") ("s" "'#'") ("c" "# it's") ("k" "return") ("s" "\"\"\"a
+'b'\"\"\"") ("k" "if") ("k" "else") ("n" "None")))
+               ("bash" "for f in *.txt; do echo \"$f # no\" ${#f} 'a\\' # yes
+done" (("k" "for") ("k" "in") ("k" "do") ("s" "\"$f # no\"") ("s" "'a\\'")
+       ("c" "# yes") ("k" "done")))
+               ("sql" "SELECT name FROM t -- 'x'
+WHERE note = 'it''s -- no' AND id IS NOT NULL /* y */"
+                (("k" "SELECT") ("k" "FROM") ("c" "-- 'x'") ("k" "WHERE")
+                 ("s" "'it''s -- no'") ("k" "AND") ("k" "IS") ("k" "NOT") ("n" "NULL")
+                 ("c" "/* y */")))
+               ("json" "{\"a\": [1, -2.5e3, true, null], \"b //\" : \"c\"}"
+                (("k" "\"a\"") ("n" "1") ("n" "2.5e3") ("n" "true") ("n" "null")
+                 ("k" "\"b //\"") ("s" "\"c\"")))
+               ("yaml" "key: it's # note
+list:
+  - \"a # b\"
+  - ['c''d', 1.2.3]
+url: http://x#y
+on: yes"
+                (("k" "key") ("c" "# note") ("k" "list") ("s" "\"a # b\"") ("s" "'c''d'")
+                 ("n" "1.2.3") ("k" "url") ("k" "on") ("n" "yes")))
+               ("text" "int x; // y" ())))
+      (destructuring-bind (lang source expected) row
+        (ok (equal (loop for (start end class)
+                           in (lispresen::highlight-segments source lang)
+                         when class
+                           collect (list class (subseq source start end)))
+                   expected)
+            lang)))))
+
 (deftest qr-codes
   (testing "Reed-Solomon, format and version bits match the standard's examples"
     ;; HELLO WORLD at 1-M, and the format and version tables of ISO/IEC 18004.
@@ -456,6 +536,10 @@ diagnostics"
       ;; No preview options, no tags: the head is as before.
       (ok (contains html "</title>
 <style>")))
+    (ok (contains (lispresen:render "(deck :lang \"en-US\")") "<html lang=\"en-US\">"))
+    (ok (contains (lispresen:render "(deck)") "<html lang=\"ja\">"))
+    (ok (equal (render-diagnostics "(deck :lang \"en\\\"x\")")
+               '((:error 1 ":lang of deck must be a language tag of letters, digits and -"))))
     (ok (contains (lispresen:render "(deck :title \"t&\" :description \"d\"
   :page-url \"https://e.x/a/t.html\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
                   "<title>t&amp;</title>
@@ -585,6 +669,8 @@ and libpng read them"
                               (cond ((string= path "a.clj") a)
                                     ((string= path "b.txt") (vector 255)))))
         (ok (contains html "data-lang=\"clojure\""))
+        (ok (equal (mapcar #'lispresen::code-file-lang '("A.java" "b.yml" "c.txt"))
+                   '("java" "yaml" nil)))
         (ok (contains html "é→𝄞"))
         (ok
          (equal (mapcar #'lispresen::diagnostic-message diagnostics)
@@ -606,7 +692,7 @@ and libpng read them"
           '((:error 2 "unknown element frob")
             (:error 5 "a table row has 1 cells where the table has 2")
             (:error 6
-             "expected (slide ...), (section ...) or (define ...), found other")
+             "expected (slide ...), (section ...), (agenda) or (define ...), found other")
             (:error 7 "dotted lists outside (cells ...) and #n= labels are not deck syntax")
             (:error 8
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
@@ -625,6 +711,22 @@ and libpng read them"
             (:warning 3 "a kicker stands above a title; this slide has none")
             (:error 4
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
+  (testing "a deck footer is a line on every slide but the title slide and the dropped"
+    (let ((html (lispresen:render
+                 "(deck :title \"d\" :page-numbers t :footer (\"#talk \" (link \"https://e.org\" \"@me\")))
+(slide :title \"a\" \"x\")
+(slide :title \"b\" :footer nil \"y\")")))
+      (let* ((part "<p class=\"footer\">#talk <a href=\"https://e.org\">@me</a></p>")
+             (at (search part html)))
+        (ok (and at (not (search part html :start2 (1+ at))))))
+      (ok (contains html ".footer{left:")))
+    (ok
+     (equal (render-diagnostics
+             "(deck :footer \"かかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかかか\")
+(slide :title \"t\" :footer 1 \"b\")")
+            '((:warning 1
+               "the footer does not fit on one line beside the page number and is cut; shorten it")
+              (:error 2 ":footer of slide must be nil")))))
   (ok
    (equal (render-diagnostics
            "(slide :title \"t\" (source (say \"c\" \"a\")) (source \"b\") (column (source \"c\")))
@@ -651,7 +753,36 @@ and libpng read them"
         (render-diagnostics
          "(deck :agenda t)
 (slide \"x\")")
-        '((:warning 1 ":agenda lists the sections, and this deck has none"))))))
+        '((:warning 1 ":agenda lists the sections, and this deck has none")))))
+    ;; (agenda) places it: the slides and sections before it are not listed.
+    (multiple-value-bind (html diagnostics) (lispresen:render
+                                             "(deck :title \"d\" :agenda t)
+(define s (x) (section x))
+(slide \"opening\")
+(s \"0\")
+(agenda)
+(slide :title \"t\" (s))
+(s \"a\")
+(agenda)")
+      (ok (contains html "<h1 class=\"section-title\">0</h1>"))
+      (ok (contains html "<ol><li>a</li></ol>"))
+      (ok (equal (mapcar (lambda (d)
+                           (list (lispresen::diagnostic-slide d)
+                                 (lispresen::diagnostic-message d)))
+                         diagnostics)
+                 '((5 "template s takes 1 argument, given 0")
+                   (nil "the agenda stands at the first (agenda); this one is ignored")))))
+    (ok
+     (equal
+      (render-diagnostics
+       "(deck :agenda t)
+(section \"a\")
+(agenda 1)")
+      '((:error 3 "(agenda) takes no arguments")
+        (:warning 3 ":agenda lists the sections after (agenda), and this deck has none"))))
+    (ok
+     (equal (render-diagnostics "(agenda)")
+            '((:warning 1 "(agenda) places the agenda of (deck :agenda t), which this deck lacks")))))
   (testing ":morph pairs the tokens of the first code blocks of two slides, a bracket with
 the token beside it, so a form that moved moves whole"
     (multiple-value-bind (html diagnostics)
@@ -682,6 +813,11 @@ y\\\")\"))
 (slide \"x\")")))
       (ok (contains html "--accent:#ffcc00;"))
       (ok (contains html ".layout-statement::before{left:40px"))))
+  (testing "both starter decks render with no diagnostic, dated as asked"
+    (dolist (language '(:ja :en))
+      (let ((deck (lispresen:starter-deck "2026-10-24" language)))
+        (ok (contains deck ":date \"2026-10-24\""))
+        (ok (null (render-diagnostics deck))))))
   (ok
    (equal (lispresen:format-diagnostic "t.lisp"
                                        (lispresen::make-diagnostic

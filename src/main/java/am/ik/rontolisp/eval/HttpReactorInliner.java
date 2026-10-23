@@ -193,6 +193,61 @@ public final class HttpReactorInliner {
 		}, car -> lowerDirective(car, found));
 	}
 
+	/**
+	 * The {@code --native} lowering of the {@code rontolisp:http-handler} DIRECTIVE: a
+	 * native executable's module is Preview 1, which has no incoming TCP, and its runner
+	 * serves instead -- the leg {@code clack:clackup} and Ring's {@code run-server} take
+	 * there ({@code http-serve.lisp}, {@code #+rontolisp-native}). Every
+	 * {@code (rontolisp:http-handler 'name port ...)} call becomes
+	 *
+	 * <pre>{@code
+	 * (rontolisp::%http-serve (function name) port nil t :stream|:buffered)
+	 * }</pre>
+	 *
+	 * binding every interface, as the directive does on the interpreter and the JVM. The
+	 * port is kept as written (it is evaluated where the directive is), and the
+	 * {@code :raw-body} mode rides the call, so the directive's default ({@code :stream},
+	 * rontolisp's own asynchronous body) means here what it means everywhere else. Called
+	 * by the CLI for a {@code --native} build BEFORE {@code HttpServeLibrary}, whose
+	 * splice the rewritten call triggers.
+	 * @param program the top-level forms
+	 * @return the program with every directive lowered; unchanged when none is present
+	 */
+	public static List<LispVal> lowerHttpHandlerForRunner(List<LispVal> program) {
+		boolean[] found = new boolean[1];
+		List<LispVal> out = new ArrayList<>(program.size());
+		for (LispVal form : program) {
+			out.add(lowerDirectiveForRunner(form, found));
+		}
+		return found[0] ? out : program;
+	}
+
+	private static LispVal lowerDirectiveForRunner(LispVal form, boolean[] found) {
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
+				return node;
+			}
+			if (isHttpHandlerDirective(cons)) {
+				found[0] = true;
+				LispVal port = cons.cdr() instanceof LispCons handler && handler.cdr() instanceof LispCons rest
+						? lowerDirectiveForRunner(rest.car(), found) : LispNil.INSTANCE;
+				LispCons call = (LispCons) LispReader
+					.readAllFromString("(%s (function %s) %%port nil t :%s)".formatted(HttpServeLibrary.SERVE,
+							directiveHandlerName(cons), directiveRawBodyMode(cons).isEmpty() ? "stream" : "buffered"),
+							Features.INTERPRETER)
+					.get(0);
+				// The port form as written, in place of the %port placeholder.
+				LispCons args = (LispCons) call.cdr();
+				LispCons rest = (LispCons) args.cdr();
+				return new LispCons(call.car(), new LispCons(args.car(), new LispCons(port, rest.cdr())));
+			}
+			return null;
+		}, car -> lowerDirectiveForRunner(car, found));
+	}
+
 	private static boolean isHttpHandlerDirective(LispCons cons) {
 		if (!(cons.car() instanceof LispSymbol sym)) {
 			return false;

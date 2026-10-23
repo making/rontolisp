@@ -24,6 +24,42 @@ a rontolisp handler. `rontolisp:fetch` keeps `(:status :headers :body)`
 - `RontoHttpServer.Request` = 11 raw facts: target verbatim, headers in wire order with
   duplicates, body as BYTES, protocol/scheme/local/remote, `scriptName` (RAW target prefix).
 
+## --native: the runner's server
+A `--native` module is Preview 1 (no incoming TCP), so the RUNNER owns the socket and the
+protocol and the module owns the application: `http-serve.lisp`'s `#+rontolisp-native` leg over
+seven `rlhttp` imports the network runner answers (`runner/src/http/serve.rs`): `serve(host,
+port) -> server | -1` (+ `serveError`), `nextRequest(server) -> extern` (blocks), `requestHead`,
+`readRequestBody` (`:bytes` result, the read(2) shape), `writeResponseBody` (`:bytes` param),
+`respond(exchange, head)`. The module loop is `%http-serve-exchange` = the REACTOR transport
+(`%http-reactor-handle`, `.kb/clack.md`): ONE request model and one 500 arm with the Worker
+host, no third env builder. Since 2026-10-24.
+- **The directive too**: `HttpReactorInliner.lowerHttpHandlerForRunner` (CompileFrontend,
+  `runnerHosted()`, BEFORE `HttpServeLibrary.process`) rewrites `(rontolisp:http-handler
+  'h port [:raw-body m])` to `(%http-serve #'h port nil t :stream|:buffered)`; the native
+  leg's optional 5th argument carries the mode (the adapters' 4-argument calls get
+  `:buffered`), so the directive's default asynchronous body means what it means elsewhere.
+  Pinned by `HttpHandlerJvmTest#aNativeExecutableServesTheDirectiveThroughItsRunner`.
+- **Threads are the runner's**: an acceptor and a thread per connection read the head
+  (`httparse`, 64 KiB cap -> 431) and the WHOLE body (`Content-Length`, chunked decoded and
+  re-labelled with a `content-length`, `Expect: 100-continue` answered), then queue the
+  exchange; the module answers serially. An idle or slow client never blocks another
+  (Chrome's speculative preconnects did block a one-socket-at-a-time loop). Keep-alive per
+  HTTP/1.1 (1.0 opts in), 60 s idle timeout.
+- **The response goes out whole, `Content-Length`-framed**: the reactor contract hands body
+  chunks over BEFORE the head, and an in-band `"body"` key in the head replaces what crossed
+  (the mid-body 500). So no streaming responses (SSE) on this transport -- the same limit the
+  reactor has. HEAD and 204/304 send no body; the runner drops a handler's
+  content-length/transfer-encoding/connection fields (it frames).
+- **The envelope grew optional keys for a host that owns a socket**: `protocol`,
+  `local-addr`, `local-port`, `remote-port` (`ReactorEnvelope.REQUEST_KEYS`;
+  `HostGlueEmitter` leaves them out -- a Worker has none), so `:remote-port`/`:server-port`
+  are real here as on the JDK transports.
+- **Never returns**: no second thread, so `join`/`:use-thread`/`:join? false` are ignored
+  (documented); the server stops with the process. An exchange handle the collector drops
+  unanswered answers 500.
+- Pins: `serve.rs` tests (keep-alive with both body framings, repeated headers, the in-band
+  replacement, HEAD/204/1.0, 400 and a taken port), `ClojureRingAdapterTest`'s native leg.
+
 ## Graceful shutdown (JDK transports)
 **A termination signal drains the JDK server; an explicit stop does not.**
 `RontoHttpServer.registerServer` -> `shutdownGracefully(grace)` -> `HttpServer.stop(delay)`,

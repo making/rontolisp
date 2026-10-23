@@ -1,9 +1,10 @@
 # Clack (`(ql:quickload "clack")` + `clack:clackup` on the rontolisp backend)
 
 Clack loads VERBATIM from the Quicklisp dist (clack-20250622-git + lack-20260101-git);
-`clack:clackup :server :rontolisp` runs on the interpreter, the JVM, WASM `--component`, a
-reactor host, and a Servlet 6 war. Preview 1 has no incoming TCP (`.kb/tcp-sockets.md`): the
-program compiles and `clackup` signals the `http-handler` message at CALL time. Out of scope:
+`clack:clackup :server :rontolisp` runs on the interpreter, the JVM, a `--native` executable,
+WASM `--component`, a reactor host, and a Servlet 6 war. A plain Preview 1 `.wasm` has no
+incoming TCP (`.kb/tcp-sockets.md`): the program compiles and `clackup` signals the
+`http-handler` message at CALL time. Out of scope:
 WebSocket (`clack.socket`), `:swank-port`.
 
 Pins: `ClackE2eTest` (opt-in `RONTOLISP_CLACK_E2E=1`; Docker for pinned wasmtime, embedded
@@ -69,13 +70,19 @@ bivalent body stream that lets lack-request / circular-streams / http-body read 
 
 ## Transport selection (the one-clackup-source rule)
 `:server :rontolisp` = "serve on THIS target's native inbound transport", chosen at COMPILE
-time by reader features, so ONE source runs on five transports
+time by reader features, so ONE source runs on six transports
 (`examples/net/httpbin-clack.lisp`; `hello-clack.lisp` is the four-form minimum). `:port`
 reads the `PORT` env var, which only the socket transports look at. The manifest pins four of
-five legs per file.
+the six legs per file (no manifest leg compiles `--native`).
 - `#-rontolisp-wasm` — the socket server above.
-- `#+(and rontolisp-wasm (not rontolisp-reactor))` — the `rontolisp:http-handler` directive
-  leg: `wasmtime serve` under `--component`, call-time error on Preview 1.
+- `#+rontolisp-native` (`Features.NATIVE`, a `--native` module) — the RUNNER's server
+  (`.kb/http-server.md`, "--native: the runner's server"): binds `:port`/`:address`, never
+  returns (join and `:use-thread` ignored -- one thread).
+- `#+(and rontolisp-wasm (not rontolisp-reactor) (not rontolisp-native))` — the
+  `rontolisp:http-handler` directive leg: `wasmtime serve` under `--component`, call-time
+  error on Preview 1. **The `(not rontolisp-native)` is load-bearing**: a `--native` module
+  is a Preview 1 build with `:rontolisp-wasm` set, so without it the directive leg would be
+  read beside the runner leg.
 - `#+rontolisp-reactor` (`--no-wasi`, Preview 1 only, and `--no-gc`; `Features.WASM_REACTOR`,
   selected in `RontoLispCli.compileRecorded`) — run stores the app in the SHARED reactor store
   and leaves the `rontolisp::%http-reactor` marker; the compiler synthesizes the

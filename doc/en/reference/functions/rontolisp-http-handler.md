@@ -62,6 +62,9 @@ the module runs as a serverless HTTP component under `wasmtime serve` (the
 **Servlet war** (`-o app.war`) it registers the handler with the servlet
 container instead of binding a socket, and the `port` argument is likewise
 ignored — see the [HTTP guide](../../guides/http-handler.md#compiled-to-a-servlet-war).
+Compiled to a **native executable** (`--native`) the executable's runner binds
+`port` on the wildcard address and serves until the process is stopped — see
+[Compile to a Native Executable](../../compiling/native.md#serving-http).
 
 ```console
 (defun handle (env)
@@ -107,7 +110,8 @@ GET /hello
 
 `http-handler` runs on the **interpreter** backend (a blocking server), the
 **JVM** backend (the same blocking server, travelling beside the compiled
-class so it needs nothing else on the classpath) and the **WASI component**
+class so it needs nothing else on the classpath), a **native executable** (its
+runner's server) and the **WASI component**
 backend
 (`--component`, a `wasi:http/handler@0.3.0` component for `wasmtime serve`).
 Request and response headers are marshalled on every backend, the WASI component

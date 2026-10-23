@@ -54,6 +54,8 @@ jobs:
         - { os: macos-latest, name: darwin-arm64 }
     runs-on: ${{ matrix.os }}
     steps:
+    # The default shallow checkout is enough: building reads the commit from .git/HEAD and
+    # the ref it names (lispresen/src/build.lisp), never the history.
     - uses: actions/checkout@v7
     - name: Download rontolisp
       env:
@@ -67,11 +69,14 @@ jobs:
       run: |
         "$RUNNER_TEMP/rontolisp" lispresen/cli.lisp --native -o "lispresen-${{ matrix.name }}"
         ls -l "lispresen-${{ matrix.name }}"
+        "./lispresen-${{ matrix.name }}" --version
     # The same check lispresen/check.sh makes of every backend: the deck renders to
-    # examples/intro.html and intro.png byte for byte, with no diagnostic. The golden files
-    # come from develop's rontolisp; a published rontolisp older than a change lispresen
-    # depends on fails here and publishes nothing, until a later run.
-    - name: Render the intro deck
+    # examples/intro.html and intro.png byte for byte, with no diagnostic; --version prints
+    # the pom.xml version and this commit (github.sha, checked out); the starter deck
+    # renders with no diagnostic. The golden files come from develop's rontolisp; a
+    # published rontolisp older than a change lispresen depends on fails here and
+    # publishes nothing, until a later run.
+    - name: Check the executable
       run: lispresen/check.sh --exe "$PWD/lispresen-${{ matrix.name }}"
     - name: Upload the executable
       uses: actions/upload-artifact@v7

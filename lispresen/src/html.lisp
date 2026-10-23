@@ -68,7 +68,9 @@ th{font-weight:700}
 .qr{position:absolute;display:flex;flex-direction:column;gap:QR-GAP;font-size:QR-SIZE;line-height:QR-LH;white-space:nowrap}
 .qr.right{align-items:flex-end}
 .qr a{color:var(--muted)}
-.page{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
+.page,.footer{position:absolute;bottom:24px;font-size:PAGE;line-height:PAGE;color:var(--muted)}
+.footer{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.footer a{color:inherit}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
 .slide.measure{display:block;visibility:hidden}
@@ -217,6 +219,7 @@ html:not(.js) #fs{display:none}
     (format out ".centered{height:~dpx}~%" (safe-height))
     (format out ".page{right:~dpx}.out{left:~dpx;width:~dpx}~%" *margin-x*
             *margin-x* content)
+    (format out ".footer{left:~dpx;width:~dpx}~%" *margin-x* (footer-width deck))
     (format out ".thumb{aspect-ratio:~d/~d}~%" width *canvas-height*)
     (format out
             "@media print{@page{size:~dpx ~dpx;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}~%"
@@ -338,15 +341,12 @@ block B, which the player also finds the anchor by; nothing when there are none.
     (format out "</~a>~%" tag)))
 
 (defun write-code-text (b out)
-  (let ((text (code-text b)))
-    (cond ((code-block-steps b)
-           (write-stepped-lines (with-output-to-string (s)
-                                  (write-code-text (copy-code-block-plain b) s))
-                                b out))
-          ((code-block-morph b) (write-morph-text b out))
-          ((highlighted-p b) (write-highlighted text out))
-          ((console-p b) (write-console (code-block-lines b) out))
-          (t (write-escaped text out)))))
+  (cond ((code-block-steps b)
+         (write-stepped-lines (with-output-to-string (s)
+                                (write-code-text (copy-code-block-plain b) s))
+                              b out))
+        ((code-block-morph b) (write-morph-text b out))
+        (t (write-highlighted (code-text b) (code-block-lang b) out))))
 
 (defun copy-code-block-plain (b)
   (let ((c (copy-code-block b))) (setf (code-block-steps c) nil) c))
@@ -705,6 +705,10 @@ corner the fit solver chose."
       (write-string "<p class=\"source\">" out)
       (write-inlines (slide-source slide) (slide-source-run slide) out)
       (format out "</p>~%"))
+    (when (footer-shown-p deck slide)
+      (write-string "<p class=\"footer\">" out)
+      (write-inlines (deck-footer deck) (deck-footer-run deck) out)
+      (format out "</p>~%"))
     (when (and (deck-page-numbers deck) (not (eq (slide-kind slide) :title)))
       (format out "<div class=\"page\">~d</div>~%" (slide-number slide)))
     (when (slide-notes slide)
@@ -717,8 +721,10 @@ corner the fit solver chose."
   "<svg viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/></svg>")
 
 (defun write-deck (deck theme out)
-  (format out
-   "<!DOCTYPE html>~%<html lang=\"ja\">~%<head>~%<meta charset=\"utf-8\">~%")
+  (write-string "<!DOCTYPE html>
+<html lang=\"" out)
+  (write-escaped (or (deck-lang deck) "ja") out)
+  (format out "\">~%<head>~%<meta charset=\"utf-8\">~%")
   (format out
    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">~%")
   (write-string "<title>" out)

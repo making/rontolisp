@@ -20,6 +20,8 @@
   aspect
   runtime
   page-numbers
+  footer
+  footer-run
   callouts
   kicker
   agenda
@@ -30,6 +32,7 @@
   page-image
   page-image-font
   description
+  lang
   slides)
 
 ;;; KIND is :title (generated from the deck header), :section or :slide. LAYOUT is the
@@ -40,7 +43,8 @@
 ;;; lists what a page advance reveals, in source order (stepped items, code blocks with
 ;;; :steps, callouts), and STEP-COUNT how many advances that takes (NUMBER-STEPS). MORPH
 ;;; is the :morph option: its first code block changes from the previous slide's. SOURCE
-;;; holds the inline content of its (source ...) line, SOURCE-RUN its run.
+;;; holds the inline content of its (source ...) line, SOURCE-RUN its run. FOOTER is
+;;; :deck (the deck's footer line shows) or nil (the slide drops it).
 (defstruct slide
   number
   line
@@ -55,6 +59,7 @@
   callouts
   kicker
   kicker-run
+  (footer :deck)
   meta
   steps
   (step-count 0)
@@ -856,7 +861,7 @@ callout points at, or else a paragraph holding it as inline content."
 
 (defun parse-slide (form number line)
   (multiple-value-bind (opts body)
-      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS" "MORPH")
+      (split-options (cdr form) '("TITLE" "KICKER" "LAYOUT" "CLASS" "MORPH" "FOOTER")
                      "slide")
     (let* ((title (string-option opts "TITLE" "slide"))
            (*slide-title* title)
@@ -885,6 +890,7 @@ callout points at, or else a paragraph holding it as inline content."
        :kicker (if (assoc "KICKER" opts :test #'string=)
                    (string-option opts "KICKER" "slide")
                    :deck)
+       :footer (parse-slide-footer opts)
        :callouts (reverse *callouts*)
        :steps (reverse *steps*)
        :layout (let ((l (opt opts "LAYOUT")))
@@ -948,23 +954,37 @@ of a code block's :steps, one per step callout (by its :step, or by CALLOUTS, th
     (report :error ":runtime must be :hosted, :none or a URL string")
     nil)))
 
+(defun parse-lang-option (opts)
+  "The :lang of the deck header: a BCP 47 tag of letters, digits and hyphens, or nil."
+  (let ((v (string-option opts "LANG" "deck")))
+    (cond ((null v) nil)
+          ((and (plusp (length v))
+                (every (lambda (c) (or (char= c #\-) (and (< (char-code c) 128) (alphanumericp c))))
+                       v))
+           v)
+          (t
+           (report :error ":lang of deck must be a language tag of letters, digits and -")
+           nil))))
+
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME"
-                                                    "PAGE-NUMBERS" "CALLOUTS"
+                                                    "PAGE-NUMBERS" "FOOTER" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
                                                     "URL" "PROGRESS" "PAGE-URL"
                                                     "PAGE-IMAGE" "PAGE-IMAGE-FONT"
-                                                    "DESCRIPTION") "deck")
+                                                    "DESCRIPTION" "LANG") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
                :author (string-option opts "AUTHOR" "deck")
                :date (string-option opts "DATE" "deck")
+               :lang (parse-lang-option opts)
                :theme (opt opts "THEME")
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS")
+               :footer (parse-footer-option (opt opts "FOOTER"))
                :callouts (parse-callouts-option (opt opts "CALLOUTS"))
                :kicker (parse-kicker-option (opt opts "KICKER"))
                :logo (let ((l (opt opts "LOGO")))
@@ -1041,6 +1061,25 @@ REF when REF starts with a slash, else REF in BASE's directory."
          (report :error ":kicker of deck must be :section")
          nil)))
 
+(defun parse-footer-option (x)
+  "The inline content of the deck's :footer, a string, an inline form or a list of
+inlines (\"text \" (link ...)); nil when absent."
+  (when x
+    (let* ((*callouts* nil) (*steps* nil)
+           (nodes (parse-inlines (if (and (consp x) (not (symbolp (car x))))
+                                     x
+                                     (list x)))))
+      (when *callouts* (report :error "a footer takes no callouts"))
+      (strip-callouts nodes))))
+
+(defun parse-slide-footer (opts)
+  "A slide's :footer: :deck, or nil for (slide :footer nil), which drops the deck's."
+  (cond ((not (assoc "FOOTER" opts :test #'string=)) :deck)
+        ((null (opt opts "FOOTER")) nil)
+        (t
+         (report :error ":footer of slide must be nil")
+         :deck)))
+
 (defun parse-callouts-option (x)
   "The deck's :callouts as :step (a page advance shows each bubble) or :shown."
   (cond ((null x) :shown)
@@ -1088,7 +1127,8 @@ expanded first, so the sections an agenda lists are known before any slide is pa
         (number 0)
         (section nil)
         (expanded nil)
-        (agenda nil))
+        (agenda nil)
+        (marker nil))
     (when (and forms (equal (form-tag (car (car forms))) "DECK"))
       (let ((*line* (second (car forms))))
         (setf deck (parse-deck-header (car (car forms))))
@@ -1137,27 +1177,58 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                               :test #'equal)
                   (incf count)))))))
     (setf expanded (nreverse expanded))
-    (when (deck-agenda deck)
-      (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) expanded)
-          (progn
-            ;; The expansion counted the slides without the agenda slide placed here.
-            (dolist (d *diagnostics*)
-              (when (and (diagnostic-slide d) (> (diagnostic-slide d) number))
-                (incf (diagnostic-slide d))))
-            (push (setf agenda
-                        (make-slide :number (incf number)
-                                    :line (deck-line deck)
-                                    :kind :slide)) slides))
-          (let ((*line* (deck-line deck)))
-            (report
-             :warning ":agenda lists the sections, and this deck has none"))))
-    (loop for (form line) in expanded
+    ;; The agenda slide stands where the first (agenda) is, else after the title slide,
+    ;; and lists the sections after it.
+    (let* ((markers
+            (remove-if-not (lambda (e) (equal (form-tag (first e)) "AGENDA"))
+                           expanded))
+           (listed
+            (if markers (cdr (member (first markers) expanded)) expanded)))
+      (setf marker (first markers))
+      (dolist (e markers)
+        (let ((*line* (second e)))
+          (when (rest (first e)) (report :error "(agenda) takes no arguments"))
+          (cond ((not (deck-agenda deck))
+                 (report :warning
+                         "(agenda) places the agenda of (deck :agenda t), which this deck lacks"))
+                ((not (eq e marker))
+                 (report :warning
+                         "the agenda stands at the first (agenda); this one is ignored")))))
+      (when (deck-agenda deck)
+        (if (some (lambda (e) (equal (form-tag (first e)) "SECTION")) listed)
+            (let ((at
+                   (+ number 1
+                      (count-if (lambda (e)
+                                  (member (form-tag (first e)) '("SLIDE" "SECTION")
+                                          :test #'equal))
+                                expanded
+                                :end (or (position marker expanded) 0)))))
+              ;; The expansion counted the slides without the agenda slide placed here.
+              (dolist (d *diagnostics*)
+                (when (and (diagnostic-slide d) (>= (diagnostic-slide d) at))
+                  (incf (diagnostic-slide d))))
+              (setf agenda
+                    (make-slide :line (if marker (second marker) (deck-line deck))
+                                :kind :slide))
+              (unless marker
+                (setf (slide-number agenda) (incf number))
+                (push agenda slides)))
+            (let ((*line* (if marker (second marker) (deck-line deck))))
+              (report :warning (if marker
+                                   ":agenda lists the sections after (agenda), and this deck has none"
+                                   ":agenda lists the sections, and this deck has none"))))))
+    (loop for entry in expanded
+          for (form line) = entry
           do
             (let ((tag (form-tag form))
                   (*line* line)
                   (*slide* (1+ number))
                   (*slide-title* nil))
-              (cond ((equal tag "SLIDE")
+              (cond ((equal tag "AGENDA")
+                     (when (and agenda (eq entry marker))
+                       (setf (slide-number agenda) (incf number))
+                       (push agenda slides)))
+                    ((equal tag "SLIDE")
                      (let ((slide (parse-slide form (incf number) line)))
                        (number-steps slide (deck-callouts deck))
                        (when (slide-morph slide) (morph-code slide (car slides)))
@@ -1175,7 +1246,7 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                     (t
                      (let ((*slide* nil))
                        (report :error (format nil
-                                              "expected (slide ...), (section ...) or (define ...), found ~a"
+                                              "expected (slide ...), (section ...), (agenda) or (define ...), found ~a"
                                               (if tag
                                                   (string-downcase tag)
                                                   (prin1-to-string form)))))))))
@@ -1184,5 +1255,6 @@ expanded first, so the sections an agenda lists are known before any slide is pa
       (add-agendas deck agenda
                    (remove-if-not (lambda (s)
                                     (and (eq (slide-kind s) :section)
-                                         (slide-title s))) (deck-slides deck))))
+                                         (slide-title s)))
+                                  (cdr (member agenda (deck-slides deck))))))
     deck))

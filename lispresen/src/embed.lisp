@@ -52,7 +52,12 @@ UTF-8."
 
 (defparameter *code-langs*
   '(("lisp" . "lisp") ("lsp" . "lisp") ("cl" . "lisp") ("scm" . "scheme")
-    ("ss" . "scheme") ("clj" . "clojure") ("cljc" . "clojure"))
+    ("ss" . "scheme") ("clj" . "clojure") ("cljc" . "clojure") ("java" . "java")
+    ("kt" . "kotlin") ("js" . "javascript") ("mjs" . "javascript")
+    ("ts" . "typescript") ("c" . "c") ("h" . "c") ("cpp" . "cpp") ("cc" . "cpp")
+    ("hpp" . "cpp") ("go" . "go") ("rs" . "rust") ("py" . "python") ("sh" . "bash")
+    ("bash" . "bash") ("zsh" . "bash") ("sql" . "sql") ("json" . "json")
+    ("yaml" . "yaml") ("yml" . "yaml"))
   "Code file extensions and the language they default :lang to.")
 
 (defun code-file-lang (path)

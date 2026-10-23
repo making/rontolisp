@@ -34,6 +34,8 @@ on:
     # whose runtime it loads.
     - lispresen/examples/intro.html
     - lispresen/examples/intro.png
+    # lispresen's agent skill, published as a plugin in the skill's marketplace.
+    - lispresen/skills/**
     # The slide decks and their link-preview images.
     - decks/**
     - .github/workflows/pages.yaml
@@ -104,7 +106,11 @@ jobs:
         echo "previous-version=$(echo "$PUBLISHED" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
         echo "previous-hash=$(echo "$PUBLISHED" | sed -n 's/.*"contentHash": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
         echo "candidate ${MAJOR_MINOR}.${PATCH}; published $PUBLISHED"
-    - name: Generate agent skill (doc -> web/dist/skill)
+        # lispresen's skill is hand-written, so its version counts only the commits
+        # that can change its plugin: the skill directory and the code packaging it.
+        LISPRESEN=$(git rev-list --count HEAD -- lispresen/skills docs-tool/src/main/java/am/ik/rontolisp/docgen/SkillGen.java)
+        echo "lispresen-version=${MAJOR_MINOR}.${LISPRESEN}" >> "$GITHUB_OUTPUT"
+    - name: Generate agent skills (doc, lispresen/skills -> web/dist/skill)
       run: |
         java -jar docs-tool/target/rontolisp-docgen.jar skill \
           --source doc --out web/dist/skill \
@@ -112,7 +118,8 @@ jobs:
           --previous-version '${{ steps.skill.outputs.previous-version }}' \
           --previous-hash '${{ steps.skill.outputs.previous-hash }}' \
           --commit '${{ github.sha }}' \
-          --site-base 'https://making.github.io/rontolisp'
+          --site-base 'https://making.github.io/rontolisp' \
+          --plugin 'lispresen/skills/lispresen@${{ steps.skill.outputs.lispresen-version }}'
     # The golden deck is self-contained (check.sh renders it with --embed) and loads
     # its runtime from this same site, so it is copied as is, with the PNG of its title
     # slide that lispresen draws and its og:image names. After the web profile, which

@@ -36,6 +36,14 @@ Claude Code re-reads the marketplace file from that URL, so a new version
 becomes available without you changing anything -- see
 [Staying current](#staying-current) for how the version moves.
 
+The same marketplace also carries the skill for
+[lispresen](https://github.com/making/rontolisp/blob/develop/lispresen/README.md),
+the slide tool written in rontolisp, as a plugin of its own:
+
+```bash
+claude plugin install lispresen@rontolisp
+```
+
 ## Install without the plugin system
 
 A skill is a directory, and Claude Code reads every skill under `~/.claude/skills`

@@ -555,6 +555,12 @@ final class CompileFrontend {
 		// ring.adapter.rontolisp/run-server both call it. FIRST, because each leg is
 		// what a later pass reads -- the http-handler directive (HttpHandlerInliner,
 		// HttpLibrary, the :raw-body scan), the reactor marker (HttpReactorInliner).
+		// A --native module is Preview 1, which has no incoming TCP: the runner serves
+		// (http-serve.lisp's #+rontolisp-native leg), so the http-handler DIRECTIVE
+		// becomes a call of that leg here, before the splice below reads the program.
+		if (options.runnerHosted()) {
+			loaded = HttpReactorInliner.lowerHttpHandlerForRunner(loaded);
+		}
 		loaded = HttpServeLibrary.process(loaded, features);
 		// objc:, appkit:, metal: and scene: have no lowering for a .wasm and never will
 		// (no WASM runtime offers a foreign function API, AppKit or Metal); the JVM

@@ -1,6 +1,7 @@
 ;; A Ring application served by ring.adapter.rontolisp/run-server. One source
-;; for every transport: a socket on the interpreter and the JVM, a Servlet
-;; container under -o app.war, `wasmtime serve` under --component, and a host
+;; for every transport: a socket on the interpreter and the JVM, the runner's
+;; server in a --native executable, a Servlet container under -o app.war,
+;; `wasmtime serve` under --component, and a host
 ;; calling the handle-request export under --no-wasi. The response builders
 ;; and the parameter middleware are the built-in ring.util / ring.middleware
 ;; namespaces.

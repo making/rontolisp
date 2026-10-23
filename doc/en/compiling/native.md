@@ -53,6 +53,32 @@ A program that fetches starts with a larger runner, the one that carries HTTP
 and TLS; every other program keeps the small one
 ([Size and Speed](#size-and-speed)).
 
+## Serving HTTP
+
+A [Clack](../guides/clack.md) application started with `(clack:clackup app
+:server :rontolisp)`, a [Ring](../clojure/reference/ring.md) handler started
+with `run-server`, or a handler served by
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+serves from the executable: the runner binds `:port` and
+`:address`, accepts the connections and speaks HTTP/1.1, and the program answers
+the requests.
+
+```bash
+rontolisp app.lisp --native -o app
+./app        # serves until stopped (Ctrl-C)
+```
+
+The runner reads every connection on a thread of its own (a request's head and
+its whole body, `Content-Length` or chunked) and keeps connections alive as
+HTTP/1.1 says, closing one that stays idle for a minute. The application answers
+one request at a time, on the program's one thread, and its response goes out
+whole, with a `Content-Length`. So `clackup`, `run-server` and `http-handler` never return:
+`:use-thread` and `:join? false` have no second thread to hand the program back
+on, and the server stops with the process. The request is the one the
+interpreter and the JVM build, the peer's address and port included; the files
+a handler serves are read from the file system as in any program
+([Files](#files)).
+
 ## Flags
 
 Every flag of the default WASM output applies (`--simd`, `--optimize`,
@@ -60,7 +86,8 @@ Every flag of the default WASM output applies (`--simd`, `--optimize`,
 refused by name: `--component`, `--no-wasi`, `--no-gc`, `--host-random`,
 `--host-fetch`, `--host-boundary`, `--reentrant` and `--emit-js-glue`. So is an
 `-o` name ending in `.wasm`, `.class`, `.jar` or `.war`. A program that fetches
-needs no flag: the runner answers `fetch` itself ([HTTP](#http)).
+or serves needs no flag: the runner answers `fetch` and the server itself
+([HTTP](#http), [Serving HTTP](#serving-http)).
 
 ## Where It Runs
 
@@ -106,6 +133,6 @@ other target such a program is a compile error naming the reference.
 
 An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,
 1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.1 MB for `hello` on Linux
-x86_64, 2.3 MB for a 28 KB module. The runner of a program that fetches is
+x86_64, 2.3 MB for a 28 KB module. The runner of a program that fetches or serves HTTP is
 3.3 MB on Linux x86_64 and 2.9 MB on Linux aarch64. It starts in about 10 ms and runs at
 about the speed of `wasmtime run` on the same module.
