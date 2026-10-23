@@ -95,7 +95,9 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   on the classpath. `pom.xml` adds `rontolisp-native/target/resources` as a resource
   directory; without the host's pair there `--native` answers "not available for <os>-<arch>".
 - **Building it from Maven**: the `native-shims` antrun execution (generate-resources) runs
-  `build.sh --maven <rontolisp.native.build> <rontolisp.native.required>`. `build` (default
+  `build.sh --maven <rontolisp.native.build> <rontolisp.native.required>` on every Unix build,
+  whatever the two properties say (until 2026-10-23 only when one was `true`, so the stale
+  rebuild below never ran under a plain `./mvnw test`). `build` (default
   `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
   there afterwards and, on Linux, its stub is static. Without the musl target (no rustup)

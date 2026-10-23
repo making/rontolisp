@@ -30,7 +30,8 @@
 		<!-- The native executable output's precompile shim and runner stub
 		     (.kb/native-output.md): build them with rontolisp-native/build.sh during
 		     generate-resources when cargo is found (-Pnative turns this on), and fail
-		     unless the host's pair ends up on the classpath (CI turns this on). -->
+		     unless the host's pair ends up on the classpath (CI turns this on). A host
+		     pair older than its sources is rebuilt under the defaults too. -->
 		<rontolisp.native.build>false</rontolisp.native.build>
 		<rontolisp.native.required>false</rontolisp.native.required>
 	</properties>
@@ -179,7 +180,11 @@ gitBranch=${git.branch}
 					</execution>
 					<!-- Runs before process-resources copies rontolisp-native/target/resources
 					     (registered below), so a pair built here is in this build's jar and
-					     native image. Unix only: build.sh is a bash script. -->
+					     native image. Runs on every build, whatever the two properties say:
+					     build.sh also rebuilds a host pair older than its sources, and a
+					     plain `./mvnw test` must reach that check (.kb/native-output.md). With
+					     nothing to build it costs a find over ~50 files. Unix only: build.sh
+					     is a bash script. -->
 					<execution>
 						<id>native-shims</id>
 						<phase>generate-resources</phase>
@@ -187,14 +192,8 @@ gitBranch=${git.branch}
 							<goal>run</goal>
 						</goals>
 						<configuration>
-							<target xmlns:if="ant:if">
-								<condition property="native.shims">
-									<or>
-										<istrue value="${rontolisp.native.build}"/>
-										<istrue value="${rontolisp.native.required}"/>
-									</or>
-								</condition>
-								<exec if:set="native.shims" executable="bash" osfamily="unix" failonerror="true">
+							<target>
+								<exec executable="bash" osfamily="unix" failonerror="true">
 									<arg value="${project.basedir}/rontolisp-native/build.sh"/>
 									<arg value="--maven"/>
 									<arg value="${rontolisp.native.build}"/>
