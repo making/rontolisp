@@ -1,6 +1,6 @@
 ---
 name: lispresen
-description: Make presentation slides with lispresen, which turns a deck written as S-expressions ((deck ...), (section ...), (slide ...)) into one self-contained HTML file and chooses font sizes and placement itself. Covers installing lispresen when it is missing (native executable from GitHub Releases, or a Java fallback), starting from `lispresen new`, writing the deck, rendering, and fixing the diagnostics it reports. Use this whenever the user asks for slides, a talk, a deck or a presentation made with lispresen, mentions a lispresen deck or a .lisp file of (deck ...)/(slide ...) forms, or wants a presentation written as S-expressions and delivered as a single HTML page, even if lispresen is not installed yet.
+description: Make presentation slides with lispresen, which turns a deck written as S-expressions ((deck ...), (section ...), (slide ...)) into one self-contained HTML file and chooses font sizes and placement itself. Covers installing lispresen when it is missing (native executable from GitHub Releases, or a Java fallback), starting from `lispresen new`, writing the deck, previewing it with `lispresen serve` (live reload on every save), rendering, and fixing the diagnostics it reports. Use this whenever the user asks for slides, a talk, a deck or a presentation made with lispresen, mentions a lispresen deck or a .lisp file of (deck ...)/(slide ...) forms, or wants a presentation written as S-expressions and delivered as a single HTML page, even if lispresen is not installed yet.
 ---
 
 # lispresen
@@ -10,8 +10,9 @@ holding the slides and the player. The author writes content only: lispresen pic
 layout and the font sizes, and reports a slide that cannot stay readable instead of
 shrinking it. The deck is read, never evaluated.
 
-The work goes in five steps: install, start from the starter deck, write, render and fix,
-check in a browser. Upstream documentation (there is no local checkout to read):
+The work goes in five steps: install, start from the starter deck, write, preview and
+fix (`lispresen serve` rebuilds the page on every save), check in a browser and build the
+final HTML. Upstream documentation (there is no local checkout to read):
 
 - README (every form and option): https://github.com/making/rontolisp/blob/develop/lispresen/README.md
 - DESIGN (layout rules, lint table): https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md
@@ -123,14 +124,32 @@ Read `references/deck-format.md` now if it is not already in context. The essent
 - `:agenda t` (or a title string) on the deck adds an agenda after the title slide; put
   `(agenda)` after opening slides that should come before it.
 
-## 4. Render and fix
+## 4. Preview, lint and fix
 
-Lint first, then render:
+The editing loop is `lispresen serve`: it serves the deck's page over HTTP, rebuilds it
+whenever the deck (or a file it reads) is saved, and the open page reloads on the slide it
+showed. Start it once, in the background, and leave it running while you edit:
+
+```bash
+lispresen serve talk.lisp --port 8000 2> serve.log &   # http://127.0.0.1:8000/
+serve_pid=$!
+```
+
+- It writes nothing to disk. Images and videos are served from beside the deck, so they
+  show without `--embed`, and a video can be sought.
+- A build happens when the page asks for it (every half second while it is open). Each
+  build writes `lispresen: built talk.lisp: E errors, W warnings` and the diagnostics to
+  standard error (`serve.log` above), and the page shows them in a panel over the slides.
+  Without a page open, `curl -s http://127.0.0.1:8000/__lispresen/version` triggers one.
+- `--port` picks another port when 8000 is taken (`cannot serve on ...`, exit 1);
+  `--theme` and `--runtime` are the rendering options. It runs on the native executable,
+  the JVM jar and SBCL; a WASM build refuses it.
+- Stop it when done: `kill $serve_pid`. Never leave a server running when you hand over.
+
+Lint the deck with `--check`, which prints the same diagnostics without a server:
 
 ```bash
 lispresen talk.lisp --check --strict   # report only; exit 1 on any warning or error
-lispresen talk.lisp                    # writes talk.html (and :page-image, if set)
-lispresen talk.lisp --embed            # images and videos inlined as data: URIs: the HTML stands alone
 ```
 
 Diagnostics go to standard error, one per line:
@@ -142,39 +161,52 @@ talk.lisp:42: slide 7 "title": error: the content does not fit the slide even at
 
 The line is the line of the top-level form; the slide number counts the title slide and
 the agenda. Exit status: 0 success, 1 errors (or warnings under `--strict`), 2 usage.
-An error still writes the HTML, with the broken slide outlined in red, so always read
-standard error and the exit status, not only whether `talk.html` appeared.
+A render with an error still writes the HTML, with the broken slide outlined in red, so
+always read standard error and the exit status, not only whether `talk.html` appeared.
 
-Loop until `--check --strict` prints nothing. Fix warnings too: each one marks something
-the audience will find hard to read. `references/deck-format.md` maps the common
-diagnostics to their fixes.
+Loop (edit, save, read the diagnostics, look at the page) until `--check --strict` prints
+nothing. Fix warnings too: each one marks something the audience will find hard to read.
+`references/deck-format.md` maps the common diagnostics to their fixes.
 
-Use `--embed` for a deck that will be sent or published as one file. Without it the
-HTML refers to images by relative path and must travel with them, and a missing image is
-not reported; `--embed` reports it as an error.
+When the deck is done, build the HTML to hand over:
+
+```bash
+lispresen talk.lisp --embed --strict   # writes talk.html (and :page-image, if set); exit 1 on any warning
+```
+
+`--embed` inlines images and videos as `data:` URIs, so the file alone is the deck. Without
+it (`lispresen talk.lisp`) the HTML refers to images by relative path and must travel with
+them, and a missing image is not reported; `--embed` reports it as an error.
 
 ## 5. Check in a browser
 
-Open `talk.html` (on macOS, `open talk.html`). Append `?check` to the URL: the player then
-measures each slide with the fonts the machine really has and shows an overlay in the
-top-right corner. `runtime check: no corrections` is the expected result; otherwise it
-lists each slide it stepped down a size (`slide 7: body 56px -> 52px`) and outlines it.
+While editing, the page is the one serve answers: tell the user to open
+`http://127.0.0.1:8000/` and keep it open; every save reloads it. The built `talk.html`
+opens from disk (on macOS, `open talk.html`). Append `?check` to either URL
+(`http://127.0.0.1:8000/?check`): the player then measures each slide with the fonts the
+machine really has and shows an overlay in the top-right corner. `runtime check: no
+corrections` is the expected result; otherwise it lists each slide it stepped down a size
+(`slide 7: body 56px -> 52px`) and outlines it.
 A correction is not an error, but a slide corrected on the presenting machine is a slide
 near its limit; shorten it.
 
 With browser automation available (Chrome DevTools MCP, Playwright), open
-`file:///absolute/path/talk.html?check` in a new page, wait for the fonts, read the text
-of the element `#chk`, and take screenshots of the slides you changed (`#N` in the URL
-opens slide N; `window.lispresen.show(i)` shows the slide at 0-based index i). Close the
-pages you opened. Without browser tools, ask the user to open the file with `?check` and
-tell you what the overlay says.
+`http://127.0.0.1:8000/?check` (while serving) or `file:///absolute/path/talk.html?check`
+in a new page, wait for the fonts, read the text of the element `#chk`, and take
+screenshots of the slides you changed (`#N` in the URL opens slide N;
+`window.lispresen.show(i)` shows the slide at 0-based index i). A served page reloads
+itself after each save, so screenshot after the reload. Close the pages you opened.
+Without browser tools, ask the user to open the page with `?check` and tell you what the
+overlay says.
 
 Player keys worth telling the user: arrows/space move, `F` full screen, `O` overview, `P`
 presenter window (notes, timer), `E` or a click edits runnable code, `Ctrl+Enter` runs it.
 
 ## 6. Before handing over
 
-- `lispresen talk.lisp --check --strict` prints nothing and exits 0.
+- `lispresen talk.lisp --embed --strict` printed nothing and exited 0, and `talk.html` is
+  that build (serve writes no file).
+- The `lispresen serve` you started is stopped.
 - The browser check reports `no corrections`.
 - Every `image` and `video` file exists beside the deck (or the deck was rendered with
   `--embed`), and every one has `:alt`.

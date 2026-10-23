@@ -176,7 +176,9 @@ runtime (about 35 MB) loads from the network when the deck opens; `:runtime :non
 
 `(image "img/arch.png" :alt "..." :caption "...")`. The path is relative to the deck.
 Without `--embed` the HTML refers to the file by that path. `--embed` inlines `png`,
-`jpg`, `gif`, `webp`, `avif`, `svg` and reports a missing file as an error. An SVG or PNG
+`jpg`, `gif`, `webp`, `avif`, `svg` and reports a missing file as an error.
+`lispresen serve` serves the files beside the deck, so they show while editing without
+`--embed`; build the final HTML with `--embed`. An SVG or PNG
 does not follow the theme's colors; prefer a `flow`, `bars` or `cells` diagram where one
 fits.
 
@@ -216,6 +218,8 @@ A recorded demo, the fallback for a live one:
 - Print, the overview and the presenter window show `:poster` (or the first frame); set
   it, since Safari may show no frame before playing.
 - `--embed` inlines `mp4` and `webm` (and the poster); above 20 MB it warns.
+- `lispresen serve` answers byte-range requests, so a served video can be sought while
+  editing; a large one is better kept beside the HTML than embedded.
 
 ## Templates
 
@@ -304,6 +308,8 @@ drawn. Leave all of these out for a deck that is not published.
   sequence is measured as one 1 em glyph and never split across lines.
 - **Every image and video needs `:alt`.**
 - **Do not shrink to fit.** There is no option for it; split the slide.
+- **serve writes no file.** The page `lispresen serve` shows exists only in its answers;
+  the HTML to hand over is the one `lispresen talk.lisp --embed --strict` writes.
 
 ## Diagnostics and their fixes
 
