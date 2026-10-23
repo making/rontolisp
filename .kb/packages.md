@@ -516,8 +516,10 @@ made table-aware. The model:
   table; `%package-symbols-where` normalizes each distinct row once and keeps the first
   answer by table. They were `remove-duplicates :test #'equal` and a `member` scan of the
   answer, which made a package walk quadratic in the corpus and dominated the compiled legs.
-  Pinned by
-  `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` and its WASM twin. Each
+  Pinned by the source shape, both backends at once:
+  `LispPreludeLibraryTest#thePackageWalksDeduplicateThroughATableRatherThanAScan` (the two
+  defuns call `gethash` and no `remove-duplicates` / `append` / `member`; the wall-clock
+  ratio pins it replaced were removed 2026-10-23, `.kb/test-execution.md`). Each
   row's WASM `intern` was a linear scan of the symbol table until
   `_intern` became a hash table (`.kb/symbol-runtime-api.md`). The normalize cost left
   after that was NOT the package tables (2026-10-05,

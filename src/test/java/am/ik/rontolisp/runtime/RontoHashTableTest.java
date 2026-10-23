@@ -39,12 +39,18 @@ class RontoHashTableTest {
 		remove(table, "b");
 		assertThat(RontoHashTable.count(table)).isEqualTo(3);
 		assertThat(walk(table)).isEqualTo(List.of("a=A", "c=C", "d=D"));
+		// The removal left a dead slot rather than moving the entries after it: shifting
+		// the order per removal made removing every entry oldest-first quadratic.
+		assertThat(List.of(pos(table, "a"), pos(table, "c"), pos(table, "d"))).containsExactly(0, 2, 3);
 		// A removed key stored again goes last, as a fresh entry.
 		RontoHashTable.put(table, "b", "B3");
 		assertThat(walk(table)).isEqualTo(List.of("a=A", "c=C", "d=D", "b=B3"));
+		assertThat(pos(table, "b")).isEqualTo(4);
 		// Half the slots dead: the table rebuilds, keeping the order.
 		remove(table, "a");
+		assertThat(pos(table, "d")).isEqualTo(3);
 		remove(table, "c");
+		assertThat(List.of(pos(table, "d"), pos(table, "b"))).containsExactly(0, 1);
 		remove(table, "d");
 		assertThat(walk(table)).isEqualTo(List.of("b=B3"));
 		RontoHashTable.clear(table);
@@ -254,6 +260,17 @@ class RontoHashTableTest {
 			}
 		}
 		return false;
+	}
+
+	// The key's slot in the insertion order.
+	private static int pos(RontoHashTable table, Object key) {
+		for (RontoHashTable.Entry entry = RontoHashTable.find(table,
+				key.hashCode()); entry != RontoHashTable.END; entry = entry.next) {
+			if (key.equals(entry.pair[0])) {
+				return entry.pos;
+			}
+		}
+		throw new AssertionError("no entry for " + key);
 	}
 
 	private static List<String> walk(RontoHashTable table) {

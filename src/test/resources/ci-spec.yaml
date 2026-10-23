@@ -16819,12 +16819,11 @@ cases:
       (print (length *scan-mixed*))
       (print (subseq *scan-mixed* 2 5))
       (print (char-code (char *scan-mixed* 0)))
-      ;; A character index costs the same wherever it lands, so scanning ONE long
-      ;; string costs what scanning the SAME characters in short chunks costs.
-      ;; Every compile backend used to walk from the first byte on every (char s i)
-      ;; -- the JVM through String.offsetByCodePoints, both WASM backends through
-      ;; the UTF-8 decode -- which made a left-to-right scan quadratic and made the
-      ;; chunked half 64x cheaper than the whole-string half below.
+      ;; A left-to-right scan of ONE long string reads exactly what scanning the
+      ;; SAME characters in short chunks reads. Its COST -- an index costs the same
+      ;; wherever it lands; every compile backend used to walk from the first byte
+      ;; on every (char s i) -- is pinned per backend in JUnit by protocol state and
+      ;; a WASM fuel budget, not by a clock (.kb/string-index-cost.md).
       (defun scan-sum-of (s)
         (let ((total 0))
           (dotimes (i (length s))
@@ -16838,28 +16837,10 @@ cases:
       (dotimes (i 6) (setq *scan-short* (concatenate 'string *scan-short* *scan-short*)))
       (defvar *scan-long* *scan-short*)
       (dotimes (i 7) (setq *scan-long* (concatenate 'string *scan-long* *scan-long*)))
-      (scan-sum-of "warm")
-      (defvar *scan-t0* (get-internal-real-time))
       (defvar *scan-whole* (scan-sum-of *scan-long*))
-      (defvar *scan-t1* (get-internal-real-time))
       (defvar *scan-chunked* 0)
       (dotimes (k 128) (setq *scan-chunked* (+ *scan-chunked* (scan-sum-of *scan-short*))))
-      (defvar *scan-t2* (get-internal-real-time))
-      ;; Both halves must have read the same characters for the times to compare.
       (print (= *scan-whole* *scan-chunked*))
-      (print (if (<= (- *scan-t1* *scan-t0*) (+ 500 (* 6 (- *scan-t2* *scan-t1*))))
-                 'scan-flat
-                 'scan-quadratic))
-      ;; (length s) is the same walk, so it may not be linear in the length either.
-      (defvar *scan-acc* 0)
-      (defvar *scan-t3* (get-internal-real-time))
-      (dotimes (k 20000) (setq *scan-acc* (+ *scan-acc* (length *scan-long*))))
-      (defvar *scan-t4* (get-internal-real-time))
-      (dotimes (k 20000) (setq *scan-acc* (+ *scan-acc* (length *scan-short*))))
-      (defvar *scan-t5* (get-internal-real-time))
-      (print (if (<= (- *scan-t4* *scan-t3*) (+ 500 (* 6 (- *scan-t5* *scan-t4*))))
-                 'length-flat
-                 'length-quadratic))
     expected: |
       (97 233 128512 98 12354 99 128512 100 233)
       (233 100 128512 99 12354 98 128512 233 97)
@@ -16868,8 +16849,6 @@ cases:
       "😀bあ"
       97
       T
-      SCAN-FLAT
-      LENGTH-FLAT
   - name: character-index-into-a-string-holding-a-surrogate-pair
     source: |
       ;; The CORRECTNESS half of the invariant above, for the shape that case
@@ -16933,10 +16912,11 @@ cases:
       ;; (char v i) / (schar v i) / (elt v i) on a MUTABLE CHARACTER VECTOR (a
       ;; make-string buffer) read the ELEMENT, exactly as (aref v i) always did:
       ;; no rendered string is built per index, so the cost invariant of the case
-      ;; above holds for this representation too (.kb/string-index-cost.md). The
-      ;; compile backends used to render the WHOLE vector into a fresh string on
-      ;; every index, which made a left-to-right scan of a make-string buffer
-      ;; O(n^2) -- 1153 ms vs 8 ms for 200 scans of 2048 characters on the JVM.
+      ;; above holds for this representation too (.kb/string-index-cost.md, pinned
+      ;; per backend in JUnit). The compile backends used to render the WHOLE
+      ;; vector into a fresh string on every index, which made a left-to-right scan
+      ;; of a make-string buffer O(n^2) -- 1153 ms vs 8 ms for 200 scans of 2048
+      ;; characters on the JVM.
       (defvar *cvx* (make-string 4 :initial-element #\a))
       (setf (char *cvx* 1) #\é)
       (setf (char *cvx* 2) (code-char 128512))
@@ -16946,8 +16926,8 @@ cases:
       (defvar *cvv* (make-array 2 :element-type 'character :displaced-to *cvx*
                                   :displaced-index-offset 1))
       (print (char-code (char *cvv* 1)))
-      ;; The cost half, the shape of the case above: one long buffer against the
-      ;; same characters in short chunks.
+      ;; One long buffer scanned whole reads what the same characters in short
+      ;; chunks read.
       (defun cv-scan-sum (s)
         (let ((total 0))
           (dotimes (i (length s))
@@ -16955,37 +16935,21 @@ cases:
           total))
       (defvar *cv-short* (make-string 1024 :initial-element #\a))
       (defvar *cv-long* (make-string 65536 :initial-element #\a))
-      (cv-scan-sum (make-string 4 :initial-element #\w))
-      (defvar *cv-t0* (get-internal-real-time))
       (defvar *cv-whole* (cv-scan-sum *cv-long*))
-      (defvar *cv-t1* (get-internal-real-time))
       (defvar *cv-chunked* 0)
       (dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
-      (defvar *cv-t2* (get-internal-real-time))
       (print (= *cv-whole* *cv-chunked*))
-      (print (if (<= (- *cv-t1* *cv-t0*) (+ 500 (* 6 (- *cv-t2* *cv-t1*))))
-                 'cv-scan-flat
-                 'cv-scan-quadratic))
     expected: |
       (233 233 128512 128512)
       128512
       T
-      CV-SCAN-FLAT
   - name: string-accumulate-is-not-quadratic
     source: |
       ;; Turning many pieces into one string must cost the TOTAL LENGTH, not the
-      ;; sum of the prefixes. Both portable ways a program has of doing it are
-      ;; pinned here as a ratio -- one call over N characters against the same N
-      ;; characters in short calls -- so the bound is machine-independent
-      ;; (.kb/string-accumulate-cost.md).
-      ;;
-      ;; The file shape the invariant exists for -- uiop:read-file-string over a
-      ;; multi-megabyte file -- is NOT what is timed: on the interpreter
-      ;; read-sequence costs about 1.2 us per character, so the accumulate does
-      ;; not dominate below roughly 1.2M characters and a corpus-affordable file
-      ;; cannot tell the two implementations apart there. What IS timed is the
-      ;; two mechanisms that read-file-string and its hand-written twin are made
-      ;; of, at a size every backend finishes in milliseconds.
+      ;; sum of the prefixes (.kb/string-accumulate-cost.md). The two portable ways
+      ;; a program has of doing it build the same characters here in one call and
+      ;; in short calls; the cost itself is pinned in JUnit by the shape of the
+      ;; first-class concatenate, not by a clock.
       (defvar *acc-piece* (make-string 64 :initial-element #\y))
       (defvar *acc-pieces* nil)
       (dotimes (i 4096) (push *acc-piece* *acc-pieces*))
@@ -16997,34 +16961,20 @@ cases:
       (print (apply #'concatenate 'string (list "ab" "cd" "ef")))
       (print (funcall #'concatenate 'string "a" '(#\b #\c) #(#\d) nil "e"))
       (print (apply #'concatenate 'list (list '(1 2) #(3 4) "ab")))
-      (apply #'concatenate 'string *acc-sixteen*)
-      (defvar *acc-t0* (get-internal-real-time))
       (defvar *acc-whole* (length (apply #'concatenate 'string *acc-pieces*)))
-      (defvar *acc-t1* (get-internal-real-time))
       (defvar *acc-chunked* 0)
       (dotimes (k 256)
         (setq *acc-chunked* (+ *acc-chunked* (length (apply #'concatenate 'string *acc-sixteen*)))))
-      (defvar *acc-t2* (get-internal-real-time))
       (print (= *acc-whole* *acc-chunked*))
-      (print (if (<= (- *acc-t1* *acc-t0*) (+ 500 (* 6 (- *acc-t2* *acc-t1*))))
-                 'concat-flat
-                 'concat-quadratic))
       ;; The string output stream uiop:read-file-string accumulates its chunks
       ;; into: every backend appends into a buffer that doubles.
       (defun ci-acc-stream (chunk k)
         (with-output-to-string (out) (dotimes (i k) (write-string chunk out))))
-      (ci-acc-stream *acc-piece* 16)
-      (defvar *acc-t3* (get-internal-real-time))
       (defvar *acc-swhole* (length (ci-acc-stream *acc-piece* 4096)))
-      (defvar *acc-t4* (get-internal-real-time))
       (defvar *acc-schunked* 0)
       (dotimes (k 256)
         (setq *acc-schunked* (+ *acc-schunked* (length (ci-acc-stream *acc-piece* 16)))))
-      (defvar *acc-t5* (get-internal-real-time))
       (print (= *acc-swhole* *acc-schunked*))
-      (print (if (<= (- *acc-t4* *acc-t3*) (+ 500 (* 6 (- *acc-t5* *acc-t4*))))
-                 'stream-flat
-                 'stream-quadratic))
       ;; uiop:read-file-string itself, for CORRECTNESS: a file longer than the
       ;; 4,096-character read buffer, with a multi-byte character straddling no
       ;; boundary in particular, comes back whole and in order.
@@ -17039,9 +16989,7 @@ cases:
       "abcde"
       (1 2 3 4 #\a #\b)
       T
-      CONCAT-FLAT
       T
-      STREAM-FLAT
       4500
       "0123456789abcdé"
       "0123456789abcdé"
@@ -30002,18 +29950,6 @@ cases:
       (print (replace "abc" "xy"))
     expected: |
       "xyc"
-  - name: stringp-over-a-char-vector-is-constant-time
-    source: |
-      (defun stringp-ms (s iters)
-        (let ((n 0) (start (get-internal-real-time)))
-          (dotimes (i iters)
-            (if (stringp s) (setq n (+ n 1))))
-          (if (= n iters) (- (get-internal-real-time) start) -1)))
-      (let* ((short (stringp-ms (make-string 1) 200000))
-             (long (stringp-ms (make-string 8192) 200000)))
-        (print (and (>= short 0) (<= long (+ 50 (* 20 short))))))
-    expected: |
-      T
   - name: float16-bits
     source: |
       (print (rontolisp:float16-bits 1.0))

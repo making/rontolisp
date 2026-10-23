@@ -194,11 +194,13 @@ scales with the mirrored globals, eval-using programs run several times faster o
 component and somewhat faster on the JVM.
 Size: an eval-using program shrinks and no example output
 grew; everything else in size-report, bench-report and examples is byte-identical (P1,
-`--optimize=size`, component, JVM). Pinned by
-`aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees` (`EvalMirrorFixture`: the same walk
-cost however many `set` globals, before the fix and after)
-in `JvmLispCompilerTest` (`compileAndRun...`), `WasmLispCompilerIntegrationTest` (P1 and
-component) and `LispEvaluatorTest`. A user global assigned in a loop still pays the walk.
+`--optimize=size`, component, JVM). Pinned by the mirror's own instruction, a call of
+`_store`: `aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv` in `JvmLispCompilerTest` (a
+defun answering `(values 1 2)` calls none, one assigning a global calls one) and
+`WasmLispCompilerTest` (functions answering several values add no `_store` to the module;
+the decision is codegen's, so P1 and the component share it). The wall-clock ratio pins it
+replaced (`aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees`) were removed 2026-10-23.
+A user global assigned in a loop still pays the walk.
 
 ## Tests
 

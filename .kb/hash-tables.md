@@ -207,7 +207,9 @@ rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` func
   order array. A removal unlinks the entry and kills its order slot (`END` on the JVM, nil on
   WASM); the order compacts once half its slots are dead, so each `remhash` is O(1) amortised.
   Unlinking from the order instead -- the JVM's `#order` list until 2026-09-18 -- was far
-  slower per removal on a large `eq` table (`.todo/855`). A table nobody copies stays
+  slower per removal on a large `eq` table (`.todo/855`); `RontoHashTableTest` pins the
+  order slots a removal leaves where they were until half are dead (the wall-clock pin on
+  400,000 removals was removed 2026-10-23). A table nobody copies stays
   flat all its life; the first copy makes it a TRIE ("Copies share structure"), `clrhash` flat
   again.
 - An entry keeps the hash it was placed by, so growing and converting never hash again. The

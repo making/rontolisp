@@ -129,27 +129,24 @@ e.g. anything reading uninitialized tail slots) is a separate, larger project th
 item's scope.
 
 ## Pinning
-- ci-spec `string-accumulate-is-not-quadratic` (all four backends): 4,096 pieces of 64
-  characters concatenated in ONE `apply #'concatenate 'string` against the same 262,144
-  characters in 256 sixteen-piece calls -> `CONCAT-FLAT`; the same ratio over a
-  `with-output-to-string` accumulator -> `STREAM-FLAT`; then `uiop:read-file-string`
-  over a 4,500-character file it writes itself, for correctness across the 4,096-character
-  read boundary.
-  **Why the ratio is not over FILES**, which is what the invariant exists for: when this
-  was written the interpreter's character `read-sequence` was slow enough that the
-  accumulate did not dominate below a large file, and a file big enough to
-  separate the two implementations cost tens of seconds per backend leg -- a file-sized
-  ratio was undetectable under any
-  bound that is not itself a flake. The two mechanisms `read-file-string` is MADE of are
-  timed instead, at a size every backend finishes in milliseconds. **That premise moved on
-  2026-09-12**: the character read is fast per character now
-  (`.kb/character-sequence-io.md`), so a file-sized ratio would separate cleanly today --
-  re-open this if the in-memory pins ever prove too indirect.
-- `JvmLispCompilerTest#compileANaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes`
-  and
-  `WasmLispCompilerIntegrationTest#aNaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes`
-  -- the per-backend cost pins, where a timing verdict cannot take the
-  shared corpus down with it.
+- `BuiltinFunctionWrapperCatalogTest#aWrapperNameResolvesToItsCatalogLambda`: the catalog
+  lambda every compile path injects for `#'concatenate` sizes one `make-string` and
+  `replace`s into it, folds the list arm `:from-end t`, and spells no `%string-concat`
+  (the old pairwise fold's only spelling). The shape, not a clock.
+- ci-spec `string-accumulate-is-not-quadratic` (all four backends): CORRECTNESS only --
+  4,096 pieces of 64 characters in ONE `apply #'concatenate 'string` build what 256
+  sixteen-piece calls build, the same over a `with-output-to-string` accumulator, then
+  `uiop:read-file-string` over a 4,500-character file it writes itself, across the
+  4,096-character read boundary.
+- **The wall-clock pins were removed 2026-10-23**: the ci-spec `CONCAT-FLAT` /
+  `STREAM-FLAT` tokens and the JVM / WASM
+  `#aNaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes` bounded the one-call half
+  by `500 + 6 *` the chunked half in ms, a machine-speed verdict (the same family failed
+  CI 22 times, `.kb/character-sequence-io.md`). The doubling of the string-output buffer
+  has no deterministic pin: a WASM fuel budget cannot see it (an `array.copy` costs the
+  same fuel whatever its length), and the JVM / interpreter use the JDK's `StringWriter`.
+  `WasmStringStreamArenaE2eTest#aStringOutputStreamCostsTheArenaNothingPerWrite` pins the
+  per-write half on WASM.
 - Correctness of the rewritten wrapper arms rides the existing
   `#compileAndRunConcatenateAsFunctionValue` /
   `#concatenateBuildsListAndVectorResultTypes` family and the mutable-result pins in

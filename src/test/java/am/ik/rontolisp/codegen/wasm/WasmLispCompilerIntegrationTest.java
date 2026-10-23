@@ -935,41 +935,6 @@ class WasmLispCompilerIntegrationTest {
 				"ab\"""");
 	}
 
-	// The first-class concatenate must cost the TOTAL LENGTH, not the sum of the
-	// prefixes: (apply #'concatenate 'string lines) is the shape a caller reaches for
-	// over a file's lines, and the wrapper used to fold PAIRWISE through
-	// %string-concat (.kb/string-accumulate-cost.md). 4,096 pieces of 64
-	// characters here: 19,037 ms under the fold, 23 ms sized once.
-	@Test
-	void aNaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes() throws Exception {
-		String program = """
-				(defvar *piece* (make-string 64 :initial-element #\\y))
-				(defvar *pieces* nil)
-				(dotimes (i 4096) (push *piece* *pieces*))
-				(defvar *sixteen* (subseq *pieces* 0 16))
-				(apply #'concatenate 'string *sixteen*)
-				(defvar *t0* (get-internal-real-time))
-				(defvar *whole* (length (apply #'concatenate 'string *pieces*)))
-				(defvar *t1* (get-internal-real-time))
-				(defvar *chunked* 0)
-				(dotimes (k 256)
-				  (setq *chunked* (+ *chunked* (length (apply #'concatenate 'string *sixteen*)))))
-				(defvar *t2* (get-internal-real-time))
-				;; Both halves build the same 262,144 characters.
-				(print (= *whole* *chunked*))
-				(print (- *t1* *t0*))
-				(print (- *t2* *t1*))
-				""";
-		String[] lines = compileAndRun(program).split("\n");
-		assertThat(lines[0]).as("the two halves must build the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("concatenating 4,096 pieces in one call (%d ms) against the same characters "
-					+ "in 16-piece calls (%d ms)", whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
 	@Test
 	void redefinedDefunKeepsTheTopLevelChunkIndicesRight() throws Exception {
 		// A redefined defun emits one module function PER DEFINITION (the defuns list),
@@ -7308,7 +7273,11 @@ class WasmLispCompilerIntegrationTest {
 	// Runs a Preview 1 program under a wasmtime fuel budget: an instruction count, so a
 	// test can tell a bulk operation from an element loop without timing anything.
 	private static String compileAndRunWithFuel(String lispCode, long fuel) throws Exception {
-		byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(lispCode));
+		return compileAndRunWithFuel(LispReader.readAllFromString(lispCode), fuel);
+	}
+
+	private static String compileAndRunWithFuel(List<LispVal> program, long fuel) throws Exception {
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "-W",
 				"fuel=" + fuel, path("test.wasm"));
@@ -8103,113 +8072,47 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(let ((cp 128513)) (print (eq (code-char cp) (code-char cp))))")).isEqualTo("T");
 	}
 
-	// A character index costs the same wherever it lands: scanning ONE long string costs
-	// what scanning the SAME characters in short chunks costs. Before, _str_char_at
-	// decoded the UTF-8 data forward from byte 0 on every call, so a left-to-right scan
-	// was quadratic and the whole-string half below was 64x the chunked one (4,230 ms
-	// against 66 ms over 131,072 characters). The comparison is against the chunked half
-	// rather than a wall-clock constant so the bound does not depend on the machine.
+	// A character index and a length cost the same wherever they land
+	// (.kb/string-index-cost.md): the string carries a cursor -- character ci starts at
+	// byte cb -- so a left-to-right scan is linear and a repeated (length s) is one
+	// compare. Before, _str_char_at decoded the UTF-8 data forward from byte 0 on every
+	// call and _str_char_count recounted every lead byte. Pinned by a wasmtime FUEL
+	// budget, an instruction count, so neither a clock nor the machine is in it: one scan
+	// of 131,072 characters, then 20,000 lengths of them. Measured 2026-10-23 (wasmtime
+	// 49): 100 M fuel over ASCII, 164 M over Hiragana and 120 M with an astral character
+	// in every 16 -- most of it building the string -- against a budget of 600 M, while
+	// decoding from the start is n^2/2 = 8.6e9 byte steps for the scan alone and the
+	// recount 2.6e9 more. The astral content is the shape with no shortcut: the cursor's
+	// "every character before it is one byte" fast path cannot hold, so every index is
+	// the walk itself.
 	@Test
-	void aCharacterIndexDoesNotDecodeFromTheStartOfTheString() throws Exception {
-		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"0123456789abcdef\"")), "ASCII");
+	void aCharacterIndexAndALengthDoNotDecodeFromTheStartOfTheString() throws Exception {
+		for (String unit : List.of("0123456789abcdef", "あいうえおかきくけこさしすせそた", "😀0123456789abcde")) {
+			long sum = 8192L * unit.codePoints().asLongStream().sum();
+			assertThat(compileAndRunWithFuel("""
+					(defun scan-sum (s)
+					  (let ((total 0))
+					    (dotimes (i (length s))
+					      (setq total (+ total (char-code (char s i)))))
+					    total))
+					(defvar *long* "%s")
+					(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
+					(print (scan-sum *long*))
+					(defvar *acc* 0)
+					(dotimes (k 20000) (setq *acc* (+ *acc* (length *long*))))
+					(print *acc*)
+					""".formatted(unit), 600_000_000L)).as(unit).isEqualTo(sum + "\n" + 20000L * 131072);
+		}
 	}
 
-	// Same over multi-byte content, where the byte offset of a character genuinely has to
-	// be walked: the cursor is what keeps a scan linear, not an ASCII shortcut.
-	@Test
-	void aCharacterIndexDoesNotDecodeFromTheStartOfAMultiByteString() throws Exception {
-		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
-	}
-
-	// Same over content holding an ASTRAL character -- a four-byte UTF-8 sequence, and
-	// on the UTF-16 backends a surrogate pair. It is the shape with no shortcut anywhere:
-	// the cursor's "every character before it is one byte" fast path cannot hold, so
-	// every index here is the walk itself. This is the only place either WASM leg pins
-	// the cost of that shape -- ci-spec carries the CORRECTNESS of it on all four
-	// backends and no timing at all (.kb/string-index-cost.md).
-	@Test
-	void aCharacterIndexDoesNotDecodeFromTheStartOfAStringHoldingAnAstralCharacter() throws Exception {
-		String unit = "\"" + "\uD83D\uDE00" + "0123456789abcde\"";
-		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted(unit)), "one astral character in every 16");
-	}
-
-	// Builds a 1,024-character string and the 131,072-character string that IS that
-	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
-	// grow from the same literal rather than the shorter (defvar *long* *short*), which
-	// the compile paths get wrong.
-	private static final String SCAN_PROGRAM = """
-			(defun scan-sum (s)
-			  (let ((total 0))
-			    (dotimes (i (length s))
-			      (setq total (+ total (char-code (char s i)))))
-			    total))
-			(defvar *short* %1$s)
-			(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
-			(defvar *long* %1$s)
-			(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
-			(scan-sum "warm")
-			(defvar *t0* (get-internal-real-time))
-			(defvar *whole* (scan-sum *long*))
-			(defvar *t1* (get-internal-real-time))
-			(defvar *chunked* 0)
-			(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-sum *short*))))
-			(defvar *t2* (get-internal-real-time))
-			(print (= *whole* *chunked*))
-			(princ (- *t1* *t0*)) (terpri)
-			(princ (- *t2* *t1*)) (terpri)
-			""";
-
-	private static void assertScanIsFlat(String output, String label) {
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("%s: scanning 131,072 characters as one string (%d ms) against the same "
-					+ "characters in 1,024-character chunks (%d ms)", label, whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
-	// The same cost invariant over the MUTABLE CHARACTER VECTOR representation (a
-	// make-string buffer). (char v i) used to render the WHOLE vector into a fresh
-	// string per index (_charvec_to_str at the site), which made a scan O(n^2); it
-	// reads the element through _str_char_ref -> _arr_get now, so a scan of one long
-	// buffer costs what scanning the same characters in short chunks costs
-	// (.kb/string-index-cost.md).
-	@Test
-	void aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector() throws Exception {
-		String output = compileAndRun("""
-				(defun cv-scan-sum (s)
-				  (let ((total 0))
-				    (dotimes (i (length s))
-				      (setq total (+ total (char-code (char s i)))))
-				    total))
-				(defvar *cv-short* (make-string 1024 :initial-element #\\a))
-				(defvar *cv-long* (make-string 65536 :initial-element #\\a))
-				(cv-scan-sum (make-string 4 :initial-element #\\w))
-				(defvar *cv-t0* (get-internal-real-time))
-				(defvar *cv-whole* (cv-scan-sum *cv-long*))
-				(defvar *cv-t1* (get-internal-real-time))
-				(defvar *cv-chunked* 0)
-				(dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
-				(defvar *cv-t2* (get-internal-real-time))
-				(print (= *cv-whole* *cv-chunked*))
-				(princ (- *cv-t1* *cv-t0*)) (terpri)
-				(princ (- *cv-t2* *cv-t1*)) (terpri)
-				""");
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("scanning a 65,536-character make-string buffer as one vector (%d ms) against "
-					+ "the same characters in 1,024-character chunks (%d ms)", whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
-	// The correctness half of the read above: char/schar/elt/aref agree on a character
-	// vector, non-ASCII elements included, and a displaced string view reads through
-	// the same element path.
+	// The same invariant over the MUTABLE CHARACTER VECTOR representation (a make-string
+	// buffer): char/schar/elt/aref agree on one, non-ASCII elements included, and a
+	// displaced string view reads through the same element path. That path reads the
+	// ELEMENT (_str_char_ref -> _arr_get); the site used to render the whole vector into
+	// a fresh string per index (_charvec_to_str), which made a scan O(n^2). The cost half
+	// is a scan of a 65,536-character buffer under a fuel budget: 32.5 M measured
+	// 2026-10-23 against a budget of 200 M, where rendering per index is 65,536^2
+	// element copies.
 	@Test
 	void aCharacterVectorIndexAgreesAcrossTheFourSpellings() throws Exception {
 		assertThat(compileAndRun("""
@@ -8222,6 +8125,14 @@ class WasmLispCompilerIntegrationTest {
 				                            :displaced-index-offset 1))
 				(print (char-code (char *cvv* 1)))
 				""")).isEqualTo("(233 233 128512 128512)\n128512");
+		assertThat(compileAndRunWithFuel("""
+				(defun cv-scan-sum (s)
+				  (let ((total 0))
+				    (dotimes (i (length s))
+				      (setq total (+ total (char-code (char s i)))))
+				    total))
+				(print (cv-scan-sum (make-string 65536 :initial-element #\\a)))
+				""", 200_000_000L)).isEqualTo(String.valueOf(65536 * 97));
 	}
 
 	// An index outside the string answers whatever it answered before (bounds are
@@ -8242,36 +8153,6 @@ class WasmLispCompilerIntegrationTest {
 				(princ " ")
 				(princ (char-code (char *s* 4)))
 				""")).isEqualTo("101 5 111");
-	}
-
-	// (length s) reads the same walk, so it may not be linear in the length either:
-	// 20,000 (length *long*) calls against 20,000 (length *short*) ones. Before, every
-	// call counted the UTF-8 lead bytes of the whole string (5,510 ms against 40 ms).
-	@Test
-	void aStringLengthDoesNotRecountTheWholeStringOnEveryCall() throws Exception {
-		String output = compileAndRun("""
-				(defvar *short* "0123456789abcdef")
-				(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
-				(defvar *long* "0123456789abcdef")
-				(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
-				(defvar *acc* 0)
-				(defvar *t0* (get-internal-real-time))
-				(dotimes (k 20000) (setq *acc* (+ *acc* (length *long*))))
-				(defvar *t1* (get-internal-real-time))
-				(dotimes (k 20000) (setq *acc* (+ *acc* (length *short*))))
-				(defvar *t2* (get-internal-real-time))
-				(print (= *acc* (* 20000 (+ 131072 1024))))
-				(princ (- *t1* *t0*)) (terpri)
-				(princ (- *t2* *t1*)) (terpri)
-				""");
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must be the lengths they claim").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("20,000 lengths of a 131,072-character string (%d ms) against 20,000 of a "
-					+ "1,024-character one (%d ms)", whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
 	}
 
 	@Test
@@ -15184,6 +15065,13 @@ class WasmLispCompilerIntegrationTest {
 	// used to live in a fixed 8 KB region below the heap, so the 1,025th fresh symbol
 	// was written over the heap's first interned bytes and the walk below trapped out of
 	// bounds on both module shapes.
+	//
+	// And an intern costs the same wherever its symbol sits: _intern is a hash table on
+	// the token bytes now, where it was a scan of the compile-time rows and then of the
+	// runtime ones, so interning n fresh symbols cost n^2 (a 32,000-symbol package walk:
+	// 4.6 s on WASM against 0.1 s on the JVM). Pinned by a fuel budget: 32,000 fresh
+	// interns, then 100,000 of the last of them -- 280 M measured 2026-10-23 (wasmtime
+	// 49) against a budget of 1.2 G, where the scan is 3.2e9 row compares.
 	@Test
 	void runtimeInternKeepsEverySymbolPastAThousand() throws Exception {
 		String source = """
@@ -15199,115 +15087,15 @@ class WasmLispCompilerIntegrationTest {
 		String expected = "(0 RI-0 RI-2999 T)";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileAndRunComponent(source)).isEqualTo(expected);
-	}
-
-	// A runtime intern costs the same wherever its symbol sits in the table. _intern
-	// was a scan of the compile-time rows and then of the runtime ones, so a lookup of
-	// the symbol interned last paid for every symbol before it and interning n fresh
-	// symbols cost n^2 (a 32,000-symbol package walk: 4.6 s on WASM against 0.1 s on the
-	// JVM). The bound is a ratio between two lookups of the same program, each the best
-	// of three, so it does not depend on the machine.
-	@Test
-	void runtimeInternCostsTheSameWhereverItsSymbolSits() throws Exception {
-		String[] lines = compileAndRunPrelude("""
-				(defvar *rc-names* (make-array 32000))
-				(dotimes (i 32000) (setf (aref *rc-names* i) (format nil "RC-~D" i)))
-				(dotimes (i 32000) (intern (aref *rc-names* i)))
-				(defun rc-probe (name)
-				  (let ((t0 (get-internal-real-time)))
-				    (dotimes (j 100000) (intern name))
-				    (- (get-internal-real-time) t0)))
-				(defun rc-best (name) (min (rc-probe name) (rc-probe name) (rc-probe name)))
-				(princ (rc-best (aref *rc-names* 0))) (terpri)
-				(princ (rc-best (aref *rc-names* 31999))) (terpri)
-				""").split("\n");
-		long first = Long.parseLong(lines[0].trim());
-		long last = Long.parseLong(lines[1].trim());
-		assertThat(last)
-			.as("100,000 interns of the last of 32,000 runtime symbols (%d ms) against the first (%d ms)", last, first)
-			.isLessThanOrEqualTo(200 + 3 * first);
-	}
-
-	// The JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare twin:
-	// do-symbols and apropos-list over 32,000 rows against the same rows walked as 64-row
-	// packages.
-	@Test
-	void aPackageWalkCostsItsUniverseNotItsSquare() throws Exception {
-		StringBuilder program = new StringBuilder();
-		StringBuilder wideUses = new StringBuilder();
-		for (int p = 0; p < 8; p++) {
-			program.append("(defpackage :pw-").append(p).append(" (:use) (:export");
-			for (int i = 0; i < 4000; i++) {
-				program.append(" #:").append((char) ('A' + p)).append(i);
-			}
-			program.append("))\n");
-			wideUses.append(" :pw-").append(p);
-		}
-		program.append("(defpackage :pw-few (:use) (:export");
-		for (int i = 0; i < 64; i++) {
-			program.append(" #:F").append(i);
-		}
-		program.append("))\n");
-		program.append("(make-package :pw-wide :use '(").append(wideUses.toString().trim()).append("))\n");
-		program.append("""
-				(make-package :pw-small :use '(:pw-few))
-				(defun pw-walk (p) (let ((n 0)) (do-symbols (s p) (setq n (+ n 1))) n))
-				(defun pw-match (p) (length (apropos-list "" p)))
-				(defvar *pw-reps* (floor (pw-walk :pw-wide) (pw-walk :pw-small)))
-				(pw-match :pw-small)
-				(defvar *pw-t0* (get-internal-real-time))
-				(defvar *pw-whole* (pw-walk :pw-wide))
-				(defvar *pw-t1* (get-internal-real-time))
-				(defvar *pw-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-walk :pw-small)))) n))
-				(defvar *pw-t2* (get-internal-real-time))
-				(defvar *pw-found* (pw-match :pw-wide))
-				(defvar *pw-t3* (get-internal-real-time))
-				(defvar *pw-found-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-match :pw-small)))) n))
-				(defvar *pw-t4* (get-internal-real-time))
-				(princ (list *pw-whole* *pw-pieces* *pw-found* *pw-found-pieces*)) (terpri)
-				(princ (- *pw-t1* *pw-t0*)) (terpri)
-				(princ (- *pw-t2* *pw-t1*)) (terpri)
-				(princ (- *pw-t3* *pw-t2*)) (terpri)
-				(princ (- *pw-t4* *pw-t3*)) (terpri)
-				""");
-		String[] lines = compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.toString(),
-				am.ik.rontolisp.reader.Features.WASM, true, false))
-			.split("\n");
-		assertThat(lines[0].trim()).as("both halves must walk the same rows").isEqualTo("(32000 32000 32000 32000)");
-		long walkWhole = Long.parseLong(lines[1].trim());
-		long walkPieces = Long.parseLong(lines[2].trim());
-		long matchWhole = Long.parseLong(lines[3].trim());
-		long matchPieces = Long.parseLong(lines[4].trim());
-		assertThat(walkWhole)
-			.as("do-symbols over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", walkWhole,
-					walkPieces)
-			.isLessThanOrEqualTo(500 + 6 * walkPieces);
-		assertThat(matchWhole)
-			.as("apropos-list over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", matchWhole,
-					matchPieces)
-			.isLessThanOrEqualTo(500 + 6 * matchPieces);
-	}
-
-	// The
-	// JvmLispCompilerTest#compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees
-	// twin, on both module shapes: the mirrored multiple-value spill made the probe 50x
-	// slower with 4,000 more globals (104 ms -> 5.6 s on P1 and the component).
-	@Test
-	void aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() throws Exception {
-		String source = am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE;
-		assertManyGlobalsCostNothing(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
-				am.ik.rontolisp.reader.Features.WASM, true, false)));
-		assertManyGlobalsCostNothing(runComponentFrontendProgramWithDir(source));
-	}
-
-	private static void assertManyGlobalsCostNothing(String output) {
-		String[] lines = output.split("\n");
-		assertThat(lines[2].trim()).as("the globals reach the eval runtime").isEqualTo("3999");
-		long few = Long.parseLong(lines[0].trim());
-		long many = Long.parseLong(lines[1].trim());
-		assertThat(many)
-			.as("three apropos-list walks with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
-			.isLessThanOrEqualTo(200 + 3 * few);
+		assertThat(
+				compileAndRunWithFuel(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+						(defvar *rc-names* (make-array 32000))
+						(dotimes (i 32000) (setf (aref *rc-names* i) (format nil "RC-~D" i)))
+						(dotimes (i 32000) (intern (aref *rc-names* i)))
+						(dotimes (j 100000) (intern (aref *rc-names* 31999)))
+						(print (symbol-name (intern (aref *rc-names* 31999))))
+						""")), 1_200_000_000L))
+			.isEqualTo("\"RC-31999\"");
 	}
 
 	@Test
@@ -19163,6 +18951,15 @@ class WasmLispCompilerIntegrationTest {
 				(T T T T T T)
 				(NIL NIL NIL NIL NIL NIL NIL)
 				(NIL NIL NIL NIL NIL NIL NIL NIL NIL)""");
+		// And asking costs the same however long the vector is: rendering it made every
+		// stringp of a character vector O(n). 200,000 asks of an 8,192-character buffer
+		// under a fuel budget: 46.5 M measured 2026-10-23 (wasmtime 49) against a budget
+		// of 200 M, where rendering per ask is 1.6e9 element copies.
+		assertThat(compileAndRunWithFuel("""
+				(defun stringp-count (s iters)
+				  (let ((n 0)) (dotimes (i iters) (if (stringp s) (setq n (+ n 1)))) n))
+				(print (stringp-count (make-string 8192) 200000))
+				""", 200_000_000L)).isEqualTo("200000");
 	}
 
 	@Test

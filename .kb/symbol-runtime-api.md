@@ -175,9 +175,10 @@ symbol past the region's capacity overwrote the heap's first pooled token (out-o
 Measured 2026-10-04 (jar): long package walks and `apropos-list` drop from seconds to a
 fraction; ci-spec `runtime-package-api` halves per WASM leg (and drops further once the
 eval mirror stopped recording `%mv-spill`, `.kb/eval-runtime.md`). Size: a module without the real `_intern` is byte-identical; one with it carries the
-table's few hundred bytes. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`,
-`#runtimeInternCostsTheSameWhereverItsSymbolSits` and
-`#aPackageWalkCostsItsUniverseNotItsSquare`.
+table's few hundred bytes. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`:
+every symbol past the old region, and the cost as a wasmtime FUEL budget (32,000 fresh
+interns, then 100,000 of the last: 280 M measured 2026-10-23 against 1.2 G, where the scan
+is 3.2e9 row compares).
 
 **Compile-path folds and limits**: `find-symbol` requires a literal string and matches its
 VERBATIM name against `isClMemberName` (every name cl exports, implemented or not -- `T`,

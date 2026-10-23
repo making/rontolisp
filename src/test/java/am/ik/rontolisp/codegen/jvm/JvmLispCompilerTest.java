@@ -6971,42 +6971,6 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (apply #'concatenate 'string (list \"a\" \"b\")))")).isEqualTo("\"ab\"");
 	}
 
-	// The first-class concatenate must cost the TOTAL LENGTH, not the sum of the
-	// prefixes: (apply #'concatenate 'string lines) is the shape a caller reaches for
-	// over a file's lines, and the wrapper used to fold PAIRWISE through
-	// %string-concat, so 495,920 lines of a 12.8 MB tokenizer.json cost about 2.7e12
-	// character copies and never returned (.kb/string-accumulate-cost.md).
-	// 4,096 pieces of 64 characters: 6,933 ms under the fold, 39 ms sized once.
-	@Test
-	void compileANaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes() throws Exception {
-		String output = compileAndRun("""
-				(defvar *piece* (make-string 64 :initial-element #\\y))
-				(defvar *pieces* nil)
-				(dotimes (i 4096) (push *piece* *pieces*))
-				(defvar *sixteen* (subseq *pieces* 0 16))
-				(apply #'concatenate 'string *sixteen*)
-				(defvar *t0* (get-internal-real-time))
-				(defvar *whole* (length (apply #'concatenate 'string *pieces*)))
-				(defvar *t1* (get-internal-real-time))
-				(defvar *chunked* 0)
-				(dotimes (k 256)
-				  (setq *chunked* (+ *chunked* (length (apply #'concatenate 'string *sixteen*)))))
-				(defvar *t2* (get-internal-real-time))
-				;; Both halves build the same 262,144 characters.
-				(print (= *whole* *chunked*))
-				(print (- *t1* *t0*))
-				(print (- *t2* *t1*))
-				""");
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must build the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("concatenating 4,096 pieces in one call (%d ms) against the same characters "
-					+ "in 16-piece calls (%d ms)", whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
 	@Test
 	void compileAndRunARedefinedDefunKeepsTheLastDefinition() throws Exception {
 		// A class may not hold two methods of the same name and descriptor, so a
@@ -11321,26 +11285,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunRemhashOfManyEntriesStaysFast() throws Exception {
-		// Removing from the insertion-order list was O(n) per removal, so
-		// removing every entry oldest-first was quadratic (~3 s per 50k on this
-		// machine). Tombstones make each removal O(1); the bound below has an order
-		// of magnitude of headroom over the fixed shape and fails on the old one.
-		long start = System.nanoTime();
-		assertThat(compileAndRun("""
-				(let ((h (make-hash-table :test 'eq)) (keys nil))
-				  (dotimes (i 400000)
-				    (let ((k (cons i i)))
-				      (push k keys)
-				      (setf (gethash k h) i)))
-				  (dolist (k (reverse keys)) (remhash k h))
-				  (print (hash-table-count h)))
-				""")).isEqualTo("0");
-		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-		assertThat(elapsedMs).as("400k oldest-first remhashes took %d ms", elapsedMs).isLessThan(15000);
-	}
-
-	@Test
 	void compileAndRunPackageVarIsReadWhenTheFormRuns() throws Exception {
 		// CL's *package* is dynamic: a defun reads the package current at CALL time,
 		// (in-package P) assigns it, a let of it binds it for the extent and
@@ -11531,94 +11475,6 @@ class JvmLispCompilerTest {
 				.as(program.getKey().substring(0, 60))
 				.isEqualTo(program.getValue());
 		}
-	}
-
-	// Enumerating a package costs its universe, not the universe squared. The compiled
-	// backends walk through the prelude's %do-symbols-list and %package-symbols-where,
-	// which deduplicated with remove-duplicates over the whole universe and a member scan
-	// of the answer: 3.9 s for do-symbols and 18 s for apropos-list over the 32,000 rows
-	// below, against 0.1 s and 0.7 s by table. In the ci-spec corpus that made one
-	// do-all-symbols cost 8-25 s on WASM. The bound is a ratio against the same rows
-	// walked as 64-row packages, so it does not depend on the machine. The WASM twin is
-	// WasmLispCompilerIntegrationTest#aPackageWalkCostsItsUniverseNotItsSquare.
-	@Test
-	void compileAndRunAPackageWalkCostsItsUniverseNotItsSquare() throws Exception {
-		StringBuilder program = new StringBuilder();
-		StringBuilder wideUses = new StringBuilder();
-		for (int p = 0; p < 8; p++) {
-			program.append("(defpackage :pw-").append(p).append(" (:use) (:export");
-			for (int i = 0; i < 4000; i++) {
-				program.append(" #:").append((char) ('A' + p)).append(i);
-			}
-			program.append("))\n");
-			wideUses.append(" :pw-").append(p);
-		}
-		program.append("(defpackage :pw-few (:use) (:export");
-		for (int i = 0; i < 64; i++) {
-			program.append(" #:F").append(i);
-		}
-		program.append("))\n");
-		program.append("(make-package :pw-wide :use '(").append(wideUses.toString().trim()).append("))\n");
-		program.append("""
-				(make-package :pw-small :use '(:pw-few))
-				(defun pw-walk (p) (let ((n 0)) (do-symbols (s p) (setq n (+ n 1))) n))
-				(defun pw-match (p) (length (apropos-list "" p)))
-				(defvar *pw-reps* (floor (pw-walk :pw-wide) (pw-walk :pw-small)))
-				(pw-match :pw-small)
-				(defvar *pw-t0* (get-internal-real-time))
-				(defvar *pw-whole* (pw-walk :pw-wide))
-				(defvar *pw-t1* (get-internal-real-time))
-				(defvar *pw-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-walk :pw-small)))) n))
-				(defvar *pw-t2* (get-internal-real-time))
-				(defvar *pw-found* (pw-match :pw-wide))
-				(defvar *pw-t3* (get-internal-real-time))
-				(defvar *pw-found-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-match :pw-small)))) n))
-				(defvar *pw-t4* (get-internal-real-time))
-				(princ (list *pw-whole* *pw-pieces* *pw-found* *pw-found-pieces*)) (terpri)
-				(princ (- *pw-t1* *pw-t0*)) (terpri)
-				(princ (- *pw-t2* *pw-t1*)) (terpri)
-				(princ (- *pw-t3* *pw-t2*)) (terpri)
-				(princ (- *pw-t4* *pw-t3*)) (terpri)
-				""");
-		String[] lines = compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.toString(),
-				am.ik.rontolisp.reader.Features.JVM, false, false))
-			.split("\n");
-		assertThat(lines[0].trim()).as("both halves must walk the same rows").isEqualTo("(32000 32000 32000 32000)");
-		long walkWhole = Long.parseLong(lines[1].trim());
-		long walkPieces = Long.parseLong(lines[2].trim());
-		long matchWhole = Long.parseLong(lines[3].trim());
-		long matchPieces = Long.parseLong(lines[4].trim());
-		assertThat(walkWhole)
-			.as("do-symbols over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", walkWhole,
-					walkPieces)
-			.isLessThanOrEqualTo(500 + 6 * walkPieces);
-		assertThat(matchWhole)
-			.as("apropos-list over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", matchWhole,
-					matchPieces)
-			.isLessThanOrEqualTo(500 + 6 * matchPieces);
-	}
-
-	// A package walk costs the same however many globals the eval runtime sees. In a
-	// program that carries the eval runtime every assignment of a global is mirrored
-	// into its global environment, a list holding every global the program assigned, and
-	// the multiple-value spill -- written by nearly every function return -- was one of
-	// them: each call paid a walk of that list. 4,000 globals made the probe below 300x
-	// slower (30 ms -> 9.6 s); in the ci-spec corpus it was ~85% of a package walk.
-	// The bound is a ratio between two probes of the same program, each the best of
-	// three, so it does not depend on the machine. The WASM twin is
-	// WasmLispCompilerIntegrationTest#aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees.
-	@Test
-	void compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() throws Exception {
-		String[] lines = compileAndRun(
-				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE,
-						am.ik.rontolisp.reader.Features.JVM, false, false))
-			.split("\n");
-		assertThat(lines[2].trim()).as("the globals reach the eval runtime").isEqualTo("3999");
-		long few = Long.parseLong(lines[0].trim());
-		long many = Long.parseLong(lines[1].trim());
-		assertThat(many)
-			.as("three apropos-list walks with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
-			.isLessThanOrEqualTo(200 + 3 * few);
 	}
 
 	@Test
@@ -12566,188 +12422,14 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("128512\n\"😀\"\n233\n\"é\"");
 	}
 
-	// A character index costs the same wherever it lands: scanning ONE long string costs
-	// what scanning the SAME characters in short chunks costs. Before, the index was
-	// turned into a UTF-16 code-unit offset with String.offsetByCodePoints(1, i), which
-	// walks -- so a left-to-right scan was quadratic and the whole-string half below was
-	// 64x the chunked one (893 ms vs 14 ms over 131,072 characters). The comparison is
-	// against the chunked half rather than a wall-clock constant so the bound does not
-	// depend on the machine.
-	@Test
-	void compileACharacterIndexDoesNotWalkFromTheStartOfTheString() throws Exception {
-		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"0123456789abcdef\"")), "ASCII");
-	}
-
-	// Same, for a string the JVM cannot store as LATIN1: its content decides the storage
-	// (Hiragana is two bytes a character), and the cheap "no surrogates" probe is only
-	// O(1) on the LATIN1 half. The verdict per string is what carries the non-LATIN1 one.
-	@Test
-	void compileACharacterIndexDoesNotWalkForANonLatin1String() throws Exception {
-		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
-	}
-
-	// The same invariant for the shape the probe above CANNOT answer: a string that
-	// holds a surrogate pair. There is no arithmetic from a character index to a code
-	// unit offset then, and the fallback -- String.offsetByCodePoints(1, i) on every
-	// index, with nothing remembered -- made a scan quadratic in a string that is
-	// otherwise pure ASCII: ONE emoji at the front of 30,720 digits cost 630 ms against
-	// 14 ms for the same characters in 481-character pieces. The breakpoint table
-	// (_cpidx) is what flattens it (.kb/string-index-cost.md).
-	@Test
-	void compileACharacterIndexIntoAStringWithASurrogatePairDoesNotWalkFromTheStart() throws Exception {
-		String emoji = "\uD83D\uDE00";
-		String shortLit = emoji + "0123456789abcde".repeat(32);
-		String longLit = emoji + "0123456789abcde".repeat(2048);
-		String output = compileAndRun("""
-				(defun scan-sum (s)
-				  (let ((total 0))
-				    (dotimes (i (length s))
-				      (setq total (+ total (char-code (char s i)))))
-				    total))
-				(defvar *short* "%s")
-				(defvar *long* "%s")
-				(scan-sum "warm")
-				(defvar *t0* (get-internal-real-time))
-				(defvar *whole* (scan-sum *long*))
-				(defvar *t1* (get-internal-real-time))
-				(defvar *chunked* 0)
-				(dotimes (k 64) (setq *chunked* (+ *chunked* (scan-sum *short*))))
-				(defvar *t2* (get-internal-real-time))
-				;; Both halves read the same 30,720 digits; the short one carries the
-				;; emoji 64 times over and the long one once.
-				(print (= (+ *whole* (* 63 128512)) *chunked*))
-				(princ (- *t1* *t0*)) (terpri)
-				(princ (- *t2* *t1*)) (terpri)
-				""".formatted(shortLit, longLit));
-		assertScanIsFlat(output, "one surrogate pair at the front");
-	}
-
-	// A LONG string must not be evicted from the index memory by SHORT ones. Proving a
-	// string flat costs its whole length when the JVM cannot store it as LATIN1, so the
-	// memory is what keeps a scan linear -- and under the old "keep the two most recent"
-	// rule any two short strings touched between two indexes threw the long one out and
-	// it was re-proven at O(n) on the next character. That is not a corner: a JSON parse
-	// cuts one fresh short string out per token, so rontolisp:json-parse over a real
-	// 10.8-million-character tokenizer.json was still inside its first object after ten
-	// minutes. The victim is the shorter slot now (.kb/string-index-cost.md).
-	//
-	// Both halves are built through rontolisp:octets-to-string, the one producer whose
-	// result is an immutable java.lang.String rather than a character vector -- a vector
-	// reads its element through _rmGet and never reaches the memory under test.
-	@Test
-	void compileACharacterIndexKeepsTheLongStringWhenShortOnesAreIndexedBetween() throws Exception {
-		String output = compileAndRun(
-				"""
-						;; Two SHORT strings, indexed between every two indexes into the long one.
-						;; Both are non-LATIN1, so each is a miss the old rule remembered.
-						(defvar *k1* "\u3042\u3044\u3046\u3048\u304A")
-						(defvar *k2* "\u304B\u304D\u304F\u3051\u3053")
-						(defun repeat-octets (src times)
-						  (let* ((n (length src))
-						         (out (make-array (* n times) :element-type '(unsigned-byte 8))))
-						    (dotimes (k times out) (replace out src :start1 (* k n)))))
-						(defvar *unit*
-						  (rontolisp:string-to-octets
-						   "\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043A\u043B\u043C\u043D\u043E\u043F\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044A\u044B\u044C\u044D\u044E\u044F"))
-						(defvar *short* (rontolisp:octets-to-string (repeat-octets *unit* 32)))
-						(defvar *long* (rontolisp:octets-to-string (repeat-octets *unit* 4096)))
-						(defun scan-interleaved (s)
-						  (let ((total 0))
-						    (dotimes (i (length s))
-						      (setq total (+ total (char-code (char s i))))
-						      (setq total (+ total (char-code (char *k1* 0))))
-						      (setq total (+ total (char-code (char *k2* 0)))))
-						    total))
-						(scan-interleaved "warm")
-						(defvar *t0* (get-internal-real-time))
-						(defvar *whole* (scan-interleaved *long*))
-						(defvar *t1* (get-internal-real-time))
-						(defvar *chunked* 0)
-						(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-interleaved *short*))))
-						(defvar *t2* (get-internal-real-time))
-						(print (= *whole* *chunked*))
-						(princ (- *t1* *t0*)) (terpri)
-						(princ (- *t2* *t1*)) (terpri)
-						""");
-		assertScanIsFlat(output, "a long string indexed between two short ones");
-	}
-
-	// Builds a 1,024-character string and the 131,072-character string that IS that
-	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
-	// grow from the same literal rather than the shorter (defvar *long* *short*), which
-	// the compile paths get wrong.
-	private static final String SCAN_PROGRAM = """
-			(defun scan-sum (s)
-			  (let ((total 0))
-			    (dotimes (i (length s))
-			      (setq total (+ total (char-code (char s i)))))
-			    total))
-			(defvar *short* %1$s)
-			(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
-			(defvar *long* %1$s)
-			(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
-			(scan-sum "warm")
-			(defvar *t0* (get-internal-real-time))
-			(defvar *whole* (scan-sum *long*))
-			(defvar *t1* (get-internal-real-time))
-			(defvar *chunked* 0)
-			(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-sum *short*))))
-			(defvar *t2* (get-internal-real-time))
-			(print (= *whole* *chunked*))
-			(princ (- *t1* *t0*)) (terpri)
-			(princ (- *t2* *t1*)) (terpri)
-			""";
-
-	private static void assertScanIsFlat(String output, String label) {
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("%s: scanning 131,072 characters as one string (%d ms) against the same "
-					+ "characters in 1,024-character chunks (%d ms)", label, whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
-	// The same cost invariant over the MUTABLE CHARACTER VECTOR representation (a
-	// make-string buffer). (char v i) used to render the WHOLE vector into a fresh
-	// string per index (_strv at the site), which made a scan O(n^2); it reads the
-	// element through _charRef -> _rmGet now, so a scan of one long buffer costs what
-	// scanning the same characters in short chunks costs (.kb/string-index-cost.md).
-	@Test
-	void compileACharacterIndexIntoACharacterVectorReadsTheElement() throws Exception {
-		String output = compileAndRun("""
-				(defun cv-scan-sum (s)
-				  (let ((total 0))
-				    (dotimes (i (length s))
-				      (setq total (+ total (char-code (char s i)))))
-				    total))
-				(defvar *cv-short* (make-string 1024 :initial-element #\\a))
-				(defvar *cv-long* (make-string 65536 :initial-element #\\a))
-				(cv-scan-sum (make-string 4 :initial-element #\\w))
-				(defvar *cv-t0* (get-internal-real-time))
-				(defvar *cv-whole* (cv-scan-sum *cv-long*))
-				(defvar *cv-t1* (get-internal-real-time))
-				(defvar *cv-chunked* 0)
-				(dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
-				(defvar *cv-t2* (get-internal-real-time))
-				(print (= *cv-whole* *cv-chunked*))
-				(princ (- *cv-t1* *cv-t0*)) (terpri)
-				(princ (- *cv-t2* *cv-t1*)) (terpri)
-				""");
-		String[] lines = output.split("\n");
-		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
-		long whole = Long.parseLong(lines[1].trim());
-		long chunked = Long.parseLong(lines[2].trim());
-		assertThat(whole)
-			.as("scanning a 65,536-character make-string buffer as one vector (%d ms) against "
-					+ "the same characters in 1,024-character chunks (%d ms)", whole, chunked)
-			.isLessThanOrEqualTo(500 + 6 * chunked);
-	}
-
-	// The correctness half of the read above: char/schar/elt/aref agree on a character
-	// vector, non-ASCII elements included, and a displaced string view reads through
-	// the same element path.
+	// A character index costs the same wherever it lands, in both string representations
+	// (.kb/string-index-cost.md), and what makes it so is pinned as protocol state rather
+	// than a clock. A MUTABLE CHARACTER VECTOR (a make-string buffer) reads its ELEMENT:
+	// every (char s i) site is one call of _charRef, which reaches the vector through
+	// _rmGet -- the site used to render the whole vector per index (_strv), which made a
+	// scan of a make-string buffer O(n^2). The correctness half: char/schar/elt/aref
+	// agree on a character vector, non-ASCII elements included, and a displaced string
+	// view reads through the same element path.
 	@Test
 	void compileACharacterVectorIndexAgreesAcrossTheFourSpellings() throws Exception {
 		assertThat(compileAndRun("""
@@ -12760,6 +12442,63 @@ class JvmLispCompilerTest {
 				                            :displaced-index-offset 1))
 				(print (char-code (char *cvv* 1)))
 				""")).isEqualTo("(233 233 128512 128512)\n128512");
+		byte[] site = compileToBytes("""
+				(defun cv-at (s i) (char s i))
+				(print (char-code (cv-at (make-string 2 :initial-element #\\a) 1)))
+				""");
+		// The site's call is the operator-named wrapper of _charRef.
+		assertThat(invokedMethodNames(site, "CV-AT")).filteredOn(name -> name.startsWith("_charRef")).hasSize(1);
+		assertThat(invokedMethodNames(site, "CV-AT")).noneMatch(name -> name.startsWith("_strv"));
+		assertThat(ownCallsIn(site, "_charRef", "_rmGet")).isOne();
+		assertThat(ownCallsIn(site, "_charRef", "_cpoff")).isOne();
+	}
+
+	// The immutable string's half of the invariant above. Its character i sits at code
+	// unit 1 + i unless a surrogate pair precedes, and the helpers every index reads
+	// through (_cpoff / _scount over _cpidx) REMEMBER what a walk found, in two pairs of
+	// static slots. Driven directly on the compiled class, so the state is the evidence:
+	// - a string the JVM cannot store as LATIN1 is proven flat once and remembered, and
+	// the memory keeps the LONGER string: under the old "keep the two most recent" rule
+	// two short strings indexed between two indexes into a long one evicted it, so a JSON
+	// parse re-proved its document every few characters and never finished;
+	// - a string holding a surrogate pair gets a BREAKPOINT TABLE, built once and kept
+	// under the same rule -- it used to walk offsetByCodePoints from the start on every
+	// index, 45x its own chunked scan.
+	// An ASCII / Latin-1 string needs no memory: the flat probe is constant time there.
+	@Test
+	void compileAStringIndexRemembersTheLongestStringsItWalked() throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("index"));
+		Files.write(dir.resolve("Test.class"), compileToBytes("(defun at (s i) (char s i)) (print (at \"ab\" 1))"));
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("Test");
+			Method index = program.getDeclaredMethod("_cpidx", String.class);
+			index.setAccessible(true);
+			String wideLong = "\"😀" + "0123456789abcde".repeat(2048) + "\"";
+			int[] table = (int[]) index.invoke(null, wideLong);
+			int count = 1 + 15 * 2048;
+			assertThat(table[0]).isEqualTo(count);
+			assertThat(table).hasSize((count >>> 5) + 2);
+			for (int k = 0; k <= count >>> 5; k++) {
+				assertThat(table[1 + k]).as("breakpoint %d", k).isEqualTo(wideLong.offsetByCodePoints(1, k << 5));
+			}
+			String flatLong = "\"" + "あ".repeat(4096) + "\"";
+			assertThat(index.invoke(null, flatLong)).isNull();
+			for (String shorter : List.of("\"😀a\"", "\"😀b\"", "\"いい\"", "\"うう\"")) {
+				index.invoke(null, shorter);
+			}
+			assertThat(index.invoke(null, wideLong) == table).as("the table, kept past two shorter wide strings")
+				.isTrue();
+			assertThat(staticField(program, "_cpsimple0") == flatLong || staticField(program, "_cpsimple1") == flatLong)
+				.as("the flat memory, kept past two shorter flat strings")
+				.isTrue();
+		}
+	}
+
+	private static Object staticField(Class<?> owner, String name) throws ReflectiveOperationException {
+		java.lang.reflect.Field field = owner.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(null);
 	}
 
 	// read-from-string's SECOND value, CL's stop index, on the compiled backend too: the
@@ -18311,6 +18050,20 @@ class JvmLispCompilerTest {
 		// loop counter and the loop's accumulator temporary emit none.
 		assertThat(evalStoreCallsInTopLevel(classBytes)).isEqualTo(1);
 		assertThat(runClass(classBytes)).isEqualTo("1\n6\n0");
+		// Nor is a compiler channel a variable an eval'd form can name: the
+		// multiple-value spill nearly every function return writes was mirrored, so
+		// each call paid a walk of the eval global alist and 4,000 program globals
+		// made a package walk 300x slower. A function assigning a real global still
+		// mirrors it.
+		byte[] functions = compileToBytes("""
+				(defun mv-two () (values 1 2))
+				(defun set-global () (setq mirrored-global 2))
+				(print (multiple-value-list (mv-two)))
+				(set-global)
+				(eval '(print mirrored-global))
+				""");
+		assertThat(ownCallsIn(functions, "MV-TWO", "_store")).isZero();
+		assertThat(ownCallsIn(functions, "SET-GLOBAL", "_store")).isOne();
 	}
 
 	@Test

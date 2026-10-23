@@ -151,8 +151,7 @@ forks already fill the runner.
   holds it `READ`. A `--gpu` run takes `testsupport/GpuDeviceLock`, a provider that
   serializes while `LinalgGpu.available()` and hands out nothing without a device:
   concurrent use of one device from several embedded `am.ik.gpu` copies is unmeasured.
-- Still exposed: the cost-ratio pins (`assertScanIsFlat` and siblings) compare two halves of
-  ONE run, with 500 ms + 6x slack. Socket tests: `.kb/tcp-sockets.md`, "Socket tests".
+- Socket tests: `.kb/tcp-sockets.md`, "Socket tests".
 
 Found on the way, **2026-09-24**: the first concurrent run of `JvmLinalgSimdAccelCompilerTest`
 hung forever on a class-initialization deadlock in production code. `LispFloatArray` (a
@@ -308,6 +307,32 @@ Traps met doing it:
   Concurrent methods share the field, so one method's cleanup deletes the directory another is
   running in (seen as `NoSuchFileException` on a file the test had just created). Take it as a
   method parameter.
+
+## No test reads a clock to judge cost
+
+Removed 2026-10-23: every pin that bounded one elapsed time by another (`500 + 6 *` a
+baseline, `200 + 3 *`) or by a constant (15 s, 1 s, 200 ms). On a loaded 4-vCPU runner with
+methods CONCURRENT the ratio was in effect a ~500 ms absolute budget: the read-sequence
+member of the family failed CI 22 times with no product change, and several could not fail
+on the regression they named (`.kb/character-sequence-io.md`). A cost invariant is pinned by
+something the machine cannot move:
+
+- the mechanism's own state or shape -- the memory slots of the compiled class
+  (`.kb/string-index-cost.md`), a helper call counted in the bytecode or the module
+  (`ownCallsIn`, `WasmLispCompilerTest#storeCalls`), a library defun's source shape, a
+  table's order slots (`RontoHashTableTest`);
+- a wasmtime FUEL budget (`WasmLispCompilerIntegrationTest#compileAndRunWithFuel`): an
+  instruction count, identical on every machine. Size the program so the fixed cost sits
+  several times under the budget and the regression orders of magnitude over it, and write
+  the measured fuel beside the budget. Blind spot: one `array.copy` / `memory.copy` costs the
+  same fuel whatever its length;
+- an allocation budget (`com.sun.management.ThreadMXBean#getCurrentThreadAllocatedBytes`
+  around one call on the current thread);
+- for concurrency, a latch or a thread's state (`Thread.getState`, `ThreadMXBean`'s locked
+  monitors), never "finished within N ms". A timeout is a generous hang guard only.
+
+Lower bounds on a sleep (`(sleep 0.05)` took at least 40 ms) stay: the platform guarantees
+them.
 
 ## Determinism a test assumes but the JVM does not owe it
 

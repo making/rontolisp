@@ -61,6 +61,24 @@ class LispPreludeLibraryTest {
 		}
 	}
 
+	// Enumerating a package costs its universe, not the universe squared, on both
+	// compiled backends (.kb/packages.md): their do-symbols / apropos-list walk the
+	// prelude's %do-symbols-list and %package-symbols-where, which deduplicated with an
+	// append per row, remove-duplicates over the whole universe and a member scan of
+	// the answer -- 3.9 s for do-symbols and 18 s for apropos-list over 32,000 rows on
+	// the JVM, against 0.1 s and 0.7 s by table, and one ci-spec do-all-symbols 8-25 s
+	// on WASM. Both deduplicate through equal hash tables now.
+	@Test
+	void thePackageWalksDeduplicateThroughATableRatherThanAScan() {
+		for (String walk : List.of(am.ik.rontolisp.LispNames.DO_SYMBOLS_LIST_INTERNAL,
+				am.ik.rontolisp.LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL)) {
+			String source = LispPreludeLibrary.formsFor(walk).stream().map(LispVal::print).reduce("", String::concat);
+			assertThat(source).as(walk)
+				.contains("(MAKE-HASH-TABLE ", "(GETHASH ")
+				.doesNotContain("(REMOVE-DUPLICATES ", "(APPEND ", "(MEMBER ");
+		}
+	}
+
 	// %read-from-string-full is read-from-string's whole lambda list: a call passing
 	// more than the string is rewritten onto it inside the expression compilers, and
 	// #'read-from-string calls it where the value can be handed more than one argument.

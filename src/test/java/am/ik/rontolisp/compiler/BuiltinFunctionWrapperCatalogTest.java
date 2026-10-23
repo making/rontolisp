@@ -84,6 +84,15 @@ class BuiltinFunctionWrapperCatalogTest {
 		assertThat(BuiltinFunctionWrappers.lambdaFor(LispNames.ELT)).isNotNull();
 		assertThat(BuiltinFunctionWrappers.lambdaFor(LispNames.COERCE)).isNotNull();
 		assertThat(BuiltinFunctionWrappers.lambdaFor("NO-SUCH-BUILT-IN")).isNull();
+		// #'concatenate costs the TOTAL LENGTH, not the sum of the prefixes, on every
+		// compile path (.kb/string-accumulate-cost.md): the string arm sizes one
+		// make-string and replaces each piece into it, the list arm folds from the RIGHT.
+		// The wrapper used to fold pairwise through %string-concat, so (apply
+		// #'concatenate 'string lines) over a 12.8 MB tokenizer.json's 495,920 lines cost
+		// about 2.7e12 character copies and never returned.
+		assertThat(java.util.Objects.requireNonNull(BuiltinFunctionWrappers.lambdaFor(LispNames.CONCATENATE)).print())
+			.doesNotContain("%STRING-CONCAT")
+			.contains("(MAKE-STRING ", "(REPLACE ", ":FROM-END T");
 	}
 
 	@Test

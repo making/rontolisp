@@ -1860,6 +1860,17 @@ class WasmLispCompilerTest {
 		assertThat(storeCalls(moreLexical)).isEqualTo(stores);
 		assertThat(storeCalls(moreGlobal)).isEqualTo(stores + 1);
 		assertThat(occurrences(compile(base), "PROBE-COUNTER")).isZero();
+		// Nor is a compiler channel: the multiple-value spill nearly every function
+		// return writes was mirrored, so each call paid that walk and 4,000 program
+		// globals made a package walk 50x slower. Functions answering several values add
+		// no store.
+		String moreValues = base + """
+				(defun mv-two () (values 1 2))
+				(defun mv-three () (values 1 2 3))
+				(print (multiple-value-list (mv-two)))
+				(print (multiple-value-list (mv-three)))
+				""";
+		assertThat(storeCalls(moreValues)).isEqualTo(stores);
 	}
 
 	@Test

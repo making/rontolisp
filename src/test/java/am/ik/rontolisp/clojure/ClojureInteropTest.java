@@ -2383,7 +2383,7 @@ class ClojureInteropTest {
 	}
 
 	// Oracle (clj 1.12.6): pmap runs one future per element and pvalues one per
-	// expression, so sleep-backed branches finish in less than their sum; the
+	// expression, so two branches that each wait for the other both finish; the
 	// values keep order and print like the sequential forms (realized? stays
 	// false for pmap, like the oracle's lazy seq), and a failure surfaces at
 	// the deref in order.
@@ -2429,22 +2429,19 @@ class ClojureInteropTest {
 						(7 7)
 						(2 3)
 						""");
-		assertOverlapsEach("pmap-over-four-sleeps",
-				"(println (let [t0 (System/nanoTime)] (doall (pmap (fn [x] (Thread/sleep 300) x) [1 2 3 4])) (quot (- (System/nanoTime) t0) 1000000)))",
-				1200);
-		assertOverlapsEach("pvalues-over-two-sleeps",
-				"(println (let [t0 (System/nanoTime)] (pvalues (do (Thread/sleep 300) :a) (do (Thread/sleep 300) :b)) (quot (- (System/nanoTime) t0) 1000000)))",
-				600);
-	}
-
-	/**
-	 * The program's elapsed milliseconds on the interpreter and the JVM stay under
-	 * {@code limit}: sleep-backed branches overlap instead of running in order. No
-	 * wall-clock assertions on the WASM legs, which stay sequential.
-	 */
-	private static void assertOverlapsEach(String what, String program, int limit) throws Exception {
-		assertThat(Integer.parseInt(interpret(program).trim())).as(what + " on the interpreter").isLessThan(limit);
-		assertThat(Integer.parseInt(runOnJvm(program).trim())).as(what + " on the JVM").isLessThan(limit);
+		// Each branch counts a two-party latch down and then waits for the other: run
+		// in order, the first wait could only time out and answer false. The minute is
+		// a hang guard, not a measurement. Not on the WASM legs, which stay sequential.
+		String overlap = """
+				(def g36-await
+				  (fn [l] (.countDown l) (.await l 60 java.util.concurrent.TimeUnit/SECONDS)))
+				(let [l (java.util.concurrent.CountDownLatch. 2)]
+				  (println (doall (pmap (fn [x] (g36-await l)) [1 2]))))
+				(let [l (java.util.concurrent.CountDownLatch. 2)]
+				  (println (pvalues (g36-await l) (g36-await l))))
+				""";
+		assertThat(interpret(overlap)).as("on the interpreter").isEqualTo("(true true)\n(true true)\n");
+		assertThat(runOnJvm(overlap)).as("on the JVM").isEqualTo("(true true)\n(true true)\n");
 	}
 
 	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a

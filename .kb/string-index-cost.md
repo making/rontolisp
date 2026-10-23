@@ -161,11 +161,18 @@ byte-reader detour stayed.
   `WeakReference` slot would remove even that, at one `get()` per index on the hottest path.
 
 ## Pinning tests
+No pin reads a clock. **The wall-clock ratio pins were removed 2026-10-23**: the ci-spec
+`SCAN-FLAT` / `LENGTH-FLAT` / `CV-SCAN-FLAT` tokens and the JUnit `assertScanIsFlat` family
+bounded the whole-string half by `500 + 6 *` the chunked half in ms -- on a loaded CI runner
+a ~500 ms absolute budget, the shape that failed CI 22 times in the read-sequence twin
+(`.kb/character-sequence-io.md`). What replaced them is protocol state: the JVM's memory
+slots and call shape, and on WASM a wasmtime FUEL budget -- an instruction count, the same
+on every machine, which sees a per-character walk (it cannot see the length of one
+`array.copy`, which no regression here hides behind).
 - ci-spec `character-vector-index-reads-the-element`,
-  `character-index-is-not-linear-in-the-index` (all four backends): forward/backward/jumping
-  orders over one mixed ASCII / 2-byte / 3-byte / astral string, then cost as `SCAN-FLAT` /
-  `LENGTH-FLAT` -- 131,072 characters as ONE string against 1,024-character chunks.
-  Comparing the two halves is what makes the bound machine-independent.
+  `character-index-is-not-linear-in-the-index` (all four backends): CORRECTNESS --
+  forward/backward/jumping orders over one mixed ASCII / 2-byte / 3-byte / astral string,
+  and a scan of 131,072 characters as ONE string reading what 1,024-character chunks read.
 - ci-spec `character-index-into-a-string-holding-a-surrogate-pair` (all four backends):
   CORRECTNESS only over a string with an astral character in every 16 -- the lengths, three
   indexes, and that a walk of the long string reads exactly what 128 walks of the short one do.
@@ -178,17 +185,23 @@ byte-reader detour stayed.
   size whose n^2 exceeds it, and then only 3.7x) detection is a property of the RUNNER's speed
   rather than of the code, and a timeout names the command, i.e. a backend and not a case.
   The cost belongs in the per-backend pins below.
-- `JvmLispCompilerTest.compileACharacterIndexDoesNotWalk{FromTheStartOfTheString,ForANonLatin1String}`
-  (the second over Hiragana, so the LATIN1 shortcut cannot carry it),
-  `#compileACharacterIndexIntoACharacterVectorReadsTheElement`,
-  `#compileACharacterIndexIntoAStringWithASurrogatePairDoesNotWalkFromTheStart`,
-  `#compileACharacterIndexKeepsTheLongStringWhenShortOnesAreIndexedBetween` (the tokenizer.json
-  mechanism in miniature: two short strings indexed between every two indexes into a long one).
-- `LispEvaluatorTest.evalSubseqDoesNotRenderTheWholeStringItCutsFrom`,
-  `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
-- `WasmLispCompilerIntegrationTest.aCharacterIndexDoesNotDecodeFromTheStartOf{TheString,AMultiByteString,AStringHoldingAnAstralCharacter}`,
-  `#aStringLengthDoesNotRecountTheWholeStringOnEveryCall`,
-  `#aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector`. **The COMPONENT leg has no cost
+- `JvmLispCompilerTest.compileAStringIndexRemembersTheLongestStringsItWalked`: drives
+  `_cpidx` on the compiled class and reads its slots -- a surrogate-bearing string's
+  breakpoint table is right at every breakpoint and is the SAME array after two shorter wide
+  strings were indexed; a non-LATIN1 flat string stays in `_cpsimple0/1` after two shorter
+  flat ones (the tokenizer.json mechanism in miniature). ASCII / Latin-1 needs no memory.
+  `#compileACharacterVectorIndexAgreesAcrossTheFourSpellings`: a `(char s i)` site is one
+  call of `_charRef`'s operator wrapper and no `_strv`, and `_charRef` reads a vector
+  through `_rmGet`.
+- `LispEvaluatorTest.evalSubseqDoesNotRenderTheWholeStringItCutsFrom` (an ALLOCATION budget:
+  64 one-character cuts out of 1,048,576 characters under 4 MB, where rendering allocated
+  67 MB), `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
+- `WasmLispCompilerIntegrationTest.aCharacterIndexAndALengthDoNotDecodeFromTheStartOfTheString`
+  (ASCII, Hiragana and an astral character in every 16: one scan of 131,072 characters and
+  20,000 lengths under 600 M fuel; measured 2026-10-23 at 100 / 164 / 120 M, and with the
+  cursor never stored the ASCII leg alone exhausts the budget),
+  `#aCharacterVectorIndexAgreesAcrossTheFourSpellings` (a 65,536-character buffer scanned
+  under 200 M; 32.5 M measured). **The COMPONENT leg has no cost
   pin of its own, and does not need one -- but that is an inference, not a measurement**: the
   cursor lives in `TYPE_STRING` in the CORE module, which the component wraps unchanged, and only
   the I/O adapter and the entropy/clock source differ between the two legs. If the string runtime

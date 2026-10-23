@@ -37,25 +37,6 @@ class GpuDeclineTest {
 	}
 
 	@Test
-	void worthIsAPureSizePredicateThatCostsNothing() {
-		// It is documented as the pre-check a caller makes BEFORE unwrapping its
-		// operands,
-		// so it must not be the thing that runs the probe: on a machine with a GPU that
-		// is
-		// a dlopen, a cuInit, a retained primary context and a PTX JIT, on a path that
-		// may
-		// then never touch the device. Asking it many times must stay free.
-		long start = System.nanoTime();
-		boolean any = false;
-		for (int i = 0; i < 100_000; i++) {
-			any |= Gpu.worth(i % 97, 64, 64);
-		}
-		long elapsed = System.nanoTime() - start;
-		assertThat(any).isTrue();
-		assertThat(elapsed).as("100k worth() calls in nanoseconds").isLessThan(200_000_000L);
-	}
-
-	@Test
 	void aProductBelowTheSizeThresholdIsNeverOffered() {
 		// The threshold is the whole reason an intercepted call is allowed to be
 		// unconditional: a small product declines and the caller's own kernel runs.

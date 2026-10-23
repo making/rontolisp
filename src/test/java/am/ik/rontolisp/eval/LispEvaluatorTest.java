@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
@@ -2138,31 +2137,33 @@ class LispEvaluatorTest {
 	// render the whole code-point buffer into a java.lang.String and then substring it,
 	// so a parser that cuts one token out of a long document per step was quadratic in
 	// the document -- rontolisp:json-parse over a 10.8 million character tokenizer.json
-	// took hours on the interpreter (.kb/string-index-cost.md). Both halves below do the
-	// SAME 8,192 one-character cuts; only the string they cut from differs in length.
+	// took hours on the interpreter (.kb/string-index-cost.md). An allocation budget pins
+	// it without a clock: 64 one-character cuts out of a 1,048,576-character string
+	// allocated at least one rendered megabyte each, and now allocate what the slices do.
 	@Test
 	void evalSubseqDoesNotRenderTheWholeStringItCutsFrom() {
-		String output = evalMulti("""
+		com.sun.management.ThreadMXBean threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory
+			.getThreadMXBean();
+		org.junit.jupiter.api.Assumptions
+			.assumeTrue(threads.isThreadAllocatedMemorySupported() && threads.isThreadAllocatedMemoryEnabled());
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		for (LispVal form : LispReader.readAllFromString("""
 				(defun cut-head (s n)
 				  (let ((total 0))
 				    (dotimes (i n) (setq total (+ total (length (subseq s 0 1)))))
 				    total))
-				(defvar *short* "%s")
 				(defvar *long* "%s")
-				(cut-head *short* 64)
-				(let ((t0 (get-internal-real-time)))
-				  (cut-head *long* 8192)
-				  (let ((t1 (get-internal-real-time)))
-				    (cut-head *short* 8192)
-				    (list (- t1 t0) (- (get-internal-real-time) t1))))
-				""".formatted("x".repeat(256), "x".repeat(1048576))).print();
-		String[] halves = output.replace("(", "").replace(")", "").trim().split("\\s+");
-		long longString = Long.parseLong(halves[0]);
-		long shortString = Long.parseLong(halves[1]);
-		assertThat(longString)
-			.as("8,192 one-character cuts out of a 1,048,576-character string (%d ms) against "
-					+ "the same cuts out of a 256-character one (%d ms)", longString, shortString)
-			.isLessThanOrEqualTo(500 + 6 * shortString);
+				(cut-head "warm" 64)
+				""".formatted("x".repeat(1048576)))) {
+			evaluator.eval(form);
+		}
+		LispVal cuts = LispReader.readFromString("(cut-head *long* 64)");
+		long before = threads.getCurrentThreadAllocatedBytes();
+		LispVal total = evaluator.eval(cuts);
+		long allocated = threads.getCurrentThreadAllocatedBytes() - before;
+		assertThat(total).isEqualTo(new LispInteger(64));
+		assertThat(allocated).as("bytes allocated by 64 one-character cuts out of 1,048,576 characters")
+			.isLessThan(4_000_000);
 	}
 
 	@Test
@@ -17063,19 +17064,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() {
-		// The interpreter leg of the compiled backends' ratio pin
-		// (JvmLispCompilerTest#compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees):
-		// the same program answers the same last line, and its global table is a map.
-		String[] lines = printedLines(am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE).split("\n");
-		assertThat(lines[2].trim()).isEqualTo("3999");
-		long few = Long.parseLong(lines[0].trim());
-		long many = Long.parseLong(lines[1].trim());
-		assertThat(many).as("with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
-			.isLessThanOrEqualTo(200 + 3 * few);
-	}
-
-	@Test
 	void symbolBuildersAnswerTheTAndNilSingletons() {
 		// The compiled harnesses pin the same line; (intern "T" "CL") reaches the
 		// singleton through the designated-package arm too.
@@ -24243,28 +24231,40 @@ class LispEvaluatorTest {
 		// program can hand over to another thread (the macOS main thread, a socket
 		// read), which then cannot take the monitor to evaluate a memoized form of its
 		// own. Both halves park. The memo must be read under the monitor and the
-		// expansion evaluated outside it.
+		// expansion evaluated outside it. The holder parks in a memoized expansion until
+		// interrupted; once it is parked, it must hold no monitor at all, and a memoized
+		// form on this thread evaluates.
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
-		for (LispVal form : LispReader.readAllFromString("(when t 1)")) {
-			evaluator.eval(form); // memoize the call site
-		}
-		LispVal slow = LispReader.readFromString("(when t (%sleep-ms 3000))");
-		evaluator.eval(slow); // memoize the slow call site too, so the next run hits
-		CountDownLatch running = new CountDownLatch(1);
+		LispVal quick = LispReader.readFromString("(when t 1)");
+		evaluator.eval(quick); // memoize the call site
+		evaluator.eval(LispReader.readFromString("(defvar *park-ms* 0)"));
+		LispVal park = LispReader.readFromString("(when t (%sleep-ms *park-ms*))");
+		evaluator.eval(park); // memoize the parking call site too, so the holder hits
+		evaluator.eval(LispReader.readFromString("(setq *park-ms* 600000)"));
 		Thread holder = new Thread(() -> {
-			running.countDown();
-			evaluator.eval(slow);
+			try {
+				evaluator.eval(park);
+			}
+			catch (RuntimeException interrupted) {
+				// the interrupt below ends the park
+			}
 		});
 		holder.setDaemon(true);
 		holder.start();
-		running.await();
-		Thread.sleep(300); // let the holder get inside the memoized evaluation
-		LispVal quick = LispReader.readFromString("(when t 1)");
-		long start = System.nanoTime();
-		evaluator.eval(quick);
-		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-		holder.interrupt();
-		assertThat(elapsedMs).as("a memo hit on another thread must not block this evaluation").isLessThan(1000);
+		try {
+			while (holder.getState() != Thread.State.TIMED_WAITING) {
+				assertThat(holder.isAlive()).as("the holder parks rather than returning").isTrue();
+				Thread.onSpinWait();
+			}
+			java.lang.management.ThreadInfo info = java.lang.management.ManagementFactory.getThreadMXBean()
+				.getThreadInfo(new long[] { holder.threadId() }, true, false)[0];
+			assertThat(info.getLockedMonitors()).as("monitors held while the memoized expansion runs").isEmpty();
+			assertThat(evaluator.eval(quick)).isEqualTo(new LispInteger(1));
+		}
+		finally {
+			holder.interrupt();
+			holder.join();
+		}
 	}
 
 	@Test
