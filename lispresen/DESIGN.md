@@ -109,7 +109,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -417,8 +417,8 @@ phrases (文節), not between arbitrary characters.
 | Deck header (generated first slide) | `title` (below) |
 | `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
-| No title, one `image` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
-| Title + one `image` | `image` (image fills the body box, `object-fit: contain`) |
+| No title, one `image` or `video` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
+| Title + one `image` or `video` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
 | Title + one `table` | `table` |
@@ -486,6 +486,56 @@ the body and give it a part of the canvas, edge to edge:
 - Print, the overview and the presenter thumbnails show these slides like any other: the
   image is part of the slide. The page image draws the title slide and is unaffected, and
   so is `--embed`, which inlines the image as it does in the body.
+
+#### Video
+
+A recorded demo is the fallback of every live demo, and an animated GIF a poor one (no
+sound, no pause, files ten times larger). `(video "demo.mp4" :alt "..." [:caption "t"]
+[:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` is an image to the layout:
+lispresen computes the box and the browser fits the video in it (`object-fit`), so the
+fit solver needs no intrinsic size and sees an image. It takes every place and option an
+`image` does (the body, `full`, `image-left` / `image-right`, `:fit`, `:share`,
+`:caption`, a callout), with the same rules and diagnostics, which name it a video.
+`:alt` is required as for images; it becomes the element's `aria-label`.
+
+- `:autoplay t` means "play when the slide is entered": the player calls `play()` when a
+  page move enters the slide and `pause()` on every video of a slide it leaves. The
+  element has no `autoplay` attribute, which would play every video on page load, hidden
+  slides included; the slide the page opens on does not play either, nor does a step
+  advance inside the slide, so a video the speaker paused stays paused. A paused video
+  that is entered again resumes where it stopped; one that ended starts over.
+- A browser allows `play()` with sound only in a window that has had a user gesture
+  (Chrome's autoplay policy; a muted video always plays). A key press, a click or a tap
+  in the slides window counts, so presenting from that window always plays; moving from
+  the presenter window gives the slides window no gesture, and the speaker presses `F`
+  there first. A refused `play()` leaves the video paused and logs a warning. This is
+  the documented policy, not a measurement: under browser automation a script call
+  counts as a gesture (2026-10-24, Chrome via DevTools MCP), so it is checked by hand.
+- A click or tap on a video plays or pauses it, and the page does not move (Touch,
+  below; measured 2026-10-24 in Chrome, as were play on entering, pause on leaving,
+  resuming on re-entry, no play on page load, the poster in the overview and the
+  presenter window, and a click forwarded from it); a double-click on it does not toggle full screen. Space, the arrows and the
+  other keys keep moving slides: the element has no `controls` in the player, so it
+  never takes focus and its keyboard shortcuts never compete with the deck's. The HTML
+  has `controls`, which the player removes, so the page without JavaScript plays it from
+  the browser's own controls.
+- The element is `<video src preload="metadata" playsinline>`, with `poster`, `loop` and
+  `muted` from the options and `data-autoplay` for the player. `preload="metadata"`
+  reads the size and the first frame, not the whole file, so a deck of several demos
+  opens without reading them; `playsinline` keeps iOS from opening it full screen. In the
+  body box it is as wide as the box (`width: 100%`), not its own width as an image is,
+  so its box does not change when the metadata arrives: the bubble of a callout is
+  placed against that box, and `object-position: right` sets the picture against the
+  bubble's strip.
+- Print, the overview and the presenter thumbnails copy the slide, so they show the
+  poster, or the first frame the copy loaded; Safari may load no frame before playing
+  (not measured), so a deck for Safari sets `:poster`. A click on the video in the presenter window's current slide
+  plays or pauses it in the slides window, over the `BroadcastChannel`; the presenter's
+  copy itself never plays, so the sound comes from one window.
+- `--embed` inlines `mp4` (`video/mp4`) and `webm` (`video/webm`), the formats every
+  current browser plays, and the poster as an image. The page holds the base64 of the
+  whole file, a third larger, and the browser parses all of it before the first slide
+  shows, so a video over 20 MB is a warning.
 
 ### Fit solver
 
@@ -1125,8 +1175,12 @@ One file containing:
 - The player script: canvas scaling, navigation (arrow keys, space, PageUp/PageDown for
   clickers, Home/End, tap, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
   below),
-  the runtime check, a presenter window (`P`, below), and the runnable-code worker,
-  included only when the deck has runnable code.
+  the runtime check, a presenter window (`P`, below), the runnable-code worker,
+  included only when the deck has runnable code, and the playing of videos, included
+  only when the deck has one.
+- A video as `<video src="demo.mp4" aria-label="..." preload="metadata" playsinline
+  controls>` in its `figure`, with `poster`, `loop`, `muted` and `data-autoplay` from
+  its options (Video, above); the player removes `controls`.
 - Callouts as `<div class="say" role="note" data-side="below" style="left:...;top:...">`
   after the body, each named by its anchor's `aria-describedby` (an inline anchor is a
   `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
@@ -1156,7 +1210,8 @@ the next one, the notes, a timer (click to reset), Start, and with runnable code
 state and a runtime reset. Navigation in either window moves the other; the windows talk
 over a `BroadcastChannel` named after the file's path. The presenter's copy of the current
 slide shows the audience window's edits and outputs, and its Run and Reset act in the
-audience window, where the code runs.
+audience window, where the code runs; so does a click on a video there, which plays or
+pauses it in the audience window.
 
 ### Touch
 
@@ -1170,7 +1225,7 @@ same picture, so there is no second, scrolling layout to keep in step with it.
   the touch's default action (`preventDefault`), so no click or `dblclick` follows it.
 - A tap on something that does something itself is left to it: links, buttons, form
   fields, `[tabindex]`, `[contenteditable]`, a runnable code block (a tap edits it) and its
-  output. A tap while text is selected clears the selection, and one while the editor has
+  output, and a video (a tap plays or pauses it). A tap while text is selected clears the selection, and one while the editor has
   focus leaves the editor, instead of moving.
 - A horizontal swipe over 50 px moves as before; a touch is a swipe or a tap, never both.
   Two fingers, a pinch-zoomed page (`visualViewport.scale` above 1), or the editor with
@@ -1211,8 +1266,8 @@ Presenting is done in full screen; the windowed view is for preparation.
   true; full screen itself is refused under browser automation (as `F` is there), so it
   is checked by hand.
 
-Images are referenced by their relative path, so the output is written next to the deck
-by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
+Images and videos are referenced by their relative path, so the output is written next to
+the deck by default and the paths stay valid. `--embed` inlines them as `data:` URIs instead, so
 the HTML file stands alone:
 
 - A relative path resolves against the deck's directory (the working directory when the
@@ -1221,8 +1276,9 @@ the HTML file stands alone:
   2026-10-22 on the interpreter, JVM, both WASM backends and SBCL, with bytes 0, 128 and
   255); the WASM backends need the directory preopened (`wasmtime run --dir .`).
 - The MIME type comes from the extension: `png`, `jpg` / `jpeg`, `gif`, `webp`, `avif`,
-  `svg`. Another extension, or a file that cannot be read, is an error and leaves the
-  path in place.
+  `svg`, and for a video `mp4` and `webm` (a video's `:poster` is an image). Another
+  extension, or a file that cannot be read, is an error and leaves the path in place; a
+  video over 20 MB is a warning (Video, above).
 - The base64 is computed in `embed.lisp` with integer arithmetic, not by a host library,
   so every backend writes the same characters.
 - A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
@@ -1519,7 +1575,8 @@ before committing a change under `lispresen/`.
   page URL in the head), a statement, a
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
   numeric columns), every inline form, an embedded PNG, a full-bleed slide and a split one
-  (`:image-right`, `:share 1/3`, the ratio read on every backend), ordered and unordered lists, one
+  (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
+  with an embedded poster, ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
   chart with a source line under it, a progress bar, `:layout` and
   `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
@@ -1533,7 +1590,7 @@ before committing a change under `lispresen/`.
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the layout a lone untitled image takes and
-  the text region of a split slide, the
+  the text region of a split slide (a video in it), the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   the QR encoder against the standard's examples and its version boundaries, the title
   slide's logo and QR code, the preview tags (none without the options, every one with
@@ -1552,7 +1609,7 @@ before committing a change under `lispresen/`.
   token split at a line end inside `:steps` lines) and its diagnostics, the callout and
   `:steps` diagnostics, the kicker diagnostics, base64 padding, the CRC-32 and Adler-32
   check values, deflate and a whole PNG against what zlib reads, the
-  embedding diagnostics, code files (UTF-8 up to four bytes, `:lines`, the language by
+  embedding diagnostics (a video, its poster and the size warning), code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics), the highlighting of every language from a table of
   (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
@@ -1565,7 +1622,9 @@ before committing a change under `lispresen/`.
   and outputs, and forward Run; a callout must sit beside its anchor after the runtime
   check; a deck of three versions of a function must morph stepping forward and back,
   driven from either window, and switch at once on a jump, under reduced motion and
-  after an edit; Start must put the audience window in full screen on the other display,
+  after an edit; a video with `:autoplay` must play on entering its slide and pause on
+leaving it, a click must play and pause it without moving the slide, and the presenter
+window must show its poster and forward a click on it; Start must put the audience window in full screen on the other display,
   and `Esc` in the editor in full screen must leave the editor only (Chromium). The
   documentation site's Run cells are verified the same way; no committed test drives a
   browser.

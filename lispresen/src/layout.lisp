@@ -204,7 +204,7 @@ image, where it would be text on a picture."
 
 (defun lone-image-p (slide)
   "True when SLIDE is one image to fill the canvas: no title, source or callout, and an
-(image ...) without a caption as its only block. Text on a picture is left out, since no
+(image ...) or (video ...) without a caption as its only block. Text on a picture is left out, since no
 lint can check its contrast."
   (let ((blocks (slide-blocks slide)))
     (and (null (slide-title slide)) (null (slide-source slide))
@@ -212,8 +212,8 @@ lint can check its contrast."
          (figure-p (car blocks)) (null (figure-caption (car blocks))))))
 
 (defun split-figure (slide)
-  "The image a split slide sets beside its text: its one (image ...) outside columns, when
-that has no caption and no callout points at it; nil otherwise."
+  "The image a split slide sets beside its text: its one (image ...) or (video ...) outside
+columns, when that has no caption and no callout points at it; nil otherwise."
   (let ((figures (remove-if-not #'figure-p (slide-blocks slide))))
     (and (= (length figures) 1)
          (null (figure-caption (car figures)))
@@ -249,14 +249,14 @@ the model puts them, so a slide with callouts never takes it."
            automatic)
           ((equal requested "full")
            (report :warning
-                   "the full layout needs an (image ...) without :caption as the only block, and no title, source or callout")
+                   "the full layout needs an (image ...) or (video ...) without :caption as the only block, and no title, source or callout")
            automatic)
           ((member requested *split-layouts* :test #'equal)
            (if (split-figure slide)
                requested
                (progn
                  (report :warning (format nil
-                                   "the ~a layout needs one (image ...) outside columns, without :caption or a callout on it"
+                                   "the ~a layout needs one (image ...) or (video ...) outside columns, without :caption or a callout on it"
                                    requested))
                  automatic)))
           ((member "statement" (list requested automatic) :test #'equal)
@@ -902,8 +902,8 @@ rest less the side margins."
       (report-image-option figure ":share"))))
 
 (defun report-image-option (figure option)
-  (report :warning (format nil "image ~a takes ~a only on ~a slide" (figure-src figure)
-                           option
+  (report :warning (format nil "~a ~a takes ~a only on ~a slide" (figure-noun figure)
+                           (figure-src figure) option
                            (if (equal option ":fit")
                                "a :full, :image-left or :image-right"
                                "an :image-left or :image-right"))))

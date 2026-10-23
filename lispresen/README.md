@@ -53,6 +53,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(quote [:cite "who"] inline...)` | a quotation |
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | an image, fitted into the remaining space; alone on a slide without a title, it covers the whole slide. `:fit :contain` shows a full-bleed or split image whole instead of cropping it, `:share` (`1/3`, `1/2`, `2/3`) is the width a split image takes |
+| `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t] ...)` | a video (`mp4`, `webm`), laid out as an image and taking the same options. `:autoplay t` plays it when its slide is entered, never on page load; leaving the slide pauses it. A click or tap on it plays or pauses it. Print, the overview and the presenter window show the `:poster` image (or the first frame) |
 | `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
@@ -282,8 +283,9 @@ lispresen --version
 ```
 
 `DECK` and `OUT` accept `-` for standard input and output; `OUT` defaults to `DECK` with
-`.html`. Code files are read into the HTML. Images are referenced by their path, relative to the deck; `--embed` puts them in
-the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`), so the file
+`.html`. Code files are read into the HTML. Images and videos are referenced by their path, relative to the deck; `--embed` puts them in
+the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`; `mp4`, `webm`,
+a video over 20 MB reported, since the page then opens slowly), so the file
 alone is the whole deck, the page image (Link preview, below) aside. A WASM build reads and writes files
 only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
 warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
@@ -309,14 +311,16 @@ reports `unknown`.
 
 Open the HTML file in a browser. Arrow keys, space, PageUp/PageDown (clickers),
 Home/End and swiping move between slides; on a touch screen, a tap on the left third goes
-back and anywhere else goes forward. `#N` in the URL opens slide N. `F`, a double click
+back and anywhere else goes forward. A click or tap on a video plays or pauses it, and
+leaves the slide where it is. `#N` in the URL opens slide N. `F`, a double click
 or the button in the bottom-right corner toggles full screen. `O` shows all slides.
 Printing to PDF puts one slide on each page.
 
 `P` opens the presenter window: the current and next slide, the notes, a timer (click it
 to reset) and Start, which puts the slides in full screen on the other display (Chrome or
 Edge, the deck served over HTTP; the first Start asks for permission to use the
-displays). Moving in either window moves the other.
+displays). Moving in either window moves the other, and a click on a video in the presenter window
+plays or pauses it in the slides.
 
 If the fonts on the presenting machine set text wider than lispresen measured, the deck
 steps the affected slides down a size when it opens; `?check` in the URL lists what it
@@ -423,6 +427,19 @@ the title and body of a split slide are fitted in the width the image leaves. Te
 never set on a picture, since its contrast cannot be checked: a full-bleed image takes no
 title, caption, source or callout and shows no page number or footer, and an image beside
 text takes no caption.
+
+A recorded demo is a `video`, laid out as an image: in the body, over the whole slide or
+beside the text.
+
+```lisp
+(slide :title "デモ"
+  (video "demo.mp4" :alt "fib を評価する" :poster "demo.png" :autoplay t :muted t))
+```
+
+`:autoplay t` plays it when the slide is entered and leaving the slide pauses it. A
+browser plays sound only in a window that has had a key press or click, so when moving
+from the presenter window, press `F` in the slides window first; a `:muted t` video
+always plays.
 
 ## Development
 

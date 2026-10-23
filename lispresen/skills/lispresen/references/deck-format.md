@@ -4,7 +4,7 @@ A condensed reference for writing decks. The full description of every form is t
 https://github.com/making/rontolisp/blob/develop/lispresen/README.md
 
 Contents: file structure, the header, slides, blocks, inline forms, tables, diagrams,
-callouts, page advances, code, images, templates, themes, link preview, limits, mistakes
+callouts, page advances, code, images, videos, templates, themes, link preview, limits, mistakes
 to avoid, diagnostics and their fixes.
 
 ## File structure
@@ -77,6 +77,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(quote [:cite "who"] inline...)` | quotation |
 | `(column block...)` | consecutive columns stand side by side; widths come from content |
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | image fitted into the remaining space; full-bleed or split (Images, below) |
+| `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` | video laid out as an image, same options (Videos, below) |
 | `(table ...)` | table (below) |
 | `(flow ...)`, `(bars ...)`, `(cells ...)` | diagrams (below) |
 | `(notes "text")` | speaker notes, presenter window only |
@@ -166,6 +167,27 @@ A photograph can run to the slide's edges:
   no page number or footer; a split image takes no caption or callout. Put a photo
   credit in a split slide's `source` or in `notes`.
 
+
+## Videos
+
+A recorded demo, the fallback for a live one:
+
+```lisp
+(slide :title "Demo"
+  (video "demo.mp4" :alt "fib evaluated in the REPL"
+         :poster "demo.png" :autoplay t :muted t :loop t))
+```
+
+- A video is laid out as an image: in the body, `full` alone on an untitled slide, or
+  `:image-left` / `:image-right`, with the same `:caption`, `:fit`, `:share` and callouts.
+- `:autoplay t` plays it when its slide is entered (never on page load) and leaving the
+  slide pauses it. A click or tap plays or pauses it; keys still move slides. Sound plays
+  only after a key press or click in that window, so use `:muted t` when the demo has
+  none.
+- Print, the overview and the presenter window show `:poster` (or the first frame); set
+  it, since Safari may show no frame before playing.
+- `--embed` inlines `mp4` and `webm` (and the poster); above 20 MB it warns.
+
 ## Templates
 
 ```lisp
@@ -245,7 +267,7 @@ drawn. Leave all of these out for a deck that is not published.
 - **Parentheses.** An unbalanced form is `error: cannot read this form (unbalanced
   parentheses or bad syntax)`, reported at the line where the form starts.
 - **Full-width letters and digits** (`ＡＢＣ１２３`) are a warning; write half-width.
-- **Every image needs `:alt`.**
+- **Every image and video needs `:alt`.**
 - **Do not shrink to fit.** There is no option for it; split the slide.
 
 ## Diagnostics and their fixes
@@ -265,9 +287,10 @@ drawn. Leave all of these out for a deck that is not published.
 | `a callout takes N lines; keep each to 2` | shorten the comment |
 | `(agenda) places the agenda of (deck :agenda t), which this deck lacks` | add `:agenda t` to the deck, or remove `(agenda)` |
 | `:agenda lists the sections, and this deck has none` | add `section`s or drop `:agenda` |
-| `image X has no :alt` | add `:alt "what it shows"` |
-| `the full layout needs an (image ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
-| `the image-left layout needs one (image ...) outside columns, ...` | keep one image, outside `column`, without `:caption` or a callout on it |
+| `image X has no :alt`, `video X has no :alt` | add `:alt "what it shows"` |
+| `the full layout needs an (image ...) or (video ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
+| `the image-left layout needs one (image ...) or (video ...) outside columns, ...` | keep one image or video, outside `column`, without `:caption` or a callout on it |
 | `image X takes :fit only on a :full, :image-left or :image-right slide` | remove `:fit`; an image in the body is always shown whole |
 | `cannot embed image X: cannot read it` | fix the path (relative to the deck) |
+| `video X is N MB, which makes the embedded HTML slow to open; ...` | shorten or re-encode the video, or render without `--embed` and ship it beside the HTML |
 | `:page-image is drawn in the :page-image-font, which this deck lacks` | add a TrueType font, use an absolute image URL, or remove `:page-image` |

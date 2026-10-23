@@ -8,12 +8,13 @@
 ;;;; from the previous slide's on a page advance. *RUNNER-SCRIPT*, included only when the deck
 ;;;; has runnable code, runs code blocks on the playground runtime in a Web Worker.
 ;;;; *SAY-SCRIPT*, included only when the deck has callouts, places their bubbles again on
-;;;; the geometry the browser drew. The slides are laid out without any of them; they only
-;;;; present and correct them.
+;;;; the geometry the browser drew. *VIDEO-SCRIPT*, included only when the deck has a
+;;;; video, plays and pauses videos as slides are entered and left, and on a click. The
+;;;; slides are laid out without any of them; they only present and correct them.
 ;;;;
 ;;;; They are written without double quotes and backslashes so they sit in a Lisp string
-;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY START })(); the
-;;;; runner and the callouts extend the player through HOOKS.
+;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY VIDEO START })(); the
+;;;; runner, the callouts and the videos extend the player through HOOKS.
 
 (in-package :lispresen)
 
@@ -303,11 +304,11 @@ if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.cre
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
 return cunion(crects(rg.getClientRects(),o,k));}
 if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
-if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
 if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
 return cunion(ctext(el,o,k));}
 function cobstacles(sl,o,k){var a=ctext(sl,o,k);
-sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img'),fr=cbox(f.getBoundingClientRect(),o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video'),fr=cbox(f.getBoundingClientRect(),o,k);
 if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
 sl.querySelectorAll('.tools,.dg-art>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
 function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
@@ -330,6 +331,21 @@ else{if(c.dataset.side!==p.side)notes.push('callout '+(j+1)+' '+c.dataset.side+'
 c.classList.remove('overflow');c.dataset.side=p.side;c.style.left=p.x+'px';c.style.top=p.y+'px';c.style.setProperty('--tail',(p.tail-SAY.border)+'px');}
 x=parseInt(c.style.left,10);y=parseInt(c.style.top,10);obs.push({l:x,t:y,r:x+w,b:y+h});if(p)obs.push(p.tb);});}
 hooks.place.push(callouts);
+")
+
+(defparameter *video-script*
+  "
+var vids=Array.prototype.slice.call(deck.querySelectorAll('video')),vat=-1;
+vids.forEach(function(v,i){v.controls=false;v.dataset.v=i;});
+function vplay(v){var p=v.play();if(p&&p.catch)p.catch(function(e){console.warn('lispresen: the browser did not play the video',e);});}
+function vtoggle(v){if(v.paused)vplay(v);else v.pause();}
+function vclick(v,f){v.addEventListener('click',function(e){e.stopPropagation();f();});v.addEventListener('dblclick',function(e){e.stopPropagation();});}
+if(presenter)hooks.thumb.push(function(root){root.querySelectorAll('video').forEach(function(v){vclick(v,function(){send({t:'video',i:+v.dataset.v});});});});
+else{vids.forEach(function(v){vclick(v,function(){vtoggle(v);});});
+hooks.go.push(function(i){if(i===vat)return;var entered=vat>=0;vat=i;
+vids.forEach(function(v){if(!v.paused&&!slides[i].contains(v))v.pause();});
+if(entered)slides[i].querySelectorAll('video[data-autoplay]').forEach(vplay);});
+hooks.msg.push(function(m){if(m.t==='video'&&vids[m.i])vtoggle(vids[m.i]);});}
 ")
 
 (defparameter *start-script*
