@@ -109,8 +109,8 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `notes`, `source`, `say` around one block (`:at`, `:step`) |
-| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `say` (`(say "comment" inline...)`, `:step`) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`) |
+| Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `math` (an inline formula), `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
 
@@ -118,23 +118,33 @@ Rules:
   backquote or CLOS definitions (`doc/en/guides/eval-limitations.md`), so evaluating the
   deck would make the language a deck may use differ per backend. Reading only is
   identical everywhere and makes a deck file safe to render from an untrusted source.
-- Tags are matched by `symbol-name`, not by symbol identity, so the package the runtime
-  reader interns into does not matter. Options are keyword/value pairs at the start of
-  a form; the first argument that is not a keyword starts the content.
-- The compiled runtime reader does not support backquote, `#.`, `#+`/`#-`
-  (`doc/en/guides/read-load-limitations.md`); the deck format needs none of them. The
-  interpreter's and SBCL's readers evaluate `#.`, so the deck is read under `*read-eval*`
-  nil, which every backend refuses alike. A form holding a dotted list or more conses
-  than characters (shared or circular structure from `#n=`, which SBCL reads) is reported
-  and skipped, so the parser and the template expansion only ever see proper trees. The
-  one exception is the datum of `(cells ...)` (Diagrams, below), whose dotted pairs are
-  what it draws; the template substitution walks a dotted tail, and nothing else reads
-  the datum but the drawing.
+- **The deck is read by lispresen's own reader** (`reader.lisp`), not the backend's
+  `read-from-string`: lists, a dotted tail, strings (`\"` and `\\`, a backslash escaping
+  the next character), characters (`#\x`, `#\Space`, `#\Newline`, `#\Tab`), `'x`,
+  integers, ratios, decimals (read as floats, which every element refuses with a
+  message, since float printing differs between implementations), keywords, `t`, `nil`
+  and symbols, with `;` and `#| |#` comments. Anything else after `#` (`#.`, `#+`,
+  `#n=`) and backquote are errors. Two reasons. The backends' readers differ: the
+  compiled runtime reader has no backquote, `#.` or `#+` and reads `|a b|` as two
+  symbols where the interpreter and SBCL read one, so a deck using them rendered
+  differently per backend; one reader makes the syntax identical by construction, and
+  there is no `#.` to refuse. And every backend's reader folds case, which a formula
+  cannot afford: `N` and `n` are different letters. A symbol keeps the case it is
+  written with (uninterned, matched by name), `|...|` and `\` escape characters in it;
+  tags, options and template names match whatever their case, cells and formulas print
+  a symbol as written.
+- Tags are matched by `symbol-name`, so a symbol's package never matters. Options are
+  keyword/value pairs at the start of a form; the first argument that is not a keyword
+  starts the content.
+- A form holding a dotted list is reported and skipped, so the parser and the template
+  expansion only ever see proper trees. The one exception is the datum of `(cells ...)`
+  (Diagrams, below), whose dotted pairs are what it draws; the template substitution
+  walks a dotted tail, and nothing else reads the datum but the drawing.
   Characters are code points on every backend (`.kb/string-index-cost.md`), so Japanese
   strings measure and slice identically everywhere.
 - Top-level forms instead of one enclosing `(deck ...)`: each form is read separately,
-  and the stop index `read-from-string` returns gives its start offset, hence a line
-  number for every diagnostic. One enclosing form would leave only "slide 7".
+  and the index after it gives the next one's start offset, hence a line number for
+  every diagnostic. One enclosing form would leave only "slide 7".
 - `code` content is dedented (the common leading whitespace removed, a leading blank
   line dropped) so it can be indented with the surrounding source. A `"` inside code is
   written `\"`.
@@ -333,6 +343,8 @@ Width of a code point, in milli-em:
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Emoji (dingbats, transport and map, U+1FA00-1FAFF, ...) and an emoji sequence (flag, ZWJ, skin tone, variation selector, keycap) | 1000 per glyph, exact; the characters of a sequence after the first take 0 and never break apart |
 | Symbols the font stack sets wider than a Latin letter (™ ⌘ ¼½¾ Æ, Letterlike, number forms, math, technical, supplemental arrows and operators, currency, tiles) | per block, the widest glyph measured plus 2% (900-1650); box drawing and block elements 1000, 614 in code |
+| Greek (U+0370-03FF) and ∏ | 1000, exact |
+| The symbols formulas set (∑ ∫ √ ≤ ≥ ≠ ∞ ∈ − ± × ⋅ ∂ ∇ ′ ⌊ ⌋ ⟨ ⟩ ∀ ∃ ¬ ∧ ∨ ∪ ∩ ⊂ ℝ ℕ ℤ ℚ ℂ ∘ ≡ ∼ ∝ ℏ ° ⊕ ⊗ ˆ ¯, ...) | per glyph, the wider of weights 400 and 700 plus 2% (`*measured-symbol-widths*`), in place of the block width above, which over-estimates them by up to half and would space a formula out |
 | Other proportional characters | 800 (bold 840), plus 2% |
 | Inline code (`tt`) and a marker (`mark`) | 125 more on the element's first character and on its last, its padding |
 
@@ -601,6 +613,7 @@ and a maximum, the widest of their unwrapped widths:
 | Block | Minimum | Maximum |
 |-------|---------|---------|
 | text, list, quote | the widest unbreakable unit, plus the indent | the text set on one line, plus the indent |
+| formula | its box at the body size | the same |
 | code | the longest line, plus padding; runnable code at least its buttons, 320 + 2 x 12 px | the same |
 | console transcript | the longest command line, plus padding | the longest line, plus padding |
 | table | the sum of its columns' minima | the sum of their maxima |
@@ -755,6 +768,83 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
 
 No diagram has steps of its own yet; a step callout on one works as on any block.
+
+### Formulas
+
+```lisp
+(p "計算量は " (math (O (* n (log n)))) " で済む")
+(math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a))))
+(math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+```
+
+A formula belongs in the deck as text for the reasons a diagram does, and prefix
+notation is already a formula's tree, so `(math expr...)` needs no second syntax: the
+operators are named as Lisp names them (`+ - * / = < <= expt`), a symbol is a variable
+or a Greek letter or symbol by name, a string is text, a ratio a fraction. The README
+lists every form. In block position a `math` is a display formula, a figure centered in
+its region like a diagram; inside text it is an inline formula, one character of the run
+as wide as its box (`*formula-char*`, a private-use code point), so it wraps with the
+text and never breaks inside.
+
+- **Layout.** `math.lisp` lays the tree out into boxes once, at parse time, in milli-em
+  of the font size the formula will be set at: a box has a width, an ascent and a
+  descent, and places its glyphs (centered in boxes measured from the width table),
+  rules and stretched delimiters from its left edge and baseline. The layout is
+  independent of the size, so the fit solver sees a box that scales: a display formula
+  is set at the body size and steps down with it, an inline one takes its run's size.
+  Fractions sit on the math axis, scripts are 0.7 and 0.5 of their base's size with
+  TeX's shifts and spacing classes (thin, medium and thick spaces between ordinary
+  symbols, operators and relations, none in scripts), large operators grow 1.4 times
+  with their limits below and above in display style and as scripts in text style
+  (an integral's always beside it), a delimiter is the glyph while its content is no
+  taller than a line and else the glyph stretched vertically about the axis to cover it,
+  and the radical sign is the √ glyph stretched the same way under an overbar. A sum
+  used as a factor, after a minus sign or as the base of a script is parenthesized, as a
+  writer would.
+- **Vertical metrics**, measured on Hiragino Sans in Chrome 155 on 2026-10-24
+  (`measureText`'s ink box at 1000 px): x-height 545, capitals 766, digits 780,
+  descenders 210, the axis 276 above the baseline (the middle of + and =), parentheses
+  778 above and 159 below, √ 905 above and 74 below; the font's ascent and descent are
+  880 and 120. Each glyph's ink (`*glyph-extents*`, letters by their shape) sets the box
+  of a text atom, so a fraction bar clears its numerator by the gap intended, not by a
+  line box. The calibration page checks these against the browser.
+- **Output.** An inline SVG (`<svg class="mx" role="img" aria-label="...">`) of `<text>`
+  elements at the model's positions (`text-anchor: middle`, italic by class, a smaller
+  `font-size` for scripts), `<rect>`s for rules and a `transform="scale(1 k)"` on a
+  stretched delimiter, every coordinate in em of the element's own font size, so an
+  inline formula follows the text around it. Why SVG and not positioned spans: an inline
+  formula's parts rise above and hang below its line, and positioned spans would be
+  boxes that extend the body's scrollable overflow, which the runtime check reads as an
+  overflow and steps the slide down for; SVG content is ink, not boxes. The inline SVG
+  is 1 px high with its top edge on the baseline (`margin-bottom: -1px`, the baseline
+  of an inline SVG being its bottom margin edge), so it changes no line; its glyphs may
+  reach 1.3 em above and 0.6 em below the baseline before meeting the lines around it,
+  which is the warning that a taller formula belongs in a block. A display formula's SVG
+  is as tall as its box. The scale factor is printed from an integer, as every number
+  is.
+- **Why not MathML Core.** Chrome, Safari and Firefox render it, but its layout depends
+  on the math font the machine has (macOS ships none; Chrome then sets fractions and
+  radicals from fallback heuristics), so lispresen could not know a formula's box and
+  the fit solver would not be exact. The box layout is exact by construction and the
+  runtime check leaves it as written.
+- **Accessibility.** The `aria-label` is a spoken form generated from the tree (`x
+  equals (minus b plus or minus the square root of b squared minus 4 a c) over (2 a)`;
+  the subtree of a `role="img"` is not read).
+- **Callouts.** A `say` around a display formula points at its box; `:at` is not
+  supported on a formula. An inline formula inside a `say` is its anchor's character.
+- **Diagnostics.** A malformed form (a float, `(/ a)`, `(= a)`, a matrix row that is not
+  a list, a keyword) is an error and drops the formula; a display formula wider than its
+  region at the smallest body size is an error naming its width; an inline formula
+  reaching past the limits above is a warning.
+- A template passes its parameters into a formula, and a list inside one that looks like
+  a use is laid out, not expanded, as in a cells datum.
+
+Checked 2026-10-24 in Chrome 155 through DevTools: the golden deck's formula slide and a
+deck of quadratic, piecewise, summation, limit, matrix, integral, binomial, radical and
+symbol formulas, inline and as blocks, in all four built-in themes, the runtime check
+making no correction; the calibration page's formula metrics agree with the browser's
+ink within 10 milli-em and two paragraphs holding inline formulas wrap as counted. Safari
+was not measured: its JavaScript from Apple Events is off on this machine.
 
 ### Page advances
 
@@ -1127,8 +1217,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: slide 7 "その場で動かす": warning: body text at
 44px (floor 48px); consider splitting the slide`.
@@ -1217,6 +1307,9 @@ One file containing:
   them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
   dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
+- A formula as `<svg class="mx" role="img" aria-label="...">` of `<text>` and `<rect>`
+  elements in em coordinates (Formulas, above); a display formula's in a `<figure
+  class="math">`.
 - A footer as `<p class="footer">` after the source, placed by the stylesheet at the left
   of the bottom band.
 - A source as `<p class="source">` after the body, placed by the stylesheet at the bottom
@@ -1541,6 +1634,7 @@ lispresen/
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
+    math.lisp            formulas: parsing, box layout, the spoken form, the SVG
     layout.lisp          layout selection, type scale, fit solver
     lint.lisp            readability checks, contrast ratio
     theme.lisp           built-in themes, theme overrides
@@ -1617,9 +1711,10 @@ before committing a change under `lispresen/`.
   (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
   with an embedded poster, ordered and unordered lists, one
   revealed by steps, a flow, two cells drawings in columns (one with dotted pairs), a bar
-  chart with a source line under it, a progress bar, `:layout` and
-  `:class`, and eight callouts (two inline ones, one of them a step; by `:at`, a code
-  line, a flow box, a cells atom and a bar; one on an image; and a step one named by
+  chart with a source line under it, three inline formulas in a paragraph and two display
+  formulas (a case analysis, a sum with a fraction), a progress bar, `:layout` and
+  `:class`, and nine callouts (two inline ones, one of them a step; by `:at`, a code
+  line, a flow box, a cells atom and a bar; one on an image, one on a formula; and a step one named by
   `:at` in runnable code read from a file by `:lines`, which `:steps` brings forward line
   by line), so the highlighter, the emitted player, template expansion, diagram drawing,
   callout placement and the binary read, UTF-8 decoding and base64 are in the
@@ -1636,8 +1731,12 @@ before committing a change under `lispresen/`.
   them, an image lispresen does not draw), URL resolution and the preview diagnostics
   (a font that cannot be read or is not TrueType, a missing glyph, a logo left out),
   numeric column detection, parser diagnostics with line
-  numbers (`#.` and dotted lists among them), the balanced rows of a flow, a cells datum
-  with dotted pairs and a list that looks like a template use, the callout sides on a flow
+  numbers (`#.` and dotted lists among them), the reader keeping a symbol's case and
+  tags and options matching whatever theirs, the balanced rows of a flow, a cells datum
+  with dotted pairs, `|a b|` and a list that looks like a template use, a formula's box at
+  two sizes (a fraction, a script, a radical, a matrix), an inline formula as one
+  character of its run, the emitted SVG and spoken form, the formula diagnostics and a
+  template passing a parameter into a formula, the callout sides on a flow
   box, a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
   a source takes and its diagnostics, the agenda, its place at `(agenda)` and their
   slide numbers and diagnostics, template
@@ -1653,8 +1752,9 @@ before committing a change under `lispresen/`.
   (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
-  the font stacks or the player change): the page `tools/calibrate.lisp` writes must
-  report no paragraph where the model predicts fewer lines than the browser; a deck with
+  the font stacks, the formula metrics or the player change): the page `tools/calibrate.lisp` writes must
+  report no paragraph where the model predicts fewer lines than the browser, no character,
+  emoji or symbol wider than the model and no formula metric off by more than 10 milli-em; a deck with
   Lisp, Scheme and Clojure blocks must run each on the hosted and on a local runtime,
   share definitions across slides, and recover from an infinite loop by timeout; the
   presenter window must follow navigation both ways, every kind of step included, show edits

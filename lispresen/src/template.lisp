@@ -12,7 +12,7 @@
 (defparameter *element-names*
   '("DECK" "SECTION" "SLIDE" "AGENDA" "DEFINE" "P" "UL" "OL" "LI" "CODE" "IMAGE" "QUOTE"
     "VIDEO" "COLUMN" "TABLE" "CELL" "NOTES" "THEME" "LEAD" "B" "I" "MARK" "ACCENT" "TT"
-    "LINK" "SAY" "FLOW" "CELLS" "BARS" "SOURCE")
+    "LINK" "SAY" "FLOW" "CELLS" "BARS" "SOURCE" "MATH")
   "The tags lispresen gives a meaning to; a template or parameter cannot take one.")
 
 (defparameter *template-depth* 32 "How deeply template uses may nest.")
@@ -31,12 +31,16 @@
 
 (defun name-symbol-p (x)
   "True when X can name a template or a parameter."
-  (and x (symbolp x) (not (keywordp x))
-       (not (member (symbol-name x) '("T" "NIL") :test #'string=))))
+  (and x (symbolp x) (not (keywordp x)) (not (eq x t))))
+
+(defun name-of (x)
+  "The upper-case name of the symbol X: templates and parameters match regardless of
+case, as tags do."
+  (string-upcase (symbol-name x)))
 
 (defun find-template (form)
   (and (consp form) (name-symbol-p (car form))
-       (find (symbol-name (car form)) *templates*
+       (find (name-of (car form)) *templates*
              :key #'template-name
              :test #'string=)))
 
@@ -46,12 +50,12 @@
     (loop while (and ok (consp params))
           do
             (let ((p (pop params)))
-              (cond ((and (symbolp p) (string= (symbol-name p) "&REST"))
+              (cond ((and (symbolp p) (string-equal (symbol-name p) "&REST"))
                      (setf ok
                            (and (consp params) (null (cdr params))
                                 (name-symbol-p (car params))))
-                     (when ok (setf rest (symbol-name (pop params)))))
-                    ((name-symbol-p p) (push (symbol-name p) names))
+                     (when ok (setf rest (name-of (pop params)))))
+                    ((name-symbol-p p) (push (name-of p) names))
                     (t (setf ok nil)))))
     (let* ((all (if rest (cons rest names) names))
            (element
@@ -77,7 +81,7 @@
     (if (not (and (name-symbol-p name) (consp (cddr form))))
         (report :error "(define ...) takes a name, a parameter list and a body")
         (let ((label (string-downcase (symbol-name name))))
-          (cond ((member (symbol-name name) *element-names* :test #'string=)
+          (cond ((member (name-of name) *element-names* :test #'string=)
                  (report :error (format nil
                                  "~a is an element and cannot be a template"
                                  label)))
@@ -89,7 +93,7 @@
                 (t (multiple-value-bind (params rest)
                        (parse-params (caddr form) label)
                      (unless (eq params :error)
-                       (push (make-template :name (symbol-name name)
+                       (push (make-template :name (name-of name)
                                             :params params
                                             :rest rest
                                             :body (cdddr form))
@@ -102,7 +106,7 @@ may end in a dotted pair inside a (cells ...) datum; its tail is substituted too
     (loop while (consp forms)
           do
             (let ((x (pop forms)))
-              (if (and rest (name-symbol-p x) (string= (symbol-name x) rest))
+              (if (and rest (name-symbol-p x) (string= (name-of x) rest))
                   (dolist (a rest-args) (push a out))
                   (push (substitute-param x bindings rest rest-args) out))))
     (let ((head (nreverse out))
@@ -116,7 +120,7 @@ may end in a dotted pair inside a (cells ...) datum; its tail is substituted too
 (defun substitute-param (x bindings rest rest-args)
   (cond ((consp x) (substitute-params x bindings rest rest-args))
         ((name-symbol-p x)
-         (let ((entry (assoc (symbol-name x) bindings :test #'string=)))
+         (let ((entry (assoc (name-of x) bindings :test #'string=)))
            (if entry (cdr entry) x)))
         (t x)))
 
@@ -166,8 +170,9 @@ of FORM when it is a use."
           ((equal (form-tag form) "DEFINE")
            (report :error "(define ...) belongs at the top level")
            nil)
-          ;; A cells datum is data: a list in it that looks like a use is drawn as is.
-          ((cells-form-p form) (list form))
+          ;; A cells datum and a formula are data: a list in them that looks like a use
+          ;; is drawn as is (its parameters were substituted above).
+          ((or (cells-form-p form) (math-form-p form)) (list form))
           ((consp form) (list (expand-forms form depth)))
           (t (list form)))))
 

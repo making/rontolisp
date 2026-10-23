@@ -103,9 +103,9 @@
     (table :header (\"種類\" \"フォーム\" \"数\")
            :row-header t :align (:left :left :right)
            :caption \"デッキの要素は、どれもリストとして書く\"
-      (\"図\" (tt \"flow cells bars\") \"3\")
+      (\"図と数式\" (tt \"flow cells bars math\") \"4\")
       ...
-      ((cell :colspan 2 \"合計\") \"29\"))"))
+      ((cell :colspan 2 \"合計\") \"30\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
@@ -114,10 +114,10 @@
     ("トップレベル" (tt "deck section slide agenda define") "5")
     ("ブロック" (tt "p lead ul ol code quote column image video table") "10")
     ("部品" (tt "li cell") "2")
-    ("図" (tt "flow cells bars") "3")
+    ("図と数式" (tt "flow cells bars math") "4")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "29")))
+    ((cell :colspan 2 "合計") "30")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -263,6 +263,25 @@
   (source "2026-10-22, macOS arm64 で測定 ("
           (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
                 "DESIGN.md") ")"))
+
+(slide :title "数式" :kicker "書き方"
+  (p "前置記法の木がそのまま数式になる。段落の中でも、ブロックとしても書ける。")
+  (sexp "
+    (p \"計算量は \" (math (O (* n (log n)))) \" で済む\")
+    (math (= (fib n)
+             (cases (n (< n 2))
+                    ((+ (fib (- n 1)) (fib (- n 2))) \"otherwise\"))))
+    (say \"上下に範囲が付く\"
+      (math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6))))"))
+
+;; A formula is laid out from its S-expression: inline in a paragraph, or as a block
+;; centered in the body; a callout points at the whole block.
+(slide :title "数式" :kicker "表示例"
+  (p "計算量は " (math (O (* n (log n)))) " で済む。分数や添字も "
+     (math (/ 1 (sqrt n))) " や " (math (_ x i)) " のように行の中に収まる。")
+  (math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+  (say "上下に範囲が付く"
+    (math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6)))))
 
 (slide :title "画像" :kicker "書き方"
   (p "画像は残りの場所に収まる。" (tt "--embed") " で HTML に埋め込む。")

@@ -4,8 +4,8 @@ A condensed reference for writing decks. The full description of every form is t
 https://github.com/making/rontolisp/blob/develop/lispresen/README.md
 
 Contents: file structure, the header, slides, blocks, inline forms, tables, diagrams,
-callouts, page advances, code, images, videos, templates, themes, link preview, limits, mistakes
-to avoid, diagnostics and their fixes.
+formulas, callouts, page advances, code, images, videos, templates, themes, link preview,
+limits, mistakes to avoid, diagnostics and their fixes.
 
 ## File structure
 
@@ -80,6 +80,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` | video laid out as an image, same options (Videos, below) |
 | `(table ...)` | table (below) |
 | `(flow ...)`, `(bars ...)`, `(cells ...)` | diagrams (below) |
+| `(math expr)` | a display formula (below); inside a paragraph, list item or cell it is inline |
 | `(notes "text")` | speaker notes: the presenter window, and the handout print (`?notes` in the URL) |
 | `(source inline...)` | one muted line at the bottom naming a source; one per slide |
 | `(say "comment" ... block)` | callout (below) |
@@ -116,6 +117,25 @@ At most 7 body rows and 5 columns.
 `bars` values are integers or decimals written as strings (`"2.1"`, `"1,840"`); a float
 (`2.1`) is an error. `cells` takes one quoted list (this is the one place `'` belongs).
 At most 8 flow boxes and 7 bars.
+
+## Formulas
+
+```lisp
+(p "Runs in " (math (O (* n (log n)))) " time.")                      ; inline
+(math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a))))      ; a block
+(math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6)))
+(math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+```
+
+Prefix notation is the formula's tree: `+ - * / = < <= >= /= pm times cdot in -> =>
+approx`; `(^ x 2)` and `(_ x i)` scripts; `sqrt`, `root`, `abs`, `norm`, `floor`,
+`ceil`, `paren`, `set`; `sum`, `prod`, `int`, `lim` with their limits first; `sin`,
+`log`, `max` and other functions; `(f x y)` for any other function; `matrix`,
+`bmatrix`, `vmatrix`, `cases`; `bar`, `hat`, `vec`, `bold`, `prime`, `!`, `text`.
+Symbols: one letter is italic (`x`, `N`; case is kept), a longer name is upright, Greek
+and other symbols by name (`alpha`, `Gamma`, `inf`, `partial`, `cdots`, `reals`). A
+decimal is a string (`"0.5"`); a ratio `1/2` is a fraction. `*` juxtaposes (`2x`) and
+parenthesizes a sum on its own. The README lists every form.
 
 ## Callouts
 
@@ -246,7 +266,7 @@ drawn. Leave all of these out for a deck that is not published.
 
 - **Quotes in strings.** A `"` inside a string is `\"`. An unescaped one ends the string
   early and the rest is read as symbols: `"He said "hi""` gives
-  `error: unexpected HI on a slide`. Inside `code` text the same applies.
+  `error: unexpected hi on a slide`. Inside `code` text the same applies.
 - **Backslashes.** Only `\"` and `\\` are escapes; `"\n"` reads as `n`. Write real line
   breaks inside the string; the common indentation of a code block is removed, so indent
   it with the surrounding source:
@@ -260,6 +280,10 @@ drawn. Leave all of these out for a deck that is not published.
   repetition.
 - **`'` is the quote element.** `'x` reads as `(quote x)`, a quotation block. Do not quote
   lists in a deck, except the datum of `cells`.
+- **Decimals are strings.** `2.5` is an error wherever it would be shown (text, a bar
+  value, a formula); write `"2.5"`. Integers and ratios (`1/2`) are fine.
+- **Case is kept.** `N` and `n` are different symbols in a formula; `(Slide :Title ...)`
+  still works, since tags and options match regardless of case.
 - **Options come first.** `(code "text" :lang "lisp")` is `error: (code ...) takes strings
   only`; write `(code :lang "lisp" "text")`.
 - **Lists are blocks.** A `ul` inside `p` is `error: unknown inline element ul`. A nested
@@ -286,6 +310,9 @@ drawn. Leave all of these out for a deck that is not published.
 | `lists nested deeper than 2 levels are hard to follow` | flatten |
 | `a table row has N cells where the table has M` | add the missing cells or a `:colspan` |
 | `a bar's value is a float; write it as a string, such as "2.1"` | quote the number |
+| `the formula is Npx wide at its smallest size, wider than the Mpx it has; split it` | break the formula into two `math` blocks, or shorten it |
+| `the formula is taller than a line of text; set it as a block of its own` | move the `(math ...)` out of the paragraph into block position |
+| `(/ ...) takes a numerator and a denominator`, `(= ...) takes two operands or more`, `a row of (matrix ...) is a list of cells` | give the form the operands it lists; see Formulas |
 | `the :at text "..." is not on a line of the code` | copy the text exactly from one line of the block |
 | `the callout "..." has no room beside its anchor; shorten it or the slide` | shorten the comment, point at a different anchor, or remove content around it |
 | `a callout takes N lines; keep each to 2` | shorten the comment |

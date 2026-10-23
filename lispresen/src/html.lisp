@@ -162,6 +162,13 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 span.dg-l{font-family:MONO;white-space:pre}
 .dg-t,.dg-v{text-align:left}
 .dg-v{white-space:nowrap}
+figure.math{flex:none;display:block;align-self:center;line-height:0}
+svg.mx{overflow:visible;font-weight:400}
+figure.math>svg.mx{display:block}
+.mx text{fill:currentColor;text-anchor:middle;white-space:pre}
+.mx rect,.mx polygon{fill:currentColor}
+.mx .i{font-style:italic}
+.mx .b{font-weight:700}
 figure.pointed{align-items:flex-end}
 figure.pointed video{object-position:right}
 figure.pointed figcaption{align-self:stretch}
@@ -311,6 +318,10 @@ line with the character after it when that is no boundary, as Chrome breaks afte
                         (write-string "<code>" out)
                         (chars (second n))
                         (write-string "</code>" out))
+                       ((eq (car n) :math)
+                        ;; One character of the run stands for it.
+                        (write-formula (second n) out)
+                        (incf i))
                        ((eq (car n) :link)
                         (write-string "<a href=\"" out)
                         (write-escaped (second n) out)
@@ -622,6 +633,12 @@ the list it draws."
         ((quotation-p b) (write-quote b out))
         ((table-block-p b) (write-table b out))
         ((diagram-p b) (write-diagram b out))
+        ((formula-p b)
+         (write-string "<figure class=\"math\"" out)
+         (write-described-by b out)
+         (write-string ">" out)
+         (write-formula b out)
+         (format out "</figure>~%"))
         ((column-row-p b) (write-columns b out))))
 
 ;;; --- slides ------------------------------------------------------------------------

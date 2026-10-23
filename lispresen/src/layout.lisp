@@ -595,6 +595,7 @@ the second of an image, which takes whatever width it is given."
                (column-bounds b (step-at *table-steps* k))
              (values (reduce #'+ mins) (reduce #'+ maxs))))
           ((diagram-p b) (diagram-bounds b (step-at *diagram-steps* k)))
+          ((formula-p b) (let ((w (formula-width b s))) (values w w)))
           (t (values 0 0)))))
 
 (defun row-widths (row k c width)
@@ -651,7 +652,11 @@ of columns as its tallest column."
              (if ts (setf h th) (setf ok nil))))
           ((diagram-p b)
            (multiple-value-bind (ds d) (diagram-fit b k width)
-             (if ds (setf h (drawing-height d)) (setf ok nil)))))
+             (if ds (setf h (drawing-height d)) (setf ok nil))))
+          ((formula-p b)
+           ;; A display formula is set at the body size, so it steps down with it.
+           (setf h (formula-height b s))
+           (when (> (formula-width b s) width) (setf ok nil))))
     (values h ok)))
 
 (defun blocks-height (blocks k c width body-height)
@@ -1226,6 +1231,12 @@ layout gives it to them."
                    (setf h (drawing-height d) box
                          (list dx top (+ dx (drawing-width d))
                                (+ top (drawing-height d)))))))
+              ((formula-p b)
+               ;; Centered in its region, as the stylesheet centers it.
+               (let* ((w (min width (formula-width b s)))
+                      (dx (+ x (floor (- width w) 2))))
+                 (setf h (formula-height b s) box (list dx top (+ dx w) (+ top h)))
+                 (obstacle box)))
               ((figure-p b)
                (setf h (floor rest growing) box
                      (figure-geometry b s x top width h)))

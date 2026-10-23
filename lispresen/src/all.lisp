@@ -11,6 +11,7 @@
 #+rontolisp (load "budoux-ja.lisp")
 #+rontolisp (load "phrase.lisp")
 #+rontolisp (load "metrics.lisp")
+#+rontolisp (load "math.lisp")
 #+rontolisp (load "template.lisp")
 #+rontolisp (load "model.lisp")
 #+rontolisp (load "embed.lisp")
@@ -34,7 +35,7 @@
 #-rontolisp
 (with-compilation-unit ()
   (dolist (name
-           '("package" "reader" "budoux-ja" "phrase" "metrics" "template"
+           '("package" "reader" "budoux-ja" "phrase" "metrics" "math" "template"
              "model" "embed" "qr" "diagram" "layout" "lint" "theme" "player"
              "highlight" "morph" "html" "png" "truetype" "raster"
              "page-image" "lispresen"))

@@ -174,7 +174,7 @@ name, and the remaining arguments. An option not in ALLOWED is reported."
   (let ((opts nil))
     (loop while (and args (keywordp (car args)))
           do
-            (let ((name (symbol-name (car args))))
+            (let ((name (string-upcase (symbol-name (car args)))))
               (unless (member name allowed :test #'string=)
                 (report :warning (format nil "unknown option ~a for ~a"
                                          (option-name (car args)) context)))
@@ -192,6 +192,13 @@ name, and the remaining arguments. An option not in ALLOWED is reported."
 (defun symbol-value-name (x)
   "The upper-case name of a symbol option value such as :light, or nil."
   (and x (symbolp x) (string-upcase (symbol-name x))))
+
+(defun written (x)
+  "The datum X as the deck writes it, for a diagnostic: a symbol by its name (the reader
+keeps its case), anything else as printed."
+  (cond ((keywordp x) (concatenate 'string ":" (symbol-name x)))
+        ((and x (symbolp x) (not (eq x t))) (symbol-name x))
+        (t (prin1-to-string x))))
 
 (defun raw-string-option (opts name context)
   "The string value of option NAME as written, or nil."
@@ -250,7 +257,7 @@ a line break between two wide characters, one space otherwise."
 ;;; --- inline content ----------------------------------------------------------
 
 (defun inline-tag-p (tag)
-  (member tag '("B" "I" "MARK" "ACCENT" "TT" "LINK" "SAY") :test #'equal))
+  (member tag '("B" "I" "MARK" "ACCENT" "TT" "LINK" "SAY" "MATH") :test #'equal))
 
 (defun say-content (form)
   "The arguments of (say \"comment\" [:at \"text\"] content...) after the comment and
@@ -287,6 +294,10 @@ in *CALLOUTS*; nil after reporting a malformed one."
 (defun parse-inline (x)
   "The inline nodes X stands for; an unknown form is reported and dropped."
   (cond ((stringp x) (list (text-leaf x)))
+        ((floatp x)
+         ;; Its printing is the one thing the backends may not share.
+         (report :error "a decimal in text is written as a string, such as \"2.5\"")
+         nil)
         ((numberp x) (list (princ-to-string x)))
         ((consp x)
          (let ((tag (form-tag x)))
@@ -313,6 +324,8 @@ in *CALLOUTS*; nil after reporting a malformed one."
                                 ":at belongs to a callout around a code block or a diagram")
                         (setf (callout-at c) nil))
                       (list (list :say c nodes))))))
+            ((equal tag "MATH")
+             (let ((f (parse-math x nil))) (and f (list (list :math f)))))
             ((equal tag "LINK")
              (if (stringp (cadr x))
                  (list
@@ -327,7 +340,7 @@ in *CALLOUTS*; nil after reporting a malformed one."
              nil))))
         (t
          (report
-          :error (format nil "unexpected ~a in text" (prin1-to-string x)))
+          :error (format nil "unexpected ~a in text" (written x)))
          nil)))
 
 (defun parse-inlines (args)
@@ -807,7 +820,8 @@ holding it; nil when none does."
       (position-if (lambda (s) (search at s)) texts)))
 
 (defparameter *anchor-blocks*
-  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS"
+    "MATH")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -863,6 +877,8 @@ callout points at, or else a paragraph holding it as inline content."
                  ((equal tag "FLOW") (parse-flow x))
                  ((equal tag "CELLS") (parse-cells x))
                  ((equal tag "BARS") (parse-bars x))
+                 ;; A formula in block position is a display formula of its own.
+                 ((equal tag "MATH") (parse-math x t))
                  ((inline-tag-p tag) (make-para :inlines (parse-inline x)))
                  ((equal tag "LI")
                   (report :error "(li ...) belongs in (ul ...) or (ol ...)")
@@ -876,7 +892,7 @@ callout points at, or else a paragraph holding it as inline content."
                   nil))))
         (t
          (report
-          :error (format nil "unexpected ~a on a slide" (prin1-to-string x)))
+          :error (format nil "unexpected ~a on a slide" (written x)))
          nil)))
 
 ;;; --- slides and the deck -----------------------------------------------------
@@ -944,7 +960,7 @@ callout points at, or else a paragraph holding it as inline content."
 (defun strip-callouts (nodes)
   "The inline NODES with every callout replaced by the content it wraps."
   (mapcan (lambda (n)
-            (cond ((or (stringp n) (eq (car n) :tt)) (list n))
+            (cond ((or (stringp n) (member (car n) '(:tt :math))) (list n))
                   ((eq (car n) :say) (strip-callouts (third n)))
                   ((eq (car n) :link)
                    (list (list :link (second n) (strip-callouts (third n)))))
@@ -1289,7 +1305,7 @@ expanded first, so the sections an agenda lists are known before any slide is pa
                                               "expected (slide ...), (section ...), (agenda) or (define ...), found ~a"
                                               (if tag
                                                   (string-downcase tag)
-                                                  (prin1-to-string form)))))))))
+                                                  (written form)))))))))
     (setf (deck-slides deck) (nreverse slides))
     (when agenda
       (add-agendas deck agenda

@@ -6,7 +6,7 @@
 (in-package :lispresen)
 
 (defun text-block-p (b)
-  (or (para-p b) (bullets-p b) (figure-p b) (quotation-p b)))
+  (or (para-p b) (bullets-p b) (figure-p b) (quotation-p b) (formula-p b)))
 
 (defun lint-list (b s width depth)
   (when (> (length (bullets-items b)) 6)
@@ -49,6 +49,10 @@
                                     (:flow "shorten its widest label")
                                     (:bars "shorten its labels or values")
                                     (t "draw a shorter list")))))
+          ((and (formula-p b) (> (formula-width b (fit-body-size fit)) width))
+           (report :error (format nil
+                                  "the formula is ~dpx wide at its smallest size, wider than the ~dpx it has; split it"
+                                  (formula-width b (fit-body-size fit)) width)))
           ((and (diagram-p b) (< (diagram-size b) *diagram-floor*))
            (report :warning (format nil
                                     "diagram labels at ~dpx (floor ~dpx); draw fewer boxes or a shorter list"

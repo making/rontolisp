@@ -366,13 +366,14 @@ q\")))")))
       (ok (contains html "c <code>d</code></li>"))
       (ok (contains html "--dg:48px"))))
   (testing "cells draws the datum, dotted pairs and lists that look like uses included"
+    ;; The deck reader keeps a symbol's case and reads |...| escapes alike everywhere.
     (let ((html
            (lispresen:render
             "(define u () \"x\")
-(slide :title \"t\" (cells '(1 (u) (#\\a . \"b\") :k 1/2)))")))
+(slide :title \"t\" (cells '(1 (u) (#\\a . \"b\") :k 1/2 Foo |a b|)))")))
       (ok
        (contains html
-        "role=\"img\" aria-label=\"(1 (u) (#\\a . &quot;b&quot;) :k 1/2)\""))
+        "role=\"img\" aria-label=\"(1 (u) (#\\a . &quot;b&quot;) :k 1/2 Foo a b)\""))
       (ok (contains html ">#\\a</span>"))))
   (testing "bar values are integers or decimal strings, kept as written"
     (ok (equal (multiple-value-list (lispresen::bar-value "1,840.25"))
@@ -430,6 +431,58 @@ q\")))")))
               (:error 5 "the options of (bars ...) come before its bars")
               (:warning 6 "a bar chart of 8 bars is hard to read; keep it to 7")
               (:error 6 "the :at text \"z\" is not a label of the bar chart"))))))
+
+(deftest formulas
+  (testing "a formula's box scales with its size: a fraction, a script, a radical and a
+matrix at 56 and 40 px"
+    (dolist (row '(((/ 1 2) 52 107 38 77) ((^ x 2) 78 63 56 45) ((sqrt x) 79 55 56 40)
+                   ((matrix (a b) (c d)) 168 110 120 79)))
+      (destructuring-bind (expr w56 h56 w40 h40) row
+        (let ((f (lispresen::parse-math (list 'math expr) t)))
+          (ok (equal (list (lispresen::formula-width f 56) (lispresen::formula-height f 56)
+                           (lispresen::formula-width f 40) (lispresen::formula-height f 40))
+                     (list w56 h56 w40 h40))
+              (prin1-to-string expr))))))
+  (testing "an inline formula is one character of a run, as wide as its box"
+    (let ((run (lispresen::make-text-run
+                (list "a " (list :math (lispresen::parse-math '(math (^ x 2)) nil)) " b"))))
+      (ok (equal (lispresen::run-units run) '((0 2 604 340) (2 4 1383 340) (4 5 677 0))))))
+  (testing "the SVG: em coordinates, italic letters, scripts a size smaller, a spoken form;
+a block formula is a figure the fit solver centers; the reader keeps the case of N and n"
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (p \"計算量は \" (math (O (* N (log n)))) \" で\")
+  (math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a)))))")))
+      (ok (contains html "<svg class=\"mx\" role=\"img\" aria-label=\"O of N log n\" style=\"width:4.928em;height:1px;margin-bottom:-1px\"><text x=\"0.412em\" y=\"0.000em\" class=\"i\">O</text><text x=\"1.013em\" y=\"0.000em\">(</text>"))
+      (ok (contains html "<figure class=\"math\"><svg class=\"mx\" role=\"img\" aria-label=\"x equals (minus b plus or minus the square root of b squared minus 4 a c) over (2 a)\" style=\"width:9.535em;height:2.456em\">"))
+      (ok (contains html "<text x=\"8.620em\" y=\"1.022em\" font-size=\"0.700em\">2</text>"))
+      (ok (contains html "transform=\"scale(1 1.355)\">√</text>"))))
+  (testing "a formula wider than the slide at the smallest size, one taller than its
+line, a decimal in text, and malformed formulas"
+    (ok
+     (equal (render-diagnostics
+             (format nil "(slide :title \"t\" (math (= y ~a)))
+(slide :title \"t\" (p (math (matrix (a) (b) (c))) 1e3))
+(slide :title \"t\" (math) (math 2.5) (math (/ 1)) (math (= x)) (math (matrix 1)) (math (foo :k)) (math (cases (a b c))))"
+                     (make-string 100 :initial-element #\a)))
+            '((:error 1 "the content does not fit the slide even at the smallest sizes; split the slide")
+              (:warning 1 "body text at 40px (floor 48px); consider splitting the slide")
+              (:error 1 "the formula is 2489px wide at its smallest size, wider than the 1696px it has; split it")
+              (:warning 2 "the formula is taller than a line of text; set it as a block of its own")
+              (:error 2 "a decimal in text is written as a string, such as \"2.5\"")
+              (:error 3 "(math ...) needs an expression")
+              (:error 3 "a number in a formula is an integer, a ratio or a string, such as \"0.5\"")
+              (:error 3 "(/ ...) takes a numerator and a denominator")
+              (:error 3 "(= ...) takes two operands or more")
+              (:error 3 "a row of (matrix ...) is a list of cells")
+              (:error 3 "unexpected :k in a formula")
+              (:error 3 "a row of (cases ...) is (value condition)")))))
+  (testing "a template passes its parameters into a formula and expands no use inside it"
+    (ok
+     (equal (lispresen:render "(define sq (x) (math (^ x 2)))
+(define f () \"x\")
+(slide :title \"t\" (sq n) (math (f y)))")
+            (lispresen:render "(slide :title \"t\" (math (^ n 2)) (math (f y)))")))))
 
 (deftest templates
   (testing "a use is the body with its arguments substituted, &rest spliced"
@@ -727,17 +780,19 @@ a large video is reported"
                   ":lines belongs to (code :file ...)")))))))
 
 (deftest diagnostics
+  ;; Tags and options match whatever their case; a symbol in text is named as written.
   (ok
    (equal (render-diagnostics
            "(deck :title \"d\")
-(slide :title \"s\"
-  (frob \"x\"))
+(Slide :Title \"s\"
+  (frob \"x\") (p Foo))
 
 (slide (table (\"a\" \"b\") (\"c\")))
 (other)
 (slide \"a\" . \"b\")
 (slide \"ok\"")
           '((:error 2 "unknown element frob")
+            (:error 2 "unexpected Foo in text")
             (:error 5 "a table row has 1 cells where the table has 2")
             (:error 6
              "expected (slide ...), (section ...), (agenda) or (define ...), found other")

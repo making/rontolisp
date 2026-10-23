@@ -57,6 +57,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
+| `(math expr...)` | a formula laid out from its S-expression (below): a display formula as a block, an inline one inside a paragraph, a list item or a table cell |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
 | `(source inline...)` | a line in the muted color at the bottom of the slide naming where its content comes from; one per slide |
@@ -64,8 +65,12 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(say "comment" [:step t] inline...)`, `(say "comment" [:at "text"] [:step t] block)` | a callout: the comment in a speech bubble pointing at the content it wraps (below) |
 | `(define name (param... [&rest rest]) body...)` | a template (below) |
 
-The deck is read, never evaluated: no macros, no backquote, no reader conditionals, no
-`#.`.
+The deck is read by lispresen's own reader, never evaluated: no macros, no backquote, no
+reader conditionals, no `#.`. Symbols keep the case they are written with (`N` and `n`
+are different letters in a formula; tags and options match whatever their case), `|a b|`
+and `\` escape characters in a symbol, and a decimal such as `2.5` is refused wherever it
+would be printed, since float printing differs between implementations: write it as a
+string.
 
 A template is reused by substitution: a later `(name arg...)` anywhere in the deck is
 replaced by the body, each parameter by its argument, the `&rest` arguments spliced where
@@ -134,6 +139,42 @@ than 7 bars is a warning, as for a table's rows.
 Labels start at 48 px and step down to 36 px with the slide; a diagram wider than its
 room at 36 px is an error. A diagram is centered in its column or the body; a bar chart
 spans it.
+
+## Formulas
+
+A formula is written as an S-expression, prefix notation being a formula's tree already,
+and laid out by lispresen from the same width table as the text: no TeX, no script
+library, no image. In block position `(math ...)` is a display formula centered in its
+column or the body, set at the body size; inside a paragraph, a list item, a table cell
+or a flow label it is an inline formula of the text's size, fractions and limits set
+compactly so it stays within its line. A `say` around a block formula points at it.
+
+```lisp
+(p "計算量は " (math (O (* n (log n)))) " で済む")
+(math (= x (/ (pm (- b) (sqrt (- (^ b 2) (* 4 a c)))) (* 2 a))))
+(math (= (fib n) (cases (n (< n 2)) ((+ (fib (- n 1)) (fib (- n 2))) "otherwise"))))
+(math (= (sum (= i 1) n (^ i 2)) (/ (* n (+ n 1) (+ (* 2 n) 1)) 6)))
+```
+
+| Form | Sets |
+|------|------|
+| `x`, `N`, `#\N`, `alpha`, `Gamma`, `inf`, `partial`, `cdots`, `reals`, ... | a symbol: one letter in italic, a longer name upright, a Greek letter or symbol by name (`infty`, `nabla`, `emptyset`, `forall`, `exists`, `ell`, `hbar`, `deg`, `dots`, `vdots`, `naturals`, `integers`, `rationals`, `complex`) |
+| `42`, `1/2`, `"if"` | a number; a ratio as a fraction; a string as text (a decimal is written as a string: `"0.5"`) |
+| `(+ a b)`, `(- a b)`, `(- a)`, `(* a b)`, `(pm a b)`, `(times a b)`, `(cdot a b)`, `(div a b)`, `(mod a b)` | sums and products; `*` is juxtaposition (`2x`, a dot between two numbers), a sum used as a factor or after a minus sign gets parentheses |
+| `(= a b c)`, `<`, `>`, `<=`, `>=`, `/=`, `approx`, `equiv`, `sim`, `propto`, `in`, `notin`, `subset`, `subseteq`, `->`, `=>`, `<=>`, `mapsto`, `ll`, `gg` | relations, chained |
+| `(/ a b)`, `(binom n k)`, `(deriv y x)`, `(partial f x)` | a fraction, a binomial coefficient, dy/dx, ∂f/∂x |
+| `(^ x 2)`, `(_ x i)`, `(^ (_ x i) 2)` | a superscript, a subscript, both |
+| `(sqrt x)`, `(root 3 x)`, `(abs x)`, `(norm v)`, `(floor x)`, `(ceil x)`, `(paren ...)`, `(bracket ...)`, `(brace ...)`, `(set a b)`, `(tuple a b)`, `(angle a b)` | radicals and delimiters, which grow with their content; several arguments are separated by commas |
+| `(sum lo hi body)`, `(prod ...)`, `(int ...)`, `(bigcup ...)`, `(bigcap ...)`, `(lim (-> n inf) body)` | large operators with their limits (either may be left out); below and above in a display formula, beside in an inline one |
+| `(sin x)`, `log`, `ln`, `exp`, `max`, `min`, `det`, `gcd`, ... | a function set upright, its argument in parentheses unless it is simple |
+| `(f x y)` | any other head is a function applied to its arguments: f(x, y) |
+| `(matrix (a b) (c d))`, `bmatrix`, `vmatrix`, `(cases (value condition) ...)` | a matrix in parentheses, brackets or bars; a case analysis behind a brace |
+| `(bar x)`, `(hat x)`, `(vec x)`, `(dot x)`, `(bold w)`, `(prime f)`, `(! n)`, `(not p)`, `(text "and")` | accents, bold, f′, n!, ¬p, words |
+
+Every formula carries a spoken form as its `aria-label` (`x equals (minus b plus or
+minus the square root of b squared minus 4 a c) over (2 a)`). A display formula wider
+than its room at the smallest body size is an error; an inline formula taller than its
+line (a matrix, a display-sized sum) is a warning that it belongs in a block.
 
 ## Callouts
 
@@ -459,5 +500,7 @@ lispresen/check.sh --update   # regenerate examples/intro.html and intro.png fir
 and `web/index.html`, served over HTTP, re-renders the deck as you type.
 
 `tools/calibrate.lisp` writes a page that compares the width model with the browser it
-is opened in. `tools/gen-budoux.py` regenerates `src/budoux-ja.lisp` from BudouX's
+is opened in: the line counts of sample paragraphs (formulas among them), every ASCII
+character, emoji, symbol and Greek letter in both weights, and the ink heights the
+formula layout assumes. `tools/gen-budoux.py` regenerates `src/budoux-ja.lisp` from BudouX's
 model (Apache License 2.0, `tools/BUDOUX-LICENSE`).

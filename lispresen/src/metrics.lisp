@@ -27,7 +27,28 @@
       (<= #x1FA00 code #x1FAFF)
       ;; Symbols Chrome sets exactly 1 em: Letterlike, Roman numerals, ‼ ⁇ ⁈ ⁉, ⌥.
       (find code '(#x203C #x2103 #x2105 #x2109 #x2113 #x2116 #x2121 #x212B #x2325))
-      (<= #x2047 code #x2049) (<= #x2160 code #x217F)))
+      (<= #x2047 code #x2049) (<= #x2160 code #x217F)
+      ;; Greek: Hiragino sets every letter 1 em, no accented or archaic one wider
+      ;; (measured 2026-10-24, both weights).
+      (<= #x0370 code #x03FF) (= code #x220F)))
+
+(defparameter *measured-symbol-widths*
+  '((#x2211 . 722) (#x222B . 391) (#x221A . 583) (#x221E . 700) (#x2264 . 510)
+    (#x2265 . 510) (#x2260 . 700) (#x2248 . 700) (#x2208 . 700) (#x2209 . 700)
+    (#x22C5 . 450) (#x2212 . 700) (#xB1 . 700) (#x2213 . 700) (#xD7 . 700) (#xF7 . 700)
+    (#x2202 . 661) (#x2207 . 843) (#x2032 . 251) (#x2308 . 614) (#x2309 . 614)
+    (#x230A . 614) (#x230B . 614) (#x27E8 . 374) (#x27E9 . 374) (#x2200 . 808)
+    (#x2203 . 808) (#xAC . 700) (#x2227 . 700) (#x2228 . 700) (#x222A . 700)
+    (#x2229 . 700) (#x2282 . 700) (#x2283 . 700) (#x2286 . 700) (#x2287 . 700)
+    (#x2205 . 942) (#x211D . 614) (#x2115 . 614) (#x2124 . 614) (#x211A . 794)
+    (#x2102 . 737) (#x2218 . 363) (#x2261 . 700) (#x223C . 622) (#x221D . 700)
+    (#x210F . 659) (#xB0 . 346) (#x2234 . 700) (#x2235 . 700) (#x2295 . 928)
+    (#x2297 . 928) (#x2C6 . 510) (#xAF . 510) (#x2D9 . 510) (#x2DC . 622)
+    (#x226A . 700) (#x226B . 700) (#x22A5 . 700) (#x2225 . 700) (#x2216 . 820)
+    (#x2220 . 700))
+  "Milli-em widths of the symbols formulas set: the wider of weights 400 and 700,
+measured in Chrome 155 on Hiragino Sans on 2026-10-24, plus the 2% margin. The block
+widths below over-estimate them by up to half, which would space a formula out.")
 
 (defun wider-than-em-width (code)
   "Milli-em width of a symbol inside a full-width range that Chrome sets wider than 1 em,
@@ -108,6 +129,7 @@ the full-width ranges takes the width of a wide Latin letter."
   (cond
     ((<= #x23ED code #x23EE) 1020)      ; the two emoji Chrome sets 1003 milli-em
     ((and (eq style :mono) (<= #x2500 code #x259F)) 614) ; Menlo draws boxes at 602
+    ((and (not (eq style :mono)) (cdr (assoc code *measured-symbol-widths*))))
     ((wider-than-em-width code))
     ((wide-code-p code) 1000)
     ((and (not (eq style :mono)) (symbol-width code)))
@@ -179,10 +201,16 @@ opening an aside and code are not such a word."
 ;;; each callout whose anchor is the characters START below END.
 (defstruct run text styles breaks widths units anchors)
 
+(defparameter *formula-char*
+  (code-char #xE000)
+  "The character that stands for an inline formula in a run's text: a private-use code
+point no deck writes, as wide as the formula's box.")
+
 (defun flatten-inlines (inlines bold)
   "The text of INLINES, the style of each of its characters, the anchors of the callouts
-in it, and the indices of the characters inline code or a marker pads, one per side."
-  (let ((styles nil) (anchors nil) (pads nil) (i 0))
+in it, the indices of the characters inline code or a marker pads, one per side, and the
+(INDEX . WIDTH) of each inline formula, which stands as one character of its width."
+  (let ((styles nil) (anchors nil) (pads nil) (boxes nil) (i 0))
     (values (with-output-to-string (out)
               (labels ((chars (s style)
                          (loop for c across s
@@ -193,6 +221,9 @@ in it, and the indices of the characters inline code or a marker pads, one per s
                        (walk (nodes style)
                          (dolist (n nodes)
                            (cond ((stringp n) (chars n style))
+                                 ((eq (car n) :math)
+                                  (push (cons i (mbox-width (formula-box (second n)))) boxes)
+                                  (chars (string *formula-char*) style))
                                  ((eq (car n) :tt)
                                   (let ((start i))
                                     (chars (second n) :mono)
@@ -209,7 +240,7 @@ in it, and the indices of the characters inline code or a marker pads, one per s
                                     (push (list (second n) start i) anchors)))
                                  (t (walk (second n) style))))))
                 (walk inlines (if bold :bold :normal))))
-            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads)))
+            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads boxes)))
 
 (defun compute-units (text breaks widths)
   (let ((n (length text)) (units nil) (start 0))
@@ -226,7 +257,7 @@ in it, and the indices of the characters inline code or a marker pads, one per s
 
 (defun make-text-run (inlines &key bold)
   "The run of INLINES; BOLD sets the whole text bold, as a title is."
-  (multiple-value-bind (text styles anchors pads) (flatten-inlines inlines bold)
+  (multiple-value-bind (text styles anchors pads boxes) (flatten-inlines inlines bold)
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
@@ -237,9 +268,9 @@ in it, and the indices of the characters inline code or a marker pads, one per s
         (loop while (< i n)
               do (let ((e (cluster-end text i)))
                    (incf (svref widths i)
-                         (if (> e (1+ i))
-                             1000
-                             (char-width (char-code (char text i)) (svref styles i))))
+                         (cond ((> e (1+ i)) 1000)
+                               ((assoc i boxes) (cdr (assoc i boxes)))
+                               (t (char-width (char-code (char text i)) (svref styles i)))))
                    (loop for k from (1+ i) below e do (setf (svref inside k) t))
                    (setf i e))))
       (dotimes (i n)
