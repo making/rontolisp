@@ -290,7 +290,7 @@ warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status
 success, 1 errors (or warnings under `--strict`), 2 usage.
 
 `new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
-with `--lang en`, dated today in UTC. An existing `FILE` is left alone and reported unless
+with `--lang en`, dated today in the local time zone. An existing `FILE` is left alone and reported unless
 `--force` is given. A deck file named `new` is rendered as `./new`.
 
 `--version` prints the version and the commit lispresen was built from, in the shape of

@@ -38,7 +38,7 @@
   --embed       inline images as data: URIs, so the HTML file stands alone
   --check       report diagnostics without writing HTML or the page image
   --strict      fail on warnings too
-  new FILE      write a starter deck to FILE (- for standard output), dated today (UTC)
+  new FILE      write a starter deck to FILE (- for standard output), dated today (local date)
   --lang L      the starter deck's language: ja (the default) or en
   --force       overwrite FILE when it exists
   --version     print the version and the commit lispresen was built from")
@@ -124,10 +124,9 @@ TARGET is standard output."
         path)))
 
 (defun today ()
-  "Today's date as YYYY-MM-DD, in UTC: no backend but SBCL knows the local time zone, and
-a starter deck is the same on every one."
+  "Today's date as YYYY-MM-DD in the local time zone."
   (multiple-value-bind (second minute hour day month year)
-      (decode-universal-time (get-universal-time) 0)
+      (decode-universal-time (get-universal-time))
     (declare (ignore second minute hour))
     (format nil "~4,'0d-~2,'0d-~2,'0d" year month day)))
 
