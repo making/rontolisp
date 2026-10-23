@@ -7,6 +7,9 @@ produces the same bytes on each. Decks are written in Japanese; lines break betw
 
 The design is in [DESIGN.md](DESIGN.md).
 
+The deck introducing lispresen, [examples/intro.lisp](examples/intro.lisp), is published at
+https://making.github.io/rontolisp/lispresen/intro.html with every push that changes it.
+
 ## A deck
 
 ```lisp

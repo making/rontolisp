@@ -30,6 +30,8 @@ on:
     - docs-tool/**
     # The agent skill mirrors the example programs, so they are an input to it.
     - examples/**
+    # lispresen's golden deck, published beside the playground whose runtime it loads.
+    - lispresen/examples/intro.html
     - .github/workflows/pages.yaml
   workflow_dispatch:
 
@@ -107,6 +109,11 @@ jobs:
           --previous-hash '${{ steps.skill.outputs.previous-hash }}' \
           --commit '${{ github.sha }}' \
           --site-base 'https://making.github.io/rontolisp'
+    # The golden deck is self-contained (check.sh renders it with --embed) and loads
+    # its runtime from this same site, so it is copied as is. After the web profile,
+    # which recreates web/dist.
+    - name: Publish the lispresen intro deck (web/dist/lispresen/intro.html)
+      run: install -D -m 644 lispresen/examples/intro.html web/dist/lispresen/intro.html
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v5
       with:
