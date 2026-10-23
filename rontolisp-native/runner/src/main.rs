@@ -11,9 +11,9 @@
 //! Exit status: the program's `proc_exit` code, 0 when `_start` returns, 134 after a trap
 //! (what `wasmtime run` answers on Unix), 1 when the module cannot be loaded.
 //!
-//! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers a
-//! fetch's `rlhttp` imports (`http`). The side that assembles an output picks the one the
-//! module's imports need.
+//! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers the
+//! `rlhttp` imports (`http`) of a program that fetches or serves HTTP. The side that
+//! assembles an output picks the one the module's imports need.
 
 use std::process::exit;
 
@@ -92,14 +92,15 @@ fn run() -> wasmtime::Result<()> {
             "this program uses the Objective-C runtime (objc:, appkit:), which a --native output reaches on macOS on Apple silicon only"
         );
     }
-    // A program using rontolisp:fetch imports the network host (`http`, rlrun-net only);
-    // nothing of it runs before the first request.
+    // A program using rontolisp:fetch, or serving HTTP (clack:clackup, Ring's run-server),
+    // imports the network host (`http`, rlrun-net only); nothing of it runs before the
+    // first request or the server's start.
     if module.imports().any(|i| i.module() == "rlhttp") {
         #[cfg(feature = "net")]
         http::add_to_linker(&mut linker)?;
         #[cfg(not(feature = "net"))]
         wasmtime::bail!(
-            "this program uses rontolisp:fetch, whose host is the network runner (rlrun-net), not this one"
+            "this program fetches or serves HTTP, whose host is the network runner (rlrun-net), not this one"
         );
     }
     let mut store = Store::new(&engine, wasi.build_p1());

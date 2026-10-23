@@ -50,8 +50,8 @@ The defaults work the way Clack users expect:
   every Clack example under `examples/` is written that way.
 - `:silent t` suppresses the banner and `:debug nil` the debug notice.
 
-`:address` applies where the PROGRAM owns the socket — the interpreter and the
-JVM. The Servlet war, the WASI component and the reactor are hosted: the
+`:address` applies where the PROGRAM owns the socket — the interpreter, the
+JVM and a native executable. The Servlet war, the WASI component and the reactor are hosted: the
 container, `wasmtime serve` or the Worker owns the listener, so `:address` is
 ignored there exactly as `:port` is. The bare
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
@@ -75,7 +75,7 @@ standard `(status headers body)` list:
 | `:headers` | a hash table (`:test 'equal`) keyed by lowercased header names; duplicate request headers join with `", "` in wire order |
 | `:content-type` / `:content-length` | from that table (`nil` when absent; `:content-length` an integer) |
 | `:raw-body` | the request body as a synchronous in-memory bivalent stream — `read-line`/`read-char` and `read-byte`/`read-sequence` both work, with a real `file-position` (what lack-request and http-body need); `nil` for a bodiless request |
-| `:remote-addr` / `:remote-port` | the real peer on the interpreter and the JVM; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
+| `:remote-addr` / `:remote-port` | the real peer on the interpreter, the JVM and a native executable; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
 
 The response `body` may be a list of strings, a
 `(vector (unsigned-byte 8))` (written byte for byte, so a binary response is
@@ -242,6 +242,13 @@ on this target's native inbound transport", chosen at compile time:
 - **JVM class** — the same program compiled with `-o App.class`; like every
   served program it is self-contained, its server travelling beside the class
   (`java -cp . App`, or `-o app.jar` and `java -jar app.jar`).
+- **Native executable** (`--native -o app`) — the executable's runner owns the
+  socket and speaks HTTP/1.1 (kept-alive connections, chunked request bodies),
+  reading every connection on a thread of its own, while the application
+  answers one request at a time on the program's one thread. `:port` and
+  `:address` apply; `clackup` serves until the process is stopped, whatever
+  `:use-thread` says, and `clack:stop` is meaningless. See
+  [Compile to a Native Executable](../compiling/native.md#serving-http).
 - **WASM component** (`--component`) — the host owns the socket: run with
   `wasmtime serve -S cli=y -S tcp=y
   -S inherit-network=y app.wasm`. The `:port` argument is ignored,
@@ -274,8 +281,8 @@ on this target's native inbound transport", chosen at compile time:
 
 Every row above is one file:
 [`examples/net/hello-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack.lisp)
-is the smallest Clack application there is, and it compiles to all five without
-an edit — its `:port` reads the `PORT` environment variable, which only the two
+is the smallest Clack application there is, and it compiles to all six without
+an edit — its `:port` reads the `PORT` environment variable, which only the three
 transports that own a socket look at.
 [`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
 deploys that same file as a Worker, and lists the per-host commands.
@@ -407,6 +414,11 @@ Two details the host side must get right:
   `"script-name"` key: the mount point as a **raw** prefix of `target`. It
   becomes `:script-name` (percent-decoded) with `:path-info` carrying only the
   remainder; absent means root-mounted.
+- A host that owns the socket may add `"protocol"` (`"HTTP/1.1"` when absent),
+  `"local-addr"` and `"local-port"` (the address the request came in on, for
+  `:server-name` / `:server-port` when no `Host` header names them) and
+  `"remote-port"` (`:remote-port`, `nil` when absent). A native executable's
+  runner sends all four.
 
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.

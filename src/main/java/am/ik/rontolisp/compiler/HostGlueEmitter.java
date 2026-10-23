@@ -1061,6 +1061,11 @@ public final class HostGlueEmitter {
 				}
 				case "remote-addr" ->
 					conditional.add("    if (remoteAddr != null) head[\"" + key + "\"] = remoteAddr;");
+				// ABSENT: a fetch boundary hands over no socket, so the envelope's
+				// defaults (HTTP/1.1, the Host header's name and port, no peer port)
+				// stand.
+				case "protocol", "local-addr", "local-port", "remote-port" -> {
+				}
 				// ABSENT: the emitted glue serves a whole fetch boundary, so the
 				// application is root-mounted. A hand-written host that mounts it under
 				// a path sends the key itself.

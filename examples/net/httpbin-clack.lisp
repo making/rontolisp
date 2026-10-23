@@ -15,6 +15,7 @@
 ;;   rontolisp examples/net/httpbin-clack.lisp -o App.class && java -cp . App
 ;;   rontolisp examples/net/httpbin-clack.lisp -o app.jar && java -jar app.jar
 ;;   rontolisp examples/net/httpbin-clack.lisp -o app.war                 # Servlet 6 container
+;;   rontolisp examples/net/httpbin-clack.lisp --native -o app && ./app   # native executable, :8080
 ;;   rontolisp examples/net/httpbin-clack.lisp -o app.wasm --component && \
 ;;     wasmtime serve -S cli=y app.wasm
 ;;   rontolisp examples/net/httpbin-clack.lisp -o worker.wasm --no-wasi   # Cloudflare Worker

@@ -26,6 +26,7 @@
 //! a PEM bundle, that bundle's instead (`wire::tls_config`).
 
 mod json;
+mod serve;
 mod url;
 mod wire;
 
@@ -396,7 +397,7 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             }
         },
     )?;
-    Ok(())
+    serve::add_to_linker(linker)
 }
 
 #[cfg(test)]

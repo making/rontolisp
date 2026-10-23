@@ -11,6 +11,7 @@ runs on every transport the Clack backend `:server :rontolisp` serves
 | Interpreter | `rontolisp app.clj` | a socket the program binds (`:port`, `:host`) |
 | JVM | `-o App.class`, `-o app.jar` | the same socket server |
 | Servlet war | `-o app.war` | the container owns the port; `run-server` registers the handler and returns |
+| Native executable | `--native -o app` | the executable's runner owns the socket (`:port`, `:host`); `run-server` serves until the process is stopped ([Compile to a Native Executable](../../compiling/native.md#serving-http)) |
 | WASM component | `-o app.wasm --component`, run with `wasmtime serve` | the host owns the socket; `run-server` returns at once |
 | WASM reactor | `-o app.wasm --no-wasi` | the host calls the `handle-request` export ([the reactor build](../../guides/clack.md#a-host-that-calls-you-the-reactor-build)) |
 
@@ -71,7 +72,7 @@ response `:body`, or sent on as a [`rontolisp.http-client`](http-client.md) requ
 A handler that answers anything but a map, or a body of any other kind, signals; the
 transport answers 500. So does a `java.io.File` naming no file the program can read: the
 WebAssembly serving transports (`wasmtime serve`, the reactor) have no file system, so a file
-is served on the interpreter, the JVM and a war; a byte stream over a
+is served on the interpreter, the JVM, a war and a native executable; a byte stream over a
 [resource](clojure-java-io.md) the program carries is served everywhere. The response
 builders, `file-response` and `resource-response` among them, and the parameter middleware
 are the built-in [Ring utilities](ring-util.md).

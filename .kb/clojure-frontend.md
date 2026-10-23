@@ -1670,7 +1670,9 @@ before the passes reading its legs; `ClojureLibrary` (much later) splices the
 `%clojure-ring-*` conversions. Verified 2026-10-08 on the interpreter and the JVM (socket), a
 `--no-wasi` module driven by node (P1's serving transport), `--component` under `wasmtime
 serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directive's
-"requires --component" at call time, like Clack.
+"requires --component" at call time, like Clack. A `--native` executable serves through its
+runner since 2026-10-24 (`ClojureRingAdapterTest#aNativeExecutableServesARingHandlerThroughItsRunner`,
+the same `assertServes` as the socket legs: files, byte streams and octet bodies included).
 - Request map (`%clojure-ring-request` over the Clack env): `:request-method` lower-cased
   keyword, `:uri` = `:request-uri` up to `?` (RAW, not the decoded `:path-info`),
   `:query-string`, `:headers` = the env's equal table as is (already a Clojure map),

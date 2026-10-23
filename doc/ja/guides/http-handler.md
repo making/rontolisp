@@ -39,7 +39,7 @@
 | `:server-protocol` | キーワード。例: `:HTTP/1.1` |
 | `:request-uri` | 生のリクエストターゲットそのまま（エンコードされたまま、クエリ込み） |
 | `:url-scheme` | `"http"` または `"https"` |
-| `:remote-addr` / `:remote-port` | インタープリタと JVM では実際のピア。WASI コンポーネントでは `nil`（`wasi:http@0.3.0` はピアのアクセサを公開しません） |
+| `:remote-addr` / `:remote-port` | インタープリタ、JVM、ネイティブ実行ファイルでは実際のピア。WASI コンポーネントでは `nil`（`wasi:http@0.3.0` はピアのアクセサを公開しません） |
 | `:headers` | **小文字化した**ヘッダ名をキーとする `equal` ハッシュテーブル — `(gethash "content-type" (getf env :headers))` で引きます。重複したヘッダは `", "` で結合され、`nil` になることはありません |
 | `:content-type` / `:content-length` | 上のテーブルから（なければ `nil`。`:content-length` は整数） |
 | `:raw-body` | リクエストボディ（下記） |

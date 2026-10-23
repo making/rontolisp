@@ -1106,7 +1106,8 @@ examples:
       from it in the same run, which is the only place a per-target edit could
       hide. The interpreter leg is the same program under `rontolisp` and blocks
       like the others here. :port is read from the PORT environment variable,
-      which only the two socket transports look at.
+      which only the socket transports look at (the interpreter, the JVM and a
+      --native executable, whose runner serves; no leg here builds one).
   - path: net/hello-clack-accesslog.lisp
     backends: [jvm-compile, war-compile, wasm-component]
     note: >-
