@@ -8,9 +8,8 @@
 (deck :title "rontolisp 入門"
       :author "rontolisp"
       :date "2026-10-23"
-      :logo (image "logo.svg" :alt "rontolisp")
       :url "https://github.com/making/rontolisp"
-      :description "Java で実装した Common Lisp のサブセット rontolisp の入門。インストール、言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまで"
+      :description "Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する"
       :page-url "https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html"
       :page-image "rontolisp-intro.png"
       :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf")
@@ -26,21 +25,15 @@
 
 (section "rontolisp とは")
 
-(slide :title "Java で実装した Common Lisp のサブセット"
+(slide :title "Java で実装した Common Lisp 処理系"
   (p "一つのソースを、三つの実行モードで動かす。")
   (ul (li (b "インタプリタ") " REPL とファイル実行。ツリーウォークで評価する")
       (li (b "JVM コンパイラ") " " (tt ".class") " や " (tt ".jar") " を出力する")
       (li (b "WASM コンパイラ") " wasm-GC を使った " (tt ".wasm") " を出力する"))
-  (p "コアライブラリは外部依存を持たない。JVM と WASM のバイトコードも、ASM などのライブラリを使わずに出力する。"))
-
-(slide :title "なぜサブセットなのか"
-  (ul "インタプリタ、JVM、WASM で同じように動く"
-      "ランタイムのメタオブジェクトプロトコルなしでバイトコードへ直接コンパイルできるよう、言語を小さく保つ"
-      "そのため、完全な Common Lisp の機能の多くを意図的に省いている")
-  (source "doc/ja/guides/missing-features.md"))
+  (p "コアライブラリは外部依存を持たない。JVM と WASM のバイトコードは、ASM などのライブラリを使わずに生成する。"))
 
 (slide :title "まず動かしてみる"
-  (p "このスライドのコードはブラウザの中の rontolisp が実行する。クリックで編集し、Run で実行する。")
+  (p "このデッキのコードは、ブラウザ上の rontolisp で実行できる。クリックして編集し、Run で実行する。")
   (say "Run で 3628800 が出る" :at "(fact 10)" :step t
     (code :lang "lisp" "
       (defun fact (n)
@@ -92,7 +85,7 @@
       $ rontolisp -e \"(print (+ 1 2))\"
 
       3")
-    (ul "REPL と違い、値をエコーしない"
+    (ul "REPL と違い、評価した値を表示しない"
         "エラーで終わると、終了コードが 0 以外になる")))
 
 (slide :title "コマンドの一覧"
@@ -101,22 +94,28 @@
     ((tt "rontolisp app.lisp") "ファイルをインタプリタで実行")
     ((tt "rontolisp -e \"(...)\"") "引数のプログラムを実行")
     ((tt "rontolisp app.lisp -o OUT") (cell "コンパイル。" (tt "OUT") " の拡張子で出力を選ぶ"))
-    ((tt "rontolisp format src/") "ソースを正規のレイアウトに再インデント")
-    ((tt "rontolisp test tests/main.lisp") "rove のテストを実行し、結果を終了コードにする")))
+    ((tt "rontolisp format src/") "ソースを正規のレイアウトにインデントし直す")
+    ((tt "rontolisp test tests/main.lisp") "rove のテストを実行し、結果を終了コードで返す")))
 
 ;;; --- the language -----------------------------------------------------------------
 
 (section "言語")
 
-(slide :title "使える Common Lisp の範囲"
-  (table :header ("機能" "状況")
-         :caption "詳しくは「未対応の CL 機能」のページにある"
-    ("マクロ、バッククォート" "使える")
-    ("コンディションとリスタート" "使える。デバッガとの統合はない")
-    ("多値" "使える")
-    ("CLOS" "一部。静的なサブセットと、定義時の MOP のサブセット")
-    ((tt "loop") "一部 (拡張版)")
-    ((tt "eval-when") (cell (tt "progn") " として扱う"))))
+(slide :title "Common Lisp の主な機能"
+  (table :header ("機能" "主なフォーム")
+    ("マクロ" (cell (tt "defmacro") "、バッククォート、" (tt "macroexpand")))
+    ("CLOS" (cell (tt "defclass") "、" (tt "defgeneric") "、" (tt "defmethod")))
+    ("コンディションとリスタート" (cell (tt "handler-case") "、" (tt "restart-case")))
+    ("多値" (cell (tt "values") "、" (tt "multiple-value-bind")))
+    ("繰り返し" (cell (tt "loop") "、" (tt "dolist") "、" (tt "dotimes")))
+    ("数値" "多倍長整数、有理数、浮動小数点数")))
+
+(slide :title "ANSI Common Lisp テストスイート"
+  (p "19,769 件のテストのうち " (accent (b "16,511 件")) " が通過している (83.5%)。")
+  (ul "計測の対象はインタプリタ"
+      "CI が毎日スイート全体を実行し、通過数が変わるたびに結果を記録する"
+      "対応する機能を増やし、通過数を引き続き上げていく")
+  (source "ansi-test/results/interpreter.md (2026-10-21 時点、スイートのリビジョン ca06bd9)"))
 
 (slide :title "プログラムもリスト"
   (p "コードは S 式で書く。S 式はリストなので、マクロはリストを組み立ててコードを作る。")
@@ -138,8 +137,8 @@
     (handler-case (/ 1 0)
       (division-by-zero () :infinity))"))
 
-(slide :title "Scheme のフロントエンド (実験的)"
-  (p (tt ".scm") " のファイルを、R7RS-small の一部として読む。")
+(slide :title "Scheme のフロントエンド"
+  (p (tt ".scm") " のファイルを Scheme として読む。" (tt "(scheme base)") " などの R7RS-small のライブラリを使える。")
   (code :lang "scheme" "
     (import (scheme base) (scheme write))
     (define (count-up n)
@@ -149,8 +148,8 @@
             (loop (+ i 1) (cons (* i i) acc)))))
     (display (count-up 5))"))
 
-(slide :title "Clojure のフロントエンド (実験的)"
-  (p (tt ".clj") " と " (tt ".cljc") " を、Clojure の小さなサブセットとして読む。")
+(slide :title "Clojure のフロントエンド"
+  (p (tt ".clj") " と " (tt ".cljc") " のファイルを Clojure として読む。")
   (code :lang "clojure" "
     (defn fact [n]
       (if (< n 2) 1 (* n (fact (- n 1)))))
@@ -165,8 +164,7 @@
     ((tt ".clj .cljc") "Clojure")
     ("それ以外" (cell (tt "--source-language") " で指定する")))
   (ul "一つのプログラムに複数の言語のファイルを混ぜられる"
-      "どの言語も同じコアフォームに変換され、すべてのバックエンドで動く"
-      "Scheme と Clojure は実験的。動かし続けたいものは Common Lisp で書く"))
+      "どの言語も同じコアフォームに変換され、すべてのバックエンドで動く"))
 
 ;;; --- backends ---------------------------------------------------------------------
 
@@ -176,7 +174,7 @@
   (flow "ソース (CL、Scheme、Clojure)" "コアフォームに変換" "マクロ展開"
         ("インタプリタ、" (tt ".class") "、" (tt ".wasm")))
   (ul "言語の違いは最初の変換で吸収する"
-      "バックエンドは Scheme や Clojure の名前を知らない"))
+      "バックエンドが受け取るのは、どの言語でも同じコアフォーム"))
 
 (slide :title "出力の拡張子でバックエンドを選ぶ"
   (code :lang "console" "
@@ -198,7 +196,7 @@
     (ul (li "既定は WASI Preview 1")
         (li (tt "--component") " で WASI 0.3")
         (li (tt "--no-wasi") " でインポートなし")
-        (li (tt "--no-gc") " で任意のエンジン向け (数値と文字列のみ)"))))
+        (li (tt "--no-gc") " で wasm-GC のないエンジン向け"))))
 
 (slide :title "ネイティブ実行ファイル"
   (p (tt "--native") " は、WASM 出力を wasmtime でマシンコードにプリコンパイルし、小さなランナーの後ろに付ける。")
@@ -214,9 +212,9 @@
   (source "bench-report/results/benchmarks.md (2026-09-04, Linux x86_64, AMD EPYC 9V74)"))
 
 (slide :title "インタプリタは試行錯誤に使う"
-  (ul "即座に起動し、コンパイラと同じ意味で実行する"
+  (ul "すぐに起動し、コンパイル後と同じ意味で実行する"
       "I/O が中心のスクリプトなら、速さの差は表に出にくい"
-      "CPU を使い切る処理は、コンパイルした成果物で動かす")
+      "CPU 負荷の高い処理は、コンパイルしてから動かす")
   (code :lang "console" "
     $ rontolisp program.lisp -o program.jar
     $ java -jar program.jar"))
@@ -234,13 +232,12 @@
 (section "連携とライブラリ")
 
 (slide :title "Java 連携"
-  (p (tt "java") " パッケージが、リフレクションで任意の Java API を呼ぶ。")
+  (p (tt "java") " パッケージの関数で、任意の Java API をリフレクション経由で呼べる。")
   (code :lang "lisp" :run nil "
     (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"length\")  ; => 2
     (java:static \"java.lang.Math\" \"max\" 3 7)                        ; => 7
     (java:field \"java.lang.Integer\" \"MAX_VALUE\")                    ; => 2147483647")
-  (ul (li "JVM 上のインタプリタと、コンパイルした " (tt ".class") " で動く")
-      "WASM はホストのオブジェクトを表せないので、コンパイルを拒否する"))
+  (p "JVM 上のインタプリタと、コンパイルした " (tt ".class") " で使える。"))
 
 (slide :title "ASDF で複数ファイルのプロジェクトを読む"
   (column
@@ -265,12 +262,12 @@
     CL-USER> (split-sequence:split-sequence #\\, \"a,b,c\")
     (\"a\" \"b\" \"c\")")
   (ul (li (tt "ql:quickload") " は Quicklisp の配布物から取得し、" (tt "~/.rontolisp/quicklisp/") " にキャッシュする")
-      "alexandria、cl-ppcre、cl-who、jzon、chipz などを、上流のソースのまま 4 つのバックエンドで動かしている"))
+      "alexandria、cl-ppcre、cl-who、jzon、chipz などが、上流のソースのままインタプリタ、JVM、WASM で動く"))
 
 (slide :title "そのほかの組み込みパッケージ"
   (table :header ("パッケージ" "用途")
-         :caption "動くバックエンドはパッケージごとに違う。各ガイドを参照"
-    ((tt "uiop") "環境変数、ファイル、ディレクトリなど (一部を実装)")
+         :caption "使えるバックエンドはパッケージごとに異なる。詳しくは各ガイドにある"
+    ((tt "uiop") "環境変数、ファイル、ディレクトリなど")
     ((cell (tt "rove") "、" (tt "rontolisp test")) "テスト")
     ((tt "rontolisp:fetch") "HTTP リクエスト")
     ((tt "clack") "Web アプリケーション")
