@@ -2029,7 +2029,7 @@ public final class LispEvaluator {
 					if (!(args.get(0) instanceof LispString path)) {
 						throw new LispEvalException(LispNames.PROBE_FILE_INTERNAL + " expects a string pathname");
 					}
-					// The truename is the namestring itself (see LispNames.PROBE_FILE).
+					// The namestring as given; probe-file resolves its links first.
 					return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
 				}));
 		// %read-link: the same SourceLoader mediation as %probe-file,

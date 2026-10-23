@@ -1654,9 +1654,9 @@ final class JvmIoRuntimeBuilder {
 	/**
 	 * {@code _probeFile(Object path) -> path | null}. Whether the path names an existing
 	 * file: the quotes are stripped the way {@code _open} does, and the answer is the
-	 * ORIGINAL (still quoted) path value so the caller gets a Lisp string back --
-	 * rontolisp's namestring stands in for the truename. Unlike {@code _open} this never
-	 * throws on a missing path; that is the whole point of the primitive.
+	 * ORIGINAL (still quoted) path value so the caller gets a Lisp string back (the
+	 * prelude {@code probe-file} resolves links before it asks). Unlike {@code _open}
+	 * this never throws on a missing path; that is the whole point of the primitive.
 	 */
 	private MethodCode buildProbeFile() {
 		// Slots: 0=path (Object), 1=p (String)

@@ -14,7 +14,7 @@ Every name is reachable through either spelling: `uiop:probe-file*` and
 | Function | What it answers |
 |----------|-----------------|
 | `uiop:file-exists-p` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
-| `uiop:directory-exists-p` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
+| `uiop:directory-exists-p` | the truename (with a trailing `/`, symbolic links resolved) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
 | `uiop:probe-file*` | parse the designator and probe: the parsed pathname when something is there (`:truename t` answers its truename instead), `nil` otherwise — including for a designator `ensure-pathname` rejects, such as a wildcard |
 | `uiop:truename*` | the nil-tolerant `truename`: the truename when the file exists (trying the directory form too, where a missing trailing separator defeats some implementations' `truename`), `nil` otherwise — and `nil` for `nil` |
 | `uiop:directory*` | `directory` — upstream's per-implementation symlink keys are accepted and dropped: `directory` answers each entry as named, never resolved, which is what upstream asks for with them |

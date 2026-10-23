@@ -11,10 +11,13 @@
 ;; file-exists-p above.
 (defun uiop/filesystem:native-namestring (%nns-path) (namestring %nns-path))
 
+;; The directory's truename, as probe-file answers a file's: its links resolved,
+;; the resolved spelling listed. "" (the working directory) stays "".
 (defun uiop/filesystem:directory-exists-p (%de-path)
-  (let ((%de-d (%dir-namestring %de-path)))
-    (if (%list-directory (if (string= %de-d "") "." %de-d))
-        (pathname %de-d)
+  (let* ((%de-d (%dir-namestring %de-path))
+         (%de-r (if (string= %de-d "") "" (%real-path %de-d))))
+    (if (%list-directory (if (string= %de-r "") "." %de-r))
+        (pathname %de-r)
         nil)))
 
 ;; The optional PATTERN is UIOP's own second argument: a name-and-type wildcard
@@ -74,9 +77,9 @@
 
 ;;;; Probing: truename*, probe-file*, directory* and safe-file-write-date.
 ;;;; Upstream's per-implementation stat dance collapses here: probe-file is the
-;;;; one existence probe on every backend (a directory counts as existing,
-;;;; nothing resolves symlinks or absolutizes), truename is the path with its
-;;;; symlinks resolved plus a signal, and directory is the one listing over
+;;;; one existence probe on every backend (a directory counts as existing, the
+;;;; answer has its symlinks resolved, nothing is absolutized), truename is
+;;;; probe-file plus a signal, and directory is the one listing over
 ;;;; %list-directory (.kb/directory-listing.md). So probe-file* parses, probes,
 ;;;; and answers either the parsed pathname or its truename; truename* is the
 ;;;; nil-tolerant truename that also tries the directory form (a missing trailing separator

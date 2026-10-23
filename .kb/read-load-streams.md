@@ -327,10 +327,10 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   caches `-1` and `$path_open` turns that into an errno. Hit `probe-file` too.
 - **`%probe-file` stays a string-in/string-out PRIMITIVE**, not `open` in a `handler-case`: nil is
   cheaper than catching a condition, works outside EH mode, and `--no-gc` rejects catching. Public
-  `probe-file` is prelude Lisp over it (`uiop:file-exists-p` lowers onto it). Contract: the
-  namestring when the file exists (no link resolved, nothing absolutized -- `truename` resolves,
-  next bullet), nil otherwise; a directory counts as existing, and so does a link whose target
-  does. Interpreter goes through the installed **`SourceLoader.exists`**,
+  `probe-file` is prelude Lisp over it (`uiop:file-exists-p` lowers onto it), probing the
+  `%real-path` spelling (next bullet). Contract: the namestring as given when the file exists
+  (no link resolved, nothing absolutized), nil otherwise; a directory counts as existing, and
+  so does a link whose target does. Interpreter goes through the installed **`SourceLoader.exists`**,
   never `Files` directly, so the playground's in-memory loader answers (`fileSystem()` OVERRIDES with
   `Files.exists` — a read is wrong for a file that exists but is not decodable text). JVM
   `_probeFile` + `JvmProbeFileCompiler`; WASM `_probe_file` (`FUNC_PROBE_FILE` after `FUNC_T_SYM` as
@@ -342,8 +342,8 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   over the injected `path_readlink` (`TYPE_PATH_RENAME`'s shape; the adapter's over
   `readlink-at`, the serve bridge errno 76). The `bufused` cell must be 4-aligned (wasmtime:
   `Pointer not aligned to 4`). A `..` pops only an already-resolved part; a relative path stays
-  relative (no cwd on wasm); a missing part reads as no link and is kept. `truename` probes the
-  RESOLVED spelling. On wasmtime 49 (checked 2026-10-09), `path_readlink` answers a relative
+  relative (no cwd on wasm); a missing part reads as no link and is kept. `probe-file` (and
+  `truename` over it) probes the RESOLVED spelling since 2026-10-23 (`.kb/pathnames.md`). On wasmtime 49 (checked 2026-10-09), `path_readlink` answers a relative
   target even when it climbs out of the preopen, refuses an ABSOLUTE target with errno 63, so
   such a link stays as spelled and is not there on both wasm backends (the one cross-backend
   difference). **Every WASM `path_open` passes `symlink_follow`** (`emitDirFdAndPath`, the
@@ -363,7 +363,7 @@ Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
 `probe-file-existing-and-missing`, `truename-resolves-symbolic-links` (tree staged by
 `CorpusFixtures.stageSymlinkTree`), `open-if-exists-append-keeps-the-existing-content`.
 
-## The `:if-exists` / `:if-does-not-exist` table is ONE lowering over `probe-file`
+## The `:if-exists` / `:if-does-not-exist` table is ONE lowering over `%probe-file`
 
 **No backend learned a mode for it.** `.todo/906`: the whole table plus `:direction :probe`
 is a GUARD around the existing literal open, built once in
@@ -373,14 +373,15 @@ interpreter's `open` built-in is the fourth reading, natively over `Files.exists
 must stay in step, and the cross-backend pin is ci-spec
 `open-if-exists-if-does-not-exist-and-probe`.
 
-- The guard reads `(probe-file path)` ONCE into `__open_act`, a keyword of `:open` /
+- The guard reads `(%probe-file path)` ONCE into `__open_act`, a keyword of `:open` /
   `:create` / `:error-exists` / `:error-missing` / nil, and the base open appears once
   below it -- a dispatch over six literal leaves is not duplicated. Both arms folding to
   "just open" emits NO guard, so an existing program keeps its exact bytes
   (`needsOpenExistenceGuard`, `aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore`).
-  The `probe-file` prelude entry's splice gate therefore keys on the SURFACE option list
-  (`callsOpenWithExistenceGuard`, the `callsLoadWithIfDoesNotExist` pattern) -- `#'open`
-  counts, since its wrapper passes every option computed.
+  The probe is the primitive over the designator's namestring (`existenceProbe`, built from
+  `%obj-*` alone), not `probe-file`: the guard asks what the open will see, needs no
+  truename, and -- built after prelude selection -- needs no splice (before 2026-10-23 it
+  called `probe-file` and keyed that splice on surface scans of the option lists).
 - **`:if-exists` is read only on an OUTPUT open.** An input or probe open drops it whatever
   it says, which is what makes `(open p :if-exists :rename)` the plain input open CL says
   it is. `:supersede` / `:new-version` / `:rename` / `:rename-and-delete` all collapse onto
@@ -1600,10 +1601,10 @@ family `.kb/asdf.md`.
 `:if-does-not-exist` is REAL (a false value answers nil instead of signalling) while
 `:verbose`/`:print`/`:external-format` are accepted and dropped; every option value is still BOUND,
 in written order. The compile paths lower in `LispMacroExpander.lowerLoadOptions` (a `let*` plus an
-`(or <value> (probe-file path))` guard); the interpreter reads the same four against a `sourceLoader`
-probe — an UNREADABLE file, not merely a missing one, answers nil on both. Because the guard is built
-inside the expression compilers long after prelude selection, `referencedBySurfaceForm` splices
-`probe-file` on the SURFACE fact (`LispMacroExpander.callsLoadWithIfDoesNotExist`).
+`(or <value> (%probe-file path))` guard, `existenceProbe` as `open`'s); the interpreter reads the same
+four against a `sourceLoader` probe — an UNREADABLE file, not merely a missing one, answers nil on
+both. The guard is built inside the expression compilers long after prelude selection, which is
+why it calls the primitive and splices nothing.
 
 The SUCCESS value is `t` on every backend: JVM `_load` returns the symbol String `"T"`, the WASM
 `_load` calls `_t_sym`. Both once answered the integer 1 — truthy, so only reading the value showed

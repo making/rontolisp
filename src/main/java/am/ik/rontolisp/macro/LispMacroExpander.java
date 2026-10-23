@@ -10142,15 +10142,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the program contains an {@code open} / {@code with-open-file} whose options
-	 * make {@link #needsOpenExistenceGuard} true. The guard calls {@code probe-file}, and
-	 * it is built inside the expression compilers -- after the prelude selection pass --
-	 * so selection keys on the SURFACE form, the {@code callsLoadWithIfDoesNotExist}
-	 * pattern.
-	 * @param program the top-level forms
-	 * @return whether the guard can appear
-	 */
-	/**
 	 * Whether the program can open a BIDIRECTIONAL (or {@code :overwrite}) file stream --
 	 * the gate the JVM backend's {@code _open} arm and the travelling
 	 * {@code RontoIoFileStream} class hang off, and the WASM backends' {@code path_open}
@@ -10208,47 +10199,6 @@ public final class LispMacroExpander {
 			LispVal value = optionPairs.get(i + 1);
 			if (value instanceof LispSymbol sym
 					&& (LispNames.IO_KEYWORD.equals(sym.name()) || LispNames.OVERWRITE_KEYWORD.equals(sym.name()))) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public static boolean callsOpenWithExistenceGuard(List<LispVal> program) {
-		for (LispVal form : program) {
-			if (callsOpenWithExistenceGuard(form)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean callsOpenWithExistenceGuard(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		List<LispVal> parts = cons.toList();
-		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op) {
-			String member = unqualifiedClMember(op.name());
-			if (LispNames.OPEN.equals(member) && parts.size() > 2
-					&& needsOpenExistenceGuard(parts.subList(2, parts.size()))) {
-				return true;
-			}
-			// #'open: the wrapper hands its plist to the same lowering with every option
-			// COMPUTED, so the guard is always there.
-			if (LispNames.FUNCTION.equals(member) && parts.size() == 2 && parts.get(1) instanceof LispSymbol named
-					&& LispNames.OPEN.equals(unqualifiedClMember(named.name()))) {
-				return true;
-			}
-			if (LispNames.WITH_OPEN_FILE.equals(member) && parts.size() > 1 && parts.get(1) instanceof LispCons spec) {
-				List<LispVal> specParts = spec.toList();
-				if (specParts.size() > 2 && needsOpenExistenceGuard(specParts.subList(2, specParts.size()))) {
-					return true;
-				}
-			}
-		}
-		for (LispVal part : parts) {
-			if (callsOpenWithExistenceGuard(part)) {
 				return true;
 			}
 		}
@@ -10601,13 +10551,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The question an {@code open} / {@code load} existence guard asks: does the path, as
+	 * the open itself will spell it, name a file. It is the {@code %probe-file} primitive
+	 * over the designator's namestring ({@link #coercePathArg}'s unwrap, built from the
+	 * {@code %obj-*} primitives alone), not {@code probe-file}: the guard needs no
+	 * truename, so it walks no symbolic link, and a call the expression compilers
+	 * synthesize after the prelude selection needs no prelude entry.
+	 * @param pathVar the variable holding the path designator
+	 * @return the probe expression
+	 */
+	private static LispVal existenceProbe(String pathVar) {
+		return coercePathArg((LispCons) callOf(LispNames.PROBE_FILE_INTERNAL, new LispSymbol(pathVar)), 0);
+	}
+
+	/**
 	 * Wraps the base {@code open} in the existence guard the {@code :if-exists} /
 	 * {@code :if-does-not-exist} pair asks for. The base appears ONCE -- the two arms
 	 * pick an action keyword and the guard reads it -- so a dispatch over six literal
 	 * leaves is not duplicated.
 	 *
 	 * <pre>
-	 * (let ((__open_act (if (probe-file __open_path) &lt;exists&gt; &lt;missing&gt;)))
+	 * (let ((__open_act (if (%probe-file __open_path) &lt;exists&gt; &lt;missing&gt;)))
 	 *   (if (eq __open_act :error-exists)  (%file-error __open_path "...")
 	 *   (if (eq __open_act :error-missing) (%file-error __open_path "...")
 	 *   (if __open_act
@@ -10633,8 +10597,8 @@ public final class LispMacroExpander {
 		}
 		LispSymbol act = new LispSymbol(OPEN_ACTION_VAR);
 		LispVal exists = existsIsOpen ? new LispSymbol(OPEN_ACT_OPEN) : existsAction;
-		LispVal decision = makeIf(callOf(LispNames.PROBE_FILE, new LispSymbol(OPEN_PATH_VAR)),
-				java.util.Objects.requireNonNull(exists), missingAction);
+		LispVal decision = makeIf(existenceProbe(OPEN_PATH_VAR), java.util.Objects.requireNonNull(exists),
+				missingAction);
 		// The :create arm has to make the file itself for a direction whose open would
 		// not: an input open cannot create, and a probe open never opens for writing.
 		// For an output direction the open already creates, so the extra step is
@@ -10795,7 +10759,7 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (load p :if-does-not-exist nil) ->
 	 * (let* ((__load_path p) (__load_opt0 nil))
-	 *   (if (or __load_opt0 (probe-file __load_path)) (load __load_path) nil))
+	 *   (if (or __load_opt0 (%probe-file __load_path)) (load __load_path) nil))
 	 * </pre>
 	 *
 	 * Every option value is BOUND, in the order it was written, so an option this
@@ -10836,56 +10800,11 @@ public final class LispMacroExpander {
 		LispVal loadCall = callOf(LispNames.LOAD, new LispSymbol(LOAD_PATH_VAR));
 		LispVal body = loadCall;
 		if (ifDoesNotExist != null) {
-			body = makeIf(listToCons(List.of(new LispSymbol(LispNames.OR), ifDoesNotExist,
-					callOf(LispNames.PROBE_FILE, new LispSymbol(LOAD_PATH_VAR)))), loadCall, LispNil.INSTANCE);
+			body = makeIf(
+					listToCons(List.of(new LispSymbol(LispNames.OR), ifDoesNotExist, existenceProbe(LOAD_PATH_VAR))),
+					loadCall, LispNil.INSTANCE);
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
-	}
-
-	/**
-	 * Whether the program calls {@code load} with an {@code :if-does-not-exist} option,
-	 * or names {@code #'load} / {@code 'load}, whose injected wrapper forwards one -- the
-	 * surface fact {@code LispPreludeLibrary} keys the {@code probe-file} splice on,
-	 * because the call that needs it is produced by {@link #lowerLoadOptions(LispCons)}
-	 * inside the expression compilers, long after the prelude selection ran.
-	 * @param program the program forms
-	 * @return true when at least one such call occurs
-	 */
-	public static boolean callsLoadWithIfDoesNotExist(List<LispVal> program) {
-		for (LispVal form : program) {
-			if (callsLoadWithIfDoesNotExist(form)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean callsLoadWithIfDoesNotExist(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		List<LispVal> parts = cons.toList();
-		// #'load, or 'load, which the backends rewrite to #'load in designator position.
-		if (parts.size() == 2 && parts.get(0) instanceof LispSymbol op
-				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
-				&& parts.get(1) instanceof LispSymbol named
-				&& LispNames.LOAD.equals(unqualifiedClMember(named.name()))) {
-			return true;
-		}
-		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op
-				&& LispNames.LOAD.equals(unqualifiedClMember(op.name()))) {
-			for (int i = 2; i < parts.size(); i += 2) {
-				if (parts.get(i) instanceof LispSymbol key && IF_DOES_NOT_EXIST_KEYWORD.equals(key.name())) {
-					return true;
-				}
-			}
-		}
-		for (LispVal part : parts) {
-			if (callsLoadWithIfDoesNotExist(part)) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static LispVal buildWithOpenFile(LispVal var, List<LispVal> openParts, StreamElementType elementType,

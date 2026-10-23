@@ -226,7 +226,9 @@ first check rather than the second, both the same `parameter-error`. **Symlinks 
 on all four** (2026-10-09): `truenamize` (and `resolve-symlinks` over it) is
 `%real-path`, the walk behind `truename` (`.kb/pathnames.md`), whose "missing parts kept
 as spelled" is the answer upstream's walk up the parents reaches, so `*resolve-symlinks*`
-defaults to t as upstream's does. `probe-file* :truename t` answers `truename`.
+defaults to t as upstream's does. `probe-file* :truename t` answers `truename`;
+`file-exists-p` and `directory-exists-p` answer resolved spellings, as upstream's do over
+SBCL (`.kb/pathnames.md`).
 `lisp-implementation-directory` is nil (no install directory exists
 to name) and `lisp-implementation-pathname-p` follows it. **`with-current-directory`
 inherits `chdir`'s decision and invents no second one**: `call-with-current-directory`

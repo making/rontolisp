@@ -12509,8 +12509,9 @@ cases:
       99
   - name: probe-file-existing-and-missing
     source: |
-      ;; probe-file answers a PATHNAME value carrying the argument namestring,
-      ;; and takes both designator spellings.
+      ;; probe-file answers a PATHNAME value carrying the truename (here, with no
+      ;; link in the path, the argument namestring), and takes both designator
+      ;; spellings.
       (with-open-file (out "probe.dat" :direction :output) (write-line "x" out))
       (print (probe-file "probe.dat"))
       (print (probe-file #P"probe.dat"))
@@ -12527,16 +12528,18 @@ cases:
     # truename resolves every symbolic link in the path over %read-link (both WASM
     # backends through path_readlink, the component adapter's over readlink-at) and
     # takes . and .. out, a .. after a link from where the link LEADS; a relative
-    # path stays relative. probe-file stays the existence probe, and a link in the
-    # last component opens through on every backend. The e95-links/ tree is staged
-    # by the driver (CorpusFixtures.stageSymlinkTree): no backend creates a link.
+    # path stays relative. probe-file and uiop:directory-exists-p answer the same
+    # truename (as SBCL's do), and a link in the last component opens through on
+    # every backend. The e95-links/ tree is staged by the driver
+    # (CorpusFixtures.stageSymlinkTree): no backend creates a link.
     source: |
       (print (namestring (truename "e95-links/in")))
       (print (namestring (truename "e95-links/dl/f.txt")))
       (print (namestring (truename "e95-links/dl/../a.txt")))
       (print (namestring (truename "./e95-links/up/../in")))
       (print (namestring (truename "e95-links/dl/")))
-      (print (probe-file "e95-links/in"))
+      (print (list (probe-file "e95-links/in") (probe-file "e95-links/dl/none")))
+      (print (uiop:directory-exists-p "e95-links/dl"))
       (print (with-open-file (s "e95-links/in") (read-line s)))
       (print (handler-case (truename "e95-links/none") (file-error () :missing)))
       (print (namestring (uiop:resolve-symlinks "e95-links/dl/new.txt")))
@@ -12546,7 +12549,8 @@ cases:
       "e95-links/a.txt"
       "e95-links/a.txt"
       "e95-links/d/"
-      #P"e95-links/in"
+      (#P"e95-links/a.txt" NIL)
+      #P"e95-links/d/"
       "a"
       :MISSING
       "e95-links/d/new.txt"
@@ -12557,12 +12561,14 @@ cases:
       ;; LITERAL absolute path is not a test of this, because the compile paths bundle
       ;; the file's compile-time contents instead of opening anything, and on WASM the
       ;; path has to be resolved against the preopen whose name COVERS it (/tmp here)
-      ;; rather than handed to the first preopened directory whole.
+      ;; rather than handed to the first preopened directory whole. probe-file's
+      ;; answer is the truename, which differs by host (macOS's /tmp is a link) and,
+      ;; on WASM, by what the preopens let the module see -- but it opens everywhere.
       (defvar *abs-dir* "/tmp")
       (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-path.txt"))
       (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
       (print (with-open-file (in *abs-file*) (read-line in)))
-      (print (probe-file *abs-file*))
+      (print (with-open-file (in (probe-file *abs-file*)) (read-line in)))
       (print (probe-file (concatenate 'string *abs-dir* "/ronto-abs-absent.txt")))
       (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-path.lisp")
                        :direction :output)
@@ -12570,7 +12576,7 @@ cases:
       (load (concatenate 'string *abs-dir* "/ronto-abs-path.lisp"))
     expected: |
       "absolute"
-      #P"/tmp/ronto-abs-path.txt"
+      "absolute"
       NIL
       "loaded-by-absolute-path"
   - name: directory-listing-and-uiop-walkers

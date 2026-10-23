@@ -8,9 +8,8 @@ same contract, same behavior -- and it lowers onto that primitive on every
 backend, so libraries spelling the question the UIOP way (postmodern's
 `execute-file`, for instance) need no shim.
 
-The pathname answered on success carries the argument namestring, as
-`probe-file`'s does: no symbolic link is resolved and nothing is made absolute. A
-directory counts as existing.
+The pathname answered on success is the truename, as `probe-file`'s is: every
+symbolic link resolved, nothing made absolute. A directory counts as existing.
 
 ```lisp
 (uiop:file-exists-p "definitely-missing.txt")   ; => NIL

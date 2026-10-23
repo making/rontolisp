@@ -8,9 +8,8 @@
 UIOP 流の綴りを使うライブラリ（たとえば postmodern の `execute-file`）にシムは
 不要です。
 
-成功時に返るパス名は、`probe-file` と同じく引数の名前文字列を保持します。シンボリック
-リンクの解決も絶対パス化も行いません。
-ディレクトリも存在すると見なされます。
+成功時に返るパス名は、`probe-file` と同じく真名 (truename) です。シンボリックリンクを
+すべて解決し、絶対パス化は行いません。ディレクトリも存在すると見なされます。
 
 ```lisp
 (uiop:file-exists-p "definitely-missing.txt")   ; => NIL
