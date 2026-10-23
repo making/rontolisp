@@ -116,6 +116,60 @@ downstream is unchanged (`.kb/clojure-frontend.md`). `CompileFrontend.run` refus
 entry language under `--no-gc`, like Scheme. `defaultExtension()` is per language;
 `fileNameForModule` and the package-inferred sub-system file stay Common Lisp.
 
+## The run-time libraries' name gate (2026-10-23)
+
+Both front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`) are Common Lisp
+loaded on demand, and the question "is this name one of yours" is asked about names of
+EVERY program:
+
+- The interpreter: `LispEvaluator.resolveFunction`, for a name the global environment
+  does not bind yet, asks after the wrappers and special operators, in order: keyword
+  helpers, linalg, objc, appkit, geom, checkpoint, safetensors, metal, scene, torch,
+  tokenizer, gguf, vec, url, `SchemeLibrary.isSchemeFunction`,
+  `ClojureLibrary.isClojureFunction`, usocket, wit, the prelude (one defun at a time),
+  uiop, asdf, the generated slot/struct helpers. The name sets are disjoint (packages,
+  `%scheme-`/`%clojure-` helpers), so the order decides only which gates a name pays
+  for, never which definition it gets. A whole Clojure program splices its library
+  ahead of itself instead (`clojureProgram`).
+- The compile path: both `process` passes ask for every symbol of the program, and
+  `LibraryDefunPruner` asks for every top-level definition (`.kb/library-defun-pruning.md`).
+
+Until 2026-10-23 the two checks built their name sets from the whole library on the
+first question, whatever the name: `scheme.lisp` read plus its generated run-time table,
+`clojure.lisp` plus the case mapping and `clojure-unicode.lisp`. A Common Lisp program
+paid it on its first prelude call (`equalp`, `string<`, `read-sequence`) or its first
+undefined function; JFR of `-e '(print (equalp "a" "A"))'` had 34 of 37 samples under the
+two checks. Now `mayDefine(name)` answers from the spelling first -- Scheme: the member
+starts `%SCHEME-`; Clojure: the member starts `%CLOJURE-`, or the name starts `c%clojure.`
+(`clojure.test`'s `*testing-vars*`) -- and only a name it admits reads the library.
+Building a set throws `IllegalStateException` when the library defines a name its gate
+refuses, so a definition outside the spelling fails the first test that loads the
+library instead of silently never loading.
+
+Measured 2026-10-23, Apple M4 Max, Java 25.0.3, `java -jar` of the exec jar, min of 7 runs:
+
+| command | before | after |
+|---|---|---|
+| `-e '(print 1)'` | 0.193 s | 0.199 s |
+| `-e '(print (equalp "a" "A"))'` | 0.604 s | 0.207 s |
+| `-e '(print (string< "a" "b"))'` | 0.611 s | 0.209 s |
+| `read-sequence` into a string | 0.614 s | 0.219 s |
+| `(handler-case (no-such-fn 1) (undefined-function () ...))` | 0.703 s | 0.253 s (a plain `handler-case` of `error`: 0.248 s) |
+| `p.lisp -o P.class` (`equalp`, min of 5) | 0.909 s | 0.487 s |
+| `p.lisp -o p.wasm` | 0.984 s | 0.574 s |
+
+Scheme and Clojure examples (`examples/scheme/*.scm`, seven `examples/clojure` files) and
+four `examples/console` programs print the same and compile to byte-identical `.class` and
+`.wasm` either way. Pin: `SchemeLibraryTest#aCommonLispProgramReadsNeitherFrontEndsLibrary`
+loads the classes afresh in a loader that records resource reads (the JVM's other tests
+fill the static caches), runs a Common Lisp program through the interpreter and the
+compile front end, and asserts neither library was read -- then that `#'rontolisp::%scheme-acos`
+reads `scheme.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
+and the order was never the cause); asking only after a `.scm`/`.clj` file was read (state
+in the evaluator, while a REPL, a `load` from Common Lisp and Scheme `eval` reach the
+helpers by other paths); a build-time name index (a generated table to keep in sync, where
+the spelling already is one).
+
 ## Tests
 
 `SourceLanguageSeamTest` (no class outside the seam reads user source through

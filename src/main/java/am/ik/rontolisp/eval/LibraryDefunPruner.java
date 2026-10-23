@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
@@ -92,6 +93,10 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> prunableNames;
 
+	@Nullable private static volatile Set<String> schemeDefinitionNames;
+
+	@Nullable private static volatile Set<String> clojureDefinitionNames;
+
 	private LibraryDefunPruner() {
 	}
 
@@ -111,7 +116,7 @@ public final class LibraryDefunPruner {
 		// backends do. A program with nothing to splice comes back unchanged.
 		List<LispVal> forms = LispMacroExpander.flattenTopLevel(program);
 		Provenance provenance = Provenance.scan(forms);
-		Set<String> bundled = prunableNames();
+		Predicate<String> bundled = LibraryDefunPruner::isBundledName;
 		if (!provenance.hasSystems() && !hasBundledDefinition(forms, bundled) && !hasBundledDefstruct(forms)) {
 			// Nothing this pass could remove (the common case: a program that splices no
 			// library at all). Return the caller's list, not the flattened copy.
@@ -149,9 +154,8 @@ public final class LibraryDefunPruner {
 			forms = structs.forms();
 			resolved = structs.resolved();
 			provenance = Provenance.scan(forms);
-			Set<String> widened = new HashSet<>(bundled);
-			widened.addAll(structs.definedNames());
-			bundled = Set.copyOf(widened);
+			Set<String> generated = structs.definedNames();
+			bundled = bundled.or(generated::contains);
 		}
 		// Stage A of the bzip2-tree elimination: fold case/ecase arms no possible
 		// subject value can reach OUT of third-party definitions, BEFORE reference
@@ -186,7 +190,7 @@ public final class LibraryDefunPruner {
 			}
 			else if (name != null) {
 				boolean fromSystem = provenance.isPrunableSystem(i);
-				if (!fromSystem && !bundled.contains(name)) {
+				if (!fromSystem && !bundled.test(name)) {
 					continue;
 				}
 				if (fromSystem) {
@@ -530,10 +534,10 @@ public final class LibraryDefunPruner {
 	 * are resolver fixed points, so this pre-check needs no resolution -- it only decides
 	 * whether the pass has anything to do at all.
 	 */
-	private static boolean hasBundledDefinition(List<LispVal> forms, Set<String> bundled) {
+	private static boolean hasBundledDefinition(List<LispVal> forms, Predicate<String> bundled) {
 		for (LispVal form : forms) {
 			String name = definitionName(form);
-			if (name != null && bundled.contains(name)) {
+			if (name != null && bundled.test(name)) {
 				return true;
 			}
 		}
@@ -583,7 +587,7 @@ public final class LibraryDefunPruner {
 		if (summary == null) {
 			return false;
 		}
-		if (schemeStructNames().contains(summary.structName())) {
+		if (SchemeLibrary.mayDefine(summary.structName()) && schemeStructNames().contains(summary.structName())) {
 			return true;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(summary.structName());
@@ -609,7 +613,7 @@ public final class LibraryDefunPruner {
 					names.add(summary.structName());
 				}
 			}
-			cached = Set.copyOf(names);
+			cached = checkedNames(names, SchemeLibrary::mayDefine, "scheme.lisp");
 			schemeStructNames = cached;
 		}
 		return cached;
@@ -1253,9 +1257,13 @@ public final class LibraryDefunPruner {
 	private record Prunable(Set<String> exact, Set<String> substringScanned,
 			Map<String, List<String>> thirdPartyByMember) {
 
-		static Prunable of(Set<String> all, Set<String> bundled, Set<String> thirdParty) {
-			Set<String> scanned = new HashSet<>(bundled);
-			scanned.retainAll(all);
+		static Prunable of(Set<String> all, Predicate<String> bundled, Set<String> thirdParty) {
+			Set<String> scanned = new HashSet<>();
+			for (String name : all) {
+				if (bundled.test(name)) {
+					scanned.add(name);
+				}
+			}
 			Map<String, List<String>> byMember = new HashMap<>();
 			for (String name : thirdParty) {
 				byMember.computeIfAbsent(LispSymbol.memberName(name), k -> new ArrayList<>()).add(name);
@@ -1265,16 +1273,66 @@ public final class LibraryDefunPruner {
 	}
 
 	/**
+	 * Whether the name is a definition of a prunable bundled library: one of
+	 * {@link #prunableNames()}, or of the Scheme or Clojure front end's run-time library.
+	 * Those two are asked only for a name that can be theirs ({@code mayDefine}), so a
+	 * program of neither language never reads them: their read was 0.33 s of a 0.9 s
+	 * compile ({@code .kb/library-defun-pruning.md}).
+	 */
+	private static boolean isBundledName(String name) {
+		return prunableNames().contains(name) || SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
+				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name);
+	}
+
+	private static Set<String> schemeDefinitionNames() {
+		Set<String> cached = schemeDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(SchemeLibrary.everyVariantForms(), SchemeLibrary::mayDefine, "scheme.lisp");
+			schemeDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	private static Set<String> clojureDefinitionNames() {
+		Set<String> cached = clojureDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(ClojureLibrary.forms(), ClojureLibrary::mayDefine, "clojure.lisp");
+			clojureDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	/**
+	 * The definition names of a library only a gate's names may reach: a name the gate
+	 * refuses would never be asked for, so the library could not prune it.
+	 */
+	private static Set<String> definitionNames(List<LispVal> forms, Predicate<String> gate, String library) {
+		Set<String> names = new HashSet<>();
+		collectDefinitionNames(forms, names);
+		return checkedNames(names, gate, library);
+	}
+
+	private static Set<String> checkedNames(Set<String> names, Predicate<String> gate, String library) {
+		for (String name : names) {
+			if (!gate.test(name)) {
+				throw new IllegalStateException(library + " defines " + name + ", which its name gate refuses");
+			}
+		}
+		return Set.copyOf(names);
+	}
+
+	/**
 	 * The union of every definition name in the prunable libraries (linalg, geom, metal,
-	 * scene, torch, vec, json + its {@code #'} wrappers, url, prelude). geom's four
-	 * {@code defclass} forms are not keyed here and stay roots (the class-shaped
-	 * candidates below are the third-party trees'), which is what a program using
-	 * {@code geom:box} alone carries beyond its own reachable defuns: the type model, not
-	 * {@code geom:revolution}'s tessellator. usocket is deliberately absent: its
-	 * {@code with-*} built-in macros synthesize calls not textually present in the
-	 * pre-expansion AST; torch's one built-in macro ({@code torch:no-grad}) synthesizes
-	 * only {@code torch::*grad-enabled*}, which is a hardcoded edge of the macro name
-	 * (see {@code collectReferences}), so the rest of the library stays prunable.
+	 * scene, torch, vec, json + its {@code #'} wrappers, url, prelude), the front ends'
+	 * aside ({@link #isBundledName}). geom's four {@code defclass} forms are not keyed
+	 * here and stay roots (the class-shaped candidates below are the third-party trees'),
+	 * which is what a program using {@code geom:box} alone carries beyond its own
+	 * reachable defuns: the type model, not {@code geom:revolution}'s tessellator.
+	 * usocket is deliberately absent: its {@code with-*} built-in macros synthesize calls
+	 * not textually present in the pre-expansion AST; torch's one built-in macro
+	 * ({@code torch:no-grad}) synthesizes only {@code torch::*grad-enabled*}, which is a
+	 * hardcoded edge of the macro name (see {@code collectReferences}), so the rest of
+	 * the library stays prunable.
 	 */
 	private static Set<String> prunableNames() {
 		Set<String> cached = prunableNames;
@@ -1296,8 +1354,6 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(JsonLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.wrapperForms(), names);
 					collectDefinitionNames(UrlLibrary.forms(), names);
-					collectDefinitionNames(SchemeLibrary.everyVariantForms(), names);
-					collectDefinitionNames(ClojureLibrary.forms(), names);
 					collectDefinitionNames(InflateLibrary.forms(), names);
 					collectDefinitionNames(ClojureLowering.programMacroRuntimeForms(), names);
 					for (String name : LispPreludeLibrary.names()) {
@@ -1332,9 +1388,9 @@ public final class LibraryDefunPruner {
 	 * splices the library able to create conditions, which routes the condition report
 	 * runtime into all of them. {@code defclass} stays a root (geom's type model).
 	 */
-	private static @Nullable List<String> bundledConditionKeys(LispVal form, Set<String> bundled) {
+	private static @Nullable List<String> bundledConditionKeys(LispVal form, Predicate<String> bundled) {
 		List<String> names = conditionDefinedNames(form);
-		return names != null && bundled.contains(names.get(0)) ? names : null;
+		return names != null && bundled.test(names.get(0)) ? names : null;
 	}
 
 	private static @Nullable List<String> conditionDefinedNames(LispVal form) {

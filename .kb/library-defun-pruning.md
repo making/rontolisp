@@ -26,6 +26,14 @@ six of them -- see `.kb/architecture.md`, "Package rules".
   (`ClojureLowering.programMacroRuntimeForms`: `C%MACRO-EXPANDER`, `C%MACRO-FN`,
   `C%MACROEXPAND(-1)`), so a program expanding nothing at run time loses every macro
   expander and what its template spells (`.kb/clojure-frontend.md`, "Macros").
+- **The front ends' libraries (`scheme.lisp`, both feature variants, and `clojure.lisp`)
+  are asked behind their name gate** (2026-10-23): `isBundledName` is `prunableNames()`
+  (every library above, read eagerly) or, for a name `SchemeLibrary.mayDefine` /
+  `ClojureLibrary.mayDefine` admits, that library's definition names; `schemeStructNames`
+  likewise. In the eager union they cost every compile 0.33 s of reading and generating
+  (JFR: 33 of 49 samples of a 0.9 s `-o P.class` of a one-line Common Lisp program); a
+  program of neither language now never reads them, and the output is byte-identical
+  (`.kb/source-language.md`, "The run-time libraries' name gate").
 - **usocket is excluded entirely**: its `with-*` built-in macros synthesize
   `usocket:socket-close` / `usocket::%usock-guard` / `%usock-resignal` calls absent from the
   pre-expansion AST.
