@@ -200,7 +200,9 @@ Rules:
   (`("#talk " (link "https://e.org" "@me"))`; a link takes the footer's color). It is
   a label like the page number, outside the body type scale, and takes no room from the
   body. Its width is the content width less the widest page number and a 48 px gap; one
-  longer than a line is cut with an ellipsis and reported once. `(slide :footer nil)`
+  longer than a line is cut with an ellipsis and reported once. The clip that cuts it
+  reaches a quarter em above and below the line box, so descenders (`g`, `p`) are kept
+  whole. `(slide :footer nil)`
   drops it from a slide. A source stays above the band. It is part of the slide, so print
   and the overview show it.
 - `(deck :progress t)` draws a 6 px bar in the accent color along the bottom edge of the
