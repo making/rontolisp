@@ -938,7 +938,7 @@ y\\\")\"))
                                         :slide 2
                                         :title "x"
                                         :message "m"))
-          "t.lisp:3: slide 2 \"x\": warning: m")))
+          "t.lisp:3: warning: slide 2 \"x\": m")))
 
 (defun spit (path text)
   (with-open-file (s path :direction :output :if-exists :supersede

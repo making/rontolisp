@@ -346,8 +346,8 @@ lispresen --version
 the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`; `mp4`, `webm`,
 a video over 20 MB reported, since the page then opens slowly), so the file
 alone is the whole deck, the page image (Link preview, below) aside. A WASM build reads and writes files
-only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: slide 7 "title":
-warning: ...`. `--check` only reports, `--strict` fails on warnings. Exit status: 0
+only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: warning: slide 7
+"title": ...`, the severity right after the line. `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
 
 `new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English
@@ -370,8 +370,8 @@ network open it), `--theme` and `--runtime` are the rendering options above.
   one byte range (`Range: bytes=...`) gets just those bytes, so a video can be sought.
   Nothing is written to disk: no HTML, no page image.
 - Each build's diagnostics go to standard error as above. In the browser, a build with
-  any shows them in a panel over the slides (a click hides it); the next build without
-  any removes it. A deck that stops reading (an unbalanced parenthesis) still shows the
+  any shows them in a panel over the slides, errors red and warnings amber (a click hides
+  it); the next build without any removes it. A deck that stops reading (an unbalanced parenthesis) still shows the
   slides before the error, and the page returns to the slide you were on when it is fixed.
 
 `serve` runs on the native executable, the interpreter, the JVM and SBCL. A WASM module

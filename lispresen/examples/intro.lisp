@@ -394,7 +394,7 @@
 (slide :title "読みにくさを報告する"
   (code :lang "console" "
     $ java -jar lispresen.jar talk.lisp --check
-    talk.lisp:42: slide 7 \"比較\": warning: a list with 8 items is hard to follow; keep it to 6")
+    talk.lisp:42: warning: slide 7 \"比較\": a list with 8 items is hard to follow; keep it to 6")
   (ul (li "診断には行番号が付く。" (tt "--strict") " なら警告でも失敗する")
       "文字色と背景のコントラストも検査する"))
 

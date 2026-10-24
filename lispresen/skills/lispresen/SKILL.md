@@ -155,8 +155,8 @@ lispresen talk.lisp --check --strict   # report only; exit 1 on any warning or e
 Diagnostics go to standard error, one per line:
 
 ```
-talk.lisp:42: slide 7 "title": warning: a list with 8 items is hard to follow; keep it to 6
-talk.lisp:42: slide 7 "title": error: the content does not fit the slide even at the smallest sizes; split the slide
+talk.lisp:42: warning: slide 7 "title": a list with 8 items is hard to follow; keep it to 6
+talk.lisp:42: error: slide 7 "title": the content does not fit the slide even at the smallest sizes; split the slide
 ```
 
 The line is the line of the top-level form; the slide number counts the title slide and

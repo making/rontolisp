@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>lispresen editor</title>
 <style>
-:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--rule:#d0d7de;--panel:#f6f8fa;--accent:#0b5cad;--err:#b3261e;--warn:#8a5a00}
-@media (prefers-color-scheme:dark){:root{--bg:#15181d;--fg:#e6e8eb;--muted:#9aa3ad;--rule:#3d444d;--panel:#1c2128;--accent:#6cb6ff;--err:#f47067;--warn:#d4a72c}}
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--rule:#d0d7de;--panel:#f6f8fa;--accent:#0b5cad;--err:#b3261e;--warn:#8a5a00;--err-bg:#fdecea;--warn-bg:#fff3e0}
+@media (prefers-color-scheme:dark){:root{--bg:#15181d;--fg:#e6e8eb;--muted:#9aa3ad;--rule:#3d444d;--panel:#1c2128;--accent:#6cb6ff;--err:#f47067;--warn:#d4a72c;--err-bg:#3a1d1d;--warn-bg:#33290f}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,'Hiragino Sans','Noto Sans JP',sans-serif}
 body{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
@@ -18,8 +18,9 @@ main{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);min-height:0
 textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(--rule);padding:12px;margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 Menlo,Consolas,'BIZ UDGothic',monospace;tab-size:2;outline:none}
 iframe{width:100%;height:100%;border:0;background:#fff}
 #diagnostics{margin:0;max-height:25vh;overflow:auto;padding:8px 12px;border-top:1px solid var(--rule);background:var(--panel);font:13px/1.5 Menlo,Consolas,monospace;white-space:pre-wrap}
-#diagnostics .error{color:var(--err)}
-#diagnostics .warning{color:var(--warn)}
+#diagnostics div{margin:2px 0;padding:1px 8px;border-left:6px solid}
+#diagnostics .error{color:var(--err);background:var(--err-bg);border-color:var(--err)}
+#diagnostics .warning{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
 #diagnostics:empty::before{content:'no diagnostics';color:var(--muted)}
 @media (max-width:720px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}textarea{border-right:0;border-bottom:1px solid var(--rule)}}
 </style>
@@ -85,7 +86,7 @@ function render(text) {
 function showDiagnostics(lines) {
   diagnostics.replaceChildren(...lines.map((line) => {
     const div = document.createElement("div");
-    div.className = / error: /.test(line) ? "error" : "warning";
+    div.className = /^[^:]*(:\d+)?: error: /.test(line) ? "error" : "warning";
     div.textContent = line;
     return div;
   }));

@@ -26,10 +26,13 @@
                          :message message) *diagnostics*))
 
 (defun format-diagnostic (file d)
-  "One diagnostic as FILE:LINE: slide N \"TITLE\": SEVERITY: MESSAGE."
+  "One diagnostic as FILE:LINE: SEVERITY: slide N \"TITLE\": MESSAGE, the severity at the
+same place on every line, where compilers put it."
   (with-output-to-string (out)
     (write-string file out)
     (when (diagnostic-line d) (format out ":~d" (diagnostic-line d)))
+    (write-string ": " out)
+    (write-string (string-downcase (symbol-name (diagnostic-severity d))) out)
     (write-string ": " out)
     (when (diagnostic-slide d)
       (format out "slide ~d" (diagnostic-slide d))
@@ -39,8 +42,6 @@
         (write-string (diagnostic-title d) out)
         (write-char (code-char 34) out))
       (write-string ": " out))
-    (write-string (string-downcase (symbol-name (diagnostic-severity d))) out)
-    (write-string ": " out)
     (write-string (diagnostic-message d) out)))
 
 (defun blank-code-p (code)

@@ -123,10 +123,11 @@ parenthesis swallows the rest of the deck) shows its last one there, so the slid
 viewer chose rides the reload in session storage until they move.")
 
 (defun write-diagnostics-panel (served out)
-  "The diagnostics of the build as a panel over the slides; a click hides it."
+  "The diagnostics of the build as a panel over the slides, each line in its severity's
+color, an error red and a warning amber; a click hides it."
   (let* ((diagnostics (served-diagnostics served))
          (errors (count :error diagnostics :key #'diagnostic-severity)))
-    (format out "<style>#lispresen-serve{position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#fff;color:#111;border:3px solid ~a;border-radius:8px;font:14px/1.5 Menlo,Consolas,monospace;white-space:pre-wrap;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.3)}@media print{#lispresen-serve{display:none}}</style>"
+    (format out "<style>#lispresen-serve{position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;max-height:40vh;overflow:auto;margin:0;padding:10px 14px;background:#fff;color:#111;border:3px solid ~a;border-radius:8px;font:14px/1.5 Menlo,Consolas,monospace;white-space:pre-wrap;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.3)}#lispresen-serve div{margin-top:4px;padding:2px 8px;border-left:6px solid}#lispresen-serve .error{color:#b71c1c;background:#fdecea;border-color:#c62828}#lispresen-serve .warning{color:#6d4400;background:#fff3e0;border-color:#e08a00}@media print{#lispresen-serve{display:none}}</style>"
             (if (> errors 0) "#c62828" "#e08a00"))
     (format out "<pre id=\"lispresen-serve\" role=\"alert\" onclick=\"this.remove()\">")
     (write-escaped
@@ -134,8 +135,10 @@ viewer chose rides the reload in session storage until they move.")
              (- (length diagnostics) errors))
      out)
     (dolist (d diagnostics)
-      (terpri out)
-      (write-escaped (format-diagnostic (served-name served) d) out))
+      (format out "<div class=\"~a\">"
+              (string-downcase (symbol-name (diagnostic-severity d))))
+      (write-escaped (format-diagnostic (served-name served) d) out)
+      (write-string "</div>" out))
     (write-string "</pre>" out)))
 
 (defun served-page (served)
