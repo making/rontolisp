@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**16,529 / 19,769 tests pass (83.6%)** -- 1,322 fail, 1,918 signal an error.
+**16,533 / 19,770 tests pass (83.6%)** -- 1,323 fail, 1,914 signal an error.
 
-7 top-level forms could not be read, 374 could not be evaluated, 2 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 374 could not be evaluated, 1 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -13,7 +13,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | conditions | 673 | 555 | 56 | 62 | 82.5% | 11 |
 | cons | 1,882 | 1,742 | 77 | 63 | 92.6% | 11 |
 | data-and-control-flow | 1,428 | 1,242 | 68 | 118 | 87.0% | 12 |
-| environment | 210 | 132 | 11 | 67 | 62.9% | 11 |
+| environment | 210 | 136 | 11 | 63 | 64.8% | 11 |
 | eval-and-compile | 306 | 224 | 37 | 45 | 73.2% | 11 |
 | files | 87 | 36 | 9 | 42 | 41.4% | 11 |
 | hash-tables | 157 | 132 | 19 | 6 | 84.1% | 13 |
@@ -25,7 +25,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | pathnames | 215 | 124 | 23 | 68 | 57.7% | 11 |
 | printer | 725 | 437 | 117 | 171 | 60.3% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 12 |
-| reader | 575 | 389 | 60 | 126 | 67.7% | 19 |
+| reader | 576 | 389 | 61 | 126 | 67.5% | 18 |
 | sequences | 3,287 | 3,079 | 74 | 134 | 93.7% | 11 |
 | streams | 797 | 666 | 67 | 64 | 83.6% | 16 |
 | strings | 509 | 435 | 56 | 18 | 85.5% | 12 |
@@ -33,7 +33,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | symbols | 1,145 | 1,085 | 24 | 36 | 94.8% | 11 |
 | system-construction | 77 | 28 | 1 | 48 | 36.4% | 11 |
 | types-and-classes | 626 | 343 | 188 | 95 | 54.8% | 13 |
-| **total** | **19,769** | **16,529** | **1,322** | **1,918** | **83.6%** | **383** |
+| **total** | **19,770** | **16,533** | **1,323** | **1,914** | **83.6%** | **382** |
 
 ## Most frequent failure reasons
 
