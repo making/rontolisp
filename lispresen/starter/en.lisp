@@ -49,14 +49,16 @@
   (column (p (b "Left")) (ul "Item A" (say "A comment in a bubble" "Item B")))
   (column (p (b "Right")) (ul "Item C" "Item D")))
 
-;; A table, and a diagram of boxes joined by arrows.
+;; A table, and a diagram: (flow "a" "b" "c") is a row of boxes joined by arrows;
+;; (-> ...) paths branch and merge, a box named by its text, and (label ...) labels an arrow.
 (slide :title "A table"
   (table :header ("Part" "Time")
     ("Talk" "20 min")
     ("Questions" "10 min")))
 
 (slide :title "A diagram"
-  (flow "Write" "Render" "Present"))
+  (flow (-> "Write" "Render" "Present")
+        (-> "Render" (label "print") "Hand out")))
 
 ;; An image is a file beside the deck, fitted into the slide:
 ;; (slide :title "An image" (image "photo.png" :alt "What it shows" :caption "A caption"))

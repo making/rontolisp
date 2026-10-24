@@ -110,9 +110,16 @@ At most 7 body rows and 5 columns.
 
 ```lisp
 (flow "read" "parse" (b "layout") ("emit " (tt "html")))       ; boxes joined by arrows
+(flow (-> "read" "check" "emit")                               ; paths: branch and merge
+      (-> "read" (label "on error") "report"))
 (bars :unit " KB" ("JVM" 297) ("WASM" 788) ("native" "6,700"))  ; horizontal bar chart
 (cells '(a (b c)))                                             ; box-and-pointer drawing
 ```
+
+A flow that branches or merges is several `(-> step...)` paths. A label names its box by
+its text, so a label written in two paths is one box; `(node NAME label...)` declares a
+box that paths write as `NAME` (for two boxes of one text). `(label "text")` between two
+steps labels that arrow. `:direction :down` draws it top to bottom. A cycle is an error.
 
 `bars` values are integers or decimals written as strings (`"2.1"`, `"1,840"`); a float
 (`2.1`) is an error. `cells` takes one quoted list (this is the one place `'` belongs).

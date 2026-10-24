@@ -48,14 +48,16 @@
   (column (p (b "左の列")) (ul "項目 A" (say "吹き出しで補足する" "項目 B")))
   (column (p (b "右の列")) (ul "項目 C" "項目 D")))
 
-;; A table, and a diagram of boxes joined by arrows.
+;; A table, and a diagram: (flow "a" "b" "c") is a row of boxes joined by arrows;
+;; (-> ...) paths branch and merge, a box named by its text, and (label ...) labels an arrow.
 (slide :title "表"
   (table :header ("項目" "時間")
     ("発表" "20 分")
     ("質疑" "10 分")))
 
 (slide :title "図"
-  (flow "書く" "描画する" "発表する"))
+  (flow (-> "書く" "描画する" "発表する")
+        (-> "描画する" (label "印刷") "配る")))
 
 ;; An image is a file beside the deck, fitted into the slide:
 ;; (slide :title "画像" (image "photo.png" :alt "写真の説明" :caption "キャプション"))

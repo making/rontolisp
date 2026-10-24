@@ -54,7 +54,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | an image, fitted into the remaining space; alone on a slide without a title, it covers the whole slide. `:fit :contain` shows a full-bleed or split image whole instead of cropping it, `:share` (`1/3`, `1/2`, `2/3`) is the width a split image takes |
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t] ...)` | a video (`mp4`, `webm`), laid out as an image and taking the same options. `:autoplay t` plays it when its slide is entered, never on page load; leaving the slide pauses it. A click or tap on it plays or pauses it. Print, the overview and the presenter window show the `:poster` image (or the first frame) |
-| `(flow label...)` | boxes joined by arrows, left to right (below); a label is a string, an inline form or a list of them |
+| `(flow [:direction :down] label...)`, `(flow (-> step...)...)` | boxes joined by arrows (below): a chain, or paths that branch and merge; a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
 | `(math expr...)` | a formula laid out from its S-expression (below): a display formula as a block, an inline one inside a paragraph, a list item or a table cell |
@@ -115,14 +115,34 @@ and sized like the rest of the slide.
 ```lisp
 (flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
 
+(flow (-> "deck" "interpreter" "HTML")
+      (-> "deck" "compile" "JVM" "HTML")
+      (-> "compile" (label "or") "WASM" "HTML"))
+
 (cells '((a . 1) (b . 2)))
 
 (bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
 ```
 
-`flow` sets its boxes left to right, joined by arrows, one height for all; when they do
-not fit one row it takes as few rows as fit, as even as it can, and the arrow turns back
-below each row. `cells` draws a list as cons cells: the cdr chain on one row, each car
+`flow` with labels alone is a chain: its boxes left to right, joined by arrows, one
+height for all; when they do not fit one row it takes as few rows as fit, as even as it
+can, and the arrow turns back below each row. A flow that branches or merges is written
+as paths, each `(-> step...)` a chain of arrows:
+
+- A label names its box by its text, so a label written in two paths is one box, drawn
+  where it is first written (an inline callout belongs there). Two boxes of one text are
+  told apart with `(node NAME label...)`, which declares a box named by the symbol `NAME`;
+  a path then writes `NAME` for it, before or after the declaration.
+- `(label inline...)` between two steps labels the arrow between them. An arrow written
+  twice is drawn once; it takes one label at most.
+- `:direction :down` draws the flow top to bottom (a chain too); the default is `:right`.
+- A cycle is an error naming it: a flow reads one way.
+
+A flow of paths is laid out in layers, each box one layer past every box before it, with
+few crossings, each box level with the boxes it joins where room allows; an arrow that
+skips a layer runs straight through it. Arrows leaving one box share a line that splits,
+as do arrows into one box, and a dot marks where lines join, so lines that only cross
+read as crossing. More than 8 boxes is a warning. `cells` draws a list as cons cells: the cdr chain on one row, each car
 below its cell (an atom as its label, a list as its own row), `nil` as a slash and a dotted
 pair's cdr to its right. The datum is quoted or not; a dotted pair is deck syntax only
 inside `cells`, and a template use inside it is drawn, not expanded. It holds at most 32
@@ -182,7 +202,8 @@ line (a matrix, a display-sized sum) is a warning that it belongs in a block.
 phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
 block named by its text, a box of a `flow`, a bar of `bars` (the tail at its value) or an
 atom of `cells` named by its label (the first equal to the text, else the first holding
-it).
+it). A `say` inside a label of a `flow` or `bars` points where `:at` naming that label
+would.
 
 ```lisp
 (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")

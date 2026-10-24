@@ -119,12 +119,17 @@
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
 ;;; A diagram drawn from an S-expression. KIND is :flow, boxes joined by arrows, whose
-;;; LABELS hold each box's inline content and RUNS their runs; :bars, a horizontal bar
-;;; per label, DATUM listing each bar's (VALUE TEXT), the value a rational and the text it
-;;; is written with, its unit included; or :cells, the box-and-pointer drawing of the list
-;;; DATUM. SIZE is the label size and DRAWING the shapes (diagram.lisp), both set when the
-;;; slide is fitted.
+;;; LABELS hold each box's inline content and RUNS their runs, DATUM its flow-graph; :bars,
+;;; a horizontal bar per label, DATUM listing each bar's (VALUE TEXT), the value a rational
+;;; and the text it is written with, its unit included; or :cells, the box-and-pointer
+;;; drawing of the list DATUM. SIZE is the label size and DRAWING the shapes
+;;; (diagram.lisp), both set when the slide is fitted.
 (defstruct diagram kind labels runs datum size drawing)
+;;; The arrows of a flow. DIRECTION is :right or :down; EDGES are (FROM TO LABEL) between
+;;; box indices, LABEL the index of the arrow's label among EDGE-LABELS (inline content) or
+;;; nil. EDGE-RUNS are the labels' runs, set when the slide is fitted; PLAN is how the flow
+;;; is drawn at any size, worked out once by diagram.lisp.
+(defstruct flow-graph direction edges edge-labels edge-runs plan)
 ;;; Consecutive columns of a slide, side by side in one row; WIDTHS is set when the slide
 ;;; is fitted.
 (defstruct column-row columns widths)
@@ -657,29 +662,174 @@ those. Nil after reporting a malformed one."
   32
   "The most conses a cells drawing holds; more are not legible on a slide.")
 
+(defun flow-label (x)
+  "The inline content of the box label X: a string, an inline form, or a list of them
+for mixed content."
+  (if (and (consp x) (not (form-tag x)))
+      (parse-inlines x)
+      (parse-inline x)))
+
+(defun node-name-p (x)
+  "True when X can name a box of a flow: a symbol, not a keyword, nil or t."
+  (and x (symbolp x) (not (keywordp x)) (not (eq x t))))
+
+(defun flow-cycle (n edges)
+  "A cycle among N boxes joined by EDGES ((FROM TO LABEL) ...), as its box indices from
+the first box back to it, or nil."
+  (let ((state (make-array n :initial-element 0))
+        (succs (make-array n :initial-element nil)))
+    (dolist (e (reverse edges)) (push (second e) (aref succs (first e))))
+    (labels ((visit (v path)
+               (setf (aref state v) 1)
+               (dolist (w (aref succs v))
+                 (case (aref state w)
+                   (0 (visit w (cons v path)))
+                   (1 (return-from flow-cycle
+                        (append (member w (reverse (cons v path))) (list w))))))
+               (setf (aref state v) 2)))
+      (dotimes (v n) (when (zerop (aref state v)) (visit v nil))))
+    nil))
+
 (defun parse-flow (form)
-  "A diagram from (flow label...). A label is a string, an inline form, or a list of
-them for a box of mixed inline content."
-  (multiple-value-bind (opts body) (split-options (cdr form) '("STEP") "flow")
-    (declare (ignore opts))
-    (let ((labels
-           (loop for x in body
-                 for nodes =
-                   (if (and (consp x) (not (form-tag x)))
-                       (parse-inlines x)
-                       (parse-inline x))
-                 when nodes
-                 collect nodes)))
-      (cond
-       ((null labels)
-        (report :error "(flow ...) needs at least one box")
-        nil)
-       (t
-        (when (> (length labels) *flow-boxes*)
-          (report :warning (format nil
-                                   "a flow of ~d boxes is hard to follow; keep it to ~d"
-                                   (length labels) *flow-boxes*)))
-        (make-diagram :kind :flow :labels labels))))))
+  "A diagram from (flow [:direction :right|:down] path...): boxes joined by arrows. The
+body is one path, or several (-> step...) paths. A step is a box -- a label, which names
+the box by its text; (node NAME label...), which names it by the symbol NAME; or NAME --
+or (label inline...), which labels the arrow between the boxes either side of it."
+  (multiple-value-bind (opts body)
+      (split-options (cdr form) '("DIRECTION" "STEP") "flow")
+    (let ((direction (symbol-value-name (opt opts "DIRECTION" :right)))
+          (paths nil)
+          (boxes nil)
+          (count 0)
+          (texts nil)
+          (names nil)
+          (edges nil)
+          (edge-labels nil)
+          (failed nil))
+      (unless (member direction '("RIGHT" "DOWN") :test #'equal)
+        (report :error ":direction of flow must be :right or :down")
+        (setf direction "RIGHT"))
+      (if (some (lambda (x) (equal (form-tag x) "->")) body)
+          (dolist (x body)
+            (if (equal (form-tag x) "->")
+                (push (cdr x) paths)
+                (report :error
+                        "a flow written as (-> ...) paths takes every box in a path")))
+          (push body paths))
+      (labels ((new-box (inlines)
+                 (push (cons count inlines) boxes)
+                 (incf count)
+                 (1- count))
+               (named (x)
+                 (let ((entry (assoc (name-of x) names :test #'string=)))
+                   (or entry
+                       (car (push (list (name-of x) (new-box nil) nil (symbol-name x))
+                                  names)))))
+               (step-box (x)
+                 ;; The index of the box the step X stands for, nil after reporting.
+                 (cond
+                  ((node-name-p x) (second (named x)))
+                  ((equal (form-tag x) "NODE")
+                   (if (not (and (consp (cdr x)) (node-name-p (cadr x)) (cddr x)))
+                       (progn
+                         (report :error "(node ...) takes a name and the box's label")
+                         nil)
+                       (let ((entry (named (cadr x)))
+                             (inlines (or (parse-inlines (cddr x)) (list ""))))
+                         (if (third entry)
+                             (report :error (format nil
+                                                    "the flow declares the box ~a twice"
+                                                    (symbol-name (cadr x))))
+                             (setf (third entry) t
+                                   (cdr (assoc (second entry) boxes)) inlines))
+                         (second entry))))
+                  (t
+                   (let* ((callouts *callouts*)
+                          (steps *steps*)
+                          (inlines (flow-label x))
+                          (text (and inlines (values (flatten-inlines inlines nil))))
+                          (entry (and inlines (assoc text texts :test #'string=))))
+                     (cond ((null inlines) nil)
+                           (entry
+                            ;; A later appearance names the box; its first one draws it.
+                            (unless (eq callouts *callouts*)
+                              (setf *callouts* callouts *steps* steps)
+                              (late-callout text))
+                            (cdr entry))
+                           (t (let ((i (new-box inlines)))
+                                (push (cons text i) texts)
+                                i)))))))
+               (late-callout (text)
+                 (report :error
+                         (format nil "a callout in the box ~s belongs on its first appearance"
+                                 text)))
+               (box-text (i)
+                 (values (flatten-inlines (cdr (assoc i boxes)) nil)))
+               (connect (from to label)
+                 (let ((edge (find-if (lambda (e)
+                                        (and (= (first e) from) (= (second e) to)))
+                                      edges)))
+                   (cond ((null edge)
+                          (push (list from to nil) edges)
+                          (setf edge (car edges)))
+                         ((and label (third edge))
+                          (report :error (format nil
+                                                 "the arrow from ~s to ~s has two labels"
+                                                 (box-text from) (box-text to)))
+                          (setf label nil)))
+                   (when label
+                     (push label edge-labels)
+                     (setf (third edge) (1- (length edge-labels)))))))
+        (dolist (path (reverse paths))
+          (let ((prev nil) (label nil) (labelled nil))
+            (dolist (x path)
+              (if (equal (form-tag x) "LABEL")
+                  (progn
+                    (when (or (null prev) labelled)
+                      (report :error
+                              "(label ...) stands between two boxes of a path"))
+                    (setf labelled t
+                          label (parse-inlines (cdr x)))
+                    (unless label (report :error "(label ...) needs text")))
+                  (let ((i (step-box x)))
+                    (when i
+                      (when prev (connect prev i (and labelled label)))
+                      (setf prev i labelled nil label nil)))))
+            (when labelled
+              (report :error "(label ...) stands between two boxes of a path")))))
+      (dolist (entry (reverse names))
+        (unless (third entry)
+          (setf failed t)
+          (report :error (format nil
+                                 "the flow names ~a, but no (node ~a ...) declares it"
+                                 (fourth entry) (fourth entry)))))
+      (setf edges (nreverse edges))
+      (let ((box-labels (mapcar #'cdr (sort boxes #'< :key #'car)))
+            (cycle (and (not failed) (flow-cycle count edges))))
+        (cond
+         ((zerop count)
+          (report :error "(flow ...) needs at least one box")
+          nil)
+         (cycle
+          (report :error (format nil "the flow has a cycle: ~{~s~^ -> ~}"
+                                 (mapcar (lambda (i)
+                                           (values
+                                            (flatten-inlines (nth i box-labels) nil)))
+                                         cycle)))
+          nil)
+         (failed nil)
+         (t
+          (when (> count *flow-boxes*)
+            (report :warning (format nil
+                                     "a flow of ~d boxes is hard to follow; keep it to ~d"
+                                     count *flow-boxes*)))
+          (make-diagram :kind :flow
+                        :labels box-labels
+                        :datum (make-flow-graph :direction (if (equal direction "DOWN")
+                                                               :down
+                                                               :right)
+                                                :edges edges
+                                                :edge-labels (reverse edge-labels)))))))))
 
 (defparameter *bar-rows*
   7

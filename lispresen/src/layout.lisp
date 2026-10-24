@@ -130,7 +130,11 @@ language is never run, whatever its :run says."
              (setf (figure-caption-run b)
                    (make-text-run (list (figure-caption b))))))
           ((diagram-p b)
-           (setf (diagram-runs b) (mapcar #'make-text-run (diagram-labels b))))
+           (setf (diagram-runs b) (mapcar #'make-text-run (diagram-labels b)))
+           (when (flow-graph-p (diagram-datum b))
+             (setf (flow-graph-edge-runs (diagram-datum b))
+                   (mapcar #'make-text-run
+                           (flow-graph-edge-labels (diagram-datum b))))))
           ((table-block-p b)
            (when (table-block-caption b)
              (setf (table-block-caption-run b)
@@ -1167,27 +1171,43 @@ image's own is unknown within, and its caption. Returns the picture area."
 
 (defun diagram-geometry (b s d x y)
   "Records the drawing D of the diagram B, set at S px from X, Y: every shape, and the
-lines of every flow and bar label, which hold its inline callouts' anchors. A callout
-naming a label with :at points at that label's box, its bar's value, or its atom."
-  (let ((labels nil) (px (dg-pad-x s)))
-    (dolist (shape (drawing-shapes d))
-      (destructuring-bind (l top r bottom) (shape-box shape)
-        (let ((box (list (+ x l) (+ y top) (+ x r) (+ y bottom))))
-          (obstacle box)
-          (case (car shape)
-            (:box
-             (destructuring-bind (bx by w h i pad) (cdr shape)
-               (declare (ignore h))
-               (run-geometry (nth i (diagram-runs b)) s (- w (* 2 px)) (dg-lh s)
-                             (+ x bx px) (+ y by pad) "center"))
-             (push box labels))
-            (:bar-label (destructuring-bind (bx by w h i) (cdr shape)
-                          (declare (ignore h))
-                          (run-geometry (nth i (diagram-runs b)) s w (dg-lh s)
-                                        (+ x bx) (+ y by))))
-            ;; A bar is named by its label and pointed at by its value.
-            ((:atom :value) (push box labels))))))
+lines of every flow box, arrow and bar label. A callout inside a label points where one
+naming the label with :at does: at a box or an arrow's label as a whole, at a bar's
+value; :at an atom points at the atom."
+  (let ((labels nil) (bar-runs nil) (px (dg-pad-x s)))
+    (flet ((label-run (run w lx ly align box)
+             (run-geometry run s w (dg-lh s) lx ly align)
+             ;; Its text lies inside the box, which leaves a bubble no room beside it.
+             (when box
+               (dolist (anchor (run-anchors run))
+                 (setf (callout-fragments (first anchor)) (list box))))))
+      (dolist (shape (drawing-shapes d))
+        (destructuring-bind (l top r bottom) (shape-box shape)
+          (let ((box (list (+ x l) (+ y top) (+ x r) (+ y bottom))))
+            (obstacle box)
+            (case (car shape)
+              (:box
+               (destructuring-bind (bx by w h i pad) (cdr shape)
+                 (declare (ignore h))
+                 (label-run (nth i (diagram-runs b)) (- w (* 2 px)) (+ x bx px)
+                            (+ y by pad) "center" box))
+               (push box labels))
+              (:bar-label
+               (destructuring-bind (bx by w h i) (cdr shape)
+                 (declare (ignore h))
+                 (label-run (nth i (diagram-runs b)) w (+ x bx) (+ y by) nil nil)
+                 (push i bar-runs)))
+              (:edge-label
+               (destructuring-bind (bx by w h j) (cdr shape)
+                 (declare (ignore h))
+                 (label-run (nth j (flow-graph-edge-runs (diagram-datum b))) w
+                            (+ x bx) (+ y by) "center" box)))
+              ;; A bar is named by its label and pointed at by its value.
+              ((:atom :value) (push box labels)))))))
     (setf labels (nreverse labels))
+    (dolist (i bar-runs)
+      (dolist (anchor (run-anchors (nth i (diagram-runs b))))
+        (setf (callout-fragments (first anchor)) (list (nth i labels)))))
     (dolist (co *slide-callouts*)
       (when (and (eq (callout-target co) b) (callout-at co))
         (let ((i (label-index (diagram-label-texts b) (callout-at co))))

@@ -157,7 +157,8 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 .dg-f{fill:var(--head-bg)}
 .dg-e{fill:var(--fg)}
 .dg-flow{padding:0}
-.dg-l{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
+.dg-l,.dg-el{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
+.dg-el{color:var(--muted)}
 .dg-flow>.dg-l{padding:0 var(--dg-x)}
 span.dg-l{font-family:MONO;white-space:pre}
 .dg-t,.dg-v{text-align:left}
@@ -519,9 +520,9 @@ shown whole on the background with :fit :contain."
 
 (defun write-diagram (b out)
   "A diagram as an SVG of filled shapes in the theme's colors, with its labels as HTML
-over it where the fit solver put them: a flow's boxes as an ordered list, a bar chart's
-labels and values as paragraphs, the atoms of cells as spans, the whole of cells named by
-the list it draws."
+over it where the fit solver put them: a flow's boxes as an ordered list and its arrow
+labels as paragraphs, a bar chart's labels and values as paragraphs, the atoms of cells as
+spans, the whole of cells named by the list it draws."
   (let* ((d (diagram-drawing b))
          (s (diagram-size b))
          (w (drawing-width d))
@@ -556,16 +557,28 @@ the list it draws."
            (format out "<circle class=\"dg-e\" cx=\"~d\" cy=\"~d\" r=\"~d\"/>" x
                    y r)))))
     (format out "</svg>~%")
-    (when flow (write-string "<ol class=\"dg-flow\">" out))
+    (when flow
+      (write-string "<ol class=\"dg-flow\">" out)
+      (dolist (shape shapes)
+        (when (eq (car shape) :box)
+          (destructuring-bind (x y bw bh i pad) (cdr shape)
+            (format out
+                    "<li class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;padding-top:~dpx\">"
+                    x y bw bh pad)
+            (write-inlines (nth i (diagram-labels b)) (nth i (diagram-runs b)) out)
+            (write-string "</li>" out))))
+      (write-string "</ol>" out))
     (dolist (shape shapes)
       (case (car shape)
-        (:box (destructuring-bind (x y bw bh i pad) (cdr shape)
-                (format out
-                        "<li class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;padding-top:~dpx\">"
-                        x y bw bh pad)
-                (write-inlines (nth i (diagram-labels b))
-                               (nth i (diagram-runs b)) out)
-                (write-string "</li>" out)))
+        (:edge-label
+         (destructuring-bind (x y lw lh j) (cdr shape)
+           (let ((g (diagram-datum b)))
+             (format out
+                     "<p class=\"dg-el\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                     x y lw lh)
+             (write-inlines (nth j (flow-graph-edge-labels g))
+                            (nth j (flow-graph-edge-runs g)) out)
+             (write-string "</p>" out))))
         (:bar-label
          (destructuring-bind (x y lw lh i) (cdr shape)
            (format out
@@ -587,7 +600,6 @@ the list it draws."
                          x y aw ah)
                  (write-escaped text out)
                  (write-string "</span>" out)))))
-    (when flow (write-string "</ol>" out))
     (format out "~%</figure>~%")))
 
 (defun write-cell (c tag align scope out)

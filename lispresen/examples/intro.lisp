@@ -229,6 +229,24 @@
   (say "テンプレートもここで展開する" :at "parse"
     (flow "read" "parse" "segment" "layout" "lint" "emit")))
 
+(slide :title "分岐と合流" :kicker "書き方"
+  (p "経路を " (tt "->") " で並べる。同じ文字の箱は一つの箱になり、"
+     (tt "label") " は矢印に付く。")
+  (sexp "
+    (say \"check.sh で比べる\" :at \"同じ HTML\"
+      (flow (-> (tt \"cli.lisp\") \"インタプリタ\" \"同じ HTML\")
+            (-> (tt \"cli.lisp\") \"コンパイル\" \"JVM\" \"同じ HTML\")
+            (-> \"コンパイル\" \"WASM\" \"同じ HTML\")
+            (-> (tt \"cli.lisp\") (label \"基準\") \"SBCL\" \"同じ HTML\")))"))
+
+;; Layered: a branch, a merge, an arrow across a layer and a label on an arrow.
+(slide :title "分岐と合流" :kicker "表示例"
+  (say "check.sh で比べる" :at "同じ HTML"
+    (flow (-> (tt "cli.lisp") "インタプリタ" "同じ HTML")
+          (-> (tt "cli.lisp") "コンパイル" "JVM" "同じ HTML")
+          (-> "コンパイル" "WASM" "同じ HTML")
+          (-> (tt "cli.lisp") (label "基準") "SBCL" "同じ HTML"))))
+
 (slide :title "コンスセル" :kicker "書き方"
   (p (tt "cells") " はリストを箱と矢印で描く。ドット対も描ける。")
   (sexp "

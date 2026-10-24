@@ -46,7 +46,7 @@
                                   (diagram-name b)
                                   (drawing-width (diagram-drawing b)) width
                                   (case (diagram-kind b)
-                                    (:flow "shorten its widest label")
+                                    (:flow (flow-hint b))
                                     (:bars "shorten its labels or values")
                                     (t "draw a shorter list")))))
           ((and (formula-p b) (> (formula-width b (fit-body-size fit)) width))

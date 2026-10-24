@@ -365,7 +365,8 @@ q\")))
 (deftest diagrams
   (testing "flow boxes take as few rows as fit, as even as that allows"
     (ok
-     (equal (lispresen::flow-rows (make-list 6 :initial-element 300) 72 1696)
+     (equal (lispresen::flow-rows (make-list 6 :initial-element 300)
+                                  (make-list 5 :initial-element 72) 1696)
             '(3 3)))
     (let ((html
            (lispresen:render
@@ -374,6 +375,27 @@ q\")))
       (ok (contains html "<strong>b</strong></li>"))
       (ok (contains html "c <code>d</code></li>"))
       (ok (contains html "--dg:48px"))))
+  (testing "a flow of paths is layered: a box named by its text or by (node ...), a side
+input next to its target, crossings reduced, a dot where arrows join, labels on arrows"
+    (let* ((b (lispresen::parse-flow
+               '(flow (-> "a" "c" "e" "f") (-> "b" "d" "e") (-> "a" "d") (-> "b" "c")
+                 (-> (node n "x") (label "y") "f"))))
+           (plan (lispresen::flow-plan-of b)))
+      (ok (equal (lispresen::flow-graph-edges (lispresen::diagram-datum b))
+                 '((0 1 nil) (1 2 nil) (2 3 nil) (4 5 nil) (5 2 nil) (0 5 nil) (4 1 nil) (6 3 0))))
+      ;; x, joined to f through its label, stands with c and d, not with the sources.
+      (ok (equal (mapcar (lambda (nodes)
+                           (mapcar (lambda (v) (aref (lispresen::flow-plan-kinds plan) v))
+                                   nodes))
+                         (lispresen::flow-plan-layers plan))
+                 '(((:box 0) (:box 4)) ((:box 1) (:box 5) (:box 6)) ((:box 2) (:label 0))
+                   ((:box 3))))))
+    (let ((html
+           (lispresen:render
+            "(slide :title \"t\" (flow :direction :down (-> \"a\" (label \"yes\") \"b\") (-> \"a\" \"c\")))")))
+      (ok (contains html "<p class=\"dg-el\" style=\""))
+      (ok (contains html ">yes</p>"))
+      (ok (contains html "<circle class=\"dg-e\""))))
   (testing "cells draws the datum, dotted pairs and lists that look like uses included"
     ;; The deck reader keeps a symbol's case and reads |...| escapes alike everywhere.
     (let ((html
@@ -389,13 +411,15 @@ q\")))
                '(7361/4 "1,840.25")))
     (ok (equal (multiple-value-list (lispresen::bar-value 3)) '(3 "3")))
     (ok (notany #'lispresen::bar-value '("2." ".5" "-1" "1e3" -1 1/2))))
-  (testing "a bar is its value's share of the longest; a callout names a box, a bar or an atom"
+  (testing "a bar is its value's share of the longest; a callout names a box, a bar or an
+atom, and one inside a label points where naming the label would"
     (let ((html
            (lispresen:render
-            "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" \"c\")))
+            "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" (say \"d\" \"c\"))))
 (slide :title \"t\" (say \"c\" :at \"2\" (cells '(1 2))))
 (slide :title \"t\" (say \"c\" :at \"y\" (bars :unit \"s\" (\"x\" \"0.5\") (\"y\" 2) (\"z\" 0))))")))
       (ok (equal (callout-side html "s1c1") "below"))
+      (ok (equal (callout-side html "s1c2") "right"))
       (ok (contains html "data-at=\"b\""))
       (ok (equal (callout-side html "s2c1") "right"))
       ;; The longest bar takes the room the label and value columns leave, 1505 px; a
@@ -414,9 +438,12 @@ q\")))
 (slide :title \"t\" (cells '~a))
 (slide :title \"t\" (say \"c\" :at \"z\" (flow \"a\")))
 (slide :title \"t\" (bars) (bars (\"a\" 2.5) (\"b\" -1) (c 1) (\"d\" 1) :unit \"s\"))
-(slide :title \"t\" (say \"c\" :at \"z\" (bars~{ (~s 1)~})))"
+(slide :title \"t\" (say \"c\" :at \"z\" (bars~{ (~s 1)~})))
+(slide :title \"t\" (flow (-> \"a\" \"b\" \"a\")) (flow :direction :up (label \"x\") \"a\" n))
+(slide :title \"t\" (flow (-> \"a\" (label \"x\") \"b\") (-> \"a\" (label \"y\") \"b\") \"c\"))
+(slide :title \"t\" (flow (-> (say \"c\" \"p\") \"q\") (-> (say \"d\" \"p\") \"r\")))"
                      (make-list 33 :initial-element 1)
-                     (make-list 9 :initial-element "x")
+                     (loop for i from 1 to 9 collect (format nil "x~d" i))
                      (loop for i from 1 to 16 collect (list i))
                      (make-list 8 :initial-element "x")))
             '((:error 1 "(flow ...) needs at least one box")
@@ -439,7 +466,14 @@ q\")))
               (:error 5 "a bar is a list of its label and its value")
               (:error 5 "the options of (bars ...) come before its bars")
               (:warning 6 "a bar chart of 8 bars is hard to read; keep it to 7")
-              (:error 6 "the :at text \"z\" is not a label of the bar chart"))))))
+              (:error 6 "the :at text \"z\" is not a label of the bar chart")
+              (:error 7 "the flow has a cycle: \"a\" -> \"b\" -> \"a\"")
+              (:error 7 ":direction of flow must be :right or :down")
+              (:error 7 "(label ...) stands between two boxes of a path")
+              (:error 7 "the flow names n, but no (node n ...) declares it")
+              (:error 8 "a flow written as (-> ...) paths takes every box in a path")
+              (:error 8 "the arrow from \"a\" to \"b\" has two labels")
+              (:error 9 "a callout in the box \"p\" belongs on its first appearance"))))))
 
 (deftest formulas
   (testing "a formula's box scales with its size: a fraction, a script, a radical and a

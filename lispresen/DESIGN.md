@@ -620,7 +620,7 @@ and a maximum, the widest of their unwrapped widths:
 | console transcript | the longest command line, plus padding | the longest line, plus padding |
 | table | the sum of its columns' minima | the sum of their maxima |
 | image | its caption's widest unit | none: it takes what it gets |
-| flow | its widest box, labels wrapped at their widest unit | its boxes on one row |
+| flow | its drawing, labels wrapped at their widest unit (a chain one box per row) | its drawing, labels on one line (a chain on one row) |
 | cells | its drawing | the same |
 
 With 80 px between columns, `1696 - 80 (n - 1)` px are shared:
@@ -702,6 +702,9 @@ the model did. The header row is bold on a tinted background, and each body row 
 
 ```lisp
 (flow "read" "parse" (b "segment") ("layout " (tt "fit-slide")) "lint" "emit")
+(flow (-> "deck" "interpreter" "HTML")
+      (-> "deck" "compile" "JVM" "HTML")
+      (-> "compile" (label "or") "WASM" "HTML"))
 (cells '(slide :title "t" (p "x")))
 (cells '((a . 1) (b . 2)))
 (bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
@@ -726,17 +729,63 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   36 px is an error naming its width, besides the slide's overflow. A diagram is
   centered in its region (`align-self: center`); it is fixed geometry, so the runtime
   check leaves it as written.
-- **flow.** A label is inline content (`b`, `tt`, an inline callout ...): a string, an
-  inline form, or a list of them for mixed content. It is set on one line, or wrapped at
-  its phrases when wider than a third of the flow (less the gaps), so long labels do not
-  push the row into one box per row. Every box has the height of the tallest label and is
-  no narrower than it is tall. Boxes fill as few rows as the region holds, and then the
-  narrowest row limit that needs no more rows (a binary search over the greedy fill)
-  evens them: six equal boxes of which four fit a row go three and three, not four and
-  two. Rows are left-aligned; the arrow from a row's last box drops below it, runs back
-  along the gap and drops into the next row's first box, so the reading order stays left
-  to right. More than 8 boxes is a warning. The boxes are an `<ol>` of `<li>`s, each as
-  large as its box, its label's top padding the half of the height its lines leave.
+- **flow: syntax.** A flow is written as paths: `(-> step...)` is a chain of arrows, and
+  a flow is the union of its paths. A step is a box's label (inline content: a string,
+  an inline form, or a list of them for mixed content), `(node NAME label...)`, a bare
+  `NAME`, or `(label inline...)`, which labels the arrow between the steps either side of
+  it. A label names its box by its flattened text, so a box written in two paths is one
+  box, and branching and merging need nothing more: a fan-out is two paths from one box,
+  a merge two paths into one. `(node NAME ...)` is only for two boxes of one text, or a
+  long label written once, and is declared once, before or after the paths that use
+  `NAME`. Body without `->` is one path, so the common chain stays `(flow "a" "b" "c")`.
+  The alternatives were weighed against a slide's typical graph, a pipeline with a branch
+  or two. A node list plus an edge list (`(nodes ...) (edges (a b) ...)`) makes every
+  box a name and reads as a table, not as the flow; nested branch forms (`(fork ...)`,
+  `(join ...)`) draw only series-parallel graphs and nest deeply for a merge across
+  branches; paths draw any DAG, read in the order the talk tells them, and keep the
+  chain case unchanged. Diagnostics: a cycle (an error naming it, `"a" -> "b" -> "a"`:
+  a flow reads one way, and a back arrow is left out rather than drawn wrong), a `NAME`
+  without its `(node ...)`, a node declared twice, a `label` not between two boxes or
+  without text, an arrow given two labels, a non-path among paths, a `:direction` other
+  than `:right` or `:down`, and an inline callout in a box's later appearance (it belongs
+  where the box is drawn) are errors; more than 8 boxes is a warning, as a long list is.
+- **flow: a chain.** A flow that is one chain going right keeps its row layout. A box's
+  label is set on one line, or wrapped at its phrases when wider than a third of the flow
+  (less the gaps), so long labels do not push the row into one box per row. Every box has
+  the height of the tallest label and is no narrower than it is tall. Boxes fill as few
+  rows as the region holds, and then the narrowest row limit that needs no more rows (a
+  binary search over the greedy fill) evens them: six equal boxes of which four fit a row
+  go three and three, not four and two. Rows are left-aligned; the arrow from a row's
+  last box drops below it, runs back along the gap and drops into the next row's first
+  box, so the reading order stays left to right. An arrow's label stands on its line,
+  which leaves a gap around it; the gap (or the row gap, for the turn) widens to hold it.
+- **flow: layers.** Any other flow (a branch, a merge, or `:direction :down`) is laid
+  out Sugiyama style, in integer and rational arithmetic only, every sort stable, so
+  every backend draws it alike. An arrow's label is a node of its own between the
+  arrow's ends, so the layers make room for it as for a box. (1) Layers: the longest path
+  from a source; a chain hanging from a source (a side input, a label after it) moves on
+  next to its target; then each node moves, within the layers its neighbors leave it,
+  towards the side with more of them, until none moves. An arrow across several layers
+  passes a dummy node in each. (2) Order: 12 barycenter sweeps, down and up, keeping the
+  order with the fewest crossings seen, then neighbors swapped while that removes a
+  crossing. (3) Position across the layers: each layer is packed and centered, then
+  moved in turn, ten sweeps, to the weighted mean of its neighbors' positions as nearly
+  as its spacing allows (weighted least squares under the spacing constraints, solved
+  exactly by pooling adjacent violators); a link pulls more between dummies, so a long
+  arrow runs straight, and most when it is the only arrow out of its start and into its
+  end. A link less than s/2 out of line, which reads as a slip, is then put in line where
+  the neighbors in its layer leave room, and so is every such single link, last first,
+  so a chain lines up with its end. (4) Arrows run
+  orthogonally through each gap between layers: arrows out of a node with several
+  targets share one vertical track (a bus that splits), as do arrows into one node from
+  nodes with one target each; tracks are ordered by least cost (a crossing each, far more
+  for two tracks running along one line), share a column when their spans are disjoint,
+  and widen the gap at 0.75 s each. A dot marks every point where three or more line ends
+  meet, so arrows that join read apart from arrows that cross. Box sizes are as in a
+  chain, with the text cap shared among the layers (or the widest layer, going down).
+- **flow: output.** The boxes are an `<ol>` of `<li>`s in the order written, each as
+  large as its box, its label's top padding the half of the height its lines leave; arrow
+  labels follow the list as `<p class="dg-el">`, in the muted color.
 - **cells.** The classic box-and-pointer drawing. The cdr chain of a list stands in one
   row of cells (a square half for the car, one for the cdr, a divider between); each
   car's drawing hangs below its cell, an atom as its label (monospace, the `tt` widths)
@@ -766,8 +815,11 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   values are `<p>`s over the SVG (`dg-t`, `dg-v`), read in row order.
 - **Callouts.** A `say` around a diagram points at its whole drawing; with `:at` at the
   first label equal to the text, else the first holding it: a box of a flow, a bar of a
-  bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). Every shape and label is an obstacle, a flow box
-  whole, and the runtime placement takes the SVG shapes' boxes as obstacles too.
+  bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). An
+  inline `say` inside a flow box, an arrow's label or a bar's label points where `:at`
+  naming that label would, on both sides: its text lies inside the box, which would leave
+  the bubble no room. Every shape and label is an obstacle, a flow box whole, and the
+  runtime placement takes the SVG shapes' boxes as obstacles too.
 
 A diagram is revealed whole by `:step t` (Page advances, below); its boxes, bars and
 cells have no steps of their own, and a step callout on one works as on any block.
@@ -1250,7 +1302,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
 | warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: warning: slide 7 "その場で動かす": body text at
@@ -1343,8 +1395,8 @@ One file containing:
 - A diagram as `<figure class="dg" style="width:...;height:...;--dg:48px ...">` holding
   `<svg class="dg-art">` (`rect`, `polygon` and `circle` elements, classed `dg-b`, `dg-f`
   and `dg-e` for their colors) and, over it, its labels at the places the solver gave
-  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, a `<p class="dg-l
-  dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
+  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, then a `<p
+  class="dg-el">` per arrow label, a `<p class="dg-l dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
   class="dg-l">` atoms for cells.
 - A formula as `<svg class="mx" role="img" aria-label="...">` of `<text>` and `<rect>`
   elements in em coordinates (Formulas, above); a display formula's in a `<figure
@@ -1818,7 +1870,8 @@ before committing a change under `lispresen/`.
   (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
   with an embedded poster, ordered and unordered lists, one
   revealed by steps, a bar chart, a formula with a callout and a lead revealed whole by
-  `:step t`, a flow, two cells drawings in columns (one with dotted pairs), a bar
+  `:step t`, a flow, a layered flow (a branch, a merge, an arrow across a layer and a
+  labeled arrow), two cells drawings in columns (one with dotted pairs), a bar
   chart with a source line under it, three inline formulas in a paragraph and two display
   formulas (a case analysis, a sum with a fraction), a progress bar, `:layout` and
   `:class`, and ten callouts (two inline ones, one of them a step; by `:at`, a code
@@ -1841,12 +1894,13 @@ before committing a change under `lispresen/`.
   (a font that cannot be read or is not TrueType, a missing glyph, a logo left out),
   numeric column detection, parser diagnostics with line
   numbers (`#.` and dotted lists among them), the reader keeping a symbol's case and
-  tags and options matching whatever theirs, the balanced rows of a flow, a cells datum
+  tags and options matching whatever theirs, the balanced rows of a flow, the edges and
+  layers of a flow of paths and its drawing going down, a cells datum
   with dotted pairs, `|a b|` and a list that looks like a template use, a formula's box at
   two sizes (a fraction, a script, a radical, a matrix), an inline formula as one
   character of its run, the emitted SVG and spoken form, the formula diagnostics and a
   template passing a parameter into a formula, the callout sides on a flow
-  box, a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
+  box (by `:at` and inline), a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
   a source takes and its diagnostics, the agenda, its place at `(agenda)` and their
   slide numbers and diagnostics, template
   expansion and its diagnostics and
@@ -1931,6 +1985,12 @@ into two rows, labels in bold and inline code, an alist, a list deeper than the 
 wide and diagrams in columns, render as laid out in all four built-in themes; the runtime
 check makes no correction, and the bubble naming a flow box stays on the side the static
 layout chose, 1 px off (the half pixel of centering).
+
+Layered flows (2026-10-24, Chrome through DevTools): the golden deck's branch-and-merge
+slide, a diamond, a fan-out of four, two sources crossing into two targets, an arrow
+skipping two layers, labeled arrows in a wrapped chain and in layers, named nodes, and
+`:direction :down`, render as laid out; inline callouts in a flow box, an arrow's label
+and a bar's label land on the side the static layout chose.
 
 Code morph (2026-10-23, Chrome 155 through DevTools and Safari 26.3 through
 `safaridriver`): a deck of three versions of a function (a memo table added, then a loop,
