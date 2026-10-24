@@ -103,9 +103,9 @@
     (table :header (\"種類\" \"フォーム\" \"数\")
            :row-header t :align (:left :left :right)
            :caption \"デッキの要素は、どれもリストとして書く\"
-      (\"図と数式\" (tt \"flow cells bars math\") \"4\")
+      (\"図と数式\" (tt \"flow cells bars columns lines pie math\") \"7\")
       ...
-      ((cell :colspan 2 \"合計\") \"30\"))"))
+      ((cell :colspan 2 \"合計\") \"33\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
@@ -114,10 +114,10 @@
     ("トップレベル" (tt "deck section slide agenda define") "5")
     ("ブロック" (tt "p lead ul ol code quote column image video table") "10")
     ("部品" (tt "li cell") "2")
-    ("図と数式" (tt "flow cells bars math") "4")
+    ("図と数式" (tt "flow cells bars columns lines pie math") "7")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "30")))
+    ((cell :colspan 2 "合計") "33")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -281,6 +281,55 @@
   (source "2026-10-22, macOS arm64 で測定 ("
           (link "https://github.com/making/rontolisp/blob/develop/lispresen/DESIGN.md"
                 "DESIGN.md") ")"))
+
+(slide :title "系列と凡例" :kicker "書き方"
+  (p (tt ":series") " で系列に名前を付けると、凡例が付き、系列ごとに色が変わる。"
+     (tt ":step :series") " は系列を一つずつ見せる。")
+  (sexp "
+    (lead \"例: 四半期ごとの発表数\")
+    (columns :series (\"2025\" \"2026\") :step :series
+      (\"Q1\" 3 5) (\"Q2\" 4 (say \"最多\" 8))
+      (\"Q3\" 2 6) (\"Q4\" 5 7))"))
+
+;; A column chart of two series: a legend, a color per series, and a callout around a
+;; value pointing at its column; each series is a page advance of its own.
+(slide :title "系列と凡例" :kicker "表示例"
+  (lead "例: 四半期ごとの発表数")
+  (columns :series ("2025" "2026") :step :series
+    ("Q1" 3 5) ("Q2" 4 (say "最多" 8)) ("Q3" 2 6) ("Q4" 5 7)))
+
+(slide :title "折れ線グラフ" :kicker "書き方"
+  (p "目盛りは 1、2、5 の 10 のべき倍で刻む。値が 0 から離れていれば 0 を含めない。")
+  (sexp "
+    (lead \"例: 応答時間\")
+    (lines :series (\"p50\" \"p99\") :unit \" ms\"
+      (\"1月\" 12 40) (\"2月\" 11 38) (\"3月\" 10 55)
+      (\"4月\" \"9.5\" 33) (\"5月\" 9 31))"))
+
+;; A line chart: a scale with gridlines, a marker shape and a color per series.
+(slide :title "折れ線グラフ" :kicker "表示例"
+  (lead "例: 応答時間")
+  (lines :series ("p50" "p99") :unit " ms"
+    ("1月" 12 40) ("2月" 11 38) ("3月" 10 55) ("4月" "9.5" 33) ("5月" 9 31)))
+
+(slide :title "割合" :kicker "書き方"
+  (p (tt "pie") " は全体に占める割合を、" (tt ":stack t") " は系列を積み上げた合計を描く。"
+     (tt ":axis t") " は値の代わりに目盛りを付ける。")
+  (sexp "
+    (column
+      (say \"半分を超える\" :at \"eval\"
+        (pie :donut t (\"read\" 2) (\"eval\" 9) (\"print\" 1))))
+    (column
+      (bars :series (\"read\" \"eval\") :stack t :axis t
+        (\"小\" 2 9) (\"大\" 4 20)))"))
+
+;; A donut with a legend of values, and stacked bars along a scale.
+(slide :title "割合" :kicker "表示例"
+  (column
+    (say "半分を超える" :at "eval"
+      (pie :donut t ("read" 2) ("eval" 9) ("print" 1))))
+  (column
+    (bars :series ("read" "eval") :stack t :axis t ("小" 2 9) ("大" 4 20))))
 
 (slide :title "数式" :kicker "書き方"
   (p "前置記法の木がそのまま数式になる。段落の中でも、ブロックとしても書ける。")

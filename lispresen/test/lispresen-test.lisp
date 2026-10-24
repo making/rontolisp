@@ -406,28 +406,50 @@ input next to its target, crossings reduced, a dot where arrows join, labels on 
        (contains html
         "role=\"img\" aria-label=\"(1 (u) (#\\a . &quot;b&quot;) :k 1/2 Foo a b)\""))
       (ok (contains html ">#\\a</span>"))))
-  (testing "bar values are integers or decimal strings, kept as written"
-    (ok (equal (multiple-value-list (lispresen::bar-value "1,840.25"))
+  (testing "chart values are integers or decimal strings, kept as written; a scale steps
+by 1, 2 or 5 x 10^n, in rationals"
+    (ok (equal (multiple-value-list (lispresen::chart-value "1,840.25"))
                '(7361/4 "1,840.25")))
-    (ok (equal (multiple-value-list (lispresen::bar-value 3)) '(3 "3")))
-    (ok (notany #'lispresen::bar-value '("2." ".5" "-1" "1e3" -1 1/2))))
+    (ok (equal (multiple-value-list (lispresen::chart-value "-0.5")) '(-1/2 "-0.5")))
+    (ok (equal (multiple-value-list (lispresen::chart-value -3)) '(-3 "-3")))
+    (ok (notany #'lispresen::chart-value '("2." ".5" "-" "1e3" 1/2)))
+    (ok (equal (mapcar (lambda (r) (multiple-value-list (apply #'lispresen::nice-scale r)))
+                       '((-7/2 12 5) (95 991/10 4) (0 1/2 5)))
+               '((-5 15 5) (94 100 2) (0 1/2 1/10)))))
   (testing "a bar is its value's share of the longest; a callout names a box, a bar or an
-atom, and one inside a label points where naming the label would"
+atom, and one inside a label points where naming the label would; columns, lines and a
+pie take a series' color, and a series reveals in its step"
     (let ((html
            (lispresen:render
             "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" (say \"d\" \"c\"))))
 (slide :title \"t\" (say \"c\" :at \"2\" (cells '(1 2))))
-(slide :title \"t\" (say \"c\" :at \"y\" (bars :unit \"s\" (\"x\" \"0.5\") (\"y\" 2) (\"z\" 0))))")))
+(slide :title \"t\" (say \"c\" :at \"y\" (bars :unit \"s\" (\"x\" \"0.5\") (\"y\" 2) (\"z\" 0))))
+(slide :title \"t\"
+  (columns :series (\"a\" \"b\") :step :series :axis t (\"x\" (say \"c\" 3) -1) (\"y\" \"1.5\" 2)))
+(slide :title \"t\" (lines :series (\"a\" \"b\") (\"x\" 1 2) (\"y\" 3 1)))
+(slide :title \"t\" (pie :donut t (\"x\" 1) (\"y\" 3)))")))
       (ok (equal (callout-side html "s1c1") "below"))
       (ok (equal (callout-side html "s1c2") "right"))
       (ok (contains html "data-at=\"b\""))
       (ok (equal (callout-side html "s2c1") "right"))
       ;; The longest bar takes the room the label and value columns leave, 1505 px; a
       ;; quarter of the value a quarter of it; a zero draws none, its value at the axis.
-      (ok (contains html "<rect class=\"dg-b\" x=\"57\" y=\"12\" width=\"376\""))
-      (ok (contains html "<rect class=\"dg-b\" x=\"57\" y=\"104\" width=\"1505\""))
+      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"12\" width=\"376\""))
+      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"104\" width=\"1505\""))
       (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1590px;top:104px"))
       (ok (contains html ">z</p><p class=\"dg-l dg-v\" style=\"left:85px;top:196px"))
+      ;; The tail points at the value written at the bar's end.
+      (ok (contains html "data-side=\"below\" data-at=\"y\" data-box=\"1590 104 1651 172\""))
+      ;; A negative column hangs from the zero line; the scale ticks every 1 from -1 to 3;
+      ;; a series' columns, legend and callouts share its step.
+      (ok (contains html "<rect class=\"dg-s2\" data-step=\"2\" x=\"485\" y=\"381\" width=\"136\" height=\"85\"/>"))
+      (ok (contains html "<p class=\"dg-l dg-t\" data-step=\"1\" style=\"left:48px;top:0px"))
+      (ok (contains html ">-1</p><p class=\"dg-l dg-v dg-a dg-rt\" style=\"left:0px;top:347px;width:52px;height:68px\">0</p>"))
+      (ok (contains html "data-side=\"right\" data-step=\"1\" data-box=\"347 126 483 381\""))
+      ;; The second series' line and its square markers, each over a ring.
+      (ok (contains html "<polygon class=\"dg-s2\" points=\"469,235 1287,348 1287,356 469,243\"/><rect class=\"dg-r2\" x=\"455\" y=\"225\""))
+      ;; A quarter of a donut from the top, clockwise.
+      (ok (contains html "<path class=\"dg-s1\" d=\"M170 0A170 170 0 0 1 340 170L272 170A102 102 0 0 0 170 68Z\"/>"))
       (ok (equal (callout-side html "s3c1") "below"))))
   (testing "malformed, too large and too wide diagrams"
     (ok
@@ -441,7 +463,10 @@ atom, and one inside a label points where naming the label would"
 (slide :title \"t\" (say \"c\" :at \"z\" (bars~{ (~s 1)~})))
 (slide :title \"t\" (flow (-> \"a\" \"b\" \"a\")) (flow :direction :up (label \"x\") \"a\" n))
 (slide :title \"t\" (flow (-> \"a\" (label \"x\") \"b\") (-> \"a\" (label \"y\") \"b\") \"c\"))
-(slide :title \"t\" (flow (-> (say \"c\" \"p\") \"q\") (-> (say \"d\" \"p\") \"r\")))"
+(slide :title \"t\" (flow (-> (say \"c\" \"p\") \"q\") (-> (say \"d\" \"p\") \"r\")))
+(slide :title \"t\" (pie :step :series (\"a\" -1) (\"b\" 0)) (lines :stack t (\"x\" 1))
+  (columns :series (\"a\") (\"x\" 1)) (columns (p \"a\")))
+(slide :title \"t\" (columns :series (\"a\" \"b\" \"c\" \"d\" \"e\") (\"x\" 1 2 3 4 5) (\"y\" 1)))"
                      (make-list 33 :initial-element 1)
                      (loop for i from 1 to 9 collect (format nil "x~d" i))
                      (loop for i from 1 to 16 collect (list i))
@@ -458,14 +483,12 @@ atom, and one inside a label points where naming the label would"
               (:error 3
                       "the cells drawing is 2172px wide at its smallest size, wider than the 1696px it has; draw a shorter list")
               (:error 4 "the :at text \"z\" is not a label of the flow")
-              (:error 5 "(bars ...) needs at least one bar")
+              (:error 5 "(bars ...) needs at least one row")
               (:error 5
-                      "a bar's value is a float; write it as a string, such as \"2.1\"")
-              (:error 5
-                      "a bar's value is an integer or a decimal string of 0 or more")
-              (:error 5 "a bar is a list of its label and its value")
-              (:error 5 "the options of (bars ...) come before its bars")
-              (:warning 6 "a bar chart of 8 bars is hard to read; keep it to 7")
+                      "a chart's value is a float; write it as a string, such as \"2.1\"")
+              (:error 5 "a row of a chart is a list of its label and its value")
+              (:error 5 "the options of (bars ...) come before its rows")
+              (:warning 6 "a bar chart of 8 categories is hard to read; keep it to 7")
               (:error 6 "the :at text \"z\" is not a label of the bar chart")
               (:error 7 "the flow has a cycle: \"a\" -> \"b\" -> \"a\"")
               (:error 7 ":direction of flow must be :right or :down")
@@ -473,7 +496,17 @@ atom, and one inside a label points where naming the label would"
               (:error 7 "the flow names n, but no (node n ...) declares it")
               (:error 8 "a flow written as (-> ...) paths takes every box in a path")
               (:error 8 "the arrow from \"a\" to \"b\" has two labels")
-              (:error 9 "a callout in the box \"p\" belongs on its first appearance"))))))
+              (:error 9 "a callout in the box \"p\" belongs on its first appearance")
+              (:error 10 ":step :series reveals the series of bars, columns or lines")
+              (:error 10 "a slice of a pie is 0 or more")
+              (:error 10 "a pie needs a slice above 0")
+              (:warning 10 "unknown option :stack for lines")
+              (:error 10 ":series of columns lists the names of two series or more")
+              (:error 10
+                      "(columns ...) draws a column chart; blocks side by side are (column ...) each")
+              (:error 12
+                      "a row of a chart is a list of its label and 5 values, one per series")
+              (:warning 12 "a chart of 5 series is hard to read; keep it to 4"))))))
 
 (deftest formulas
   (testing "a formula's box scales with its size: a fraction, a script, a radical and a
@@ -845,7 +878,8 @@ a large video is reported"
   (ok
    (equal (render-diagnostics
            "(deck :kicker :later
-      :theme (theme :base :dark :muted \"#555555\" :code-muted \"#555555\" :accent \"blue\"))
+      :theme (theme :base :dark :muted \"#555555\" :code-muted \"#555555\" :accent \"blue\"
+                    :chart-3 \"#333333\"))
 (slide :kicker \"k\" \"b\")
 (slide #.(+ 1 2))")
           '((:error 1 ":kicker of deck must be :section")
@@ -854,8 +888,10 @@ a large video is reported"
                       "theme: captions (--muted on --bg) has contrast 2.3:1, below 4.5:1")
             (:warning 1
                       "theme: code comments (--code-muted on --code-bg) has contrast 2.0:1, below 4.5:1")
-            (:warning 3 "a kicker stands above a title; this slide has none")
-            (:error 4
+            (:warning 1
+                      "theme: chart series 3 (--chart-3 on --bg) has contrast 1.4:1, below 3.0:1")
+            (:warning 4 "a kicker stands above a title; this slide has none")
+            (:error 5
              "cannot read this form (unbalanced parentheses or bad syntax)"))))
   (testing "a deck footer is a line on every slide but the title slide and the dropped"
     (let ((html (lispresen:render

@@ -45,18 +45,30 @@
                                   "the ~a is ~dpx wide at its smallest size, wider than the ~dpx it has; ~a"
                                   (diagram-name b)
                                   (drawing-width (diagram-drawing b)) width
-                                  (case (diagram-kind b)
-                                    (:flow (flow-hint b))
-                                    (:bars "shorten its labels or values")
-                                    (t "draw a shorter list")))))
+                                  (diagram-hint b))))
           ((and (formula-p b) (> (formula-width b (fit-body-size fit)) width))
            (report :error (format nil
                                   "the formula is ~dpx wide at its smallest size, wider than the ~dpx it has; split it"
                                   (formula-width b (fit-body-size fit)) width)))
           ((and (diagram-p b) (< (diagram-size b) *diagram-floor*))
            (report :warning (format nil
-                                    "diagram labels at ~dpx (floor ~dpx); draw fewer boxes or a shorter list"
-                                    (diagram-size b) *diagram-floor*))))))
+                                    "diagram labels at ~dpx (floor ~dpx); ~a"
+                                    (diagram-size b) *diagram-floor*
+                                    (case (diagram-kind b)
+                                      (:flow "draw fewer boxes")
+                                      (:cells "draw a shorter list")
+                                      (t "draw fewer rows or series"))))))))
+
+(defun diagram-hint (b)
+  "What the too-wide error suggests for the diagram B."
+  (case (diagram-kind b)
+    (:flow (flow-hint b))
+    (:cells "draw a shorter list")
+    (:columns (if (chart-axis (diagram-datum b))
+                  "shorten its labels or draw fewer columns"
+                  "shorten its labels or values, or draw it :axis t"))
+    (:lines "shorten its labels or draw fewer points")
+    (t "shorten its labels or values")))
 
 (defun lint-footer (deck)
   "Reports once a footer that does not fit on one line beside the page number, in the
@@ -163,16 +175,24 @@ feeds a comparison and a rounded number, so float printing never reaches the out
   (let ((la (relative-luminance a)) (lb (relative-luminance b)))
     (/ (+ (max la lb) 0.05d0) (+ (min la lb) 0.05d0))))
 
+;;; A chart's series colors fill its marks, never text, so each needs the WCAG ratio for
+;;; graphical objects against the page.
+(defparameter *mark-pairs*
+  (loop for i from 2 to 6
+        collect (list (format nil "chart-~d" i) "bg" (format nil "chart series ~d" i))))
+
 (defun lint-theme (theme)
-  (dolist (pair *contrast-pairs*)
-    (destructuring-bind (fg bg what) pair
-      (let ((tenths
-             (floor
-              (* 10
-                 (contrast-ratio (theme-color theme fg)
-                                 (theme-color theme bg))))))
-        (when (< tenths 45)
-          (report :warning (format nil
-                                   "theme: ~a (--~a on --~a) has contrast ~d.~d:1, below 4.5:1"
-                                   what fg bg (floor tenths 10)
-                                   (mod tenths 10))))))))
+  (loop for (pairs least) in (list (list *contrast-pairs* 45) (list *mark-pairs* 30))
+        do
+          (dolist (pair pairs)
+            (destructuring-bind (fg bg what) pair
+              (let ((tenths
+                     (floor
+                      (* 10
+                         (contrast-ratio (theme-color theme fg)
+                                         (theme-color theme bg))))))
+                (when (< tenths least)
+                  (report :warning (format nil
+                                           "theme: ~a (--~a on --~a) has contrast ~d.~d:1, below ~d.~d:1"
+                                           what fg bg (floor tenths 10) (mod tenths 10)
+                                           (floor least 10) (mod least 10)))))))))

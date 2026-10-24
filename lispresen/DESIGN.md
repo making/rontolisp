@@ -107,7 +107,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` (`:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` / `columns` (`:series`, `:stack`, `:axis`, `:unit`, `:step :series`), `lines` (`:series`, `:unit`, `:step :series`), `pie` (`:donut`, `:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `math` (an inline formula), `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -708,6 +708,9 @@ the model did. The header row is bold on a tinted background, and each body row 
 (cells '(slide :title "t" (p "x")))
 (cells '((a . 1) (b . 2)))
 (bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
+(columns :series ("2025" "2026") :step :series ("Q1" 3 5) ("Q2" 4 (say "peak" 8)))
+(lines :series ("p50" "p99") :unit " ms" ("Jan" 12 40) ("Feb" 11 38) ("Mar" 10 55))
+(pie :donut t :unit "%" ("Chrome" 64) ("Safari" 19) ("Other" 17))
 ```
 
 A picture of a structure belongs in the deck as text for the reasons the rest of the
@@ -798,31 +801,86 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   their colon), integers, ratios, strings and characters. A float is refused because its
   printing is the one thing the backends may not share. The figure is `role="img"` named by
   the list as Lisp prints it, the atoms as spans.
-- **bars.** A horizontal bar chart: a row per `(label value)`, the label on the left,
-  the bar (an accent rectangle, `dg-b`) as long as the value's share of the largest, the
-  value at its end followed by `:unit` as written. It is sized like a table: the label
-  size steps with the body, and further while the chart does not fit its region; a row is
-  its label's lines at the label line height plus s/4 above and below, the bar as tall as
-  one line, centered on the label. The label column is as wide as its widest label set on
-  one line, or wrapped at its phrases when that is wider than a third of the chart; the
-  value column as wide as its widest value; 0.6 s separates them from the bars. The
-  longest bar takes the rest of the region, which must be at least 4 s, else the chart is
-  too wide (the error above); in a row of columns its minimum is that, and it takes
-  whatever width it is given, as an image does. A bar of a positive value is at least
-  4 px, a zero draws none. Values are integers or decimals written as strings, read into
-  rationals, so the lengths are integer arithmetic and no float is printed; the value is
-  shown as written. More than 7 bars is a warning, as a table's rows are. Labels and
-  values are `<p>`s over the SVG (`dg-t`, `dg-v`), read in row order.
+- **Charts.** Four forms, one per question a chart answers, rather than one form with a
+  `:type`: `bars` compares categories with long labels, `columns` compares categories or
+  a few periods, `lines` follows a change over ordered points, `pie` divides a whole. Each
+  takes only the options that mean something for it (`:stack` on a line chart or
+  `:series` on a pie is reported), and the names are the ones spreadsheet users know.
+  `columns` is one letter from the layout form `column`; a `columns` whose rows are
+  forms is reported as that slip. All four share one row syntax, `(label value...)`, a
+  value per series in the order `:series` names them, so turning a bar chart into a
+  column chart is renaming the form. Rows, not series, are the unit because a deck lists
+  what it compares (a backend, a quarter) and each row's values sit together in the
+  source as they do in a table. A series has a name (inline content, as a label) and
+  nothing else; its color is its place.
+- **Values and scales.** A value is an integer or a decimal string (`"-0.5"`,
+  `"1,840.25"`), read into a rational and shown as written; a float is refused, since its
+  printing is the one thing the backends may not share. Every length is integer
+  arithmetic on rationals. A scale (`:axis t` on bars and columns, always on lines) takes
+  the smallest step of 1, 2 or 5 x 10^n that covers the values in at most 5 intervals
+  (4 on a column or line chart, which is shorter than it is wide; a bar chart drops to
+  fewer while its tick labels would collide), its bounds the step's multiples around the
+  values, its labels written with the step's decimals (`0.5`, `1.0`), the unit and the
+  values' thousands separators. Bars and columns always reach from zero, which lies in
+  their scale; a line chart's scale reaches zero unless that would leave the lines less
+  than half the plot, as a range of 95 to 99 would. Without `:axis`, each bar or column
+  carries its value at its end instead, outside the bar so that text never sits on a
+  series color; a stack carries its total. A nonzero bar is at least 4 px long, a zero
+  one draws nothing and keeps its value at zero.
+- **Geometry.** A bar chart is sized like a table: a row is its label's lines at the
+  label line height plus s/4 above and below, the bars of a row side by side (s thick
+  each, 2 px apart; one series a line height thick), the label column as wide as its
+  widest label on one line or wrapped at its phrases past a third of the chart, the
+  values of negative bars in a column left of zero, the longest bar the rest of the
+  region (at least 4 s). A column or line chart spans its region: the plot is 5 line
+  heights tall, a category takes an equal slot of the width, at least its label's widest
+  phrase and its values, a column at most two line heights wide (wider for grouped
+  values that would not fit), its label centered under it. A line is a 6 px band (a
+  parallelogram, widened by the slope through `isqrt` so it is as thick across at any
+  angle) and its points markers of a different shape per series (circle, square,
+  diamond, triangle up and down, plus) over a ring of the page color. A pie is as tall as
+  its legend or 5 line heights, its slices clockwise from the top in the order written; a
+  slice's edge points come from a fixed-point Taylor sine at 10^18 (exact at the quarter
+  turns), so the paths are integers every backend computes alike, and a 2 px band of the
+  page color parts two slices. A donut's hole is 3/5 of the radius. The legend of a chart
+  of two series or more stands above it (beside a pie, with each slice's value): a swatch
+  (on a line chart a stretch of line through the marker) and the name, left to right in
+  as few rows as fit.
+- **Colors.** Series take `--accent` and then `--chart-2` to `--chart-6` (`dg-s1` to
+  `dg-s6`), in order and never cycled: 6 is a theme's palette, a seventh series or slice
+  is an error, and more than 4 series a warning. Each built-in theme's palette was
+  chosen for its background with the dataviz palette validator (2026-10-24): every
+  color at least 3:1 against `bg` (WCAG non-text contrast), adjacent colors at least 15
+  apart in OKLab x 100 for normal vision and 8 under simulated protanopia and
+  deuteranopia. The lint checks `chart-2` to `chart-6` at 3:1 on `bg` for an
+  overridden theme. Text never takes a series color: labels and values are `--fg`, ticks
+  `--muted`, gridlines `--rule`, the zero line `--muted`; a line chart's markers differ
+  in shape as well, so no series is told apart by color alone.
+- **Reading order and limits.** The figure is `role="img"` named by its values
+  (`2025: Q1 3, Q2 4; 2026: Q1 5, Q2 8`), the labels HTML over the SVG. More than 7 rows
+  of bars, 12 of columns or lines, or 5 slices is a warning, as a table's rows are.
 - **Callouts.** A `say` around a diagram points at its whole drawing; with `:at` at the
-  first label equal to the text, else the first holding it: a box of a flow, a bar of a
-  bar chart (the tail at its value), an atom of cells (in the order Lisp prints them). An
-  inline `say` inside a flow box, an arrow's label or a bar's label points where `:at`
-  naming that label would, on both sides: its text lies inside the box, which would leave
-  the bubble no room. Every shape and label is an obstacle, a flow box whole, and the
-  runtime placement takes the SVG shapes' boxes as obstacles too.
+  first label equal to the text, else the first holding it: a box of a flow, an atom of
+  cells (in the order Lisp prints them), a category of a chart (on a chart of one series
+  its mark: the value written at a bar's or column's end, else the bar, the point or the
+  slice; else its label), a slice of a pie, or a series by its name in the legend. A
+  `say` around a chart's value, `("Q2" 4 (say "peak" 8))`, points at that mark. An inline `say` inside
+  a flow box, an arrow's label or a chart's label points where `:at` naming that label
+  would, on both sides: its text lies inside the box, which would leave the bubble no
+  room. Every shape and label is an obstacle, a flow box whole, but gridlines, the zero
+  line and the gaps between marks are not; the runtime placement takes the same SVG
+  shapes' boxes as obstacles. A callout on a part of a chart carries that part's box
+  relative to the figure (`data-box`), which the player offsets by the figure's box: a
+  part may be a slice or a marker no element outlines alone.
 
-A diagram is revealed whole by `:step t` (Page advances, below); its boxes, bars and
-cells have no steps of their own, and a step callout on one works as on any block.
+A diagram is revealed whole by `:step t` (Page advances, below); its boxes and cells have
+no steps of their own, and a step callout on one works as on any block. A bar, column or
+line chart of several series may instead take `:step :series`: the chart's frame (scale,
+labels) shows with the slide and each series is a step of its own, its legend name,
+marks and values together, a callout around one of its values with it. A series is the
+one part of a chart whose meaning does not change while others are hidden: its bars keep
+their lengths against the same scale. A pie's slices have no such frame (each is a share
+of the whole), so `:step :series` on a pie is an error.
 
 ### Formulas
 
@@ -907,6 +965,7 @@ was not measured: its JavaScript from Apple Events is off on this machine.
 (ul :step t "一つ目" "二つ目")
 (code :file "fib.lisp" :lines (4 6) :steps ((1 2) "(fib 20)"))
 (bars :step t :unit " KB" ("JVM (jar)" 297) ("WASM" 788))
+(columns :series ("2025" "2026") :step :series ("Q1" 3 5) ("Q2" 4 8))
 (lead :step t "結論は最後に出す")
 ```
 
@@ -918,14 +977,15 @@ callout after the steps of what it wraps, since a comment follows what it is abo
 parser records them as it reads (`number-steps`).
 
 - `:step t` reveals a whole block: `p` (a bare string is written `(p :step t ...)`),
-  `lead`, `quote`, `image`, `video`, `table`, `flow`, `cells`, `bars`, a display `math`,
+  `lead`, `quote`, `image`, `video`, `table`, `flow`, `cells`, a chart, a display `math`,
   `code` and `column`. A stepped code block appears first; its `:steps` walk its lines
   after it. Only a list steps its parts, because its items are the units a talk reveals
   one by one and nothing joins them. A table's rows, a flow's boxes and a chart's bars
   are revealed with their block: a flow's arrow belongs to two boxes, a bar's length is
   read against the others and a table's column widths come from every row, so their
   parts stepping alone would need rules of their own for what shows with which part; a
-  deck that wants them one by one splits the block into slides.
+  deck that wants them one by one splits the block into slides. A chart's series are the
+  exception, with `:step :series` (Diagrams, above).
 - A callout that is no step but stands in a stepped item or block, or wraps a stepped
   block, takes that step: its bubble appears with what it points at instead of pointing
   at a hidden one.
@@ -1037,7 +1097,7 @@ its anchor. The deck names the anchor, never a position; lispresen places the bu
 - Inline, `(say "comment" inline...)` wraps its anchor: a phrase, a whole list item, a
   table cell's text. It goes wherever inline content goes, inside `b` or `mark` too.
 - Around a block, `(say "comment" block)` points at one `p`, `ul`, `ol`, `code`, `image`,
-  `table`, `quote`, `flow`, `cells` or `bars` as a whole. In block position a `say` whose content is one such form
+  `table`, `quote`, `flow`, `cells` or chart as a whole. In block position a `say` whose content is one such form
   is this kind; anything else is a paragraph holding an inline callout.
 - `:at "text"` on a callout around `code` points at the first occurrence of the text,
   which must lie within one line. Code is one string, so the anchor is named by its text
@@ -1302,8 +1362,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a `bars` without bars, a bar that is not `(label value)`, a value that is not an integer or a decimal string of 0 or more (a float among them), an option after the bars; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a bar chart of more than 7 bars; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a chart without rows, a row that is not `(label value...)` with a value per series, a value that is not an integer or a decimal string (a float among them), a negative slice or a pie without a slice above 0, `:series` naming fewer than two or more than 6 series, a pie of more than 6 slices, `:step :series` on a pie or a block that is no chart, an option after the rows, a `columns` whose rows are forms; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a chart of more than 4 series, a bar chart of more than 7 rows, a column or line chart of more than 12, a pie of more than 5 slices; a chart color below 3:1 on `bg`; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: warning: slide 7 "その場で動かす": body text at
 44px (floor 48px); consider splitting the slide`: the severity follows the line, where a
@@ -1325,8 +1385,8 @@ color, and titles use `fg`.
 
 ## Themes
 
-A theme is fourteen colors: the page's `bg`, `fg`, `muted`, `accent`, `head-bg`, `rule`
-and `mark`, and the code's `code-bg`, `code-fg`, `code-muted` and highlight colors
+A theme is nineteen colors: the page's `bg`, `fg`, `muted`, `accent`, `head-bg`, `rule`
+and `mark`, the charts' `chart-2` to `chart-6` (series 1 is `accent`), and the code's `code-bg`, `code-fg`, `code-muted` and highlight colors
 `hl-str`, `hl-kw`, `hl-def`, `hl-const`, written as custom properties of the same names.
 `:theme` names a built-in theme (`:light`, `:dark`, `:high-contrast`, `:midnight`) or
 overrides one:
@@ -1393,11 +1453,15 @@ One file containing:
   triangles of the border and the fill color, and the bubble prints with its colors
   (`print-color-adjust: exact`).
 - A diagram as `<figure class="dg" style="width:...;height:...;--dg:48px ...">` holding
-  `<svg class="dg-art">` (`rect`, `polygon` and `circle` elements, classed `dg-b`, `dg-f`
-  and `dg-e` for their colors) and, over it, its labels at the places the solver gave
-  them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, then a `<p
-  class="dg-el">` per arrow label, a `<p class="dg-l dg-t">` label and a `<p class="dg-l dg-v">` value per bar of a bar chart, `<span
-  class="dg-l">` atoms for cells.
+  `<svg class="dg-art">` (`rect`, `polygon`, `circle` and, for a pie's slices, `path`
+  elements, classed `dg-b`, `dg-f` and `dg-e` for a flow's colors, `dg-s1` to `dg-s6` for
+  a chart's series, `dg-r1` to `dg-r6` for a marker's ring, `dg-g`, `dg-z` and `dg-bg`
+  for gridlines, the zero line and gaps) and, over it, its labels at the places the
+  solver gave them: an `<ol class="dg-flow">` of `<li class="dg-l">` for a flow, then a
+  `<p class="dg-el">` per arrow label, for a chart a `<p class="dg-l dg-t">` per label and
+  legend name and a `<p class="dg-l dg-v">` per value or tick (`dg-a` muted, `dg-rt` and
+  `dg-ct` aligned), a series' shapes and text carrying its `data-step` under `:step
+  :series`, `<span class="dg-l">` atoms for cells.
 - A formula as `<svg class="mx" role="img" aria-label="...">` of `<text>` and `<rect>`
   elements in em coordinates (Formulas, above); a display formula's in a `<figure
   class="math">`.
@@ -1786,7 +1850,7 @@ lispresen/
     model.lisp           structs and parsing with diagnostics
     embed.lisp           code files as text (UTF-8), images as data: URIs (base64)
     qr.lisp              QR codes of the deck's URL as SVG
-    diagram.lisp         the drawings of flow, bars and cells
+    diagram.lisp         the drawings of flow, cells and the charts
     budoux-ja.lisp       generated BudouX weights (Apache-2.0 notice)
     phrase.lisp          phrase segmentation
     metrics.lisp         code point widths, line breaking
@@ -1872,7 +1936,9 @@ before committing a change under `lispresen/`.
   revealed by steps, a bar chart, a formula with a callout and a lead revealed whole by
   `:step t`, a flow, a layered flow (a branch, a merge, an arrow across a layer and a
   labeled arrow), two cells drawings in columns (one with dotted pairs), a bar
-  chart with a source line under it, three inline formulas in a paragraph and two display
+  chart with a source line under it, a column chart of two series revealed series by
+  series with a callout around a value, a line chart of two series, a donut with a
+  callout by `:at` beside stacked bars on a scale, three inline formulas in a paragraph and two display
   formulas (a case analysis, a sum with a fraction), a progress bar, `:layout` and
   `:class`, and ten callouts (two inline ones, one of them a step; by `:at`, a code
   line, a flow box, a cells atom and a bar; one on an image, two on formulas, one of them
@@ -1900,7 +1966,10 @@ before committing a change under `lispresen/`.
   two sizes (a fraction, a script, a radical, a matrix), an inline formula as one
   character of its run, the emitted SVG and spoken form, the formula diagnostics and a
   template passing a parameter into a formula, the callout sides on a flow
-  box (by `:at` and inline), a bar and a cells atom, bar values and lengths, the diagram diagnostics, the room
+  box (by `:at` and inline), a bar's value and a cells atom, chart values and nice
+  scales, bar lengths, a negative column, a scale's ticks,
+  a series' step, a line's band and markers and a donut's slice, the diagram and chart
+  diagnostics, a chart color under the contrast lint, the room
   a source takes and its diagnostics, the agenda, its place at `(agenda)` and their
   slide numbers and diagnostics, template
   expansion and its diagnostics and
@@ -2010,6 +2079,14 @@ in a column (a zero value among the bars) and a statement with a source lay out 
 runtime check making no correction; every label sets on the lines counted and every
 value in its box in both browsers, and the bubble naming a bar stays below its value, 1 px
 off. The progress bar follows navigation and is absent from the overview.
+
+Charts (2026-10-24, Chrome through DevTools): the golden deck's chart slides and a deck
+of every kind (bars with negatives, grouped and stacked bars and columns on a scale, a
+column chart revealed series by series, lines with several series, one series off zero
+and all below zero, a pie and a donut, long wrapped labels, zero values) render as laid
+out in the light, dark, high-contrast and midnight themes, the runtime check making no
+correction; bubbles on a bar, a column, a point, a category, a slice and a legend name
+land where the static layout put them.
 
 Run buttons (2026-10-23, Chrome 155 through DevTools and Safari 26.3 through
 `safaridriver`): the golden deck's Clojure and Scheme columns and a deck with runnable

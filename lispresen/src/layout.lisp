@@ -131,10 +131,13 @@ language is never run, whatever its :run says."
                    (make-text-run (list (figure-caption b))))))
           ((diagram-p b)
            (setf (diagram-runs b) (mapcar #'make-text-run (diagram-labels b)))
-           (when (flow-graph-p (diagram-datum b))
-             (setf (flow-graph-edge-runs (diagram-datum b))
-                   (mapcar #'make-text-run
-                           (flow-graph-edge-labels (diagram-datum b))))))
+           (let ((d (diagram-datum b)))
+             (cond ((flow-graph-p d)
+                    (setf (flow-graph-edge-runs d)
+                          (mapcar #'make-text-run (flow-graph-edge-labels d))))
+                   ((chart-p d)
+                    (setf (chart-series-runs d)
+                          (mapcar #'make-text-run (chart-series d)))))))
           ((table-block-p b)
            (when (table-block-caption b)
              (setf (table-block-caption-run b)
@@ -1170,21 +1173,33 @@ image's own is unknown within, and its caption. Returns the picture area."
     img))
 
 (defun diagram-geometry (b s d x y)
-  "Records the drawing D of the diagram B, set at S px from X, Y: every shape, and the
-lines of every flow box, arrow and bar label. A callout inside a label points where one
-naming the label with :at does: at a box or an arrow's label as a whole, at a bar's
-value; :at an atom points at the atom."
-  (let ((labels nil) (bar-runs nil) (px (dg-pad-x s)))
-    (flet ((label-run (run w lx ly align box)
-             (run-geometry run s w (dg-lh s) lx ly align)
-             ;; Its text lies inside the box, which leaves a bubble no room beside it.
-             (when box
-               (dolist (anchor (run-anchors run))
-                 (setf (callout-fragments (first anchor)) (list box))))))
+  "Records the drawing D of the diagram B, set at S px from X, Y: every shape but a chart's
+gridlines and gaps, and the lines of every flow box, arrow and chart label. A callout
+naming a label with :at points at a box or an arrow's label as a whole, at an atom, at a
+chart's row (its mark on a chart of one series, else its label) or series (its name in
+the legend); one inside a label points where naming the label would, and one around a
+chart's value at that value's mark."
+  (let ((labels nil)
+        (px (dg-pad-x s))
+        (chart (and (chart-p (diagram-datum b)) (diagram-datum b))))
+    (labels ((point (co box)
+               ;; The anchor BOX, from the slide's top left; the player finds it from the
+               ;; diagram's.
+               (setf (callout-fragments co) (list box)
+                     (callout-diagram-box co) (list (- (first box) x) (- (second box) y)
+                                                    (- (third box) x) (- (fourth box) y))))
+             (target (key)
+               (let ((r (cdr (assoc key (drawing-targets d) :test #'equal))))
+                 (list (+ x (first r)) (+ y (second r)) (+ x (third r)) (+ y (fourth r)))))
+             (label-run (run w lx ly align box)
+               (run-geometry run s w (dg-lh s) lx ly align)
+               ;; Its text lies inside the box, which leaves a bubble no room beside it.
+               (when box
+                 (dolist (anchor (run-anchors run)) (point (first anchor) box)))))
       (dolist (shape (drawing-shapes d))
         (destructuring-bind (l top r bottom) (shape-box shape)
           (let ((box (list (+ x l) (+ y top) (+ x r) (+ y bottom))))
-            (obstacle box)
+            (unless (chrome-p shape) (obstacle box))
             (case (car shape)
               (:box
                (destructuring-bind (bx by w h i pad) (cdr shape)
@@ -1192,26 +1207,34 @@ value; :at an atom points at the atom."
                  (label-run (nth i (diagram-runs b)) (- w (* 2 px)) (+ x bx px)
                             (+ y by pad) "center" box))
                (push box labels))
-              (:bar-label
-               (destructuring-bind (bx by w h i) (cdr shape)
-                 (declare (ignore h))
-                 (label-run (nth i (diagram-runs b)) w (+ x bx) (+ y by) nil nil)
-                 (push i bar-runs)))
               (:edge-label
                (destructuring-bind (bx by w h j) (cdr shape)
                  (declare (ignore h))
                  (label-run (nth j (flow-graph-edge-runs (diagram-datum b))) w
                             (+ x bx) (+ y by) "center" box)))
-              ;; A bar is named by its label and pointed at by its value.
-              ((:atom :value) (push box labels)))))))
-    (setf labels (nreverse labels))
-    (dolist (i bar-runs)
-      (dolist (anchor (run-anchors (nth i (diagram-runs b))))
-        (setf (callout-fragments (first anchor)) (list (nth i labels)))))
-    (dolist (co *slide-callouts*)
-      (when (and (eq (callout-target co) b) (callout-at co))
-        (let ((i (label-index (diagram-label-texts b) (callout-at co))))
-          (when i (setf (callout-fragments co) (list (nth i labels)))))))))
+              (:category
+               (destructuring-bind (bx by w h j align) (cdr shape)
+                 (declare (ignore h))
+                 (label-run (nth j (diagram-runs b)) w (+ x bx) (+ y by) align
+                            (target (list :category j)))))
+              (:legend
+               (destructuring-bind (bx by w h i) (cdr shape)
+                 (declare (ignore h))
+                 (label-run (nth i (chart-series-runs chart)) w (+ x bx) (+ y by) nil
+                            (target (list :series i)))))
+              (:atom (push box labels))))))
+      (setf labels (nreverse labels))
+      (when chart
+        (dolist (m (chart-marks chart))
+          (point (first m) (target (list :mark (second m) (third m))))))
+      (dolist (co *slide-callouts*)
+        (when (and (eq (callout-target co) b) (callout-at co))
+          (let ((i (label-index (diagram-label-texts b) (callout-at co)))
+                (rows (length (diagram-labels b))))
+            (when i
+              (point co (cond ((not chart) (nth i labels))
+                              ((< i rows) (target (list :category i)))
+                              (t (target (list :series (- i rows)))))))))))))
 
 (defun grows-p (b)
   "True for a block that takes a share of the room the others leave: an image, or a row
@@ -1281,7 +1304,8 @@ layout gives it to them."
                 until (eq r before)
                 do (setf box (if box (rect-union box (car r)) (car r)))))
         (dolist (co *slide-callouts*)
-          (when (and box (eq (callout-target co) b) (null (callout-at co)))
+          (when (and box (eq (callout-target co) b) (null (callout-at co))
+                     (null (callout-diagram-box co)))
             (setf (callout-fragments co) (list box))))
         (incf top (+ h gap))))))
 
@@ -1414,7 +1438,7 @@ found room."
                                                                 figure-widths))
                                                               width)))
         (setf (callout-size co) s (callout-width co) w (callout-height co) h
-              (callout-fragments co) nil)))
+              (callout-fragments co) nil (callout-diagram-box co) nil)))
     ;; An image gives up a strip on its right to its bubbles.
     (dolist (b (region-blocks blocks))
       (when (figure-p b)

@@ -1,4 +1,5 @@
-;;;; diagram.lisp -- the drawings of (flow ...), (bars ...) and (cells ...).
+;;;; diagram.lisp -- the drawings of (flow ...), the charts (bars ...), (columns ...),
+;;;; (lines ...) and (pie ...), and (cells ...).
 ;;;;
 ;;;; A drawing is a list of shapes in canvas px from its top left corner. Every shape is a
 ;;;; filled area, never a stroke, so every coordinate is an integer and the box a browser
@@ -32,22 +33,36 @@
 
 ;;; WIDTH and HEIGHT in px; SHAPES, painted in order, are
 ;;;   (:rect X Y W H CLASS RX)   a rectangle: CLASS dg-b a border, dg-f the face inside
-;;;                              it, dg-e part of an arrow
-;;;   (:poly CLASS X1 Y1 ...)    a polygon: an arrowhead, or the slash of nil
-;;;   (:dot X Y R)               where a pointer starts
+;;;                              it, dg-e part of an arrow, dg-sN a mark of a chart's
+;;;                              Nth series, dg-rN the ring around its marker, dg-g a
+;;;                              gridline, dg-z the zero line, dg-bg a gap between marks
+;;;   (:poly CLASS X1 Y1 ...)    a polygon: an arrowhead, the slash of nil, a marker, a
+;;;                              stretch of a line chart's line
+;;;   (:dot X Y R [CLASS])       where a pointer starts (dg-e), or a circle of a chart
+;;;   (:slice CLASS BOX R RI LARGE X1 Y1 X2 Y2 X3 Y3 X4 Y4)
+;;;                              a slice of a pie: its edge from X1, Y1 to X2, Y2, R px
+;;;                              from the center, LARGE 1 past half a turn, then X3, Y3
+;;;                              and X4, Y4 on the hole's edge RI px from the center, or
+;;;                              the center for RI 0; BOX the rectangle it covers
 ;;;   (:box X Y W H I PAD)       the label of a flow's Ith box, PAD px above its lines
 ;;;   (:edge-label X Y W H J)    the Jth arrow label of a flow
-;;;   (:bar-label X Y W H I)     the label of a bar chart's Ith bar
-;;;   (:value X Y W H TEXT)      a bar's value, at the bar's end
+;;;   (:category X Y W H J ALIGN) the label of a chart's Jth row
+;;;   (:legend X Y W H I)        the name of a chart's Ith series
+;;;   (:value X Y W H TEXT ALIGN I)
+;;;                              a value of the Ith series, nil for a stack's total
+;;;   (:tick X Y W H TEXT ALIGN) a tick's label on a chart's scale
 ;;;   (:atom X Y W H TEXT)       an atom of cells, as printed
-(defstruct drawing width height shapes)
+;;; TARGETS lists, for a chart, the box a callout pointing at a part of it points at:
+;;; ((:mark I J) . BOX) the mark of the Ith series' value in the Jth row, ((:category J)
+;;; . BOX) the Jth row, ((:series I) . BOX) the Ith series.
+(defstruct drawing width height shapes targets)
 
 (defun shape-layer (shape)
   (case (car shape)
     (:rect (cond ((equal (sixth shape) "dg-b") 0)
                  ((equal (sixth shape) "dg-f") 1)
                  (t 2)))
-    ((:poly :dot) 2)
+    ((:poly :dot :slice) 2)
     (t 3)))
 
 (defun shape-box (shape)
@@ -57,19 +72,24 @@
                  (ys (loop for (nil y) on (cddr shape) by #'cddr collect y)))
              (list (reduce #'min xs) (reduce #'min ys) (reduce #'max xs)
                    (reduce #'max ys))))
-    (:dot (destructuring-bind (x y r) (cdr shape)
+    (:dot (destructuring-bind (x y r &optional class) (cdr shape)
+            (declare (ignore class))
             (list (- x r) (- y r) (+ x r) (+ y r))))
+    (:slice (copy-list (third shape)))
     (t (destructuring-bind (x y w h) (subseq shape 1 5)
          (list x y (+ x w) (+ y h))))))
 
 (defun shift-shape (shape dx dy)
-  (if (eq (car shape) :poly)
-      (list* :poly (second shape)
-             (loop for (x y) on (cddr shape) by #'cddr
-                   collect (+ x dx)
-                   collect (+ y dy)))
-      (list* (first shape) (+ (second shape) dx) (+ (third shape) dy)
-             (cdddr shape))))
+  (flet ((points (list)
+           (loop for (x y) on list by #'cddr
+                 collect (+ x dx)
+                 collect (+ y dy))))
+    (case (car shape)
+      (:poly (list* :poly (second shape) (points (cddr shape))))
+      (:slice (destructuring-bind (class box r ri large &rest ps) (cdr shape)
+                (list* :slice class (points box) r ri large (points ps))))
+      (t (list* (first shape) (+ (second shape) dx) (+ (third shape) dy)
+                (cdddr shape))))))
 
 (defun finish-drawing (shapes left width height)
   "The drawing of SHAPES moved right by -LEFT, painted borders first and labels last."
@@ -943,12 +963,264 @@ of their first."
          "shorten its labels or draw it :direction :down")
         (t "shorten its labels or draw it :direction :right")))
 
-;;; --- bars ----------------------------------------------------------------------------
+;;; --- charts --------------------------------------------------------------------------
+;;;
+;;; A chart is drawn in integer and rational arithmetic, as a flow is: a value's place is
+;;; its rational share of the scale floored to a px, every tick an exact multiple of a
+;;; step of 1, 2 or 5 x 10^n, and a pie's edges come from a fixed-point sine, so every
+;;; backend draws the same picture. Series take the theme's chart colors in order, the
+;;; accent first; text keeps the text colors.
 
 (defparameter *bar-room*
   4
   "The least room for the longest bar, in label sizes: a bar chart with less is too
 wide.")
+(defparameter *dg-hair*
+  2
+  "The thickness of a gridline and of the zero line, and the gap between two filled marks.")
+(defparameter *chart-line* 6 "The thickness of a line chart's lines.")
+(defparameter *chrome-classes*
+  '("dg-g" "dg-z" "dg-bg")
+  "The classes of the shapes of a chart a callout may cover: gridlines, the zero line and
+the gaps between marks.")
+
+(defun plot-height (s)
+  "The height of the plot of columns or lines, and the diameter of a pie."
+  (* 5 (dg-lh s)))
+(defun marker-radius (s) (floor s 4))
+(defun swatch-size (s) (floor (* s 2) 3))
+(defun series-count (chart) (max 1 (length (chart-series chart))))
+(defun series-class (i) (format nil "dg-s~d" (1+ i)))
+(defun ring-class (i) (format nil "dg-r~d" (1+ i)))
+
+(defun shape-series (shape)
+  "The index of the series a shape of a chart belongs to, by its class, or nil."
+  (let ((class (case (car shape)
+                 (:rect (sixth shape))
+                 (:dot (fifth shape))
+                 ((:poly :slice) (second shape)))))
+    (and (stringp class) (= (length class) 5)
+         (member (subseq class 0 4) '("dg-s" "dg-r") :test #'string=)
+         (1- (digit-char-p (char class 4))))))
+
+(defun chrome-p (shape)
+  "True for a gridline, the zero line or a gap: drawn, but no obstacle to a callout."
+  (and (member (car shape) '(:rect :poly))
+       (member (if (eq (car shape) :rect) (sixth shape) (second shape)) *chrome-classes*
+               :test #'equal)))
+
+(defun text-width (text s) (run-full-width (make-text-run (list text)) s))
+
+(defun text-decimals (text)
+  "How many digits a value written as TEXT has after its decimal point."
+  (let ((dot (position #\. text))) (if dot (- (length text) dot 1) 0)))
+
+(defun group-digits (digits)
+  "The decimal string DIGITS with a comma before each group of three from the right."
+  (with-output-to-string (out)
+    (let ((n (length digits)))
+      (dotimes (i n)
+        (when (and (> i 0) (zerop (mod (- n i) 3))) (write-char #\, out))
+        (write-char (char digits i) out)))))
+
+(defun decimal-text (v decimals grouped)
+  "The rational V in decimal with DECIMALS digits after the point, rounded, its thousands
+grouped with commas when GROUPED."
+  (let* ((scale (expt 10 decimals)) (n (round (* (abs v) scale))))
+    (multiple-value-bind (whole frac) (floor n scale)
+      (let ((w (format nil "~d" whole)) (f (format nil "~d" frac)))
+        (concatenate 'string (if (and (< v 0) (> n 0)) "-" "")
+                     (if grouped (group-digits w) w)
+                     (if (> decimals 0)
+                         (concatenate 'string "."
+                                      (make-string (- decimals (length f))
+                                                   :initial-element #\0)
+                                      f)
+                         ""))))))
+
+(defun nice-scale (lo hi intervals)
+  "The bounds and the step of a scale over LO to HI (LO < HI) in at most INTERVALS (2 or
+more) steps: the smallest step of 1, 2 or 5 x 10^n that does, the bounds its multiples
+around LO and HI."
+  (let ((raw (/ (- hi lo) intervals)) (p 1))
+    (loop while (> p raw) do (setf p (/ p 10)))
+    (loop while (<= (* 10 p) raw) do (setf p (* 10 p)))
+    (dolist (m '(1 2 5 10 20 50 100))
+      (let ((c (* m p)))
+        (when (<= (- (ceiling hi c) (floor lo c)) intervals)
+          (return (values (* c (floor lo c)) (* c (ceiling hi c)) c)))))))
+
+(defun axis-ticks (chart lo hi intervals s)
+  "The scale of CHART over LO to HI in at most INTERVALS steps: its bounds and its ticks,
+each (VALUE TEXT WIDTH), the text with the unit and as many decimals as the step has."
+  (multiple-value-bind (a z c) (nice-scale lo hi intervals)
+    (let ((d (loop for d from 0 when (integerp (* c (expt 10 d))) return d)))
+      (values a z
+              (loop for k from (round a c) to (round z c)
+                    collect (let ((text (concatenate 'string
+                                                     (decimal-text (* k c) d
+                                                                   (chart-grouped chart))
+                                                     (chart-unit chart))))
+                              (list (* k c) text (text-width text s))))))))
+
+(defun chart-extent (chart)
+  "The least and the greatest value CHART's marks reach: its values, or under :stack each
+row's sums of its negative and of its positive values."
+  (let ((reached
+         (if (chart-stack chart)
+             (loop for vs in (chart-values chart)
+                   collect (reduce #'+ (remove-if-not #'minusp vs))
+                   collect (reduce #'+ (remove-if-not #'plusp vs)))
+             (reduce #'append (chart-values chart)))))
+    (values (reduce #'min reached) (reduce #'max reached))))
+
+(defun bar-domain (chart)
+  "The values the bars of CHART span: from zero, which every bar starts at, to the
+farthest; 0 to 1 when every value is zero."
+  (multiple-value-bind (lo hi) (chart-extent chart)
+    (let ((lo (min 0 lo)) (hi (max 0 hi)))
+      (if (= lo hi) (values 0 1) (values lo hi)))))
+
+(defun line-domain (chart)
+  "The values the scale of the line chart CHART spans: its least to its greatest value,
+reaching on to zero unless that would leave the lines less than half the plot."
+  (multiple-value-bind (lo hi) (chart-extent chart)
+    (cond ((and (> lo 0) (<= (* 2 lo) hi)) (setf lo 0))
+          ((and (< hi 0) (>= (* 2 hi) lo)) (setf hi 0)))
+    (when (= lo hi) (setf lo (min 0 lo) hi (max 0 hi)))
+    (if (= lo hi) (values 0 1) (values lo hi))))
+
+(defun chart-bars (chart)
+  "The bars of CHART, each (ROW SERIES LANE FROM TO), and the value written at each one's
+end, (ROW SERIES LANE AT TEXT), its unit included: a bar per value in the series' lane of
+the row, or under :stack one lane of segments, the negative values' below zero and the
+positive ones' above, with the row's total (SERIES nil) at the end of the side it comes
+to."
+  (let ((bars nil) (labels nil) (unit (chart-unit chart)))
+    (loop for vs in (chart-values chart)
+          for ts in (chart-texts chart)
+          for j from 0
+          do
+            (if (chart-stack chart)
+                (let ((pos 0) (neg 0))
+                  (loop for v in vs
+                        for i from 0
+                        do
+                          (cond ((> v 0) (push (list j i 0 pos (incf pos v)) bars))
+                                ((< v 0) (push (list j i 0 neg (incf neg v)) bars))))
+                  (push (list j nil 0 (if (< (+ pos neg) 0) neg pos)
+                              (concatenate 'string
+                                           (decimal-text (+ pos neg)
+                                                         (reduce #'max
+                                                                 (mapcar #'text-decimals ts))
+                                                         (chart-grouped chart))
+                                           unit))
+                        labels))
+                (loop for v in vs
+                      for text in ts
+                      for i from 0
+                      do
+                        (push (list j i i 0 v) bars)
+                        (push (list j i i v (concatenate 'string text unit)) labels))))
+    (values (nreverse bars) (nreverse labels))))
+
+(defun bar-span (from to pos stack)
+  "The px from and to of a bar from the value FROM to TO along the scale POS, at least
+*DG-LINE* px long away from zero when it stands for a value other than zero, unless it
+is a segment of a stack."
+  (let ((a (funcall pos from)) (z (funcall pos to)))
+    (when (and (not stack) (/= from to) (< (abs (- z a)) *dg-line*))
+      (setf z (if (> z a) (+ a *dg-line*) (- a *dg-line*))))
+    (values (min a z) (max a z))))
+
+(defun marker (i x y r class)
+  "The marker of a line chart's Ith series, R px from X, Y: a circle, a square, a
+diamond, a triangle up or down or a plus, so that the series differ in shape as in
+color."
+  (let* ((e (+ r (floor r 4))) (q (floor (* e 3) 4)) (a (1+ (floor e 3))))
+    (case (mod i 6)
+      (0 (list :dot x y r class))
+      (1 (list :rect (- x (1- r)) (- y (1- r)) (* 2 (1- r)) (* 2 (1- r)) class 0))
+      (2 (list :poly class x (- y e) (+ x e) y x (+ y e) (- x e) y))
+      (3 (list :poly class x (- y e) (+ x e) (+ y q) (- x e) (+ y q)))
+      (4 (list :poly class x (+ y e) (+ x e) (- y q) (- x e) (- y q)))
+      (t
+       (list :poly class (- x a) (- y e) (+ x a) (- y e) (+ x a) (- y a) (+ x e) (- y a)
+             (+ x e) (+ y a) (+ x a) (+ y a) (+ x a) (+ y e) (- x a) (+ y e) (- x a)
+             (+ y a) (- x e) (+ y a) (- x e) (- y a) (- x a) (- y a))))))
+
+(defun ringed-marker (i x y s)
+  "The marker of the Ith series at X, Y, over a ring of the page's color that parts it
+from the lines it stands on."
+  (let ((r (marker-radius s)))
+    (list (marker i x y (+ r 3) (ring-class i)) (marker i x y r (series-class i)))))
+
+(defun line-segment (x1 y1 x2 y2 class)
+  "A line from X1, Y1 to X2, Y2 (X1 < X2) as a filled band *CHART-LINE* px thick: a
+parallelogram cut upright at both ends, its upright half height widened with the slope so
+that it is as thick across at any slope."
+  (let* ((dx (- x2 x1))
+         (dy (- y2 y1))
+         (h (ceiling (* (floor *chart-line* 2) (isqrt (+ (* dx dx) (* dy dy)))) dx)))
+    (list :poly class x1 (- y1 h) x2 (- y2 h) x2 (+ y2 h) x1 (+ y1 h))))
+
+(defun box-of (shape) (shape-box shape))
+
+(defun chart-legend (chart kind s avail)
+  "The legend of CHART at S px in AVAIL px, from the top left: per series a swatch (on a
+line chart a stretch of its line through its marker) and its name, wrapped at its
+phrases when wider than the room, left to right in as few rows as fit. Returns its
+shapes, its height and each name's box as ((:series I) . BOX); nothing for one series."
+  (let ((runs (chart-series-runs chart)))
+    (if (null runs)
+        (values nil 0 nil)
+        (let* ((lh (dg-lh s))
+               (sw (if (eq kind :lines) s (swatch-size s)))
+               (sp (floor s 3))
+               (cap (max 1 (- avail sw sp)))
+               (tws (mapcar (lambda (run) (flow-text-width run s cap)) runs))
+               (lines (mapcar (lambda (run w) (run-lines run s w)) runs tws))
+               (widths (mapcar (lambda (w) (+ sw sp w)) tws))
+               (shapes nil)
+               (targets nil)
+               (y 0)
+               (i 0))
+          (dolist (count (greedy-rows widths
+                                      (make-list (1- (length widths)) :initial-element s)
+                                      avail))
+            (let ((x 0) (cy (+ y (floor lh 2))))
+              (dotimes (k count)
+                (if (eq kind :lines)
+                    (progn
+                      (push (list :rect x (- cy (floor *chart-line* 2)) sw *chart-line*
+                                  (series-class i) 0)
+                            shapes)
+                      (dolist (m (ringed-marker i (+ x (floor sw 2)) cy s)) (push m shapes)))
+                    (push (list :rect x (- cy (floor sw 2)) sw sw (series-class i) 0)
+                          shapes))
+                (let ((label (list :legend (+ x sw sp) y (nth i tws)
+                                   (* lh (nth i lines)) i)))
+                  (push label shapes)
+                  (push (cons (list :series i) (box-of label)) targets))
+                (incf x (+ (nth i widths) s))
+                (incf i))
+              (incf y (* lh (reduce #'max (subseq lines (- i count) i))))))
+          (values (nreverse shapes) (+ y (floor s 2)) (nreverse targets))))))
+
+(defun finish-chart (shapes width height targets)
+  (let ((d (finish-drawing shapes 0 width height)))
+    (setf (drawing-targets d) targets)
+    d))
+
+(defun category-targets (n rows targets labels)
+  "TARGETS with the target of each of ROWS categories: on a chart of one (N) series its
+mark, else its label, whose boxes LABELS lists by row."
+  (append targets
+          (loop for j below rows
+                collect (cons (list :category j)
+                              (if (= n 1)
+                                  (cdr (assoc (list :mark 0 j) targets :test #'equal))
+                                  (nth j labels))))))
 
 (defun bar-label-width (runs s avail)
   "The width of a bar chart's label column at S px in AVAIL px: its widest label set on
@@ -959,43 +1231,442 @@ one line, or wrapped at its phrases when that is wider than a third of the chart
                          (min (run-full-width run s) (floor avail 3))))
                   runs)))
 
-(defun bar-value-widths (b s)
-  (mapcar (lambda (v) (run-full-width (make-text-run (list (second v))) s))
-          (diagram-datum b)))
-
 (defun bars-drawing (b s avail)
-  "The bar chart B at label size S in AVAIL px: a row per bar, its label on the left
-(wrapped at its phrases when long), the bar as long as its value's share of the largest,
-the value at its end. The chart spans AVAIL; it is wider when the longest bar would have
-less than its least room."
-  (let* ((runs (diagram-runs b))
+  "The bar chart B at label size S in AVAIL px: a row per category, its label on the left
+(wrapped at its phrases when long), a bar per series as long as its value's share of the
+scale from zero, which stands where the most negative bar leaves room, and the value at
+each bar's end; under :axis a scale along the bottom instead of the values. The chart
+spans AVAIL; it is wider when the longest bar would have less than its least room."
+  (let* ((chart (diagram-datum b))
+         (runs (diagram-runs b))
+         (n (series-count chart))
+         (stack (chart-stack chart))
+         (grouped (and (> n 1) (not stack)))
+         (axis (chart-axis chart))
          (gap (dg-pad-x s))
          (lh (dg-lh s))
          (pad (floor s 4))
+         (thick (if grouped s lh))
+         (band (if grouped (+ (* n s) (* (1- n) *dg-hair*)) lh))
          (label-w (bar-label-width runs s avail))
-         (value-ws (bar-value-widths b s))
-         (value-w (reduce #'max value-ws))
-         (room (max (* *bar-room* s) (- avail label-w value-w (* 2 gap))))
-         (top (reduce #'max (mapcar #'first (diagram-datum b))))
-         (x (+ label-w gap))
          (shapes nil)
-         (y 0))
-    (loop for run in runs
-          for (value text) in (diagram-datum b)
-          for vw in value-ws
-          for i from 0
+         (texts nil)
+         (targets nil))
+    (multiple-value-bind (legend top legend-targets) (chart-legend chart :bars s avail)
+      (multiple-value-bind (bars marks) (chart-bars chart)
+        (multiple-value-bind (lo hi) (bar-domain chart)
+          (let* ((vws (mapcar (lambda (m) (text-width (fifth m) s)) marks))
+                 (left-w (reduce #'max
+                                 (loop for m in marks
+                                       for w in vws
+                                       when (< (fourth m) 0)
+                                         collect w)
+                                 :initial-value 0))
+                 (right-w (reduce #'max
+                                  (loop for m in marks
+                                        for w in vws
+                                        when (>= (fourth m) 0)
+                                          collect w)
+                                  :initial-value 0))
+                 (start (+ label-w gap (if (and (not axis) (> left-w 0)) (+ left-w gap) 0)))
+                 (right (if (and (not axis) (> right-w 0)) (+ gap right-w) 0))
+                 (ticks nil))
+            (when axis
+              ;; As many ticks as their labels leave room for, five steps at most.
+              (loop for m from 5 downto 2
+                    do
+                      (multiple-value-bind (a z ts) (axis-ticks chart lo hi m s)
+                        (let* ((first-half (ceiling (third (first ts)) 2))
+                               (last-half (ceiling (third (car (last ts))) 2))
+                               (from (max (+ label-w gap) first-half))
+                               (room (- avail from last-half)))
+                          (when (or (= m 2)
+                                    (>= (* room (- (first (second ts)) (first (first ts))))
+                                        (* (- z a)
+                                           (+ s (reduce #'max (mapcar #'third ts))))))
+                            (setf lo a hi z ticks ts start from right last-half)
+                            (return))))))
+            (let* ((room (max (* *bar-room* s) (- avail start right)))
+                   (pos (lambda (v) (+ start (floor (* (- v lo) room) (- hi lo)))))
+                   (y top)
+                   (row-tops nil))
+              (loop for run in runs
+                    for j from 0
+                    do
+                      (let* ((lines (run-lines run s label-w))
+                             (h (max (* lines lh) band))
+                             (band-top (+ y pad (floor (- h band) 2)))
+                             (label (list :category 0 (+ y pad (floor (- h (* lines lh)) 2))
+                                          label-w (* lines lh) j "left"))
+                             (ends nil))
+                        (push y row-tops)
+                        (push label texts)
+                        (push (cons (list :label j) (box-of label)) targets)
+                        (dolist (bar bars)
+                          (destructuring-bind (row i lane from to) bar
+                            (when (= row j)
+                              (multiple-value-bind (x1 x2) (bar-span from to pos stack)
+                                (let ((rect (list :rect x1 (+ band-top (* lane (+ thick *dg-hair*)))
+                                                  (- x2 x1) thick (series-class i) 0)))
+                                  (when (> x2 x1)
+                                    (push rect shapes)
+                                    (when (and stack (/= from 0))
+                                      (push (list :rect (- (funcall pos from) (floor *dg-hair* 2))
+                                                  (third rect) *dg-hair* thick "dg-bg" 0)
+                                            shapes)))
+                                  (push (cons (list :mark i j) (box-of rect)) targets)
+                                  (push (list i (if (< to 0) x1 x2)) ends))))))
+                        (unless axis
+                          (loop for m in marks
+                                for w in vws
+                                do
+                                  (destructuring-bind (row i lane at text) m
+                                    (when (= row j)
+                                      (let* ((end (if (and i (not stack))
+                                                      (second (assoc i ends))
+                                                      (funcall pos at)))
+                                             (value
+                                              (list :value
+                                                    (if (< at 0) (- end gap w) (+ end gap))
+                                                    (+ band-top (* lane (+ thick *dg-hair*)))
+                                                    w thick text (if (< at 0) "right" "left")
+                                                    i)))
+                                        (push value texts)
+                                        (when (and i (not stack))
+                                          ;; The tail points at the value, at the bar's end.
+                                          (push (cons (list :mark i j) (box-of value))
+                                                targets)))))))
+                        (incf y (+ h (* 2 pad)))))
+              (let ((rows-top top) (rows-bottom y) (grid nil))
+                (dolist (tk ticks)
+                  (destructuring-bind (v text w) tk
+                    (let ((x (funcall pos v)))
+                      (unless (zerop v)
+                        (push (list :rect (- x (floor *dg-hair* 2)) rows-top *dg-hair*
+                                    (- rows-bottom rows-top) "dg-g" 0)
+                              grid))
+                      (push (list :tick (- x (floor w 2)) rows-bottom w lh text "center")
+                            texts))))
+                (finish-chart (append (nreverse grid) (reverse shapes)
+                                      (list (list :rect (- (funcall pos 0) (floor *dg-hair* 2))
+                                                  rows-top *dg-hair* (- rows-bottom rows-top)
+                                                  "dg-z" 0))
+                                      legend (nreverse texts))
+                              (+ start room right)
+                              (if axis (+ rows-bottom lh) rows-bottom)
+                              (category-targets n (length runs)
+                                                (append legend-targets targets)
+                                                (loop for j below (length runs)
+                                                      collect (cdr (assoc (list :label j)
+                                                                          targets
+                                                                          :test #'equal)))))))))))))
+
+(defun plot-drawing (b s avail)
+  "The column or line chart B at label size S in AVAIL px: the categories side by side
+along the bottom, their labels under them wrapped at their phrases, over them a column
+per series as tall as its value's share of the scale from zero, with the value at its
+end, or a point per series joined by its line, along a scale with ticks and gridlines on
+the left (always on a line chart, under :axis on columns). The chart spans AVAIL; it is
+wider when a category's label or values do not fit its share."
+  (let* ((chart (diagram-datum b))
+         (runs (diagram-runs b))
+         (rows (length runs))
+         (line (eq (diagram-kind b) :lines))
+         (n (series-count chart))
+         (stack (chart-stack chart))
+         (lanes (if (and (> n 1) (not stack) (not line)) n 1))
+         (axis (or line (chart-axis chart)))
+         (gap (dg-pad-x s))
+         (lh (dg-lh s))
+         (pad (floor s 4))
+         (p (plot-height s))
+         (shapes nil)
+         (texts nil)
+         (targets nil)
+         (labels nil))
+    (multiple-value-bind (legend top legend-targets) (chart-legend chart (diagram-kind b) s
+                                                                   avail)
+      (multiple-value-bind (bars marks) (if line (values nil nil) (chart-bars chart))
+        (multiple-value-bind (lo hi) (if line (line-domain chart) (bar-domain chart))
+          (let* ((ticks nil)
+                 (axis-w 0)
+                 (vws (if axis nil (mapcar (lambda (m) (text-width (fifth m) s)) marks)))
+                 (vmax (reduce #'max vws :initial-value 0))
+                 (max-c (max (* 2 lh) (if (> lanes 1) vmax 0))))
+            (when axis
+              (multiple-value-bind (a z ts) (axis-ticks chart lo hi 4 s)
+                (setf lo a hi z ticks ts
+                      axis-w (+ gap (reduce #'max (mapcar #'third ts))))))
+            (let* ((min-slot
+                    (max s
+                         (reduce #'max (mapcar (lambda (run) (+ gap (run-min-width run s)))
+                                               runs))
+                         (cond (axis 0)
+                               ((= lanes 1) (+ gap vmax))
+                               (t (ceiling (* 3 (+ (* lanes vmax)
+                                                   (* (1- lanes) *dg-hair*)))
+                                           2)))))
+                   (w (max (- avail axis-w) (* rows min-slot)))
+                   (c (min max-c
+                           (floor (- (floor (* (floor w rows) 2) 3) (* (1- lanes) *dg-hair*))
+                                  lanes)))
+                   (group (+ (* lanes c) (* (1- lanes) *dg-hair*)))
+                   (head (cond (axis (floor lh 2))
+                               ((some (lambda (m) (>= (fourth m) 0)) marks) lh)
+                               (t 0)))
+                   (plot-top (+ top head))
+                   (plot-bottom (+ plot-top p))
+                   (foot (if (and (not axis) (some (lambda (m) (< (fourth m) 0)) marks)) lh 0))
+                   (band-top (+ plot-bottom foot pad))
+                   (band 0)
+                   (pos (lambda (v) (+ plot-top (floor (* (- hi v) p) (- hi lo)))))
+                   (slot (lambda (j) (+ axis-w (floor (* j w) rows))))
+                   (grid nil)
+                   (points (make-array (list n rows))))
+              ;; The scale: a gridline and a label per tick.
+              (dolist (tk ticks)
+                (destructuring-bind (v text tw) tk
+                  (declare (ignore tw))
+                  (let ((y (funcall pos v)))
+                    (unless (zerop v)
+                      (push (list :rect axis-w (- y (floor *dg-hair* 2)) w *dg-hair* "dg-g" 0)
+                            grid))
+                    (push (list :tick 0 (- y (floor lh 2)) (- axis-w gap) lh text "right")
+                          texts))))
+              (dotimes (j rows)
+                (let* ((x0 (funcall slot j))
+                       (sw (- (funcall slot (1+ j)) x0))
+                       (gx (+ x0 (floor (- sw group) 2)))
+                       (lw (- sw gap))
+                       (lines (run-lines (nth j runs) s lw))
+                       (label (list :category (+ x0 (floor gap 2)) band-top lw (* lines lh) j
+                                    "center"))
+                       (ends nil))
+                  (setf band (max band (* lines lh)))
+                  (push label texts)
+                  (push (box-of label) labels)
+                  (if line
+                      (loop for v in (nth j (chart-values chart))
+                            for i from 0
+                            do (setf (aref points i j)
+                                     (list (+ x0 (floor sw 2)) (funcall pos v))))
+                      (progn
+                        (dolist (bar bars)
+                          (destructuring-bind (row i lane from to) bar
+                            (when (= row j)
+                              (multiple-value-bind (y1 y2)
+                                  (bar-span from to pos stack)
+                                (let ((rect (list :rect (+ gx (* lane (+ c *dg-hair*))) y1 c
+                                                  (- y2 y1) (series-class i) 0)))
+                                  (when (> y2 y1)
+                                    (push rect shapes)
+                                    (when (and stack (/= from 0))
+                                      (push (list :rect (second rect)
+                                                  (- (funcall pos from) (floor *dg-hair* 2))
+                                                  c *dg-hair* "dg-bg" 0)
+                                            shapes)))
+                                  (push (cons (list :mark i j) (box-of rect)) targets)
+                                  (push (list i (if (< to 0) y2 y1)) ends))))))
+                        (unless axis
+                          (loop for m in marks
+                                for vw in vws
+                                do
+                                  (destructuring-bind (row i lane at text) m
+                                    (when (= row j)
+                                      (let* ((end (if (and i (not stack))
+                                                      (second (assoc i ends))
+                                                      (funcall pos at)))
+                                             (cx (+ gx (* lane (+ c *dg-hair*)) (floor c 2)))
+                                             (value (list :value (- cx (floor vw 2))
+                                                          (if (< at 0) end (- end lh)) vw lh
+                                                          text "center" i)))
+                                        (push value texts)
+                                        (when (and i (not stack))
+                                          ;; The tail points at the value, at the bar's end.
+                                          (push (cons (list :mark i j) (box-of value))
+                                                targets)))))))))))
+              ;; Each series' line, and its markers over it.
+              (when line
+                (dotimes (i n)
+                  (dotimes (j (1- rows))
+                    (destructuring-bind (x1 y1) (aref points i j)
+                      (destructuring-bind (x2 y2) (aref points i (1+ j))
+                        (push (line-segment x1 y1 x2 y2 (series-class i)) shapes))))
+                  (dotimes (j rows)
+                    (destructuring-bind (x y) (aref points i j)
+                      (destructuring-bind (ring m) (ringed-marker i x y s)
+                        (push ring shapes)
+                        (push m shapes)
+                        (push (cons (list :mark i j) (box-of ring)) targets))))))
+              (finish-chart (append (nreverse grid) (reverse shapes)
+                                    (and (<= lo 0 hi)
+                                         (list (list :rect axis-w
+                                                     (- (funcall pos 0) (floor *dg-hair* 2))
+                                                     w *dg-hair* "dg-z" 0)))
+                                    legend (nreverse texts))
+                            (+ axis-w w) (+ band-top band)
+                            (category-targets n rows (append legend-targets targets)
+                                              (nreverse labels))))))))))
+
+;;; A pie's edges: the point a share of a turn clockwise from the top, from a sine and
+;;; cosine summed in fixed point (x 10^18) from their Taylor series, every term an
+;;; integer, so no float is computed.
+
+(defparameter *trig-one* (expt 10 18))
+(defparameter *trig-pi* 3141592653589793238 "Pi x 10^18.")
+
+(defun small-sin-cos (a)
+  "The sine and cosine x 10^18 of the angle A x 10^-18 radians, 0 <= A <= pi/4."
+  (let ((a2 (floor (* a a) *trig-one*)) (sin 0) (cos 0))
+    (loop for term = a then (floor (* term a2) (* *trig-one* k (1+ k)))
+          for k from 2 by 2
+          for sign = 1 then (- sign)
+          while (> term 0)
+          do (incf sin (* sign term)))
+    (loop for term = *trig-one* then (floor (* term a2) (* *trig-one* (1- k) k))
+          for k from 2 by 2
+          for sign = 1 then (- sign)
+          while (> term 0)
+          do (incf cos (* sign term)))
+    (values sin cos)))
+
+(defun turn-point (f r)
+  "The offset (DX DY) from a circle's center of the point of its edge, R px from the
+center, the share F of a turn clockwise from the top: R sin and -R cos of 2 pi F,
+rounded, exact at every eighth of a turn's quarter points."
+  (let* ((e (* 8 (- f (floor f))))
+         (q (floor e))
+         (u (- e q))
+         (k (if (evenp q) (floor q 2) (floor (1+ q) 2)))
+         (psi (floor (* (if (evenp q) u (- 1 u)) *trig-pi*) 4)))
+    (multiple-value-bind (sn cs) (small-sin-cos psi)
+      (when (oddp q) (setf sn (- sn)))
+      (let ((sin (case (mod k 4) (0 sn) (1 cs) (2 (- sn)) (t (- cs))))
+            (cos (case (mod k 4) (0 cs) (1 (- sn)) (2 (- cs)) (t sn))))
+        (list (round (* r sin) *trig-one*) (- (round (* r cos) *trig-one*)))))))
+
+(defun slice-shape (cx cy r ri f0 f1 class)
+  "The slice of a pie centered at CX, CY, R px across, from the share F0 of a turn to F1;
+a ring's slice when RI, its hole's radius, is above 0. Its box takes in the edge's
+extreme points within it, as a browser's box of the path does."
+  (flet ((at (f radius)
+           (destructuring-bind (dx dy) (turn-point f radius) (list (+ cx dx) (+ cy dy)))))
+    (let* ((p1 (at f0 r))
+           (p2 (at f1 r))
+           (p3 (if (> ri 0) (at f1 ri) (list cx cy)))
+           (p4 (if (> ri 0) (at f0 ri) (list cx cy)))
+           (extremes (loop for j from 1 to 3
+                           when (< f0 (/ j 4) f1)
+                             collect (at (/ j 4) r)))
+           (all (append (list p1 p2 p3 p4) extremes))
+           (xs (mapcar #'first all))
+           (ys (mapcar #'second all)))
+      (append (list :slice class
+                    (list (reduce #'min xs) (reduce #'min ys) (reduce #'max xs)
+                          (reduce #'max ys))
+                    r ri (if (> (- f1 f0) 1/2) 1 0))
+              p1 p2 p3 p4))))
+
+(defun pie-drawing (b s avail)
+  "The pie chart B at label size S in AVAIL px: the pie, its slices clockwise from the top
+in the order written, each its value's share of the whole, beside a legend of a swatch,
+the label (wrapped at its phrases when long) and the value per slice, as tall as the pie
+or the pie as tall as it; a ring under :donut."
+  (let* ((chart (diagram-datum b))
+         (runs (diagram-runs b))
+         (rows (length runs))
+         (lh (dg-lh s))
+         (gap (dg-pad-x s))
+         (pad (floor s 4))
+         (sw (swatch-size s))
+         (sp (floor s 3))
+         (vals (mapcar #'first (chart-values chart)))
+         (texts (mapcar (lambda (ts) (concatenate 'string (first ts) (chart-unit chart)))
+                        (chart-texts chart)))
+         (vws (mapcar (lambda (text) (text-width text s)) texts))
+         (vw (reduce #'max vws))
+         ;; The legend's height, which the pie matches when that is taller, at the label
+         ;; width the room left beside the least pie allows.
+         (lw (reduce #'max (mapcar (lambda (run)
+                                     (flow-text-width run s
+                                                      (- avail (plot-height s) (* 2 s) sw sp
+                                                         gap vw)))
+                                   runs)))
+         (lines (mapcar (lambda (run) (run-lines run s lw)) runs))
+         (legend-h (reduce #'+ (mapcar (lambda (l) (+ (* l lh) (* 2 pad))) lines)))
+         (d (max (plot-height s) legend-h))
+         (r (floor d 2))
+         (ri (if (chart-donut chart) (floor (* r 3) 5) 0))
+         (fixed (+ d (* 2 s) sw sp gap vw))
+         (height d)
+         (cx r)
+         (cy (+ (floor (- height d) 2) r))
+         (total (reduce #'+ vals))
+         (shown (count-if #'plusp vals))
+         (shapes nil)
+         (labels nil)
+         (targets nil)
+         (lx (+ d (* 2 s)))
+         (y (floor (- height legend-h) 2))
+         (f 0))
+    (loop for v in vals
+          for text in texts
+          for w in vws
+          for l in lines
+          for j from 0
           do
-            (let* ((lines (run-lines run s label-w))
-                   (by (+ y pad (floor (* (1- lines) lh) 2)))
-                   (len
-                    (if (zerop value)
-                        0
-                        (max *dg-line* (floor (* value room) top)))))
-              (push (list :bar-label 0 (+ y pad) label-w (* lines lh) i) shapes)
-              (when (> len 0) (push (list :rect x by len lh "dg-b" 0) shapes))
-              (push (list :value (+ x len gap) by vw lh text) shapes)
-              (incf y (+ (* lines lh) (* 2 pad)))))
-    (finish-drawing (nreverse shapes) 0 (+ x room gap value-w) y)))
+            (let ((g (+ f (/ v total))) (class (series-class j)))
+              (when (plusp v)
+                (let ((mark (if (= shown 1)
+                                (list :dot cx cy r class)
+                                (slice-shape cx cy r ri f g class))))
+                  (push mark shapes)
+                  (when (and (= shown 1) (> ri 0))
+                    (push (list :dot cx cy ri "dg-bg") shapes))
+                  (push (cons (list :mark 0 j) (box-of mark)) targets)))
+              (let ((top (+ y pad)))
+                (push (list :rect lx (+ top (floor (- lh sw) 2)) sw sw class 0) shapes)
+                (push (list :category (+ lx sw sp) top lw (* l lh) j "left") labels)
+                (let ((value (list :value (+ lx sw sp lw gap) top vw lh text "right" nil)))
+                  (push value labels)
+                  (unless (plusp v) (push (cons (list :mark 0 j) (box-of value)) targets))))
+              (incf y (+ (* l lh) (* 2 pad)))
+              (setf f g)))
+    ;; A gap of the page's color where two slices meet.
+    (when (> shown 1)
+      (let ((f 0))
+        (dolist (v vals)
+          (when (plusp v)
+            (destructuring-bind (dx dy) (turn-point f r)
+              (destructuring-bind (ix iy) (if (> ri 0) (turn-point f ri) (list 0 0))
+                (let ((px (round (- dy) r)) (py (round dx r)))
+                  (push (list :poly "dg-bg" (+ cx ix px) (+ cy iy py) (+ cx dx px)
+                              (+ cy dy py) (- (+ cx dx) px) (- (+ cy dy) py)
+                              (- (+ cx ix) px) (- (+ cy iy) py))
+                        shapes)))))
+          (incf f (/ v total)))))
+    (finish-chart (append (reverse shapes) (nreverse labels)) (+ fixed lw) height
+                  (category-targets 1 rows targets nil))))
+
+(defun chart-description (b)
+  "The data of the chart B as text, which names its figure: each row's label and value,
+by series on a chart of several."
+  (let* ((chart (diagram-datum b))
+         (unit (chart-unit chart))
+         (labels (mapcar (lambda (nodes) (values (flatten-inlines nodes nil)))
+                         (diagram-labels b)))
+         (series (mapcar (lambda (nodes) (values (flatten-inlines nodes nil)))
+                         (chart-series chart))))
+    (flet ((row-texts (i)
+             (loop for label in labels
+                   for ts in (chart-texts chart)
+                   collect (concatenate 'string label " " (nth i ts) unit))))
+      (if series
+          (format nil "~{~a~^; ~}"
+                  (loop for name in series
+                        for i from 0
+                        collect (format nil "~a: ~{~a~^, ~}" name (row-texts i))))
+          (format nil "~{~a~^, ~}" (row-texts 0))))))
 
 ;;; --- cells ---------------------------------------------------------------------------
 
@@ -1159,20 +1830,16 @@ Cells move right as far as the drawings below them need."
   (case (diagram-kind b)
     (:flow (flow-drawing b s avail))
     (:bars (bars-drawing b s avail))
+    ((:columns :lines) (plot-drawing b s avail))
+    (:pie (pie-drawing b s avail))
     (t (cells-drawing b s))))
 
 (defun diagram-bounds (b s)
   "The narrowest width the diagram B takes at S px, and its width on one row; nil for the
-second of a bar chart, which takes whatever width it is given."
+second of a chart that spans its region, which takes whatever width it is given."
   (case (diagram-kind b)
-    (:flow
-     (values (drawing-width (flow-drawing b s 0))
-             (drawing-width (flow-drawing b s 1000000))))
-    (:bars
-     (values (+ (reduce #'max
-                        (mapcar (lambda (run) (run-min-width run s))
-                                (diagram-runs b)))
-                (* 2 (dg-pad-x s)) (reduce #'max (bar-value-widths b s))
-                (* *bar-room* s))
-             nil))
+    ((:flow :pie)
+     (values (drawing-width (draw-diagram b s 0))
+             (drawing-width (draw-diagram b s 1000000))))
+    ((:bars :columns :lines) (values (drawing-width (draw-diagram b s 0)) nil))
     (t (let ((w (drawing-width (cells-drawing b s)))) (values w w)))))

@@ -79,7 +79,8 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | image fitted into the remaining space; full-bleed or split (Images, below) |
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` | video laid out as an image, same options (Videos, below) |
 | `(table ...)` | table (below) |
-| `(flow ...)`, `(bars ...)`, `(cells ...)` | diagrams (below) |
+| `(flow ...)`, `(cells ...)` | diagrams (below) |
+| `(bars ...)`, `(columns ...)`, `(lines ...)`, `(pie ...)` | charts (below) |
 | `(math expr)` | a display formula (below); inside a paragraph, list item or cell it is inline |
 | `(notes "text")` | speaker notes: the presenter window, and the handout print (`?notes` in the URL) |
 | `(source inline...)` | one muted line at the bottom naming a source; one per slide |
@@ -112,7 +113,6 @@ At most 7 body rows and 5 columns.
 (flow "read" "parse" (b "layout") ("emit " (tt "html")))       ; boxes joined by arrows
 (flow (-> "read" "check" "emit")                               ; paths: branch and merge
       (-> "read" (label "on error") "report"))
-(bars :unit " KB" ("JVM" 297) ("WASM" 788) ("native" "6,700"))  ; horizontal bar chart
 (cells '(a (b c)))                                             ; box-and-pointer drawing
 ```
 
@@ -121,9 +121,36 @@ its text, so a label written in two paths is one box; `(node NAME label...)` dec
 box that paths write as `NAME` (for two boxes of one text). `(label "text")` between two
 steps labels that arrow. `:direction :down` draws it top to bottom. A cycle is an error.
 
-`bars` values are integers or decimals written as strings (`"2.1"`, `"1,840"`); a float
-(`2.1`) is an error. `cells` takes one quoted list (this is the one place `'` belongs).
-At most 8 flow boxes and 7 bars.
+`cells` takes one quoted list (this is the one place `'` belongs). At most 8 flow boxes.
+
+## Charts
+
+```lisp
+(bars :unit " KB" ("JVM" 297) ("WASM" 788) ("native" "6,700"))  ; horizontal bars
+(columns :series ("2025" "2026") ("Q1" 3 5) ("Q2" 4 8))         ; upright, two series
+(bars :series ("parse" "eval") :stack t :axis t ("small" 10 30) ("large" 90 400))
+(lines :series ("p50" "p99") :unit " ms" ("Jan" 12 40) ("Feb" 11 38))
+(pie :donut t :unit "%" ("Chrome" 64) ("Safari" 19) ("Other" 17))
+```
+
+Pick the form by the question: `bars` compares categories (long labels fit), `columns`
+compares categories or a few periods, `lines` shows change over ordered points, `pie`
+shows parts of one whole (few slices). `columns` is a chart; side-by-side blocks are
+`column`.
+
+- A row is `(label value...)`: one value per series, in `:series` order. Without
+  `:series` there is one value per row and no legend.
+- Values are integers or decimals written as strings (`"2.1"`, `"-0.5"`, `"1,840"`); a
+  float (`2.1`) is an error. Negative values work on `bars`, `columns` and `lines`; a pie
+  slice is 0 or more. `:unit` is appended to every value as written.
+- `:series` names 2 to 6 series (more than 4 is a warning); colors come from the theme.
+- `bars`/`columns`: `:stack t` stacks a row's values; `:axis t` draws a scale with
+  gridlines instead of a value at each bar. `lines` always has a scale.
+- `pie`: at most 6 slices (more than 5 is a warning); `:donut t` for a ring.
+- `:step t` reveals the chart whole; `:step :series` (not on `pie`) reveals one series per
+  page advance, the scale and labels first.
+- Callouts: `(say "c" :at "Q2" (columns ...))` points at a category (or a series by its
+  name, or a slice); `("Q2" 4 (say "peak" 8))` points at one value.
 
 ## Formulas
 
@@ -160,10 +187,10 @@ bubble; one with no room is an error. `:step t` shows it on a page advance.
 
 - `(ul :step t ...)` reveals items one per advance.
 - `:step t` on any other block (`p`, `lead`, `quote`, `image`, `video`, `table`, `flow`,
-  `cells`, `bars`, `math`, `code`, `column`) reveals it whole on an advance, in source
+  `cells`, a chart, `math`, `code`, `column`) reveals it whole on an advance, in source
   order with the other steps: show the data, then `(lead :step t "the conclusion")`.
   Hidden blocks keep their room. A table's rows or a diagram's boxes do not step one by
-  one. A non-step callout on a stepped block appears with it; a stepped `:autoplay` video
+  one; a chart's series do with `:step :series`. A non-step callout on a stepped block appears with it; a stepped `:autoplay` video
   plays when revealed. Not on `notes`, `source` or an untitled slide's only block (it
   would open empty): an error.
 - `(code :steps ((1 2) "(fib 20)") ...)` brings lines forward: `(1 2)` is lines 1 to 2 of the
@@ -186,7 +213,7 @@ Without `--embed` the HTML refers to the file by that path. `--embed` inlines `p
 `jpg`, `gif`, `webp`, `avif`, `svg` and reports a missing file as an error.
 `lispresen serve` serves the files beside the deck, so they show while editing without
 `--embed`; build the final HTML with `--embed`. An SVG or PNG
-does not follow the theme's colors; prefer a `flow`, `bars` or `cells` diagram where one
+does not follow the theme's colors; prefer a `flow`, `cells` or chart where one
 fits.
 
 A photograph can run to the slide's edges:
@@ -276,7 +303,8 @@ drawn. Leave all of these out for a deck that is not published.
 | title | 2 lines |
 | code block | 15 lines |
 | table | 7 body rows, 5 columns |
-| flow / bars | 8 boxes / 7 bars |
+| flow | 8 boxes |
+| chart | 4 series; 7 rows of `bars`, 12 of `columns` or `lines`, 5 slices of `pie` |
 | source, callout | 2 lines |
 | body text | starts at 56 px and steps down to fit; below 48 px is a warning, and a slide that does not fit at 40 px is an error |
 
@@ -298,7 +326,7 @@ drawn. Leave all of these out for a deck that is not published.
   repetition.
 - **`'` is the quote element.** `'x` reads as `(quote x)`, a quotation block. Do not quote
   lists in a deck, except the datum of `cells`.
-- **Decimals are strings.** `2.5` is an error wherever it would be shown (text, a bar
+- **Decimals are strings.** `2.5` is an error wherever it would be shown (text, a chart
   value, a formula); write `"2.5"`. Integers and ratios (`1/2`) are fine.
 - **Case is kept.** `N` and `n` are different symbols in a formula; `(Slide :Title ...)`
   still works, since tags and options match regardless of case.
@@ -329,7 +357,10 @@ drawn. Leave all of these out for a deck that is not published.
 | `a list with N items is hard to follow; keep it to 6` | split the list or the slide |
 | `lists nested deeper than 2 levels are hard to follow` | flatten |
 | `a table row has N cells where the table has M` | add the missing cells or a `:colspan` |
-| `a bar's value is a float; write it as a string, such as "2.1"` | quote the number |
+| `a chart's value is a float; write it as a string, such as "2.1"` | quote the number |
+| `a row of a chart is a list of its label and N values, one per series` | give every row one value per `:series` name |
+| `(columns ...) draws a column chart; blocks side by side are (column ...) each` | write `(column ...)` once per column of blocks |
+| `the bar chart is Npx wide at its smallest size, ...; shorten its labels or values` | shorten labels or values, draw fewer rows, or give the chart its own slide |
 | `the formula is Npx wide at its smallest size, wider than the Mpx it has; split it` | break the formula into two `math` blocks, or shorten it |
 | `the formula is taller than a line of text; set it as a block of its own` | move the `(math ...)` out of the paragraph into block position |
 | `(/ ...) takes a numerator and a denominator`, `(= ...) takes two operands or more`, `a row of (matrix ...) is a list of cells` | give the form the operands it lists; see Formulas |

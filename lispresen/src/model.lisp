@@ -41,7 +41,8 @@
 ;;; title, :deck until the deck's :kicker decides it. META lists the (TEXT RUN) of each
 ;;; line under the title of the title slide: the author, the date and the URL. STEPS
 ;;; lists what a page advance reveals, in source order: the place (:item ITEM) of a
-;;; stepped item, the place (:block BLOCK N) of a stepped block, N its advance, code
+;;; stepped item, the place (:block BLOCK N) of a stepped block, N its advance, the place
+;;; (:series CHART I N) of a chart's Ith series under :step :series, code
 ;;; blocks with :steps, and callouts; STEP-COUNT is how many advances that takes
 ;;; (NUMBER-STEPS). MORPH is the :morph option: its first code block changes from the
 ;;; previous slide's. SOURCE holds the inline content of its (source ...) line, SOURCE-RUN
@@ -119,12 +120,20 @@
 (defstruct quotation inlines cite run cite-run)
 (defstruct column blocks)
 ;;; A diagram drawn from an S-expression. KIND is :flow, boxes joined by arrows, whose
-;;; LABELS hold each box's inline content and RUNS their runs, DATUM its flow-graph; :bars,
-;;; a horizontal bar per label, DATUM listing each bar's (VALUE TEXT), the value a rational
-;;; and the text it is written with, its unit included; or :cells, the box-and-pointer
-;;; drawing of the list DATUM. SIZE is the label size and DRAWING the shapes
-;;; (diagram.lisp), both set when the slide is fitted.
+;;; LABELS hold each box's inline content and RUNS their runs, DATUM its flow-graph; a
+;;; chart, :bars, :columns, :lines or :pie, whose LABELS are its rows' labels and DATUM
+;;; its chart; or :cells, the box-and-pointer drawing of the list DATUM. SIZE is the label
+;;; size and DRAWING the shapes (diagram.lisp), both set when the slide is fitted.
 (defstruct diagram kind labels runs datum size drawing)
+;;; The data of a chart. SERIES holds the inline name of each series, nil for a chart of
+;;; one; VALUES each row's values, one per series, as rationals, and TEXTS the same as
+;;; written; UNIT the text written after every value; GROUPED true when a value is written
+;;; with a thousands comma, so a number lispresen computes is too. STACK, AXIS and DONUT
+;;; are the options. MARKS lists (CALLOUT SERIES ROW) of each callout around a value;
+;;; STEPS the place of each series among the slide's steps under :step :series, else nil.
+;;; SERIES-RUNS are the names' runs, set when the slide is fitted.
+(defstruct chart series series-runs values texts unit grouped stack axis donut marks
+  steps)
 ;;; The arrows of a flow. DIRECTION is :right or :down; EDGES are (FROM TO LABEL) between
 ;;; box indices, LABEL the index of the arrow's label among EDGE-LABELS (inline content) or
 ;;; nil. EDGE-RUNS are the labels' runs, set when the slide is fitted; PLAN is how the flow
@@ -143,7 +152,8 @@
 ;;; advance reveals a bubble that is no step of its own. The rest is set when the slide
 ;;; is fitted (layout.lisp): RUN is the comment's text run, FRAGMENTS the anchor's
 ;;; rectangles (one per line), and SIZE, SIDE, X, Y, WIDTH, HEIGHT and TAIL place the
-;;; bubble.
+;;; bubble. DIAGRAM-BOX is the anchor's rectangle from the top left of the diagram it lies
+;;; in, which the player finds it by, nil for any other anchor.
 (defstruct callout
   id
   text
@@ -154,6 +164,7 @@
   target
   run
   fragments
+  diagram-box
   size
   side
   x
@@ -831,19 +842,31 @@ or (label inline...), which labels the arrow between the boxes either side of it
                                                 :edges edges
                                                 :edge-labels (reverse edge-labels)))))))))
 
-(defparameter *bar-rows*
-  7
-  "A bar chart of more bars than this is reported, as a table of more rows is.")
+;;; --- charts ------------------------------------------------------------------
 
-(defun bar-value (x)
-  "The value X stands for as a bar's value, a rational of 0 or more, and the text it is
-written with: an integer, or a decimal written as a string (\"2.1\", \"1,840\"), so no
-float printing reaches the output. Nil for anything else."
-  (cond ((and (integerp x) (>= x 0)) (values x (format nil "~d" x)))
+(defparameter *chart-colors*
+  6
+  "The series colors of a theme: a chart of more series, or a pie of more slices, has no
+color left for them.")
+(defparameter *chart-series* 4 "A chart of more series than this is reported.")
+(defparameter *chart-rows*
+  '((:bars . 7) (:columns . 12) (:lines . 12) (:pie . 5))
+  "Each chart's most rows before it is reported, as a table of more rows is.")
+
+(defun series-step-p (x)
+  "True for :step :series, which reveals a chart a series at a time."
+  (and (keywordp x) (equal (symbol-value-name x) "SERIES")))
+
+(defun chart-value (x)
+  "The value X stands for in a chart, a rational, and the text it is written with: an
+integer, or a decimal written as a string (\"2.1\", \"-0.5\", \"1,840\"), so no float
+printing reaches the output. Nil for anything else."
+  (cond ((integerp x) (values x (format nil "~d" x)))
         ((stringp x)
          (let* ((s (string-trim " " x))
                 (n (length s))
-                (i 0)
+                (minus (and (> n 0) (char= (char s 0) #\-)))
+                (i (if minus 1 0))
                 (whole 0)
                 (frac 0)
                 (scale 1)
@@ -865,59 +888,198 @@ float printing reaches the output. Nil for anything else."
                            scale (* scale 10))
                      (incf i)))
            (if (and (> digits 0) (= i n))
-               (values (+ whole (/ frac scale)) s)
+               (let ((v (+ whole (/ frac scale)))) (values (if minus (- v) v) s))
                nil)))
         (t nil)))
 
-(defun parse-bars (form)
-  "A diagram from (bars [:unit \"s\"] (label value)...): a horizontal bar per row, as
-long as its value's share of the largest. A label is a string, an inline form or a list
-of them; the unit is written after every value as it is."
-  (multiple-value-bind (opts body) (split-options (cdr form) '("UNIT" "STEP") "bars")
-    (let ((unit (or (string-option opts "UNIT" "bars") ""))
-          (labels nil)
-          (data nil))
-      (loop while body
-            do
-              (let ((row (pop body)))
-                (cond ((keywordp row)
-                       (report :error "the options of (bars ...) come before its bars")
-                       (pop body))
-                      ((not (and (consp row) (not (form-tag row)) (consp (cdr row))
-                                 (null (cddr row))))
-                       (report :error "a bar is a list of its label and its value"))
-                      (t
-                       (let ((nodes
-                              (if (and (consp (car row)) (not (form-tag (car row))))
-                                  (parse-inlines (car row))
-                                  (parse-inline (car row)))))
-                         (multiple-value-bind (value text) (bar-value (cadr row))
-                           (cond ((null value)
-                                  (report :error
-                                          (if (floatp (cadr row))
-                                              "a bar's value is a float; write it as a string, such as \"2.1\""
-                                              "a bar's value is an integer or a decimal string of 0 or more")))
-                                 (nodes
-                                  (push nodes labels)
-                                  (push (list value (concatenate 'string text unit))
-                                        data)))))))))
-      (cond ((null labels)
-             (report :error "(bars ...) needs at least one bar")
-             nil)
-            (t
-             (when (> (length labels) *bar-rows*)
-               (report :warning (format nil
-                                        "a bar chart of ~d bars is hard to read; keep it to ~d"
-                                        (length labels) *bar-rows*)))
-             (make-diagram :kind :bars
-                           :labels (nreverse labels)
-                           :datum (nreverse data)))))))
+(defun chart-tag (kind) (string-downcase (symbol-name kind)))
+
+(defun chart-row-noun (kind)
+  (case kind (:lines "points") (:pie "slices") (t "categories")))
+
+(defun parse-chart-label (x)
+  "The inline content of a row's label or a series' name: a string, an inline form, or a
+list of them."
+  (if (and (consp x) (not (form-tag x))) (parse-inlines x) (parse-inline x)))
+
+(defun parse-chart-series (names tag)
+  "The inline name of each series :series NAMES lists, nil when there is no :series;
+:fail after reporting."
+  (cond ((null names) nil)
+        ((not (and (consp names) (not (form-tag names)) (consp (cdr names))
+                   (null (cdr (last names)))))
+         (report :error (format nil
+                                ":series of ~a lists the names of two series or more"
+                                tag))
+         :fail)
+        ((> (length names) *chart-colors*)
+         (report :error (format nil
+                                "a chart draws at most ~d series, one per theme color; fold the rest into one"
+                                *chart-colors*))
+         :fail)
+        (t
+         (let ((series (mapcar #'parse-chart-label names)))
+           (if (some #'null series) :fail series)))))
+
+(defun parse-chart-value (x chart pie place)
+  "The value, text and callout of the value X of a chart's row; nil after reporting. X
+may be wrapped in (say \"comment\" value), which points at its mark; PLACE is the step of
+the value's series, or nil."
+  (if (equal (form-tag x) "SAY")
+      (let* ((*step-within* (or place *step-within*))
+             (c (parse-say x))
+             (content (say-content x)))
+        (cond ((null c) nil)
+              ((or (cdr content) (consp (car content)))
+               (setf *callouts* (remove c *callouts*))
+               (report :error "a (say ...) around a chart's value holds just the value")
+               nil)
+              (t
+               (when (callout-at c)
+                 (report :error ":at belongs to a callout around a code block or a diagram")
+                 (setf (callout-at c) nil))
+               (multiple-value-bind (v text) (parse-chart-value (car content) chart pie nil)
+                 (if v
+                     (progn
+                       (push c *steps*)
+                       (values v text c))
+                     (progn
+                       (setf *callouts* (remove c *callouts*))
+                       nil))))))
+      (multiple-value-bind (v text) (chart-value x)
+        (cond ((null v)
+               (report :error
+                       (if (floatp x)
+                           "a chart's value is a float; write it as a string, such as \"2.1\""
+                           "a chart's value is an integer or a decimal string"))
+               nil)
+              ((and pie (< v 0))
+               (report :error "a slice of a pie is 0 or more")
+               nil)
+              (t
+               (when (find #\, text) (setf (chart-grouped chart) t))
+               (values v text))))))
+
+(defun parse-chart (form kind)
+  "A diagram from (bars|columns|lines|pie [:unit \"s\"] [:series (name...)] ... row...):
+a row is (label value...), its label inline content and one value per series."
+  (let* ((tag (chart-tag kind))
+         (pie (eq kind :pie))
+         (allowed (append '("UNIT" "STEP")
+                          (case kind
+                            (:pie '("DONUT"))
+                            (:lines '("SERIES"))
+                            (t '("SERIES" "STACK" "AXIS"))))))
+    (multiple-value-bind (opts body) (split-options (cdr form) allowed tag)
+      (let* ((series (parse-chart-series (opt opts "SERIES") tag))
+             (n (if (consp series) (length series) 1))
+             (chart (make-chart :series (and (consp series) series)
+                                :unit (or (string-option opts "UNIT" tag) "")
+                                :stack (and (opt opts "STACK") (> n 1) t)
+                                :axis (and (opt opts "AXIS") t)
+                                :donut (and (opt opts "DONUT") t)))
+             (b (make-diagram :kind kind :datum chart))
+             (labels nil)
+             (vals nil)
+             (texts nil))
+        (when (eq series :fail) (return-from parse-chart nil))
+        (when (and (eq kind :columns) (some (lambda (row) (and (consp row) (form-tag row))) body))
+          ;; A slip for the layout form, whose rows are blocks.
+          (report :error "(columns ...) draws a column chart; blocks side by side are (column ...) each")
+          (return-from parse-chart nil))
+        (when (series-step-p (opt opts "STEP"))
+          (if pie
+              (report :error ":step :series reveals the series of bars, columns or lines")
+              ;; Each series' place is taken before the rows are read, so a step callout
+              ;; around one of its values comes after it.
+              (setf (chart-steps chart)
+                    (loop for i below n
+                          collect (let ((place (list :series b i)))
+                                    (push place *steps*)
+                                    place)))))
+        (loop while body
+              do
+                (let ((row (pop body)))
+                  (cond ((keywordp row)
+                         (report :error (format nil
+                                                "the options of (~a ...) come before its rows"
+                                                tag))
+                         (pop body))
+                        ((not (and (consp row) (not (form-tag row))
+                                   (null (cdr (last row))) (= (length row) (1+ n))))
+                         (report :error (if (= n 1)
+                                            "a row of a chart is a list of its label and its value"
+                                            (format nil
+                                                    "a row of a chart is a list of its label and ~d values, one per series"
+                                                    n))))
+                        (t
+                         (let ((nodes (parse-chart-label (car row))) (vs nil) (ts nil)
+                               (ok t))
+                           (loop for x in (cdr row)
+                                 for i from 0
+                                 do
+                                   (multiple-value-bind (v text c)
+                                       (parse-chart-value x chart pie
+                                                          (nth i (chart-steps chart)))
+                                     (if v
+                                         (progn
+                                           (push v vs)
+                                           (push text ts)
+                                           (when c
+                                             (push (list c i (length labels))
+                                                   (chart-marks chart))))
+                                         (setf ok nil))))
+                           (when (and ok nodes)
+                             (push nodes labels)
+                             (push (nreverse vs) vals)
+                             (push (nreverse ts) texts)))))))
+        (let ((rows (length labels))
+              (limit (cdr (assoc kind *chart-rows*))))
+          (setf (chart-marks chart) (nreverse (chart-marks chart)))
+          (cond ((zerop rows)
+                 (report :error (format nil "(~a ...) needs at least one row" tag))
+                 (setf b nil))
+                ((and pie (zerop (reduce #'+ (mapcar #'car vals))))
+                 (report :error "a pie needs a slice above 0")
+                 (setf b nil))
+                ((and pie (> rows *chart-colors*))
+                 (report :error (format nil
+                                        "a pie draws at most ~d slices, one per theme color; fold the rest into one"
+                                        *chart-colors*))
+                 (setf b nil))
+                (t
+                 (when (> n *chart-series*)
+                   (report :warning (format nil
+                                            "a chart of ~d series is hard to read; keep it to ~d"
+                                            n *chart-series*)))
+                 (when (> rows limit)
+                   (report :warning (format nil "a ~a of ~d ~a is hard to read; keep it to ~d"
+                                            (diagram-name b) rows (chart-row-noun kind)
+                                            limit)))))
+          (if b
+              (progn
+                (setf (diagram-labels b) (nreverse labels)
+                      (chart-values chart) (nreverse vals)
+                      (chart-texts chart) (nreverse texts))
+                (dolist (m (chart-marks chart)) (setf (callout-target (first m)) b))
+                b)
+              ;; The callouts around its values point at nothing.
+              (let ((marks (mapcar #'first (chart-marks chart))))
+                (setf *callouts* (remove-if (lambda (c) (member c marks)) *callouts*)
+                      *steps* (remove-if (lambda (s)
+                                           (or (member s marks)
+                                               (member s (chart-steps chart))))
+                                         *steps*))
+                nil)))))))
 
 (defun diagram-name (b)
   "What diagnostics call the diagram B."
   (case (diagram-kind b)
     (:flow "flow")
     (:bars "bar chart")
+    (:columns "column chart")
+    (:lines "line chart")
+    (:pie "pie chart")
     (t "cells drawing")))
 
 (defun conses-within-p (x limit)
@@ -968,11 +1130,13 @@ quoted or not."
 
 (defun diagram-label-texts (b)
   "The text of each label of the diagram B, in the order :at searches them: the boxes of
-a flow, the bars of a bar chart, the atoms of cells as printed."
+a flow, the rows of a chart and then its series, the atoms of cells as printed."
   (if (eq (diagram-kind b) :cells)
       (datum-atoms (diagram-datum b))
       (mapcar (lambda (nodes) (values (flatten-inlines nodes nil)))
-              (diagram-labels b))))
+              (append (diagram-labels b)
+                      (and (chart-p (diagram-datum b))
+                           (chart-series (diagram-datum b)))))))
 
 (defun label-index (texts at)
   "The index of the label AT names among TEXTS: the first equal to it, else the first
@@ -982,7 +1146,7 @@ holding it; nil when none does."
 
 (defparameter *anchor-blocks*
   '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS"
-    "MATH")
+    "COLUMNS" "LINES" "PIE" "MATH")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -1025,19 +1189,19 @@ callout points at, or else a paragraph holding it as inline content."
 
 (defparameter *stepped-blocks*
   '("P" "LEAD" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "COLUMN" "FLOW" "CELLS" "BARS"
-    "MATH")
+    "COLUMNS" "LINES" "PIE" "MATH")
   "The blocks :step t reveals whole on a page advance.")
 
 (defun step-option (x)
-  "Whether the block form X has a true :step among its leading options, which follow
-the path of an image or a video."
+  "The value of :step among the leading options of the block form X, which follow the
+path of an image or a video; nil when it has none."
   (let ((args (if (member (form-tag x) '("IMAGE" "VIDEO") :test #'equal)
                   (cddr x)
                   (cdr x))))
     (loop
       (unless (and (consp args) (keywordp (car args))) (return nil))
       (when (string-equal (symbol-name (car args)) "STEP")
-        (return (and (consp (cdr args)) (cadr args) t)))
+        (return (and (consp (cdr args)) (cadr args))))
       (setf args (cddr args)))))
 
 (defun block-place (b steps)
@@ -1052,8 +1216,16 @@ the path of an image or a video."
   "The block X stands for, or nil after reporting. IN-COLUMN is true inside a column. A
 block with :step t takes its place among the slide's steps before its content is parsed,
 so a step inside it (a callout) comes after it, and a bubble inside it that is no step
-is revealed with it."
-  (if (and (member (form-tag x) *stepped-blocks* :test #'equal) (step-option x))
+is revealed with it. A chart with :step :series takes a step per series instead."
+  (if (and (member (form-tag x) *stepped-blocks* :test #'equal)
+           (let ((step (step-option x)))
+             (cond ((not (series-step-p step)) step)
+                   ((member (form-tag x) '("BARS" "COLUMNS" "LINES" "PIE") :test #'equal)
+                    nil)
+                   (t
+                    (report :error
+                            ":step :series reveals the series of bars, columns or lines")
+                    nil))))
       (let ((place (list :block)) (b nil))
         (push place *steps*)
         (let ((*step-within* place)) (setf b (parse-unstepped-block x in-column)))
@@ -1085,7 +1257,10 @@ is revealed with it."
                  ((equal tag "COLUMN") (parse-column x in-column))
                  ((equal tag "FLOW") (parse-flow x))
                  ((equal tag "CELLS") (parse-cells x))
-                 ((equal tag "BARS") (parse-bars x))
+                 ((equal tag "BARS") (parse-chart x :bars))
+                 ((equal tag "COLUMNS") (parse-chart x :columns))
+                 ((equal tag "LINES") (parse-chart x :lines))
+                 ((equal tag "PIE") (parse-chart x :pie))
                  ;; A formula in block position is a display formula of its own.
                  ((equal tag "MATH")
                   (parse-math (cons (car x)
@@ -1200,8 +1375,12 @@ comes from. It takes no callouts: one in it is reported, and the content it wrap
     (strip-callouts nodes)))
 
 (defun place-step (place)
-  "The page advance of PLACE, the place of a stepped item or block among a slide's steps."
-  (if (eq (car place) :item) (item-step (second place)) (third place)))
+  "The page advance of PLACE, the place of a stepped item, block or series among a slide's
+steps."
+  (case (car place)
+    (:item (item-step (second place)))
+    (:series (fourth place))
+    (t (third place))))
 
 (defun number-steps (slide callouts)
   "Numbers the page advances of SLIDE in source order: one per stepped item or block, one
@@ -1211,6 +1390,7 @@ item or block takes that one's advance."
   (let ((n 0))
     (dolist (s (slide-steps slide))
       (cond ((and (consp s) (eq (car s) :item)) (setf (item-step (second s)) (incf n)))
+            ((and (consp s) (eq (car s) :series)) (setf (cdddr s) (list (incf n))))
             ((consp s) (setf (cddr s) (list (incf n))))
             ((code-block-p s)
              (setf (code-block-step-numbers s)

@@ -153,16 +153,26 @@ pre.mo{overflow:visible;background:none;box-shadow:none}
 .mg{position:absolute;z-index:3;font-family:MONO;white-space:pre;transform-origin:0 0}
 figure.dg{flex:none;display:block;position:relative;align-self:center}
 .dg-art{position:absolute;left:0;top:0;overflow:visible}
-.dg-b{fill:var(--accent)}
+.dg-b,.dg-s1{fill:var(--accent)}
 .dg-f{fill:var(--head-bg)}
 .dg-e{fill:var(--fg)}
+.dg-s2{fill:var(--chart-2)}
+.dg-s3{fill:var(--chart-3)}
+.dg-s4{fill:var(--chart-4)}
+.dg-s5{fill:var(--chart-5)}
+.dg-s6{fill:var(--chart-6)}
+.dg-bg,.dg-r1,.dg-r2,.dg-r3,.dg-r4,.dg-r5,.dg-r6{fill:var(--bg)}
+.dg-g{fill:var(--rule)}
+.dg-z{fill:var(--muted)}
 .dg-flow{padding:0}
 .dg-l,.dg-el{position:absolute;display:block;margin:0;font-size:var(--dg);line-height:var(--dg-lh);text-align:center}
-.dg-el{color:var(--muted)}
+.dg-el,.dg-a{color:var(--muted)}
 .dg-flow>.dg-l{padding:0 var(--dg-x)}
 span.dg-l{font-family:MONO;white-space:pre}
 .dg-t,.dg-v{text-align:left}
 .dg-v{white-space:nowrap}
+.dg-ct{text-align:center}
+.dg-rt{text-align:right}
 figure.math{flex:none;display:block;align-self:center;line-height:0}
 svg.mx{overflow:visible;font-weight:400}
 figure.math>svg.mx{display:block}
@@ -521,86 +531,129 @@ shown whole on the background with :fit :contain."
 (defun write-diagram (b out)
   "A diagram as an SVG of filled shapes in the theme's colors, with its labels as HTML
 over it where the fit solver put them: a flow's boxes as an ordered list and its arrow
-labels as paragraphs, a bar chart's labels and values as paragraphs, the atoms of cells as
-spans, the whole of cells named by the list it draws."
+labels as paragraphs, a chart's labels, names, values and ticks as paragraphs, the atoms
+of cells as spans. Cells and a chart are images named by their datum, as Lisp prints the
+list or as each row's label and value; a chart's series revealed one by one carry their
+page advance on every part."
   (let* ((d (diagram-drawing b))
          (s (diagram-size b))
          (w (drawing-width d))
          (h (drawing-height d))
          (flow (eq (diagram-kind b) :flow))
+         (chart (and (chart-p (diagram-datum b)) (diagram-datum b)))
          (shapes (drawing-shapes d)))
-    (write-string "<figure class=\"dg\"" out)
-    (when (eq (diagram-kind b) :cells)
-      (write-string " role=\"img\"" out)
-      (write-attribute "aria-label" (print-datum (diagram-datum b)) out))
-    (format out
-     " style=\"width:~dpx;height:~dpx;--dg:~dpx;--dg-lh:~dpx;--dg-x:~dpx\"" w h
-     s (dg-lh s) (dg-pad-x s))
-    (write-step b out)
-    (write-described-by b out)
-    (format out
-     ">~%<svg class=\"dg-art\" width=\"~d\" height=\"~d\" aria-hidden=\"true\">"
-     w h)
-    (dolist (shape shapes)
-      (case (car shape)
-        (:rect
-         (destructuring-bind (x y sw sh class rx) (cdr shape)
-           (format out
-            "<rect class=\"~a\" x=\"~d\" y=\"~d\" width=\"~d\" height=\"~d\""
-            class x y sw sh)
-           (when (> rx 0) (format out " rx=\"~d\"" rx))
-           (write-string "/>" out)))
-        (:poly (format out "<polygon class=\"~a\" points=\"~{~d,~d~^ ~}\"/>"
-                       (second shape) (cddr shape)))
-        (:dot
-         (destructuring-bind (x y r) (cdr shape)
-           (format out "<circle class=\"dg-e\" cx=\"~d\" cy=\"~d\" r=\"~d\"/>" x
-                   y r)))))
-    (format out "</svg>~%")
-    (when flow
-      (write-string "<ol class=\"dg-flow\">" out)
+    (labels ((series-step (i)
+               ;; The page advance of the Ith series (a stack's total: the last), or nil.
+               (let ((steps (and chart (chart-steps chart))))
+                 (and steps (fourth (if i (nth i steps) (car (last steps)))))))
+             (open-shape (tag class shape)
+               (format out "<~a class=\"~a\"" tag class)
+               (let ((k (series-step (shape-series shape))))
+                 (when (and k (shape-series shape)) (format out " data-step=\"~d\"" k))))
+             (open-label (class x y lw lh k &optional one-line)
+               ;; A value or a tick is one line, centered in its height.
+               (format out "<p class=\"dg-l ~a\"" class)
+               (when k (format out " data-step=\"~d\"" k))
+               (format out " style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx" x y lw lh)
+               (when (and one-line (/= lh (dg-lh s))) (format out ";line-height:~dpx" lh))
+               (write-string "\">" out))
+             (align-class (align)
+               (cond ((equal align "right") " dg-rt")
+                     ((equal align "center") " dg-ct")
+                     (t ""))))
+      (write-string "<figure class=\"dg\"" out)
+      (cond ((eq (diagram-kind b) :cells)
+             (write-string " role=\"img\"" out)
+             (write-attribute "aria-label" (print-datum (diagram-datum b)) out))
+            (chart
+             (write-string " role=\"img\"" out)
+             (write-attribute "aria-label" (chart-description b) out)))
+      (format out
+              " style=\"width:~dpx;height:~dpx;--dg:~dpx;--dg-lh:~dpx;--dg-x:~dpx\"" w h
+              s (dg-lh s) (dg-pad-x s))
+      (write-step b out)
+      (write-described-by b out)
+      (format out
+              ">~%<svg class=\"dg-art\" width=\"~d\" height=\"~d\" aria-hidden=\"true\">"
+              w h)
       (dolist (shape shapes)
-        (when (eq (car shape) :box)
-          (destructuring-bind (x y bw bh i pad) (cdr shape)
-            (format out
-                    "<li class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;padding-top:~dpx\">"
-                    x y bw bh pad)
-            (write-inlines (nth i (diagram-labels b)) (nth i (diagram-runs b)) out)
-            (write-string "</li>" out))))
-      (write-string "</ol>" out))
-    (dolist (shape shapes)
-      (case (car shape)
-        (:edge-label
-         (destructuring-bind (x y lw lh j) (cdr shape)
-           (let ((g (diagram-datum b)))
-             (format out
-                     "<p class=\"dg-el\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
-                     x y lw lh)
-             (write-inlines (nth j (flow-graph-edge-labels g))
-                            (nth j (flow-graph-edge-runs g)) out)
-             (write-string "</p>" out))))
-        (:bar-label
-         (destructuring-bind (x y lw lh i) (cdr shape)
-           (format out
-                   "<p class=\"dg-l dg-t\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
-                   x y lw lh)
-           (write-inlines (nth i (diagram-labels b)) (nth i (diagram-runs b))
-                          out)
-           (write-string "</p>" out)))
-        (:value
-         (destructuring-bind (x y vw vh text) (cdr shape)
-           (format out
-                   "<p class=\"dg-l dg-v\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
-                   x y vw vh)
-           (write-escaped text out)
-           (write-string "</p>" out)))
-        (:atom (destructuring-bind (x y aw ah text) (cdr shape)
+        (case (car shape)
+          (:rect
+           (destructuring-bind (x y sw sh class rx) (cdr shape)
+             (open-shape "rect" class shape)
+             (format out " x=\"~d\" y=\"~d\" width=\"~d\" height=\"~d\"" x y sw sh)
+             (when (> rx 0) (format out " rx=\"~d\"" rx))
+             (write-string "/>" out)))
+          (:poly
+           (open-shape "polygon" (second shape) shape)
+           (format out " points=\"~{~d,~d~^ ~}\"/>" (cddr shape)))
+          (:dot
+           (destructuring-bind (x y r &optional (class "dg-e")) (cdr shape)
+             (open-shape "circle" class shape)
+             (format out " cx=\"~d\" cy=\"~d\" r=\"~d\"/>" x y r)))
+          (:slice
+           (destructuring-bind (class box r ri large x1 y1 x2 y2 x3 y3 x4 y4) (cdr shape)
+             (declare (ignore box))
+             (open-shape "path" class shape)
+             (if (> ri 0)
                  (format out
-                         "<span class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
-                         x y aw ah)
-                 (write-escaped text out)
-                 (write-string "</span>" out)))))
-    (format out "~%</figure>~%")))
+                         " d=\"M~d ~dA~d ~d 0 ~d 1 ~d ~dL~d ~dA~d ~d 0 ~d 0 ~d ~dZ\"/>"
+                         x1 y1 r r large x2 y2 x3 y3 ri ri large x4 y4)
+                 (format out " d=\"M~d ~dL~d ~dA~d ~d 0 ~d 1 ~d ~dZ\"/>" x4 y4 x1 y1
+                         r r large x2 y2))))))
+      (format out "</svg>~%")
+      (when flow
+        (write-string "<ol class=\"dg-flow\">" out)
+        (dolist (shape shapes)
+          (when (eq (car shape) :box)
+            (destructuring-bind (x y bw bh i pad) (cdr shape)
+              (format out
+                      "<li class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;padding-top:~dpx\">"
+                      x y bw bh pad)
+              (write-inlines (nth i (diagram-labels b)) (nth i (diagram-runs b)) out)
+              (write-string "</li>" out))))
+        (write-string "</ol>" out))
+      (dolist (shape shapes)
+        (case (car shape)
+          (:edge-label
+           (destructuring-bind (x y lw lh j) (cdr shape)
+             (let ((g (diagram-datum b)))
+               (format out
+                       "<p class=\"dg-el\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                       x y lw lh)
+               (write-inlines (nth j (flow-graph-edge-labels g))
+                              (nth j (flow-graph-edge-runs g)) out)
+               (write-string "</p>" out))))
+          (:category
+           (destructuring-bind (x y lw lh j align) (cdr shape)
+             (open-label (if (equal align "left") "dg-t" "dg-ct") x y lw lh nil)
+             (write-inlines (nth j (diagram-labels b)) (nth j (diagram-runs b)) out)
+             (write-string "</p>" out)))
+          (:legend
+           (destructuring-bind (x y lw lh i) (cdr shape)
+             (open-label "dg-t" x y lw lh (series-step i))
+             (write-inlines (nth i (chart-series chart)) (nth i (chart-series-runs chart))
+                            out)
+             (write-string "</p>" out)))
+          (:value
+           (destructuring-bind (x y vw vh text align i) (cdr shape)
+             (open-label (concatenate 'string "dg-v" (align-class align)) x y vw vh
+                         (series-step i) t)
+             (write-escaped text out)
+             (write-string "</p>" out)))
+          (:tick
+           (destructuring-bind (x y tw th text align) (cdr shape)
+             (open-label (concatenate 'string "dg-v dg-a" (align-class align)) x y tw th
+                         nil t)
+             (write-escaped text out)
+             (write-string "</p>" out)))
+          (:atom (destructuring-bind (x y aw ah text) (cdr shape)
+                   (format out
+                           "<span class=\"dg-l\" style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx\">"
+                           x y aw ah)
+                   (write-escaped text out)
+                   (write-string "</span>" out)))))
+      (format out "~%</figure>~%"))))
 
 (defun write-cell (c tag align scope out)
   (format out "<~a" tag)
@@ -703,6 +756,8 @@ shown here; the player hides it until a page advance."
             step (callout-overflow c) (callout-id c) (callout-side c))
     (when step (format out " data-step=\"~d\"" step))
     (when (callout-at c) (write-attribute "data-at" (callout-at c) out))
+    (when (callout-diagram-box c)
+      (format out " data-box=\"~{~d~^ ~}\"" (callout-diagram-box c)))
     (format out
             " style=\"left:~dpx;top:~dpx;width:~dpx;height:~dpx;--say:~dpx;--say-lh:~dpx;--say-x:~dpx;--say-y:~dpx;--tail:~dpx\"><p>"
             (callout-x c) (callout-y c) (callout-width c) (callout-height c) s

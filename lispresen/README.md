@@ -56,7 +56,10 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t] ...)` | a video (`mp4`, `webm`), laid out as an image and taking the same options. `:autoplay t` plays it when its slide is entered, never on page load; leaving the slide pauses it. A click or tap on it plays or pauses it. Print, the overview and the presenter window show the `:poster` image (or the first frame) |
 | `(flow [:direction :down] label...)`, `(flow (-> step...)...)` | boxes joined by arrows (below): a chain, or paths that branch and merge; a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
-| `(bars [:unit "s"] (label value)...)` | a horizontal bar chart (below) |
+| `(bars [:series (name...)] [:stack t] [:axis t] [:unit "s"] [:step :series] (label value...)...)` | a horizontal bar chart (below) |
+| `(columns ...)` | a column chart, the same options as `bars` (below); side-by-side blocks are `column` |
+| `(lines [:series (name...)] [:unit "s"] [:step :series] (label value...)...)` | a line chart (below) |
+| `(pie [:donut t] [:unit "s"] (label value)...)` | a pie or donut chart (below) |
 | `(math expr...)` | a formula laid out from its S-expression (below): a display formula as a block, an inline one inside a paragraph, a list item or a table cell |
 | `(table [:header (cell...)] [:align (:left ...)] [:caption "t"] [:row-header t] (cell...)...)` | a table; a cell is inline content or `(cell :colspan n inline...)` |
 | `(notes "text")` | speaker notes |
@@ -92,6 +95,7 @@ or parameter cannot be named after an element (`slide`, `p`, `b`, ...).
 A theme is the page's colors and the code's (`code-bg`, `code-fg`, `code-muted` and the
 highlight colors). `(theme :base :light :code :dark)` sets code on dark panels in a light
 deck; any color can be replaced by name, and every text color is checked for contrast.
+A chart's series take `accent` and `chart-2` to `chart-6`, checked at 3:1 on `bg`.
 `:midnight` is a dark indigo with gold: thin arcs frame the title, section and statement
 slides, and its tables, code and lists are drawn in fine lines.
 
@@ -122,6 +126,12 @@ and sized like the rest of the slide.
 (cells '((a . 1) (b . 2)))
 
 (bars :unit "s" ("interpreter" "2.1") ("jvm" "0.4") ("wasm" "0.6"))
+
+(columns :series ("2025" "2026") ("Q1" 3 5) ("Q2" 4 8) ("Q3" 2 6))
+
+(lines :series ("p50" "p99") :unit " ms" ("Jan" 12 40) ("Feb" 11 38) ("Mar" 10 55))
+
+(pie :donut t :unit "%" ("Chrome" 64) ("Safari" 19) ("Other" 17))
 ```
 
 `flow` with labels alone is a chain: its boxes left to right, joined by arrows, one
@@ -149,16 +159,36 @@ inside `cells`, and a template use inside it is drawn, not expanded. It holds at
 conses; atoms are symbols (lower case unless written otherwise), integers, ratios,
 strings and characters.
 
-`bars` draws a row per bar: the label on the left (inline content, wrapped at its
-phrases when long), the bar in the accent color as long as its value's share of the
-largest, and the value at its end, followed by `:unit` as written (`:unit " KB"` gives
-`297 KB`). A value is an integer or a decimal written as a string (`"2.1"`, `"1,840"`), 0
-or more; a float is refused, since its printing differs between implementations. More
-than 7 bars is a warning, as for a table's rows.
+Four forms draw charts, one per question a chart answers: `bars` (categories compared,
+long labels), `columns` (categories compared, or a few periods), `lines` (a change over
+ordered points) and `pie` (the parts of a whole). A row is `(label value...)`: the label
+inline content (wrapped at its phrases when long), then one value per series. A value is
+an integer or a decimal written as a string (`"2.1"`, `"-0.5"`, `"1,840"`); a float is
+refused, since its printing differs between implementations. `:unit` follows every value
+as written (`:unit " KB"` gives `297 KB`).
+
+- `:series ("2025" "2026")` names the series, at most 6: each value of a row belongs to
+  the series in its place, a legend names them above the chart, and each takes a color of
+  the theme in order, the accent first. More than 4 is a warning.
+- `bars` draws a row per category, a bar per series side by side, as long as its value's
+  share of the scale from zero, and the value at its end; a negative value runs left of
+  zero. `columns` draws the same upright, the categories along the bottom.
+- `:stack t` stacks a row's values into one bar, negative ones below zero, with the
+  row's total at its end. `:axis t` draws a scale with gridlines instead of the values.
+- `lines` draws a point per value joined by a line per series, along a scale on the
+  left; each series has its own marker shape as well as its color. The scale starts at
+  zero unless the values lie far from it.
+- `pie` draws a slice per row clockwise from the top, at most 6, beside a legend with
+  each value; `:donut t` cuts a hole in it. A value is 0 or more.
+- A scale steps by 1, 2 or 5 times a power of ten, computed in exact rationals, its ticks
+  written with the unit and the step's decimals.
+
+More than 7 rows of `bars` (12 of `columns` or `lines`, 5 slices of a pie) is a warning,
+as for a table's rows. A chart reads as its values to a screen reader.
 
 Labels start at 48 px and step down to 36 px with the slide; a diagram wider than its
-room at 36 px is an error. A diagram is centered in its column or the body; a bar chart
-spans it.
+room at 36 px is an error. A diagram is centered in its column or the body; a bar,
+column or line chart spans it.
 
 ## Formulas
 
@@ -200,10 +230,12 @@ line (a matrix, a display-sized sum) is a warning that it belongs in a block.
 
 `say` puts a short comment in a speech bubble whose tail points at what it wraps: a
 phrase, a list item, a table cell, a whole block, or, with `:at`, a piece of a code
-block named by its text, a box of a `flow`, a bar of `bars` (the tail at its value) or an
-atom of `cells` named by its label (the first equal to the text, else the first holding
-it). A `say` inside a label of a `flow` or `bars` points where `:at` naming that label
-would.
+block named by its text, a box of a `flow`, a category of a chart (on a chart of one series
+its bar, column, point or slice, the tail at the value written there; else its label), a series by its legend name, a slice of a `pie`,
+or an atom of `cells` named by its label (the first equal to the text, else the first
+holding it). A `say` inside a label of a `flow` or a chart points where `:at` naming that
+label would; one around a chart's value, `("Q2" 4 (say "peak" 8))`, points at the value
+written at its bar or column, or at its point.
 
 ```lisp
 (li "日本語は " (say "BudouX のモデルで区切る" (mark "文節")) " で改行する")
@@ -251,7 +283,9 @@ overview show the whole slide; the presenter window shows what is still to come 
 `:step t` reveals a whole block: a paragraph (`p`, `lead`), a quote, an image, a video, a
 table, a diagram, a display formula, a code block (its `:steps` then walk its lines) or a
 column. A table's rows and a diagram's boxes or bars come with their block; only a list
-reveals its parts one by one. A bubble that is no step but points at a stepped block, or
+reveals its parts one by one, and a chart's series with `:step :series` (`bars`,
+`columns`, `lines`): one advance per series, its legend name, marks and values together,
+a bubble around one of its values with it. A bubble that is no step but points at a stepped block, or
 stands in one, appears with it. A video with `:autoplay t` that is a step plays when it
 is revealed. `:step` on `notes`, on `source` or on the only block of an untitled slide
 (which would open empty) is an error.

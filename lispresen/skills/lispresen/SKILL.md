@@ -116,7 +116,8 @@ Read `references/deck-format.md` now if it is not already in context. The essent
 - One `(deck ...)` header, then top-level `(section "...")`, `(slide ...)`, `(agenda)` and
   `(define ...)` forms, each read separately, so every diagnostic has a line number.
 - A slide is blocks top to bottom: strings (paragraphs), `ul`/`ol`, `code`, `table`,
-  `image`, `video`, `quote`, `column`s, diagrams (`flow`, `bars`, `cells`), `notes`, `source`.
+  `image`, `video`, `quote`, `column`s, diagrams (`flow`, `cells`), charts (`bars`, `columns`, `lines`, `pie`), `notes`,
+  `source`.
 - No coordinates or font sizes exist in the format. When content does not fit, the fix is
   less content per slide, not styling.
 - Plan the talk as sections of a few slides; one idea per slide, at most 6 list items.

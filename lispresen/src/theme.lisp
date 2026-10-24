@@ -1,6 +1,7 @@
 ;;;; theme.lisp -- the built-in color themes and theme overrides.
 ;;;;
-;;;; A theme is (NAME value...) with one value per *THEME-VARIABLES* entry. A deck's
+;;;; A theme is (NAME value...) with one value per *THEME-VARIABLES* entry: the page's
+;;;; colors, the code's, and a chart's series colors after its first, the accent. A deck's
 ;;;; :theme is a built-in name or (theme [:base name] [:code name] [:variable "#rrggbb"]...),
 ;;;; which starts from the base (light by default), takes the code colors of the :code
 ;;;; theme, and replaces the named colors. A built-in theme may add stylesheet rules of its
@@ -10,7 +11,8 @@
 
 (defparameter *theme-variables*
   '("bg" "fg" "muted" "accent" "code-bg" "code-fg" "code-muted" "head-bg" "rule"
-    "mark" "hl-str" "hl-kw" "hl-def" "hl-const"))
+    "mark" "hl-str" "hl-kw" "hl-def" "hl-const" "chart-2" "chart-3" "chart-4" "chart-5"
+    "chart-6"))
 
 (defparameter *code-variables*
   '("code-bg" "code-fg" "code-muted" "hl-str" "hl-kw" "hl-def" "hl-const")
@@ -19,16 +21,20 @@
 (defparameter *themes*
   '(("LIGHT" "#ffffff" "#1f2328" "#59636e" "#0b5cad" "#f3f4f6" "#1f2328"
      "#59636e" "#e3ebf6" "#d0d7de" "#fff0a0" "#0a3069" "#0550ae" "#b3261e"
-     "#7a3fc4")
+     "#7a3fc4"
+     "#d9531e" "#0f8f63" "#a87300" "#c9447a" "#5b4bc4")
     ("DARK" "#15181d" "#e6e8eb" "#9aa3ad" "#6cb6ff" "#22272e" "#e6e8eb"
      "#9aa3ad" "#253041" "#3d444d" "#5c4a00" "#96d0ff" "#6cb6ff" "#f47067"
-     "#dcbdfb")
+     "#dcbdfb"
+     "#d9622b" "#1f9e6e" "#b88500" "#d4588e" "#8f78e8")
     ("HIGH-CONTRAST" "#000000" "#ffffff" "#d0d0d0" "#ffd400" "#1a1a1a" "#ffffff"
      "#d0d0d0" "#333333" "#8a8a8a" "#6b5800" "#a5ff90" "#7fdbff" "#ff9090"
-     "#e8b8ff")
+     "#e8b8ff"
+     "#3d9df2" "#ff8fc4" "#2fbf73" "#a98bff" "#ff6a4d")
     ("MIDNIGHT" "#0f1533" "#eef0fb" "#a4abcc" "#f2c14e" "#080c24" "#eef0fb"
      "#8f97bf" "#1d2550" "#343d6e" "#6b4f00" "#ffd58a" "#8db7ff" "#ff8a6e"
-     "#c9adff")))
+     "#c9adff"
+     "#5b9bff" "#f0644f" "#b49aff" "#33b886" "#ff8fb8")))
 
 ;;; Midnight sets the title, section and statement slides between two thin arcs, the
 ;;; edges of 1000 x 2400 px ellipses whose center is 540 px in from the canvas edge, so
