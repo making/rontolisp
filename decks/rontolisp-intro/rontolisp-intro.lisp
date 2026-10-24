@@ -7,7 +7,7 @@
 
 (deck :title "rontolisp 入門"
       :author "rontolisp"
-      :date "2026-10-23"
+      :date "2026-10-24"
       :url "https://github.com/making/rontolisp"
       :description "Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから Common Lisp・Scheme・Clojure の各言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する"
       :page-url "https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html"
@@ -19,7 +19,8 @@
       :kicker :section
       :agenda "話の流れ"
       :progress t
-      :page-numbers t)
+      :page-numbers t
+      :footer "github.com/making/rontolisp")
 
 ;;; --- what rontolisp is ------------------------------------------------------------
 
@@ -132,11 +133,11 @@
     ("数値" "多倍長整数、有理数、浮動小数点数")))
 
 (slide :title "ANSI Common Lisp テストスイート"
-  (p "19,769 件のテストのうち " (accent (b "16,511 件")) " が通過している (83.5%)。")
+  (p "19,769 件のテストのうち " (accent (b "16,529 件")) " が通過している (83.6%)。")
   (ul "計測の対象はインタプリタ"
       "CI が毎日スイート全体を実行し、通過数が変わるたびに結果を記録する"
       "対応する機能を増やし、通過数を引き続き上げていく")
-  (source "ansi-test/results/interpreter.md (2026-10-21 時点、スイートのリビジョン ca06bd9)"))
+  (source "ansi-test/results/interpreter.md (2026-10-23 時点、スイートのリビジョン ca06bd9)"))
 
 (slide :title "プログラムもリスト"
   (p "コードは S 式で書く。S 式はリストなので、マクロはリストを組み立ててコードを作る。")
@@ -222,6 +223,7 @@
   (p (tt "--native") " は、WASM 出力を wasmtime でマシンコードにプリコンパイルし、小さなランナーの後ろに付ける。")
   (ul "実行に wasmtime も JVM も要らない"
       "起動は約 10 ms"
+      (li (tt "rontolisp:fetch") "、Clack や Ring の Web アプリ、TCP ソケットも動く。通信はランナーが行う")
       (li (tt "--native-target") " で Linux の x86_64 と aarch64、macOS の aarch64 向けを作れる"))
   (source "doc/ja/compiling/native.md"))
 
@@ -367,6 +369,7 @@
     ((tt "rontolisp app.lisp") "インタプリタ")
     ((tt "-o app.jar") "JVM、Google App Engine")
     ((tt "-o app.war") "Servlet コンテナ")
+    ((tt "--native -o app") "ネイティブ実行ファイル")
     ((tt "-o app.wasm --component") (cell (tt "wasmtime serve") " など"))
     ((tt "-o worker.wasm --no-wasi") "Cloudflare Workers"))
   (source "examples/net/httpbin-clack.lisp、examples/cloudflare-workers/、examples/gae/"))

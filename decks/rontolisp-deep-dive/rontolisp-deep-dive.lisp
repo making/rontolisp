@@ -5,7 +5,7 @@
 
 (deck :title "rontolisp deep dive"
       :author "rontolisp"
-      :date "2026-10-23"
+      :date "2026-10-24"
       :url "https://github.com/making/rontolisp"
       :description "rontolisp の内部: コアフォームのリストという一つの IR から、インタプリタ、JVM、WASM、ネイティブ実行ファイルへ"
       :page-url "https://making.github.io/rontolisp/decks/rontolisp-deep-dive/rontolisp-deep-dive.html"
@@ -17,7 +17,8 @@
       :kicker :section
       :agenda "話の流れ"
       :progress t
-      :page-numbers t)
+      :page-numbers t
+      :footer "github.com/making/rontolisp")
 
 ;;; --- the front end -----------------------------------------------------------------
 
@@ -63,7 +64,7 @@
     (defun sign (x)
       (if (< x 0) 'neg
           (if (= x 0) 'zero 'pos)))")
-  (source (tt "rontolisp sign.lisp --dump-ir") " の出力を小文字にして改行した (2026-10-23)"))
+  (source (tt "rontolisp sign.lisp --dump-ir") " の出力を小文字にして改行した (2026-10-24)"))
 
 (slide :title "マクロ展開をその場で見る"
   (code :lang "lisp" "
@@ -87,6 +88,16 @@
       (li "テストも " (tt "CompileFrontendAccess") " を通して前段を呼ぶ"))
   (source ".kb/architecture.md (Package rules)"))
 
+(slide :title "計算した load のパスも展開する"
+  (p "ほかの Common Lisp 処理系でも動かすプログラムは、" (tt "load") " するファイルを " (tt "*load-truename*") " からの相対で書く。")
+  (code :lang "lisp" :run nil "
+    (load (merge-pathnames \"src/a.lisp\" *load-truename*))")
+  (ul "この値はコンパイル時に決まるので、前段はパスを計算してファイルを展開する"
+      (li (tt "*load-truename*") " は絶対パスなので、どこから実行しても同じファイルを指す")
+      (li "コンパイルしたプログラムは、実行時に " (tt "src/") " を必要としない"))
+  (notes "標準の Common Lisp は相対パスの load をワーキングディレクトリから解決するので、移植できるプログラムはこの形で書く。2026-10-24 までは、コンパイルパスがこの形を実行時の load のまま残し、コンパイルしたプログラムはファイルを見つけられなかった。")
+  (source ".kb/load-inliner.md, doc/ja/compiling/dynamic.md"))
+
 (slide :title "接合は入れ子の呼び出しで書く"
   (say "使わない定義を落とす" :at "prune(program);"
     (code "
@@ -101,7 +112,8 @@
 
 (slide :title "書き直しを禁じた経緯"
   (lead "二つのコーパス検査がパスの並びの写しを持ち、本体からずれていった")
-  (ul (li (tt "tokenizer:") " のケースが " (tt "ci-spec.yaml") " に入った時点で 8 パス、直した時点で 10 パス遅れていた")
+  (ul :step t
+      (li (tt "tokenizer:") " のケースが " (tt "ci-spec.yaml") " に入った時点で 8 パス、直した時点で 10 パス遅れていた")
       (li "パスの名前を数えるだけでは見つからない、位置のずれもあった (" (tt "VecLibrary") ")")
       (li (tt "JvmOsrBackedgeCorpusTest") " は 2026-09-19 まで写しを持ち、接合 11 個分遅れて、成功するたびに警告を 10 行出していた"))
   (source ".kb/architecture.md (Package rules)"))
@@ -186,7 +198,8 @@
 
 (slide :title "着地パッドで局所変数を読み直す"
   (lead "コーパス全体が、コードの大きさによって " (tt "cast failure") " で落ちたり通ったりした")
-  (ul "Cranelift は局所変数を、呼び出しの前に評価した引数として着地パッドに渡していた"
+  (ul :step t
+      "Cranelift は局所変数を、呼び出しの前に評価した引数として着地パッドに渡していた"
       "呼び出しの間にコピー GC がオブジェクトを動かすと、パッドは古い参照を受け取る"
       "対策として、パッドの先頭で、その後に使う局所変数を読み直す")
   (notes "3,590 行を出力する実行の 3,587 行目で trap した。落ちるか通るかは、その呼び出しの間に GC が起きるかどうかだけで決まる。GC ヒープの事前拡張はコードのバイト数に比例するので、ケースを一つ足すだけで GC の時期がずれ、結果が変わった。")
@@ -203,11 +216,11 @@
 (slide :title "刈り込みで変わる .wasm の大きさ"
   (lead "chipz で gunzip するプログラムの " (tt ".wasm"))
   (say "既定で刈り込む" :at "--optimize (既定)"
-    (bars :unit " B" ("--optimize=off" "550,484") ("--optimize (既定)" "133,689")
+    (bars :unit " B" ("--optimize=off" "550,648") ("--optimize (既定)" "133,689")
           ("--optimize=size" "102,171") ("--component --optimize=size" "106,355")))
-  (p "Hello, World! だけを出すプログラムは、" (tt "--optimize=off") " の 271,101 B から既定の 480 B になる。")
+  (p "Hello, World! だけを出すプログラムは、" (tt "--optimize=off") " の 271,265 B から既定の 480 B になる。")
   (notes "「大きさ」は一つの量ではない。バイト列を削らずに別の場所へ移すと、生のサイズは減っても gzip 後のサイズは増えることがある (.kb/size-measurement.md)。")
-  (source "size-report/results/wasm-flags.md (2026-10-15 測定)"))
+  (source "size-report/results/wasm-flags.md (2026-10-23 測定)"))
 
 (slide :title "ネイティブ実行ファイル"
   (flow (tt ".wasm") "wasmtime でプリコンパイル" "ランナーの後ろに付ける" "実行ファイル")
@@ -220,8 +233,21 @@
 (slide :title "ランナーの大きさ"
   (bars :unit " MB" ("Linux x86_64" "2.1") ("Linux aarch64" "1.9") ("macOS" "1.7"))
   (ul (li "実行ファイルは、ランナーに " (tt ".wasm") " の約 11 倍を足した大きさ")
+      "HTTP の送信と配信、TCP ソケットを使うモジュールは、HTTP クライアントを含むネットワーク版のランナー (Linux x86_64 で 3.3 MB) で動く"
       (li "起動は約 10 ms。同じモジュールを " (tt "wasmtime run") " で動かすのとほぼ同じ速度で動く"))
-  (source "doc/ja/compiling/native.md (サイズと速度)"))
+  (source "doc/ja/compiling/native.md (サイズと速度), .kb/native-output.md (The network runner)"))
+
+(slide :title "ローカルタイムゾーンの問い合わせ先"
+  (p (tt "time-zone") " を省略した " (tt "decode-universal-time") " は、夏時間を含むローカルゾーンで変換する。"
+     "ゾーンを答える基本関数の実装が、バックエンドごとに違う。")
+  (table :header ("ビルド" "問い合わせ先")
+    ("インタプリタ、JVM" "java.time の既定ゾーン")
+    ((cell "Preview 1、" (tt "--component")) (cell "モジュールが " (tt "TZ") " とゾーンファイルを読む"))
+    ((tt "--native") (cell "ランナーが " (tt "localtime_r") " を呼ぶ"))
+    ("ブラウザ" (cell "JavaScript の " (tt "Date")))
+    ((tt "--no-wasi") "UTC"))
+  (notes "--native でモジュール自身がゾーンファイルを読まないのは、macOS や Debian の /etc/localtime が絶対パスへのシンボリックリンクで、WASI のサンドボックスがそれをたどらないため。2026-10-24 に、ニューヨーク、シドニー、コルカタ、ロード・ハウ島などのゾーンで SBCL 2.6.5 と比べ、--native はすべて一致した。")
+  (source ".kb/time-environment-builtins.md, doc/ja/guides/clock-and-random.md"))
 
 ;;; --- the Scheme and Clojure front ends ---------------------------------------------
 
@@ -259,7 +285,7 @@
                    nil)
                  (go %scm-l3))))
         %scm-r4))")
-  (source (tt "rontolisp sum.scm --dump-ir") " の出力を小文字にして改行した (2026-10-23)"))
+  (source (tt "rontolisp sum.scm --dump-ir") " の出力を小文字にして改行した (2026-10-24)"))
 
 (slide :title "同じインタプリタで動かす"
   (column
@@ -302,7 +328,7 @@
       (li "各バックエンドで、既定と " (tt "--simd") " の二回流す")
       (li (tt "./mvnw test") " は " (tt "CiSpecE2eTest") " を飛ばす。CI のネイティブジョブで動く")
       "2026-10-17 に、コーパスと重複する 373 のテストメソッドを消し、JVM と WASM で対になった 298 組のテストをケースに移した")
-  (source "src/test/resources/ci-spec.yaml (1,354 ケース、2026-10-23 に数えた), .kb/test-execution.md"))
+  (source "src/test/resources/ci-spec.yaml (1,353 ケース、2026-10-24 に数えた), .kb/test-execution.md"))
 
 (slide :title "出力はプログラムだけで決まる"
   (ul "同じソースと同じビルドなら、何度コンパイルしても同じバイト列になる"

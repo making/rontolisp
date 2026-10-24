@@ -51,6 +51,11 @@ html:not(.js) #progress{display:none}
 a{color:var(--accent)}
 figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:center}
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
+figure video{flex:1 1 0;min-height:0;width:100%;object-fit:contain}
+html.js video{cursor:pointer}
+figure.bleed{position:absolute;top:0;height:100%;display:block}
+.bleed img,.bleed video{display:block;width:100%;height:100%;max-width:none;object-fit:cover}
+.bleed.contain img,.bleed.contain video{object-fit:contain}
 figcaption{color:var(--muted);text-align:center}
 table{flex:none;border-collapse:collapse;table-layout:fixed;font-size:var(--table);line-height:var(--table-lh)}
 caption{caption-side:top;text-align:left;color:var(--muted);padding-bottom:var(--cell-y)}
@@ -69,7 +74,9 @@ th{font-weight:700}
 .qr{position:absolute;display:flex;flex-direction:column;gap:8px;font-size:24px;line-height:34px;white-space:nowrap}
 .qr.right{align-items:flex-end}
 .qr a{color:var(--muted)}
-.page{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.page,.footer{position:absolute;bottom:24px;font-size:24px;line-height:24px;color:var(--muted)}
+.footer{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:.25em 0;margin:-.25em 0}
+.footer a{color:inherit}
 .notes{display:none}
 .overflow{outline:8px solid #d1242f;outline-offset:-8px}
 .slide.measure{display:block;visibility:hidden}
@@ -156,28 +163,37 @@ figure.dg{flex:none;display:block;position:relative;align-self:center}
 span.dg-l{font-family:Menlo,Consolas,'BIZ UDGothic',monospace;white-space:pre}
 .dg-t,.dg-v{text-align:left}
 .dg-v{white-space:nowrap}
+figure.math{flex:none;display:block;align-self:center;line-height:0}
+svg.mx{overflow:visible;font-weight:400}
+figure.math>svg.mx{display:block}
+.mx text{fill:currentColor;text-anchor:middle;white-space:pre}
+.mx rect,.mx polygon{fill:currentColor}
+.mx .i{font-style:italic}
+.mx .b{font-weight:700}
 figure.pointed{align-items:flex-end}
+figure.pointed video{object-position:right}
 figure.pointed figcaption{align-self:stretch}
 #fs{position:fixed;right:16px;bottom:16px;width:44px;height:44px;border:0;border-radius:8px;background:rgba(127,127,127,.25);color:var(--fg);cursor:pointer;opacity:0;transition:opacity .2s}
 #stage.pointer #fs{opacity:1}
 #stage.idle{cursor:none}
 html:not(.js) #fs{display:none}
-.slide{width:1920px;height:1080px}
-.kicker,.title,.body,.centered,.source{left:112px;width:1696px}
+.slide{width:1920px;height:1080px;--left:112px;--width:1696px;--right:112px}
+.kicker,.title,.body,.centered,.source,.out{left:var(--left);width:var(--width)}
 .source{bottom:72px}
 .kicker{top:32px}
 .title,.centered{top:80px}
 .centered{height:928px}
-.page{right:112px}.out{left:112px;width:1696px}
+.page{right:var(--right)}
+.footer{left:var(--left);width:calc(var(--width) - 81px)}
 .thumb{aspect-ratio:1920/1080}
-@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}}
+@media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}html.handout .slide{overflow:visible;clip-path:inset(0 0 -1080px 0);margin-bottom:1080px}html.handout .notes{display:block;position:absolute;left:var(--left);width:var(--width);top:1080px;height:1080px;overflow:hidden;box-sizing:border-box;padding-top:48px;color:#000;font-size:36px;line-height:1.6;white-space:pre-wrap}}
 </style>
 </head>
 <body>
 <div id="stage">
 <div id="deck" style="width:1920px;height:1080px">
 <section class="slide layout-title" id="s1" style="--stmt:120px;--stmt-lh:162px;">
-<div class="centered"><h1 class="deck-title">rontolisp deep dive</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>3</p></div>
+<div class="centered"><h1 class="deck-title">rontolisp deep dive</h1><p class="deck-meta">rontolisp</p><p class="deck-meta">2026<span class="nw">-1</span>0<span class="nw">-2</span>4</p></div>
 <div class="qr right" style="left:1350px;top:646px;width:458px"><svg class="qr-code" viewBox="0 0 37 37" width="320" height="320" role="img" aria-label="QR code: https://github.com/making/rontolisp" shape-rendering="crispEdges"><rect width="37" height="37" fill="#fff"/><path fill="#000" d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM19 4h6v1h-6zM26 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM14 5h3v1h-3zM18 5h2v1h-2zM21 5h1v1h-1zM26 5h1v1h-1zM32 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM14 6h1v1h-1zM17 6h3v1h-3zM22 6h1v1h-1zM26 6h1v1h-1zM28 6h3v1h-3zM32 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h4v1h-4zM21 7h1v1h-1zM23 7h1v1h-1zM26 7h1v1h-1zM28 7h3v1h-3zM32 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM17 8h1v1h-1zM23 8h1v1h-1zM26 8h1v1h-1zM28 8h3v1h-3zM32 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h5v1h-5zM26 9h1v1h-1zM32 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h7v1h-7zM12 11h2v1h-2zM15 11h1v1h-1zM17 11h2v1h-2zM21 11h1v1h-1zM24 11h1v1h-1zM4 12h1v1h-1zM6 12h2v1h-2zM9 12h3v1h-3zM13 12h1v1h-1zM15 12h4v1h-4zM21 12h3v1h-3zM26 12h1v1h-1zM29 12h1v1h-1zM31 12h2v1h-2zM4 13h1v1h-1zM6 13h1v1h-1zM11 13h2v1h-2zM15 13h2v1h-2zM20 13h1v1h-1zM22 13h3v1h-3zM26 13h3v1h-3zM32 13h1v1h-1zM5 14h2v1h-2zM8 14h1v1h-1zM10 14h1v1h-1zM13 14h1v1h-1zM15 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM30 14h2v1h-2zM7 15h3v1h-3zM11 15h1v1h-1zM13 15h8v1h-8zM22 15h5v1h-5zM28 15h1v1h-1zM32 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM10 16h4v1h-4zM15 16h2v1h-2zM19 16h5v1h-5zM29 16h2v1h-2zM6 17h2v1h-2zM9 17h1v1h-1zM12 17h1v1h-1zM14 17h4v1h-4zM19 17h2v1h-2zM23 17h1v1h-1zM26 17h1v1h-1zM30 17h3v1h-3zM4 18h2v1h-2zM7 18h1v1h-1zM10 18h1v1h-1zM13 18h2v1h-2zM16 18h1v1h-1zM18 18h1v1h-1zM21 18h4v1h-4zM26 18h1v1h-1zM30 18h3v1h-3zM4 19h5v1h-5zM11 19h7v1h-7zM19 19h1v1h-1zM23 19h6v1h-6zM31 19h1v1h-1zM5 20h4v1h-4zM10 20h3v1h-3zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h1v1h-1zM22 20h3v1h-3zM28 20h2v1h-2zM31 20h1v1h-1zM5 21h4v1h-4zM11 21h3v1h-3zM15 21h1v1h-1zM17 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM27 21h1v1h-1zM29 21h3v1h-3zM4 22h1v1h-1zM6 22h1v1h-1zM8 22h1v1h-1zM10 22h4v1h-4zM15 22h1v1h-1zM19 22h1v1h-1zM21 22h2v1h-2zM24 22h1v1h-1zM26 22h3v1h-3zM30 22h1v1h-1zM7 23h2v1h-2zM12 23h1v1h-1zM16 23h1v1h-1zM20 23h2v1h-2zM26 23h3v1h-3zM30 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h2v1h-2zM12 24h1v1h-1zM14 24h2v1h-2zM17 24h1v1h-1zM19 24h4v1h-4zM24 24h7v1h-7zM12 25h1v1h-1zM14 25h1v1h-1zM17 25h2v1h-2zM20 25h3v1h-3zM24 25h1v1h-1zM28 25h5v1h-5zM4 26h7v1h-7zM12 26h1v1h-1zM14 26h1v1h-1zM16 26h2v1h-2zM20 26h1v1h-1zM22 26h3v1h-3zM26 26h1v1h-1zM28 26h2v1h-2zM31 26h1v1h-1zM4 27h1v1h-1zM10 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM28 27h2v1h-2zM31 27h1v1h-1zM4 28h1v1h-1zM6 28h3v1h-3zM10 28h1v1h-1zM13 28h4v1h-4zM18 28h1v1h-1zM21 28h1v1h-1zM24 28h5v1h-5zM30 28h2v1h-2zM4 29h1v1h-1zM6 29h3v1h-3zM10 29h1v1h-1zM12 29h1v1h-1zM14 29h3v1h-3zM18 29h3v1h-3zM23 29h1v1h-1zM25 29h1v1h-1zM27 29h3v1h-3zM32 29h1v1h-1zM4 30h1v1h-1zM6 30h3v1h-3zM10 30h1v1h-1zM12 30h1v1h-1zM18 30h1v1h-1zM20 30h3v1h-3zM24 30h1v1h-1zM27 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM13 31h2v1h-2zM16 31h5v1h-5zM22 31h1v1h-1zM24 31h2v1h-2zM27 31h1v1h-1zM29 31h1v1h-1zM31 31h1v1h-1zM4 32h7v1h-7zM12 32h4v1h-4zM18 32h1v1h-1zM20 32h1v1h-1zM22 32h5v1h-5zM31 32h1v1h-1z"/></svg><p><a href="https://github.com/making/rontolisp">https://github.com/making/rontolisp</a></p></div>
 </section>
 <section class="slide layout-standard" id="s2" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -185,6 +201,7 @@ html:not(.js) #fs{display:none}
 <div class="body" style="top:232px;height:776px">
 <ol><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">2</div>
 </section>
 <section class="slide layout-standard" id="s3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -192,6 +209,7 @@ html:not(.js) #fs{display:none}
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li class="current">ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">3</div>
 </section>
 <section class="slide layout-standard" id="s4" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -205,6 +223,7 @@ html:not(.js) #fs{display:none}
 <ul><li><code>SourceLanguage</code> が<wbr>言語ごとに<wbr>ソースを<wbr>読み、<wbr>コアフォームに<wbr>下げる</li><li>インタプリタ (<code>LispEvaluator</code>) が<wbr>評価し、<wbr>JVM と WASM の<wbr>コンパイラは<wbr>バイト列を<wbr>出力する</li><li>WASM には Preview 1&nbsp;と<wbr>コンポーネントの<wbr>二通りが<wbr>あり、<wbr>バックエンドは<wbr>合わせて<wbr>四つ</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Pipeline), .kb/running<span class="nw">-b</span>ackends.md</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">4</div>
 </section>
 <section class="slide layout-standard" id="s5" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -219,6 +238,7 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="say" id="s5c1" role="note" data-side="below" data-at="if" style="left:112px;top:452px;width:490px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:346px"><p>先頭の<wbr>名前で<wbr>分岐する</p></div>
 <p class="source">.kb/source<span class="nw">-l</span>anguage.md, .kb/scheme<span class="nw">-f</span>rontend.md</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">5</div>
 </section>
 <section class="slide layout-standard" id="s6" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
@@ -229,6 +249,7 @@ html:not(.js) #fs{display:none}
 <ul><li>言語は<wbr>ファイルごとに<wbr>拡張子で<wbr>決まる (<code>.lisp</code>、<code>.scm</code>、<code>.clj</code>、<code>.cljc</code>)</li><li><code>(load ...)</code> した<wbr>ファイルは、<wbr>その<wbr>ファイルの<wbr>拡張子の<wbr>言語で<wbr>読む</li><li>入口の<wbr>ファイルだけは <code><span class="nw">--s</span>ource<span class="nw">-l</span>anguage</code> で<wbr>言語を<wbr>指定できる</li><li>入口の<wbr>外で <code>LispReader</code> を<wbr>呼ぶ<wbr>クラスが<wbr>ない<wbr>ことを、<wbr><code>SourceLanguageSeamTest</code> が<wbr>確かめる</li></ul>
 </div>
 <p class="source">.kb/source<span class="nw">-l</span>anguage.md</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">6</div>
 </section>
 <section class="slide layout-standard" id="s7" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -242,6 +263,7 @@ html:not(.js) #fs{display:none}
         <span class="tk">(</span><span class="tk hl-n">t</span> <span class="tk">&#39;</span><span class="tk">pos</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span></code></pre>
 </div>
 <p class="source">.kb/architecture.md (Pipeline)</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">7</div>
 </section>
 <section class="slide layout-standard" id="s8" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -253,7 +275,8 @@ html:not(.js) #fs{display:none}
   <span class="tk" data-m="6">(</span><span class="tk hl-d">if</span> <span class="tk" data-m="9">(</span><span class="tk" data-m="10">&lt;</span> <span class="tk" data-m="11">x</span> <span class="tk hl-n" data-m="12">0</span><span class="tk" data-m="13">)</span> <span class="tk" data-m="14">&#39;</span><span class="tk" data-m="15">neg</span>
       <span class="tk" data-m="17">(</span><span class="tk hl-d">if</span> <span class="tk" data-m="18">(</span><span class="tk" data-m="19">=</span> <span class="tk" data-m="20">x</span> <span class="tk hl-n" data-m="21">0</span><span class="tk" data-m="22">)</span> <span class="tk" data-m="23">&#39;</span><span class="tk" data-m="24">zero</span> <span class="tk" data-m="28">&#39;</span><span class="tk" data-m="29">pos</span><span class="tk" data-m="30">)</span><span class="tk" data-m="31">)</span><span class="tk" data-m="32">)</span></code></pre>
 </div>
-<p class="source"><code>rontolisp sign.lisp <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>3)</p>
+<p class="source"><code>rontolisp sign.lisp <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>4)</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">8</div>
 </section>
 <section class="slide layout-standard" id="s9" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
@@ -267,6 +290,7 @@ html:not(.js) #fs{display:none}
 <ul><li>バッククォートは、<wbr>リーダーが<wbr>読み込み時に list、<wbr>append、<wbr>cons、<wbr>quote の<wbr>呼び出しに<wbr>展開する</li><li>コンパイルパスでは <code>UserMacroExpander</code> が <code>defmacro</code> を<wbr>マクロ用の<wbr>インタプリタで<wbr>評価し、<wbr>呼び出しを<wbr>展開してから<wbr>定義を<wbr>取り除く</li></ul>
 </div>
 <p class="source">.kb/defmacro<span class="nw">-b</span>ackquote.md</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">9</div>
 </section>
 <section class="slide layout-standard" id="s10" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
@@ -274,6 +298,7 @@ html:not(.js) #fs{display:none}
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li class="current">CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">10</div>
 </section>
 <section class="slide layout-standard" id="s11" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
@@ -287,13 +312,27 @@ html:not(.js) #fs{display:none}
 <ul><li>すべての<wbr>バックエンドと<wbr>埋め込み側が <code>CompileFrontend</code> を<wbr>通る</li><li>パスの<wbr>並びは <code>CompileFrontend.expand</code> にだけ<wbr>書き、<wbr>ほかの<wbr>場所で<wbr>書き直さない</li><li>テストも <code>CompileFrontendAccess</code> を<wbr>通して<wbr>前段を<wbr>呼ぶ</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Package rules)</p>
+<p class="footer">github.com/making/rontolisp</p>
 <div class="page">11</div>
 </section>
-<section class="slide layout-standard" id="s12" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s12" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">CompileFrontend.expand</p>
+<h1 class="title">計算した load の<wbr>パスも<wbr>展開する</h1>
+<div class="body" style="top:232px;height:712px">
+<p>ほかの Common Lisp 処理系でも<wbr>動かす<wbr>プログラムは、<wbr><code>load</code> する<wbr>ファイルを <code>*load<span class="nw">-t</span>ruename*</code> からの<wbr>相対で<wbr>書く。</p>
+<pre class="code" data-lang="lisp"><code>(load (merge-pathnames <span class="hl-s">&quot;src/a.lisp&quot;</span> *load-truename*))</code></pre>
+<ul><li>この<wbr>値は<wbr>コンパイル時に<wbr>決まるので、<wbr>前段は<wbr>パスを<wbr>計算して<wbr>ファイルを<wbr>展開する</li><li><code>*load<span class="nw">-t</span>ruename*</code> は<wbr>絶対パスなので、<wbr>どこから<wbr>実行しても<wbr>同じ<wbr>ファイルを<wbr>指す</li><li>コンパイルした<wbr>プログラムは、<wbr>実行時に <code>src/</code> を<wbr>必要としない</li></ul>
+</div>
+<p class="source">.kb/load<span class="nw">-i</span>nliner.md, doc/ja/compiling/dynamic.md</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">12</div>
+<aside class="notes">標準の Common Lisp は相対パスの load をワーキングディレクトリから解決するので、移植できるプログラムはこの形で書く。2026-10-24 までは、コンパイルパスがこの形を実行時の load のまま残し、コンパイルしたプログラムはファイルを見つけられなかった。</aside>
+</section>
+<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">CompileFrontend.expand</p>
 <h1 class="title">接合は<wbr>入れ子の<wbr>呼び出しで<wbr>書く</h1>
 <div class="body" style="top:232px;height:712px">
-<pre class="code" aria-describedby="s12c1"><code>languages = InflateLibrary.process(
+<pre class="code" aria-describedby="s13c1"><code>languages = InflateLibrary.process(
   ClojureLibrary.process(
     SchemeLibrary.process(
       UserMacroExpander.expand(...), ...), ...), ...);
@@ -301,28 +340,31 @@ html:not(.js) #fs{display:none}
 program = LibraryDefunPruner.prune(program);</code></pre>
 <p>呼び出しの<wbr>順序には<wbr>意味が<wbr>ある。<wbr>Scheme の<wbr>実行時ライブラリは<wbr>プレリュードの<wbr>文字列比較を<wbr>使うので、<wbr>プレリュードの<wbr>内側に<wbr>接合する。</p>
 </div>
-<div class="say" id="s12c1" role="note" data-side="right" data-at="prune(program);" style="left:1361px;top:554px;width:446px;height:82px;--say:40px;--say-lh:56px;--say-x:20px;--say-y:10px;--tail:38px"><p>使わない<wbr>定義を<wbr>落とす</p></div>
+<div class="say" id="s13c1" role="note" data-side="right" data-at="prune(program);" style="left:1361px;top:554px;width:446px;height:82px;--say:40px;--say-lh:56px;--say-x:20px;--say-y:10px;--tail:38px"><p>使わない<wbr>定義を<wbr>落とす</p></div>
 <p class="source">src/main/java/am/ik/rontolisp/cli/CompileFrontend.java からの<wbr>抜粋, .kb/scheme<span class="nw">-f</span>rontend.md</p>
-<div class="page">12</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">13</div>
 </section>
-<section class="slide layout-standard" id="s13" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s14" data-steps="3" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">CompileFrontend.expand</p>
 <h1 class="title">書き直しを<wbr>禁じた<wbr>経緯</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">二つの<wbr>コーパス検査が<wbr>パスの<wbr>並びの<wbr>写しを<wbr>持ち、<wbr>本体から<wbr>ずれていった</p>
-<ul><li><code>tokenizer:</code> の<wbr>ケースが <code>ci<span class="nw">-s</span>pec.yaml</code> に<wbr>入った<wbr>時点で 8&nbsp;パス、<wbr>直した<wbr>時点で 10&nbsp;パス遅れていた</li><li>パスの<wbr>名前を<wbr>数えるだけでは<wbr>見つからない、<wbr>位置の<wbr>ずれも<wbr>あった (<code>VecLibrary</code>)</li><li><code>JvmOsrBackedgeCorpusTest</code> は 2026<span class="nw">-0</span>9<span class="nw">-1</span>9&nbsp;まで<wbr>写しを<wbr>持ち、<wbr>接合 11&nbsp;個分遅れて、<wbr>成功する<wbr>たびに<wbr>警告を 10&nbsp;行出していた</li></ul>
+<ul><li data-step="1"><code>tokenizer:</code> の<wbr>ケースが <code>ci<span class="nw">-s</span>pec.yaml</code> に<wbr>入った<wbr>時点で 8&nbsp;パス、<wbr>直した<wbr>時点で 10&nbsp;パス遅れていた</li><li data-step="2">パスの<wbr>名前を<wbr>数えるだけでは<wbr>見つからない、<wbr>位置の<wbr>ずれも<wbr>あった (<code>VecLibrary</code>)</li><li data-step="3"><code>JvmOsrBackedgeCorpusTest</code> は 2026<span class="nw">-0</span>9<span class="nw">-1</span>9&nbsp;まで<wbr>写しを<wbr>持ち、<wbr>接合 11&nbsp;個分遅れて、<wbr>成功する<wbr>たびに<wbr>警告を 10&nbsp;行出していた</li></ul>
 </div>
 <p class="source">.kb/architecture.md (Package rules)</p>
-<div class="page">13</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">14</div>
 </section>
-<section class="slide layout-standard" id="s14" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s15" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li class="current">インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
-<div class="page">14</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">15</div>
 </section>
-<section class="slide layout-standard" id="s15" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">既定の<wbr>実行経路は<wbr>インタプリタ</h1>
 <div class="body" style="top:232px;height:712px">
@@ -330,18 +372,20 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">測った<wbr>もの</th><th scope="col">値</th></tr></thead><tbody><tr><td>インタプリタの<wbr>ループ (SBCL 比)</td><td>20〜240&nbsp;倍遅い</td></tr><tr><td><code>java <span class="nw">-j</span>ar</code> の<wbr>コンパイルの<wbr>固定費</td><td>約 0.6&nbsp;秒</td></tr><tr><td>前段 (温まった<wbr>後)</td><td>約 4&nbsp;ms</td></tr><tr><td>JVM の<wbr>コード生成 (温まった<wbr>後)</td><td>約 140&nbsp;ms</td></tr><tr><td>ネイティブバイナリでの<wbr>コンパイル全体</td><td>約 0.16&nbsp;秒</td></tr></tbody></table>
 </div>
 <p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
-<div class="page">15</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">16</div>
 </section>
-<section class="slide layout-standard" id="s16" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">実行エンジンを<wbr>自動で<wbr>切り<wbr>替えない<wbr>理由</h1>
 <div class="body" style="top:232px;height:712px">
 <ul><li>固定費の<wbr>大半は、<wbr>コンパイラ自身の<wbr>クラスロードと JIT の<wbr>ウォームアップ</li><li>メモリ上で<wbr>コンパイルして<wbr>実行すると、<wbr><code>java <span class="nw">-j</span>ar</code> で <code>(print &#39;hi)</code> が 2.2&nbsp;倍遅くなる</li><li>rontolisp の<wbr>ネイティブバイナリは、<wbr>実行時に<wbr>クラスを<wbr>定義できない</li><li>実行の<wbr>たびに<wbr>エンジンが<wbr>変わると、<wbr>インタプリタと<wbr>コンパイル経路の<wbr>食い<wbr>違いが、<wbr>そのまま<wbr>気付きにくい<wbr>挙動の<wbr>変化に<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/default<span class="nw">-r</span>un<span class="nw">-p</span>ath.md</p>
-<div class="page">16</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">17</div>
 </section>
-<section class="slide layout-standard" id="s17" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">自由変数の<wbr>解析が<wbr>一つ<wbr>抜けると</h1>
 <div class="body" style="top:232px;height:712px">
@@ -349,9 +393,10 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">結果</th></tr></thead><tbody><tr><td>インタプリタ</td><td>正しい (環境ごと<wbr>捕捉する)</td></tr><tr><td>JVM</td><td>変数の<wbr>新しい<wbr>コピーを<wbr>読み、<wbr>エラーなしに<wbr>誤った<wbr>結果を<wbr>出す</td></tr><tr><td>WASM</td><td>コンパイル時に<wbr>拒否する</td></tr></tbody></table>
 </div>
 <p class="source">.kb/core<span class="nw">-r</span>epresentation.md (Three<span class="nw">-p</span>ass compilation)</p>
-<div class="page">17</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">18</div>
 </section>
-<section class="slide layout-standard" id="s18" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">JVM: クラスファイルを JDK の API で<wbr>書く</h1>
 <div class="body" style="top:232px;height:712px">
@@ -359,67 +404,74 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">形式の<wbr>上限</th><th scope="col">超えた<wbr>とき</th></tr></thead><tbody><tr><td>分岐オフセット (16&nbsp;ビット)</td><td><code>goto_w</code> で<wbr>書く</td></tr><tr><td>メソッドの<wbr>コード (65,535&nbsp;B)</td><td>メソッド名を<wbr>挙げて<wbr>拒否する</td></tr><tr><td>定数プール (65,534&nbsp;項目)</td><td><code>$PartN</code> の<wbr>クラスに<wbr>分ける</td></tr><tr><td><code>CONSTANT_Utf8</code> (65,535&nbsp;B)</td><td>分割して<wbr>連結する</td></tr></tbody></table>
 </div>
 <p class="source">.kb/jvm<span class="nw">-m</span>ethod<span class="nw">-s</span>ize<span class="nw">-l</span>imits.md, doc/ja/compiling/jvm.md</p>
-<div class="page">18</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">19</div>
 </section>
-<section class="slide layout-table" id="s19" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">末尾呼び出しの<wbr>実装は<wbr>経路ごとに<wbr>違う</h1>
 <div class="body" style="top:232px;height:712px">
 <table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>どれも<wbr>定数スタックで<wbr>動き、<wbr>出力は<wbr>変わらない</caption><colgroup><col style="width:344px"><col style="width:1352px"></colgroup><thead><tr><th scope="col">経路</th><th scope="col">仕組み</th></tr></thead><tbody><tr><td>インタプリタ</td><td><code>eval</code> の<wbr>ループで、<wbr>末尾の<wbr>フォームが<wbr>フレームを<wbr>置き換える</td></tr><tr><td>JVM</td><td>自分への<wbr>末尾呼び出しは<wbr>メソッドの<wbr>先頭への <code>goto</code>。<wbr>関数値を<wbr>通す末尾呼び出しは、<wbr>64&nbsp;回を<wbr>超えて<wbr>続くと<wbr>トランポリンに<wbr>切り<wbr>替える</td></tr><tr><td>WASM</td><td>末尾位置の<wbr>呼び出しを<wbr>すべて <code>return_call</code> で<wbr>出す</td></tr></tbody></table>
 </div>
 <p class="source">.kb/interpreter<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-s</span>elf<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md, .kb/jvm<span class="nw">-t</span>ail<span class="nw">-b</span>ounce.md, .kb/wasm<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md</p>
-<div class="page">19</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">20</div>
 </section>
-<section class="slide layout-standard" id="s20" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">インタプリタと JVM</p>
 <h1 class="title">定数スタックで<wbr>動く<wbr>末尾再帰</h1>
 <div class="body" style="top:232px;height:712px">
 <p>ブラウザで<wbr>動く<wbr>インタプリタでも、<wbr>末尾呼び出しは<wbr>フレームを<wbr>積まない。</p>
-<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s20c1"><code>(<span class="hl-d">defun</span> count-down (n)
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s21c1"><code>(<span class="hl-d">defun</span> count-down (n)
   (<span class="hl-d">if</span> (= n <span class="hl-n">0</span>) &#39;done (count-down (- n <span class="hl-n">1</span>))))
 (count-down <span class="hl-n">100000</span>)</code></pre></div>
 </div>
-<div class="say" id="s20c1" role="note" data-side="below" data-at="(count-down 100000)" style="left:143px;top:677px;width:497px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:245px"><p>Run で DONE が<wbr>返る</p></div>
+<div class="say" id="s21c1" role="note" data-side="below" data-at="(count-down 100000)" style="left:143px;top:677px;width:497px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:245px"><p>Run で DONE が<wbr>返る</p></div>
 <p class="source">.kb/interpreter<span class="nw">-t</span>ail<span class="nw">-c</span>alls.md</p>
-<div class="page">20</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">21</div>
 </section>
-<section class="slide layout-standard" id="s21" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s22" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li class="current">WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
-<div class="page">21</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">22</div>
 </section>
-<section class="slide layout-standard" id="s22" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">WASM: 値は GC ヒープに<wbr>置く</h1>
 <div class="body" style="top:232px;height:712px">
 <ul><li>整数は <code>i31ref</code>。<wbr>fixnum の<wbr>範囲を<wbr>超えると 64&nbsp;ビットの<wbr>構造体、<wbr>さらに<wbr>超えると<wbr>多倍長整数</li><li>浮動小数点数は<wbr>構造体に<wbr>ボックス化する</li><li>文字列は<wbr>バイトの<wbr>配列 (<code>$str_bytes</code>)</li><li>モジュールは<wbr>アロケータを<wbr>持たない</li><li><code><span class="nw">--n</span>o<span class="nw">-g</span>c</code> は、<wbr>純粋な<wbr>計算に<wbr>限った<wbr>プログラムを、<wbr>スカラーと<wbr>リニアメモリの<wbr>文字列に<wbr>下げる</li></ul>
 </div>
 <p class="source">doc/ja/compiling/wasm.md, .kb/wasm<span class="nw">-g</span>c<span class="nw">-s</span>trings.md, size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md</p>
-<div class="page">22</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">23</div>
 </section>
-<section class="slide layout-standard" id="s23" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">例外処理は<wbr>プログラムが<wbr>使う<wbr>ときだけ</h1>
 <div class="body" style="top:232px;height:712px">
 <ul><li><code>handler<span class="nw">-c</span>ase</code>、<wbr><code>ignore<span class="nw">-e</span>rrors</code>、<wbr><code>unwind<span class="nw">-p</span>rotect</code> を<wbr>含む<wbr>プログラムだけを EH モードで<wbr>コンパイルする</li><li>EH モードでは<wbr>タグ <code>$lisp<span class="nw">-c</span>ond</code> を<wbr>一つ<wbr>置き、<wbr><code>try_table</code> と <code>throw</code> で<wbr>捕まえる</li><li>それ以外の<wbr>プログラムは、<wbr>EH 対応の<wbr>ない<wbr>コンパイラの<wbr>出力と<wbr>バイト単位で<wbr>同じに<wbr>なる</li><li><code>ref.cast</code> の<wbr>失敗のような trap は<wbr>捕まえられない</li></ul>
 </div>
 <p class="source">.kb/error<span class="nw">-h</span>andling.md (WASM EH<span class="nw">-m</span>ode specifics)</p>
-<div class="page">23</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">24</div>
 </section>
-<section class="slide layout-standard" id="s24" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s25" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">着地パッドで<wbr>局所変数を<wbr>読み直す</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">コーパス全体が、<wbr>コードの<wbr>大きさに<wbr>よって <code>cast failure</code> で<wbr>落ちたり<wbr>通ったりした</p>
-<ul><li>Cranelift は<wbr>局所変数を、<wbr>呼び出しの<wbr>前に<wbr>評価した<wbr>引数と<wbr>して<wbr>着地パッドに<wbr>渡していた</li><li>呼び出しの<wbr>間に<wbr>コピー GC が<wbr>オブジェクトを<wbr>動かすと、<wbr>パッドは<wbr>古い<wbr>参照を<wbr>受け取る</li><li>対策と<wbr>して、<wbr>パッドの<wbr>先頭で、<wbr>その後に<wbr>使う<wbr>局所変数を<wbr>読み直す</li></ul>
+<ul><li data-step="1">Cranelift は<wbr>局所変数を、<wbr>呼び出しの<wbr>前に<wbr>評価した<wbr>引数と<wbr>して<wbr>着地パッドに<wbr>渡していた</li><li data-step="2">呼び出しの<wbr>間に<wbr>コピー GC が<wbr>オブジェクトを<wbr>動かすと、<wbr>パッドは<wbr>古い<wbr>参照を<wbr>受け取る</li><li data-step="3">対策と<wbr>して、<wbr>パッドの<wbr>先頭で、<wbr>その後に<wbr>使う<wbr>局所変数を<wbr>読み直す</li></ul>
 </div>
 <p class="source">.kb/wasm<span class="nw">-l</span>anding<span class="nw">-p</span>ad<span class="nw">-r</span>efresh.md, .kb/wasi<span class="nw">-c</span>omponent.md</p>
-<div class="page">24</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">25</div>
 <aside class="notes">3,590 行を出力する実行の 3,587 行目で trap した。落ちるか通るかは、その呼び出しの間に GC が起きるかどうかだけで決まる。GC ヒープの事前拡張はコードのバイト数に比例するので、ケースを一つ足すだけで GC の時期がずれ、結果が変わった。</aside>
 </section>
-<section class="slide layout-standard" id="s25" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">コンポーネントは Preview 1&nbsp;の<wbr>コアを<wbr>包む</h1>
 <div class="body" style="top:232px;height:712px">
@@ -430,25 +482,27 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <ul><li>コアモジュールは Preview 1&nbsp;の<wbr>出力と<wbr>同じ<wbr>ものを<wbr>使う</li><li>アダプタが <code>wasi_snapshot_preview1</code> の 15&nbsp;関数を、<wbr>WASI 0.3&nbsp;の stream と future で<wbr>実装する</li><li><code><span class="nw">--o</span>ptimize</code> は<wbr>使う<wbr>インタフェースだけを<wbr>残す。<wbr><code>(print &quot;Hello World!&quot;)</code> では、<wbr>インタフェースが 11&nbsp;から 3&nbsp;に、<wbr>インポートの<wbr>ブロックが 7,690&nbsp;B から 2,138&nbsp;B に<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/wasi<span class="nw">-c</span>omponent.md</p>
-<div class="page">25</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">26</div>
 </section>
-<section class="slide layout-standard" id="s26" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">刈り込みで<wbr>変わる .wasm の<wbr>大きさ</h1>
 <div class="body" style="top:232px;height:712px">
 <p class="lead">chipz で gunzip する<wbr>プログラムの <code>.wasm</code></p>
-<figure class="dg" style="width:1696px;height:398px;--dg:44px;--dg-lh:62px;--dg-x:26px" aria-describedby="s26c1">
+<figure class="dg" style="width:1696px;height:398px;--dg:44px;--dg-lh:62px;--dg-x:26px" aria-describedby="s27c1">
 <svg class="dg-art" width="1696" height="398" aria-hidden="true"><rect class="dg-b" x="591" y="11" width="838" height="62"/><rect class="dg-b" x="591" y="95" width="203" height="62"/><rect class="dg-b" x="591" y="179" width="155" height="62"/><rect class="dg-b" x="591" y="294" width="161" height="62"/></svg>
-<p class="dg-l dg-t" style="left:0px;top:11px;width:565px;height:62px"><span class="nw">--o</span>ptimize=off</p><p class="dg-l dg-v" style="left:1455px;top:11px;width:241px;height:62px">550,484 B</p><p class="dg-l dg-t" style="left:0px;top:95px;width:565px;height:62px"><span class="nw">--o</span>ptimize (既定)</p><p class="dg-l dg-v" style="left:820px;top:95px;width:240px;height:62px">133,689 B</p><p class="dg-l dg-t" style="left:0px;top:179px;width:565px;height:62px"><span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:772px;top:179px;width:240px;height:62px">102,171 B</p><p class="dg-l dg-t" style="left:0px;top:263px;width:565px;height:124px"><span class="nw">--c</span>omponent <span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:778px;top:294px;width:240px;height:62px">106,355 B</p>
+<p class="dg-l dg-t" style="left:0px;top:11px;width:565px;height:62px"><span class="nw">--o</span>ptimize=off</p><p class="dg-l dg-v" style="left:1455px;top:11px;width:241px;height:62px">550,648 B</p><p class="dg-l dg-t" style="left:0px;top:95px;width:565px;height:62px"><span class="nw">--o</span>ptimize (既定)</p><p class="dg-l dg-v" style="left:820px;top:95px;width:240px;height:62px">133,689 B</p><p class="dg-l dg-t" style="left:0px;top:179px;width:565px;height:62px"><span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:772px;top:179px;width:240px;height:62px">102,171 B</p><p class="dg-l dg-t" style="left:0px;top:263px;width:565px;height:124px"><span class="nw">--c</span>omponent <span class="nw">--o</span>ptimize=size</p><p class="dg-l dg-v" style="left:778px;top:294px;width:240px;height:62px">106,355 B</p>
 </figure>
-<p>Hello, World! だけを<wbr>出す<wbr>プログラムは、<wbr><code><span class="nw">--o</span>ptimize=off</code> の 271,101&nbsp;B から<wbr>既定の 480&nbsp;B に<wbr>なる。</p>
+<p>Hello, World! だけを<wbr>出す<wbr>プログラムは、<wbr><code><span class="nw">--o</span>ptimize=off</code> の 271,265&nbsp;B から<wbr>既定の 480&nbsp;B に<wbr>なる。</p>
 </div>
-<div class="say" id="s26c1" role="note" data-side="right" data-at="--optimize (既定)" style="left:1208px;top:433px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>既定で<wbr>刈り込む</p></div>
-<p class="source">size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md (2026<span class="nw">-1</span>0<span class="nw">-1</span>5&nbsp;測定)</p>
-<div class="page">26</div>
+<div class="say" id="s27c1" role="note" data-side="right" data-at="--optimize (既定)" style="left:1208px;top:433px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>既定で<wbr>刈り込む</p></div>
+<p class="source">size<span class="nw">-r</span>eport/results/wasm<span class="nw">-f</span>lags.md (2026<span class="nw">-1</span>0<span class="nw">-2</span>3&nbsp;測定)</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">27</div>
 <aside class="notes">「大きさ」は一つの量ではない。バイト列を削らずに別の場所へ移すと、生のサイズは減っても gzip 後のサイズは増えることがある (.kb/size-measurement.md)。</aside>
 </section>
-<section class="slide layout-standard" id="s27" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">ネイティブ実行ファイル</h1>
 <div class="body" style="top:232px;height:712px">
@@ -459,38 +513,54 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <ul><li>Linux では <code>stub ++ module ++ 長さ ++ &quot;RLNATIVE&quot;</code>、<wbr>macOS では<wbr>署名した Mach<span class="nw">-O</span> の<wbr>中に<wbr>モジュールを<wbr>置く</li><li>プリコンパイラと<wbr>ランナーは<wbr>同じ wasmtime の<wbr>設定で<wbr>作り、<wbr>指紋が<wbr>違えば<wbr>書き出す前に<wbr>拒否する</li><li>Rust の<wbr>ワークスペース (<code>rontolisp<span class="nw">-n</span>ative/</code>) は Maven の<wbr>外に<wbr>あり、<wbr>コアは<wbr>外部依存を<wbr>持たないままに<wbr>なる</li></ul>
 </div>
 <p class="source">.kb/native<span class="nw">-o</span>utput.md</p>
-<div class="page">27</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">28</div>
 </section>
-<section class="slide layout-standard" id="s28" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s29" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
 <h1 class="title">ランナーの<wbr>大きさ</h1>
 <div class="body" style="top:232px;height:712px">
-<figure class="dg" style="width:1696px;height:276px;--dg:48px;--dg-lh:68px;--dg-x:28px">
-<svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-b" x="382" y="12" width="1109" height="68"/><rect class="dg-b" x="382" y="104" width="1003" height="68"/><rect class="dg-b" x="382" y="196" width="897" height="68"/></svg>
-<p class="dg-l dg-t" style="left:0px;top:12px;width:354px;height:68px">Linux x86_64</p><p class="dg-l dg-v" style="left:1519px;top:12px;width:177px;height:68px">2.1 MB</p><p class="dg-l dg-t" style="left:0px;top:104px;width:354px;height:68px">Linux aarch64</p><p class="dg-l dg-v" style="left:1413px;top:104px;width:177px;height:68px">1.9 MB</p><p class="dg-l dg-t" style="left:0px;top:196px;width:354px;height:68px">macOS</p><p class="dg-l dg-v" style="left:1307px;top:196px;width:177px;height:68px">1.7 MB</p>
+<figure class="dg" style="width:1696px;height:228px;--dg:40px;--dg-lh:56px;--dg-x:24px">
+<svg class="dg-art" width="1696" height="228" aria-hidden="true"><rect class="dg-b" x="319" y="10" width="1205" height="56"/><rect class="dg-b" x="319" y="86" width="1090" height="56"/><rect class="dg-b" x="319" y="162" width="975" height="56"/></svg>
+<p class="dg-l dg-t" style="left:0px;top:10px;width:295px;height:56px">Linux x86_64</p><p class="dg-l dg-v" style="left:1548px;top:10px;width:148px;height:56px">2.1 MB</p><p class="dg-l dg-t" style="left:0px;top:86px;width:295px;height:56px">Linux aarch64</p><p class="dg-l dg-v" style="left:1433px;top:86px;width:148px;height:56px">1.9 MB</p><p class="dg-l dg-t" style="left:0px;top:162px;width:295px;height:56px">macOS</p><p class="dg-l dg-v" style="left:1318px;top:162px;width:148px;height:56px">1.7 MB</p>
 </figure>
-<ul><li>実行ファイルは、<wbr>ランナーに <code>.wasm</code> の<wbr>約 11&nbsp;倍を<wbr>足した<wbr>大きさ</li><li>起動は<wbr>約 10&nbsp;ms。<wbr>同じ<wbr>モジュールを <code>wasmtime run</code> で<wbr>動かすのと<wbr>ほぼ<wbr>同じ<wbr>速度で<wbr>動く</li></ul>
+<ul><li>実行ファイルは、<wbr>ランナーに <code>.wasm</code> の<wbr>約 11&nbsp;倍を<wbr>足した<wbr>大きさ</li><li>HTTP の<wbr>送信と<wbr>配信、<wbr>TCP ソケットを<wbr>使う<wbr>モジュールは、<wbr>HTTP クライアントを<wbr>含む<wbr>ネットワーク版の<wbr>ランナー (Linux x86_64&nbsp;で 3.3&nbsp;MB) で<wbr>動く</li><li>起動は<wbr>約 10&nbsp;ms。<wbr>同じ<wbr>モジュールを <code>wasmtime run</code> で<wbr>動かすのと<wbr>ほぼ<wbr>同じ<wbr>速度で<wbr>動く</li></ul>
 </div>
-<p class="source">doc/ja/compiling/native.md (サイズと<wbr>速度)</p>
-<div class="page">28</div>
+<p class="source">doc/ja/compiling/native.md (サイズと<wbr>速度), .kb/native<span class="nw">-o</span>utput.md (The network runner)</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">29</div>
 </section>
-<section class="slide layout-standard" id="s29" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">WASM と<wbr>ネイティブ実行ファイル</p>
+<h1 class="title">ローカルタイムゾーンの<wbr>問い合わせ先</h1>
+<div class="body" style="top:232px;height:712px">
+<p><code>time<span class="nw">-z</span>one</code> を<wbr>省略した <code>decode<span class="nw">-u</span>niversal<span class="nw">-t</span>ime</code> は、<wbr>夏時間を<wbr>含む<wbr>ローカルゾーンで<wbr>変換する。<wbr>ゾーンを<wbr>答える<wbr>基本関数の<wbr>実装が、<wbr>バックエンドごとに<wbr>違う。</p>
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">ビルド</th><th scope="col">問い合わせ先</th></tr></thead><tbody><tr><td>インタプリタ、<wbr>JVM</td><td>java.time の<wbr>既定ゾーン</td></tr><tr><td>Preview 1、<wbr><code><span class="nw">--c</span>omponent</code></td><td>モジュールが <code>TZ</code> と<wbr>ゾーンファイルを<wbr>読む</td></tr><tr><td><code><span class="nw">--n</span>ative</code></td><td>ランナーが <code>localtime_r</code> を<wbr>呼ぶ</td></tr><tr><td>ブラウザ</td><td>JavaScript の <code>Date</code></td></tr><tr><td><code><span class="nw">--n</span>o<span class="nw">-w</span>asi</code></td><td>UTC</td></tr></tbody></table>
+</div>
+<p class="source">.kb/time<span class="nw">-e</span>nvironment<span class="nw">-b</span>uiltins.md, doc/ja/guides/clock<span class="nw">-a</span>nd<span class="nw">-r</span>andom.md</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">30</div>
+<aside class="notes">--native でモジュール自身がゾーンファイルを読まないのは、macOS や Debian の /etc/localtime が絶対パスへのシンボリックリンクで、WASI のサンドボックスがそれをたどらないため。2026-10-24 に、ニューヨーク、シドニー、コルカタ、ロード・ハウ島などのゾーンで SBCL 2.6.5 と比べ、--native はすべて一致した。</aside>
+</section>
+<section class="slide layout-standard" id="s31" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li class="current">三つの<wbr>言語、<wbr>一つの IR</li><li>検証と<wbr>依存</li></ol>
 </div>
-<div class="page">29</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">31</div>
 </section>
-<section class="slide layout-standard" id="s30" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s32" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Scheme と Clojure も<wbr>コアフォームに<wbr>下げる</h1>
 <div class="body" style="top:336px;height:608px">
 <ul><li>Scheme や Clojure の<wbr>ために、<wbr>バックエンドへ<wbr>名前を<wbr>足す<wbr>ことはない</li><li>バックエンドは<wbr>演算子の<wbr>名前で<wbr>分岐し、<wbr><code>FreeVarAnalyzer</code> も<wbr>同じ<wbr>名前を<wbr>見る<wbr>手書きの<wbr>走査</li><li>走査が<wbr>扱わない<wbr>先頭の<wbr>フォームは、<wbr>エラーに<wbr>ならずに<wbr>三通りの<wbr>結果に<wbr>分かれる</li><li>実行時の<wbr>補助関数は Common Lisp で<wbr>書き、<wbr>使わない<wbr>定義は<wbr>刈り込む</li></ul>
 </div>
 <p class="source">.kb/scheme<span class="nw">-f</span>rontend.md, .kb/clojure<span class="nw">-f</span>rontend.md</p>
-<div class="page">30</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">32</div>
 </section>
-<section class="slide layout-code" id="s31" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-code" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Scheme の<wbr>末尾再帰</h1>
 <div class="body" style="top:232px;height:712px">
@@ -500,9 +570,10 @@ program = LibraryDefunPruner.prune(program);</code></pre>
       <span class="tk">(</span><span class="tk">sum</span> <span class="tk">(</span><span class="tk">-</span> <span class="tk">n</span> <span class="tk hl-n">1</span><span class="tk">)</span> <span class="tk">(</span><span class="tk">+</span> <span class="tk">acc</span> <span class="tk">n</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span></code></pre>
 </div>
 <p class="source">.kb/scheme<span class="nw">-f</span>rontend.md</p>
-<div class="page">31</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">33</div>
 </section>
-<section class="slide layout-code" id="s32" style="--title:80px;--title-lh:104px;--body:44px;--body-lh:66px;--gap:26px;--indent:53px;--item-gap:11px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<section class="slide layout-code" id="s34" style="--title:80px;--title-lh:104px;--body:44px;--body-lh:66px;--gap:26px;--indent:53px;--item-gap:11px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Scheme の<wbr>末尾再帰</h1>
 <div class="body" style="top:232px;height:712px">
@@ -521,10 +592,11 @@ program = LibraryDefunPruner.prune(program);</code></pre>
              <span class="tk">(</span><span class="tk">go</span> <span class="tk">%scm-l3</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span>
     <span class="tk">%scm-r4</span><span class="tk">)</span><span class="tk" data-m="29">)</span></code></pre>
 </div>
-<p class="source"><code>rontolisp sum.scm <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>3)</p>
-<div class="page">32</div>
+<p class="source"><code>rontolisp sum.scm <span class="nw">--d</span>ump<span class="nw">-i</span>r</code> の<wbr>出力を<wbr>小文字に<wbr>して<wbr>改行した (2026<span class="nw">-1</span>0<span class="nw">-2</span>4)</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">34</div>
 </section>
-<section class="slide layout-columns" id="s33" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-columns" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">同じ<wbr>インタプリタで<wbr>動かす</h1>
 <div class="body" style="top:232px;height:712px">
@@ -546,9 +618,10 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p>この<wbr>ページの<wbr>ランタイムは、<wbr>三つの<wbr>フロントエンドを<wbr>持つインタプリタ一つ。<wbr>Run で 5000050000&nbsp;と 4999950000&nbsp;が<wbr>返る。</p>
 </div>
 <p class="source">lispresen/DESIGN.md (Runtime)</p>
-<div class="page">33</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">35</div>
 </section>
-<section class="slide layout-standard" id="s34" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s36" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">三つの<wbr>言語、<wbr>一つの IR</p>
 <h1 class="title">Clojure を clj と<wbr>突き合わせる</h1>
 <div class="body" style="top:232px;height:712px">
@@ -559,16 +632,18 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 </figure>
 </div>
 <p class="source">.kb/clojure<span class="nw">-f</span>rontend.md (Differential parity harness)</p>
-<div class="page">34</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">36</div>
 </section>
-<section class="slide layout-standard" id="s35" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s37" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>ソースから<wbr>コアフォームへ</li><li>CompileFrontend.expand</li><li>インタプリタと JVM</li><li>WASM と<wbr>ネイティブ実行ファイル</li><li>三つの<wbr>言語、<wbr>一つの IR</li><li class="current">検証と<wbr>依存</li></ol>
 </div>
-<div class="page">35</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">37</div>
 </section>
-<section class="slide layout-standard" id="s36" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s38" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">「検証した」<wbr>は<wbr>四つで<wbr>動かした<wbr>こと</h1>
 <div class="body" style="top:232px;height:712px">
@@ -579,27 +654,30 @@ program = LibraryDefunPruner.prune(program);</code></pre>
 <p>コンポーネントは<wbr>別の I/O アダプタを<wbr>使うので、<wbr>Preview 1&nbsp;と<wbr>食い<wbr>違うことがある。</p>
 </div>
 <p class="source">.kb/running<span class="nw">-b</span>ackends.md, CLAUDE.md</p>
-<div class="page">36</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">38</div>
 </section>
-<section class="slide layout-standard" id="s37" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s39" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">ci<span class="nw">-s</span>pec.yaml は<wbr>一つの<wbr>プログラムと<wbr>して<wbr>流す</h1>
 <div class="body" style="top:336px;height:608px">
 <ul><li>ケースを<wbr>つなげて<wbr>一つの<wbr>プログラムにし、<wbr>バックエンドごとに<wbr>一度だけ<wbr>実行して、<wbr>出力を<wbr>ケースに<wbr>切り分ける</li><li>各バックエンドで、<wbr>既定と <code><span class="nw">--s</span>imd</code> の<wbr>二回流す</li><li><code>./mvnw test</code> は <code>CiSpecE2eTest</code> を<wbr>飛ばす。<wbr>CI の<wbr>ネイティブジョブで<wbr>動く</li><li>2026<span class="nw">-1</span>0<span class="nw">-1</span>7&nbsp;に、<wbr>コーパスと<wbr>重複する 373&nbsp;の<wbr>テストメソッドを<wbr>消し、<wbr>JVM と WASM で<wbr>対に<wbr>なった 298&nbsp;組の<wbr>テストを<wbr>ケースに<wbr>移した</li></ul>
 </div>
-<p class="source">src/test/resources/ci<span class="nw">-s</span>pec.yaml (1,354&nbsp;ケース、<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>3&nbsp;に<wbr>数えた), .kb/test<span class="nw">-e</span>xecution.md</p>
-<div class="page">37</div>
+<p class="source">src/test/resources/ci<span class="nw">-s</span>pec.yaml (1,353&nbsp;ケース、<wbr>2026<span class="nw">-1</span>0<span class="nw">-2</span>4&nbsp;に<wbr>数えた), .kb/test<span class="nw">-e</span>xecution.md</p>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">39</div>
 </section>
-<section class="slide layout-standard" id="s38" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s40" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">出力は<wbr>プログラムだけで<wbr>決まる</h1>
 <div class="body" style="top:232px;height:712px">
 <ul><li>同じ<wbr>ソースと<wbr>同じ<wbr>ビルドなら、<wbr>何度コンパイルしても<wbr>同じ<wbr>バイト列に<wbr>なる</li><li><code>Map.of</code> や <code>Set.of</code> の<wbr>反復の<wbr>順序は、<wbr>JVM を<wbr>起動する<wbr>たびに<wbr>変わる</li><li>6&nbsp;行の<wbr>プログラムを 8&nbsp;回コンパイルしたら、<code>.class</code> も <code>.wasm</code> も 3&nbsp;通りの<wbr>バイト列に<wbr>なったことがある</li><li>順序を<wbr>持つ<wbr>引数は <code>SequencedSet</code> で<wbr>型付けする</li></ul>
 </div>
 <p class="source">.kb/emitted<span class="nw">-o</span>utput<span class="nw">-d</span>eterminism.md</p>
-<div class="page">38</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">40</div>
 </section>
-<section class="slide layout-columns" id="s39" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-columns" id="s41" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">コアは<wbr>外部依存を<wbr>持たない</h1>
 <div class="body" style="top:232px;height:712px">
@@ -618,20 +696,23 @@ runtime -&gt; (nothing)</code></pre>
 </div>
 </div>
 <p class="source">.kb/architecture.md (Package dependency direction, Requirements)</p>
-<div class="page">39</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">41</div>
 </section>
-<section class="slide layout-standard" id="s40" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s42" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">検証と<wbr>依存</p>
 <h1 class="title">ブラウザで<wbr>動く rontolisp</h1>
 <div class="body" style="top:232px;height:712px">
 <ul><li>GraalVM Native Image の Web Image で、<wbr>rontolisp 自体を WebAssembly に<wbr>する</li><li>インタプリタも、<wbr>JVM と WASM の<wbr>コンパイラも、<wbr>ブラウザの<wbr>中で<wbr>動く</li><li>ファイルシステムが<wbr>ないので、<wbr>ファイルを<wbr>読むコンパイル時の<wbr>パスは <code>SourceLoader</code> を<wbr>通す</li><li>この<wbr>デッキの Run も、<wbr>この<wbr>ブラウザ版 (約 35&nbsp;MB) で<wbr>動いている</li></ul>
 </div>
 <p class="source">web/README.md, .kb/architecture.md, lispresen/README.md</p>
-<div class="page">40</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">42</div>
 </section>
-<section class="slide layout-statement" id="s41" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement" id="s43" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">どの<wbr>経路を<wbr>通っても<wbr>同じ<wbr>答えを<wbr>出す<wbr>ことを、<wbr>一つの<wbr>コーパスで<wbr>確かめ続ける。</p></div>
-<div class="page">41</div>
+<p class="footer">github.com/making/rontolisp</p>
+<div class="page">43</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>
@@ -644,7 +725,7 @@ var cfg=JSON.parse(d.getElementById('lp').textContent);
 var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElementById('fs'),pg=d.getElementById('progress');
 var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
 var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
-var params=new URLSearchParams(location.search),presenter=params.has('presenter');
+var params=new URLSearchParams(location.search),presenter=params.has('presenter'),handout=params.has('notes');
 var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
 var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
 function send(m){if(chan)chan.postMessage(m);}
@@ -730,7 +811,10 @@ function pad(n){return (n<10?'0':'')+n;}
 function buildPresenter(){de.classList.add('presenter');var pv=d.createElement('div');pv.id='pv';
 var bar=d.createElement('div');bar.className='pv-bar';var timer=d.createElement('span');timer.className='pv-timer';
 timer.title='Click to reset';var count=d.createElement('span');var start=d.createElement('button');start.textContent='Start';
-start.title='Full screen on the other display';bar.append(timer,count,start);
+start.title='Full screen on the other display';
+var pn=d.createElement('button');pn.textContent='Print with notes';pn.title='Slides with their notes below, one per page';
+pn.onclick=function(){var u=location.href.split('#')[0].replace(/[?&]presenter/,'');open(u+(u.indexOf('?')<0?'?':'&')+'notes&print','lispresen-handout');};
+bar.append(timer,count,start,pn);
 var cu=d.createElement('div');cu.className='pv-cur';var nx=d.createElement('div');nx.className='pv-next';
 var notes=d.createElement('div');notes.className='pv-notes';pv.append(bar,cu,nx,notes);d.body.appendChild(pv);
 hooks.bar.forEach(function(f){f(bar);});
@@ -905,7 +989,7 @@ function crects(list,o,k){var a=[];for(var j=0;j<list.length;j++)if(list[j].widt
 function cunion(a){if(!a.length)return a;var u={l:a[0].l,t:a[0].t,r:a[0].r,b:a[0].b};
 a.forEach(function(r){u.l=Math.min(u.l,r.l);u.t=Math.min(u.t,r.t);u.r=Math.max(u.r,r.r);u.b=Math.max(u.b,r.b);});return [u];}
 function ctext(root,o,k){var a=[],w=d.createTreeWalker(root,NodeFilter.SHOW_TEXT),rg=d.createRange(),n;
-while((n=w.nextNode())){if(n.parentElement.closest('.say,.notes,.out'))continue;rg.selectNodeContents(n);a=a.concat(crects(rg.getClientRects(),o,k));}return a;}
+while((n=w.nextNode())){if(n.parentElement.closest('.say,.notes,.out,.mx'))continue;rg.selectNodeContents(n);a=a.concat(crects(rg.getClientRects(),o,k));}return a;}
 function cmeet(a,b){return a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;}
 function canchor(sl,c,o,k){var el=null,at=c.dataset.at;sl.querySelectorAll('[aria-describedby]').forEach(function(e){
 if(!el&&e.getAttribute('aria-describedby').split(' ').indexOf(c.id)>=0)el=e;});if(!el)return [];
@@ -917,13 +1001,13 @@ if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.cre
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
 return cunion(crects(rg.getClientRects(),o,k));}
 if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
-if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video,svg.mx');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
 if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
 return cunion(ctext(el,o,k));}
 function cobstacles(sl,o,k){var a=ctext(sl,o,k);
-sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img'),fr=cbox(f.getBoundingClientRect(),o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video'),fr=cbox(f.getBoundingClientRect(),o,k);
 if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
-sl.querySelectorAll('.tools,.dg-art>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
+sl.querySelectorAll('.tools,.dg-art>*,.mx>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
 function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
 function along(a,ext,lo,hi){return [a-Math.floor(ext/2),a-I,a-ext+I].map(function(p){return Math.max(lo,Math.min(hi-ext,p));});}
 ax=fl.r;ay=Math.floor((fl.t+fl.b)/2);along(ay,h,bd.t,bd.b).forEach(function(y){out.push({side:'right',x:ax+R,y:y,tail:ay-y,tb:{l:ax,t:ay-HB,r:ax+R,b:ay+HB}});});
@@ -946,7 +1030,14 @@ x=parseInt(c.style.left,10);y=parseInt(c.style.top,10);obs.push({l:x,t:y,r:x+w,b
 hooks.place.push(callouts);
 
 addEventListener('resize',fit);
-d.addEventListener('fullscreenchange',function(){fit();wake();});
+d.addEventListener('fullscreenchange',function(){fit();wake();keepAwake();});
+var wl=null,wlBusy=false;
+function keepAwake(){var want=presenter||!!d.fullscreenElement;
+if(!want){if(wl){wl.release().catch(function(){});wl=null;}return;}
+if(wl||wlBusy||d.visibilityState!=='visible'||!navigator.wakeLock)return;wlBusy=true;
+navigator.wakeLock.request('screen').then(function(s){wlBusy=false;wl=s;
+s.addEventListener('release',function(){if(wl===s)wl=null;});keepAwake();},function(){wlBusy=false;});}
+d.addEventListener('visibilitychange',keepAwake);
 addEventListener('hashchange',function(){show(fromHash());});
 var y0=0,t0=0,tt=0,TAPPABLE='a,button,input,textarea,select,label,summary,video,audio,iframe,[contenteditable],[tabindex],.codebox.runnable,.out';
 function typing(){var a=d.activeElement;return !!a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'||a.isContentEditable);}
@@ -964,6 +1055,10 @@ if(Math.abs(dx)>10||Math.abs(dy)>10||tt-t0>500||ov||presenter||e.target.closest(
 e.preventDefault();wake();move(p.clientX<stage.clientWidth/3?-1:1);});
 window.lispresen={show:function(i){show(i);},current:function(){return cur;}};
 if(presenter)buildPresenter();
+keepAwake();
+if(handout&&!presenter){de.classList.add('handout');var ps=d.createElement('style');
+ps.textContent='@media print{@page{size:'+W+'px '+2*H+'px;margin:0}}';d.head.appendChild(ps);
+if(params.has('print'))addEventListener('load',function(){(d.fonts&&d.fonts.ready?d.fonts.ready:Promise.resolve()).then(function(){setTimeout(print,300);});});}
 deck.querySelectorAll('[data-step]').forEach(function(e){e.classList.add('pending');});
 fit();show(fromHash(),presenter);
 if(d.fonts&&d.fonts.ready)d.fonts.ready.then(check);else check();
