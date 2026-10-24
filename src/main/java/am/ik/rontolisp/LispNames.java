@@ -4788,6 +4788,15 @@ public final class LispNames {
 	public static final String READ_LINK_INTERNAL = "%READ-LINK";
 
 	/**
+	 * The {@code %terminal-p} internal primitive: takes a process standard stream's
+	 * descriptor (0, 1 or 2) and answers whether it is a terminal -- {@code isatty} on
+	 * the interpreter and the JVM, a character device by WASI's {@code fd_fdstat_get} on
+	 * Preview 1, a {@code wasi:cli/terminal-*} handle on the component. Never signalling;
+	 * {@code nil} for anything it cannot tell. {@link #INTERACTIVE_STREAM_P} rides it.
+	 */
+	public static final String TERMINAL_P_INTERNAL = "%TERMINAL-P";
+
+	/**
 	 * The {@code %real-path} internal prelude function: a namestring with every symbolic
 	 * link among its components resolved (over {@link #READ_LINK_INTERNAL}) and every
 	 * {@code .} and {@code ..} taken out -- or, given a true second argument, the
@@ -5433,8 +5442,9 @@ public final class LispNames {
 
 	/**
 	 * The {@code interactive-stream-p} function: whether the stream is attached to an
-	 * interactive device. Nothing here can answer yes -- no backend distinguishes a
-	 * terminal from a pipe -- so it validates its argument and answers nil.
+	 * interactive device -- a process standard stream that is a terminal
+	 * ({@link #TERMINAL_P_INTERNAL}); {@code t} asks for standard input and output
+	 * together. Every other stream answers nil. Prelude Lisp.
 	 */
 	public static final String INTERACTIVE_STREAM_P = "INTERACTIVE-STREAM-P";
 

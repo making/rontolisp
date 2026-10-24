@@ -7,7 +7,9 @@
 ;; path_open/fd_close/fd_readdir/fd_prestat_*/fd_filestat_get/path_filestat_get/
 ;; path_readlink/path_create_directory/path_unlink_file/path_remove_directory/path_rename
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
-;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
+;; 0.3; fd_fdstat_get answers for the three standard streams over wasi:cli's
+;; terminal-stdin / terminal-stdout / terminal-stderr; random_get/clock_time_get/environ_*
+;; bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
 ;; pair is UNREACHABLE from Lisp: uiop:getenv under --component is
 ;; environment.lisp, which binds get-environment straight off this block's own
@@ -40,6 +42,7 @@
 ;;   0x5009c cached waitable-set handle (0 = not yet created)
 ;;   0x500a0 read-directory result tuple {stream@0x500a0, future@0x500a4}
 ;;   0x500b0 one lowered directory-entry (24 bytes: type variant @0, name ptr@16 len@20)
+;;   0x500d0 get-terminal-* result: option<terminal-*> {disc@0x500d0 byte, handle@0x500d4}
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, eof-latch@8,
 ;;           valid@12}
 ;;   0x51800 file-offset table: 64 slots x 8 bytes -- the byte position the next fd_read
@@ -99,6 +102,11 @@
   (import "w" "desc-stat" (func $desc_stat (param i32 i32)))
   (import "w" "stat-at" (func $stat_at (param i32 i32 i32 i32 i32)))
   (import "w" "readlink-at" (func $readlink_at (param i32 i32 i32 i32)))
+  (import "w" "term-stdin" (func $term_stdin (param i32)))
+  (import "w" "term-stdout" (func $term_stdout (param i32)))
+  (import "w" "term-stderr" (func $term_stderr (param i32)))
+  (import "w" "drop-term-in" (func $drop_term_in (param i32)))
+  (import "w" "drop-term-out" (func $drop_term_out (param i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
   ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
@@ -860,6 +868,29 @@
         (br $l)))
     (i32.const 0))
 
+  ;; fd_fdstat_get(fd, buf) -> errno, for the three standard streams only (all
+  ;; %terminal-p asks about): a character device when wasi:cli's get-terminal-* hands out
+  ;; a terminal handle -- dropped at once, nothing else needs it -- and an unknown file
+  ;; type otherwise, as wasmtime's own preview1 answers for a standard stream that is
+  ;; no tty. Flags and rights are zero. Any other fd is errno 58 (ENOTSUP).
+  (func $fd_fdstat_get (param $fd i32) (param $buf i32) (result i32)
+    (if (i32.gt_u (local.get $fd) (i32.const 2)) (then (return (i32.const 58))))
+    (memory.fill (local.get $buf) (i32.const 0) (i32.const 24))
+    (i32.store8 (i32.const 0x500d0) (i32.const 0))
+    (if (i32.eqz (local.get $fd))
+      (then (call $term_stdin (i32.const 0x500d0)))
+      (else (if (i32.eq (local.get $fd) (i32.const 1))
+        (then (call $term_stdout (i32.const 0x500d0)))
+        (else (call $term_stderr (i32.const 0x500d0))))))
+    (if (i32.load8_u (i32.const 0x500d0))
+      (then
+        (if (i32.eqz (local.get $fd))
+          (then (call $drop_term_in (i32.load (i32.const 0x500d4))))
+          (else (call $drop_term_out (i32.load (i32.const 0x500d4)))))
+        ;; filetype::character_device
+        (i32.store8 (local.get $buf) (i32.const 2))))
+    (i32.const 0))
+
   (export "fd_write" (func $fd_write))
   (export "fd_read" (func $fd_read))
   ;; The stdio-only / stdout-only / stdin-only implementations, retained UNDER the names
@@ -880,6 +911,7 @@
   (export "fd_filestat_get" (func $fd_filestat_get))
   (export "path_filestat_get" (func $path_filestat_get))
   (export "path_readlink" (func $path_readlink))
+  (export "fd_fdstat_get" (func $fd_fdstat_get))
   (export "file_position_get" (func $file_position_get))
   (export "file_position_set" (func $file_position_set))
   (export "path_create_directory" (func $path_create_directory))

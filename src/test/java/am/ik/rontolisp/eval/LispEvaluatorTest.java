@@ -25764,12 +25764,15 @@ class LispEvaluatorTest {
 				  (list (clear-input)
 				        (with-input-from-string (s "abc") (clear-input s))
 				        (interactive-stream-p o)
+				        ;; a captured standard output, and a piped standard error
+				        (interactive-stream-p t)
+				        (interactive-stream-p *error-output*)
 				        (stream-external-format o)
 				        (file-string-length o #\\a)
 				        (file-string-length o "abc")
 				        (file-string-length o (string (code-char 233)))
 				        (broadcast-stream-streams (make-broadcast-stream o))))
-				""").print()).isEqualTo("(NIL NIL NIL :UTF-8 1 3 2 (#<STREAM>))");
+				""").print()).isEqualTo("(NIL NIL NIL NIL NIL :UTF-8 1 3 2 (#<STREAM>))");
 	}
 
 	@Test

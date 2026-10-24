@@ -437,7 +437,7 @@ page.
 | `concatenated-stream-streams` | `(concatenated-stream-streams s)` | the component list of a concatenated stream |
 | `broadcast-stream-streams` | `(broadcast-stream-streams s)` | the component list of a broadcast stream |
 | `file-string-length` | `(file-string-length s obj)` | how far writing the character or string would move `file-position`: its UTF-8 byte length |
-| `interactive-stream-p` | `(interactive-stream-p s)` | always `nil` -- no backend distinguishes a terminal from a pipe |
+| `interactive-stream-p` | `(interactive-stream-p s)` | whether a process standard stream is a terminal; `nil` for every other stream |
 | `stream-external-format` | `(stream-external-format s)` | always `:utf-8` -- the one format the reader and every writer use |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` when the stream can be read from |

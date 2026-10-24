@@ -51,9 +51,11 @@ class ComponentImportBlockTest {
 
 		assertThat(block.interfaceIds()).containsExactly(CLI_TYPES, STDOUT, "wasi:cli/stdin@0.3.0",
 				"wasi:cli/environment@0.3.0", "wasi:clocks/types@0.3.0", "wasi:clocks/system-clock@0.3.0",
-				"wasi:clocks/monotonic-clock@0.3.0", FS_TYPES, FS_PREOPENS, "wasi:random/random@0.3.0", STDERR);
+				"wasi:clocks/monotonic-clock@0.3.0", FS_TYPES, FS_PREOPENS, "wasi:random/random@0.3.0", STDERR,
+				"wasi:cli/terminal-input@0.3.0", "wasi:cli/terminal-output@0.3.0", "wasi:cli/terminal-stdin@0.3.0",
+				"wasi:cli/terminal-stdout@0.3.0", "wasi:cli/terminal-stderr@0.3.0");
 		assertThat(block.instanceOf()).containsEntry(CLI_TYPES, 0).containsEntry(STDERR, 10);
-		assertThat(block.typeCount()).isEqualTo(17);
+		assertThat(block.typeCount()).isEqualTo(25);
 	}
 
 	@Test

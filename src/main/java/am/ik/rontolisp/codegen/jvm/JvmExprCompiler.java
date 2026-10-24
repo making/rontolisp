@@ -1417,6 +1417,16 @@ final class JvmExprCompiler {
 			case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.RENAME_FILE_INTERNAL,
 					LispNames.READ_LINK_INTERNAL ->
 				JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
+			case LispNames.TERMINAL_P_INTERNAL -> {
+				// isatty through runtime/RontoTerminal, which travels with the class.
+				if (cons.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							"%terminal-p expects 1 argument, got " + (cons.toList().size() - 1));
+				}
+				compileExpr(cons.toList().get(1), ctx, className);
+				ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.TERMINAL_CLASS), "terminalP",
+						JvmAsyncRuntimeBuilder.UNARY_DESC));
+			}
 			case LispNames.FILE_LENGTH -> {
 				LispVal wide = ctx.functions.containsKey(LispNames.WIDE_ELEMENTS_INTERNAL)
 						? LispMacroExpander.expandWideFileLength(cons) : null;

@@ -48,7 +48,8 @@ class JvmRuntimeClassFilesTest {
 						JvmComplexRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmQuantizedMatrixRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES, JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES,
-						JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
+						JvmLispCompiler.TERMINAL_RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES,
+						JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
 						JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES,
 						JvmJavaImplementations.RUNTIME_CLASS_FILES, JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES)
 				.flatMap(List::stream)

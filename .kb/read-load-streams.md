@@ -423,7 +423,7 @@ must stay in step, and the cross-backend pin is ci-spec
 ## Five stream operators that are prelude Lisp over what exists
 
 `clear-input` (the read-side `clear-output`: nothing here buffers input a program could
-throw away), `interactive-stream-p` (always nil -- no backend tells a terminal from a pipe),
+throw away), `interactive-stream-p` (over `%terminal-p`, below),
 `stream-external-format` (always `:utf-8`), `file-string-length` (the UTF-8 byte length) and
 `broadcast-stream-streams`. All five validate a stream and answer; none needed a primitive,
 a per-backend compiler or a wrapper entry. The composite constructors gained the BYTE half
@@ -431,6 +431,32 @@ of their Gray protocol the same way (`stream-read-byte` / `stream-write-byte` on
 `%two-way-stream`, `%echo-stream`, `%concatenated-stream`, `%broadcast-stream`), so
 `read-byte`/`write-byte` reach the components like `read-char`/`write-char` already did.
 Pinned by ci-spec `stream-operators-clear-input-and-friends`.
+
+### `%terminal-p`: is a standard stream a terminal (2026-10-24)
+
+`interactive-stream-p` asks `(%terminal-p fd)` for a standard stream: `t` is fd 0 AND fd 1,
+a `:standard` stream value its slot-0 descriptor (`*error-output*` is 2), Clojure's
+`:standard-output` / `:standard-input` values 1 / 0, a synonym stream its target. One
+primitive per backend, never signalling:
+
+- Interpreter: `runtime/RontoTerminal.isTerminal` (FFM `isatty`), fd 0/1 only while the
+  evaluator was given `System.in` / `System.out` itself (a test capture is no terminal).
+- JVM: `RontoTerminal.terminalP`, travelling with the output (`TERMINAL_RUNTIME_CLASS_FILES`).
+  `isNativeAccessEnabled()` false (`java Prog` without the flag) answers false WITHOUT the
+  downcall, so the JDK's restricted-method warning never reaches standard error. The native
+  image binds it through the already registered `(jint)jint` downcall shape; `-Pweb`
+  substitutes `false` (`Target_RontoTerminal`).
+- WASM Preview 1: `_terminal_p` (`FUNC_TERMINAL_P`) over an injected `fd_fdstat_get`; a
+  character device (filetype 2) is a terminal -- what wasmtime reports for a tty stdio and
+  `unknown` otherwise. The `--native` runner is wasmtime-wasi p1, so the same answer.
+- `--component`: the adapter's `fd_fdstat_get` over `wasi:cli/terminal-std{in,out,err}`'s
+  `get-terminal-*` (option of a handle, dropped at once); the five `terminal-*` interfaces are
+  appended LAST to `uni.wit`. The serve bridge answers errno 58; `--no-wasi` gets the nil stub.
+
+Measured 2026-10-24 under a pty and through a pipe on the interpreter, `java -jar`, Preview 1
+and the component: `(t t t nil t)` vs all nil for stdout / `*error-output*` / stdin / a string
+stream / a synonym of `*error-output*`, and `(nil t nil nil t)` with only stdout redirected.
+No test opens a pty; ci-spec pins the piped (nil) answers.
 
 ## Output left open at the end is WRITTEN, on all four backends
 

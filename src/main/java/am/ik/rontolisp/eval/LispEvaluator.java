@@ -810,11 +810,21 @@ public final class LispEvaluator {
 	private final MutablePrintStream out;
 
 	/**
+	 * The streams the evaluator was given, unwrapped: {@code %terminal-p} asks the host
+	 * about descriptor 0 or 1 only while they are the process's own, never for a capture.
+	 */
+	private final PrintStream givenOut;
+
+	@Nullable private final InputStream givenIn;
+
+	/**
 	 * Create a new evaluator with the given output stream.
 	 * @param out the output stream for print operations
 	 */
 	public LispEvaluator(PrintStream out) {
 		this.out = new MutablePrintStream(out);
+		this.givenOut = out;
+		this.givenIn = null;
 		this.globalEnv = Environment.createGlobal(this.out);
 		registerEval();
 	}
@@ -826,6 +836,8 @@ public final class LispEvaluator {
 	 */
 	public LispEvaluator(PrintStream out, InputStream in) {
 		this.out = new MutablePrintStream(out);
+		this.givenOut = out;
+		this.givenIn = in;
 		this.globalEnv = Environment.createGlobal(this.out, in);
 		registerEval();
 	}
@@ -2059,6 +2071,25 @@ public final class LispEvaluator {
 					}
 					String target = this.sourceLoader.readLink(path.value());
 					return target == null ? LispNil.INSTANCE : new LispString(target);
+				}));
+		// %terminal-p: whether a process standard stream is a terminal (isatty through
+		// RontoTerminal). Standard output and input count only while the evaluator
+		// writes and reads the process's own, so a captured run is never a terminal;
+		// standard error is always the process's (Environment writes System.err).
+		this.globalEnv.defineFunction(LispNames.TERMINAL_P_INTERNAL,
+				new LispFunction(LispNames.TERMINAL_P_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.TERMINAL_P_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispInteger fd)) {
+						return LispNil.INSTANCE;
+					}
+					long n = fd.value();
+					boolean own = (n == 0) ? this.givenIn == System.in
+							: (n == 1) ? this.givenOut == System.out : n == 2;
+					return own && am.ik.rontolisp.runtime.RontoTerminal.isTerminal((int) n) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
 				}));
 		// %host-getcwd: the working-directory namestring the SourceLoader resolves a
 		// relative path against (user.dir for the filesystem loader), nil where it has

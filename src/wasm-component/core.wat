@@ -43,6 +43,13 @@
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.rename-at" (func (param i32 i32 i32 i32 i32 i32 i32)))
   (import "wasi:filesystem/preopens@0.3.0" "get-directories" (func (param i32)))
   (import "wasi:random/random@0.3.0" "get-random-u64" (func (result i64)))
+  ;; get-terminal-* answer option<terminal-*>, two flat values, so the lowering returns
+  ;; through a retptr; the handle is dropped through its resource's own drop.
+  (import "wasi:cli/terminal-stdin@0.3.0" "get-terminal-stdin" (func (param i32)))
+  (import "wasi:cli/terminal-stdout@0.3.0" "get-terminal-stdout" (func (param i32)))
+  (import "wasi:cli/terminal-stderr@0.3.0" "get-terminal-stderr" (func (param i32)))
+  (import "wasi:cli/terminal-input@0.3.0" "[resource-drop]terminal-input" (func (param i32)))
+  (import "wasi:cli/terminal-output@0.3.0" "[resource-drop]terminal-output" (func (param i32)))
   (memory (export "memory") 6)
   (global $hp (mut i32) (i32.const 65536))
   (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32) (global.get $hp))

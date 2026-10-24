@@ -130,15 +130,15 @@ class WasmLispCompilerTest {
 
 	@Test
 	void aComponentAlwaysDeclaresTheWholeFixedWasiSurface() {
-		// At --optimize=off the core keeps all nine preview1 imports, so the adapter
-		// keeps every branch and the block keeps every interface -- the shape this
-		// builder has always emitted, and the "before" of the narrowing the next test
-		// pins.
+		// At --optimize=off the adapter keeps every branch and the block keeps every
+		// interface, the terminal ones fd_fdstat_get reads included -- the "before" of
+		// the narrowing the next test pins.
 		assertThat(componentImportNames(compileComponentAt("(print 1)", OptimizeLevel.NONE))).containsExactly(
 				"wasi:cli/types@0.3.0", "wasi:cli/stdout@0.3.0", "wasi:cli/stdin@0.3.0", "wasi:cli/environment@0.3.0",
 				"wasi:clocks/types@0.3.0", "wasi:clocks/system-clock@0.3.0", "wasi:clocks/monotonic-clock@0.3.0",
 				"wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0", "wasi:random/random@0.3.0",
-				"wasi:cli/stderr@0.3.0");
+				"wasi:cli/stderr@0.3.0", "wasi:cli/terminal-input@0.3.0", "wasi:cli/terminal-output@0.3.0",
+				"wasi:cli/terminal-stdin@0.3.0", "wasi:cli/terminal-stdout@0.3.0", "wasi:cli/terminal-stderr@0.3.0");
 	}
 
 	@Test

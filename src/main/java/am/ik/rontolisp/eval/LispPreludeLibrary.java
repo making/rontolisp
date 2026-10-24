@@ -1605,14 +1605,24 @@ public final class LispPreludeLibrary {
 				      nil
 				      (error 'type-error :datum %ci-s :expected-type 'stream)))
 				""");
-		// interactive-stream-p: no backend can tell a terminal from a pipe, so the
-		// answer is nil for every stream -- but the ARGUMENT is still a stream, not a
-		// designator, and a non-stream is a type-error.
+		// interactive-stream-p: whether a process standard stream is a terminal, asked of
+		// the host through %terminal-p. t is the terminal *terminal-io* names, standard
+		// input and output together; a standard stream value names its descriptor (slot
+		// 0 of :standard, the descriptor itself for Clojure's *out* / *in*); a synonym
+		// stream answers for the stream its variable holds (slot 1 reads it). A string,
+		// file or composite stream is no terminal, and a non-stream is a type-error.
 		SOURCES.put(LispNames.INTERACTIVE_STREAM_P, """
 				(defun interactive-stream-p (%isp-s)
-				  (if (streamp %isp-s)
-				      nil
-				      (error 'type-error :datum %isp-s :expected-type 'stream)))
+				  (cond ((eq %isp-s t) (and (%terminal-p 0) (%terminal-p 1)))
+				        ((%obj-is %isp-s '%STREAM)
+				         (let ((%isp-k (%obj-ref %isp-s 1)))
+				           (cond ((equal %isp-k :standard) (%terminal-p (%obj-ref %isp-s 0)))
+				                 ((equal %isp-k :standard-output) (%terminal-p 1))
+				                 ((equal %isp-k :standard-input) (%terminal-p 0)))))
+				        ((%obj-is %isp-s '%SYNONYM-STREAM)
+				         (interactive-stream-p (funcall (%obj-ref %isp-s 1))))
+				        ((streamp %isp-s) nil)
+				        (t (error 'type-error :datum %isp-s :expected-type 'stream))))
 				""");
 		// stream-external-format: UTF-8 is the one format the reader and every writer
 		// use, on every backend, so there is nothing to select and nothing to remember --

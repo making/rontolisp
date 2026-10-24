@@ -2289,6 +2289,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// %host-getcwd.
 	static final int FUNC_HOST_GETCWD = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
 
+	// _terminal_p ((ref null eq) fd) -> (ref null eq): T when the process standard stream
+	// fd is a terminal (WasmIoRuntimeBuilder.buildTerminalPBody, over the injected
+	// fd_fdstat_get import). Reuses the unary callable signature; appended after the last
+	// fixed helper so no index above shifts. A nil stub unless a WASI program names
+	// %terminal-p.
+	static final int FUNC_TERMINAL_P = FUNC_HOST_GETCWD + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2319,7 +2326,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_HOST_GETCWD + 1;
+	static final int FUNC_VEC_BASE = FUNC_TERMINAL_P + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2341,11 +2348,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
 	// (_rand_big), the path stat (_file_write_date), the link read (_read_link), the
-	// hash-table runtime (_ht_*) and the working directory (_host_getcwd) -- plus,
+	// hash-table runtime (_ht_*), the working directory (_host_getcwd) and the terminal
+	// probe (_terminal_p) -- plus,
 	// under --simd, the vec: SIMD block, and the conditional helpers (the _arity_* /
 	// _undefined_function / _unbound_variable / _lit_stage / _funcref chain and the
 	// complex block). Use userFuncBase(), which adds those offsets.
-	static final int FUNC_USER_BASE = FUNC_HOST_GETCWD + 1;
+	static final int FUNC_USER_BASE = FUNC_TERMINAL_P + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3816,6 +3824,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// --no-wasi module has no preopens (they are trap stubs there), so it answers
 		// nil.
 		boolean hostGetcwd = !this.noWasi && programUsesSymbol(program, LispNames.HOST_GETCWD);
+		// %terminal-p (behind interactive-stream-p) asks fd_fdstat_get whether a standard
+		// stream is a character device: wasmtime's own on Preview 1, the adapter's over
+		// wasi:cli's get-terminal-* under --component. A --no-wasi module has no standard
+		// streams of its own, so it answers nil there.
+		boolean hostTerminal = !this.noWasi && programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
 		// _open body -- gated on the surface fact so every other module keeps its bytes.
@@ -6104,6 +6117,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_readlink",
 					TYPE_PATH_RENAME));
 		}
+		// fd_fdstat_get(fd, buf) -> errno is (i32, i32) -> i32, _intern's shape
+		// (TYPE_INTERN), so it appends no type.
+		final int fdstatOrdinal = hostTerminal ? hostImports.size() : -1;
+		if (hostTerminal) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "fd_fdstat_get", TYPE_INTERN));
+		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
 		// for. Every emitted body has been compiled by now, so ctx.valueFuncIds holds
@@ -8048,6 +8068,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				fnDef.addFunction(TYPE_READ_LINE); // _host_getcwd () -> value
 													// (FUNC_HOST_GETCWD)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _terminal_p (fd) -> value
+															// (FUNC_TERMINAL_P)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -9125,6 +9147,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// or a nil stub where nothing names %host-getcwd.
 				code.addFunction(
 						hostGetcwd ? WasmIoRuntimeBuilder.buildHostGetcwdBody() : WasmEmitHelper.buildNilBody());
+				// the terminal probe (FUNC_TERMINAL_P): over the injected fd_fdstat_get,
+				// or a nil stub where nothing declared it.
+				code.addFunction(fdstatOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildTerminalPBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + fdstatOrdinal, stringTable));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

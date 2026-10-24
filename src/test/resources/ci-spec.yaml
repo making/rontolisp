@@ -12236,12 +12236,16 @@ cases:
     # stream-external-format / broadcast-stream-streams are prelude Lisp over what
     # every backend already has, so one definition answers on all four.
     # file-string-length is the UTF-8 byte length -- the one external format any of
-    # them writes.
+    # them writes. interactive-stream-p asks the host about a standard stream
+    # (%terminal-p); the driver pipes all three, so each is no terminal.
     source: |
       (let ((o (make-string-output-stream)))
         (print (list (clear-input)
                      (with-input-from-string (s "abc") (clear-input s))
                      (interactive-stream-p o)
+                     (interactive-stream-p t)
+                     (interactive-stream-p *error-output*)
+                     (interactive-stream-p (make-synonym-stream '*error-output*))
                      (stream-external-format o)
                      (file-string-length o #\a)
                      (file-string-length o "abc")
@@ -12270,7 +12274,7 @@ cases:
           (close b)))
       (print (with-open-file (s "reusefs.txt") (read-line s)))
     expected: |
-      (NIL NIL NIL :UTF-8 1 3 2 1)
+      (NIL NIL NIL NIL NIL NIL :UTF-8 1 3 2 1)
       (65 65 :EOF)
       T
       (NIL NIL)

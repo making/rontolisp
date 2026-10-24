@@ -437,7 +437,7 @@
 | `concatenated-stream-streams` | `(concatenated-stream-streams s)` | 連結ストリームのコンポーネントリスト |
 | `broadcast-stream-streams` | `(broadcast-stream-streams s)` | ブロードキャストストリームのコンポーネントリスト |
 | `file-string-length` | `(file-string-length s obj)` | 文字または文字列を書き込んだときに `file-position` がどれだけ進むか。UTF-8 でのバイト長です |
-| `interactive-stream-p` | `(interactive-stream-p s)` | 常に `nil` -- 端末とパイプを区別できるバックエンドはありません |
+| `interactive-stream-p` | `(interactive-stream-p s)` | プロセスの標準ストリームが端末かどうか。それ以外のストリームは `nil` |
 | `stream-external-format` | `(stream-external-format s)` | 常に `:utf-8` -- リーダーもすべてのライターもこの1つだけを使います |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | ストリームから読み込めるときに `t` |

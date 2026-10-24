@@ -176,6 +176,23 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsInflateRuntime;
 
 	/**
+	 * The terminal probe behind {@code %terminal-p} ({@code interactive-stream-p}), in
+	 * internal form: the class {@code JvmExprCompiler} calls it on, which travels with
+	 * the output.
+	 */
+	static final String TERMINAL_CLASS = "am/ik/rontolisp/runtime/RontoTerminal";
+
+	/** The terminal probe's class files: the class and its lazily bound handle holder. */
+	static final List<String> TERMINAL_RUNTIME_CLASS_FILES = List.of(TERMINAL_CLASS + ".class",
+			TERMINAL_CLASS + "$Isatty.class");
+
+	/**
+	 * Whether the last {@link #compile} asks whether a standard stream is a terminal,
+	 * i.e. whether the emitted class needs {@code RontoTerminal} beside it.
+	 */
+	private boolean needsTerminalRuntime;
+
+	/**
 	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
 	 * needs {@code RontoHashTable} beside it: every table is one, and the key fold for an
 	 * {@code equalp} table lives there too.
@@ -858,9 +875,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsQuantizedRuntime
-				&& !this.needsIoStreamRuntime && !this.needsCharFileRuntime && !this.needsStringInputRuntime
-				&& !this.needsJavaValueRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
+				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
+				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
+				&& this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -900,6 +918,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsInflateRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(INFLATE_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsTerminalRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(TERMINAL_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
@@ -2321,6 +2342,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// decompressing one the decoder.
 		this.needsFetchRuntime = usesFetch;
 		this.needsInflateRuntime = usesInflate;
+		this.needsTerminalRuntime = programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
 		// class travels with any hash-using output -- and with nothing else, since no

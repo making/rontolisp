@@ -1417,6 +1417,17 @@ final class WasmExprCompiler {
 	 */
 	private static boolean compileOperator2(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
+			// %terminal-p: _terminal_p over the injected fd_fdstat_get, a nil stub on a
+			// --no-wasi module.
+			case LispNames.TERMINAL_P_INTERNAL -> {
+				if (cons.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.TERMINAL_P_INTERNAL + " expects 1 argument, got " + (cons.toList().size() - 1));
+				}
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TERMINAL_P);
+			}
 			// %host-getcwd: _host_getcwd, fd 3's preopen name when the host spells it
 			// absolute (the --native runner stub names it after the current
 			// directory), nil otherwise. A WASI program has preopened directories and

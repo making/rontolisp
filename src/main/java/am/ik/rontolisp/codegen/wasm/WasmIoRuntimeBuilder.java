@@ -2165,6 +2165,91 @@ final class WasmIoRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/** The size of a WASI {@code fdstat}: filetype u8, flags u16, two u64 rights. */
+	private static final int FDSTAT_BYTES = 24;
+
+	/** WASI's {@code filetype::character_device}: what a host reports for a terminal. */
+	private static final int FILETYPE_CHARACTER_DEVICE = 2;
+
+	/**
+	 * Builds the _terminal_p(fd) function body: the T symbol when the process standard
+	 * stream {@code fd} (0, 1 or 2) is a terminal, {@code ref.null eq} (nil) otherwise --
+	 * any other value, a refusal, or another file type. A terminal is what WASI reports
+	 * as a character device through the injected {@code fd_fdstat_get}: wasmtime answers
+	 * so for a standard stream exactly when it is a tty, and the component adapter when
+	 * {@code wasi:cli}'s {@code get-terminal-*} hands out a terminal. The 24-byte
+	 * {@code fdstat} lands at {@code HEAP_PTR}, 8-aligned, advanced over the call and
+	 * popped after it, like {@link #buildFileWriteDateBody}'s {@code filestat}.
+	 * @param fdFdstatGetFunc the placeholder index of the injected {@code fd_fdstat_get}
+	 * import
+	 * @param st the string table the T symbol's name is interned in
+	 * @return the function body bytes
+	 */
+	static byte[] buildTerminalPBody(int fdFdstatGetFunc, WasmLispCompiler.StringTable st) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: FD=0 (ref) ; i32 locals: N=1, OLD=2, BUF=3, ERR=4
+		w.write(1);
+		w.write(4);
+		w.write(Type.I32);
+		final int FD = 0, N = 1, OLD = 2, BUF = 3, ERR = 4;
+
+		// n = the fixnum, or -1 for anything else; only 0, 1 and 2 are asked about
+		WasmEmitHelper.emitBoundIndex(w, FD);
+		setLocal(w, N);
+		getLocal(w, N);
+		i32(w, 2);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// buf = align8(HEAP_PTR); HEAP_PTR = buf + 24, the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, FDSTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, FDSTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// err = fd_fdstat_get(n, buf); pop HEAP_PTR
+		getLocal(w, N);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(fdFdstatGetFunc);
+		setLocal(w, ERR);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// err == 0 && filetype == character_device ? T : nil
+		getLocal(w, ERR);
+		w.write(Instruction.I32_EQZ);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, FILETYPE_CHARACTER_DEVICE);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		emitT(w, t);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitNil(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	/**
 	 * Builds the _file_write_date(path) function body: the universal time the named file
 	 * was last written, as an exact integer, or {@code ref.null eq} (nil) when it cannot
