@@ -930,15 +930,16 @@ y\\\")\"))
       (let ((deck (lispresen:starter-deck "2026-10-24" language)))
         (ok (contains deck ":date \"2026-10-24\""))
         (ok (null (render-diagnostics deck))))))
-  (ok
-   (equal (lispresen:format-diagnostic "t.lisp"
-                                       (lispresen::make-diagnostic
-                                        :severity :warning
-                                        :line 3
-                                        :slide 2
-                                        :title "x"
-                                        :message "m"))
-          "t.lisp:3: warning: slide 2 \"x\": m")))
+  (let ((d (lispresen::make-diagnostic :severity :warning
+                                       :line 3
+                                       :slide 2
+                                       :title "x"
+                                       :message "m")))
+    (ok (equal (lispresen:format-diagnostic "t.lisp" d)
+               "t.lisp:3: warning: slide 2 \"x\": m"))
+    (ok (equal (lispresen:format-diagnostic "t.lisp" d t)
+               (format nil "t.lisp:3: ~c[1;33mwarning:~c[0m slide 2 \"x\": m"
+                       (code-char 27) (code-char 27))))))
 
 (defun spit (path text)
   (with-open-file (s path :direction :output :if-exists :supersede

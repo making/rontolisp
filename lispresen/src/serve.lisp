@@ -19,6 +19,7 @@
   name            ; what diagnostics call it
   theme runtime   ; render's options
   read-octets     ; a function from a path to the file's bytes, or nil
+  color           ; whether standard error shows the severities in color
   lock            ; held while a request reads or rebuilds the build
   (source nil)    ; the deck text the build is of
   (read nil)      ; ((path . write date) ...) of the files the build read
@@ -33,9 +34,10 @@ thread of its own."
   #+rontolisp `(rontolisp:with-mutex ((served-lock ,served)) ,@body)
   #-rontolisp `(progn (served-lock ,served) ,@body))
 
-(defun make-served (deck &key theme runtime read-octets)
+(defun make-served (deck &key theme runtime read-octets color)
   "A server of the deck file DECK, built once, or nil when the deck cannot be read.
-READ-OCTETS reads a file's bytes (nil when it cannot)."
+READ-OCTETS reads a file's bytes (nil when it cannot); COLOR colors the severities each
+build reports on standard error."
   (let* ((slash (position #\/ deck :from-end t))
          (served
           (%make-served :deck deck
@@ -44,6 +46,7 @@ READ-OCTETS reads a file's bytes (nil when it cannot)."
                         :theme theme
                         :runtime runtime
                         :read-octets read-octets
+                        :color color
                         :lock #+rontolisp (rontolisp:make-mutex) #-rontolisp nil)))
     (when (served-text served)
       (rebuild served)
@@ -91,7 +94,8 @@ READ-OCTETS reads a file's bytes (nil when it cannot)."
         (format *error-output* "lispresen: built ~a: ~d error~:p, ~d warning~:p~%"
                 (served-name served) errors (- (length diagnostics) errors)))
       (dolist (d diagnostics)
-        (write-line (format-diagnostic (served-name served) d) *error-output*))
+        (write-line (format-diagnostic (served-name served) d (served-color served))
+                    *error-output*))
       (finish-output *error-output*))))
 
 (defun changed-p (entry)

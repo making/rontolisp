@@ -7,8 +7,10 @@
 ;;;;
 ;;;; Reads DECK, writes its HTML and the page image a :page-image draws, prints
 ;;;; diagnostics to standard error; new writes a starter deck to FILE; serve serves the
-;;;; deck's page over HTTP, rebuilt and reloaded when its files change. Exit status: 0
-;;;; success, 1 errors (or warnings under --strict), 2 usage. Runs unchanged on every
+;;;; deck's page over HTTP, rebuilt and reloaded when its files change. A diagnostic's
+;;;; severity is red (error) or yellow (warning) when standard error is a terminal,
+;;;; unless NO_COLOR is set or TERM is dumb. Exit status: 0 success, 1 errors (or
+;;;; warnings under --strict), 2 usage. Runs unchanged on every
 ;;;; backend, serve on those that can open a server socket (the interpreter, the JVM, a
 ;;;; native executable and SBCL):
 ;;;;
@@ -58,6 +60,13 @@
   --port N      the port to listen on (default 8000)
   --host ADDR   the address to listen on (default 127.0.0.1, this machine only)
   --version     print the version and the commit lispresen was built from")
+
+(defun color-p ()
+  "Whether diagnostics on standard error show their severity in color: a terminal, unless
+NO_COLOR is set (https://no-color.org) or TERM is dumb."
+  (and (interactive-stream-p *error-output*)
+       (equal (or (uiop:getenv "NO_COLOR") "") "")
+       (not (equal (uiop:getenv "TERM") "dumb"))))
 
 (defun usage-error (message)
   (format *error-output* "lispresen: ~a~%~a~%" message *usage*)
@@ -315,7 +324,7 @@ process is stopped."
     (when (string= deck "-") (usage-error "serve needs a deck file, not standard input"))
     (let ((served
            (lispresen:make-served deck :theme theme :runtime runtime
-                                  :read-octets #'read-octets)))
+                                  :read-octets #'read-octets :color (color-p))))
       (unless served (fail "cannot read ~a" deck))
       (format *error-output* "lispresen: serving ~a at http://~a:~d/ (Ctrl-C stops)~%" deck
               host port)
@@ -375,12 +384,13 @@ process is stopped."
                                                                       :page-image t)
         (let ((name (if (string= deck "-") "<stdin>" deck))
               (errors 0)
-              (warnings 0))
+              (warnings 0)
+              (color (color-p)))
           (dolist (d diagnostics)
             (if (eq (lispresen:diagnostic-severity d) :error)
                 (incf errors)
                 (incf warnings))
-            (write-line (lispresen:format-diagnostic name d) *error-output*))
+            (write-line (lispresen:format-diagnostic name d color) *error-output*))
           (finish-output *error-output*)
           (unless check
             (let ((target

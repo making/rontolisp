@@ -347,7 +347,8 @@ the HTML file as `data:` URIs (`png`, `jpg`, `gif`, `webp`, `avif`, `svg`; `mp4`
 a video over 20 MB reported, since the page then opens slowly), so the file
 alone is the whole deck, the page image (Link preview, below) aside. A WASM build reads and writes files
 only in a directory `wasmtime run --dir` opens. Diagnostics go to standard error as `talk.lisp:42: warning: slide 7
-"title": ...`, the severity right after the line. `--check` only reports, `--strict` fails on warnings. Exit status: 0
+"title": ...`, the severity right after the line, red for an error and yellow for a warning
+when standard error is a terminal (not under `NO_COLOR` or `TERM=dumb`). `--check` only reports, `--strict` fails on warnings. Exit status: 0
 success, 1 errors (or warnings under `--strict`), 2 usage.
 
 `new` writes the starter deck to `FILE` (`-` for standard output): Japanese, or English

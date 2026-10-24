@@ -1257,7 +1257,10 @@ Diagnostics print as `talk.lisp:42: warning: slide 7 "その場で動かす": bo
 44px (floor 48px); consider splitting the slide`: the severity follows the line, where a
 compiler puts it, so it stands at the same place on every line whatever the title's
 length, and an editor that reads compiler output (Emacs's compilation mode) tells errors
-from warnings. `serve`'s panel and the web editor show each line in its severity's color.
+from warnings. On a terminal the severity is bold red or yellow (`interactive-stream-p`
+of `*error-output*`, off under `NO_COLOR` or `TERM=dumb`); a pipe or a file gets the
+plain text an agent or a log reads. `serve`'s panel and the web editor show each line in
+its severity's color.
 
 The contrast lint checks every text color against the background it is set on: `fg`,
 `muted` and `accent` on `bg`, `fg` on `head-bg` (table headers and callouts) and `mark`,

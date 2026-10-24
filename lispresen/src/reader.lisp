@@ -25,15 +25,21 @@
                          :title *slide-title*
                          :message message) *diagnostics*))
 
-(defun format-diagnostic (file d)
+(defun format-diagnostic (file d &optional color)
   "One diagnostic as FILE:LINE: SEVERITY: slide N \"TITLE\": MESSAGE, the severity at the
-same place on every line, where compilers put it."
+same place on every line, where compilers put it. COLOR sets SEVERITY: in bold red for an
+error and bold yellow for a warning, for a terminal."
   (with-output-to-string (out)
     (write-string file out)
     (when (diagnostic-line d) (format out ":~d" (diagnostic-line d)))
     (write-string ": " out)
+    (when color
+      (format out "~c[1;~dm" (code-char 27)
+              (if (eq (diagnostic-severity d) :error) 31 33)))
     (write-string (string-downcase (symbol-name (diagnostic-severity d))) out)
-    (write-string ": " out)
+    (write-char #\: out)
+    (when color (format out "~c[0m" (code-char 27)))
+    (write-char #\Space out)
     (when (diagnostic-slide d)
       (format out "slide ~d" (diagnostic-slide d))
       (when (diagnostic-title d)
