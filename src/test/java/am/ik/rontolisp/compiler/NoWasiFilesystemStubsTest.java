@@ -26,15 +26,20 @@ class NoWasiFilesystemStubsTest {
 
 	@Test
 	void aVariableNamedOpenIsNotACallToOpen() {
-		// Only OPERATOR position is a call. `open` is an ordinary variable name as well
-		// as a CL function, and walking a list's TAIL as if it were a form rewrote the
-		// (OPEN T) tail of (setq open t) into a stub -- leaving a setq with ONE
-		// argument, which the WASM backend rejects at compile time.
+		// Only a code position is a call. `open` is an ordinary variable name as well as
+		// a CL function: walking a list's TAIL as if it were a form rewrote the (OPEN T)
+		// tail of (setq open t) into a stub, and a lambda list or binding list headed by
+		// OPEN reads exactly like a call -- both leave a form the WASM backend rejects.
 		String source = """
 				(defvar open nil)
 				(defun f () (setq open t) open)
+				(defun g (open close) (list open close))
+				(defun h () (let ((open 1)) open))
 				""";
-		assertThat(rewrite(source)).doesNotContain("has no filesystem").contains("(SETQ OPEN T)");
+		assertThat(rewrite(source)).doesNotContain("has no filesystem")
+			.contains("(SETQ OPEN T)")
+			.contains("(OPEN CLOSE)")
+			.contains("((OPEN 1))");
 	}
 
 	@Test

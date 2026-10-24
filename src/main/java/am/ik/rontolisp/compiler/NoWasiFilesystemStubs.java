@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
-import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -40,16 +39,9 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * function, not CL's).
  *
  * <p>
- * Only a form in OPERATOR position is a call: the walk descends into a list's ELEMENTS,
- * never into its tail as if the tail were itself a form. {@code open} is an ordinary
- * variable name as well as a CL function, and a tail-walking rewrite turns
- * {@code (setq open t)} into a {@code setq} with one argument. What the walk still cannot
- * tell apart is a BINDING from a call -- {@code (let ((open nil)) ...)} and
- * {@code (defun f (open) ...)} spell the binding exactly like {@code (open nil)} spells
- * the call -- so a {@code --no-wasi} program that binds the name that way still gets it
- * stubbed. The failure is loud (a malformed binding the backend rejects), never a wrong
- * module, and the fix is the binding-position knowledge {@code ShadowedBuiltins}'s walker
- * already carries.
+ * Only a list in a CODE position is a call: the rewrite rides {@link CallSiteWalk}, so
+ * {@code open} as a variable -- {@code (setq open t)}, {@code (let ((open nil)) ...)},
+ * {@code (defun fenced-box (open close) ...)} -- keeps its binding.
  *
  * <p>
  * WASM {@code --no-wasi} only -- the JVM and the WASI-carrying WASM targets have real
@@ -94,23 +86,16 @@ public final class NoWasiFilesystemStubs {
 	}
 
 	private static LispVal rewriteForm(LispVal val, boolean userOpen) {
-		if (!(val instanceof LispCons cons)) {
-			return val;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.isQuote(head.name())) {
-				return cons;
-			}
+		return CallSiteWalk.walk(val, (cons, head) -> {
 			if (LispNames.WITH_OPEN_FILE.equals(head.name()) && cons.cdr() instanceof LispCons rest
 					&& rest.car() instanceof LispCons spec && spec.cdr() instanceof LispCons pathCell) {
 				// (with-open-file (var PATH opts...) body...) -> (progn PATH' (error
-				// ...)).
-				// The real form computes PATH, then opens -- which here can only fail --
-				// so the body and the option values never run.
+				// ...)). The real form computes PATH, then opens -- which here can only
+				// fail -- so the body and the option values never run.
 				return SourceProvenance.inherit(cons,
 						stub(List.of(rewriteForm(pathCell.car(), userOpen)), head.name()));
 			}
-			if (!userOpen && LispNames.OPEN.equals(head.name()) && cons.isProperList()) {
+			if (!userOpen && LispNames.OPEN.equals(head.name())) {
 				List<LispVal> parts = cons.toList();
 				List<LispVal> args = new ArrayList<>(parts.size() - 1);
 				for (int i = 1; i < parts.size(); i++) {
@@ -118,17 +103,8 @@ public final class NoWasiFilesystemStubs {
 				}
 				return SourceProvenance.inherit(cons, stub(args, head.name()));
 			}
-		}
-		// Otherwise walk the ELEMENTS, each of them a form, and never the tail as if it
-		// were one: a cdr whose own car is OPEN is an argument list or a binding, not a
-		// call. (setq open t) is the case that taught this -- rewriting the tail turned
-		// it into (setq (progn t (error ...))), a setq with one argument.
-		return rewriteElements(cons, userOpen);
-	}
-
-	private static LispVal rewriteElements(LispCons cons, boolean userOpen) {
-		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node,
-				element -> rewriteForm(element, userOpen));
+			return null;
+		});
 	}
 
 	/** {@code (progn args... (error "OPERATOR requires WASI; ..."))}. */

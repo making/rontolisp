@@ -227,8 +227,9 @@ as a bare symbol or binds the name anywhere.
 ## Filesystem: `with-open-file` / `open` lower to call-time error stubs
 
 `compiler/NoWasiFilesystemStubs`. `WasmLispCompiler.compile` rewrites every reachable
-`(with-open-file ...)` / `(open ...)` form -- quoted data excluded, `open` left alone when the
-program defines its own `(defun open ...)` -- into `(progn <path-expr> (error "... requires WASI; a
+`(with-open-file ...)` / `(open ...)` form in a code position (`CallSiteWalk`: quoted data, lambda
+lists and binding lists excluded, so lispresen's `(defun fenced-box (open close ...) ...)` keeps its
+parameter; `open` left alone when the program defines its own `(defun open ...)`) -- into `(progn <path-expr> (error "... requires WASI; a
 --no-wasi module has no filesystem"))`. It SIGNALS, it does not fabricate a stream, and does not make
 `path_open`'s errno redundant: the errno backstops what the rewrite cannot see (`probe-file`,
 `directory`, `load`, an `open` reached through `funcall`).
