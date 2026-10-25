@@ -4,7 +4,9 @@
 ;;;;
 ;;;; Exports render (:string -> :string). A reactor export returns one value, so the
 ;;;; result is the HTML, then *SEPARATOR*, then one diagnostic per line as the CLI prints
-;;;; them with "deck" as the file name. index.html is the editor page that calls it.
+;;;; them with "deck" as the file name. index.html is the editor page that calls it, and
+;;;; calls highlight (:string -> :string) on every input to color the deck source with the
+;;;; tokenizer that colors Lisp on a slide.
 
 (load "../src/all.lisp")
 
@@ -20,5 +22,14 @@
 
 (rontolisp:wasm-export 'render-web
                        :as "render"
+                       :params '(:string)
+                       :returns :string)
+
+(defun highlight-web (source)
+  (with-output-to-string (out)
+    (lispresen::write-highlighted source "lisp" out)))
+
+(rontolisp:wasm-export 'highlight-web
+                       :as "highlight"
                        :params '(:string)
                        :returns :string)

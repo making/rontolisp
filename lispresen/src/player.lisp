@@ -10,12 +10,13 @@
 ;;;; *SAY-SCRIPT*, included only when the deck has callouts, places their bubbles again on
 ;;;; the geometry the browser drew. *VIDEO-SCRIPT*, included only when the deck has a
 ;;;; video, plays and pauses videos as slides are entered and left and as steps reveal and
-;;;; hide them, and on a click. The
-;;;; slides are laid out without any of them; they only present and correct them.
+;;;; hide them, and on a click. *FRAME-SCRIPT*, included only when the deck has a frame,
+;;;; keeps a copy of a slide from loading its page again. The slides are laid out without
+;;;; any of them; they only present and correct them.
 ;;;;
 ;;;; They are written without double quotes and backslashes so they sit in a Lisp string
-;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY VIDEO START })(); the
-;;;; runner, the callouts and the videos extend the player through HOOKS.
+;;;; as is. The emitter wraps them as (function(){ PLAYER RUNNER SAY VIDEO FRAME START })();
+;;;; the runner, the callouts, the videos and the frames extend the player through HOOKS.
 
 (in-package :lispresen)
 
@@ -27,7 +28,7 @@ var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElemen
 var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
 var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
 var params=new URLSearchParams(location.search),presenter=params.has('presenter'),handout=params.has('notes');
-var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
+var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[],copy:[]};
 var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
 function send(m){if(chan)chan.postMessage(m);}
 function fit(){var s=Math.min(innerWidth/W,innerHeight/H);
@@ -74,7 +75,7 @@ function toggleFull(){if(d.fullscreenElement){d.exitFullscreen();}else if(stage.
 function wake(){stage.classList.add('pointer');stage.classList.remove('idle');clearTimeout(idle);
 idle=setTimeout(function(){stage.classList.remove('pointer');if(d.fullscreenElement)stage.classList.add('idle');},2000);}
 function thumb(i,live){var t=d.createElement('div');t.className='thumb';var c=slides[i].cloneNode(true);
-c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');t.appendChild(c);return t;}
+c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');hooks.copy.forEach(function(f){f(c);});t.appendChild(c);return t;}
 function scaleThumbs(root){root.querySelectorAll('.thumb').forEach(function(t){t.firstChild.style.transform='scale('+t.clientWidth/W+')';});}
 var ov=null,sel=0;
 function mark(){Array.prototype.forEach.call(ov.children,function(t,i){t.classList.toggle('sel',i===sel);});
@@ -307,11 +308,11 @@ if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.cre
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
 return cunion(crects(rg.getClientRects(),o,k));}
 if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
-if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video,svg.mx');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video,.frame,svg.mx');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
 if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
 return cunion(ctext(el,o,k));}
 function cobstacles(sl,o,k){var a=ctext(sl,o,k);
-sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video'),fr=cbox(f.getBoundingClientRect(),o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video,.frame'),fr=cbox(f.getBoundingClientRect(),o,k);
 if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
 sl.querySelectorAll('.tools,.dg-art>:not(.dg-g,.dg-z,.dg-bg),.mx>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
 function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
@@ -350,6 +351,13 @@ vids.forEach(function(v){if(!v.paused&&!slides[i].contains(v))v.pause();});
 slides[i].querySelectorAll('video').forEach(function(v){var e=v.closest('[data-step]'),s=e?+e.dataset.step:0;
 if(s>shown){if(!v.paused)v.pause();}else if(v.hasAttribute('data-autoplay')&&(moved?entered:s>k0))vplay(v);});});
 hooks.msg.push(function(m){if(m.t==='video'&&vids[m.i])vtoggle(vids[m.i]);});}
+")
+
+(defparameter *frame-script*
+  "
+function fcopy(root){root.querySelectorAll('.frame iframe').forEach(function(f){var p=d.createElement('p');
+p.className='frame-copy';p.textContent=f.title||f.getAttribute('src');f.replaceWith(p);});}
+hooks.copy.push(fcopy);if(presenter)fcopy(deck);
 ")
 
 (defparameter *start-script*

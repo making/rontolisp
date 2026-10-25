@@ -52,7 +52,11 @@ figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:ce
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
 figure video{flex:1 1 0;min-height:0;width:100%;object-fit:contain}
 html.js video{cursor:pointer}
+.frame{flex:1 1 0;min-height:0;width:100%;position:relative;overflow:hidden;border-radius:12px;box-shadow:0 0 0 2px var(--rule)}
+.frame iframe{position:absolute;left:0;top:0;width:calc(100% / var(--zoom));height:calc(100% / var(--zoom));border:0;transform:scale(var(--zoom));transform-origin:0 0}
+.frame-copy{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--head-bg);color:var(--muted);font-size:48px;line-height:1.4;text-align:center}
 figure.bleed{position:absolute;top:0;height:100%;display:block}
+.bleed .frame{height:100%;border-radius:0;box-shadow:none}
 .bleed img,.bleed video{display:block;width:100%;height:100%;max-width:none;object-fit:cover}
 .bleed.contain img,.bleed.contain video{object-fit:contain}
 figcaption{color:var(--muted);text-align:center}
@@ -485,11 +489,24 @@ takes a share of the room the other blocks leave, as the image does."
           (format out "</div>~%"))
   (format out "</div>~%"))
 
+(defun quarters-string (x)
+  "The number X, a whole number of quarters, as CSS writes it: 2, 2.25, 2.5."
+  (multiple-value-bind (whole part) (floor (* 4 x) 4)
+    (format nil "~d~[~;.25~;.5~;.75~]" whole part)))
+
 (defun write-media (b out)
-  "The <img> of the image B, or the <video> of a video. A video has no autoplay attribute,
-which would play it on page load: the player plays it when its slide is entered. Its
-controls, which the player removes, let a page without the script still play it."
-  (cond ((figure-video b)
+  "The <img> of the image B, the <video> of a video, or the <iframe> of a frame. A video
+has no autoplay attribute, which would play it on page load: the player plays it when its
+slide is entered. Its controls, which the player removes, let a page without the script
+still play it. A frame's page is laid out in its box divided by the zoom and scaled up
+again, and loads lazily, when its slide is first shown."
+  (cond ((figure-frame b)
+         (format out "<div class=\"frame\" style=\"--zoom:~a\"><iframe"
+                 (quarters-string (figure-zoom b)))
+         (write-attribute "src" (figure-src b) out)
+         (when (figure-alt b) (write-attribute "title" (figure-alt b) out))
+         (write-string " loading=\"lazy\"></iframe></div>" out))
+        ((figure-video b)
          (write-string "<video" out)
          (write-attribute "src" (figure-src b) out)
          (when (figure-poster b) (write-attribute "poster" (figure-poster b) out))
@@ -886,10 +903,11 @@ corner the fit solver chose."
           "</div>~%<button id=\"fs\" title=\"Full screen (F)\" aria-label=\"Full screen\">~a</button>~%</div>~%"
           *full-screen-icon*)
   (write-config deck out)
-  (format out "<script>(function(){~a~a~a~a~a})();</script>~%</body>~%</html>~%"
+  (format out "<script>(function(){~a~a~a~a~a~a})();</script>~%</body>~%</html>~%"
           *player-script* (if (deck-runnable-p deck) *runner-script* "")
           (if (some #'slide-callouts (deck-slides deck)) *say-script* "")
-          (if (deck-video-p deck) *video-script* "")
+          (if (deck-figure-p deck #'figure-video) *video-script* "")
+          (if (deck-figure-p deck #'figure-frame) *frame-script* "")
           *start-script*))
 
 (defun write-meta (attribute name content out)
@@ -920,12 +938,13 @@ link preview is built from; nothing for a deck that sets neither."
 
 (defparameter *hosted-runtime* "https://making.github.io/rontolisp/")
 
-(defun deck-video-p (deck)
-  "True when a slide of DECK holds a video, in its body or beside it."
+(defun deck-figure-p (deck test)
+  "True when a slide of DECK holds a figure satisfying TEST (a video, a frame), in its body
+or beside it."
   (some (lambda (slide)
           (let ((bleed (fit-bleed (slide-fit slide))))
-            (or (and bleed (figure-video (first bleed)))
-                (some (lambda (b) (and (figure-p b) (figure-video b)))
+            (or (and bleed (funcall test (first bleed)))
+                (some (lambda (b) (and (figure-p b) (funcall test b)))
                       (region-blocks (slide-blocks slide))))))
         (deck-slides deck)))
 

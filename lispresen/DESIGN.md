@@ -107,7 +107,7 @@ Elements:
 | Kind | Forms |
 |------|-------|
 | Top-level | `deck`, `section`, `slide` (`:title`, `:kicker`, `:footer`, `:layout`, `:class`, `:morph`), `define` (below) |
-| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` / `columns` (`:series`, `:stack`, `:axis`, `:unit`, `:step :series`), `lines` (`:series`, `:unit`, `:step :series`), `pie` (`:donut`, `:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
+| Block | bare string (= `p`), `p`, `lead`, `ul` / `ol` (`:step`), `li`, `code` (`:lang`, `:file`, `:lines`, `:steps`, and for runnable code `:run`, `:timeout`, `:fresh`, `:stdin`), `image` (`:alt`, `:caption`, `:fit`, `:share`), `video` (as `image`, and `:poster`, `:autoplay`, `:muted`, `:loop`), `frame` (as `image` but `:fit`, and `:zoom`), `quote` (`:cite`), `column`, `table`, `flow`, `cells`, `bars` / `columns` (`:series`, `:stack`, `:axis`, `:unit`, `:step :series`), `lines` (`:series`, `:unit`, `:step :series`), `pie` (`:donut`, `:unit`), `math` (a display formula), `notes`, `source`, `say` around one block (`:at`, `:step`); every block but a list, `notes` and `source` takes `:step` (Page advances, below) |
 | Inline | string, `b`, `i`, `tt`, `link` (`(link "url" ...)`), `mark`, `accent`, `math` (an inline formula), `say` (`(say "comment" inline...)`, `:step`) |
 
 Rules:
@@ -454,8 +454,8 @@ phrases (文節), not between arbitrary characters.
 | Deck header (generated first slide) | `title` (below) |
 | `section` | `section` (large, centered); with `:agenda`, `standard` (the agenda) |
 | No title, one short `p`, no callout | `statement` (centered, statement scale) |
-| No title, one `image` or `video` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
-| Title + one `image` or `video` | `image` (image fills the body box, `object-fit: contain`) |
+| No title, one `image`, `video` or `frame` without `:caption`, no source or callout | `full` (the image covers the canvas, below) |
+| Title + one `image`, `video` or `frame` | `image` (image fills the body box, `object-fit: contain`) |
 | Title + one `code` | `code` |
 | Title + one `quote` | `quote` |
 | Title + one `table` | `table` |
@@ -575,6 +575,47 @@ fit solver needs no intrinsic size and sees an image. It takes every place and o
   current browser plays, and the poster as an image. The page holds the base64 of the
   whole file, a third larger, and the browser parses all of it before the first slide
   shows, so a video over 20 MB is a warning.
+
+#### Frames
+
+A demonstration of a web application is best given live, as runnable code is. `(frame
+"https://..." :alt "..." [:zoom 2] [:caption "t"])` shows a page in an `<iframe>`, an
+image to the layout as a video is: the body, `full`, `image-left` / `image-right`,
+`:share`, `:caption`, `:step` and callouts, with the same rules and diagnostics, which
+name it a frame. `:alt` is its `title`, the name assistive technology reads. `:fit` is
+refused: a page fills its box.
+
+- **Zoom.** lispresen cannot measure a page it does not render, so the fit solver cannot
+  size its text. The page is laid out in the box divided by `:zoom` and scaled up by a
+  CSS transform (`--zoom` on its `.frame`), so a page set at 16 px reads at 32 canvas px,
+  below the body floor but within the code size steps, at the default 2. It is the one
+  scale a deck states, since there is nothing to fit; 1 to 4 in quarters, printed as a
+  decimal with no float. The CSS `zoom` property would not do: whether it reaches the
+  content of an iframe differs per browser.
+- **Loading.** `loading="lazy"`: a slide that is not shown is `display: none`, so the page
+  loads when its slide is first shown, and stays loaded, keeping its state, when the slide
+  is left. The runtime check shows every slide for a moment (`measure`) but within one
+  task, and lazy loading is decided at the next rendering, so it loads nothing (measured
+  2026-10-25, Chrome: the editor of a later slide not requested until it is shown). A
+  page loaded with the deck could be heavy (the intro deck's editor starts a second
+  runtime) and is wasted on a reader who never reaches it.
+- **Copies.** Every copy of a slide (the overview, the presenter window's thumbnails)
+  would load the page again, a separate instance that does not follow the slides. The
+  frame script (`*frame-script*`, only in a deck with a frame) replaces the iframe of a
+  copy, before it is attached, by `<p class="frame-copy">` holding its name; in the
+  presenter window it does the same to the deck itself, whose stage is
+  `visibility: hidden` and would load every shown page.
+- **Keys.** A page that has focus takes the keys, and a parent page cannot see them: once
+  the page is clicked, the slide keys move nothing until the slide outside the page is
+  clicked. A frame filling the whole canvas leaves nothing outside, so an interactive page
+  belongs on a titled slide; the presenter window still moves the slides. A tap on the page
+  is the page's, as on any embedded content.
+- **Isolation.** A deck under a cross-origin isolated scope (the playground's COOP/COEP
+  service worker on Pages) can frame only a page that sends a compatible COEP; a page of
+  the same scope gets it from the same worker. Checked 2026-10-25 in Chrome with the
+  worker active: the framed editor renders and is itself isolated.
+- `--embed` leaves a frame's URL as it is, a page being served, not a file; a relative
+  URL is a warning, as the HTML then does not stand alone.
 
 ### Fit solver
 
@@ -1362,8 +1403,8 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a chart without rows, a row that is not `(label value...)` with a value per series, a value that is not an integer or a decimal string (a float among them), a negative slice or a pie without a slice above 0, `:series` naming fewer than two or more than 6 series, a pie of more than 6 slices, `:step :series` on a pie or a block that is no chart, an option after the rows, a `columns` whose rows are forms; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`; under `--embed`, an image that cannot be read or has an unknown extension |
-| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a chart of more than 4 series, a bar chart of more than 7 rows, a column or line chart of more than 12, a pie of more than 5 slices; a chart color below 3:1 on `bg`; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
+| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a chart without rows, a row that is not `(label value...)` with a value per series, a value that is not an integer or a decimal string (a float among them), a negative slice or a pie without a slice above 0, `:series` naming fewer than two or more than 6 series, a pie of more than 6 slices, `:step :series` on a pie or a block that is no chart, an option after the rows, a `columns` whose rows are forms; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`, a frame `:zoom` other than 1 to 4 in quarters; under `--embed`, an image that cannot be read or has an unknown extension |
+| warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a chart of more than 4 series, a bar chart of more than 7 rows, a column or line chart of more than 12, a pie of more than 5 slices; a chart color below 3:1 on `bg`; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image`, `video` or `frame` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL, a frame given as a relative URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: warning: slide 7 "その場で動かす": body text at
 44px (floor 48px); consider splitting the slide`: the severity follows the line, where a
@@ -1442,11 +1483,13 @@ One file containing:
   clickers, Home/End, tap, swipe, `#N` in the URL), overview grid (`O`), full screen (`F`,
   below),
   the runtime check, a presenter window (`P`, below), the runnable-code worker,
-  included only when the deck has runnable code, and the playing of videos, included
-  only when the deck has one.
+  included only when the deck has runnable code, the playing of videos, included
+  only when the deck has one, and the frame copies, likewise.
 - A video as `<video src="demo.mp4" aria-label="..." preload="metadata" playsinline
   controls>` in its `figure`, with `poster`, `loop`, `muted` and `data-autoplay` from
   its options (Video, above); the player removes `controls`.
+- A frame as `<div class="frame" style="--zoom:2"><iframe src title loading="lazy">` in its
+  `figure` (Frames, above).
 - Callouts as `<div class="say" role="note" data-side="below" style="left:...;top:...">`
   after the body, each named by its anchor's `aria-describedby` (an inline anchor is a
   `<span>`), which is also how the player finds the anchor. The tail is two `clip-path`
@@ -1688,7 +1731,7 @@ code ending where the browser's ends.
 | WASM component | `cli.lisp` | `rontolisp lispresen/cli.lisp --component -o lispresen.wasm && wasmtime run --dir . lispresen.wasm talk.lisp` |
 | Native executable | `cli.lisp` | `rontolisp lispresen/cli.lisp --native -o lispresen && ./lispresen talk.lisp` |
 | SBCL | `cli.lisp` | `sbcl --script lispresen/cli.lisp talk.lisp` |
-| Browser | `web/lispresen-web.lisp` | `web/build.sh` (`--no-wasi --optimize`): a reactor exporting `render` (`:params '(:string) :returns :string`) |
+| Browser | `web/lispresen-web.lisp` | `web/build.sh` (`--no-wasi --optimize`): a reactor exporting `render` and `highlight` (`:params '(:string) :returns :string`) |
 
 CLI:
 
@@ -1761,12 +1804,28 @@ The browser host is an editor page: the deck source on the left, the rendered de
 `iframe srcdoc` on the right, re-rendered on a short debounce, diagnostics listed below,
 and a download button for the HTML. The reactor returns the HTML and the diagnostics in
 one string (a fixed separator line), since a reactor export returns a single value. The
-lispresen reactor (887 KB) renders; the preview's runnable code loads the playground
+lispresen reactor (2.2 MB, 620 KB gzipped, 2026-10-25) renders; the preview's runnable code loads the playground
 runtime like any other deck. The preview keeps its slide across re-renders through
-`window.lispresen` (`show`, `current`), which the player defines. The reactor's
-arguments and results are allocated by a bump allocator that is never reset (about 15 KB
-per render of the golden deck), so the page instantiates the compiled module again once
-its memory passes 64 MB. `lispresen.wasm` is built, not committed.
+`window.lispresen` (`show`, `current`), which the player defines. A second export,
+`highlight`, colors the deck source with the tokenizer that colors Lisp on a slide
+(`write-highlighted`): the page lays the result in a `pre` under a `textarea` whose text is
+transparent, same font and padding, and repaints on every input, without the debounce
+(2026-10-25, Chrome: 43 ms for the 28,653-character golden deck, linear in its length).
+The reactor's
+arguments and results are allocated by a bump allocator that is never reset (2026-10-25,
+golden deck: 84 KB per render, 39 KB per highlight), so the page instantiates the compiled
+module again once its memory passes 64 MB, about 11 ms. `lispresen.wasm` is built, not committed.
+
+The Pages workflow publishes the editor at `lispresen/editor/`, beside the intro deck
+(`lispresen/intro.html`), which frames it: `web/build.sh DIR` compiles the reactor into
+DIR and copies `index.html` beside it, with the jar the web profile has just packaged, so
+the published editor is always the develop sources' (the workflow runs on a change to
+`lispresen/src` or `lispresen/web`). The deck names the editor by its absolute URL, as
+`:runtime :hosted` names the runtime: a relative one would resolve on Pages only, while
+the deck is also opened from `file://`, from `lispresen serve` and as `examples/intro.html`.
+A framed editor (`window.top` not itself) starts from its sample and neither reads nor
+writes the draft: it shares the origin, and so the `localStorage`, of the editor opened on
+its own, whose draft a demonstration on a slide would otherwise replace.
 
 ### Serve
 
@@ -1877,7 +1936,8 @@ lispresen/
   web/
     lispresen-web.lisp   browser reactor
     index.html           editor page
-    build.sh             compiles the reactor to lispresen.wasm
+    build.sh             compiles the reactor to lispresen.wasm, or the editor into a
+                         directory to publish
   test/
     lispresen-test.lisp  rove: segmentation, metrics, solver, parser diagnostics
   examples/
@@ -1932,7 +1992,7 @@ before committing a change under `lispresen/`.
   code morph, a quote with a source, tables (a row header, `:align`, a `:colspan` cell,
   numeric columns), every inline form, an embedded PNG, a full-bleed slide and a split one
   (`:image-right`, `:share 1/3`, the ratio read on every backend), an embedded MP4 video
-  with an embedded poster, ordered and unordered lists, one
+  with an embedded poster, a frame of the published editor, ordered and unordered lists, one
   revealed by steps, a bar chart, a formula with a callout and a lead revealed whole by
   `:step t`, a flow, a layered flow (a branch, a merge, an arrow across a layer and a
   labeled arrow), two cells drawings in columns (one with dotted pairs), a bar
@@ -1952,7 +2012,7 @@ before committing a change under `lispresen/`.
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
   line breaking at their exact boundaries, step selection, the hard-floor error, the layout a lone untitled image takes and
-  the text region of a split slide (a video in it), the
+  the text region of a split slide (a video in it), a frame's markup and zoom, the
   three table-width cases, column widths beside a full-width block, a wrapping console,
   the QR encoder against the standard's examples and its version boundaries, the title
   slide's logo and QR code, the preview tags (none without the options, every one with

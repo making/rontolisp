@@ -54,6 +54,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `(column block...)` | a column; consecutive columns stand side by side at one text size, each as wide as its content needs, and blocks before or after them span the slide |
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | an image, fitted into the remaining space; alone on a slide without a title, it covers the whole slide. `:fit :contain` shows a full-bleed or split image whole instead of cropping it, `:share` (`1/3`, `1/2`, `2/3`) is the width a split image takes |
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t] ...)` | a video (`mp4`, `webm`), laid out as an image and taking the same options. `:autoplay t` plays it when its slide is entered, never on page load; leaving the slide pauses it. A click or tap on it plays or pauses it. Print, the overview and the presenter window show the `:poster` image (or the first frame) |
+| `(frame "https://..." :alt "name" [:zoom 2] ...)` | a live web page, laid out as an image and taking the same options but `:fit`. It is shown `:zoom` times enlarged (1 to 4 in quarters, 2 by default) and loads when its slide is first shown; the overview and the presenter window show its name instead (below) |
 | `(flow [:direction :down] label...)`, `(flow (-> step...)...)` | boxes joined by arrows (below): a chain, or paths that branch and merge; a label is a string, an inline form or a list of them |
 | `(cells '(1 (2 3)))` | the box-and-pointer drawing of a list (below) |
 | `(bars [:series (name...)] [:stack t] [:axis t] [:unit "s"] [:step :series] (label value...)...)` | a horizontal bar chart (below) |
@@ -281,7 +282,7 @@ overview show the whole slide; the presenter window shows what is still to come 
 ```
 
 `:step t` reveals a whole block: a paragraph (`p`, `lead`), a quote, an image, a video, a
-table, a diagram, a display formula, a code block (its `:steps` then walk its lines) or a
+frame, a table, a diagram, a display formula, a code block (its `:steps` then walk its lines) or a
 column. A table's rows and a diagram's boxes or bars come with their block; only a list
 reveals its parts one by one, and a chart's series with `:step :series` (`bars`,
 `columns`, `lines`): one advance per series, its legend name, marks and values together,
@@ -451,7 +452,8 @@ reports `unknown`.
 Open the HTML file in a browser. Arrow keys, space, PageUp/PageDown (clickers),
 Home/End and swiping move between slides; on a touch screen, a tap on the left third goes
 back and anywhere else goes forward. A click or tap on a video plays or pauses it, and
-leaves the slide where it is. `#N` in the URL opens slide N. `F`, a double click
+leaves the slide where it is; one on a frame's page goes to the page, as do the keys after
+it, until the slide outside the page is clicked. `#N` in the URL opens slide N. `F`, a double click
 or the button in the bottom-right corner toggles full screen. `O` shows all slides.
 While the deck is in full screen, and while the presenter window is open, the player holds a
 screen wake lock so the display does not dim or lock mid-talk (browsers that lack the API, or
@@ -586,6 +588,25 @@ browser plays sound only in a window that has had a key press or click, so when 
 from the presenter window, press `F` in the slides window first; a `:muted t` video
 always plays.
 
+A live demo of a web application is a `frame`, also laid out as an image:
+
+```lisp
+(slide :title "エディタ"
+  (frame "https://making.github.io/rontolisp/lispresen/editor/" :alt "lispresen のエディタ"))
+```
+
+- The page is laid out in its box divided by `:zoom` and scaled up, so a page set at
+  16 px reads as 32 px on the 1920 x 1080 slide at the default 2.
+- It loads when its slide is first shown and keeps its state after that. The overview and
+  the presenter window show its name, not a second copy of the page.
+- Once the page is clicked, keys go to it; click the slide outside it to move between
+  slides again. A frame that fills the whole slide leaves nothing to click, so give an
+  interactive page a title.
+- A page is served, never embedded: under `--embed` a relative URL is reported.
+
+The intro deck frames lispresen's own editor (`web/`), which the Pages workflow publishes
+at `https://making.github.io/rontolisp/lispresen/editor/`.
+
 ## Development
 
 ```bash
@@ -595,7 +616,11 @@ lispresen/check.sh --update   # regenerate examples/intro.html and intro.png fir
 ```
 
 `web/` is a browser editor: `web/build.sh` compiles lispresen to a WebAssembly reactor,
-and `web/index.html`, served over HTTP, re-renders the deck as you type.
+and `web/index.html`, served over HTTP, re-renders the deck as you type and colors its
+source as a Lisp code block on a slide is colored. `web/build.sh
+DIR` puts both files in `DIR` instead, which is how the Pages workflow publishes the
+editor at `lispresen/editor/`. Framed in another page, the editor starts from its sample
+and leaves the draft of the editor opened alone untouched.
 
 `tools/calibrate.lisp` writes a page that compares the width model with the browser it
 is opened in: the line counts of sample paragraphs (formulas among them), every ASCII

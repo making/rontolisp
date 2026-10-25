@@ -211,16 +211,17 @@ image, where it would be text on a picture."
 
 (defun lone-image-p (slide)
   "True when SLIDE is one image to fill the canvas: no title, source or callout, and an
-(image ...) or (video ...) without a caption as its only block. Text on a picture is left out, since no
-lint can check its contrast."
+(image ...), (video ...) or (frame ...) without a caption as its only block. Text on a
+picture is left out, since no lint can check its contrast."
   (let ((blocks (slide-blocks slide)))
     (and (null (slide-title slide)) (null (slide-source slide))
          (null (slide-callouts slide)) (= (length blocks) 1)
          (figure-p (car blocks)) (null (figure-caption (car blocks))))))
 
 (defun split-figure (slide)
-  "The image a split slide sets beside its text: its one (image ...) or (video ...) outside
-columns, when that has no caption and no callout points at it; nil otherwise."
+  "The image a split slide sets beside its text: its one (image ...), (video ...) or
+(frame ...) outside columns, when that has no caption and no callout points at it; nil
+otherwise."
   (let ((figures (remove-if-not #'figure-p (slide-blocks slide))))
     (and (= (length figures) 1)
          (null (figure-caption (car figures)))
@@ -256,14 +257,14 @@ the model puts them, so a slide with callouts never takes it."
            automatic)
           ((equal requested "full")
            (report :warning
-                   "the full layout needs an (image ...) or (video ...) without :caption as the only block, and no title, source or callout")
+                   "the full layout needs an (image ...), (video ...) or (frame ...) without :caption as the only block, and no title, source or callout")
            automatic)
           ((member requested *split-layouts* :test #'equal)
            (if (split-figure slide)
                requested
                (progn
                  (report :warning (format nil
-                                   "the ~a layout needs one (image ...) or (video ...) outside columns, without :caption or a callout on it"
+                                   "the ~a layout needs one (image ...), (video ...) or (frame ...) outside columns, without :caption or a callout on it"
                                    requested))
                  automatic)))
           ((member "statement" (list requested automatic) :test #'equal)

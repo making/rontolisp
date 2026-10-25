@@ -4,7 +4,7 @@ A condensed reference for writing decks. The full description of every form is t
 https://github.com/making/rontolisp/blob/develop/lispresen/README.md
 
 Contents: file structure, the header, slides, blocks, inline forms, tables, diagrams,
-formulas, callouts, page advances, code, images, videos, templates, themes, link preview,
+formulas, callouts, page advances, code, images, videos, frames, templates, themes, link preview,
 limits, mistakes to avoid, diagnostics and their fixes.
 
 ## File structure
@@ -78,6 +78,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `(column block...)` | consecutive columns stand side by side; widths come from content |
 | `(image "path" :alt "text" [:caption "text"] [:fit :contain] [:share 1/3])` | image fitted into the remaining space; full-bleed or split (Images, below) |
 | `(video "demo.mp4" :alt "text" [:poster "demo.png"] [:autoplay t] [:muted t] [:loop t])` | video laid out as an image, same options (Videos, below) |
+| `(frame "https://..." :alt "name" [:zoom 2])` | live web page laid out as an image (Frames, below) |
 | `(table ...)` | table (below) |
 | `(flow ...)`, `(cells ...)` | diagrams (below) |
 | `(bars ...)`, `(columns ...)`, `(lines ...)`, `(pie ...)` | charts (below) |
@@ -186,7 +187,7 @@ bubble; one with no room is an error. `:step t` shows it on a page advance.
 ## Page advances and morph
 
 - `(ul :step t ...)` reveals items one per advance.
-- `:step t` on any other block (`p`, `lead`, `quote`, `image`, `video`, `table`, `flow`,
+- `:step t` on any other block (`p`, `lead`, `quote`, `image`, `video`, `frame`, `table`, `flow`,
   `cells`, a chart, `math`, `code`, `column`) reveals it whole on an advance, in source
   order with the other steps: show the data, then `(lead :step t "the conclusion")`.
   Hidden blocks keep their room. A table's rows or a diagram's boxes do not step one by
@@ -254,6 +255,25 @@ A recorded demo, the fallback for a live one:
 - `--embed` inlines `mp4` and `webm` (and the poster); above 20 MB it warns.
 - `lispresen serve` answers byte-range requests, so a served video can be sought while
   editing; a large one is better kept beside the HTML than embedded.
+
+## Frames
+
+A live web page, such as a web application demonstrated during the talk:
+
+```lisp
+(slide :title "Editor"
+  (frame "https://making.github.io/rontolisp/lispresen/editor/" :alt "the lispresen editor"))
+```
+
+- Laid out as an image (body, `full`, `:image-left` / `:image-right`, `:caption`,
+  `:share`, callouts), but takes no `:fit`.
+- `:zoom` (1 to 4 in quarters, default 2) enlarges the page: lispresen cannot measure
+  it, so pick the zoom that makes its text readable from the back.
+- It loads when its slide is first shown. The overview and the presenter window show its
+  `:alt` instead of the page.
+- After a click on the page, keys go to it until the slide outside it is clicked, so give
+  an interactive page a title rather than a full-slide frame.
+- Use an absolute URL: `--embed` cannot inline a page and warns about a relative one.
 
 ## Templates
 
@@ -341,7 +361,7 @@ drawn. Leave all of these out for a deck that is not published.
 - **Full-width letters and digits** (`ＡＢＣ１２３`) are a warning; write half-width.
 - **Emoji** may be written as UTF-8 characters (`🚀`, `✅`, `🇯🇵`, `👨‍💻`); each emoji or
   sequence is measured as one 1 em glyph and never split across lines.
-- **Every image and video needs `:alt`.**
+- **Every image, video and frame needs `:alt`.**
 - **Do not shrink to fit.** There is no option for it; split the slide.
 - **serve writes no file.** The page `lispresen serve` shows exists only in its answers;
   the HTML to hand over is the one `lispresen talk.lisp --embed --strict` writes.
@@ -369,12 +389,13 @@ drawn. Leave all of these out for a deck that is not published.
 | `a callout takes N lines; keep each to 2` | shorten the comment |
 | `(agenda) places the agenda of (deck :agenda t), which this deck lacks` | add `:agenda t` to the deck, or remove `(agenda)` |
 | `:agenda lists the sections, and this deck has none` | add `section`s or drop `:agenda` |
-| `image X has no :alt`, `video X has no :alt` | add `:alt "what it shows"` |
-| `the full layout needs an (image ...) or (video ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
-| `the image-left layout needs one (image ...) or (video ...) outside columns, ...` | keep one image or video, outside `column`, without `:caption` or a callout on it |
+| `image X has no :alt`, `video X has no :alt`, `frame X has no :alt` | add `:alt "what it shows"` |
+| `the full layout needs an (image ...), (video ...) or (frame ...) without :caption as the only block, ...` | drop the title, caption, source and callouts, or drop `:layout :full` |
+| `the image-left layout needs one (image ...), (video ...) or (frame ...) outside columns, ...` | keep one image, video or frame, outside `column`, without `:caption` or a callout on it |
 | `:step on the only block of an untitled slide would open it empty` | drop `:step`, give the slide a title, or put what comes first on the slide |
 | `:step does not apply to notes, ...`, `:step does not apply to a source, ...` | drop `:step`: notes are never on the slide, the source shows with it |
 | `image X takes :fit only on a :full, :image-left or :image-right slide` | remove `:fit`; an image in the body is always shown whole |
 | `cannot embed image X: cannot read it` | fix the path (relative to the deck) |
 | `video X is N MB, which makes the embedded HTML slow to open; ...` | shorten or re-encode the video, or render without `--embed` and ship it beside the HTML |
+| `frame X is a page beside the HTML, which --embed does not put in it; give its URL` | publish the page and give its absolute URL, or render without `--embed` and serve the page beside the HTML |
 | `:page-image is drawn in the :page-image-font, which this deck lacks` | add a TrueType font, use an absolute image URL, or remove `:page-image` |

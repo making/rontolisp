@@ -34,6 +34,9 @@ on:
     # whose runtime it loads.
     - lispresen/examples/intro.html
     - lispresen/examples/intro.png
+    # The lispresen editor the intro deck frames, compiled from lispresen's sources.
+    - lispresen/src/**
+    - lispresen/web/**
     # lispresen's agent skill, published as a plugin in the skill's marketplace.
     - lispresen/skills/**
     # The slide decks and their link-preview images.
@@ -128,6 +131,12 @@ jobs:
       run: |
         install -D -m 644 lispresen/examples/intro.html web/dist/lispresen/intro.html
         install -D -m 644 lispresen/examples/intro.png web/dist/lispresen/intro.png
+    # The editor (lispresen/web) is the page the intro deck's (frame ...) names, at
+    # lispresen/editor/. Its lispresen.wasm is built, not committed, so it is compiled
+    # here with the rontolisp jar the web profile packaged. After the web profile, which
+    # recreates web/dist.
+    - name: Publish the lispresen editor (web/dist/lispresen/editor/)
+      run: lispresen/web/build.sh web/dist/lispresen/editor
     # Every deck is committed rendered (decks/build.sh, --embed), so its HTML and the PNG
     # its og:image names are copied as is: decks/<name>/*.html and *.png to
     # web/dist/decks/<name>/. After the web profile, which recreates web/dist.

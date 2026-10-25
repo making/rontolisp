@@ -105,19 +105,19 @@
            :caption \"デッキの要素は、どれもリストとして書く\"
       (\"図と数式\" (tt \"flow cells bars columns lines pie math\") \"7\")
       ...
-      ((cell :colspan 2 \"合計\") \"33\"))"))
+      ((cell :colspan 2 \"合計\") \"34\"))"))
 
 (slide :title "表" :kicker "表示例"
   (table :header ("種類" "フォーム" "数")
          :row-header t :align (:left :left :right)
          :caption "デッキの要素は、どれもリストとして書く"
     ("トップレベル" (tt "deck section slide agenda define") "5")
-    ("ブロック" (tt "p lead ul ol code quote column image video table") "10")
+    ("ブロック" (tt "p lead ul ol code quote column image video frame table") "11")
     ("部品" (tt "li cell") "2")
     ("図と数式" (tt "flow cells bars columns lines pie math") "7")
     ("インライン" (tt "b i tt mark accent link") "6")
     ("注釈" (tt "say notes source") "3")
-    ((cell :colspan 2 "合計") "33")))
+    ((cell :colspan 2 "合計") "34")))
 
 (slide :title "引用と出典" :kicker "書き方"
   (p (tt "source") " はスライドの下端に出典を一行で置く。")
@@ -401,6 +401,21 @@
   (video "demo.mp4" :alt "REPL で (fib 30) と (map fib (range 10)) を評価する"
          :poster "demo-poster.png" :autoplay t :muted t :loop t))
 
+;; The minesweeper is one of rontolisp's browser examples, published on the same site;
+;; the frame names its URL so that the deck shows it wherever it is opened.
+(slide :title "ウェブページを埋め込む" :kicker "書き方"
+  (p (tt "frame") " はウェブページをスライドの中で動かす。次のスライドはマインスイーパー。")
+  (ul (li "ページは " (tt ":zoom") " 倍に拡大する。既定は 2")
+      "スライドを開いたときに読み込む。一覧と発表者ウィンドウには名前だけが出る"
+      "ページをクリックするとキーはページに渡る。外をクリックすると戻る")
+  (sexp "
+    (frame \"https://making.github.io/rontolisp/minesweeper/\"
+           :alt \"マインスイーパー\" :zoom 1)"))
+
+(slide :title "ウェブページを埋め込む" :kicker "表示例"
+  (frame "https://making.github.io/rontolisp/minesweeper/"
+         :alt "マインスイーパー。クリックでマスを開く" :zoom 1))
+
 (slide :title "テンプレート" :kicker "書き方"
   (p (tt "define") " で名前を付け、使う所を本体で置き換える。評価はしない。")
   (sexp "
@@ -444,8 +459,8 @@
   (table :header ("スライドの形" "レイアウト")
          :caption ":layout で選ぶこともできる"
     ("題がなく、段落が一つ" (tt "statement"))
-    ("題がなく、画像か動画が一つ" (tt "full"))
-    ("題と画像か動画が一つ" (tt "image"))
+    ("題がなく、画像か動画かページが一つ" (tt "full"))
+    ("題と画像か動画かページが一つ" (tt "image"))
     ("題とコード、表、引用のどれか一つ"
      (cell (tt "code") " " (tt "table") " " (tt "quote")))
     ((cell (tt "column") " を含む") (tt "columns"))
@@ -694,6 +709,18 @@
     ("ネイティブ" "実行ファイル" (tt "./lispresen"))
     ("SBCL" "なし" (tt "sbcl --script cli.lisp"))
     ("ブラウザ" (cell :colspan 2 (tt "web/") " のエディタが入力のたびに描き直す"))))
+
+(slide :title "lispresen 自体を WASM にする"
+  (flow (tt "lispresen-web.lisp") (tt "lispresen.wasm") "エディタのページ")
+  (ul (li (tt "render") " を書き出す WASM モジュールにコンパイルする")
+      "ページは入力のたびに呼び、描いたデッキを隣に出す"
+      "描画はブラウザの中で終わる。サーバーはいらない"))
+
+;; The editor is lispresen/web, published beside this deck by the Pages workflow.
+(slide :title "lispresen 自体を埋め込む" :kicker "試す"
+  (frame "https://making.github.io/rontolisp/lispresen/editor/"
+         :alt "lispresen のエディタ。左でデッキを書くと、右に描いたスライドが出る"
+         :caption "左のデッキを書き換えると、右のスライドが描き直される"))
 
 ;; The preview image is an output of the same run, so the try slide links to the
 ;; published one instead of embedding it.

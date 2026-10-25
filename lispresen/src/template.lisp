@@ -11,8 +11,8 @@
 
 (defparameter *element-names*
   '("DECK" "SECTION" "SLIDE" "AGENDA" "DEFINE" "P" "UL" "OL" "LI" "CODE" "IMAGE" "QUOTE"
-    "VIDEO" "COLUMN" "TABLE" "CELL" "NOTES" "THEME" "LEAD" "B" "I" "MARK" "ACCENT" "TT"
-    "LINK" "SAY" "FLOW" "CELLS" "BARS" "COLUMNS" "LINES" "PIE" "SOURCE" "MATH")
+    "VIDEO" "FRAME" "COLUMN" "TABLE" "CELL" "NOTES" "THEME" "LEAD" "B" "I" "MARK" "ACCENT"
+    "TT" "LINK" "SAY" "FLOW" "CELLS" "BARS" "COLUMNS" "LINES" "PIE" "SOURCE" "MATH")
   "The tags lispresen gives a meaning to; a template or parameter cannot take one.")
 
 (defparameter *template-depth* 32 "How deeply template uses may nest.")

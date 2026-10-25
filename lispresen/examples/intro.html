@@ -53,7 +53,11 @@ figure{flex:1 1 0;min-height:0;display:flex;flex-direction:column;align-items:ce
 figure img{flex:1 1 0;min-height:0;max-width:100%;object-fit:contain}
 figure video{flex:1 1 0;min-height:0;width:100%;object-fit:contain}
 html.js video{cursor:pointer}
+.frame{flex:1 1 0;min-height:0;width:100%;position:relative;overflow:hidden;border-radius:12px;box-shadow:0 0 0 2px var(--rule)}
+.frame iframe{position:absolute;left:0;top:0;width:calc(100% / var(--zoom));height:calc(100% / var(--zoom));border:0;transform:scale(var(--zoom));transform-origin:0 0}
+.frame-copy{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--head-bg);color:var(--muted);font-size:48px;line-height:1.4;text-align:center}
 figure.bleed{position:absolute;top:0;height:100%;display:block}
+.bleed .frame{height:100%;border-radius:0;box-shadow:none}
 .bleed img,.bleed video{display:block;width:100%;height:100%;max-width:none;object-fit:cover}
 .bleed.contain img,.bleed.contain video{object-fit:contain}
 figcaption{color:var(--muted);text-align:center}
@@ -195,7 +199,7 @@ html:not(.js) #fs{display:none}
 .title,.centered{top:80px}
 .centered{height:928px}
 .page{right:var(--right)}
-.footer{left:var(--left);width:calc(var(--width) - 81px)}
+.footer{left:var(--left);width:calc(var(--width) - 98px)}
 .thumb{aspect-ratio:1920/1080}
 @media print{@page{size:1920px 1080px;margin:0}#stage{position:static}#deck{transform:none!important}.slide{display:block!important;position:relative;break-after:page}#fs,.tools,#chk,#progress{display:none}.pending{visibility:visible}.ln.dim{opacity:1}html.handout .slide{overflow:visible;clip-path:inset(0 0 -1080px 0);margin-bottom:1080px}html.handout .notes{display:block;position:absolute;left:var(--left);width:var(--width);top:1080px;height:1080px;overflow:hidden;box-sizing:border-box;padding-top:48px;color:#000;font-size:36px;line-height:1.6;white-space:pre-wrap}}
 </style>
@@ -327,7 +331,7 @@ html:not(.js) #fs{display:none}
        <span class="hl-k">:caption</span> <span class="hl-s">&quot;デッキの要素は、どれもリストとして書く&quot;</span>
   (<span class="hl-s">&quot;図と数式&quot;</span> (tt <span class="hl-s">&quot;flow cells bars columns lines pie math&quot;</span>) <span class="hl-s">&quot;7&quot;</span>)
   ...
-  ((cell <span class="hl-k">:colspan</span> <span class="hl-n">2</span> <span class="hl-s">&quot;合計&quot;</span>) <span class="hl-s">&quot;33&quot;</span>))</code></pre>
+  ((cell <span class="hl-k">:colspan</span> <span class="hl-n">2</span> <span class="hl-s">&quot;合計&quot;</span>) <span class="hl-s">&quot;34&quot;</span>))</code></pre>
 </div>
 <div class="page">13</div>
 </section>
@@ -335,7 +339,7 @@ html:not(.js) #fs{display:none}
 <p class="kicker">表示例</p>
 <h1 class="title">表</h1>
 <div class="body" style="top:232px;height:776px">
-<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><caption>デッキの<wbr>要素は、<wbr>どれも<wbr>リストと<wbr>して<wbr>書く</caption><colgroup><col style="width:288px"><col style="width:1239px"><col style="width:169px"></colgroup><thead><tr><th scope="col">種類</th><th scope="col">フォーム</th><th scope="col" class="right">数</th></tr></thead><tbody><tr><th scope="row">トップレベル</th><td><code>deck section slide agenda define</code></td><td class="right">5</td></tr><tr><th scope="row">ブロック</th><td><code>p lead ul ol code quote column image video table</code></td><td class="right">10</td></tr><tr><th scope="row">部品</th><td><code>li cell</code></td><td class="right">2</td></tr><tr><th scope="row">図と<wbr>数式</th><td><code>flow cells bars columns lines pie math</code></td><td class="right">7</td></tr><tr><th scope="row">インライン</th><td><code>b i tt mark accent link</code></td><td class="right">6</td></tr><tr><th scope="row">注釈</th><td><code>say notes source</code></td><td class="right">3</td></tr><tr><th scope="row" colspan="2">合計</th><td class="right">33</td></tr></tbody></table>
+<table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><caption>デッキの<wbr>要素は、<wbr>どれも<wbr>リストと<wbr>して<wbr>書く</caption><colgroup><col style="width:288px"><col style="width:1304px"><col style="width:104px"></colgroup><thead><tr><th scope="col">種類</th><th scope="col">フォーム</th><th scope="col" class="right">数</th></tr></thead><tbody><tr><th scope="row">トップレベル</th><td><code>deck section slide agenda define</code></td><td class="right">5</td></tr><tr><th scope="row">ブロック</th><td><code>p lead ul ol code quote column image video frame table</code></td><td class="right">11</td></tr><tr><th scope="row">部品</th><td><code>li cell</code></td><td class="right">2</td></tr><tr><th scope="row">図と<wbr>数式</th><td><code>flow cells bars columns lines pie math</code></td><td class="right">7</td></tr><tr><th scope="row">インライン</th><td><code>b i tt mark accent link</code></td><td class="right">6</td></tr><tr><th scope="row">注釈</th><td><code>say notes source</code></td><td class="right">3</td></tr><tr><th scope="row" colspan="2">合計</th><td class="right">34</td></tr></tbody></table>
 </div>
 <div class="page">14</div>
 </section>
@@ -769,7 +773,26 @@ html:not(.js) #fs{display:none}
 </div>
 <div class="page">48</div>
 </section>
-<section class="slide layout-standard" id="s49" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s49" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<p class="kicker">書き方</p>
+<h1 class="title">ウェブページを<wbr>埋め込む</h1>
+<div class="body" style="top:232px;height:776px">
+<p><code>frame</code> は<wbr>ウェブページを<wbr>スライドの<wbr>中で<wbr>動かす。<wbr>次の<wbr>スライドは<wbr>マインスイーパー。</p>
+<ul><li>ページは <code>:zoom</code> 倍に<wbr>拡大する。<wbr>既定は 2</li><li>スライドを<wbr>開いた<wbr>ときに<wbr>読み込む。<wbr>一覧と<wbr>発表者ウィンドウには<wbr>名前だけが<wbr>出る</li><li>ページを<wbr>クリックすると<wbr>キーは<wbr>ページに<wbr>渡る。<wbr>外を<wbr>クリックすると<wbr>戻る</li></ul>
+<pre class="code" data-lang="lisp"><code>(frame <span class="hl-s">&quot;https://making.github.io/rontolisp/minesweeper/&quot;</span>
+       <span class="hl-k">:alt</span> <span class="hl-s">&quot;マインスイーパー&quot;</span> <span class="hl-k">:zoom</span> <span class="hl-n">1</span>)</code></pre>
+</div>
+<div class="page">49</div>
+</section>
+<section class="slide layout-image" id="s50" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">表示例</p>
+<h1 class="title">ウェブページを<wbr>埋め込む</h1>
+<div class="body" style="top:232px;height:776px">
+<figure><div class="frame" style="--zoom:1"><iframe src="https://making.github.io/rontolisp/minesweeper/" title="マインスイーパー。クリックでマスを開く" loading="lazy"></iframe></div></figure>
+</div>
+<div class="page">50</div>
+</section>
+<section class="slide layout-standard" id="s51" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">テンプレート</h1>
 <div class="body" style="top:232px;height:776px">
@@ -780,9 +803,9 @@ html:not(.js) #fs{display:none}
 (side <span class="hl-s">&quot;インタプリタ&quot;</span> <span class="hl-s">&quot;起動が速い&quot;</span> <span class="hl-s">&quot;eval が完全&quot;</span>)
 (side <span class="hl-s">&quot;コンパイラ&quot;</span> <span class="hl-s">&quot;実行が速い&quot;</span> <span class="hl-s">&quot;成果物が一つ&quot;</span>)</code></pre>
 </div>
-<div class="page">49</div>
+<div class="page">51</div>
 </section>
-<section class="slide layout-columns" id="s50" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-columns" id="s52" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">テンプレート</h1>
 <div class="body" style="top:232px;height:776px">
@@ -797,54 +820,54 @@ html:not(.js) #fs{display:none}
 </div>
 </div>
 </div>
-<div class="page">50</div>
+<div class="page">52</div>
 </section>
-<section class="slide layout-standard" id="s51" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s53" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>lispresen とは</li><li>デッキを<wbr>書く</li><li class="current">レイアウトは<wbr>ツールが<wbr>決める</li><li>発表する</li><li>見た<wbr>目を<wbr>選ぶ</li><li>出力と<wbr>始め方</li></ol>
 </div>
-<div class="page">51</div>
+<div class="page">53</div>
 </section>
-<section class="slide layout-standard" id="s52" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s54" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">文字の<wbr>大きさは<wbr>自動で<wbr>決まる</h1>
 <div class="body" style="top:232px;height:776px">
 <p>スライドごとに、<wbr>収まる<wbr>最大の<wbr>段を<wbr>選ぶ。</p>
 <ol><li>どの<wbr>スライドも 1920&nbsp;x 1080 (<code>:aspect :4x3</code> なら 1440&nbsp;x 1080) で<wbr>組み、<wbr>画面に<wbr>合わせて<wbr>拡大する</li><li>本文は 56px から<wbr>始め、<wbr>必要な<wbr>ときだけ 40px まで<wbr>下げる</li><li>40px でも<wbr>収まらなければ、<wbr>縮めずに<wbr>エラーと<wbr>して<wbr>報告する</li></ol>
 </div>
-<div class="page">52</div>
+<div class="page">54</div>
 </section>
-<section class="slide layout-table" id="s53" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s55" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">大きさの<wbr>段階</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>単位は px。<wbr>警告の<wbr>境を<wbr>下回ると<wbr>警告し、<wbr>下限でも<wbr>収まらなければ<wbr>エラーに<wbr>する</caption><colgroup><col style="width:424px"><col style="width:424px"><col style="width:424px"><col style="width:424px"></colgroup><thead><tr><th scope="col">役割</th><th scope="col" class="right">既定</th><th scope="col" class="right">警告の<wbr>境</th><th scope="col" class="right">下限</th></tr></thead><tbody><tr><th scope="row">題</th><td class="right">80</td><td class="right">64</td><td class="right">56</td></tr><tr><th scope="row">本文</th><td class="right">56</td><td class="right">48</td><td class="right">40</td></tr><tr><th scope="row">コード</th><td class="right">44</td><td class="right">32</td><td class="right">28</td></tr><tr><th scope="row">表</th><td class="right">48</td><td class="right">40</td><td class="right">36</td></tr><tr><th scope="row">吹き出し</th><td class="right">44</td><td class="right">40</td><td class="right">36</td></tr><tr><th scope="row">図の<wbr>ラベル</th><td class="right">48</td><td class="right">40</td><td class="right">36</td></tr></tbody></table>
 </div>
-<div class="page">53</div>
+<div class="page">55</div>
 </section>
-<section class="slide layout-table" id="s54" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-table" id="s56" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">レイアウトは<wbr>スライドの<wbr>形で<wbr>決まる</h1>
 <div class="body" style="top:232px;height:776px">
-<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>:layout で<wbr>選ぶこともできる</caption><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">スライドの<wbr>形</th><th scope="col">レイアウト</th></tr></thead><tbody><tr><td>題が<wbr>なく、<wbr>段落が<wbr>一つ</td><td><code>statement</code></td></tr><tr><td>題が<wbr>なく、<wbr>画像か<wbr>動画が<wbr>一つ</td><td><code>full</code></td></tr><tr><td>題と<wbr>画像か<wbr>動画が<wbr>一つ</td><td><code>image</code></td></tr><tr><td>題と<wbr>コード、<wbr>表、<wbr>引用の<wbr>どれか<wbr>一つ</td><td><code>code</code> <code>table</code> <code>quote</code></td></tr><tr><td><code>column</code> を<wbr>含む</td><td><code>columns</code></td></tr><tr><td>それ以外</td><td><code>standard</code></td></tr></tbody></table>
+<table style="--table:48px;--table-lh:68px;--cell-x:28px;--cell-y:12px;width:1696px"><caption>:layout で<wbr>選ぶこともできる</caption><colgroup><col style="width:872px"><col style="width:824px"></colgroup><thead><tr><th scope="col">スライドの<wbr>形</th><th scope="col">レイアウト</th></tr></thead><tbody><tr><td>題が<wbr>なく、<wbr>段落が<wbr>一つ</td><td><code>statement</code></td></tr><tr><td>題が<wbr>なく、<wbr>画像か<wbr>動画か<wbr>ページが<wbr>一つ</td><td><code>full</code></td></tr><tr><td>題と<wbr>画像か<wbr>動画か<wbr>ページが<wbr>一つ</td><td><code>image</code></td></tr><tr><td>題と<wbr>コード、<wbr>表、<wbr>引用の<wbr>どれか<wbr>一つ</td><td><code>code</code> <code>table</code> <code>quote</code></td></tr><tr><td><code>column</code> を<wbr>含む</td><td><code>columns</code></td></tr><tr><td>それ以外</td><td><code>standard</code></td></tr></tbody></table>
 </div>
-<div class="page">54</div>
+<div class="page">56</div>
 </section>
-<section class="slide layout-standard" id="s55" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s57" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">一文だけの<wbr>スライド</h1>
 <div class="body" style="top:232px;height:776px">
 <p>題を<wbr>付けずに<wbr>段落を<wbr>一つだけ<wbr>置くと、<wbr>大きな<wbr>文字で<wbr>中央に<wbr>置く。<wbr>次の<wbr>スライドが<wbr>表示例。</p>
 <pre class="code" data-lang="lisp"><code>(slide <span class="hl-s">&quot;読みやすさは、書き手ではなくツールが守る。&quot;</span>)</code></pre>
 </div>
-<div class="page">55</div>
+<div class="page">57</div>
 </section>
-<section class="slide layout-statement" id="s56" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement" id="s58" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">読みやすさは、<wbr>書き手ではなく<wbr>ツールが<wbr>守る。</p></div>
-<div class="page">56</div>
+<div class="page">58</div>
 </section>
-<section class="slide layout-standard" id="s57" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s59" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">レイアウトは<wbr>ツールが<wbr>決める</p>
 <h1 class="title">読みにくさを<wbr>報告する</h1>
 <div class="body" style="top:232px;height:776px">
@@ -852,49 +875,49 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">talk.lisp:42: warning: slide 7 &quot;比較&quot;: a list with 8 items is hard to follow; keep it to 6</span></code></pre>
 <ul><li>診断には<wbr>行番号が<wbr>付く。<wbr><code><span class="nw">--s</span>trict</code> なら<wbr>警告でも<wbr>失敗する</li><li>文字色と<wbr>背景の<wbr>コントラストも<wbr>検査する</li></ul>
 </div>
-<div class="page">57</div>
+<div class="page">59</div>
 </section>
-<section class="slide layout-standard" id="s58" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s60" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">使い方</p>
 <h1 class="title">フォントで<wbr>測り直す</h1>
 <div class="body" style="top:232px;height:776px">
 <p>発表する<wbr>マシンの<wbr>フォントは、<wbr>lispresen が<wbr>幅を<wbr>測った<wbr>フォントと<wbr>違うことがある。</p>
 <ul><li>開いた<wbr>ときに、<wbr>各スライドの<wbr>高さを<wbr>測る</li><li>は<wbr>み出す所だけ、<wbr>段を<wbr>一つずつ<wbr>下げる</li><li>URL に <code>?check</code> を<wbr>付けると、<wbr>下げた<wbr>所を<wbr>一覧する</li></ul>
 </div>
-<div class="page">58</div>
+<div class="page">60</div>
 </section>
-<section class="slide layout-standard" id="s59" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s61" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">フォントで<wbr>測り直す</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>URL の<wbr>末尾に <code>?check</code> を<wbr>付けて<wbr>開き直す</li><li>右上に <code>runtime check: no corrections</code> と<wbr>出れば、<wbr>補正は<wbr>ない</li></ol>
 </div>
-<div class="page">59</div>
+<div class="page">61</div>
 </section>
-<section class="slide layout-standard" id="s60" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s62" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>lispresen とは</li><li>デッキを<wbr>書く</li><li>レイアウトは<wbr>ツールが<wbr>決める</li><li class="current">発表する</li><li>見た<wbr>目を<wbr>選ぶ</li><li>出力と<wbr>始め方</li></ol>
 </div>
-<div class="page">60</div>
+<div class="page">62</div>
 </section>
-<section class="slide layout-table" id="s61" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s63" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">使い方</p>
 <h1 class="title">キー操作</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>タップ (左 3&nbsp;分の 1&nbsp;で<wbr>前へ) や<wbr>スワイプでも<wbr>送れる。<wbr>印刷で 1&nbsp;枚 1&nbsp;ページの PDF</caption><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">キー</th><th scope="col">動作</th></tr></thead><tbody><tr><td><code>→ ↓ Space PageDown</code></td><td>次へ</td></tr><tr><td><code>← ↑ PageUp</code></td><td>前へ</td></tr><tr><td><code>Home End</code></td><td>最初と<wbr>最後</td></tr><tr><td><code>F</code></td><td>全画面 (ダブルクリックでも)</td></tr><tr><td><code>O</code></td><td>全スライドの<wbr>一覧</td></tr><tr><td><code>P</code></td><td>発表者ウィンドウ</td></tr><tr><td><code>E</code></td><td>コードの<wbr>編集</td></tr></tbody></table>
 </div>
-<div class="page">61</div>
+<div class="page">63</div>
 </section>
-<section class="slide layout-standard" id="s62" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s64" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">キー操作</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>← で<wbr>一枚戻り、<wbr>→ で<wbr>戻ってくる</li><li>O で<wbr>一覧を<wbr>開き、<wbr>矢印で<wbr>選んで Enter で<wbr>開く</li><li>F で<wbr>全画面にし、<wbr>もう<wbr>一度 F で<wbr>戻る</li><li>URL の<wbr>末尾を <code>#5</code> に<wbr>して<wbr>開き直す</li></ol>
 </div>
-<div class="page">62</div>
+<div class="page">64</div>
 </section>
-<section class="slide layout-standard" id="s63" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s65" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">使い方</p>
 <h1 class="title">発表者ウィンドウ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -902,18 +925,18 @@ html:not(.js) #fs{display:none}
 <pre class="code" data-lang="lisp"><code>(notes <span class="hl-s">&quot;このノートは発表者ウィンドウにだけ出る。&quot;</span>)</code></pre>
 <ul><li>今の<wbr>スライドと<wbr>次の<wbr>スライド</li><li>スライドの<wbr>話者ノート</li><li>タイマー (クリックで 0&nbsp;に<wbr>戻る)</li><li>Start で、<wbr>もう<wbr>一つの<wbr>ディスプレイに<wbr>全画面で<wbr>映す</li></ul>
 </div>
-<div class="page">63</div>
+<div class="page">65</div>
 </section>
-<section class="slide layout-standard" id="s64" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s66" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">発表者ウィンドウ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>P を<wbr>押す</li><li>この<wbr>スライドの<wbr>ノートを<wbr>読む</li><li>→ で<wbr>送り、<wbr>こちらの<wbr>ウィンドウも<wbr>進む<wbr>ことを<wbr>確かめる</li></ol>
 </div>
-<div class="page">64</div>
+<div class="page">66</div>
 <aside class="notes">このノートは発表者ウィンドウにだけ出る。</aside>
 </section>
-<section class="slide layout-standard" id="s65" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s67" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">ページ送りで<wbr>一つずつ<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
@@ -922,19 +945,19 @@ html:not(.js) #fs{display:none}
     (li (say <span class="hl-s">&quot;項目の後に出る&quot;</span> <span class="hl-k">:step</span> <span class="hl-n">t</span> <span class="hl-s">&quot;吹き出し&quot;</span>)))
 (code <span class="hl-k">:steps</span> ((<span class="hl-n">1</span> <span class="hl-n">2</span>) <span class="hl-s">&quot;(fib 20)&quot;</span>) ...)</code></pre>
 </div>
-<div class="page">65</div>
+<div class="page">67</div>
 </section>
-<section class="slide layout-standard" id="s66" data-steps="4" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s68" data-steps="4" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">ページ送りで<wbr>一つずつ<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
-<ol><li data-step="1">リストの<wbr>項目</li><li data-step="2">コードの<wbr>行</li><li data-step="3"><span aria-describedby="s66c1">吹き出し</span></li></ol>
+<ol><li data-step="1">リストの<wbr>項目</li><li data-step="2">コードの<wbr>行</li><li data-step="3"><span aria-describedby="s68c1">吹き出し</span></li></ol>
 <p>→ で<wbr>順に<wbr>出し、<wbr>← で<wbr>一つずつ戻す。<wbr><code>(deck :callouts :step)</code> ならどの<wbr>吹き出しも<wbr>送りで<wbr>出る。</p>
 </div>
-<div class="say step" id="s66c1" role="note" data-side="right" data-step="4" style="left:440px;top:436px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>項目の<wbr>後に<wbr>出る</p></div>
-<div class="page">66</div>
+<div class="say step" id="s68c1" role="note" data-side="right" data-step="4" style="left:440px;top:436px;width:358px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:31px"><p>項目の<wbr>後に<wbr>出る</p></div>
+<div class="page">68</div>
 </section>
-<section class="slide layout-standard" id="s67" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s69" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">ブロックを<wbr>丸ごと<wbr>送りで<wbr>出す</h1>
 <div class="body" style="top:232px;height:776px">
@@ -943,9 +966,9 @@ html:not(.js) #fs{display:none}
 (lead <span class="hl-k">:step</span> <span class="hl-n">t</span> <span class="hl-s">&quot;結論は最後に出す&quot;</span>)</code></pre>
 <p>図と<wbr>表は<wbr>一度に<wbr>全体が<wbr>出る。<wbr>吹き出しは<wbr>包んだ<wbr>ブロックと<wbr>一緒に<wbr>出る。</p>
 </div>
-<div class="page">67</div>
+<div class="page">69</div>
 </section>
-<section class="slide layout-standard" id="s68" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s70" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">ブロックを<wbr>丸ごと<wbr>送りで<wbr>出す</h1>
 <div class="body" style="top:232px;height:776px">
@@ -954,13 +977,13 @@ html:not(.js) #fs{display:none}
 <svg class="dg-art" width="1696" height="276" aria-hidden="true"><rect class="dg-s1" x="268" y="12" width="51" height="68"/><rect class="dg-s1" x="268" y="104" width="137" height="68"/><rect class="dg-s1" x="268" y="196" width="1168" height="68"/><rect class="dg-z" x="267" y="0" width="2" height="276"/></svg>
 <p class="dg-l dg-t" style="left:0px;top:12px;width:240px;height:68px">JVM (jar)</p><p class="dg-l dg-v" style="left:347px;top:12px;width:187px;height:68px">297 KB</p><p class="dg-l dg-t" style="left:0px;top:104px;width:240px;height:68px">WASM</p><p class="dg-l dg-v" style="left:433px;top:104px;width:187px;height:68px">788 KB</p><p class="dg-l dg-t" style="left:0px;top:196px;width:240px;height:68px">ネイティブ</p><p class="dg-l dg-v" style="left:1464px;top:196px;width:232px;height:68px">6,700 KB</p>
 </figure>
-<figure class="math" data-step="2" aria-describedby="s68c1"><svg class="mx" role="img" aria-label="6700 over 297 is approximately 23" style="width:5.618em;height:1.910em"><text x="1.494em" y="0.780em">6700</text><rect x="0.060em" y="0.930em" width="2.868em" height="0.050em"/><text x="1.493em" y="1.910em">297</text><text x="3.616em" y="1.231em">≈</text><text x="4.931em" y="1.231em">23</text></svg></figure>
+<figure class="math" data-step="2" aria-describedby="s70c1"><svg class="mx" role="img" aria-label="6700 over 297 is approximately 23" style="width:5.618em;height:1.910em"><text x="1.494em" y="0.780em">6700</text><rect x="0.060em" y="0.930em" width="2.868em" height="0.050em"/><text x="1.493em" y="1.910em">297</text><text x="3.616em" y="1.231em">≈</text><text x="4.931em" y="1.231em">23</text></svg></figure>
 <p class="lead" data-step="3">→ 配るなら jar が<wbr>一番<wbr>小さい</p>
 </div>
-<div class="say step" id="s68c1" role="note" data-side="right" data-step="2" style="left:1153px;top:666px;width:301px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:42px"><p>jar の<wbr>何倍か</p></div>
-<div class="page">68</div>
+<div class="say step" id="s70c1" role="note" data-side="right" data-step="2" style="left:1153px;top:666px;width:301px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:42px"><p>jar の<wbr>何倍か</p></div>
+<div class="page">70</div>
 </section>
-<section class="slide layout-standard" id="s69" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s71" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">コードを<wbr>動かす</h1>
 <div class="body" style="top:232px;height:776px">
@@ -970,30 +993,30 @@ html:not(.js) #fs{display:none}
         <span class="hl-k">:steps</span> ((<span class="hl-n">1</span> <span class="hl-n">2</span>) <span class="hl-s">&quot;(fib 20)&quot;</span>)))</code></pre>
 <ul><li>クリックか E で<wbr>編集し、<wbr>Ctrl+Enter か Run で<wbr>実行する</li><li>Reset で<wbr>デッキに<wbr>書いた<wbr>コードに<wbr>戻す</li><li>出力は<wbr>スライドに<wbr>重ねて<wbr>開く。<wbr>↑ ↓ で<wbr>スクロールし、<wbr>× か Esc で<wbr>閉じる</li></ul>
 </div>
-<div class="page">69</div>
+<div class="page">71</div>
 </section>
-<section class="slide layout-code" id="s70" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-code" id="s72" data-steps="3" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">コードを<wbr>動かす</h1>
 <div class="body" style="top:232px;height:776px">
-<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s70c1" data-focus="1 2"><code><span class="ln" data-hot="1">(<span class="hl-d">defun</span> fib (n)</span>
+<div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code" aria-describedby="s72c1" data-focus="1 2"><code><span class="ln" data-hot="1">(<span class="hl-d">defun</span> fib (n)</span>
 <span class="ln" data-hot="1">  (<span class="hl-d">if</span> (&lt; n <span class="hl-n">2</span>) n (+ (fib (- n <span class="hl-n">1</span>)) (fib (- n <span class="hl-n">2</span>)))))</span>
 <span class="ln" data-hot="2">(fib <span class="hl-n">20</span>)</span></code></pre></div>
 </div>
-<div class="say step" id="s70c1" role="note" data-side="below" data-step="3" data-at="(fib 20)" style="left:112px;top:476px;width:482px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:127px"><p>Run で 6765&nbsp;が<wbr>出る</p></div>
-<div class="page">70</div>
+<div class="say step" id="s72c1" role="note" data-side="below" data-step="3" data-at="(fib 20)" style="left:112px;top:476px;width:482px;height:90px;--say:44px;--say-lh:62px;--say-x:22px;--say-y:11px;--tail:127px"><p>Run で 6765&nbsp;が<wbr>出る</p></div>
+<div class="page">72</div>
 <aside class="notes">Run を押す。続けて (fib 25) に書き換えて実行し、Reset で戻す。</aside>
 </section>
-<section class="slide layout-standard" id="s71" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s73" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">発表する</p>
 <h1 class="title">前の<wbr>スライドの<wbr>定義を<wbr>使う</h1>
 <div class="body" style="top:232px;height:776px">
 <p>同じ<wbr>言語の<wbr>コードは<wbr>定義を<wbr>共有する。<wbr>前の<wbr>スライドで Run してから<wbr>実行する。</p>
 <div class="codebox runnable" data-lang="lisp" data-timeout="10"><pre class="code"><code>(mapcar #&#39;fib &#39;(<span class="hl-n">1</span> <span class="hl-n">2</span> <span class="hl-n">3</span> <span class="hl-n">4</span> <span class="hl-n">5</span> <span class="hl-n">6</span> <span class="hl-n">7</span> <span class="hl-n">8</span> <span class="hl-n">9</span> <span class="hl-n">10</span>))</code></pre></div>
 </div>
-<div class="page">71</div>
+<div class="page">73</div>
 </section>
-<section class="slide layout-standard" id="s72" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s74" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">書き方</p>
 <h1 class="title">書き換えを<wbr>動きで<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1008,9 +1031,9 @@ html:not(.js) #fs{display:none}
             finally (return a)))&quot;</span>))</code></pre>
 <p>共通の<wbr>トークンは<wbr>移動し、<wbr>消える<wbr>ものは<wbr>薄れ、<wbr>増える<wbr>ものは<wbr>現れる。</p>
 </div>
-<div class="page">72</div>
+<div class="page">74</div>
 </section>
-<section class="slide layout-code" id="s73" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-code" id="s75" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">書き換えを<wbr>動きで<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1019,9 +1042,9 @@ html:not(.js) #fs{display:none}
   <span class="tk">(</span><span class="tk hl-d">if</span> <span class="tk">(</span><span class="tk">&lt;</span> <span class="tk">n</span> <span class="tk hl-n">2</span><span class="tk">)</span> <span class="tk">n</span> <span class="tk">(</span><span class="tk">+</span> <span class="tk">(</span><span class="tk">fib</span> <span class="tk">(</span><span class="tk">-</span> <span class="tk">n</span> <span class="tk hl-n">1</span><span class="tk">)</span><span class="tk">)</span> <span class="tk">(</span><span class="tk">fib</span> <span class="tk">(</span><span class="tk">-</span> <span class="tk">n</span> <span class="tk hl-n">2</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span><span class="tk">)</span>
 <span class="tk">(</span><span class="tk">fib</span> <span class="tk hl-n">20</span><span class="tk">)</span></code></pre></div>
 </div>
-<div class="page">73</div>
+<div class="page">75</div>
 </section>
-<section class="slide layout-code" id="s74" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-code" id="s76" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">書き換えを<wbr>動きで<wbr>見せる</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1033,9 +1056,9 @@ html:not(.js) #fs{display:none}
         <span class="tk">finally</span> <span class="tk">(</span><span class="tk">return</span> <span class="tk">a</span><span class="tk" data-m="34">)</span><span class="tk" data-m="35">)</span><span class="tk" data-m="36">)</span>
 <span class="tk" data-m="37">(</span><span class="tk" data-m="38">fib</span> <span class="tk hl-n" data-m="39">20</span><span class="tk" data-m="40">)</span></code></pre></div>
 </div>
-<div class="page">74</div>
+<div class="page">76</div>
 </section>
-<section class="slide layout-standard" id="s75" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s77" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">Clojure と Scheme</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1043,9 +1066,9 @@ html:not(.js) #fs{display:none}
 <pre class="code" data-lang="lisp"><code>(code <span class="hl-k">:lang</span> <span class="hl-s">&quot;clojure&quot;</span> <span class="hl-k">:timeout</span> <span class="hl-n">5</span> <span class="hl-s">&quot;...&quot;</span>)
 (code <span class="hl-k">:lang</span> <span class="hl-s">&quot;scheme&quot;</span> <span class="hl-k">:fresh</span> <span class="hl-n">t</span> <span class="hl-k">:stdin</span> <span class="hl-s">&quot;3 4&quot;</span> <span class="hl-s">&quot;...&quot;</span>)</code></pre>
 </div>
-<div class="page">75</div>
+<div class="page">77</div>
 </section>
-<section class="slide layout-columns" id="s76" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
+<section class="slide layout-columns" id="s78" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:32px;--code-lh:45px;--code-pad:16px;">
 <p class="kicker">表示例</p>
 <h1 class="title">Clojure と Scheme</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1061,9 +1084,9 @@ html:not(.js) #fs{display:none}
 </div>
 </div>
 </div>
-<div class="page">76</div>
+<div class="page">78</div>
 </section>
-<section class="slide layout-standard" id="s77" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s79" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">発表する</p>
 <h1 class="title">ランタイムの<wbr>置き場所</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1072,16 +1095,16 @@ html:not(.js) #fs{display:none}
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> cp web/dist/rontoplayground.js* talk/runtime/
 <span class="hl-k">$</span> jwebserver -d &quot;$PWD/talk&quot;</code></pre>
 </div>
-<div class="page">77</div>
+<div class="page">79</div>
 </section>
-<section class="slide layout-standard" id="s78" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s80" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>lispresen とは</li><li>デッキを<wbr>書く</li><li>レイアウトは<wbr>ツールが<wbr>決める</li><li>発表する</li><li class="current">見た<wbr>目を<wbr>選ぶ</li><li>出力と<wbr>始め方</li></ol>
 </div>
-<div class="page">78</div>
+<div class="page">80</div>
 </section>
-<section class="slide layout-standard" id="s79" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s81" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">テーマ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1091,9 +1114,9 @@ html:not(.js) #fs{display:none}
 (deck <span class="hl-k">:theme</span> (theme <span class="hl-k">:base</span> <span class="hl-k">:light</span> <span class="hl-k">:code</span> <span class="hl-k">:dark</span>))</code></pre>
 <p>文字色は<wbr>どれも、<wbr>背景との<wbr>コントラスト比 4.5:1&nbsp;以上を<wbr>検査する。</p>
 </div>
-<div class="page">79</div>
+<div class="page">81</div>
 </section>
-<section class="slide layout-standard" id="s80" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s82" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">表示例</p>
 <h1 class="title">テーマ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1102,9 +1125,9 @@ html:not(.js) #fs{display:none}
 <p>本文の <code>tt</code>、<wbr><mark>マーカー</mark>、<wbr><span class="accent">アクセント色</span> も<wbr>同じ<wbr>テーマの<wbr>色で<wbr>描く。</p>
 <p><code><span class="nw">--t</span>heme midnight</code> を<wbr>付けて<wbr>描き直すと、<wbr>この<wbr>デッキが<wbr>紺と<wbr>金に<wbr>なる。</p>
 </div>
-<div class="page">80</div>
+<div class="page">82</div>
 </section>
-<section class="slide layout-standard" id="s81" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s83" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">道しるべ</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1117,17 +1140,17 @@ html:not(.js) #fs{display:none}
 (slide <span class="hl-k">:kicker</span> <span class="hl-s">&quot;試す&quot;</span> ...)
 (slide <span class="hl-k">:kicker</span> <span class="hl-n">nil</span> ...)</code></pre>
 </div>
-<div class="page">81</div>
+<div class="page">83</div>
 </section>
-<section class="slide layout-standard" id="s82" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s84" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">道しるべ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>Home で<wbr>表紙に<wbr>戻り、<wbr>ロゴと URL の QR コードを<wbr>見る</li><li>節の<wbr>始まりの<wbr>目次では、<wbr>今の<wbr>節が<wbr>強調される</li><li>題の<wbr>上の<wbr>小見出しは<wbr>節の<wbr>題。<code>:kicker</code> で<wbr>変えられる</li><li>下端の<wbr>バーと<wbr>ページ番号が<wbr>今の<wbr>位置を<wbr>示す</li></ol>
 </div>
-<div class="page">82</div>
+<div class="page">84</div>
 </section>
-<section class="slide layout-standard" id="s83" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s85" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">目次の<wbr>位置</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1138,24 +1161,24 @@ html:not(.js) #fs{display:none}
 (section <span class="hl-s">&quot;lispresen とは&quot;</span>)</code></pre>
 <ul><li><code>(agenda)</code> より<wbr>前の<wbr>スライドと<wbr>節は<wbr>目次に<wbr>載らない</li><li>目次を<wbr>出すには <code>:agenda</code> も<wbr>要る</li></ul>
 </div>
-<div class="page">83</div>
+<div class="page">85</div>
 </section>
-<section class="slide layout-standard" id="s84" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s86" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">目次の<wbr>位置</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>Home で<wbr>表紙に<wbr>戻る</li><li>→ で<wbr>進むと、<wbr>表紙の<wbr>次は <code>(agenda)</code> より<wbr>前に<wbr>書いた<wbr>スライド</li><li>もう<wbr>一度 → で<wbr>目次。<wbr>最初の<wbr>節は <code>(agenda)</code> の<wbr>後に<wbr>書いた<wbr>「lispresen とは」</li></ol>
 </div>
-<div class="page">84</div>
+<div class="page">86</div>
 </section>
-<section class="slide layout-standard" id="s85" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s87" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">話の<wbr>流れ</h1>
 <div class="body" style="top:232px;height:776px">
 <ol class="agenda"><li>lispresen とは</li><li>デッキを<wbr>書く</li><li>レイアウトは<wbr>ツールが<wbr>決める</li><li>発表する</li><li>見た<wbr>目を<wbr>選ぶ</li><li class="current">出力と<wbr>始め方</li></ol>
 </div>
-<div class="page">85</div>
+<div class="page">87</div>
 </section>
-<section class="slide layout-standard" id="s86" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s88" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">描画は<wbr>文字列から<wbr>文字列への<wbr>関数</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1163,17 +1186,37 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">;; =&gt; (values html diagnostics image)</span></code></pre>
 <ul><li>入出力を<wbr>しないので、<wbr>CLI からも<wbr>ブラウザからも<wbr>呼べる</li><li>整数だけで<wbr>計算するので、<wbr>どこでも<wbr>同じ<wbr>バイト列に<wbr>なる</li></ul>
 </div>
-<div class="page">86</div>
+<div class="page">88</div>
 </section>
-<section class="slide layout-table" id="s87" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-table" id="s89" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">どの<wbr>バックエンドでも<wbr>同じ HTML</h1>
 <div class="body" style="top:232px;height:776px">
 <table style="--table:44px;--table-lh:62px;--cell-x:26px;--cell-y:11px;width:1696px"><caption>check.sh が<wbr>六つの<wbr>出力を<wbr>バイト単位で<wbr>比べる</caption><colgroup><col style="width:519px"><col style="width:518px"><col style="width:659px"></colgroup><thead><tr><th scope="col">バックエンド</th><th scope="col">成果物</th><th scope="col">実行</th></tr></thead><tbody><tr><td>インタプリタ</td><td>なし</td><td><code>rontolisp cli.lisp</code></td></tr><tr><td>JVM</td><td><code>.jar</code></td><td><code>java <span class="nw">-j</span>ar</code></td></tr><tr><td>WASM</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>WASM component</td><td><code>.wasm</code></td><td><code>wasmtime run</code></td></tr><tr><td>ネイティブ</td><td>実行ファイル</td><td><code>./lispresen</code></td></tr><tr><td>SBCL</td><td>なし</td><td><code>sbcl <span class="nw">--s</span>cript cli.lisp</code></td></tr><tr><td>ブラウザ</td><td colspan="2"><code>web/</code> の<wbr>エディタが<wbr>入力の<wbr>たびに<wbr>描き直す</td></tr></tbody></table>
 </div>
-<div class="page">87</div>
+<div class="page">89</div>
 </section>
-<section class="slide layout-standard" id="s88" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s90" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">出力と<wbr>始め方</p>
+<h1 class="title">lispresen 自体を WASM に<wbr>する</h1>
+<div class="body" style="top:232px;height:776px">
+<figure class="dg" style="width:1666px;height:100px;--dg:48px;--dg-lh:68px;--dg-x:28px">
+<svg class="dg-art" width="1666" height="100" aria-hidden="true"><rect class="dg-b" x="0" y="0" width="600" height="100" rx="12"/><rect class="dg-b" x="672" y="0" width="482" height="100" rx="12"/><rect class="dg-b" x="1226" y="0" width="440" height="100" rx="12"/><rect class="dg-f" x="4" y="4" width="592" height="92" rx="8"/><rect class="dg-f" x="676" y="4" width="474" height="92" rx="8"/><rect class="dg-f" x="1230" y="4" width="432" height="92" rx="8"/><rect class="dg-e" x="608" y="48" width="37" height="4"/><polygon class="dg-e" points="645,38 664,50 645,62"/><rect class="dg-e" x="1162" y="48" width="37" height="4"/><polygon class="dg-e" points="1199,38 1218,50 1199,62"/></svg>
+<ol class="dg-flow"><li class="dg-l" style="left:0px;top:0px;width:600px;height:100px;padding-top:16px"><code>lispresen<span class="nw">-w</span>eb.lisp</code></li><li class="dg-l" style="left:672px;top:0px;width:482px;height:100px;padding-top:16px"><code>lispresen.wasm</code></li><li class="dg-l" style="left:1226px;top:0px;width:440px;height:100px;padding-top:16px">エディタの<wbr>ページ</li></ol>
+</figure>
+<ul><li><code>render</code> を<wbr>書き出す WASM モジュールに<wbr>コンパイルする</li><li>ページは<wbr>入力の<wbr>たびに<wbr>呼び、<wbr>描いた<wbr>デッキを<wbr>隣に<wbr>出す</li><li>描画は<wbr>ブラウザの<wbr>中で<wbr>終わる。<wbr>サーバーは<wbr>いらない</li></ul>
+</div>
+<div class="page">90</div>
+</section>
+<section class="slide layout-image" id="s91" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<p class="kicker">試す</p>
+<h1 class="title">lispresen 自体を<wbr>埋め込む</h1>
+<div class="body" style="top:232px;height:776px">
+<figure><div class="frame" style="--zoom:2"><iframe src="https://making.github.io/rontolisp/lispresen/editor/" title="lispresen のエディタ。左でデッキを書くと、右に描いたスライドが出る" loading="lazy"></iframe></div><figcaption>左の<wbr>デッキを<wbr>書き換えると、<wbr>右の<wbr>スライドが<wbr>描き直される</figcaption></figure>
+</div>
+<div class="page">91</div>
+</section>
+<section class="slide layout-standard" id="s92" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">書き方</p>
 <h1 class="title">リンクの<wbr>プレビュー</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1184,17 +1227,17 @@ html:not(.js) #fs{display:none}
       <span class="hl-k">:page-image-font</span> (<span class="hl-s">&quot;r.ttf&quot;</span> <span class="hl-s">&quot;b.ttf&quot;</span>))</code></pre>
 <ul><li><code>head</code> に <code>og:title</code> や <code>og:image</code> の <code>meta</code> タグを<wbr>書く</li><li>表紙を 1200&nbsp;x 675&nbsp;の PNG に<wbr>描き、<wbr>HTML の<wbr>隣に<wbr>書く</li><li>画像の<wbr>文字は TrueType フォントで<wbr>描く</li></ul>
 </div>
-<div class="page">88</div>
+<div class="page">92</div>
 </section>
-<section class="slide layout-standard" id="s89" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s93" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">リンクの<wbr>プレビュー</h1>
 <div class="body" style="top:232px;height:776px">
 <ol><li>この<wbr>デッキの URL を SNS の<wbr>投稿欄に<wbr>貼る</li><li>プレビューに<wbr>表紙の<wbr>画像と<wbr>題、<wbr>説明が<wbr>出る</li><li><a href="https://making.github.io/rontolisp/lispresen/intro.png"><code>intro.png</code></a> を<wbr>開くと、<wbr>描いた<wbr>画像<wbr>その<wbr>ものを<wbr>見られる</li></ol>
 </div>
-<div class="page">89</div>
+<div class="page">93</div>
 </section>
-<section class="slide layout-standard" id="s90" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
+<section class="slide layout-standard" id="s94" style="--title:80px;--title-lh:104px;--body:48px;--body-lh:72px;--gap:28px;--indent:58px;--item-gap:12px;--code:36px;--code-lh:51px;--code-pad:18px;">
 <p class="kicker">使い方</p>
 <h1 class="title">ネイティブ実行ファイル</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1202,9 +1245,9 @@ html:not(.js) #fs{display:none}
 <table style="--table:40px;--table-lh:56px;--cell-x:24px;--cell-y:10px;width:1696px"><colgroup><col style="width:848px"><col style="width:848px"></colgroup><thead><tr><th scope="col">プラットフォーム</th><th scope="col">ファイル</th></tr></thead><tbody><tr><td>macOS (Apple Silicon)</td><td><code>lispresen<span class="nw">-d</span>arwin<span class="nw">-a</span>rm64</code></td></tr><tr><td>Linux (x86_64)</td><td><code>lispresen<span class="nw">-l</span>inux<span class="nw">-a</span>md64</code></td></tr><tr><td>Linux (arm64)</td><td><code>lispresen<span class="nw">-l</span>inux<span class="nw">-a</span>rm64</code></td></tr></tbody></table>
 <ul><li>実行権を<wbr>付け、<wbr><code>PATH</code> の<wbr>通った<wbr>ディレクトリに <code>lispresen</code> の<wbr>名前で<wbr>置く</li><li>macOS で<wbr>ブラウザから<wbr>ダウンロードした<wbr>ファイルは<wbr>隔離され、<wbr>起動すると<wbr>止められる</li></ul>
 </div>
-<div class="page">90</div>
+<div class="page">94</div>
 </section>
-<section class="slide layout-standard" id="s91" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s95" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">試す</p>
 <h1 class="title">ネイティブ実行ファイル</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1216,18 +1259,18 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">{&quot;version&quot;: &quot;0.1.0-SNAPSHOT&quot;, &quot;gitCommit&quot;: &quot;3b9b214&quot;}</span></code></pre>
 <p><code>curl</code> と <code>wget</code> で<wbr>取得した<wbr>ファイルは<wbr>隔離されない。<wbr>ブラウザで<wbr>ダウンロードした<wbr>ファイルは <code>xattr <span class="nw">-d</span> com.apple.quarantine</code> で<wbr>隔離を<wbr>外す。</p>
 </div>
-<div class="page">91</div>
+<div class="page">95</div>
 </section>
-<section class="slide layout-standard" id="s92" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s96" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">使い方</p>
 <h1 class="title">編集しながら<wbr>見る</h1>
 <div class="body" style="top:232px;height:776px">
 <p><code>lispresen serve</code> は<wbr>デッキを HTTP で<wbr>配り、<wbr>保存する<wbr>たびに<wbr>描き直す。</p>
 <ul><li>ブラウザで<wbr>開いた<wbr>ページは、<wbr>見ていた<wbr>スライドの<wbr>まま<wbr>読み込み直す</li><li>診断は<wbr>ターミナルと、<wbr>スライドに<wbr>重ねた<wbr>パネルに<wbr>出る</li><li>画像と<wbr>動画は<wbr>デッキの<wbr>横から<wbr>配るので、<wbr><code><span class="nw">--e</span>mbed</code> は<wbr>要らない</li></ul>
 </div>
-<div class="page">92</div>
+<div class="page">96</div>
 </section>
-<section class="slide layout-standard" id="s93" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s97" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <p class="kicker">試す</p>
 <h1 class="title">編集しながら<wbr>見る</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1235,9 +1278,9 @@ html:not(.js) #fs{display:none}
 <span class="hl-c">lispresen: built talk.lisp: 0 errors, 0 warnings</span></code></pre>
 <ol><li><code>http://127.0.0.1:8000/</code> を<wbr>ブラウザで<wbr>開く</li><li>デッキを<wbr>書き換えて<wbr>保存し、<wbr>ページが<wbr>追従するのを<wbr>見る</li><li>Ctrl<span class="nw">-C</span> で<wbr>止め、<wbr><code>lispresen talk.lisp <span class="nw">--e</span>mbed <span class="nw">--s</span>trict</code> で HTML を<wbr>書く</li></ol>
 </div>
-<div class="page">93</div>
+<div class="page">97</div>
 </section>
-<section class="slide layout-standard" id="s94" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
+<section class="slide layout-standard" id="s98" style="--title:80px;--title-lh:104px;--body:52px;--body-lh:78px;--gap:31px;--indent:63px;--item-gap:13px;--code:40px;--code-lh:56px;--code-pad:20px;">
 <p class="kicker">出力と<wbr>始め方</p>
 <h1 class="title">コマンドライン</h1>
 <div class="body" style="top:232px;height:776px">
@@ -1249,9 +1292,9 @@ lispresen serve DECK [--port N] [--host ADDR] [--theme NAME]
 lispresen --version</code></pre>
 <ul><li><code>-</code> で<wbr>標準入力から<wbr>読み、<wbr>標準出力に<wbr>書く</li><li><code><span class="nw">--e</span>mbed</code> で<wbr>画像を<wbr>埋め込み、<wbr>ファイル一つで<wbr>完結させる</li><li><code><span class="nw">--v</span>ersion</code> は<wbr>版と<wbr>ビルドした<wbr>コミットを JSON で<wbr>出す</li><li>終了コードは 0&nbsp;が<wbr>成功、<wbr>1&nbsp;が<wbr>エラー、<wbr>2&nbsp;が<wbr>使い方の<wbr>誤り</li></ul>
 </div>
-<div class="page">94</div>
+<div class="page">98</div>
 </section>
-<section class="slide layout-standard" id="s95" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
+<section class="slide layout-standard" id="s99" style="--title:80px;--title-lh:104px;--body:56px;--body-lh:84px;--gap:33px;--indent:68px;--item-gap:14px;--code:44px;--code-lh:62px;--code-pad:22px;">
 <h1 class="title">始め方</h1>
 <div class="body" style="top:232px;height:776px">
 <pre class="code console" data-lang="console"><code><span class="hl-k">$</span> lispresen new talk.lisp
@@ -1259,11 +1302,11 @@ lispresen --version</code></pre>
 <span class="hl-k">$</span> lispresen talk.lisp --embed --strict</code></pre>
 <ul><li><code>new</code> は、<wbr>主な<wbr>フォームに<wbr>コメントで<wbr>説明を<wbr>添えた<wbr>雛形を<wbr>書く。<wbr><code><span class="nw">--l</span>ang en</code> なら<wbr>英語</li><li>診断には<wbr>行番号が<wbr>付く。<wbr>その<wbr>行を<wbr>直して<wbr>保存すると、<wbr>ページが<wbr>描き直る</li><li>見本は<wbr>この<wbr>デッキ、<wbr><code>lispresen/examples/intro.lisp</code></li></ul>
 </div>
-<div class="page">95</div>
+<div class="page">99</div>
 </section>
-<section class="slide layout-statement closing" id="s96" style="--stmt:120px;--stmt-lh:162px;">
+<section class="slide layout-statement closing" id="s100" style="--stmt:120px;--stmt-lh:162px;">
 <div class="centered"><p class="statement">スライドも、<wbr>コードと<wbr>同じように<wbr>書いて、<wbr>レビューして、<wbr>動かす。</p></div>
-<div class="page">96</div>
+<div class="page">100</div>
 </section>
 <div id="progress" aria-hidden="true"></div>
 </div>
@@ -1277,7 +1320,7 @@ var stage=d.getElementById('stage'),deck=d.getElementById('deck'),fs=d.getElemen
 var slides=Array.prototype.slice.call(deck.querySelectorAll(':scope>.slide'));
 var W=deck.offsetWidth,H=deck.offsetHeight,cur=-1,shown=0,idle=null,x0=null,NL=String.fromCharCode(10);
 var params=new URLSearchParams(location.search),presenter=params.has('presenter'),handout=params.has('notes');
-var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[]};
+var hooks={go:[],key:[],msg:[],thumb:[],bar:[],hello:[],place:[],copy:[]};
 var chan=null;try{chan=new BroadcastChannel('lispresen:'+location.pathname);}catch(e){}
 function send(m){if(chan)chan.postMessage(m);}
 function fit(){var s=Math.min(innerWidth/W,innerHeight/H);
@@ -1324,7 +1367,7 @@ function toggleFull(){if(d.fullscreenElement){d.exitFullscreen();}else if(stage.
 function wake(){stage.classList.add('pointer');stage.classList.remove('idle');clearTimeout(idle);
 idle=setTimeout(function(){stage.classList.remove('pointer');if(d.fullscreenElement)stage.classList.add('idle');},2000);}
 function thumb(i,live){var t=d.createElement('div');t.className='thumb';var c=slides[i].cloneNode(true);
-c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');t.appendChild(c);return t;}
+c.removeAttribute('id');c.classList.add('active');if(!live)c.setAttribute('inert','');hooks.copy.forEach(function(f){f(c);});t.appendChild(c);return t;}
 function scaleThumbs(root){root.querySelectorAll('.thumb').forEach(function(t){t.firstChild.style.transform='scale('+t.clientWidth/W+')';});}
 var ov=null,sel=0;
 function mark(){Array.prototype.forEach.call(ov.children,function(t,i){t.classList.toggle('sel',i===sel);});
@@ -1551,11 +1594,11 @@ if(at!==undefined){var i=el.textContent.indexOf(at),e=i+at.length,pos=0,rg=d.cre
 while((n=w.nextNode())){var len=n.data.length;if(pos<=i&&i<=pos+len)rg.setStart(n,i-pos);if(pos<=e&&e<=pos+len){rg.setEnd(n,e-pos);break;}pos+=len;}
 return cunion(crects(rg.getClientRects(),o,k));}
 if(el.tagName==='SPAN')return crects(el.getClientRects(),o,k);
-if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video,svg.mx');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
+if(el.tagName==='FIGURE'&&!el.classList.contains('quote')){var im=el.querySelector('img,video,.frame,svg.mx');return im?[cbox(im.getBoundingClientRect(),o,k)]:[];}
 if(el.tagName==='PRE'||el.tagName==='TABLE')return [cbox(el.getBoundingClientRect(),o,k)];
 return cunion(ctext(el,o,k));}
 function cobstacles(sl,o,k){var a=ctext(sl,o,k);
-sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video'),fr=cbox(f.getBoundingClientRect(),o,k);
+sl.querySelectorAll('figure:not(.quote)').forEach(function(f){var im=f.querySelector('img,video,.frame'),fr=cbox(f.getBoundingClientRect(),o,k);
 if(im){var ir=cbox(im.getBoundingClientRect(),o,k);a.push({l:fr.l,t:ir.t,r:fr.r,b:ir.b});}});
 sl.querySelectorAll('.tools,.dg-art>:not(.dg-g,.dg-z,.dg-bg),.mx>*').forEach(function(t){a.push(cbox(t.getBoundingClientRect(),o,k));});return a;}
 function ccands(f,w,h,bd){var f1=f[0],fl=f[f.length-1],R=SAY.reach,I=SAY.inset,HB=SAY.half,out=[],ax,ay;
@@ -1591,6 +1634,10 @@ vids.forEach(function(v){if(!v.paused&&!slides[i].contains(v))v.pause();});
 slides[i].querySelectorAll('video').forEach(function(v){var e=v.closest('[data-step]'),s=e?+e.dataset.step:0;
 if(s>shown){if(!v.paused)v.pause();}else if(v.hasAttribute('data-autoplay')&&(moved?entered:s>k0))vplay(v);});});
 hooks.msg.push(function(m){if(m.t==='video'&&vids[m.i])vtoggle(vids[m.i]);});}
+
+function fcopy(root){root.querySelectorAll('.frame iframe').forEach(function(f){var p=d.createElement('p');
+p.className='frame-copy';p.textContent=f.title||f.getAttribute('src');f.replaceWith(p);});}
+hooks.copy.push(fcopy);if(presenter)fcopy(deck);
 
 addEventListener('resize',fit);
 d.addEventListener('fullscreenchange',function(){fit();wake();keepAwake();});

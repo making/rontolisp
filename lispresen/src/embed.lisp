@@ -170,10 +170,19 @@ LIMIT bytes is reported."
                     (concatenate 'string "data:" type ";base64," (base64 octets)))))))))
 
 (defun embed-figure (figure)
-  "Replaces the source of FIGURE, and a video's poster, with data: URIs of the files."
-  (let ((uri (if (figure-video figure)
-                 (embedded (figure-src figure) *video-types* "video" *embed-video-limit*)
-                 (embedded (figure-src figure) *image-types* "image"))))
+  "Replaces the source of FIGURE, and a video's poster, with data: URIs of the files. A
+frame's page runs where it is served, so it stays a URL; a relative one is reported, as
+the HTML no longer stands alone."
+  (let ((uri (case (figure-kind figure)
+               (:video (embedded (figure-src figure) *video-types* "video"
+                                 *embed-video-limit*))
+               (:frame (unless (url-p (figure-src figure))
+                         (report :warning
+                                 (format nil
+                                         "frame ~a is a page beside the HTML, which --embed does not put in it; give its URL"
+                                         (figure-src figure))))
+                       nil)
+               (t (embedded (figure-src figure) *image-types* "image")))))
     (when uri (setf (figure-src figure) uri)))
   (when (figure-poster figure)
     (let ((uri (embedded (figure-poster figure) *image-types* "poster")))

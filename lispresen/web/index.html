@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>lispresen editor</title>
 <style>
-:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--rule:#d0d7de;--panel:#f6f8fa;--accent:#0b5cad;--err:#b3261e;--warn:#8a5a00;--err-bg:#fdecea;--warn-bg:#fff3e0}
-@media (prefers-color-scheme:dark){:root{--bg:#15181d;--fg:#e6e8eb;--muted:#9aa3ad;--rule:#3d444d;--panel:#1c2128;--accent:#6cb6ff;--err:#f47067;--warn:#d4a72c;--err-bg:#3a1d1d;--warn-bg:#33290f}}
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--rule:#d0d7de;--panel:#f6f8fa;--accent:#0b5cad;--err:#b3261e;--warn:#8a5a00;--err-bg:#fdecea;--warn-bg:#fff3e0;--hl-str:#0a3069;--hl-kw:#0550ae;--hl-def:#b3261e;--hl-const:#7a3fc4}
+@media (prefers-color-scheme:dark){:root{--bg:#15181d;--fg:#e6e8eb;--muted:#9aa3ad;--rule:#3d444d;--panel:#1c2128;--accent:#6cb6ff;--err:#f47067;--warn:#d4a72c;--err-bg:#3a1d1d;--warn-bg:#33290f;--hl-str:#96d0ff;--hl-kw:#6cb6ff;--hl-def:#f47067;--hl-const:#dcbdfb}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,'Hiragino Sans','Noto Sans JP',sans-serif}
 body{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
@@ -15,14 +15,20 @@ header h1{font-size:16px;margin:0 8px 0 0}
 header button,header label{font:inherit;padding:4px 12px;border:1px solid var(--rule);border-radius:6px;background:var(--panel);color:var(--fg);cursor:pointer}
 #status{margin-left:auto;color:var(--muted)}
 main{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);min-height:0}
-textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(--rule);padding:12px;margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 Menlo,Consolas,'BIZ UDGothic',monospace;tab-size:2;outline:none}
+#editor{position:relative;min-height:0;border-right:1px solid var(--rule)}
+#editor textarea,#editor pre{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:12px;border:0;font:14px/1.6 Menlo,Consolas,'BIZ UDGothic',monospace;tab-size:2;white-space:pre-wrap;overflow-wrap:break-word;overflow-y:auto;scrollbar-gutter:stable}
+#editor textarea{resize:none;background:transparent;color:var(--fg);caret-color:var(--fg);outline:none}
+#editor pre{overflow:hidden;color:var(--fg);pointer-events:none;visibility:hidden}
+#editor.hl textarea{color:transparent}
+#editor.hl pre{visibility:visible}
+.hl-c{color:var(--muted)}.hl-s{color:var(--hl-str)}.hl-k{color:var(--hl-kw)}.hl-d{color:var(--hl-def)}.hl-n{color:var(--hl-const)}
 iframe{width:100%;height:100%;border:0;background:#fff}
 #diagnostics{margin:0;max-height:25vh;overflow:auto;padding:8px 12px;border-top:1px solid var(--rule);background:var(--panel);font:13px/1.5 Menlo,Consolas,monospace;white-space:pre-wrap}
 #diagnostics div{margin:2px 0;padding:1px 8px;border-left:6px solid}
 #diagnostics .error{color:var(--err);background:var(--err-bg);border-color:var(--err)}
 #diagnostics .warning{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
 #diagnostics:empty::before{content:'no diagnostics';color:var(--muted)}
-@media (max-width:720px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}textarea{border-right:0;border-bottom:1px solid var(--rule)}}
+@media (max-width:720px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}#editor{border-right:0;border-bottom:1px solid var(--rule)}}
 </style>
 </head>
 <body>
@@ -33,16 +39,20 @@ iframe{width:100%;height:100%;border:0;background:#fff}
   <span id="status">loading lispresen.wasm...</span>
 </header>
 <main>
-  <textarea id="source" spellcheck="false" aria-label="Deck source"></textarea>
+  <div id="editor"><pre id="highlight" aria-hidden="true"></pre><textarea id="source" spellcheck="false" aria-label="Deck source"></textarea></div>
   <iframe id="preview" title="Preview"></iframe>
 </main>
 <pre id="diagnostics" aria-live="polite"></pre>
 <script>
 // The editor: the deck source on the left, the rendered deck on the right, re-rendered
-// on a short debounce by the lispresen reactor (lispresen.wasm, built by build.sh).
+// on a short debounce by the lispresen reactor (lispresen.wasm, built by build.sh). The
+// source is colored on every input by the reactor's highlight, the tokenizer that colors
+// Lisp on a slide, into a <pre> under the textarea, whose own text is transparent.
 "use strict";
 const SEPARATOR = "\n<!-- lispresen diagnostics -->\n";
-const DRAFT = "lispresen-draft";
+// The draft is the reader's own: an editor framed in another page (a deck's (frame ...))
+// starts from the sample and leaves the draft of the editor opened on its own alone.
+const DRAFT = window.top === window ? "lispresen-draft" : null;
 const SAMPLE = `(deck :title "lispresen" :author "rontolisp" :page-numbers t)
 
 (section "S式で書くスライド")
@@ -56,7 +66,9 @@ const SAMPLE = `(deck :title "lispresen" :author "rontolisp" :page-numbers t)
     (defn square [x] (* x x))
     (map square (range 5))"))
 `;
+const editor = document.getElementById("editor");
 const source = document.getElementById("source");
+const highlight = document.getElementById("highlight");
 const preview = document.getElementById("preview");
 const diagnostics = document.getElementById("diagnostics");
 const status = document.getElementById("status");
@@ -74,13 +86,25 @@ function instantiate() {
   if (ex._initialize) ex._initialize();
 }
 
-function render(text) {
+function call(name, text) {
   if (ex.memory.buffer.byteLength > 64 * 1024 * 1024) instantiate();
   const bytes = enc.encode(text);
   const p = ex.__ronto_alloc(bytes.length);
   new Uint8Array(ex.memory.buffer, p, bytes.length).set(bytes);
-  const [rp, rl] = ex.render(p, bytes.length);
+  const [rp, rl] = ex[name](p, bytes.length);
   return dec.decode(new Uint8Array(ex.memory.buffer, rp, rl));
+}
+
+// The <pre> drops a final line break, which the textarea shows as an empty line.
+function paint() {
+  if (!ex) return;
+  try {
+    highlight.innerHTML = call("highlight", source.value) + "\n";
+    editor.classList.add("hl");
+  } catch (e) {
+    editor.classList.remove("hl");
+  }
+  highlight.scrollTop = source.scrollTop;
 }
 
 function showDiagnostics(lines) {
@@ -94,10 +118,10 @@ function showDiagnostics(lines) {
 
 function update() {
   const text = source.value;
-  try { localStorage.setItem(DRAFT, text); } catch (e) { /* storage unavailable */ }
+  try { if (DRAFT) localStorage.setItem(DRAFT, text); } catch (e) { /* storage unavailable */ }
   let out;
   try {
-    out = render(text);
+    out = call("render", text);
   } catch (e) {
     status.textContent = "render failed: " + e.message;
     return;
@@ -115,9 +139,11 @@ function update() {
 }
 
 source.addEventListener("input", () => {
+  paint();
   clearTimeout(timer);
   timer = setTimeout(update, 400);
 });
+source.addEventListener("scroll", () => { highlight.scrollTop = source.scrollTop; });
 source.addEventListener("keydown", (e) => {
   if (e.key === "Tab" && !e.shiftKey) {
     e.preventDefault();
@@ -129,6 +155,7 @@ document.getElementById("open").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   source.value = await file.text();
+  paint();
   update();
 });
 document.getElementById("download").addEventListener("click", () => {
@@ -141,13 +168,14 @@ document.getElementById("download").addEventListener("click", () => {
 
 (async () => {
   let draft = null;
-  try { draft = localStorage.getItem(DRAFT); } catch (e) { /* storage unavailable */ }
+  try { if (DRAFT) draft = localStorage.getItem(DRAFT); } catch (e) { /* storage unavailable */ }
   source.value = draft || SAMPLE;
   try {
     const response = await fetch("lispresen.wasm");
     if (!response.ok) throw new Error("lispresen.wasm: HTTP " + response.status + " (run build.sh)");
     module = await WebAssembly.compile(await response.arrayBuffer());
     instantiate();
+    paint();
     update();
   } catch (e) {
     status.textContent = e.message + " -- serve this directory over HTTP, in a browser with WebAssembly GC";

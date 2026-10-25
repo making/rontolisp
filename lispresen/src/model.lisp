@@ -95,17 +95,19 @@
   steps
   step-numbers
   morph)
-;;; An (image ...) or, with VIDEO true, a (video ...): the layout treats both alike.
-;;; STRIP is the width kept free on the right for the bubble of a callout on the image.
-;;; FIT is :contain when an image filling the slide or a side of it is shown whole on the
-;;; background, nil to cover its area (the :fit option); SHARE is the (NUMERATOR
+;;; An (image ...), a (video ...) or a (frame ...), as KIND says: the layout treats them
+;;; alike. STRIP is the width kept free on the right for the bubble of a callout on the
+;;; image. FIT is :contain when an image filling the slide or a side of it is shown whole
+;;; on the background, nil to cover its area (the :fit option); SHARE is the (NUMERATOR
 ;;; DENOMINATOR) of the canvas width it takes beside text, nil for half (the :share option).
 ;;; POSTER, LOOP, MUTED and AUTOPLAY are a video's options; AUTOPLAY plays it when its
-;;; slide is entered.
-(defstruct figure src alt caption caption-run strip fit share video poster loop muted
-  autoplay)
+;;; slide is entered. ZOOM is the scale a frame shows its page at, in quarters.
+(defstruct figure (kind :image) src alt caption caption-run strip fit share poster loop
+  muted autoplay zoom)
 
-(defun figure-noun (f) (if (figure-video f) "video" "image"))
+(defun figure-video (f) (eq (figure-kind f) :video))
+(defun figure-frame (f) (eq (figure-kind f) :frame))
+(defun figure-noun (f) (string-downcase (symbol-name (figure-kind f))))
 (defstruct table-block
   header
   rows
@@ -538,35 +540,56 @@ those. Nil after reporting a malformed one."
                   (part step)))
             steps)))
 
+(defparameter *figure-tags* '("IMAGE" "VIDEO" "FRAME")
+  "The blocks the layout takes as an image: each names its file or page first.")
+
 (defun parse-image (form)
-  "The figure of an (image ...) or a (video ...) FORM, or nil after reporting."
+  "The figure of an (image ...), a (video ...) or a (frame ...) FORM, or nil after
+reporting."
   (let* ((src (cadr form))
-         (video (equal (form-tag form) "VIDEO"))
-         (noun (if video "video" "image")))
+         (kind (cond ((equal (form-tag form) "VIDEO") :video)
+                     ((equal (form-tag form) "FRAME") :frame)
+                     (t :image)))
+         (noun (string-downcase (symbol-name kind))))
     (if (not (stringp src))
         (progn
-          (report :error (format nil "(~a ...) takes the ~:*~a path first" noun))
+          (report :error (if (eq kind :frame)
+                             "(frame ...) takes the page's URL first"
+                             (format nil "(~a ...) takes the ~:*~a path first" noun)))
           nil)
         (multiple-value-bind (opts rest)
             (split-options (cddr form)
-                           (append '("ALT" "CAPTION" "FIT" "SHARE" "STEP")
-                                   (and video '("POSTER" "LOOP" "MUTED" "AUTOPLAY")))
+                           (append '("ALT" "CAPTION" "SHARE" "STEP")
+                                   (if (eq kind :frame) '("ZOOM") '("FIT"))
+                                   (and (eq kind :video)
+                                        '("POSTER" "LOOP" "MUTED" "AUTOPLAY")))
                            noun)
           (when rest
-            (report :error (format nil "(~a ...) takes only a path and options" noun)))
+            (report :error (format nil "(~a ...) takes only a ~a and options"
+                                   noun (if (eq kind :frame) "URL" "path"))))
           (let ((alt (string-option opts "ALT" noun)))
             (unless alt
               (report :warning (format nil "~a ~a has no :alt" noun src)))
-            (make-figure :src src
+            (make-figure :kind kind
+                         :src src
                          :alt alt
                          :caption (string-option opts "CAPTION" noun)
-                         :fit (parse-image-fit (opt opts "FIT") noun)
+                         :fit (and (not (eq kind :frame))
+                                   (parse-image-fit (opt opts "FIT") noun))
                          :share (parse-image-share (opt opts "SHARE") noun)
-                         :video video
-                         :poster (and video (raw-string-option opts "POSTER" noun))
+                         :poster (and (eq kind :video) (raw-string-option opts "POSTER" noun))
                          :loop (and (opt opts "LOOP") t)
                          :muted (and (opt opts "MUTED") t)
-                         :autoplay (and (opt opts "AUTOPLAY") t)))))))
+                         :autoplay (and (opt opts "AUTOPLAY") t)
+                         :zoom (and (eq kind :frame) (parse-frame-zoom (opt opts "ZOOM" 2)))))))))
+
+(defun parse-frame-zoom (x)
+  "The :zoom of a frame: a number from 1 to 4 in quarters, 2 after reporting another."
+  (if (and (rationalp x) (<= 1 x 4) (integerp (* 4 x)))
+      x
+      (progn
+        (report :error ":zoom of frame must be 1 to 4 in quarters: 1, 5/4, 3/2, ... 4")
+        2)))
 
 (defun parse-image-fit (x noun)
   "The :fit of an image or video: :contain, or nil for :cover and when absent."
@@ -1145,8 +1168,8 @@ holding it; nil when none does."
       (position-if (lambda (s) (search at s)) texts)))
 
 (defparameter *anchor-blocks*
-  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "FLOW" "CELLS" "BARS"
-    "COLUMNS" "LINES" "PIE" "MATH")
+  '("P" "LEAD" "UL" "OL" "CODE" "IMAGE" "VIDEO" "FRAME" "TABLE" "QUOTE" "FLOW" "CELLS"
+    "BARS" "COLUMNS" "LINES" "PIE" "MATH")
   "The blocks a callout can point at as a whole.")
 
 (defun parse-block-say (form in-column)
@@ -1188,14 +1211,14 @@ callout points at, or else a paragraph holding it as inline content."
           b))))
 
 (defparameter *stepped-blocks*
-  '("P" "LEAD" "CODE" "IMAGE" "VIDEO" "TABLE" "QUOTE" "COLUMN" "FLOW" "CELLS" "BARS"
-    "COLUMNS" "LINES" "PIE" "MATH")
+  '("P" "LEAD" "CODE" "IMAGE" "VIDEO" "FRAME" "TABLE" "QUOTE" "COLUMN" "FLOW" "CELLS"
+    "BARS" "COLUMNS" "LINES" "PIE" "MATH")
   "The blocks :step t reveals whole on a page advance.")
 
 (defun step-option (x)
   "The value of :step among the leading options of the block form X, which follow the
-path of an image or a video; nil when it has none."
-  (let ((args (if (member (form-tag x) '("IMAGE" "VIDEO") :test #'equal)
+path of an image or a video and the URL of a frame; nil when it has none."
+  (let ((args (if (member (form-tag x) *figure-tags* :test #'equal)
                   (cddr x)
                   (cdr x))))
     (loop
@@ -1251,7 +1274,7 @@ is revealed with it. A chart with :step :series takes a step per series instead.
                  ((equal tag "SAY") (parse-block-say x in-column))
                  ((list-tag-p x) (parse-list x))
                  ((equal tag "CODE") (parse-code x))
-                 ((member tag '("IMAGE" "VIDEO") :test #'equal) (parse-image x))
+                 ((member tag *figure-tags* :test #'equal) (parse-image x))
                  ((equal tag "TABLE") (parse-table x))
                  ((equal tag "QUOTE") (parse-quote x))
                  ((equal tag "COLUMN") (parse-column x in-column))
