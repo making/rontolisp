@@ -6885,17 +6885,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						}
 					});
 					// type 4: string struct {i32 id, i32 len, (ref null eq) data,
-					// (mut i32) ci, (mut i32) cb}. id is the canonical integer identity
-					// (interned offset or runtime id, compared with i32.eq); len is the
-					// byte length; data is the $str_bytes GC array holding the
-					// quote-framed bytes (nil until a builder fills it -- see
+					// (mut i32) ci, (mut i32) cb, (mut i32) cc}. id is the canonical
+					// integer identity (interned offset or runtime id, compared with
+					// i32.eq); len is the byte length; data is the $str_bytes GC array
+					// holding the quote-framed bytes (nil until a builder fills it -- see
 					// FUNC_STR_BUILD). ci/cb are the character-index cursor
-					// (_str_char_byte_offset): character ci starts at byte cb, seeded
-					// (0, 1) by every builder.
+					// (_str_char_byte_offset): character ci starts at byte cb; cc is the
+					// character count once _str_char_count has counted it, -1 before.
+					// Every builder seeds (0, 1, -1).
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 					});

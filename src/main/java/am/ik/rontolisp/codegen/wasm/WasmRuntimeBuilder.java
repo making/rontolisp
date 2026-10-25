@@ -3258,10 +3258,7 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(2);
 		w.write(Instruction.I32_ADD);
 		emitScratchBytes(w, scratchLocal);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
+		WasmStringRuntimeBuilder.emitSeedCursor(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.ELSE);

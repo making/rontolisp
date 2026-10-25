@@ -27,19 +27,28 @@ WHOLE vector per index.
   still render once per CALL.
 
 ## WASM: the string carries its own cursor
-`TYPE_STRING` (rec-group type 4) gained two `(mut i32)` fields:
+`TYPE_STRING` (rec-group type 4) gained three `(mut i32)` fields:
 
-    struct { i32 id, i32 len, (ref null eq) data, (mut i32) ci, (mut i32) cb }
+    struct { i32 id, i32 len, (ref null eq) data, (mut i32) ci, (mut i32) cb, (mut i32) cc }
 
-= "character `ci` starts at byte `cb`", seeded `(0, 1)` by the only two constructors
-`_str_build` / `_str_fresh`. `WasmStringRuntimeBuilder.buildStrCharByteOffsetBody`:
+`ci`/`cb` = "character `ci` starts at byte `cb`", `cc` = the character count, seeded
+`(0, 1, -1)` by `WasmStringRuntimeBuilder.emitSeedCursor` at every `struct.new`. `WasmStringRuntimeBuilder.buildStrCharByteOffsetBody`:
 - **`cb == ci + 1` means the `ci` characters before the cursor are one byte each**, so any
   index at or below `ci` is `1 + i` -- always true for ASCII. Otherwise the walk starts at
   whichever of the cursor and the string start is nearer, and the cursor follows.
 - The cursor is stored ONLY when the walk landed exactly on character `i`
   (`remaining == 0`), so a store can never cost the fast path's single-byte-prefix fact.
-- `_str_char_count` (every `(length s)`) shares the pair: a cursor on the closing quote
-  (`cb == len - 1`) HOLDS the count, so a repeated `length` is one compare.
+- `_str_char_count` (every `(length s)`) counts once, resuming at the cursor, and keeps the
+  count in `cc`, so a repeated `length` is one compare. A single-byte string also parks the
+  cursor on the closing quote (`cb == ci + 1` then answers every index); a multi-byte one
+  leaves it where the last index put it. **The count must not live only in the cursor**:
+  until 2026-10-25 a cursor on the closing quote WAS the count, so `(< i (length s))` around
+  `(char s i)` -- every tokenizer -- moved the cursor off the quote at each index, walked back
+  to the end at each length, and on a multi-byte string walked each index from the start:
+  quadratic. Found through lispresen's browser editor highlighting its deck source (an
+  export's `:string` parameter, so a `TYPE_STRING`): 896 ms per keystroke on a 56 KB Japanese
+  deck. `concatenate` and the other flipped producers answer a character vector and never
+  showed it; `rontolisp:octets-to-string` and export parameters do.
 - **Soundness: a string's bytes never change after it is built** -- an indexed write
   rebuilds (`.kb/string-write-runtime.md`), so a cursor cannot go stale.
 
@@ -145,7 +154,7 @@ byte-reader detour stayed.
   breakpoint table, so a random index costs its distance from the string start. A
   left-to-right scan is still linear; a hot loop over a long wide string belongs on a
   backend with the cursor.
-- WASM: **8 bytes per string** plus the bigger helper bodies (a real program carries a few
+- WASM: **12 bytes per string** plus the bigger helper bodies (a real program carries a few
   hundred extra bytes at either
   `--optimize` level); `subseq`/`replace`/`search`/`position` needed no special-casing.
 - **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).
@@ -197,9 +206,12 @@ on every machine, which sees a per-character walk (it cannot see the length of o
   64 one-character cuts out of 1,048,576 characters under 4 MB, where rendering allocated
   67 MB), `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
 - `WasmLispCompilerIntegrationTest.aCharacterIndexAndALengthDoNotDecodeFromTheStartOfTheString`
-  (ASCII, Hiragana and an astral character in every 16: one scan of 131,072 characters and
-  20,000 lengths under 600 M fuel; measured 2026-10-23 at 100 / 164 / 120 M, and with the
-  cursor never stored the ASCII leg alone exhausts the budget),
+  (ASCII, Hiragana and an astral character in every 16, made a `TYPE_STRING` through
+  `octets-to-string`: one scan testing `(length s)` at every step, of 131,072 characters, and
+  20,000 lengths under 600 M fuel; measured 2026-10-25 at 166 / 313 / 201 M, and with the count
+  kept only in the cursor the Hiragana and astral legs exhaust the budget. Until then the
+  string came from `concatenate`, a character vector, so the pin measured the element path and
+  not the cursor),
   `#aCharacterVectorIndexAgreesAcrossTheFourSpellings` (a 65,536-character buffer scanned
   under 200 M; 32.5 M measured). **The COMPONENT leg has no cost
   pin of its own, and does not need one -- but that is an inference, not a measurement**: the

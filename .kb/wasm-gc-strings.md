@@ -8,7 +8,7 @@ wasm-GC heap (reclaimable), not in a linear-memory bump heap that only grew
 
 ```
 TYPE_STRING (rec-group type 4) = struct { i32 id, i32 len, (ref null eq) data,
-                                          (mut i32) ci, (mut i32) cb }
+                                          (mut i32) ci, (mut i32) cb, (mut i32) cc }
 $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
 ```
 
@@ -18,9 +18,10 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   a keyword leading `:`), so `linear[id + i]` == `array[i]`. Discriminator
   `array.get_u data 0 == 0x22` (string) / `0x3A` (keyword); readers `ref.cast $str_bytes` first
   (`WasmEmitHelper.emitStrBytesArray`). Content is UTF-8 (`_charvec_to_str` normalizes).
-- **ci / cb**: the character-index cursor ("character `ci` starts at byte `cb`", seeded `(0, 1)`)
-  that keeps scans linear rather than quadratic ([[string-index-cost]]). Every `struct.new` for
-  TYPE_STRING lives in `_str_build` / `_str_fresh`.
+- **ci / cb / cc**: the character-index cursor ("character `ci` starts at byte `cb`", seeded
+  `(0, 1)`) and the character count (`-1` until counted) that keep scans linear rather than
+  quadratic ([[string-index-cost]]). Every `struct.new` for TYPE_STRING pushes the seed through
+  `WasmStringRuntimeBuilder.emitSeedCursor`.
 
 ## Character accessors
 `FUNC_STR_CHAR_COUNT` (every `(length s)`), `FUNC_STR_CHAR_AT` (`(aref TYPE_STRING i)` directly;

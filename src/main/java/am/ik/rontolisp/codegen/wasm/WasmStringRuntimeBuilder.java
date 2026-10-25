@@ -164,7 +164,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// return struct.new TYPE_STRING (off, len, arr, ci = 0, cb = 1)
+		// return struct.new TYPE_STRING (off, len, arr, ci = 0, cb = 1, cc = -1)
 		get(w, off);
 		get(w, len);
 		get(w, arr);
@@ -234,7 +234,7 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new TYPE_STRING (id, len, arr, ci = 0, cb = 1)
+		// return struct.new TYPE_STRING (id, len, arr, ci = 0, cb = 1, cc = -1)
 		get(w, id);
 		get(w, len);
 		get(w, arr);
@@ -1388,16 +1388,19 @@ final class WasmStringRuntimeBuilder {
 
 	/**
 	 * Builds {@code _str_char_count} (FUNC_STR_CHAR_COUNT): returns the number of Unicode
-	 * characters in a UTF-8 encoded {@code TYPE_STRING}. Resumes the character-index
-	 * cursor (fields 3/4, see {@link #buildStrCharByteOffsetBody()}) rather than counting
-	 * from the first byte: a cursor sitting on the closing quote ({@code cb == len - 1})
-	 * already holds the count, so a repeated {@code (length s)} is one compare. Otherwise
-	 * the walk resumes at {@code cb} and leaves the cursor on the terminator, which both
-	 * answers every later {@code length} in constant time and -- for a single-byte
-	 * string, where the cursor then reads {@code cb == ci + 1} -- makes every later
-	 * character index constant time as well. Every {@code (length s)} for a string reads
-	 * through this, so a source-literal string and a char-vec-derived string both report
-	 * their true character count.
+	 * characters in a UTF-8 encoded {@code TYPE_STRING}. The count is counted once and
+	 * kept in field 5, so every later {@code (length s)} is one compare wherever the
+	 * character-index cursor (fields 3/4, see {@link #buildStrCharByteOffsetBody()}) has
+	 * moved since. The one count resumes at the cursor rather than at the first byte.
+	 * Keeping the count apart from the cursor is what makes a loop alternating
+	 * {@code (length s)} and {@code (char s i)} linear: when the count lived only in a
+	 * cursor parked on the closing quote, each index moved the cursor off it and each
+	 * length walked back to the end, and on a multi-byte string each index after a length
+	 * walked from the start. A single-byte string still parks the cursor on the
+	 * terminator, where it reads {@code cb == ci + 1} and makes every character index
+	 * constant time; a multi-byte string leaves the cursor where the last index put it.
+	 * Every {@code (length s)} for a string reads through this, so a source-literal
+	 * string and a char-vec-derived string both report their true character count.
 	 * @return the function body (signature {@code ((ref null eq)) -> i32}, TYPE_RAT_GET)
 	 */
 	static byte[] buildStrCharCountBody() {
@@ -1424,19 +1427,19 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// The cursor is on the closing quote: everything before it has been counted.
-		getCursor(w, s, CURSOR_BYTE);
-		set(w, pos);
-		get(w, pos);
-		get(w, len);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_EQ);
+		// Counted before: the count is kept.
+		getCursor(w, s, CHAR_COUNT);
+		set(w, count);
+		get(w, count);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.IF, 0x40);
-		getCursor(w, s, CURSOR_CHAR);
+		get(w, count);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// count = cursor character index; resume the walk at its byte offset.
+		getCursor(w, s, CURSOR_BYTE);
+		set(w, pos);
 		getCursor(w, s, CURSOR_CHAR);
 		set(w, count);
 		w.write(Instruction.BLOCK, 0x40);
@@ -1461,15 +1464,22 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// Park the cursor on the terminator: (count, len - 1) is a valid pair -- those
-		// count characters do occupy bytes [1, len - 1) -- and it only ever moves the
-		// cursor forward.
+		setCursorFrom(w, s, CHAR_COUNT, count);
+		// A single-byte string (count == len - 2) parks the cursor on the terminator:
+		// (count, len - 1) is a valid pair, and its cb == ci + 1 answers every index.
+		get(w, count);
+		get(w, len);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
 		get(w, len);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		set(w, pos);
 		setCursorFrom(w, s, CURSOR_CHAR, count);
 		setCursorFrom(w, s, CURSOR_BYTE, pos);
+		w.write(Instruction.END);
 		get(w, count);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -3709,15 +3719,19 @@ final class WasmStringRuntimeBuilder {
 	// byte CURSOR_BYTE of its $str_bytes array. Both are (mut i32) and both are seeded
 	// (0, 1) -- character 0 always starts right after the opening quote -- so the pair is
 	// valid from the moment a string is built. See buildStrCharByteOffsetBody().
+	// CHAR_COUNT is the character count, -1 until buildStrCharCountBody() counts it.
 	private static final int CURSOR_CHAR = 3;
 
 	private static final int CURSOR_BYTE = 4;
 
-	// Pushes the seed cursor operands a struct.new TYPE_STRING needs after its data
-	// array.
-	private static void emitSeedCursor(WasmWriter w) {
+	private static final int CHAR_COUNT = 5;
+
+	// Pushes the seed cursor and count operands a struct.new TYPE_STRING needs after its
+	// data array: (0, 1, -1).
+	static void emitSeedCursor(WasmWriter w) {
 		i32(w, 0);
 		i32(w, 1);
+		i32(w, -1);
 	}
 
 	// Pushes cursor field `field` of the TYPE_STRING held in sLocal.

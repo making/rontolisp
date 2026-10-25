@@ -424,14 +424,13 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new TYPE_STRING (id, len + 2, out, ci = 0, cb = 1)
+		// return struct.new TYPE_STRING (id, len + 2, out, ci = 0, cb = 1, cc = -1)
 		getLocal(w, ID);
 		getLocal(w, LEN);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, OUT);
-		i32(w, 0);
-		i32(w, 1);
+		WasmStringRuntimeBuilder.emitSeedCursor(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END);

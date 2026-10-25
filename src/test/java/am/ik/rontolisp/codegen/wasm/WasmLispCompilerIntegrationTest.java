@@ -8074,34 +8074,40 @@ class WasmLispCompilerIntegrationTest {
 
 	// A character index and a length cost the same wherever they land
 	// (.kb/string-index-cost.md): the string carries a cursor -- character ci starts at
-	// byte cb -- so a left-to-right scan is linear and a repeated (length s) is one
-	// compare. Before, _str_char_at decoded the UTF-8 data forward from byte 0 on every
-	// call and _str_char_count recounted every lead byte. Pinned by a wasmtime FUEL
+	// byte cb -- and its count once counted, so a left-to-right scan is linear and a
+	// repeated (length s) is one compare. Before, _str_char_at decoded the UTF-8 data
+	// forward from byte 0 on every call and _str_char_count recounted every lead byte.
+	// The scan tests (length s) on every step, as a tokenizer's (< i (length s)) does:
+	// while the count lived in a cursor parked on the closing quote, each index moved the
+	// cursor off it and each length walked back, quadratic on a multi-byte string. The
+	// string goes through octets-to-string because concatenate answers a character
+	// vector, which reads its element and has no cursor to pin. Pinned by a wasmtime FUEL
 	// budget, an instruction count, so neither a clock nor the machine is in it: one scan
-	// of 131,072 characters, then 20,000 lengths of them. Measured 2026-10-23 (wasmtime
-	// 49): 100 M fuel over ASCII, 164 M over Hiragana and 120 M with an astral character
-	// in every 16 -- most of it building the string -- against a budget of 600 M, while
-	// decoding from the start is n^2/2 = 8.6e9 byte steps for the scan alone and the
-	// recount 2.6e9 more. The astral content is the shape with no shortcut: the cursor's
-	// "every character before it is one byte" fast path cannot hold, so every index is
-	// the walk itself.
+	// of 131,072 characters, then 20,000 lengths of them. Measured 2026-10-25 (wasmtime
+	// 49): 166 M fuel over ASCII, 313 M over Hiragana and 201 M with an astral character
+	// in every 16 -- most of it building the string -- against a budget of 600 M, which
+	// the Hiragana and astral legs exhausted with the count kept only in the cursor. The
+	// astral content is the shape with no shortcut: the cursor's "every character before
+	// it is one byte" fast path cannot hold, so every index is the walk itself.
 	@Test
 	void aCharacterIndexAndALengthDoNotDecodeFromTheStartOfTheString() throws Exception {
 		for (String unit : List.of("0123456789abcdef", "あいうえおかきくけこさしすせそた", "😀0123456789abcde")) {
 			long sum = 8192L * unit.codePoints().asLongStream().sum();
-			assertThat(compileAndRunWithFuel("""
-					(defun scan-sum (s)
-					  (let ((total 0))
-					    (dotimes (i (length s))
-					      (setq total (+ total (char-code (char s i)))))
-					    total))
-					(defvar *long* "%s")
-					(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
-					(print (scan-sum *long*))
-					(defvar *acc* 0)
-					(dotimes (k 20000) (setq *acc* (+ *acc* (length *long*))))
-					(print *acc*)
-					""".formatted(unit), 600_000_000L)).as(unit).isEqualTo(sum + "\n" + 20000L * 131072);
+			assertThat(compileAndRunWithFuel(
+					am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+							(defun scan-sum (s)
+							  (do ((i 0 (1+ i)) (total 0 (+ total (char-code (char s i)))))
+							      ((>= i (length s)) total)))
+							(defvar *long* "%s")
+							(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
+							(setq *long* (rontolisp:octets-to-string (rontolisp:string-to-octets *long*)))
+							(print (scan-sum *long*))
+							(defvar *acc* 0)
+							(dotimes (k 20000) (setq *acc* (+ *acc* (length *long*))))
+							(print *acc*)
+							""".formatted(unit))), 600_000_000L))
+				.as(unit)
+				.isEqualTo(sum + "\n" + 20000L * 131072);
 		}
 	}
 
