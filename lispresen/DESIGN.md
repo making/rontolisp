@@ -646,6 +646,17 @@ An image takes a share of the height the other blocks leave (`flex: 1 1 0`), and
 of columns holding an image takes one too; every other block and row is as tall as its
 content.
 
+A chart takes the height left over too, so that a slide of charts does not leave its
+lower part empty while text stays at the deck's size. On a slide without an image, once
+the body step is chosen and the callouts placed, the charts, and the rows of columns
+holding one, share the room the body leaves evenly, and the charts of a column share
+what the column leaves of its row's grown height (`grow-charts`). The room given is the
+most, found by a binary search, at which the body still fits, every callout still finds
+room, and every other block keeps its height and every chart its label size. Each chart
+kind caps its growth (Diagrams, Geometry), so a sparse slide can still leave room below.
+The grown height is computed at build time like everything else, never by the
+stylesheet.
+
 ### Columns
 
 Column widths come from content, as table widths do, and for the same reason: a code
@@ -873,14 +884,16 @@ lispresen from an S-expression, as an inline SVG, its labels HTML over it.
   each, 2 px apart; one series a line height thick), the label column as wide as its
   widest label on one line or wrapped at its phrases past a third of the chart, the
   values of negative bars in a column left of zero, the longest bar the rest of the
-  region (at least 4 s). A column or line chart spans its region: the plot is 5 line
-  heights tall, a category takes an equal slot of the width, at least its label's widest
-  phrase and its values, a column at most two line heights wide (wider for grouped
+  region (at least 4 s); given more height, its bar thickness and the space around
+  each row grow by one factor, at most 2. A column or line chart spans its region: the
+  plot is 5 line heights tall, given more height up to 2/3 of its width, a category
+  takes an equal slot of the width, at least its label's widest phrase and its values, a column at most two line heights wide (wider for grouped
   values that would not fit), its label centered under it. A line is a 6 px band (a
   parallelogram, widened by the slope through `isqrt` so it is as thick across at any
   angle) and its points markers of a different shape per series (circle, square,
   diamond, triangle up and down, plus) over a ring of the page color. A pie is as tall as
-  its legend or 5 line heights, its slices clockwise from the top in the order written; a
+  its legend or 5 line heights, given more height as tall as its region's width leaves
+  beside its legend, its slices clockwise from the top in the order written; a
   slice's edge points come from a fixed-point Taylor sine at 10^18 (exact at the quarter
   turns), so the paths are integers every backend computes alike, and a 2 px band of the
   page color parts two slices. A donut's hole is 3/5 of the radius. The legend of a chart

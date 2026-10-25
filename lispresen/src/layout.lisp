@@ -538,7 +538,7 @@ is wider than WIDTH; nil when no step fits."
   (loop for j from (min k (1- (length *diagram-steps*))) below
           (length *diagram-steps*)
         do
-          (let* ((s (nth j *diagram-steps*)) (d (draw-diagram b s width)))
+          (let* ((s (nth j *diagram-steps*)) (d (draw-diagram b s width (diagram-room b))))
             (when (<= (drawing-width d) width) (return (values s d))))))
 
 (defun diagram-layout (b k width)
@@ -548,7 +548,7 @@ fits."
     (if s
         (values s d)
         (let ((s (car (last *diagram-steps*))))
-          (values s (draw-diagram b s width))))))
+          (values s (draw-diagram b s width (diagram-room b)))))))
 
 (defun quote-height (q s width)
   (let ((w (- width (quote-indent s))))
@@ -602,7 +602,8 @@ the second of an image, which takes whatever width it is given."
            (multiple-value-bind (mins maxs)
                (column-bounds b (step-at *table-steps* k))
              (values (reduce #'+ mins) (reduce #'+ maxs))))
-          ((diagram-p b) (diagram-bounds b (step-at *diagram-steps* k)))
+          ((diagram-p b)
+           (diagram-bounds b (step-at *diagram-steps* k) (diagram-room b)))
           ((formula-p b) (let ((w (formula-width b s))) (values w w)))
           (t (values 0 0)))))
 
@@ -741,6 +742,7 @@ Columns share the slide's sizes, so side-by-side text matches."
       (setf (fit-overflow fit) t)
       (setf k (1- (length *body-steps*))))
     (setf k (fit-callouts slide fit k width))
+    (grow-charts slide fit k width)
     (let ((c (body-code-size blocks k width)))
       (setf (fit-body-size fit) (step-at *body-steps* k) (fit-code-size fit) c)
       (dolist (b blocks)
@@ -759,6 +761,88 @@ Columns share the slide's sizes, so side-by-side text matches."
                 (when (diagram-p b)
                   (multiple-value-bind (s d) (diagram-layout b k rwidth)
                     (setf (diagram-size b) s (diagram-drawing b) d))))))))
+
+(defun growing-chart-p (b)
+  (and (diagram-p b) (member (diagram-kind b) '(:bars :columns :lines :pie))))
+
+(defun holds-chart-p (b)
+  "True for a block that grows into the room the others leave on a slide without an
+image: a chart, or a row of columns holding one."
+  (or (growing-chart-p b)
+      (and (column-row-p b)
+           (some (lambda (col) (some #'growing-chart-p (column-blocks col)))
+                 (column-row-columns b)))))
+
+(defun chart-rooms (blocks k c width extra)
+  "The height each chart among BLOCKS, a region WIDTH px wide at body step K and code size
+C, grows to when the region is EXTRA px taller than its content, as (CHART . ROOM): the
+blocks holding one share EXTRA evenly, and the charts of a column share what the column
+leaves of its row's grown height."
+  (let ((share (floor extra (max 1 (count-if #'holds-chart-p blocks))))
+        (rooms nil))
+    (dolist (b blocks rooms)
+      (cond ((growing-chart-p b)
+             (push (cons b (+ share (block-height b k c width 0))) rooms))
+            ((holds-chart-p b)
+             (let ((row-h (+ share (block-height b k c width 0))))
+               (loop for col in (column-row-columns b)
+                     for w in (row-widths b k c width)
+                     do
+                       (let* ((cblocks (column-blocks col))
+                              (left (- row-h (blocks-height cblocks k c w 0)))
+                              (each (floor left (max 1 (count-if #'growing-chart-p cblocks)))))
+                         (dolist (cb cblocks)
+                           (when (growing-chart-p cb)
+                             (push (cons cb (+ each (block-height cb k c w 0)))
+                                   rooms)))))))))))
+
+(defun grow-charts (slide fit k width)
+  "Grows SLIDE's charts into the room its body leaves at body step K, so that a chart is
+drawn as large as the body allows instead of leaving the slide's lower part empty: the
+most room at which the body still fits and every callout still finds room, by a binary
+search. Labels keep their size and the other blocks their lines. A slide with an image
+leaves the room to the image, and one whose callouts lacked room already keeps its charts
+as they are."
+  (let* ((blocks (slide-blocks slide))
+         (charts (remove-if-not #'growing-chart-p (region-blocks blocks)))
+         (callouts (slide-callouts slide))
+         (height (fit-body-height fit))
+         (c (body-code-size blocks k width))
+         (natural nil))
+    (when (and charts (notany #'figure-p (region-blocks blocks))
+               (notany #'callout-overflow callouts))
+      (labels ((settled ()
+                 ;; What growing must leave alone: the height of every block but a chart,
+                 ;; and every chart's label size, in the widths its region gets.
+                 (loop for (rblocks rwidth) in (regions blocks k c width)
+                       nconc
+                         (loop for b in rblocks
+                               unless (column-row-p b)
+                               collect (if (growing-chart-p b)
+                                           (diagram-fit b k rwidth)
+                                           (block-height b k c rwidth height)))))
+               (set-rooms (extra)
+                 (dolist (b charts) (setf (diagram-room b) nil))
+                 (when (> extra 0)
+                   (loop for (b . room) in (chart-rooms blocks k c width extra)
+                         do (setf (diagram-room b) room))))
+               (fits-p (extra)
+                 (set-rooms extra)
+                 (multiple-value-bind (h ok) (blocks-height blocks k c width height)
+                   (and ok (<= h height) (equal (settled) natural)
+                        (or (null callouts)
+                            (place-at slide fit k (callout-size (car callouts)) width
+                                      nil))))))
+        (set-rooms 0)
+        (setf natural (settled))
+        (let ((lo 0)
+              (hi (- height (blocks-height blocks k c width height))))
+          (loop while (< lo hi)
+                do
+                  (let ((mid (ceiling (+ lo hi) 2)))
+                    (if (fits-p mid) (setf lo mid) (setf hi (1- mid)))))
+          ;; Leaves the rooms, and the callouts placed, at the room found.
+          (fits-p lo))))))
 
 (defun body-code-size (blocks k width)
   (or (code-size-at blocks k width) (car (last *code-steps*))))

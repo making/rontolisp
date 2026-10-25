@@ -189,7 +189,10 @@ as for a table's rows. A chart reads as its values to a screen reader.
 
 Labels start at 48 px and step down to 36 px with the slide; a diagram wider than its
 room at 36 px is an error. A diagram is centered in its column or the body; a bar,
-column or line chart spans it.
+column or line chart spans it. A chart grows into the height the other blocks leave, its
+labels at the same size: a pie as wide as its column allows, a column or line chart's
+plot up to two thirds of its width, a bar chart's bars up to twice as thick. It leaves
+room for its callouts, and on a slide with an image the image takes the height.
 
 ## Formulas
 

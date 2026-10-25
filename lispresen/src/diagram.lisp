@@ -987,6 +987,15 @@ the gaps between marks.")
 (defun plot-height (s)
   "The height of the plot of columns or lines, and the diameter of a pie."
   (* 5 (dg-lh s)))
+(defparameter *bar-growth*
+  2
+  "The most a bar chart's rows grow by, as a multiple of their natural height.")
+(defparameter *plot-aspect*
+  2/3
+  "The tallest a grown plot of columns or lines is, as a share of its width.")
+(defun room-extra (room natural)
+  "The px a chart NATURAL px tall grows by toward ROOM px, or 0 when ROOM is nil."
+  (if room (max 0 (- room natural)) 0))
 (defun marker-radius (s) (floor s 4))
 (defun swatch-size (s) (floor (* s 2) 3))
 (defun series-count (chart) (max 1 (length (chart-series chart))))
@@ -1231,12 +1240,13 @@ one line, or wrapped at its phrases when that is wider than a third of the chart
                          (min (run-full-width run s) (floor avail 3))))
                   runs)))
 
-(defun bars-drawing (b s avail)
+(defun bars-drawing (b s avail &optional room)
   "The bar chart B at label size S in AVAIL px: a row per category, its label on the left
 (wrapped at its phrases when long), a bar per series as long as its value's share of the
 scale from zero, which stands where the most negative bar leaves room, and the value at
 each bar's end; under :axis a scale along the bottom instead of the values. The chart
-spans AVAIL; it is wider when the longest bar would have less than its least room."
+spans AVAIL; it is wider when the longest bar would have less than its least room. Toward
+ROOM px tall its bars and the space between them grow alike, up to *BAR-GROWTH* times."
   (let* ((chart (diagram-datum b))
          (runs (diagram-runs b))
          (n (series-count chart))
@@ -1253,6 +1263,14 @@ spans AVAIL; it is wider when the longest bar would have less than its least roo
          (texts nil)
          (targets nil))
     (multiple-value-bind (legend top legend-targets) (chart-legend chart :bars s avail)
+      (let* ((rows-h (loop for run in runs
+                           sum (+ (max (* (run-lines run s label-w) lh) band) (* 2 pad))))
+             (grow (min *bar-growth*
+                        (/ (+ rows-h
+                              (room-extra room (+ top rows-h (if axis lh 0))))
+                           rows-h))))
+        (setf thick (floor (* thick grow)) pad (floor (* pad grow))
+              band (if grouped (+ (* n thick) (* (1- n) *dg-hair*)) (floor (* band grow)))))
       (multiple-value-bind (bars marks) (chart-bars chart)
         (multiple-value-bind (lo hi) (bar-domain chart)
           (let* ((vws (mapcar (lambda (m) (text-width (fifth m) s)) marks))
@@ -1361,13 +1379,14 @@ spans AVAIL; it is wider when the longest bar would have less than its least roo
                                                                           targets
                                                                           :test #'equal)))))))))))))
 
-(defun plot-drawing (b s avail)
+(defun plot-drawing (b s avail &optional room)
   "The column or line chart B at label size S in AVAIL px: the categories side by side
 along the bottom, their labels under them wrapped at their phrases, over them a column
 per series as tall as its value's share of the scale from zero, with the value at its
 end, or a point per series joined by its line, along a scale with ticks and gridlines on
 the left (always on a line chart, under :axis on columns). The chart spans AVAIL; it is
-wider when a category's label or values do not fit its share."
+wider when a category's label or values do not fit its share. Toward ROOM px tall its
+plot grows, up to *PLOT-ASPECT* of its width."
   (let* ((chart (diagram-datum b))
          (runs (diagram-runs b))
          (rows (length runs))
@@ -1379,7 +1398,6 @@ wider when a category's label or values do not fit its share."
          (gap (dg-pad-x s))
          (lh (dg-lh s))
          (pad (floor s 4))
-         (p (plot-height s))
          (shapes nil)
          (texts nil)
          (targets nil)
@@ -1415,12 +1433,21 @@ wider when a category's label or values do not fit its share."
                                ((some (lambda (m) (>= (fourth m) 0)) marks) lh)
                                (t 0)))
                    (plot-top (+ top head))
-                   (plot-bottom (+ plot-top p))
                    (foot (if (and (not axis) (some (lambda (m) (< (fourth m) 0)) marks)) lh 0))
+                   (slot (lambda (j) (+ axis-w (floor (* j w) rows))))
+                   (label-h
+                    (loop for j below rows
+                          maximize (* (run-lines (nth j runs) s
+                                                 (- (funcall slot (1+ j)) (funcall slot j) gap))
+                                      lh)))
+                   (p (let ((p (plot-height s)))
+                        (max p (min (floor (* w *plot-aspect*))
+                                    (+ p (room-extra room
+                                                     (+ plot-top p foot pad label-h)))))))
+                   (plot-bottom (+ plot-top p))
                    (band-top (+ plot-bottom foot pad))
                    (band 0)
                    (pos (lambda (v) (+ plot-top (floor (* (- hi v) p) (- hi lo)))))
-                   (slot (lambda (j) (+ axis-w (floor (* j w) rows))))
                    (grid nil)
                    (points (make-array (list n rows))))
               ;; The scale: a gridline and a label per tick.
@@ -1567,11 +1594,12 @@ extreme points within it, as a browser's box of the path does."
                     r ri (if (> (- f1 f0) 1/2) 1 0))
               p1 p2 p3 p4))))
 
-(defun pie-drawing (b s avail)
+(defun pie-drawing (b s avail &optional room)
   "The pie chart B at label size S in AVAIL px: the pie, its slices clockwise from the top
 in the order written, each its value's share of the whole, beside a legend of a swatch,
 the label (wrapped at its phrases when long) and the value per slice, as tall as the pie
-or the pie as tall as it; a ring under :donut."
+or the pie as tall as it; a ring under :donut. Toward ROOM px tall the pie grows, as far
+as AVAIL leaves room beside its legend."
   (let* ((chart (diagram-datum b))
          (runs (diagram-runs b))
          (rows (length runs))
@@ -1594,7 +1622,9 @@ or the pie as tall as it; a ring under :donut."
                                    runs)))
          (lines (mapcar (lambda (run) (run-lines run s lw)) runs))
          (legend-h (reduce #'+ (mapcar (lambda (l) (+ (* l lh) (* 2 pad))) lines)))
-         (d (max (plot-height s) legend-h))
+         (d (let ((d (max (plot-height s) legend-h)))
+              (max d (min (+ d (room-extra room d))
+                          (- avail (* 2 s) sw sp gap vw lw)))))
          (r (floor d 2))
          (ri (if (chart-donut chart) (floor (* r 3) 5) 0))
          (fixed (+ d (* 2 s) sw sp gap vw))
@@ -1825,21 +1855,23 @@ Cells move right as far as the drawings below them need."
       (cells-layout (diagram-datum b) s)
     (finish-drawing shapes left (- right left) (- (* rows (+ (dg-lh s) s)) s))))
 
-(defun draw-diagram (b s avail)
-  "The diagram B at label size S in AVAIL px; wider than AVAIL when it does not fit."
+(defun draw-diagram (b s avail &optional room)
+  "The diagram B at label size S in AVAIL px; wider than AVAIL when it does not fit. A
+chart grows toward ROOM px tall, as far as its caps let it."
   (case (diagram-kind b)
     (:flow (flow-drawing b s avail))
-    (:bars (bars-drawing b s avail))
-    ((:columns :lines) (plot-drawing b s avail))
-    (:pie (pie-drawing b s avail))
+    (:bars (bars-drawing b s avail room))
+    ((:columns :lines) (plot-drawing b s avail room))
+    (:pie (pie-drawing b s avail room))
     (t (cells-drawing b s))))
 
-(defun diagram-bounds (b s)
-  "The narrowest width the diagram B takes at S px, and its width on one row; nil for the
-second of a chart that spans its region, which takes whatever width it is given."
+(defun diagram-bounds (b s &optional room)
+  "The narrowest width the diagram B takes at S px, and its width on one row (a pie's
+grown toward ROOM px tall); nil for the second of a chart that spans its region, which
+takes whatever width it is given."
   (case (diagram-kind b)
     ((:flow :pie)
      (values (drawing-width (draw-diagram b s 0))
-             (drawing-width (draw-diagram b s 1000000))))
+             (drawing-width (draw-diagram b s 1000000 room))))
     ((:bars :columns :lines) (values (drawing-width (draw-diagram b s 0)) nil))
     (t (let ((w (drawing-width (cells-drawing b s)))) (values w w)))))

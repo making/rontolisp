@@ -152,6 +152,8 @@ shows parts of one whole (few slices). `columns` is a chart; side-by-side blocks
   page advance, the scale and labels first.
 - Callouts: `(say "c" :at "Q2" (columns ...))` points at a category (or a series by its
   name, or a slice); `("Q2" 4 (say "peak" 8))` points at one value.
+- A chart grows into the height the other blocks leave (labels keep their size), so a
+  slide of charts needs no padding or filler to look full.
 
 ## Formulas
 

@@ -420,7 +420,8 @@ by 1, 2 or 5 x 10^n, in rationals"
                '((-5 15 5) (94 100 2) (0 1/2 1/10)))))
   (testing "a bar is its value's share of the longest; a callout names a box, a bar or an
 atom, and one inside a label points where naming the label would; columns, lines and a
-pie take a series' color, and a series reveals in its step"
+pie take a series' color, and a series reveals in its step; a chart grows into the
+height the body leaves, a bar chart's bars at most twice as thick"
     (let ((html
            (lispresen:render
             "(slide :title \"t\" (say \"c\" :at \"b\" (flow \"a\" \"b\" (say \"d\" \"c\"))))
@@ -436,22 +437,24 @@ pie take a series' color, and a series reveals in its step"
       (ok (equal (callout-side html "s2c1") "right"))
       ;; The longest bar takes the room the label and value columns leave, 1505 px; a
       ;; quarter of the value a quarter of it; a zero draws none, its value at the axis.
-      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"12\" width=\"376\""))
-      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"104\" width=\"1505\""))
-      (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1590px;top:104px"))
-      (ok (contains html ">z</p><p class=\"dg-l dg-v\" style=\"left:85px;top:196px"))
+      ;; Grown into the body, a bar is 136 px thick, twice its line height.
+      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"24\" width=\"376\" height=\"136\""))
+      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"208\" width=\"1505\""))
+      (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1590px;top:208px"))
+      (ok (contains html ">z</p><p class=\"dg-l dg-v\" style=\"left:85px;top:392px"))
       ;; The tail points at the value written at the bar's end.
-      (ok (contains html "data-side=\"below\" data-at=\"y\" data-box=\"1590 104 1651 172\""))
-      ;; A negative column hangs from the zero line; the scale ticks every 1 from -1 to 3;
-      ;; a series' columns, legend and callouts share its step.
-      (ok (contains html "<rect class=\"dg-s2\" data-step=\"2\" x=\"485\" y=\"381\" width=\"136\" height=\"85\"/>"))
+      (ok (contains html "data-side=\"below\" data-at=\"y\" data-box=\"1590 208 1651 344\""))
+      ;; A negative column hangs from the zero line; the scale ticks every 1 from -1 to 3,
+      ;; the plot grown to fill the body's 776 px; a series' columns, legend and callouts
+      ;; share its step.
+      (ok (contains html "<rect class=\"dg-s2\" data-step=\"2\" x=\"485\" y=\"553\" width=\"136\" height=\"143\"/>"))
       (ok (contains html "<p class=\"dg-l dg-t\" data-step=\"1\" style=\"left:48px;top:0px"))
-      (ok (contains html ">-1</p><p class=\"dg-l dg-v dg-a dg-rt\" style=\"left:0px;top:347px;width:52px;height:68px\">0</p>"))
-      (ok (contains html "data-side=\"right\" data-step=\"1\" data-box=\"347 126 483 381\""))
+      (ok (contains html ">-1</p><p class=\"dg-l dg-v dg-a dg-rt\" style=\"left:0px;top:519px;width:52px;height:68px\">0</p>"))
+      (ok (contains html "data-side=\"right\" data-step=\"1\" data-box=\"347 126 483 553\""))
       ;; The second series' line and its square markers, each over a ring.
-      (ok (contains html "<polygon class=\"dg-s2\" points=\"469,235 1287,348 1287,356 469,243\"/><rect class=\"dg-r2\" x=\"455\" y=\"225\""))
-      ;; A quarter of a donut from the top, clockwise.
-      (ok (contains html "<path class=\"dg-s1\" d=\"M170 0A170 170 0 0 1 340 170L272 170A102 102 0 0 0 170 68Z\"/>"))
+      (ok (contains html "<polygon class=\"dg-s2\" points=\"469,312 1287,502 1287,510 469,320\"/><rect class=\"dg-r2\" x=\"455\" y=\"302\""))
+      ;; A quarter of a donut from the top, clockwise, as tall as the body.
+      (ok (contains html "<path class=\"dg-s1\" d=\"M388 0A388 388 0 0 1 776 388L620 388A232 232 0 0 0 388 156Z\"/>"))
       (ok (equal (callout-side html "s3c1") "below"))))
   (testing "malformed, too large and too wide diagrams"
     (ok

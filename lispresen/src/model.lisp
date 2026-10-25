@@ -125,8 +125,9 @@
 ;;; LABELS hold each box's inline content and RUNS their runs, DATUM its flow-graph; a
 ;;; chart, :bars, :columns, :lines or :pie, whose LABELS are its rows' labels and DATUM
 ;;; its chart; or :cells, the box-and-pointer drawing of the list DATUM. SIZE is the label
-;;; size and DRAWING the shapes (diagram.lisp), both set when the slide is fitted.
-(defstruct diagram kind labels runs datum size drawing)
+;;; size and DRAWING the shapes (diagram.lisp), both set when the slide is fitted; ROOM
+;;; the height a chart grows to, from the room the other blocks leave, or nil.
+(defstruct diagram kind labels runs datum size drawing room)
 ;;; The data of a chart. SERIES holds the inline name of each series, nil for a chart of
 ;;; one; VALUES each row's values, one per series, as rationals, and TEXTS the same as
 ;;; written; UNIT the text written after every value; GROUPED true when a value is written
