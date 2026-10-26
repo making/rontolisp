@@ -71,7 +71,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 |---|---|
 | `"text"` or `(p inline...)` | paragraph |
 | `(lead inline...)` | paragraph in the muted color, e.g. above columns |
-| `(ul item...)`, `(ol item...)` | list; an item is a string, an inline form or `(li inline... [nested list])`; `:step t` reveals one item per advance |
+| `(ul item...)`, `(ol item...)` | list; each argument is one item: a string, an inline form or `(li inline... [nested list])`; `:step t` reveals one item per advance |
 | `(code [:lang "lisp"] "text")` | code block; common indentation removed. `lisp`, `scheme`, `clojure` are highlighted and runnable; `console` is a shell transcript (`$ ` lines are commands); `java`, `kotlin`, `javascript`/`js`, `typescript`/`ts`, `c`, `cpp`, `go`, `rust`, `python`/`py`, `bash`/`sh`, `sql`, `json`, `yaml`/`yml` are highlighted, never run; any other `:lang` is plain |
 | `(code :file "fib.lisp" [:lines (4 6)])` | code from a UTF-8 file beside the deck; `:lang` defaults by extension (`.lisp`, `.java`, `.py`, `.sh`, `.json`, ...) |
 | `(quote [:cite "who"] inline...)` | quotation |
@@ -354,6 +354,11 @@ drawn. Leave all of these out for a deck that is not published.
   still works, since tags and options match regardless of case.
 - **Options come first.** `(code "text" :lang "lisp")` is `error: (code ...) takes strings
   only`; write `(code :lang "lisp" "text")`.
+- **One argument, one item.** `(ul "see " (tt "x") " here")` is three items; an item that
+  mixes text and inline forms is `(li "see " (tt "x") " here")`. A string facing an inline
+  form across a space is `warning: (tt ...) and the string beside it are separate list
+  items; write one item as (li ...)`, but without the space (`"設定は" (tt "x")`) nothing
+  warns.
 - **Lists are blocks.** A `ul` inside `p` is `error: unknown inline element ul`. A nested
   list goes in `(li "item" (ul ...))` or right after an item in the same list.
 - **Unknown names are errors**, e.g. `(h2 ...)`, `(div ...)`, `(img ...)`. There are no

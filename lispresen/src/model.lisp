@@ -389,14 +389,35 @@ in *CALLOUTS*; nil after reporting a malformed one."
             (t (dolist (n (parse-inline a)) (push n inlines)))))
     (make-item :inlines (nreverse inlines) :sublist sublist)))
 
+(defun split-item-form (a b)
+  "The inline form of the adjacent list items A and B when they read as the parts of one
+item, a string facing an inline form across whitespace as in (ul \"see \" (tt \"x\")):
+each argument of a list is an item of its own, so this is two. Nil otherwise."
+  (flet ((inline-form-p (x)
+           (let ((tag (form-tag x)))
+             (and tag (not (member tag '("UL" "OL" "LI") :test #'equal)))))
+         (blank-at-p (s i)
+           (and (< -1 i (length s))
+                (let ((code (char-code (char s i))))
+                  (or (blank-code-p code) (= code #x3000))))))
+    (cond ((and (stringp a) (inline-form-p b) (blank-at-p a (1- (length a)))) b)
+          ((and (inline-form-p a) (stringp b) (blank-at-p b 0)) a))))
+
 (defun parse-list (form)
   "A bullets from (ul [:step t] ...) or (ol ...). A list directly inside a list nests under
 the item before it. Under :step each item is a step of its own, its nested list
 revealed with it."
   (multiple-value-bind (opts body)
       (split-options (cdr form) '("STEP") (string-downcase (form-tag form)))
-    (let ((items nil) (step (opt opts "STEP")))
+    (let ((items nil) (step (opt opts "STEP")) (prev nil))
       (dolist (x body)
+        (let ((split (split-item-form prev x)))
+          (when split
+            (report :warning
+                    (format nil
+                            "(~a ...) and the string beside it are separate list items; write one item as (li ...)"
+                            (string-downcase (form-tag split))))))
+        (setf prev (and (not (list-tag-p x)) x))
         (if (list-tag-p x)
             (cond
              ((null items) (report :error "a nested list must follow an item"))

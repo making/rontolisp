@@ -118,6 +118,9 @@ Read `references/deck-format.md` now if it is not already in context. The essent
 - A slide is blocks top to bottom: strings (paragraphs), `ul`/`ol`, `code`, `table`,
   `image`, `video`, `frame` (a live web page), `quote`, `column`s, diagrams (`flow`, `cells`), charts (`bars`, `columns`, `lines`, `pie`), `notes`,
   `source`.
+- Each argument of `ul`/`ol` is one item. An item that mixes text and inline forms goes in
+  `(li ...)`: `(ul (li "set " (tt "x") " first"))`, not `(ul "set " (tt "x") " first")`,
+  which is three items.
 - No coordinates or font sizes exist in the format. When content does not fit, the fix is
   less content per slide, not styling.
 - Plan the talk as sections of a few slides; one idea per slide, at most 6 list items.

@@ -869,7 +869,7 @@ a large video and a frame's relative URL are reported"
    (equal (render-diagnostics
            "(deck :title \"d\")
 (Slide :Title \"s\"
-  (frob \"x\") (p Foo))
+  (frob \"x\") (p Foo) (ul (tt \"x\") \" y\" \"z \" (ul \"n\") (b \"w\") \"s　\" (say \"c\" \"t\")))
 
 (slide (table (\"a\" \"b\") (\"c\")))
 (other)
@@ -877,6 +877,8 @@ a large video and a frame's relative URL are reported"
 (slide \"ok\"")
           '((:error 2 "unknown element frob")
             (:error 2 "unexpected Foo in text")
+            (:warning 2 "(tt ...) and the string beside it are separate list items; write one item as (li ...)")
+            (:warning 2 "(say ...) and the string beside it are separate list items; write one item as (li ...)")
             (:error 5 "a table row has 1 cells where the table has 2")
             (:error 6
              "expected (slide ...), (section ...), (agenda) or (define ...), found other")
