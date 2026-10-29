@@ -2486,9 +2486,10 @@ public final class ClojureLowering {
 				&& (head.name().equals("def") || head.name().equals("defn") || head.name().equals("defn-")
 						|| head.name().equals("defonce"))
 				&& ClojureLowerUtil.nameIsDynamic(items.get(1))
-				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name
-				&& varSym(varKey(this.currentNs, name.name())).equals(ClojureLowerUtil.idSym(name.name()))) {
-			this.shadowedSpecials.add(name.name());
+				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol nameSym
+				&& ownDefName(nameSym.name()) instanceof String name
+				&& varSym(varKey(this.currentNs, name)).equals(ClojureLowerUtil.idSym(name))) {
+			this.shadowedSpecials.add(name);
 		}
 		for (LispVal item : items) {
 			scanDynamicDefinitions(item);
@@ -2517,7 +2518,7 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			String key = preDeclareUnlessCoreShadow(items.get(1), "def", Kind.VARIABLE, false);
+			String key = preDeclareDef(items.get(1), "def");
 			if (key != null && items.size() == 2) {
 				this.unboundCapable.add(key);
 			}
@@ -2536,7 +2537,7 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
-			preDeclareUnlessCoreShadow(items.get(1), "defonce", Kind.VARIABLE, false);
+			preDeclareDef(items.get(1), "defonce");
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defstruct")) {
 			preDeclareUnlessCoreShadow(items.get(1), "defstruct", Kind.VARIABLE, false);
@@ -2579,8 +2580,11 @@ public final class ClojureLowering {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
 			for (int i = 1; i < items.size(); i++) {
-				String key = internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
-						ClojureLowerUtil.nameIsPrivate(items.get(i)));
+				String name = ownDefName(ClojureLowerUtil.plainName(items.get(i), "declare"));
+				if (name == null) {
+					continue; // another namespace's: the lowering refuses it
+				}
+				String key = internDeclared(name, ClojureLowerUtil.nameIsPrivate(items.get(i)));
 				this.globals.putIfAbsent(key, Kind.DECLARED);
 				this.unboundCapable.add(key);
 			}
@@ -2607,7 +2611,10 @@ public final class ClojureLowering {
 	 * its kind, so a form above the definition (or a later buffer) resolves it.
 	 */
 	private String preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
-		String name = ClojureLowerUtil.plainName(nameDatum, what);
+		return preDeclareName(nameDatum, ClojureLowerUtil.plainName(nameDatum, what), kind, privateHead);
+	}
+
+	private String preDeclareName(LispVal nameDatum, String name, Kind kind, boolean privateHead) {
 		String key = internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum));
 		this.globals.put(key, kind);
 		return key;
@@ -2628,6 +2635,58 @@ public final class ClojureLowering {
 			return null;
 		}
 		return preDeclare(nameDatum, what, kind, privateHead);
+	}
+
+	/**
+	 * {@link #preDeclareUnlessCoreShadow} of a {@code def}/{@code defonce} name, read as
+	 * {@link #defName} reads it. Null as well for another namespace's name, which the
+	 * lowering refuses at its position.
+	 */
+	private @Nullable String preDeclareDef(LispVal nameDatum, String what) {
+		String name = ownDefName(ClojureLowerUtil.plainName(nameDatum, what));
+		if (name == null || ClojureCoreNames.contains(name)) {
+			return null;
+		}
+		return preDeclareName(nameDatum, name, Kind.VARIABLE, false);
+	}
+
+	/**
+	 * The name a {@code def}, {@code defonce} or {@code declare} interns: a symbol
+	 * qualified with the current namespace (or an alias of it) names its bare var, as the
+	 * oracle's {@code def} takes it -- so the def a syntax-quote template spells defines
+	 * the var a later bare use reaches. Any other qualifier is refused with the oracle's
+	 * message: an existing var of another namespace, else one that does not exist.
+	 * @param nameDatum the name datum
+	 * @param what the defining form, for the refusal
+	 * @return the bare name
+	 */
+	String defName(LispVal nameDatum, String what) {
+		String written = ClojureLowerUtil.plainName(nameDatum, what);
+		String name = ownDefName(written);
+		if (name != null) {
+			return name;
+		}
+		int slash = qualifierSlash(written);
+		String head = written.substring(0, slash);
+		boolean core = ClojureCoreNames.NAMESPACE.equals(head)
+				|| ClojureCoreNames.NAMESPACE.equals(ns().aliases.get(head));
+		boolean exists = core ? ClojureCoreNames.contains(written.substring(slash + 1)) : lookupVar(written) != null;
+		throw new LispReadException(
+				exists ? "Can't create defs outside of current ns" : "Can't refer to qualified var that doesn't exist");
+	}
+
+	/**
+	 * A plain name with the current namespace's qualifier dropped: itself unqualified,
+	 * null when another namespace qualifies it.
+	 */
+	@Nullable String ownDefName(String name) {
+		int slash = qualifierSlash(name);
+		if (slash < 0) {
+			return name;
+		}
+		String head = name.substring(0, slash);
+		return head.equals(this.currentNs) || this.currentNs.equals(ns().aliases.get(head)) ? name.substring(slash + 1)
+				: null;
 	}
 
 	/**
@@ -3818,7 +3877,8 @@ public final class ClojureLowering {
 		String ns = this.currentNs;
 		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
 		try {
-			String last = ClojureLowerUtil.plainName(items.get(declare ? items.size() - 1 : 1), head.name());
+			String last = declare ? defName(items.get(items.size() - 1), "declare")
+					: ClojureLowerUtil.plainName(items.get(1), head.name());
 			if (declare) {
 				forms.add(ClojureVarLowering.definedVar(this, last));
 			}
@@ -3833,7 +3893,7 @@ public final class ClojureLowering {
 		return forms;
 	}
 
-	private static @Nullable String definedVarName(List<LispVal> items) {
+	private @Nullable String definedVarName(List<LispVal> items) {
 		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
 			return null;
 		}
@@ -3842,8 +3902,11 @@ public final class ClojureLowering {
 				|| op.equals("defmulti") || op.equals("defonce") || op.equals("defstruct"))) {
 			return null;
 		}
-		return ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name && !name.name().startsWith(":")
-				&& !name.name().equals("&") ? name.name() : null;
+		if (!(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) || name.name().startsWith(":")
+				|| name.name().equals("&")) {
+			return null;
+		}
+		return op.equals("def") || op.equals("defonce") ? ownDefName(name.name()) : name.name();
 	}
 
 	private List<LispVal> topLevelsOf(LispVal form) {

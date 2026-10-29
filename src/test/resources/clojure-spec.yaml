@@ -8702,7 +8702,8 @@ cases:
     # (tools.reader's), reached qualified, while its backquotes stay the reader's;
     # likewise a macro named like a special form (spec.alpha's s/def and s/&) is
     # reached qualified while the bare def, and the & of a parameter vector, stay
-    # the special forms.
+    # the special forms. A def, defonce or declare a template spells takes the name
+    # it qualifies with the namespace as its bare var, as (def sq/x ...) does.
     # Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
       (ns sq (:require [clojure.string :as s]))
@@ -8717,6 +8718,10 @@ cases:
       (defmacro hinted [n] `(defn ~n [^String s#] (.length s#)))
       (hinted slen)
       (println ((thunk 7)) (slen "abc") (:tag (meta (first (nth (macroexpand-1 '(hinted q)) 2)))))
+      (defmacro defsq [] `(do (def sq-made 1) (defonce sq-once 2) (declare sq-fwd)))
+      (defsq)
+      (def sq/sq-own 3)
+      (println sq-made sq/sq-made sq-once sq-own (bound? #'sq-fwd))
       (defmacro syntax-quote [x] (list 'quote [:mine x]))
       (println (sq/syntax-quote 1) `loose)
       (defmacro def [k v] `(swap! sq-registry assoc ~k '~v))
@@ -8731,6 +8736,7 @@ cases:
       true
       sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       7 3 java.lang.String
+      1 1 2 3 false
       [:mine 1] sq/loose
       {:a (inc 1)} [:amp 3] [1 (2)]
       excl/map clojure.core/filter

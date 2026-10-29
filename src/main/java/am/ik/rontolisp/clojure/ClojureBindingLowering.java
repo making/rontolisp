@@ -58,7 +58,7 @@ final class ClojureBindingLowering {
 			@Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
-		String name = ClojureLowerUtil.plainName(nameDatum, "def");
+		String name = ctx.defName(nameDatum, "def");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		int at = 2;
 		LispString doc = null;
@@ -195,7 +195,7 @@ final class ClojureBindingLowering {
 		List<LispVal> forms = defForms(ctx, form, items, null);
 		if (ctx.nestedDefAnswersVar) {
 			forms = new ArrayList<>(forms);
-			forms.add(ClojureVarLowering.definedVar(ctx, ClojureLowerUtil.plainName(items.get(1), "def")));
+			forms.add(ClojureVarLowering.definedVar(ctx, ctx.defName(items.get(1), "def")));
 		}
 		if (forms.size() == 1) {
 			return forms.get(0);
