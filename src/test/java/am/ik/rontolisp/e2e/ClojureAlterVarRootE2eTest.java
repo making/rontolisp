@@ -15,6 +15,7 @@ import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
@@ -29,13 +30,19 @@ import static org.junit.jupiter.api.Assumptions.abort;
 /**
  * {@code alter-var-root} of a var the program does not spell as {@code #'x} at the call,
  * on the interpreter, the JVM and both wasm backends: every var site of such a program
- * hands its root setter over, and a function whose var is taken is made redefinable. The
+ * hands its root setter over, and a function whose var is taken is made redefinable -- so
+ * is one whose qualified name a quote spells, where a lowering verb may resolve it as the
+ * program runs (on the interpreter and the JVM; a wasm module refuses such a verb). The
  * spec corpus cannot pin this: one computed call turns the setters on for its whole
  * program. Answers are clj 1.12.6's, but for the refusals of a var with no value cell.
  */
 class ClojureAlterVarRootE2eTest {
 
-	record Program(String name, String source, String expected) {
+	record Program(String name, String source, String expected, boolean lowersAtRunTime) {
+
+		Program(String name, String source, String expected) {
+			this(name, source, expected, false);
+		}
 
 		@Override
 		public String toString() {
@@ -106,7 +113,26 @@ class ClojureAlterVarRootE2eTest {
 								         (try (alter-var-root 1 inc) (catch ClassCastException e :cce))
 								         (try (alter-var-root nil inc) (catch NullPointerException e :npe)))
 								""",
-						":refused :refused :refused :cce :npe\n"));
+						":refused :refused :refused :cce :npe\n"),
+				// spec.test.alpha's instrument and unstrument: a registry of quoted
+				// names,
+				// the var a computed resolve answers for one as the program runs, its
+				// root
+				// altered and put back from a map keyed by it
+				new Program("a-var-resolved-as-the-program-runs-is-altered", """
+						(defn k [x] (* x 10))
+						(defn kk [] (k 1))
+						(def registry (atom #{'user/k}))
+						(defn var-named [s] (resolve s))
+						(def saved (atom {}))
+						(let [s (first @registry)]
+						  (swap! saved assoc (var-named s) k)
+						  (alter-var-root (var-named s) (fn [old] (fn [x] (inc (old x))))))
+						(println (k 1) (kk) (map k [1 2]))
+						(let [s (first @registry)]
+						  (alter-var-root (var-named s) (constantly (get @saved (var-named s)))))
+						(println (k 1) (kk) (count @saved))
+						""", "11 11 (11 21)\n10 10 1\n", true));
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -137,8 +163,10 @@ class ClojureAlterVarRootE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-alter-var-root", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : evaluator
-				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "alter.clj"))) {
+			// the whole program as the command line runs it: a program lowering as it
+			// runs keeps its lowering for the run
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.readClojure(program,
+					Features.INTERPRETER, "alter.clj", SourceStandards.DEFAULT, null))) {
 				evaluator.eval(form);
 			}
 			return null;
@@ -167,6 +195,9 @@ class ClojureAlterVarRootE2eTest {
 	}
 
 	private static String runOnWasm(Program program, boolean component) throws Exception {
+		if (program.lowersAtRunTime()) {
+			abort("a wasm module carries no lowering: its verbs refuse at run time");
+		}
 		if (!HostWasmtime.isAvailable()) {
 			abort("no usable wasmtime on PATH");
 		}

@@ -743,7 +743,8 @@ final class ClojureFilterLowering {
 	static LispVal mapcatOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 2, "mapcat takes a function and collections");
-		return mapcatForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lowers(items, 2));
+		return mapcatForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
+				ctx.verbCollections(items.get(1), items, 2));
 	}
 
 	/**

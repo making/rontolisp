@@ -217,7 +217,7 @@ class ClojureDepsProjectTest {
 			.map(LispVal::print)
 			.toList())
 			.anyMatch(form -> form.contains("(DEFUN |c%lib.core/f| (|c%x|) " + ClojureLoweringTest.arity("lib.core/f")
-					+ " (RONTOLISP::%CLOJURE-+ |c%x| 1))"));
+					+ " (RONTOLISP::%CLOJURE-BD-+ |c%x| 1))"));
 	}
 
 	private static String real(String name) throws IOException {

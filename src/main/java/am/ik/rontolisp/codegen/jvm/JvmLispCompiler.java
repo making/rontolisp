@@ -1022,6 +1022,17 @@ public final class JvmLispCompiler implements LispCompiler {
 			// dispatcher of the class that made it (JvmLinkage).
 			forced.add(GROUP_APPLY);
 		}
+		// A fragment's helpers take the values the classes before it make as those
+		// classes' helpers do: a table they made keys as they key it, their arrays and
+		// complex numbers are read
+		for (Map.Entry<JvmLinkage.Mode, String> group : Map
+			.of(JvmLinkage.Mode.HASH_EQUALP, GROUP_HASH_EQUALP, JvmLinkage.Mode.HASH_IDENTITY, GROUP_HASH_IDENTITY,
+					JvmLinkage.Mode.ARRAYS, GROUP_ARRAYS, JvmLinkage.Mode.COMPLEX, GROUP_COMPLEX)
+			.entrySet()) {
+			if (linksMode(group.getKey())) {
+				forced.add(group.getValue());
+			}
+		}
 		// The second retry dimension: the functions to cut into their own methods
 		// because the attempt that just ran MEASURED them over HotSpot's limit. Like
 		// `forced` it strictly grows -- a name is added, or its target shrinks toward
@@ -1116,7 +1127,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Whether the program ITSELF names a printer-control variable, decided here --
 		// before expandTopLevelDefinitions injects the renderer's defvars, which mention
 		// every one of them.
-		boolean printControlVariables = LispMacroExpander.mentionsPrintControlVariable(program);
+		boolean printControlVariables = LispMacroExpander.mentionsPrintControlVariable(program)
+				|| linksMode(JvmLinkage.Mode.PRINT_CONTROL_VARIABLES);
 		// A (boundp 'name) over a literal symbol is decided here, against the globals the
 		// top-level forms before it declare (compiler/CompileTimeBoundp): the probe is
 		// what forces the eval runtime, and the guard it tests is what keeps the
@@ -1163,6 +1175,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (programUsesAnyJavaOp(program)) {
 			closRegistry.ensureJavaExceptionSeeded();
 		}
+		// A fragment's type tests know the classes of the classes before it: a condition
+		// the host signals reaches a handler-case the fragment compiles
+		// (.kb/jvm-run-time-lowering.md, "Run time: the fragments").
+		if (this.fragment != null) {
+			seedLinkedClasses(closRegistry, this.fragment.linked().classes());
+		}
 		// Whether the program uses the restart system (handler-bind / restart-case /
 		// invoke-restart & friends). Decided on the SURFACE program -- the expansions
 		// happen lazily during Pass 2, so the pre-scans below cannot see their
@@ -1170,16 +1188,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		// real cerror) and the channel gates. Computed before
 		// expandTopLevelDefinitions, which runs the same scan to inject the
 		// restart-runtime defuns.
-		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// A fragment takes every shape of the classes before it, whose values and
+		// conditions reach it, on top of its own (their runtime defuns are theirs).
+		boolean restartMode = LispMacroExpander.usesRestartSystem(program) || linksMode(JvmLinkage.Mode.RESTART);
 		// Whether signal needs the clause-type match at the signal point (the program
 		// both signals and establishes a handler-case). Decided on the SURFACE program
 		// like restartMode; expandTopLevelDefinitions runs the same scan to inject the
 		// %hc-match-p defun and the cluster-stack defvar.
-		boolean signalClauseMatch = LispMacroExpander.needsSignalClauseMatch(program);
+		boolean signalClauseMatch = LispMacroExpander.needsSignalClauseMatch(program)
+				|| linksMode(JvmLinkage.Mode.SIGNAL_CLAUSE_MATCH);
 		// Whether a printer-control variable is in play. Decided on the SURFACE program,
 		// like the scan that gives the variable its defvar, and threaded into the
 		// expression compiler so every printing operator routes through %print-cased.
-		boolean printControls = LispMacroExpander.usesPrintControls(program);
+		boolean printControls = LispMacroExpander.usesPrintControls(program)
+				|| linksMode(JvmLinkage.Mode.PRINT_CONTROLS);
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
@@ -1233,16 +1255,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		// instance-free program stays byte-identical to a build that never knew about
 		// instances. Restart mode forces it on: the signal hook synthesizes simple-*
 		// instances for plain string signals.
-		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode
+				|| linksMode(JvmLinkage.Mode.INSTANCES);
 		// Whether a handler landing pad exists -- the gate for a %program-error signal
 		// carrying its program-error INSTANCE (LispMacroExpander.lowerProgramError).
 		// Decided on the same snapshot as the instance gate, which a pad forces on.
-		boolean hasLandingPad = LispMacroExpander.establishesLandingPad(program);
+		boolean hasLandingPad = LispMacroExpander.establishesLandingPad(program)
+				|| linksMode(JvmLinkage.Mode.LANDING_PAD);
 		// The stream-value gate is decided on the SAME program snapshot, because
 		// mayCreateInstances above already answers for it: read them apart and a later
 		// desugaring could turn one on without the other, which is a %obj-new with no
 		// instance representation behind it.
-		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
+		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program)
+				|| linksMode(JvmLinkage.Mode.STREAM_VALUES);
 		// Cut a function an earlier attempt measured over HotSpot's HugeMethodLimit
 		// into pieces small enough to be JIT-compiled: an oversized evaluated
 		// sub-form becomes a local function, which is what reaches the shape the
@@ -1264,7 +1289,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// too: the restart-case expansion transfers through catch/throw, which the
 		// surface scans cannot see (the expansion happens during Pass 2).
 		boolean blockExitChannel = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
-				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
+				|| programUsesSymbol(program, LispNames.THROW) || restartMode || linksMode(JvmLinkage.Mode.BLOCK_EXIT);
 		// Read before the lambda lists lose their &optional bounds.
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
 		// A binding of a name that only local special declarations make special is
@@ -2523,7 +2548,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A matrix is a runtime.RontoQuantizedMatrix, which travels with the output.
 		this.needsQuantizedRuntime = usesQuantized;
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime
-				|| usesFloat16Bits || usesQuantized || usesSeqFloatVector;
+				|| usesFloat16Bits || usesQuantized || usesSeqFloatVector || linksMode(JvmLinkage.Mode.FLOAT_ARRAYS);
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
 		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1
@@ -2540,7 +2565,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// _iv* dispatch on. So does a java: form ending in :octets: a byte[] it answers,
 		// or Java hands the functions of the implementation it makes, is an octet vector.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
-				|| usesInflate || usesHttpHandler || usesFloat16Bits || programAsksJavaForOctets(program);
+				|| usesInflate || usesHttpHandler || usesFloat16Bits || programAsksJavaForOctets(program)
+				|| linksMode(JvmLinkage.Mode.INT_ARRAYS);
 		// The bulk binary transfer behind read-sequence / write-sequence over a packed
 		// buffer (.kb/binary-sequence-io.md): emitted for a program that has both a
 		// packed buffer to move and a sequence-I/O call to move it with -- the primitive
@@ -5505,8 +5531,24 @@ public final class JvmLispCompiler implements LispCompiler {
 			// What a fragment compiled later links against (JvmLinkage): every function
 			// and global this class defines.
 			// raw globals are off in a linked class: every global is its _g$ field
+			Set<JvmLinkage.Mode> modes = java.util.EnumSet.noneOf(JvmLinkage.Mode.class);
+			addModeIf(modes, JvmLinkage.Mode.RESTART, restartMode);
+			addModeIf(modes, JvmLinkage.Mode.SIGNAL_CLAUSE_MATCH, signalClauseMatch);
+			addModeIf(modes, JvmLinkage.Mode.BLOCK_EXIT, blockExitChannel);
+			addModeIf(modes, JvmLinkage.Mode.INSTANCES, mayUseInstances);
+			addModeIf(modes, JvmLinkage.Mode.LANDING_PAD, hasLandingPad);
+			addModeIf(modes, JvmLinkage.Mode.STREAM_VALUES, usesStreamValues);
+			addModeIf(modes, JvmLinkage.Mode.PRINT_CONTROLS, printControls);
+			addModeIf(modes, JvmLinkage.Mode.PRINT_CONTROL_VARIABLES, printControlVariables);
+			addModeIf(modes, JvmLinkage.Mode.HASH_EQUALP, usesEqualpHashTables);
+			addModeIf(modes, JvmLinkage.Mode.HASH_IDENTITY, usesIdentityHashTables);
+			addModeIf(modes, JvmLinkage.Mode.ARRAYS, usesArrays);
+			addModeIf(modes, JvmLinkage.Mode.FLOAT_ARRAYS, usesFloatArray);
+			addModeIf(modes, JvmLinkage.Mode.INT_ARRAYS, usesIntArray);
+			addModeIf(modes, JvmLinkage.Mode.COMPLEX, usesComplex);
 			this.linkTable = ownLinkTable(programDefunNames, functions, globals, specialVars,
-					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition);
+					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition)
+				.merge(new JvmLinkage.Table(Map.of(), Map.of(), Map.of(), 0, linkedClasses(closRegistry), modes));
 		}
 		if (this.runTimeImage != null) {
 			emitHostRunTime(definition, cp, thisClass, this.runTimeImage, this.linkTable);
@@ -6051,6 +6093,60 @@ public final class JvmLispCompiler implements LispCompiler {
 		return names;
 	}
 
+	/** Whether this class is a fragment whose classes before it compiled under a mode. */
+	private boolean linksMode(JvmLinkage.Mode mode) {
+		return this.fragment != null && this.fragment.linked().modes().contains(mode);
+	}
+
+	private static void addModeIf(Set<JvmLinkage.Mode> modes, JvmLinkage.Mode mode, boolean on) {
+		if (on) {
+			modes.add(mode);
+		}
+	}
+
+	/**
+	 * The classes a registry knows, as a later fragment's registry takes them
+	 * ({@link #seedLinkedClasses}).
+	 */
+	private static Map<String, JvmLinkage.ClassLink> linkedClasses(ClosRegistry registry) {
+		Map<String, JvmLinkage.ClassLink> out = new LinkedHashMap<>();
+		for (ClosRegistry.ClassInfo info : registry.classes().values()) {
+			List<String> slots = new ArrayList<>();
+			List<String> bases = new ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				slots.add(slot.name());
+				bases.add(slot.baseName());
+			}
+			// sorted: the host class carries the table, one sequence of bytes per program
+			out.put(info.name(), new JvmLinkage.ClassLink(info.superclasses(), info.cpl(),
+					List.copyOf(new java.util.TreeSet<>(info.ancestors())), slots, bases));
+		}
+		return out;
+	}
+
+	/**
+	 * Registers the classes the classes before a fragment know, so the fragment's type
+	 * tests and slot reads take the instances they make: each with its supers, its
+	 * precedence list, its ancestors and its slots by name (an instance the host made
+	 * keeps the host's layout). A class the fragment defines again replaces it.
+	 */
+	private static void seedLinkedClasses(ClosRegistry registry, Map<String, JvmLinkage.ClassLink> classes) {
+		for (Map.Entry<String, JvmLinkage.ClassLink> entry : classes.entrySet()) {
+			if (registry.findClass(entry.getKey()) != null) {
+				continue;
+			}
+			JvmLinkage.ClassLink link = entry.getValue();
+			List<ClosRegistry.SlotSpec> slots = new ArrayList<>();
+			for (int i = 0; i < link.slots().size(); i++) {
+				String base = link.slotBases().get(i);
+				slots.add(new ClosRegistry.SlotSpec(link.slots().get(i), base, am.ik.rontolisp.LispNil.INSTANCE, false,
+						":" + base, false, List.of(), List.of(), "T"));
+			}
+			registry.registerClass(new ClosRegistry.ClassInfo(entry.getKey(), link.superclasses(), link.cpl(),
+					List.of(), slots, new java.util.LinkedHashSet<>(link.ancestors())));
+		}
+	}
+
 	/**
 	 * The cell of a {@code notinline} function of a linked class and this class's named
 	 * entry for it ({@link JvmFunctionCell}): the field of the class declaring the
@@ -6094,7 +6190,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
 					checkedGlobals.contains(g)));
 		}
-		return new JvmLinkage.Table(fns, gs, fields, funcIdEnd);
+		return new JvmLinkage.Table(fns, gs, fields, funcIdEnd, Map.of(), Set.of());
 	}
 
 	/**

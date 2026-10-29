@@ -41,13 +41,6 @@ class ClojureLoweringTest {
 	}
 
 	/**
-	 * The definition a program naming {@code +}, {@code -}, {@code *}, {@code inc} or
-	 * {@code dec} carries for the flag their worker reads (g28): the plain false object,
-	 * so the flag down they are the plain verbs.
-	 */
-	private static final String UNCHECKED_MATH_DEFVAR = "(DEFVAR RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)\n";
-
-	/**
 	 * The declaration a single-arity function's body opens with: its wrong-count report
 	 * in the oracle's words, naming it.
 	 */
@@ -555,10 +548,11 @@ class ClojureLoweringTest {
 
 	@Test
 	void fnAndAnonFnAreLambdas() {
-		assertThat(lowered("((fn [a b] (+ a b)) 1 2)")).isEqualTo(FALSE_BINDING + UNCHECKED_MATH_DEFVAR
-				+ "(FUNCALL (LAMBDA (|c%a| |c%b|) " + arity("user/fn") + " (RONTOLISP::%CLOJURE-+ |c%a| |c%b|)) 1 2)");
+		assertThat(lowered("((fn [a b] (+ a b)) 1 2)")).isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) "
+				+ arity("user/fn") + " (RONTOLISP::%CLOJURE-BD-+ |c%a| |c%b|)) 1 2)");
 		assertThat(lowered("(map #(* % %) '(1 2))")).contains("%CLOJURE-MAP")
-			.contains("(LAMBDA (|c%p1__1#|) " + arity("user/fn") + " (RONTOLISP::%CLOJURE-* |c%p1__1#| |c%p1__1#|))");
+			.contains(
+					"(LAMBDA (|c%p1__1#|) " + arity("user/fn") + " (RONTOLISP::%CLOJURE-BD-* |c%p1__1#| |c%p1__1#|))");
 		assertThatThrownBy(() -> Clojure.read("%", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("%");
 	}
@@ -1024,8 +1018,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void threadingIsADatumRewriteAroundOneTemporary() {
-		assertThat(lowered("(-> 5 inc)"))
-			.isEqualTo(FALSE_BINDING + UNCHECKED_MATH_DEFVAR + "(RONTOLISP::%CLOJURE-+ 5 1)");
+		assertThat(lowered("(-> 5 inc)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-BD-+ 5 1)");
 		assertThat(lowered("(->> 5 (conj [1]))")).contains("COERCE").contains("(VECTOR 1)");
 		assertThat(lowered("(-> {:a 1} :a)")).contains("GETHASH");
 		assertThat(lowered("(as-> 5 x (inc x))")).contains("LET*");
@@ -1159,7 +1152,7 @@ class ClojureLoweringTest {
 				"(LET* ((RONTOLISP::%CLOJURE-MATH-CONTEXT (RONTOLISP::%CLOJURE-BD-MATH-CONTEXT 10 \"HALF_UP\"))) 1)")
 			.contains("DEFVAR RONTOLISP::%CLOJURE-MATH-CONTEXT");
 		assertThat(lowered("(with-precision (+ 5 5) :rounding FLOOR)")).contains(
-				"(LET* ((RONTOLISP::%CLOJURE-MATH-CONTEXT (RONTOLISP::%CLOJURE-BD-MATH-CONTEXT (RONTOLISP::%CLOJURE-+ 5 5) \"FLOOR\"))) NIL)");
+				"(LET* ((RONTOLISP::%CLOJURE-MATH-CONTEXT (RONTOLISP::%CLOJURE-BD-MATH-CONTEXT (RONTOLISP::%CLOJURE-BD-+ 5 5) \"FLOOR\"))) NIL)");
 		assertThatThrownBy(() -> Clojure.read("(with-precision)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("with-precision takes a precision and a body");
 		assertThatThrownBy(() -> Clojure.read("(with-precision 2 :rounding SIDEWAYS 1)", null))
@@ -2970,6 +2963,18 @@ class ClojureLoweringTest {
 			.endsWith("(SETQ RONTOLISP::%CLOJURE-WARN-ON-REFLECTION T)");
 		assertThat(lowered("(set! *unchecked-math* false)"))
 			.endsWith("(SETQ RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)");
+		// *unchecked-math* is read where the call lowers, as the oracle's compiler reads
+		// it: the wrapping worker below a top-level set! of a truthy literal, the plain
+		// verb below one of false, the flag read as the call runs below a computed one;
+		// a required file starts with its loader's flag and hands it back
+		assertThat(lowered("(set! *unchecked-math* :warn-on-boxed) (+ 1 2) (set! *unchecked-math* false) (* 3 4)"))
+			.contains("(RONTOLISP::%CLOJURE-WRAPPING-+ 1 2)")
+			.contains("(RONTOLISP::%CLOJURE-BD-* 3 4)");
+		assertThat(lowered("(set! *unchecked-math* (= 1 1)) (inc 5)")).contains("(RONTOLISP::%CLOJURE-+ 5 1)");
+		assertThat(loweredWithFiles("(ns m (:require [app.lib])) (- 1 2)",
+				Map.of("src/app/lib.clj", "(ns app.lib) (set! *unchecked-math* true) (defn f [x] (* x 2))")))
+			.contains("(RONTOLISP::%CLOJURE-WRAPPING-* |c%x| 2)")
+			.contains("(RONTOLISP::%CLOJURE-BD-- 1 2)");
 		assertThat(lowered("(set! *print-dup* true)")).contains("(> RONTOLISP::%CLOJURE-PRINT-DUP-DEPTH 0)")
 			.contains("(SETQ RONTOLISP::%CLOJURE-PRINT-DUP ")
 			.contains(
@@ -3371,7 +3376,7 @@ class ClojureLoweringTest {
 	void aMacroBodyCallsAHelperDefinedAboveIt() {
 		// the oracle evaluates each top-level form before the next compiles
 		assertThat(loweredWithMacros("(defn mu-helper [x] (list 'inc x)) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
-			.endsWith("(RONTOLISP::%CLOJURE-+ 1 1)");
+			.endsWith("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
 	}
 
 	@Test
@@ -3569,7 +3574,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void clojureCoreSpellingsNameTheCoreVar() {
-		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)")).contains("(RONTOLISP::%CLOJURE-+ 1 1)");
+		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)"))
+			.contains("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
 		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])"))
 			.doesNotContain("(RONTOLISP::%CLOJURE-MAP #'|c%inc|");
 		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("(RONTOLISP::%CLOJURE-OUT)");
@@ -4166,11 +4172,17 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-AS-FN |c%s|)");
 		assertThat(lowered("(keep-indexed odd? [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" T)");
 		assertThat(lowered("(map-indexed vector [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" NIL)");
+		// a verb whose function re-enters its definition takes its collection as a lazy
+		// input, so it answers lazily like the oracle's; any other keeps the strict rule
+		assertThat(lowered("(defn t [n] (map t (range n)))")).contains("(RONTOLISP::%CLOJURE-MAP ")
+			.contains("(LIST (RONTOLISP::%CLOJURE-LAZY-INPUT ");
+		assertThat(lowered("(defn t [n] (for [x n] (t x)))")).contains("(RONTOLISP::%CLOJURE-LAZY-INPUT |c%n|)");
+		assertThat(lowered("(defn t [n] (map inc n))")).doesNotContain("%CLOJURE-LAZY-INPUT");
 		assertThat(lowered("(every? odd? [1])")).contains("LABELS").contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(some odd? [1])")).contains("LABELS");
 		assertThat(lowered("(distinct [1])")).contains("(RONTOLISP::%CLOJURE-DISTINCT (VECTOR 1))");
 		// a two-argument partition evaluates its size once, as size and step
-		assertThat(lowered("(partition (inc 1) [1])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-+ 1 1)")
+		assertThat(lowered("(partition (inc 1) [1])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-BD-+ 1 1)")
 			.contains("(RONTOLISP::%CLOJURE-PARTITION ");
 		assertThat(lowered("(take-while odd? [1])")).contains("LABELS");
 		assertThat(lowered("(interleave [1] [2])"))
@@ -4374,12 +4386,12 @@ class ClojureLoweringTest {
 		// a directive rendered nowhere here refuses when the call runs, after the
 		// arguments, so a namespace defining such a call loads (tools.reader)
 		assertThat(lowered("(format \"%h\" 1.5)")).contains("(ERROR \"format directive %h is not supported yet\")");
-		assertThat(lowered("(format \"%tY\" (inc 1))")).contains("(RONTOLISP::%CLOJURE-+ 1 1)")
+		assertThat(lowered("(format \"%tY\" (inc 1))")).contains("(RONTOLISP::%CLOJURE-BD-+ 1 1)")
 			.contains("(ERROR \"format directive %t is not supported yet\")");
 		// a flag renders through the conversion's helper; a refusal of Formatter's parse
 		// is the run-time refusal of its class, after the arguments
 		assertThat(lowered("(format \"%%x%04x\" 10)")).contains("(RONTOLISP::%CLOJURE-FORMAT-INTEGER 10 #\\x \"0\" 4)");
-		assertThat(lowered("(format \"%-d\" (inc 1))")).contains("(RONTOLISP::%CLOJURE-+ 1 1)")
+		assertThat(lowered("(format \"%-d\" (inc 1))")).contains("(RONTOLISP::%CLOJURE-BD-+ 1 1)")
 			.contains("(RONTOLISP::%CLOJURE-MISSING-FORMAT-WIDTH-EXCEPTION \"%-d\")");
 		// a computed format string, and format as a value, parse when the call runs
 		assertThat(lowered("(format (str \"%\" \"d\") 1)")).contains("(RONTOLISP::%CLOJURE-FORMAT-V ");
@@ -4490,7 +4502,8 @@ class ClojureLoweringTest {
 	void aClojureCoreAliasSpellsCoreNames() {
 		// clojure.core loads nothing: its alias spells a core name wherever
 		// clojure.core/name does, a var the namespace lacks is the oracle's refusal
-		assertThat(lowered("(ns t (:require [clojure.core :as c])) (c/inc 1)")).contains("(RONTOLISP::%CLOJURE-+ 1 1)");
+		assertThat(lowered("(ns t (:require [clojure.core :as c])) (c/inc 1)"))
+			.contains("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
 		assertThat(lowered("(ns t (:require [clojure.core :as c])) (defn inc [x] x) (map c/inc [1])"))
 			.contains("%CLOJURE-MAP")
 			.contains("(RONTOLISP::%CLOJURE-BD-+ ");
@@ -4758,7 +4771,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(min-key :k {} {})")).endsWith(" NIL)");
 		assertThat(lowered("(juxt inc :a)")).contains("(RONTOLISP::%CLOJURE-JUXT (LIST ");
 		// a two-argument partition-all evaluates its size once, as size and step
-		assertThat(lowered("(partition-all (inc 1) [1 2 3])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-+ 1 1)")
+		assertThat(lowered("(partition-all (inc 1) [1 2 3])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-BD-+ 1 1)")
 			.contains("RONTOLISP::%CLOJURE-PARTITION-ALL");
 		// pmap runs one future per element, dereferenced in order with the
 		// oracle's lookahead, so the printed seq is the sequential one's; on
@@ -5274,7 +5287,7 @@ class ClojureLoweringTest {
 				Map.of("src/app/lib.clj", "(ns app.lib) (defn f [x] (inc x))"));
 		assertThat(out)
 			.containsOnlyOnce(
-					"(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (RONTOLISP::%CLOJURE-+ |c%x| 1))")
+					"(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (RONTOLISP::%CLOJURE-BD-+ |c%x| 1))")
 			.contains("(|c%app.lib/f| 1)")
 			.contains("(|c%app.lib/f| 2)");
 		assertThat(out.indexOf("DEFUN |c%app.lib/f|")).isLessThan(out.indexOf("(|c%app.lib/f| 1)"));
@@ -5369,7 +5382,7 @@ class ClojureLoweringTest {
 		String out = loweredWithFiles("(ns m (:require [app.lib :as l])) (println (l/f 1))",
 				Map.of("src/app/lib.clj", "(ns app.lib) (println \"hi\") (def v 1) (defn f [x] (inc x))"));
 		assertThat(out)
-			.contains("(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (RONTOLISP::%CLOJURE-+ |c%x| 1))")
+			.contains("(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (RONTOLISP::%CLOJURE-BD-+ |c%x| 1))")
 			.contains("(DEFVAR |c%app.lib%loaded| NIL)")
 			.contains("(SETQ |c%app.lib%init-1| (LAMBDA NIL")
 			.contains(

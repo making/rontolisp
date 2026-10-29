@@ -1481,6 +1481,33 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The qualified names the program's quotes spell ({@code 'my.app/f}, a syntax-quote's
+	 * {@code `f}, {@code s/fdef}'s registry key): in an open program altering a computed
+	 * root ({@link #rootSetters}), a function so named may be the var a lowering verb
+	 * resolves as the program runs -- spec.test.alpha's {@code instrument} resolves its
+	 * registry's keys and alters their roots -- so it is redefinable ({@link #lower}), as
+	 * a function whose var a site takes is.
+	 */
+	final Set<String> quotedNames = new LinkedHashSet<>();
+
+	/** Records the qualified symbols a quoted datum spells ({@link #quotedNames}). */
+	private void noteQuotedNames(LispVal datum) {
+		LispVal bare = ClojureLowerUtil.stripMeta(datum);
+		if (bare instanceof LispSymbol symbol) {
+			if (qualifierSlash(symbol.name()) > 0) {
+				this.quotedNames.add(symbol.name());
+			}
+			return;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(bare);
+		if (items != null) {
+			for (LispVal item : items) {
+				noteQuotedNames(item);
+			}
+		}
+	}
+
+	/**
 	 * The identifiers whose own symbol ({@link ClojureLowerUtil#idSym}) is a special
 	 * variable: the stream and agent aliases, and every {@code ^:dynamic} var of
 	 * {@code user} (whose var symbol is the bare mangled name). A local of one of these
@@ -1685,6 +1712,18 @@ public final class ClojureLowering {
 	boolean readEvalEnabled = true;
 
 	/**
+	 * What {@code *unchecked-math*} holds where the next {@code +}, {@code -}, {@code *},
+	 * {@code inc} or {@code dec} lowers, as the oracle's compiler reads it when it
+	 * compiles the call: false at the start ({@code clojure.main} binds it false), a file
+	 * starting with its loader's value and handing that back at its end (the oracle's
+	 * {@code load} binds it), a top-level {@code set!} of a literal switching it for the
+	 * forms below. Null where the lowering cannot know it -- a top-level {@code set!} of
+	 * a computed value, a datum lowered as the program runs -- and those calls read the
+	 * flag as they run.
+	 */
+	@Nullable Boolean uncheckedMath = Boolean.FALSE;
+
+	/**
 	 * The classes a session already registered for the run-time reader, by class name: a
 	 * later buffer registers only what it adds or redefines (files register every class
 	 * at once).
@@ -1812,7 +1851,15 @@ public final class ClojureLowering {
 			boolean dynamics = lowering.boundFnUsed && dynamicSeed.addAll(lowering.dynamicVars);
 			boolean opens = runTimeTarget && !open && ClojureRunTime.reachesAny(forms, lowering.mappedCoreVars);
 			open |= opens;
-			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics && !opens) {
+			// an open program altering a computed root: a function it names as
+			// data may be the var a verb resolves as it runs
+			boolean named = false;
+			if (open && lowering.rootSetters) {
+				for (String name : lowering.quotedNames) {
+					named |= lowering.globals.get(name) == Kind.FUNCTION && redefinable.add(name);
+				}
+			}
+			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics && !opens && !named) {
 				return new Whole(forms, open ? lowering : null);
 			}
 			sourcePath = lowering.sourcePath;
@@ -2175,6 +2222,9 @@ public final class ClojureLowering {
 		this.incremental = true;
 		// and a switch the datum makes stays the lowering's, like a session buffer's
 		this.currentNs = namespace;
+		// the oracle compiles the datum under the flag the running thread holds, which
+		// only the run knows: its arithmetic reads the flag as it runs
+		this.uncheckedMath = null;
 		try {
 			LispVal datum;
 			ClojureRunTime.Host outerHost = this.decodingFor;
@@ -3425,6 +3475,9 @@ public final class ClojureLowering {
 		boolean outerEcho = this.nestedDefAnswersVar;
 		String outerFile = this.loadingFile;
 		String outerSourcePath = this.loadingSourcePath;
+		// the file starts with its loader's *unchecked-math* and hands it back, like the
+		// oracle's load binding it
+		Boolean outerUnchecked = this.uncheckedMath;
 		this.unitFiles.put(ns, found.resource());
 		this.loadingFile = fileOf(ns);
 		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
@@ -3508,6 +3561,7 @@ public final class ClojureLowering {
 			this.nestedDefAnswersVar = outerEcho;
 			this.loadingFile = outerFile;
 			this.loadingSourcePath = outerSourcePath;
+			this.uncheckedMath = outerUnchecked;
 		}
 		this.hoisted.addAll(loaded);
 	}
@@ -4165,6 +4219,9 @@ public final class ClojureLowering {
 				if (readEval != null) {
 					this.readEvalEnabled = readEval;
 				}
+				if (setsUncheckedMath(items)) {
+					this.uncheckedMath = ClojureProtocolLowering.literalFlag(items.get(2));
+				}
 				return List.of(lowered);
 			}
 			return List.of(lower(form));
@@ -4357,6 +4414,7 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "quote")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "quote takes one form");
+			noteQuotedNames(items.get(1));
 			return quoteData(items.get(1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "def")) {
@@ -5316,11 +5374,11 @@ public final class ClojureLowering {
 			case "map":
 				ClojureLowerUtil.isTrue(n >= 2, "map takes a function and collections");
 				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lowers(items, 2));
+						verbCollections(items.get(1), items, 2));
 			case "filter":
 				ClojureLowerUtil.isTrue(n == 2, "filter takes a predicate and a collection");
 				return ClojureSeqLowering.filterForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lower(items.get(2)));
+						verbCollections(items.get(1), items, 2).get(0));
 			case "reduce":
 				ClojureLowerUtil.isTrue(n == 2 || n == 3,
 						"reduce takes a function, an optional value and a collection");
@@ -5378,15 +5436,15 @@ public final class ClojureLowering {
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
 				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lower(items.get(2)));
+						verbCollections(items.get(1), items, 2).get(0));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
 				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lower(items.get(2)), true);
+						verbCollections(items.get(1), items, 2).get(0), true);
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
 				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lower(items.get(2)), false);
+						verbCollections(items.get(1), items, 2).get(0), false);
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
 				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
@@ -5398,7 +5456,7 @@ public final class ClojureLowering {
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
 				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
-						lower(items.get(2)));
+						verbCollections(items.get(1), items, 2).get(0));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
 				return ClojureFilterLowering.distinctForm(lower(items.get(1)));
@@ -5992,22 +6050,49 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code +}, {@code -} or {@code *} call honoring {@code *unchecked-math*} (g28):
-	 * the run-time worker of the name over the already-lowered operands. The worker wraps
-	 * a 64-bit-integer sum, difference or product mod 2^64 while the flag is truthy and
-	 * answers the plain verb otherwise, so the flag down the call is exactly the old one.
-	 * The flag's definition travels with any program naming the worker, whether the
-	 * program names the flag or not.
+	 * A {@code +}, {@code -} or {@code *} call under {@code *unchecked-math*} as the
+	 * lowering holds it where the call stands ({@link #uncheckedMath}), the oracle's
+	 * compile-time read: false, the plain (decimal-aware) verb; true, the wrapping worker
+	 * of the name ({@code %clojure-wrapping-+} ...), which wraps a 64-bit-integer sum,
+	 * difference or product mod 2^64; unknown, the worker reading the flag as it runs
+	 * ({@code %clojure-+} ...), which wraps while the flag is truthy. So test.check's
+	 * SplittableRandom port wraps on whatever thread calls it, and code below no
+	 * {@code set!} never wraps.
 	 * @param name the Clojure name ({@code +}, {@code -} or {@code *})
 	 * @param operands the lowered operands
-	 * @return the worker call
+	 * @return the call
 	 */
 	LispVal uncheckedMath(String name, List<LispVal> operands) {
-		this.usedSpecials.add("*unchecked-math*");
+		if (Boolean.FALSE.equals(this.uncheckedMath)) {
+			return ClojureDecimalLowering.call(name, operands);
+		}
+		String prefix = "RONTOLISP::%CLOJURE-";
+		if (Boolean.TRUE.equals(this.uncheckedMath)) {
+			prefix += "WRAPPING-";
+		}
+		else {
+			// read as the call runs: the flag's definition travels with the program
+			this.usedSpecials.add("*unchecked-math*");
+		}
 		List<LispVal> out = new ArrayList<>();
-		out.add(new LispSymbol("RONTOLISP::%CLOJURE-" + name.toUpperCase(java.util.Locale.ROOT)));
+		out.add(new LispSymbol(prefix + name.toUpperCase(java.util.Locale.ROOT)));
 		out.addAll(operands);
 		return ClojureLowerUtil.list(out);
+	}
+
+	/**
+	 * Whether a top-level {@code set!} assigns {@code clojure.core/*unchecked-math*} (not
+	 * a local or a program var spelled like it), which the forms lowered below it read
+	 * ({@link #uncheckedMath}).
+	 */
+	boolean setsUncheckedMath(List<LispVal> items) {
+		if (items.size() != 3 || !(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol target)) {
+			return false;
+		}
+		String name = target.name();
+		boolean programVar = !name.startsWith(ClojureCoreNames.PREFIX) && resolveVar(name) != null;
+		return localKind(name) == null && !programVar
+				&& "*unchecked-math*".equals(ClojureCoreSpecials.targetName(name));
 	}
 
 	List<LispVal> lowers(List<LispVal> items, int from) {
@@ -6016,6 +6101,83 @@ public final class ClojureLowering {
 			out.add(lower(items.get(i)));
 		}
 		return out;
+	}
+
+	/**
+	 * The collections of a lazy-or-strict verb over a function ({@code map},
+	 * {@code filter}, {@code mapcat} ...), lowered from {@code from} on: each a lazy
+	 * input when the function re-enters the definition the call stands in
+	 * ({@link #reentersDefinition}), so the verb answers lazily, as the oracle's always
+	 * does; else as the strict rule lowers them.
+	 * @param fnDatum the verb's function, as written
+	 * @param items the call's items
+	 * @param from the index of the first collection
+	 * @return the lowered collections
+	 */
+	List<LispVal> verbCollections(LispVal fnDatum, List<LispVal> items, int from) {
+		List<LispVal> colls = lowers(items, from);
+		if (!reentersDefinition(fnDatum)) {
+			return colls;
+		}
+		List<LispVal> lazy = new ArrayList<>();
+		for (LispVal coll : colls) {
+			lazy.add(lazyInput(coll));
+		}
+		return lazy;
+	}
+
+	/**
+	 * An already-lowered collection as a lazy input of a lazy-or-strict verb: itself when
+	 * lazy, else a lazy seq over it ({@code %clojure-lazy-input}), the collection still
+	 * evaluated where the call stands.
+	 */
+	static LispVal lazyInput(LispVal lowered) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LAZY-INPUT"), lowered);
+	}
+
+	/**
+	 * Whether a lazy-or-strict verb's function (or a {@code for}'s bindings and body)
+	 * re-enters the definition the call stands in: the datum spells, outside a quote, the
+	 * name of an enclosing {@code defn} or named function. Over a strict input such a
+	 * verb would realize at once, and a recursion through it builds the whole recursive
+	 * structure where the oracle's lazy verb builds what a consumer walks: test.check's
+	 * {@code int-rose-tree}, {@code (core/map int-rose-tree (shrink-int value))}, whose
+	 * shrink tree grows faster than any power of the value. A local spelled like the
+	 * definition makes the verb lazy too, which only costs the laziness.
+	 * @param datum the function datum, as written
+	 * @return whether it names an enclosing definition
+	 */
+	boolean reentersDefinition(LispVal datum) {
+		if (this.fnNames.isEmpty()) {
+			return false;
+		}
+		Set<String> names = new HashSet<>();
+		for (String enclosing : this.fnNames) {
+			String self = enclosing.substring(enclosing.lastIndexOf('/') + 1);
+			if (!self.isEmpty() && !self.equals("fn")) {
+				names.add(self);
+			}
+		}
+		// the outermost definition's qualified spelling
+		names.add(this.fnNames.peekLast());
+		return spellsAny(datum, names);
+	}
+
+	private static boolean spellsAny(LispVal datum, Set<String> names) {
+		LispVal bare = ClojureLowerUtil.stripMeta(datum);
+		if (bare instanceof LispSymbol symbol) {
+			return names.contains(symbol.name());
+		}
+		List<LispVal> items = ClojureLowerUtil.items(bare);
+		if (items == null || items.isEmpty() || ClojureLowerUtil.isSymbolNamed(items.get(0), "quote")) {
+			return false;
+		}
+		for (LispVal item : items) {
+			if (spellsAny(item, names)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	LispVal bodyOf(List<LispVal> body) {

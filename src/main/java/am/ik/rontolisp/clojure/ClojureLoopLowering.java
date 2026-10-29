@@ -417,6 +417,10 @@ final class ClojureLoopLowering {
 		}
 		return ctx.inScope(scope, () -> {
 			LispVal coll = ctx.lower(levels.get(0).coll());
+			if (ctx.reentersDefinition(items.get(1)) || ctx.reentersDefinition(items.get(2))) {
+				// a recursion through the comprehension walks lazily, like the oracle's
+				coll = ClojureLowering.lazyInput(coll);
+			}
 			LispVal step = forStep(ctx, levels, 0, items.get(2), scope);
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-FOR"), coll, step,
 					new LispInteger(levels.size()));

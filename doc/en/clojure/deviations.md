@@ -89,10 +89,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The type predicates follow the representation. `nil` is the empty list, so `seq?`,
   `list?`, `coll?`, `sequential?` and `counted?` answer `false` for `()`; a seq a verb answers
   over a strict input is a list, so `list?`, `counted?` and `realized?` answer `true` for it
-  (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
-  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. `identical?`
-  compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
-  two keywords of one spelling as one object.
+  (the oracle's lazy or chunked seq: `false`), unless the verb's function names the
+  definition it stands in, whose seq is lazy like the oracle's; no seq is chunked
+  (`chunked-seq?` is always `false`), and an `iterate`/`cycle` seq is `realized?` only once
+  forced. `identical?` compares numbers, characters and symbols by value
+  (`(identical? 1000 1000)` is `true`) and two keywords of one spelling as one object.
 - An integer inside the long range is a plain integer whatever made it: an `N` literal
   (`2N`), `bigint`, `biginteger`, a `BigInt` sum or product (`(+ 1N 2)`) and an integral
   ratio answer (`(* 1/2 2)`, `(rationalize 1.0)`) print without the oracle's `N` (`3`, not
@@ -125,7 +126,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `for` over strict collections answers a strict list, realized when the `for` runs
   (the oracle's waits to be consumed); with no elements it is `nil`, where the oracle
   prints `()` (the same empty-as-`nil` position as `rest`/`next`/`take`). From its first
-  lazy collection on, it is lazy like the oracle's.
+  lazy collection on, it is lazy like the oracle's, and so is a whole `for` whose bindings
+  or body name the definition it stands in.
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure
   signals. A threading step over a collection literal signals (collections are not
   functions here).
@@ -146,14 +148,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   stays silent for every type but `:pass`/`:fail`/`:error`/`:summary` (the oracle prints
   the map and runs custom `:type` methods); a `:fail`/`:error` map's `:file`/`:line` win,
   but conditions carry no portable stack trace, so test.check's file-and-line reads host
-  frames where the oracle names the test file. test.check's larger-valued generators
-  hang: `int-rose-tree` builds the whole shrink tree eagerly here (`map` over a strict
-  input is strict, where the oracle's is always lazy), so the tree holds about k^k nodes
-  for a drawn value near 2^k (20 nodes for 5, 254 for 10, 37,954 for 20, 631,314 for 26,
-  3.3M for 30, 2.6e9 for 42). Small-valued generators answer on every backend (`choose`
-  within about 0..25, seeded `quick-check`s with `:max-size 10`); a larger-valued draw
-  such as `(gen/generate (gen/choose 0 100) 5 99)` crawls past a minute everywhere but
-  the JVM.
+  frames where the oracle names the test file.
 - A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
   runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
@@ -673,15 +668,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the value when it is an instance of the class (its `instance?` test for a named class,
   the protocol tag for a computed one), `nil` of `nil`, else the oracle's refusal; a host
   class no value here has always refuses (host classes exist on no wasm backend).
-- While `*unchecked-math*` is truthy (`true` or `:warn-on-boxed`), `+`, `-`, `*`, `inc`
-  and `dec` wrap a 64-bit-integer sum, difference or product mod 2^64; anything else -- a
-  double, ratio or out-of-range-integer operand, and the flag down -- is the plain verb.
-  The flag is read when the call runs, not when it compiles: a `binding` around the call
-  wraps where the oracle (which bakes the flag into the call at compile time) throws, and
-  a function defined before a top-level `set!` wraps when called after it. No boxed-math
-  warning is ever emitted, so `:warn-on-boxed` wraps exactly like `true`. As values
-  (`+`, `apply +`, `map inc`, ...) the verbs keep the default promoting behavior on
-  every flag, where the oracle's function values throw on overflow.
+- `+`, `-`, `*`, `inc` and `dec` compiled under a truthy `*unchecked-math*` (`true` or
+  `:warn-on-boxed`) wrap a 64-bit-integer sum, difference or product mod 2^64; anything
+  else -- a double, ratio or out-of-range-integer operand -- is the plain verb. The flag
+  is read where the call compiles, like the oracle's: below a top-level `set!` of it in
+  the file, a file starting with the flag of the code requiring it and handing it back at
+  its end. Only a call below a `set!` of a computed value, and a form lowered as the
+  program runs (`eval`), reads the flag when it runs. No boxed-math warning is ever
+  emitted, so `:warn-on-boxed` wraps exactly like `true`. As values (`+`, `apply +`,
+  `map inc`, ...) the verbs keep the default promoting behavior on every flag, where the
+  oracle's function values throw on overflow.
 - `format` renders and refuses as `java.util.Formatter` does (a computed format string parses
   when the call runs), except: `%h`, `%a` and `%t` are refused (when the call runs); an integer past the long range
   renders as a `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a
@@ -986,10 +982,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a named `fn` (`(fn pos [x] ...)`) or a `def` whose value is a macro call expanding to a fn
   `:clojure.spec.alpha/unknown`, where the oracle names it (a `defn`, a `def` of a fn
   literal, a core function and every predicate a spec macro takes keep their names).
-  `clojure.spec.test.alpha`'s `instrument` (a `defn`'s calls do not go through its var) and
-  `check` are refused. What resolves a symbol or requires a namespace computed as the program runs --
-  `explain` of a regex spec over a value that is no sequence, `form` of `nilable`, the
-  generators (`gen`, `exercise`, over test.check from the `deps.edn`) -- runs on the
-  interpreter and is refused in a compiled program.
+  `clojure.spec.test.alpha`'s `instrument` reaches a function its `fdef` (or any quote)
+  names: a function named only by a symbol the program builds keeps direct calls, so its
+  `alter-var-root` is refused. What resolves a symbol or requires a namespace computed as
+  the program runs -- `instrument`, `check`, `explain` of a regex spec over a value that is
+  no sequence, `form` of `nilable`, the generators (`gen`, `exercise`, over test.check from
+  the `deps.edn`) -- runs on the interpreter and in a JVM class and is refused in a wasm
+  module.
   `clojure.lang.RT/checkSpecAsserts`, which `check-asserts` sets, starts false: the
   `clojure.spec.check-asserts` system property is not read.
