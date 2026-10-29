@@ -2215,7 +2215,7 @@ final class ClojureStateLowering {
 			@Nullable Supplier<LispVal> echo) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
-		String name = ClojureLowerUtil.plainName(nameDatum, "defonce");
+		String name = ctx.defName(nameDatum, "defonce");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		// Like def: the value lowers against the OLD binding first.
 		LispVal value = items.size() == 3 ? ctx.lower(items.get(2)) : ClojureLowering.NIL_CONST;
