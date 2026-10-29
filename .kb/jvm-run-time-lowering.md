@@ -8,7 +8,8 @@ reads and lowers the program again from the image -- the same decisions, so the 
 -- and each verb's lowered forms compile into a FRAGMENT class defined into the host's
 package through the host's own lookup, linked against the host and the fragments before
 it: functions by name, globals and run-time state through the host's fields, function
-values routed by id.** clojure-spec `the-interpreter-lowers-at-run-time` runs on the JVM
+values routed by id; a defn a fragment redefines through its cell ("Redefinition").**
+clojure-spec `the-interpreter-lowers-at-run-time` runs on the JVM
 leg as `-o App.class` / `-o app.jar` with nothing else on the class path (2026-10-30).
 Wasm refuses by name (`.kb/clojure-frontend.md`, "Lowering at run time").
 
@@ -156,11 +157,64 @@ foreign id to `_foreignApply`. `_funcref` of an id outside the class's range cal
 per id. Before the first verb the handles are unset and `_foreignLookup` answers null.
 clojure-spec `a-declared-name-a-run-time-eval-defines-is-called-where-the-program-names-it`.
 
+## Redefinition: a defn's calls go through its cell
+
+**Invariant: a defn (or deftest) a fragment redefines -- or a `def` over it -- reaches every
+caller, the host's compiled calls included, as the interpreter's re-pointed cells and the
+oracle's calls through the var do; a function value taken before keeps its code.**
+
+- The lowering: the open lowering re-points on the JVM too (`repointsRedefinitions()` is
+  `incremental`): a fragment's redefinition stores into every version a pinning pass
+  defined, `(rontolisp::%run-time-redefine 'cell fn)` where the interpreter has `(setf
+  (symbol-function 'cell) fn)`. Where `carriesRuntimes`, each function such a store may
+  target -- every version the whole-program pass defines, a fragment's first definition of
+  a name -- is declared `(declaim (notinline cell))` ahead of its `defun`
+  (`ClojureLowering.define`). A JVM-only primitive, not `setf symbol-function`, because
+  that place forces `_fenv`, the eval runtime and the setf-only forwarder defun into the
+  fragment (`.kb/symbol-runtime-api.md`).
+- The backend (`JvmFunctionCell`): in a linked class only (an ordinary class binds every
+  call, the declaration or not), a notinline defun gets a volatile static `_fc$<name>` --
+  null until `%run-time-redefine` stores into it -- shared with later fragments like a
+  global (`JvmLinkage.shared`, the table's `celled` flag, `rontolisp-link-3`). Each class
+  calling it by name has a named entry `_n$<name>` of its descriptor: the method while the
+  cell is null, `_apply` of the cell over the arguments rebuilt as a list once set (an
+  UNSUPPLIED optional ends them; `_apply` answers a value, never a bounce).
+  `emitDirectCall` calls the entry; `#'name` reads the cell first; a self or tail group
+  jump checks the cell with the arguments on the stack and takes the entry instead once set
+  (so `(def f (memoize f))` memoizes a tail-recursive f too); a call or a literal `apply`
+  of a count this definition rules out goes through `#'name` (a redefinition may take it);
+  `_foreignFuncref` -- a late-bound name's resolution -- answers the cell's function once
+  set; a `jvm-export` wrapper calls the entry. The dispatcher cases keep calling the method:
+  a value runs the code it was made of. A tail group roots a member whose entry a body
+  calls.
+- Measured before choosing (2026-10-30, Xeon E5-2697A v4, Oracle GraalVM 25.0.4, the box
+  loaded by other builds). A Java model of the three shapes, boxed `fib 32` (trivial bodies,
+  the adverse case): static call 12 ms, a plain-field cell 14 ms (+14%), a volatile cell
+  15 ms, a `MutableCallSite` through a constant dynamic invoker (the indy shape) 17 ms on
+  Graal; on C2 static 20, cell 22, indy 20. A tight loop of calls: Graal folds the static,
+  plain-cell and indy loops to one cost, a volatile load blocks that (4.6x there); C2 +8%
+  for the cell. The real host (`fib 27` and 1e7 calls of an identity defn in a `loop`, best
+  of 40 rounds): Graal `fib` 38-41 ms before, 38-44 ms with plain or volatile cells, the
+  loop 396-560 ms before and 384-534 ms with either; C2 `fib` 51 -> 47 ms, the loop 894 ->
+  933 ms -- inside the noise, Clojure's arithmetic owning the time. Not indy: `am.ik.jvm`
+  has no `invokedynamic` (`CodeReplay` refuses 0xBA; the splitter's walk, the tail groups'
+  and the shake's call scans all read `invokestatic`), and Graal's recursion through a call
+  site lost. Volatile, like the oracle's var root: a redefinition on one thread reaches a
+  loop of calls on another.
+- Pins: clojure-spec `a-run-time-redefinition-reaches-every-caller` (`host:`; the
+  interpreter and the JVM host, oracle-identical). Before, the JVM host refused the call of
+  a count only the redefinition takes, and every other line kept the replaced definition
+  (`1 1 (1) :old`, `75025 242785`, `:late1 :k1` twice).
+
 ## Limits (2026-10-30)
 
-- A fragment's redefinition of a name the host defines reaches the forms lowered after it
-  only: the host's own calls and its `_lookup` row keep the host's function, where the
-  interpreter re-points the cells the program's calls name (`.kb/nrepl.md`; `.todo/h14`).
+- A computed symbol designator (`(funcall 'name)` through `_lookup`) reaches the definition's
+  method, not its cell; Clojure code spells none. A Common Lisp `(setf (symbol-function
+  'f) ...)` still reaches no compiled call (`.kb/symbol-runtime-api.md`).
+- A defn in a body is a nested defun its class holds in `_fenv`, which no fragment reaches:
+  a fragment's call of it, its `#'name` and its redefinition signal the undefined-function
+  (`%run-time-redefine` of a name no class before defines compiles to that signal;
+  `.todo/h16`).
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
   lowering again.
 - The image keeps the files the lowering read, not a `deps.edn` dependency's jars or

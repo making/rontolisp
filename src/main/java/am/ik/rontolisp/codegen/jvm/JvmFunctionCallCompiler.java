@@ -82,6 +82,14 @@ final class JvmFunctionCallCompiler {
 
 	private static void compileDirectCall(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
+		if (fi != null && fi.cell() != null
+				&& !JvmDesignatorCall.reaches(fi.required(), fi.variadic(), cons.toList().size() - 1)) {
+			// A count this definition of a notinline function rules out, which a
+			// redefinition may take: the call applies what the name holds when it runs,
+			// whose own count check reports a miss (JvmFunctionCell).
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx, className);
+			return;
+		}
 		if (fi != null) {
 			List<LispVal> args = cons.toList();
 			// A count the lambda list rules out is the interpreter's program-error when

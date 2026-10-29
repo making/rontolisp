@@ -58,7 +58,10 @@ final class JvmApplyCompiler {
 				JvmTailBounce.emitDirectCall(fi, cons, ctx, className);
 				return;
 			}
-			if (fi != null) {
+			// A notinline function of a linked class may be redefined with another lambda
+			// list, which this definition's count guard would refuse: its apply goes
+			// through _apply over what the name holds (JvmFunctionCell).
+			if (fi != null && fi.cell() == null) {
 				JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx,
 						className);
 				int argsSlot = ctx.allocTemp();

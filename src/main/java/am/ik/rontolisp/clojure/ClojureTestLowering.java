@@ -349,7 +349,7 @@ final class ClojureTestLowering {
 		finally {
 			ctx.testLocation = outer;
 		}
-		List<LispVal> forms = new ArrayList<>();
+		List<LispVal> forms = new ArrayList<>(defined.declared());
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), bodyFn, LispNil.INSTANCE, clause.wrapped()));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn, LispNil.INSTANCE,
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-VAR"), LispString.literal(name),

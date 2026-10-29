@@ -526,7 +526,10 @@ final class JvmTailBounce {
 				ctx.body.iconst_0();
 			}
 		}
-		ctx.body.invokestatic(callee.methodref());
+		// A notinline function of a linked class through its named entry, which reaches
+		// a redefinition (JvmFunctionCell).
+		JvmFunctionCell cell = callee.cell();
+		ctx.body.invokestatic(cell != null ? cell.named() : callee.methodref());
 		if (callee.bounceVisible() && !passes) {
 			emitUnwrap(ctx, className);
 		}

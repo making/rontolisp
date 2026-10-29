@@ -4504,6 +4504,48 @@ cases:
       20 :h (10 20) true 30
       Attempting to call unbound fn: #'rtl-late/lb-k
       3
+  - name: a-run-time-redefinition-reaches-every-caller
+    # A defn eval redefines reaches every caller, as the oracle's calls through the
+    # var do: the program's own calls, a self tail call of a value taken before (which
+    # keeps its code), a call of a count only the redefinition takes, the recursion of
+    # a defn a def memoizes, and a name an earlier eval defined. A JVM host routes the
+    # calls of each such function through a cell the redefinition sets.
+    # Oracle-identical (clj 1.12.6, 2026-10-30).
+    host: eval redefines what the program defines
+    skip:
+      wasm: a wasm module carries no lowering, so the verbs refuse at run time
+      wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
+    source: |
+      (ns rtl-redef)
+      (declare rd-late rd-call-k)
+      (defn rd-g [] 1)
+      (defn rd-f [] (rd-g))
+      (def rd-old rd-g)
+      (defn rd-walk [n] (if (pos? n) (rd-walk (dec n)) :old))
+      (def rd-old-walk rd-walk)
+      (defn rd-n [] 1)
+      (defn rd-wrong [] [(rd-n 5) (apply rd-n [6])])
+      (eval '(defn rd-g [] 2))
+      (eval '(defn rd-walk [n] [:new n]))
+      (eval '(defn rd-n [x] (* 10 x)))
+      (println (rd-f) (rd-old) (map (fn [h] (h)) [rd-g]) (rd-old-walk 3) (rd-wrong))
+      (def rd-calls (atom 0))
+      (defn rd-fib [n] (swap! rd-calls inc) (if (< n 2) n (+ (rd-fib (- n 1)) (rd-fib (- n 2)))))
+      (eval '(def rd-fib (memoize rd-fib)))
+      (println (rd-fib 25) @rd-calls)
+      (defn rd-call-late [] (rd-late))
+      (eval '(defn rd-late [] :late1))
+      (eval '(defn rd-k [] :k1))
+      (eval '(defn rd-call-k [] (rd-k)))
+      (println (rd-call-late) (rd-call-k))
+      (eval '(defn rd-late [] :late2))
+      (eval '(defn rd-k [] :k2))
+      (println (rd-call-late) (rd-call-k))
+    expected: |
+      2 1 (2) [:new 2] [50 60]
+      75025 26
+      :late1 :k1
+      :late2 :k2
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time

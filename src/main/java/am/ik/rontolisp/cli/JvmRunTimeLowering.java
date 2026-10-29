@@ -128,6 +128,14 @@ public final class JvmRunTimeLowering {
 		private final Map<Integer, Object[]> boxes = new ConcurrentHashMap<>();
 
 		/**
+		 * The reader of the cell of each id's function, found when first needed: a
+		 * {@code notinline} function's field, which a redefinition sets
+		 * ({@code JvmFunctionCell}), and a reader of null for any other id. An id's
+		 * function and its class never change.
+		 */
+		private final Map<Integer, MethodHandle> cells = new ConcurrentHashMap<>();
+
+		/**
 		 * Each class's function ids, and its spread dispatcher, found when first needed:
 		 * replaced whole as a fragment joins, so a foreign call reads it without a lock.
 		 */
@@ -282,13 +290,41 @@ public final class JvmRunTimeLowering {
 		}
 
 		/**
-		 * The function value of an id a class's own table does not hold: the box of the
-		 * class that made it, else one this session keeps for it.
+		 * The function value of an id a class's own table does not hold -- a name the
+		 * class resolved when the code ran, through {@link #foreignLookup}: what a
+		 * redefinition stored in the cell of a {@code notinline} function, else the box
+		 * of the class that made it, else one this session keeps for it.
 		 */
 		Object foreignFuncref(int id) throws Throwable {
+			Object redefined = (Object) cell(id).invokeExact();
+			if (redefined != null) {
+				return redefined;
+			}
 			Range owner = owner(id);
 			Object box = owner.box(this.lookup, id);
 			return box != null ? box : this.boxes.computeIfAbsent(id, key -> new Object[] { key });
+		}
+
+		/** The reader of the cell of an id's function ({@link #cells}). */
+		private MethodHandle cell(int id) throws ReflectiveOperationException {
+			MethodHandle found = this.cells.get(id);
+			if (found != null) {
+				return found;
+			}
+			found = MethodHandles.constant(Object.class, null);
+			for (Map.Entry<String, JvmLinkage.Function> fn : this.table.functions().entrySet()) {
+				if (fn.getValue().id() == id && fn.getValue().celled()) {
+					String field = JvmLinkage.cellField(fn.getKey());
+					String declaring = this.table.fields().get(field + ":" + JvmLinkage.CELL_DESC);
+					if (declaring != null) {
+						found = this.lookup.findStaticGetter(this.lookup.findClass(declaring.replace('/', '.')), field,
+								Object.class);
+					}
+					break;
+				}
+			}
+			this.cells.put(id, found);
+			return found;
 		}
 
 		private Range owner(int id) {

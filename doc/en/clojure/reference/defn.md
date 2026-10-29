@@ -29,8 +29,8 @@ works as in [fn](fn.md).
 
 Redefining a `defn` with `def` captures the function: `(def p (memoize p))`
 evaluates its value against the OLD `FUNCTION` binding, so top-level calls hit
-the cache. In a file the `defun`'s own recursion stays direct; in the REPL it goes
-through the new root too, as in Clojure.
+the cache. In a file the `defun`'s own recursion stays direct; in the REPL and in an
+`eval` it goes through the new root too, as in Clojure.
 
 Redefining a name with another `defn` gives each definition its own function: the
 call sites below each definition call the newest, while a `(def g f)` between two
@@ -38,8 +38,8 @@ definitions keeps the older one (`(g)` answers the old value, `(f)` the new one)
 Each namespace versions its own names. In a file, a function defined above a
 redefinition still calls the older definition; only `^:dynamic` names (whose calls
 go through the var) see the newest from every call site. In the REPL, and in an
-`eval` on the interpreter, a redefinition reaches every caller, as Clojure's calls
-through the var do.
+`eval` on the interpreter or the JVM, a redefinition reaches every caller, as Clojure's
+calls through the var do.
 
 ```clojure
 (defn fact [n]

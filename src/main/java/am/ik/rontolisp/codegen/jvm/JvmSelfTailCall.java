@@ -181,6 +181,12 @@ final class JvmSelfTailCall {
 			emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 		}
 		JvmPhysicalArgs.emit(ctx, className, loop.required(), loop.optionals(), loop.variadic(), emitters);
+		JvmLispCompiler.FunctionInfo defun = loop.defun();
+		if (defun != null) {
+			// A redefinition of a notinline defun reaches its own tail call: the call
+			// takes the new function instead of the jump (JvmFunctionCell).
+			JvmFunctionCell.emitRedefinedExit(defun, ctx);
+		}
 		for (int i = loop.paramCount() - 1; i >= 0; i--) {
 			ctx.body.astore(loop.firstParamSlot() + i);
 		}

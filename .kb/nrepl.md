@@ -100,14 +100,15 @@ Measured before choosing (2026-10-30, interpreter, one JVM, rounds 2-3 of 3): 1M
 one-argument identity function cost ~0.4 µs each direct and ~1.5 µs through the var's value
 cell and the IFn dispatcher (`^:redef`'s shape); `fib 25` showed no difference (3.3-3.7 s
 either way, `%clojure-+`/`-` dominate). Chosen: zero call cost --
-`ClojureLowering.repointsRedefinitions()` (incremental and not `carriesRuntimes`: a session,
-a datum lowered as an interpreter program runs) makes a redefinition store its function into
-every cell a call may name (`setf symbol-function` of the bare symbol and each version a
-pinning pass lowered calls of, `pinnedDefnCounts`), and calls lowered there name that cell
-(`currentDefnSym`). A `def` over a defn re-points the cells to a forwarder over the value
-cell (`(def f (memoize f))` memoizes f's own recursion, the oracle's), a defn over a def
-stores the value cell. deftest likewise. Whole files keep the versions (four backends
-agree); the JVM's fragments keep theirs (`.kb/jvm-run-time-lowering.md`, Limits; `.todo/h14`).
+`ClojureLowering.repointsRedefinitions()` (incremental: a session, a datum lowered as the
+program runs) makes a redefinition store its function into every cell a call may name
+(`setf symbol-function` of the bare symbol and each version a pinning pass lowered calls of,
+`pinnedDefnCounts`), and calls lowered there name that cell (`currentDefnSym`). A `def` over
+a defn re-points the cells to a forwarder over the value cell (`(def f (memoize f))`
+memoizes f's own recursion, the oracle's), a defn over a def stores the value cell. deftest
+likewise. Whole files keep the versions (four backends agree); a JVM host and its fragments
+re-point through the cell each such function's class keeps (`.kb/jvm-run-time-lowering.md`,
+"Redefinition").
 
 ## Differences from the oracle's server
 

@@ -6,9 +6,10 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 
 /**
- * The three primitives of a Clojure program's run-time lowering on the JVM
+ * The four primitives of a Clojure program's run-time lowering on the JVM
  * ({@link JvmLinkage}):
  * <ul>
  * <li>{@code (rontolisp::%host-lower-at-run-time verb args meta refuse ns)} -- the host
@@ -18,6 +19,10 @@ import am.ik.rontolisp.LispVal;
  * the verb answers, stored in {@link JvmLinkage#ANSWER_FIELD} on the way through;</li>
  * <li>{@code (rontolisp::%run-time-constant i)} -- in a fragment, the {@code i}th value
  * its forms embed ({@link JvmLinkage#CONSTANTS_FIELD}).</li>
+ * <li>{@code (rontolisp::%run-time-redefine 'name fn)} -- in a host or a fragment, the
+ * store of {@code fn} into the cell of the {@code notinline} function {@code name}
+ * ({@link JvmFunctionCell}), which every call of it by name then reaches; answers
+ * {@code fn}.</li>
  * </ul>
  */
 final class JvmRunTimeLinkCompiler {
@@ -28,7 +33,8 @@ final class JvmRunTimeLinkCompiler {
 	static boolean handles(String member) {
 		return LispNames.HOST_LOWER_AT_RUN_TIME_INTERNAL.equals(member)
 				|| LispNames.RUN_TIME_ANSWER_INTERNAL.equals(member)
-				|| LispNames.RUN_TIME_CONSTANT_INTERNAL.equals(member);
+				|| LispNames.RUN_TIME_CONSTANT_INTERNAL.equals(member)
+				|| LispNames.RUN_TIME_REDEFINE_INTERNAL.equals(member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -41,6 +47,29 @@ final class JvmRunTimeLinkCompiler {
 			ctx.body.invokestatic(
 					ctx.cp.methodRef(ctx.cp.classEntry(className), JvmLinkage.LOWER_METHOD, JvmLinkage.LOWER_DESC));
 			return;
+		}
+		if (LispNames.RUN_TIME_REDEFINE_INTERNAL.equals(member)) {
+			requireArgs(member, items, 2);
+			String name = FunctionDesignators.literalName(items.get(1));
+			JvmLispCompiler.FunctionInfo fi = name == null ? null : ctx.functions.get(name);
+			JvmFunctionCell cell = fi == null ? null : fi.cell();
+			if (cell != null) {
+				JvmExprCompiler.compileExpr(items.get(2), ctx, className);
+				ctx.body.dup();
+				ctx.body.putstatic(cell.field());
+				return;
+			}
+			if (name != null && fi == null) {
+				// no function of the name this class reaches -- a defun nested in a body,
+				// which its class holds in its own function namespace: the
+				// undefined-function a call of it signals
+				JvmExprCompiler.compileExpr(items.get(2), ctx, className);
+				ctx.body.pop();
+				JvmFunctionFormCompiler.emitUndefinedFunctionThrow(name, ctx);
+				return;
+			}
+			throw new UnsupportedOperationException(
+					"%run-time-redefine names no notinline function of a linked class: " + items.get(1).print());
 		}
 		if (LispNames.RUN_TIME_ANSWER_INTERNAL.equals(member)) {
 			requireArgs(member, items, 1);

@@ -59,6 +59,11 @@ tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounc
 - The jump is emitted only from an empty operand stack with no unwind or spill scope open
   (`atTail`): the frame the verifier and HotSpot's OSR entry need
   ([jvm-osr-backedges.md](jvm-osr-backedges.md)); on the marked chain it always is.
+- In a linked class (a JVM host or fragment) a jump to a `notinline` defun -- self or a tail
+  group sibling -- first reads its cell with the arguments on the stack: once a run-time
+  redefinition set it, the call takes the class's named entry and returns its answer; a
+  null cell keeps the jump (`JvmFunctionCell`, [jvm-run-time-lowering.md](jvm-run-time-lowering.md),
+  "Redefinition").
 
 ## Mutual tail calls: tail groups (`JvmTailGroup`)
 

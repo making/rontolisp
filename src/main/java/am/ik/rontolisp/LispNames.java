@@ -6114,6 +6114,15 @@ public final class LispNames {
 	public static final String RUN_TIME_ANSWER_INTERNAL = "%RUN-TIME-ANSWER";
 
 	/**
+	 * The internal {@code rontolisp::%run-time-redefine} primitive:
+	 * {@code (%run-time-redefine 'name fn)} points every call of the {@code notinline}
+	 * function {@code name} by name at {@code fn} -- a JVM host's or fragment's store of
+	 * the function's cell, the redefinition a form lowered as the program runs makes of a
+	 * function the class or an earlier one defined. Only such a class's forms name it.
+	 */
+	public static final String RUN_TIME_REDEFINE_INTERNAL = "%RUN-TIME-REDEFINE";
+
+	/**
 	 * The internal {@code rontolisp::%octets-join} helper: a list of
 	 * {@code (unsigned-byte 8)} vectors and their total length -> ONE packed vector
 	 * holding them in order (a single chunk is answered as it is, uncopied). The blit
@@ -7928,6 +7937,12 @@ public final class LispNames {
 	 * ({@link #RUN_TIME_ANSWER_INTERNAL}).
 	 */
 	public static final String RUN_TIME_ANSWER_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_ANSWER_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-redefine}
+	 * ({@link #RUN_TIME_REDEFINE_INTERNAL}).
+	 */
+	public static final String RUN_TIME_REDEFINE_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_REDEFINE_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of

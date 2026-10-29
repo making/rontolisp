@@ -165,12 +165,23 @@ final class JvmFunctionFormCompiler {
 			// ... and the edge the shake keeps that case by: the case is live while this
 			// body is (JvmClassSplitter).
 			ctx.body.makesValueOf(fi.nameUtf8().stringValue(), fi.descUtf8().stringValue());
+			// A notinline function of a linked class names what a redefinition stored in
+			// its cell once one did (JvmFunctionCell).
+			JvmFunctionCell cell = fi.cell();
+			MethodCode.Label redefined = null;
+			if (cell != null) {
+				redefined = ctx.body.newLabel();
+				cell.emitRead(ctx, redefined);
+			}
 			// The canonical box for this funcId (_funcref), shared by every site that
 			// names it: two (function name) sites answer the SAME object, like the
 			// interpreter's function namespace does, so (eq #'f #'f) is t on every
 			// backend. A lambda value still boxes fresh per evaluation.
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
 			ctx.body.invokestatic(funcrefRef(ctx, className));
+			if (redefined != null) {
+				ctx.body.labelBinding(redefined);
+			}
 		}
 		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
