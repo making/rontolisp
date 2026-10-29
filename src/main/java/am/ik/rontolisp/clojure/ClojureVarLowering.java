@@ -654,13 +654,13 @@ final class ClojureVarLowering {
 
 	/**
 	 * The var of a {@code clojure.core} name: interned as {@code clojure.core/name}, its
-	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root its
-	 * function of {@code (&form &env & args)} ({@link ClojureCoreMacros#root}), and its
-	 * metadata {@code :name}/{@code :ns} plus a
-	 * macro's {@code :macro} (the oracle's {@code :arglists}, {@code :doc} and position
-	 * are not carried). A special ({@link ClojureCoreSpecials}) carries the binding-depth
-	 * reader {@code thread-bound?} asks: its counter, or one for a flag
-	 * {@code clojure.main} binds. A core var with no value here is refused.
+	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root
+	 * its function of {@code (&form &env & args)} ({@link ClojureCoreMacros#root}), and
+	 * its metadata {@code :name}/{@code :ns} plus a macro's {@code :macro} (the oracle's
+	 * {@code :arglists}, {@code :doc} and position are not carried). A special
+	 * ({@link ClojureCoreSpecials}) carries the binding-depth reader
+	 * {@code thread-bound?} asks: its counter, or one for a flag {@code clojure.main}
+	 * binds. A core var with no value here is refused.
 	 */
 	private static LispVal coreVarOf(ClojureLowering ctx, String name) {
 		String key = ClojureCoreNames.PREFIX + name;
