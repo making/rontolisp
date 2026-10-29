@@ -52,4 +52,3 @@ neither `*data-readers*` nor `*default-data-reader-fn*`.
 - `read` takes any character stream, also a plain `clojure.java.io/reader`, where the
   oracle requires a `java.io.PushbackReader`.
 - `N` and `M` numbers read as plain integers and exact ratios ([Syntax](../syntax.md#numbers)).
-- A symbol carries no metadata, so `^:k sym` reads the bare symbol.

@@ -186,8 +186,11 @@ public final class PlaygroundRepl {
 	}
 
 	private SourceSession session() {
-		return this.sessions.computeIfAbsent(this.language,
-				picked -> new SourceSession(picked, SourceStandards.DEFAULT, this.loader));
+		return this.sessions.computeIfAbsent(this.language, picked -> {
+			SourceSession session = new SourceSession(picked, SourceStandards.DEFAULT, this.loader);
+			session.attach(this.evaluator);
+			return session;
+		});
 	}
 
 	private void freshLine() {

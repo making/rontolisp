@@ -23,6 +23,7 @@ import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
@@ -177,8 +178,10 @@ class ClojureSpecE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : evaluator
-				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "spec.clj"))) {
+			// the whole program as the command line runs it: a program lowering as it
+			// runs keeps its lowering for the run
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.readClojure(program,
+					Features.INTERPRETER, "spec.clj", SourceStandards.DEFAULT, null))) {
 				evaluator.eval(form);
 			}
 			return null;

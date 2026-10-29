@@ -13,7 +13,8 @@ sequence into the enclosing list, vector, map or set. Each `x#` binds one fresh
 gensym per expansion -- the same symbol at every occurrence within it, a new one
 across expansions. Reader metadata on a template form travels with it, like the oracle's
 `(with-meta form meta)` over the syntax-quoted map (a class tag qualifies), so
-`` `(^:once fn* [] ~@body) `` and a hinted `[^String s#]` keep theirs. Outside a macro body
+`` `(^:once fn* [] ~@body) `` and a hinted `[^String s#]` keep theirs, while an unquoted form
+drops its own (`` `(def ^:private ~n 1) `` defines a public var). Outside a macro body
 the template evaluates where it is written. An unquote outside any syntax-quote is an
 error, as is a splice outside a sequence.
 

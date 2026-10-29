@@ -417,9 +417,14 @@ final class ClojureCoreLowering {
 				arity(name, n, 0, 0);
 				return worker(name, ctx.knownLoadedLibs());
 			case "intern":
-				// over a cell of its own; of a literal namespace, later
-				// lower-time lookups find the namespace too
+				// of a quoted name in the current namespace, a definition of the var
+				// the forms below may name; over a cell of its own otherwise, and of
+				// a literal namespace later lower-time lookups find the namespace too
 				arity(name, n, 2, 3);
+				LispVal defined = internedHere(ctx, items);
+				if (defined != null) {
+					return defined;
+				}
 				noteCreatedNamespace(ctx, items.get(1));
 				return n == 2 ? worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)))
 						: worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)),
@@ -849,19 +854,140 @@ final class ClojureCoreLowering {
 				&& ctx.resolveVar(head.name()) == null;
 	}
 
-	/** One reader metadata datum as map entries (key and value datums). */
+	/**
+	 * One reader metadata datum as map entries of code (key and value datums): a map's
+	 * entries as written (the oracle evaluates them), a flag's {@code true}, and a tag or
+	 * param tags as quoted data.
+	 */
 	static List<LispVal> metaEntries(LispVal meta) {
+		List<LispVal> entries = metaDataEntries(meta);
+		if (isMetaMap(meta) || meta instanceof LispSymbol s && s.name().startsWith(":")) {
+			return entries;
+		}
+		return List.of(entries.get(0), ClojureLowerUtil.list(new LispSymbol("quote"), entries.get(1)));
+	}
+
+	/**
+	 * One reader metadata datum as map entries of data, like the oracle's reader: a
+	 * keyword is {@code {k true}}, a symbol or string {@code {:tag x}}, a vector
+	 * {@code {:param-tags v}}, a map its own entries.
+	 */
+	static List<LispVal> metaDataEntries(LispVal meta) {
 		if (meta instanceof LispSymbol s && s.name().startsWith(":")) {
 			return List.of(s, new LispSymbol("true"));
 		}
 		if (meta instanceof LispSymbol || meta instanceof LispString) {
-			return List.of(new LispSymbol(":tag"), ClojureLowerUtil.list(new LispSymbol("quote"), meta));
+			return List.of(new LispSymbol(":tag"), meta);
 		}
 		List<LispVal> parts = ClojureLowerUtil.items(meta);
-		if (parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")) {
+		if (parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR) {
+			return List.of(new LispSymbol(":param-tags"), meta);
+		}
+		if (parts != null && isMetaMap(meta)) {
 			return parts.subList(1, parts.size());
 		}
-		throw new LispReadException("Metadata must be Symbol,Keyword,String or Map");
+		throw new LispReadException("Metadata must be Symbol,Keyword,String,Vector or Map");
+	}
+
+	private static boolean isMetaMap(LispVal meta) {
+		List<LispVal> parts = ClojureLowerUtil.items(meta);
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map");
+	}
+
+	/**
+	 * The symbol-meta family's test of a symbol carrying metadata,
+	 * {@code (:C%SYMBOL sym meta)} over the interned symbol ({@code clojure.lisp}).
+	 */
+	static final String META_SYMBOL_P = "RONTOLISP::%CLOJURE-META-SYMBOL-P";
+
+	/**
+	 * The constructor of a symbol carrying metadata, the symbol-meta family's producer.
+	 */
+	static final String SYMBOL_WITH_META = "RONTOLISP::%CLOJURE-SYMBOL-WITH-META";
+
+	/** The symbol-meta family's view: a symbol carrying metadata as its bare symbol. */
+	static final String SYMBOL_BARE = "RONTOLISP::%CLOJURE-SYMBOL-BARE";
+
+	/**
+	 * The {@code (%with-meta form meta)} layers of a datum, outermost first; empty when
+	 * it carries none.
+	 */
+	static List<LispVal> metaLayers(LispVal datum) {
+		List<LispVal> layers = new ArrayList<>();
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			layers.add(parts.get(2));
+			parts = ClojureLowerUtil.items(parts.get(1));
+		}
+		return layers;
+	}
+
+	/**
+	 * Metadata layers (outermost first) as one map datum, {@code (%hash-map k v ...)}, an
+	 * inner layer's entries ahead so the outer ones win: the oracle reader's merged
+	 * metadata, which a syntax-quote template builds.
+	 */
+	static LispVal metaDatum(List<LispVal> layers) {
+		List<LispVal> map = new ArrayList<>();
+		map.add(new LispSymbol("%hash-map"));
+		for (int i = layers.size() - 1; i >= 0; i--) {
+			map.addAll(metaDataEntries(layers.get(i)));
+		}
+		return ClojureLowerUtil.list(map);
+	}
+
+	/**
+	 * A quoted datum carrying reader metadata ({@code '^m x}, a macro argument), the
+	 * value the oracle's reader hands over: its metadata a map of data, merged over the
+	 * layers with the outer one winning.
+	 * @param ctx the hub
+	 * @param target the datum under the layers
+	 * @param layers the {@code (%with-meta form meta)} layers, outermost first
+	 * @return the value form ({@link #carryingMeta})
+	 */
+	static LispVal quotedWithMeta(ClojureLowering ctx, LispVal target, List<LispVal> layers) {
+		List<LispVal> entries = new ArrayList<>();
+		for (int i = layers.size() - 1; i >= 0; i--) {
+			for (LispVal datum : metaDataEntries(layers.get(i))) {
+				entries.add(ctx.quotedElement(datum, true));
+			}
+		}
+		return carryingMeta(target, ctx.quote(target, true), ClojureCollectionLowering.mapBuild(entries));
+	}
+
+	/**
+	 * The value of a datum carrying metadata: a symbol is a fresh symbol carrying it
+	 * ({@link #SYMBOL_WITH_META}), a vector, map, set or list takes it on a fresh copy;
+	 * anything else -- a number, a string, a keyword, nil, a literal of another kind --
+	 * takes none (the oracle's reader refuses one), so it answers the value alone.
+	 * @param target the datum the metadata sits on
+	 * @param value the form of its value
+	 * @param meta the form of the metadata map
+	 * @return the form of the value carrying the metadata
+	 */
+	static LispVal carryingMeta(LispVal target, LispVal value, LispVal meta) {
+		if (target instanceof LispSymbol s) {
+			String name = s.name();
+			boolean symbol = !name.startsWith(":") && !name.equals("nil") && !name.equals("true")
+					&& !name.equals("false");
+			return symbol ? ClojureLowerUtil.list(new LispSymbol(SYMBOL_WITH_META), value, meta) : value;
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		if (parts == null || parts.isEmpty()) {
+			return value;
+		}
+		LispVal head = parts.get(0);
+		if (head == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(head, "%hash-map")
+				|| ClojureLowerUtil.isSymbolNamed(head, "%hash-set")) {
+			return ClojureLowerUtil.list(runtime("put-meta"), value, meta);
+		}
+		if (head instanceof LispSymbol marker && marker.name().startsWith("%")) {
+			return value; // a regex, record or tagged literal: no metadata here
+		}
+		// a quoted list may be one constant, which every evaluation shares
+		return ClojureLowerUtil.list(runtime("put-meta"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("copy-list"), value), meta);
 	}
 
 	/**
@@ -1232,6 +1358,32 @@ final class ClojureCoreLowering {
 	 * @param ctx the hub
 	 * @param designator the namespace designator datum
 	 */
+	/**
+	 * {@code (intern ns 'name [value])} of the current namespace ({@code *ns*} or its
+	 * quoted name) and a quoted simple name: the var defined where the call stands, like
+	 * {@code (do (def name value) (var name))} -- {@code (declare name)} without a value
+	 * -- so the forms below name it, as the oracle's form-by-form compile finds the var
+	 * the call interned (until 2026-10-29 a later {@code name} was an unknown name, and
+	 * an interned root over a {@code def} was a cell the var's own reads never saw). Null
+	 * for any other call, which interns at run time over a cell of its own.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered definition, or null
+	 */
+	private static @Nullable LispVal internedHere(ClojureLowering ctx, List<LispVal> items) {
+		String ns = ClojureNamespaceLowering.namespaceDesignator(ctx, items.get(1));
+		String var = ClojureNamespaceLowering.literalSymbol(items.get(2));
+		if (ns == null || !ns.equals(ctx.currentNs) || var == null || ClojureLowering.qualifierSlash(var) >= 0
+				|| ctx.isLocal(var)) {
+			return null;
+		}
+		LispSymbol symbol = new LispSymbol(var);
+		LispVal definition = items.size() == 4 ? ClojureLowerUtil.list(new LispSymbol("def"), symbol, items.get(3))
+				: ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.NAMESPACE + "/declare"), symbol);
+		return ctx.lower(ClojureLowerUtil.list(new LispSymbol("do"), definition,
+				ClojureLowerUtil.list(new LispSymbol("var"), symbol)));
+	}
+
 	static void noteCreatedNamespace(ClojureLowering ctx, LispVal designator) {
 		String ns = ClojureNamespaceLowering.literalSymbol(designator);
 		if (ns != null) {

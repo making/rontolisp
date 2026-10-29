@@ -252,8 +252,13 @@ the same name wins back the call sites. A `defmacro` of a core name (`with-out-s
 `when-not`, `inc`, `declare`, ...) shadows it from its definition on, like the oracle's
 form-by-form compile: a call site above the definition, and a syntax-quote in a macro
 defined above it, keep the core meaning. `clojure.core/name` always names the core var,
-whatever the program defines under that name. A head the reader spells (`deref` for
-`@x`, `with-meta`) cannot name a macro. A special form (`def`, `&`, ...) can, reached only
+whatever the program defines under that name. Each argument reaches the body as the
+oracle's reader hands it over, its reader metadata included: `(meta n)` of an argument
+written `^:private x` is `{:private true}`, a hinted parameter vector stays a vector
+carrying its `{:tag ...}`, and what the expansion keeps of an argument keeps that
+metadata in the code, as a template's own reader metadata does
+(`` `(let [^String s# ~x] ...) ``). A head the reader spells (`deref` for `@x`,
+`with-meta`) cannot name a macro. A special form (`def`, `&`, ...) can, reached only
 through a qualified name (`clojure.spec.alpha/def` as `s/def`); the bare head stays the
 special form. A `fn` macro is allowed: it
 captures `fn` call sites, never `#(...)` (read as the special form `fn*`).
@@ -358,11 +363,13 @@ and an attr map like `defn`; `defonce` is `def` unless bound, so a reload keeps
 the root.
 
 Value metadata is real: [with-meta](reference/with-meta.md) answers a copy carrying the
-map, [meta](reference/meta.md) reads it, [vary-meta](reference/vary-meta.md) updates
-it, and reader metadata on a vector, map or set literal attaches like `with-meta`.
-`=` ignores it. Two deviations: a value derived from a copy (`assoc`, `conj`, ...)
-starts without metadata, where the oracle keeps it, and a symbol carries none (its
-`with-meta` answers the symbol).
+map (a symbol's copy is a fresh symbol carrying it), [meta](reference/meta.md) reads it,
+[vary-meta](reference/vary-meta.md) updates it, reader metadata on a vector, map or set
+literal attaches like `with-meta`, and a quoted symbol or collection carries its reader
+metadata (`(meta '^:k x)` is `{:k true}`). `=` and the hashes ignore it. Two
+deviations: a value derived from a copy (`conj`, `dissoc`, ...; `assoc` keeps it)
+starts without metadata, where the oracle keeps it, and a symbol keys a map or set
+without its metadata.
 
 `#'x` (`(var x)`) answers the var of a program definition, one object per name that
 prints `#'ns/x`, derefs and invokes through its root. Its metadata is what the newest
@@ -493,7 +500,7 @@ global it signals `Can't change/establish root binding of: ... with set` at run 
 `read-string` reads the first datum of a string and `read` one datum from a reader, at
 run time on every backend, answering what a quote of the same text answers: the same
 numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
-metadata dropped, `#_` discarding. A record literal builds the record of a class the
+reader metadata attached (a symbol's too), `#_` discarding. A record literal builds the record of a class the
 program defines; `#=` read-time evaluation is refused like in source, a tagged literal
 reads through `*data-readers*`, the default `#inst` and `#uuid` readers and
 `*default-data-reader-fn*` in that order, like the oracle's,
@@ -501,8 +508,9 @@ and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file.
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
-back. `load-string` stays absent, and [eval](reference/eval.md) runs only while the program
-lowers (in a macro body): no compiler runs at run time.
+back. [eval](reference/eval.md) runs while the program lowers (in a macro body) on every
+backend, and as the program runs on the interpreter, which keeps the program's lowering for
+its run; a compiled program carries none, so there it refuses at run time.
 
 ## Host boundary
 

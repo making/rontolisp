@@ -8,8 +8,9 @@ lowers, in a namespace given as a quoted name, `(find-ns 'n)`, `(the-ns 'n)` or 
 namespace the call lowers in). A namespace that does not exist fails like the oracle's:
 `(find-ns 'n)`'s nil a `NullPointerException`, a name `No namespace: n found`. An environment
 holding the symbol (a macro's `&env` holding a local of its name) answers nil. A computed
-namespace or symbol resolves inside a macro body only; when the program runs it is refused,
-like `resolve` of one (a nil namespace is the `NullPointerException` first). As a value a
+namespace or symbol resolves inside a macro body and, on the interpreter, when the call
+runs; a compiled program refuses it at run time, like `resolve` of one (a nil namespace is
+the `NullPointerException` first). As a value a
 function of two or three arguments.
 
 ```clojure

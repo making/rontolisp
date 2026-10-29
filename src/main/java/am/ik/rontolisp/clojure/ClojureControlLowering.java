@@ -80,6 +80,12 @@ final class ClojureControlLowering {
 		for (int i = tests.size() - 1; i >= 0; i--) {
 			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), tests.get(i), results.get(i), out);
 		}
+		if (seen.stream().anyMatch(key -> key.startsWith("y"))) {
+			// a symbol constant compares by eq, so a symbol carrying metadata
+			// dispatches as its bare symbol: the symbol-meta family's view, the value
+			// itself in a program making none
+			value = ClojureLowerUtil.list(new LispSymbol(ClojureCoreLowering.SYMBOL_BARE), value);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(temp, value)), out);
 	}

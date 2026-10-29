@@ -7,8 +7,9 @@ such var, like the oracle's `Var.find`: the namespace part is a namespace's own 
 never an alias, and one that does not exist is the oracle's `IllegalArgumentException`
 (`No such namespace: x`), as is an unqualified symbol (`Symbol must be
 namespace-qualified`). A quoted symbol resolves while the program lowers; a computed one
-resolves only in a macro body (hiccup's `html` finds its dynamic vars this way) and
-throws an `UnsupportedOperationException` at run time. Also names a function value.
+resolves in a macro body (hiccup's `html` finds its dynamic vars this way) and, on the
+interpreter, when the call runs; a compiled program throws an
+`UnsupportedOperationException` at run time. Also names a function value.
 
 ```clojure
 (def ^:dynamic *depth* 0)

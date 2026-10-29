@@ -203,6 +203,11 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("keyword")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
 				ClojureCollectionLowering.keywordForm("symbol")));
+		// a symbol carrying metadata (its wrapper is a cons): an arm a program making
+		// none sheds (ClojureArms.Family.SYMBOL_META)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureCoreLowering.META_SYMBOL_P), one),
+					ClojureCollectionLowering.keywordForm("symbol")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), one),
 				ClojureCollectionLowering.keywordForm("char")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),
@@ -256,7 +261,7 @@ final class ClojureProtocolLowering {
 	 */
 	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
 		return protocolRuntime(ctx,
-				ctx.session || !ctx.walkingProtocols.isEmpty() || ctx.usedProtocolValues || guardsReachable(ctx));
+				ctx.open || !ctx.walkingProtocols.isEmpty() || ctx.usedProtocolValues || guardsReachable(ctx));
 	}
 
 	/**
@@ -2113,7 +2118,7 @@ final class ClojureProtocolLowering {
 
 	/** Whether the protocol's dispatchers walk the classes of their target. */
 	static boolean walks(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
-		return ctx.session || ctx.walkingProtocols.contains(def.methodsVar().name());
+		return ctx.open || ctx.walkingProtocols.contains(def.methodsVar().name());
 	}
 
 	/**
@@ -2223,7 +2228,7 @@ final class ClojureProtocolLowering {
 	static void noteRecordGuards(ClojureLowering ctx) {
 		if (definesRecord(ctx)) {
 			for (String protocol : ctx.recordGuards) {
-				if (!ctx.session && !ctx.walkingProtocols.contains(protocol)) {
+				if (!ctx.open && !ctx.walkingProtocols.contains(protocol)) {
 					guard(ctx, protocol, RECORD_P);
 				}
 			}

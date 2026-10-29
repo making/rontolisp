@@ -60,14 +60,19 @@ class ClojureSessionTest {
 	@Test
 	void aDeclaredNameStaysOpenForALaterBuffer() {
 		// a later buffer may define what an earlier one only declared: the declare
-		// stores the unbound root only into an unbound cell, a call stays direct and a
-		// value read takes the function cell once a defn filled it
+		// stores the unbound root only into an unbound cell, and a call and a value
+		// read take the function cell once a defn filled it -- until then the call
+		// reaches the unbound root, which signals like the oracle's
 		ClojureSession session = new ClojureSession();
 		assertThat(forms(session.read("(declare later)"))).anyMatch(form -> form
 			.contains("(UNLESS (BOUNDP '|c%later|) (SETQ |c%later| (RONTOLISP::%CLOJURE-UNBOUND \"user/later\")))"));
-		assertThat(forms(session.read("(later 1)"))).contains(input("(|c%later| 1)"));
+		assertThat(forms(session.read("(later 1)"))).anyMatch(
+				form -> form.contains("(RONTOLISP::%CLOJURE-CALL (IF (FBOUNDP '|c%later|) #'|c%later| |c%later|)"));
 		assertThat(forms(session.read("(map later [1])")))
 			.anyMatch(form -> form.contains("(IF (FBOUNDP '|c%later|) #'|c%later| |c%later|)"));
+		assertThat(runSession("(declare sx-later)", "(println (try (sx-later 1) (catch Exception e (ex-message e))))",
+				"(defn sx-later [x] (inc x))", "(println (sx-later 1))"))
+			.isEqualTo("Attempting to call unbound fn: #'user/sx-later\n2\n");
 	}
 
 	@Test
@@ -87,6 +92,7 @@ class ClojureSessionTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
 		SourceSession session = new SourceSession(SourceLanguage.CLOJURE);
+		session.attach(evaluator);
 		for (String buffer : buffers) {
 			for (SourceSession.Step step : session.read(buffer, Features.INTERPRETER)) {
 				for (LispVal form : step.forms()) {
@@ -399,11 +405,15 @@ class ClojureSessionTest {
 	}
 
 	@Test
-	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
-		// eval in a macro body lowers through the session's one lowering
+	void evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns() {
+		// eval in a macro body lowers through the session's one lowering, and so does an
+		// input's eval as it runs: what it defines a later buffer names, and a computed
+		// resolve answers it
 		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",
-				"(println (sx-if (= (sx-four) 4) :yes :no) (sx-if (resolve 'sx-nowhere) :yes :no))"))
-			.isEqualTo(":yes :no\n");
+				"(println (sx-if (= (sx-four) 4) :yes :no) (sx-if (resolve 'sx-nowhere) :yes :no))",
+				"(println (eval '(defn sx-evald [] (inc (sx-four)))))",
+				"(println (sx-evald) ((resolve (symbol \"sx-evald\"))) (load-string \"(sx-if true 1 2)\"))"))
+			.isEqualTo(":yes :no\n#'user/sx-evald\n5 5 1\n");
 	}
 
 	@Test

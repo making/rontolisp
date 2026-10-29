@@ -1238,20 +1238,31 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * {@code load} as a value: paths arrive evaluated, but only literal paths load --
-	 * where the call stands -- so only the no-argument shape runs (nil, like the call of
-	 * none), and anything else refuses at run time.
+	 * {@code load} as a value: paths arrive evaluated, so they load where a lowering runs
+	 * as the program runs and refuse where none does; of none, nil, like the call of
+	 * none.
 	 * @return the value form
 	 */
 	static LispVal loadValue() {
-		LispSymbol args = new LispSymbol(ClojureLowering.mangle("load-args"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowering.NIL_CONST,
-						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
-								LispString.literal("load of a computed path is not supported"
-										+ " at run time: only literal paths load, where the call stands"))));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-LOAD-V"));
+	}
+
+	/**
+	 * A {@code load} call of a computed path: the paths evaluated and handed to the
+	 * run-time library's load, which lowers the call over them where a lowering runs as
+	 * the program runs and refuses where none does.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call, or null when every path is a string literal
+	 */
+	static @Nullable LispVal computedLoadOf(ClojureLowering ctx, List<LispVal> items) {
+		for (LispVal path : items.subList(1, items.size())) {
+			if (!(path instanceof LispString)) {
+				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOAD-HERE"),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -1294,6 +1305,50 @@ final class ClojureNamespaceLowering {
 	static List<LispVal> specsOf(List<LispVal> items, String what) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, what + " takes library specs");
 		return items.subList(1, items.size());
+	}
+
+	/**
+	 * Whether a {@code require} or {@code use} call computes a spec, as the oracle
+	 * evaluates every argument of the function: an unquoted symbol naming a local or a
+	 * var, or an unquoted list calling a local, a var or a {@code clojure.core} name. A
+	 * bare symbol naming nothing, a bare vector and a bare prefix list stay the specs the
+	 * leniency reads ({@link #unwrapQuote}); until 2026-10-29 a local's name was read as
+	 * a library's ({@code (let [n 'clojure.set] (require n))} looked for {@code n}).
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return {@code true} when the call loads at run time
+	 */
+	static boolean computesSpecs(ClojureLowering ctx, List<LispVal> items) {
+		for (LispVal spec : items.subList(1, items.size())) {
+			LispVal bare = ClojureLowerUtil.stripMeta(spec);
+			if (bare != unwrapQuote(bare)) {
+				continue;
+			}
+			if (bare instanceof LispSymbol symbol && !symbol.name().startsWith(":") && ctx.known(symbol.name())) {
+				return true;
+			}
+			List<LispVal> parts = ClojureLowerUtil.items(bare);
+			if (parts != null && !parts.isEmpty() && !ClojureBindingLowering.isVectorDatum(bare)
+					&& parts.get(0) instanceof LispSymbol head
+					&& (ctx.known(head.name()) || ClojureCoreNames.contains(head.name()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A {@code require} or {@code use} of computed specs: every argument evaluated and
+	 * handed to the run-time library's load, which lowers the call over the values where
+	 * a lowering runs as the program runs and refuses where none does.
+	 * @param ctx the hub
+	 * @param what {@code require} or {@code use}
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal computedLoad(ClojureLowering ctx, String what, List<LispVal> items) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOAD-LIBS-V"), LispString.literal(what),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 	}
 
 	/**

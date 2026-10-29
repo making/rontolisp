@@ -18,6 +18,8 @@ public final class ClojureSession {
 
 	private final ClojureJavaClasses javaClasses;
 
+	private final ClojureRunTime runTime;
+
 	/** A session that reads no files: a project {@code require} is refused by name. */
 	public ClojureSession() {
 		this(ClojureFiles.NONE);
@@ -32,6 +34,7 @@ public final class ClojureSession {
 		this.lowering.sourcePath = new ClojureSourcePath(files, null);
 		this.lowering.files = files;
 		this.javaClasses = files.javaClasses();
+		this.runTime = new ClojureRunTime(this.lowering, this.javaClasses);
 		this.lowering.referReplRequires();
 	}
 
@@ -42,8 +45,22 @@ public final class ClojureSession {
 	 * @return one entry per top-level datum, in order
 	 */
 	public List<ClojureTopLevel> read(String source) {
-		return ClojureHostClasses.lowering(this.javaClasses,
-				() -> this.lowering.interact(new ClojureReader(source, null, true)));
+		// one lowering at a time: a thread an earlier input started may hand the
+		// lowering a verb as it runs (ClojureRunTime)
+		synchronized (this.lowering) {
+			return ClojureHostClasses.lowering(this.javaClasses,
+					() -> this.lowering.interact(new ClojureReader(source, null, true)));
+		}
+	}
+
+	/**
+	 * The session's lowering as the inputs run: what {@code eval}, a computed
+	 * {@code resolve} or {@code require} and the rest of the lowering verbs over computed
+	 * arguments hand it lowers like one more input, in the namespace {@code *ns*} holds.
+	 * @return the run-time half of the session
+	 */
+	public ClojureRunTime runTime() {
+		return this.runTime;
 	}
 
 	/**

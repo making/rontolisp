@@ -4153,7 +4153,8 @@ cases:
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
     # the same function at run time. The expanders answer the mangled data itself, so
     # expansions print the oracle's lowercase spelling and = against a quoted form
-    # holds.
+    # holds. An answer holding a lazy seq (a concat) realizes into a list, the oracle's
+    # form (it was an unreadable value until 2026-10-29).
     source: |
       (defmacro sp-unless [c t] (list 'if c nil t))
       (println (macroexpand-1 '(sp-unless true 1)))
@@ -4163,6 +4164,8 @@ cases:
       (println (macroexpand-1 '(+ 1 2)))
       (println (= (macroexpand-1 '(sp-unless true 1)) '(if true nil 1)))
       (println (= (macroexpand-1 '(+ 1 2)) '(+ 1 2)))
+      (defmacro sp-sum [& xs] (concat '(+) xs))
+      (println (sp-sum 1 2 3) (macroexpand-1 '(sp-sum 1 2)))
     expected: |
       (if true nil 1)
       (if false nil 42)
@@ -4171,6 +4174,7 @@ cases:
       (+ 1 2)
       true
       true
+      6 (+ 1 2)
   - name: a-macro-may-take-a-trailing-dot-name-without-a-class
     # shcloj4's ?. macro (examples/utils.clj): a trailing-dot name with no class
     # base is no construction at a call site (only X. over a class spelling is),
@@ -4287,7 +4291,10 @@ cases:
     # libraries load and namespaces switch while the program lowers (the oracle
     # loads clojure.set, prints nil twice and the namespace; of no spec it
     # throws "Nothing specified to load" wrapped in a CompilerException, and
-    # names clojure.lang.RT/1 in in-ns's arity error).
+    # names clojure.lang.RT/1 in in-ns's arity error). The interpreter keeps the
+    # program's lowering as it runs and answers them (the next case).
+    skip:
+      interpreter: the interpreter lowers the verbs as the program runs
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
@@ -4304,6 +4311,48 @@ cases:
       Nothing specified to load
       in-ns of a computed name is not supported at run time: namespaces switch while the program lowers
       Wrong number of args (0) passed to: clojure.core/in-ns
+  - name: the-interpreter-lowers-at-run-time
+    # The interpreter keeps the program's lowering as it runs: eval, resolve,
+    # find-var, ns-resolve and requiring-resolve of a computed symbol, require of a
+    # computed spec, alias of computed names, load-string and load-reader lower when
+    # they run, in *ns*, and what they define joins the program. A value no literal
+    # spells (a function) stands in an eval'd form as itself; a form that does not
+    # lower throws the oracle's CompilerException, a library no root holds its
+    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A compiled
+    # program carries no lowering, so there the verbs refuse (the case above).
+    skip:
+      jvm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm_component: a compiled program carries no lowering, so the verbs refuse at run time
+    source: |
+      (defn rtl-twice [x] (* 2 x))
+      (def rtl-base 10)
+      (println (eval (list 'rtl-twice (list 'inc 4))) (eval `(+ ~rtl-base 1)) (eval (concat '(+) [1 2 3])))
+      (println (eval '(defn rtl-added [a] (+ a rtl-base))) (eval '(rtl-added 5)))
+      (println ((eval '(fn [x] (* x x))) 7) (eval (list (fn [x] (str "got " x)) 42)))
+      (println (eval '(do (defmacro rtl-m [x] (list '* 2 x)) (rtl-m 21))) (eval '(rtl-m 4)))
+      (println (let [s (symbol "inc")] ((resolve s) 41)) (load-string (str "(+ 1" " 2)")))
+      (let [n 'clojure.set] (require n) (println ((ns-resolve n 'union) #{1} #{2})))
+      (println @(find-var (symbol (str *ns*) "rtl-base")) (map eval ['(+ 1 1) '(* 2 3)]))
+      (println (eval (read-string "[1 2 #{3}]")) @(future (eval '(+ 40 2))))
+      (alias (symbol "rtl-s") (symbol "clojure.string"))
+      (println (eval '(rtl-s/upper-case "ab")) ((requiring-resolve (symbol "clojure.string" "join")) "-" [1 2]))
+      (println (load-reader (java.io.PushbackReader. (java.io.StringReader. "(+ 2 3) (* 6 7)"))))
+      (println (try (eval '(rtl-no-such 1)) (catch clojure.lang.Compiler$CompilerException e :refused)))
+      (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
+    expected: |
+      10 11 6
+      #'lit/rtl-added 15
+      49 got 42
+      42 8
+      42 3
+      #{1 2}
+      10 (2 6)
+      [1 2 #{3}] 42
+      AB 1-2
+      42
+      :refused
+      Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
@@ -5254,7 +5303,8 @@ cases:
     # Reader metadata attaches to the value a vector, map or set literal builds,
     # and to the function or instance a fn or reify form builds (its :type entry
     # is what type and the print-method dispatch read); on a symbol, a call or a
-    # quoted form it parses and drops. Oracle-identical (clj 1.12.6, 2026-10-13).
+    # quote form it parses and drops, while a quoted symbol or collection carries
+    # it. Oracle-identical (clj 1.12.6, 2026-10-13; the quoted shapes 2026-10-29).
     source: |
       (println (pr-str (meta ^:foo [1 2])))
       (println (pr-str (meta ^:foo (fn [x] x))))
@@ -5265,6 +5315,7 @@ cases:
       (println (pr-str (type ^{:type :rm-type} (reify Object (toString [_] "r")))))
       (println (pr-str (meta ^:foo {:a 1})))
       (println (pr-str (meta ^:private (quote foo))))
+      (println (pr-str (meta '^:foo x)) (pr-str (meta '^String y)) (pr-str (meta '^:k [1])) (pr-str (meta (first '(^:e w)))))
     expected: |
       {:foo true}
       {:foo true}
@@ -5275,12 +5326,16 @@ cases:
       :rm-type
       {:foo true}
       nil
+      {:foo true} {:tag String} {:k true} {:e true}
   - name: macro-arguments-keep-their-reader-metadata
     # Argument datums travel to the expander with their reader metadata, like the
     # oracle's forms carry it: a ^:volatile-mutable deftype field below a
     # selecting macro keeps its flag, so set! compiles (dynaload's if-bb), and a
-    # quoted shape decodes back with it. Oracle-identical (clj 1.12.6,
-    # 2026-10-13).
+    # quoted shape decodes back with it. The body reads it with meta on the symbol
+    # or collection it sits on, which stays a symbol or a vector; a template's
+    # reader metadata travels too (its tag qualified, an unquoted form's dropped),
+    # and a literal's evaluates where it lands. Oracle-identical (clj 1.12.6,
+    # 2026-10-13; the reads 2026-10-29).
     source: |
       (defmacro mm-pick [then else]
         (if (System/getProperty "no.such.property") then else))
@@ -5299,11 +5354,46 @@ cases:
       (defmacro mm-idm [x] x)
       (println (pr-str (meta (mm-idm ^:foo [1 2]))))
       (println (pr-str (let [n 3] (mm-idm ^:foo [n]))))
+      (defmacro mm-meta [n] (pr-str [(symbol? n) (name n) (meta n)]))
+      (println (mm-meta ^:foo x) (mm-meta ^{:doc "d" :tag String} y))
+      (defmacro mm-hints [args] (pr-str (vector? args) (meta args) (map meta args)))
+      (println (mm-hints ^long [^long a ^String b c]))
+      (defmacro mm-hinted [x] `(let [^String s# ~x] (.length s#)))
+      (defmacro mm-tag [] `(quote ^String w))
+      (defmacro mm-built [] (with-meta [1] {:a '(+ 1 2)}))
+      (defmacro mm-priv [n] `(def ^:private ~n 1))
+      (mm-priv mm-p)
+      (println (mm-hinted "abc") (pr-str (meta (mm-tag))) (pr-str (meta (mm-built))) (:private (meta #'mm-p)))
     expected: |
       7
       nil
       {:foo true}
       [3]
+      [true "x" {:foo true}] [true "y" {:doc "d", :tag String}]
+      true {:tag long} ({:tag long} {:tag String} nil)
+      3 {:tag java.lang.String} {:a 3} nil
+  - name: a-symbol-carrying-metadata-reads-as-its-bare-symbol
+    # with-meta of a symbol answers a fresh symbol carrying the metadata, the bare
+    # symbol keeping none: = and the hashes ignore it while identical? tells them
+    # apart, and the symbol verbs, a map or set lookup, case, a call, compare and
+    # the printer read it as its symbol, *print-meta* writing it ahead. Oracle-
+    # identical (clj 1.12.6, 2026-10-29). Not pinned: a symbol keying a map or set
+    # keeps no metadata there, and class answers :symbol for every symbol here.
+    source: |
+      (def smb (with-meta 'x {:a 1}))
+      (prn (meta smb) (meta 'x) (identical? 'x smb) (= 'x smb) (= smb (with-meta 'x {:b 2})) (= (hash 'x) (hash smb)))
+      (prn (symbol? smb) (simple-symbol? smb) (qualified-symbol? (with-meta 'a/b {:c 1})) (name smb) (namespace (with-meta 'a/b {:c 1})) (str smb) (pr-str smb) (keyword smb) (identical? smb (symbol smb)))
+      (prn (get {'x 1} smb) (contains? #{'x} smb) ({'x 5} smb) (smb {'x 6}) (get {smb 7} 'x) (count (conj #{'x} smb)))
+      (prn (case smb x :matched :no) (compare (with-meta 'b {:a 1}) 'a) (sort [(with-meta 'c {}) 'a (with-meta 'b {:z 1})]) (instance? clojure.lang.Symbol smb))
+      (prn (meta (vary-meta smb assoc :b 2)) (meta (with-meta smb nil)) (meta (with-meta (with-meta 'q {:a 1}) {:b 2})))
+      (binding [*print-meta* true] (prn smb '[^:k z] (str smb)))
+    expected: |
+      {:a 1} nil false true true true
+      true true true "x" "a" "x" "x" :x true
+      1 true 5 6 7 1
+      :matched 1 (a b c) true
+      {:a 1, :b 2} nil {:b 2}
+      ^{:a 1} x [^{:k true} z] "x"
   - name: defstruct-struct-and-struct-map
     # A defstruct holds its key vector; struct pairs keys with values (missing
     # values are nil, too many signal), struct-map seeds the same keys. Only
@@ -11176,7 +11266,7 @@ cases:
     # backends.
     source: |
       (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
-      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")))
+      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")) (meta (read-string "^:r ^{:s 1} v")))
       (let [m (read-string "#:ns{:a 1 :_/b 2 c 3}")]
         (prn (map m [:ns/a :b 'ns/c]) (read-string "#::{:a 1}") (read-string "#!skipped\n7")))
       (prn (map rs-err ["{1 2 1 3}" "#{\"a\" \"a\"}" "{[1] 1 (1) 2}" "^:k 5" "^1 [1]" "#<x>" "#a" "a:" "a/" "//" ":a/1"]))
@@ -11184,7 +11274,7 @@ cases:
       (prn (read-string "a/9") (read-string "a//b") (read-string ":1") (read-string "a/:b"))
       (prn #:item{:id 1} (:item/id #:item{:id 2}) '#:it{name 1} #::{:local 3})
     expected: |
-      {:k true, :x 2} {:tag String} {:param-tags [int]}
+      {:k true, :x 2} {:tag String} {:param-tags [int]} {:s 1, :r true}
       (1 2 3) #:user{:a 1} 7
       ("Duplicate key: 1" "Duplicate key: a" "Duplicate key: [1]" "Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String,Vector or Map" "Unreadable form" "EOF while reading" "Invalid token: a:" "Invalid token: a/" "Invalid token: //" "Invalid token: :a/1")
       ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
@@ -15540,20 +15630,24 @@ cases:
       nil
       nil
   - name: intern-var-set-and-with-redefs-fn
-    # intern makes a var over a cell of its own, var-set refuses one that is
+    # intern makes a var -- of a quoted name in the current namespace the var the
+    # forms below name, its root rebound over a def's -- var-set refuses one that is
     # not thread-locally bound, and with-redefs-fn rebinds roots for its call.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the forms below, 2026-10-29).
     source: |
       (println (intern 'user 'f67-iv 7))
       (println @(intern 'user 'f67-iv))
       (println (try (var-set (intern 'user 'f67-iv) 8) (catch IllegalStateException e (.getMessage e))))
       (def f67-rd 1)
       (println (with-redefs-fn {(var f67-rd) 99} (fn [] f67-rd)) f67-rd)
+      (intern *ns* 'f67-in 5)
+      (println f67-iv f67-in (intern *ns* 'f67-rd 2) f67-rd)
     expected: |
       #'user/f67-iv
       7
       Can't change/establish root binding of: f67-iv with set
       99 1
+      7 5 #'user/f67-rd 2
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
     # load-string of a literal runs where the call stands.

@@ -173,16 +173,44 @@ public enum SourceLanguage {
 				return new LispReader.ReadPrefix(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)),
 						null);
 			}
-			// The host is wherever the target is no wasm one: a java: member can throw
-			// and take an exception there.
-			return new LispReader.ReadPrefix(Clojure.read(source, file,
-					loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
-					clojureFiles(loader, standards), !features.contains("rontolisp-wasm"),
-					ClojureHostBoundary.INSTANCE), null);
+			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false).forms(), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
 		}
+	}
+
+	/**
+	 * Reads a whole Clojure program for a run that lowers as the program runs where its
+	 * target does -- the interpreter's: a program naming a lowering verb over computed
+	 * arguments ({@code eval}, a computed {@code resolve} or {@code require} ...) keeps
+	 * its lowering for the run ({@link Clojure.Program#runTime}), which
+	 * {@link LispEvaluator#clojureProgram(Clojure.Program)} hands those verbs to.
+	 * @param source the program text
+	 * @param features the active reader features: the interpreter's lower at run time
+	 * @param file the origin file for diagnostics and for the source path, or
+	 * {@code null} when unknown
+	 * @param standards what the program is read against
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @return the lowered program
+	 */
+	public Clojure.Program readClojure(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader) {
+		if (this != CLOJURE) {
+			throw new IllegalStateException(this + " is no Clojure source");
+		}
+		return SourceProvenance.readingProgramSource(
+				() -> clojure(source, features, file, standards, loader, features.contains("rontolisp-interpreter")));
+	}
+
+	private static Clojure.Program clojure(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader, boolean runTimeTarget) {
+		// The host is wherever the target is no wasm one: a java: member can throw and
+		// take an exception there.
+		return Clojure.program(source, file,
+				loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
+				clojureFiles(loader, standards), !features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE,
+				runTimeTarget);
 	}
 
 	/**

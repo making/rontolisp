@@ -495,7 +495,7 @@ final class ClojureWasmLowering {
 			if (kind == ClojureLowering.Kind.MACRO) {
 				throw new LispReadException("Can't take value of a macro: #'" + key);
 			}
-			if (kind == ClojureLowering.Kind.DECLARED && !ctx.session) {
+			if (kind == ClojureLowering.Kind.DECLARED && !ctx.incremental) {
 				throw new LispReadException(what + ": #'" + key + " is declared but never defined");
 			}
 			int arity = params.size();

@@ -3,6 +3,8 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -20,6 +22,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.clojure.ClojureRunTime;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -52,6 +55,45 @@ class ClojureLibraryTest {
 		}
 		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
 		assertThat(twice).isEmpty();
+	}
+
+	@Test
+	void everyFunctionReachingTheRunTimeLoweringIsAnEntry() {
+		// a program naming one lowers at run time, so the front end must know it to lower
+		// the program open where its target lowers then (ClojureRunTime.ENTRIES): every
+		// library function calling %clojure-lower-at-run-time, at any remove
+		Map<String, Set<String>> callers = new HashMap<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFUN")
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				Set<String> named = new HashSet<>();
+				symbolsOf(rest.cdr(), named);
+				for (String callee : named) {
+					callers.computeIfAbsent(callee, ignored -> new HashSet<>()).add(name.name());
+				}
+			}
+		}
+		Set<String> reaching = new TreeSet<>(Set.of("RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME"));
+		Deque<String> pending = new ArrayDeque<>(reaching);
+		while (!pending.isEmpty()) {
+			for (String caller : callers.getOrDefault(pending.pop(), Set.of())) {
+				if (reaching.add(caller)) {
+					pending.push(caller);
+				}
+			}
+		}
+		assertThat(ClojureRunTime.ENTRIES).containsExactlyInAnyOrderElementsOf(reaching);
+	}
+
+	private static void symbolsOf(LispVal form, Set<String> out) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			symbolsOf(cons.car(), out);
+			rest = cons.cdr();
+		}
+		if (rest instanceof LispSymbol symbol) {
+			out.add(symbol.name());
+		}
 	}
 
 	@Test
@@ -956,7 +998,7 @@ class ClojureLibraryTest {
 		LispVal rest = code;
 		while (rest instanceof LispCons cell) {
 			if (cell.car() instanceof LispSymbol head
-					&& (isComputedIntern(head, cell.cdr()) || head.name().equals(":C%KEYWORD")
+					&& (head.name().equals("INTERN") || head.name().equals(":C%KEYWORD")
 							&& cell.cdr() instanceof LispCons next && !(next.car() instanceof LispString))) {
 				return true;
 			}
@@ -966,23 +1008,6 @@ class ClojureLibraryTest {
 			rest = cell.cdr();
 		}
 		return false;
-	}
-
-	/**
-	 * Whether the call interns a computed spelling: an {@code INTERN} call whose argument
-	 * is not the same name read back ({@code with-meta} of a symbol answers a fresh copy
-	 * of the name it was handed, introducing no new spelling, so the printer's
-	 * namespace-map arm need not be kept for it).
-	 */
-	private static boolean isComputedIntern(LispSymbol head, LispVal args) {
-		if (!head.name().equals("INTERN")) {
-			return false;
-		}
-		if (args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons call
-				&& call.car() instanceof LispSymbol fn && fn.name().equals("SYMBOL-NAME")) {
-			return false;
-		}
-		return true;
 	}
 
 	private static boolean mentionsAny(LispVal code, Set<String> names) {

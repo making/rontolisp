@@ -3,8 +3,8 @@
 `(ns-refers ns)`
 
 The vars referred into the namespace `ns` (a symbol, a string or `*ns*`), each name to its
-var, like the oracle's. Only what the lowering knows maps, and anything computed refuses at
-run time. As a value one argument.
+var, like the oracle's. Only what the lowering knows maps, and anything computed
+answers when the call runs on the interpreter, which keeps the program's lowering, and refuses at run time in a compiled program. As a value one argument.
 
 ```clojure
 (refer 'clojure.string :only '[join])

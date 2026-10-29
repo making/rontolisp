@@ -128,6 +128,34 @@ final class ClojureLowerUtil {
 	}
 
 	/**
+	 * A datum with every {@code ^...} metadata layer dropped, at any depth: data a quote
+	 * would otherwise build carrying it.
+	 */
+	static LispVal stripMetaDeep(LispVal datum) {
+		LispVal bare = stripMeta(datum);
+		if (!(bare instanceof LispCons)) {
+			return bare;
+		}
+		List<LispVal> out = new ArrayList<>();
+		LispVal run = bare;
+		boolean changed = bare != datum;
+		while (run instanceof LispCons cell) {
+			LispVal element = stripMetaDeep(cell.car());
+			changed |= element != cell.car();
+			out.add(element);
+			run = cell.cdr();
+		}
+		if (!changed) {
+			return bare;
+		}
+		LispVal tail = run;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			tail = new LispCons(out.get(i), tail);
+		}
+		return tail;
+	}
+
+	/**
 	 * Whether a name datum carries {@code ^:dynamic} metadata (or {@code ^{:dynamic
 	 * true}}), under any wrapping.
 	 */
