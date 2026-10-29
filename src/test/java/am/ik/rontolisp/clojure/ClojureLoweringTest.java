@@ -3821,17 +3821,19 @@ class ClojureLoweringTest {
 	@Test
 	void readerMetadataDropsOnNamesAndAttachesToLiterals() {
 		// reader metadata on a name or a local parses and drops: the object lowers as
-		// itself; on a collection literal it attaches, like the oracle's reader
+		// itself; on a collection literal it attaches, like the oracle's reader, and a
+		// quoted symbol is one carrying it, a quoted list a copy carrying it
 		assertThat(lowered("(def v 1) ^:k v")).contains("|c%v|").doesNotContain("META");
 		assertThat(lowered("^:k [1]")).contains("%CLOJURE-PUT-META");
-		assertThat(lowered("'^:k x")).contains("|c%x|").doesNotContain("META");
+		assertThat(lowered("'^:k x")).contains("(RONTOLISP::%CLOJURE-SYMBOL-WITH-META '|c%x|");
+		assertThat(lowered("'^:k (1)")).contains("(RONTOLISP::%CLOJURE-PUT-META (COPY-LIST '(1))");
 		// a with-meta call attaches at run time
 		assertThat(lowered("(with-meta [1] {:a 1})")).contains("%CLOJURE-WITH-META");
 		assertThat(lowered("(meta [1])")).contains("%CLOJURE-META");
 		assertThatThrownBy(() -> Clojure.read("(with-meta 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/with-meta");
 		assertThatThrownBy(() -> Clojure.read("^1 [1]", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("Metadata must be Symbol,Keyword,String or Map");
+			.hasMessageContaining("Metadata must be Symbol,Keyword,String,Vector or Map");
 	}
 
 	@Test

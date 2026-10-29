@@ -691,18 +691,21 @@ final class ClojureFnLowering {
 	}
 
 	/**
-	 * {@link #symbolRaw}'s test over a value it may read several times: a variable or a
-	 * constant.
+	 * {@link #symbolRaw}'s test over a variable, which it reads several times. A symbol
+	 * carrying metadata is one too: an arm of the symbol-meta family, which a program
+	 * making none folds to the plain test.
 	 */
 	static LispVal symbolTest(ClojureLowering ctx, LispVal one) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ClojureLowering.TRUE_CONST)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ClojureLowering.TRUE_CONST)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable))),
+				ClojureLowerUtil.list(new LispSymbol(ClojureCoreLowering.META_SYMBOL_P), one));
 	}
 
 	/** {@code symbol?} as a value: a one-argument lambda answering {@code T}-or-false. */

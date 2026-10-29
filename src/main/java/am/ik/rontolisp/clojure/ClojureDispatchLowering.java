@@ -493,7 +493,7 @@ final class ClojureDispatchLowering {
 			case DOUBLE -> cl(Use.ONCE, "floatp");
 			case RATIO -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-RATIO");
 			case KEYWORD -> new Arm(Use.MANY, ClojureFilterLowering::keywordTest);
-			case SYMBOL -> new Arm(Use.MANY, v -> ClojureFnLowering.symbolTest(ctx, v));
+			case SYMBOL -> new Arm(Use.VARIABLE, v -> ClojureFnLowering.symbolTest(ctx, v));
 			case VECTOR -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-VECTOR");
 			case MAP_ENTRY -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-ENTRY-P");
 			case LIST -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-LIST");
@@ -654,6 +654,11 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("keyword")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
 				ClojureCollectionLowering.keywordForm("symbol")));
+		// a symbol carrying metadata (its wrapper is a cons): an arm a program making
+		// none sheds (ClojureArms.Family.SYMBOL_META)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureCoreLowering.META_SYMBOL_P), one),
+					ClojureCollectionLowering.keywordForm("symbol")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), one),
 				ClojureCollectionLowering.keywordForm("char")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),

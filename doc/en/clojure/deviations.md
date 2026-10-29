@@ -745,8 +745,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `with-meta` answers a copy carrying the metadata; `assoc` (and `update` and
   `assoc-in` through it) keeps the source's metadata, like the oracle, while any
   other value derived from it (`conj`, `dissoc`, ...) starts without metadata,
-  where the oracle keeps it, and a symbol carries
-  none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
+  where the oracle keeps it, and a symbol keys a map or set without its metadata
+  (`(meta (first (keys {(with-meta 'x {:a 1}) 1})))` is `nil`, the oracle's `{:a 1}`); a
+  definition's `:arglists` leave out its parameters' type hints, which the oracle keeps on
+  each parameter symbol. A `:tag` from reader metadata on a collection
   literal stays the symbol as written (`String`), where the oracle resolves the class
   (`java.lang.String`); a `{:tag Type}` on a `def` naming a record or deftype keeps the
   quoted symbol for the same reason (a type is no class here), where the oracle stores

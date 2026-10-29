@@ -766,7 +766,8 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The {@code ^[types]} param tags of a datum: the first vector among its reader
-	 * metadata layers, or null when it carries none.
+	 * metadata layers, or a map layer's {@code :param-tags} (a symbol a macro expansion
+	 * hands back carrying them), or null when it carries none.
 	 */
 	static @Nullable LispVal paramTags(LispVal datum) {
 		List<LispVal> parts = ClojureLowerUtil.items(datum);
@@ -775,6 +776,15 @@ final class ClojureInteropLowering {
 			List<LispVal> meta = ClojureLowerUtil.items(parts.get(2));
 			if (meta != null && !meta.isEmpty() && meta.get(0) == ClojureReader.VECTOR) {
 				return parts.get(2);
+			}
+			if (meta != null && !meta.isEmpty() && ClojureLowerUtil.isSymbolNamed(meta.get(0), "%hash-map")) {
+				for (int i = 1; i + 1 < meta.size(); i += 2) {
+					List<LispVal> tags = ClojureLowerUtil.items(meta.get(i + 1));
+					if (ClojureLowerUtil.isSymbolNamed(meta.get(i), ":param-tags") && tags != null && !tags.isEmpty()
+							&& tags.get(0) == ClojureReader.VECTOR) {
+						return meta.get(i + 1);
+					}
+				}
 			}
 			parts = ClojureLowerUtil.items(parts.get(1));
 		}

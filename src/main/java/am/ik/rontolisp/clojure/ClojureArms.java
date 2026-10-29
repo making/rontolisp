@@ -844,6 +844,26 @@ public final class ClojureArms {
 				Map.of(), Set.of(ClojureInterfaces.META_ROW), Set.of()),
 
 		/**
+		 * A symbol carrying metadata -- {@code (:C%SYMBOL sym meta)} over the interned
+		 * symbol, which no metadata can sit on -- which {@code meta}, {@code with-meta},
+		 * {@code symbol?} and the ident predicates, {@code name}, {@code namespace},
+		 * {@code symbol}, {@code keyword}, the printer, {@code str}, {@code =},
+		 * {@code compare}, the hashes, the structural keys (a map key or set member is
+		 * the bare symbol), a call, {@code ifn?}, {@code class}, {@code instance?}, a
+		 * protocol's dispatch and a {@code java:} member's argument read as its bare
+		 * symbol; the view is {@code case}'s dispatch value. Only a quote, a syntax-quote
+		 * template or a macro argument of {@code ^m sym}
+		 * ({@link ClojureCoreLowering#SYMBOL_WITH_META}), {@code with-meta} and
+		 * {@code vary-meta} of a symbol, and a read of {@code ^m sym} make one.
+		 */
+		SYMBOL_META("symbol-meta", Set.of(ClojureCoreLowering.META_SYMBOL_P), Set.of(ClojureCoreLowering.SYMBOL_BARE),
+				Map.of(),
+				Reads.with(ClojureCoreLowering.SYMBOL_WITH_META, "RONTOLISP::%CLOJURE-WITH-META",
+						"RONTOLISP::%CLOJURE-WITH-META-V", "RONTOLISP::%CLOJURE-VARY-META",
+						"RONTOLISP::%CLOJURE-VARY-META-V"),
+				Set.of()),
+
+		/**
 		 * A record, deftype or reify whose body overrides {@code Object}'s
 		 * {@code toString}, {@code equals} or {@code hashCode}, which {@code str}, the
 		 * printer, {@code =} and the instance calls read: only the store of such a row

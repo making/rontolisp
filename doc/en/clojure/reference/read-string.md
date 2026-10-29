@@ -7,7 +7,7 @@ text answers, so `(= (read-string "[1 :k]") '[1 :k])` holds. Numbers, strings,
 characters, keywords (`::kw` in the calling namespace), symbols, lists, vectors, maps and
 sets read like the source reader reads them, namespace maps (`#:ns{...}`, `#::{...}`)
 included; reader metadata attaches like the oracle's (`^:k` is `{:k true}`, a symbol or
-string `{:tag x}`, a vector `{:param-tags v}`; a symbol carries none) and `#_` discards. A
+string `{:tag x}`, a vector `{:param-tags v}`, on a symbol too) and `#_` discards. A
 repeated map key or set member is the oracle's `Duplicate key`, and a keyword or symbol the
 oracle does not read (`a:`, `x/`, `//`) its `Invalid token`. A
 record literal (`#ns.Name{...}` / `#ns.Name[...]`, a dotted name) builds the record of a

@@ -369,6 +369,8 @@
   "The spelling of the keyword or symbol K (a symbol's demangled), NIL for
    anything else."
   (cond ((rontolisp::%clojure-keyword-p k) (car (cdr k)))
+        ((rontolisp::%clojure-meta-symbol-p k)
+         (rontolisp::%clojure-ident-spelling (car (cdr k))))
         ((rontolisp::%clojure-real-symbol-p k)
          (rontolisp::%clojure-symbol-full-name k))
         (t nil)))
@@ -858,6 +860,11 @@
         ((rontolisp::%clojure-uuid-p x)
          (rontolisp::%clojure-write-uuid-literal x stream))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
+        ;; a symbol carrying metadata writes its bare symbol, its metadata
+        ;; written ahead under *print-meta*: an arm of the symbol-meta family
+        ((rontolisp::%clojure-meta-symbol-p x)
+         (rontolisp::%clojure-write (car (cdr x)) nil-replacement readable
+                                    stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
          ;; realized as it prints, like the oracle: empty is (), anything
@@ -1055,6 +1062,12 @@
          (cond ((null x) nil-replacement)
                ((stringp x) x)
                ((characterp x) (string x))
+               ;; a symbol carrying metadata: its name, the oracle's toString,
+               ;; with no metadata under *print-meta*: an arm of the symbol-meta
+               ;; family
+               ((rontolisp::%clojure-meta-symbol-p x)
+                (rontolisp::%clojure-str-of (car (cdr x)) nil-replacement
+                                            readable))
                ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-string x))
                ;; a byte array's toString, its class name (the oracle's
                ;; Class@hash without the hash): an arm a program making none
@@ -2245,6 +2258,7 @@
         ((rontolisp::%clojure-transient-p x)
          (rontolisp::%clojure-transient-class-name x))
         ((rontolisp::%clojure-seq-iterator-p x) "clojure.lang.SeqIterator")
+        ((rontolisp::%clojure-meta-symbol-p x) "clojure.lang.Symbol")
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)
@@ -2814,6 +2828,12 @@
    ((rontolisp::%clojure-instant-p a)
     (or (rontolisp::%clojure-inst-equal a b)
         (rontolisp::%clojure-host-equal-p a b)))
+   ;; a symbol carrying metadata is = to its bare symbol: an arm of the
+   ;; symbol-meta family, past every kind that tells a wrapper apart
+   ((or (rontolisp::%clojure-meta-symbol-p a)
+        (rontolisp::%clojure-meta-symbol-p b))
+    (rontolisp::%clojure-equal (rontolisp::%clojure-symbol-bare a)
+                               (rontolisp::%clojure-symbol-bare b)))
    ;; equal hands a host object no collection, so a host collection and a
    ;; Clojure one reach the host-object family's arm
    (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
@@ -3405,6 +3425,10 @@
   (cond ((rontolisp::%clojure-host-plain-p x) x)
    ((rontolisp::%clojure-keyword-p x)
     (rontolisp::%clojure-host-ident x (car (cdr x)) t))
+   ;; a symbol carrying metadata crosses as its bare symbol: an arm of the
+   ;; symbol-meta family
+   ((rontolisp::%clojure-meta-symbol-p x)
+    (rontolisp::%clojure-host-member (car (cdr x))))
    ((rationalp x)
     (java:handle x (princ-to-string x) (rontolisp::%clojure-ratio-hash x)
                  #'rontolisp::%clojure-host-number-order "clojure.lang.Ratio"))
@@ -3864,6 +3888,10 @@
           ;; of the typed-key family
           ((rontolisp::%clojure-typed-key-p x)
            (rontolisp::%clojure-typed-key-hash x))
+          ;; a symbol carrying metadata hashes as its bare symbol, to which it
+          ;; is =: an arm of the symbol-meta family
+          ((rontolisp::%clojure-meta-symbol-p x)
+           (rontolisp::%clojure-hash (car (cdr x))))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -3968,10 +3996,11 @@
 
 (defun rontolisp::%clojure-table-key (k table)
   "The key TABLE holds K under: when K is structural, the representative = to
-   it that TABLE holds; the float zero TABLE holds when K is the other one;
-   otherwise (or when TABLE holds none) K itself, which then misses like any
-   absent key."
-  (cond ((rontolisp::%clojure-structural-key-p k)
+   it that TABLE holds; the float zero TABLE holds when K is the other one; a
+   symbol carrying metadata its bare symbol; otherwise (or when TABLE holds
+   none) K itself, which then misses like any absent key."
+  (cond ((rontolisp::%clojure-meta-symbol-p k) (car (cdr k)))
+        ((rontolisp::%clojure-structural-key-p k)
          (or (rontolisp::%clojure-held-key (rontolisp::%clojure-key-class k nil)
                                            table) k))
         ((and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table))
@@ -3981,28 +4010,33 @@
   "The key to store K under in TABLE: when K is structural, the representative
    = to it that TABLE already holds (its value is replaced, its key kept, like
    the oracle), else the representative of K's own kind, else K, which becomes
-   that representative; a float zero is the one TABLE holds (the other zero),
-   any other K is itself."
-  (if (not (rontolisp::%clojure-structural-key-p k))
-      (if (and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table) k)
-      (let* ((class (rontolisp::%clojure-key-class k t))
-             (held (rontolisp::%clojure-held-key class table)))
-        (if held
-            held
-            (let ((kind (rontolisp::%clojure-key-kind k)) (own nil))
-              ;; a kind is no code of the program's, so the look and the store
-              ;; are one step
-              (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
-                (do ((c class (cdr c)))
-                    ((or own (null c)))
-                  (if (eql (rontolisp::%clojure-key-kind (car c)) kind)
-                      (setq own (car c))))
-                (if own
-                    own
-                    (progn
-                      (rplacd class (cons k (cdr class)))
-                      (setf (gethash k rontolisp::%clojure-key-reps) class)
-                      k))))))))
+   that representative; a float zero is the one TABLE holds (the other zero), a
+   symbol carrying metadata its bare symbol (its metadata stays behind), any
+   other K is itself."
+  (if (rontolisp::%clojure-meta-symbol-p k)
+      (car (cdr k))
+      (if (not (rontolisp::%clojure-structural-key-p k))
+          (if (and (floatp k) (= k 0.0))
+              (rontolisp::%clojure-zero-key k table)
+              k)
+          (let* ((class (rontolisp::%clojure-key-class k t))
+                 (held (rontolisp::%clojure-held-key class table)))
+            (if held
+                held
+                (let ((kind (rontolisp::%clojure-key-kind k)) (own nil))
+                  ;; a kind is no code of the program's, so the look and the
+                  ;; store are one step
+                  (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+                    (do ((c class (cdr c)))
+                        ((or own (null c)))
+                      (if (eql (rontolisp::%clojure-key-kind (car c)) kind)
+                          (setq own (car c))))
+                    (if own
+                        own
+                        (progn
+                          (rplacd class (cons k (cdr class)))
+                          (setf (gethash k rontolisp::%clojure-key-reps) class)
+                          k)))))))))
 
 (defun rontolisp::%clojure-set-put (table x)
   "X added to the set table TABLE as a member stored under itself (an = member
@@ -4162,6 +4196,10 @@
                                             (cdr args))
             (rontolisp::%clojure-call-keyword f (car args)
              (if (cdr args) (car (cdr args)) nil)))))
+   ;; a symbol carrying metadata calls as its bare symbol: an arm of the
+   ;; symbol-meta family
+   ((rontolisp::%clojure-meta-symbol-p f)
+    (rontolisp::%clojure-call (car (cdr f)) args))
    ((rontolisp::%clojure-var-p f)
     (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
    ((rontolisp::%clojure-sorted-p f)
@@ -4571,6 +4609,11 @@
    ((rontolisp::%clojure-reader-value-p x)
     (rontolisp::%clojure-reader-value-hash-code x))
    ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-m-hash-code x))
+   ;; a symbol carrying metadata hashes as its bare symbol, like the oracle's
+   ;; Symbol, whose hashes leave the metadata out: an arm of the symbol-meta
+   ;; family
+   ((rontolisp::%clojure-meta-symbol-p x)
+    (rontolisp::%clojure-atom-hash (car (cdr x)) eq))
    (t (%identity-hash x))))
 
 (defun rontolisp::%clojure-atom-hash (x eq)
@@ -5823,6 +5866,8 @@
   "The name of X: a string itself, a keyword's spelling past the slash, a
    symbol's demangled name past the slash; anything else signals."
   (cond ((stringp x) x)
+        ((rontolisp::%clojure-meta-symbol-p x)
+         (rontolisp::%clojure-name (car (cdr x))))
         ((rontolisp::%clojure-keyword-p x)
          (rontolisp::%clojure-split-name (car (cdr x))))
         ((rontolisp::%clojure-real-symbol-p x)
@@ -5835,7 +5880,9 @@
   "The namespace of X: a keyword's spelling before the slash, a symbol's
    demangled name before the slash, NIL when absent; strings and anything else
    signal, like the oracle."
-  (cond ((rontolisp::%clojure-keyword-p x)
+  (cond ((rontolisp::%clojure-meta-symbol-p x)
+         (rontolisp::%clojure-namespace (car (cdr x))))
+        ((rontolisp::%clojure-keyword-p x)
          (rontolisp::%clojure-split-namespace (car (cdr x))))
         ((rontolisp::%clojure-real-symbol-p x)
          (rontolisp::%clojure-split-namespace
@@ -5847,15 +5894,18 @@
   "The keyword for X: itself for a keyword, the demangled spelling for a
    symbol, the string itself for a string, NIL for anything else."
   (cond ((rontolisp::%clojure-keyword-p x) x)
+        ((rontolisp::%clojure-meta-symbol-p x)
+         (rontolisp::%clojure-keyword-1 (car (cdr x))))
         ((rontolisp::%clojure-real-symbol-p x)
          (list :C%KEYWORD (rontolisp::%clojure-symbol-full-name x)))
         ((stringp x) (list :C%KEYWORD x))
         (t nil)))
 
 (defun rontolisp::%clojure-symbol-1 (x)
-  "The symbol for X: itself for a symbol, the spelled one for a keyword or a
-   string; anything else signals."
+  "The symbol for X: itself for a symbol (one carrying metadata too), the
+   spelled one for a keyword or a string; anything else signals."
   (cond ((rontolisp::%clojure-real-symbol-p x) x)
+        ((rontolisp::%clojure-meta-symbol-p x) x)
         ((rontolisp::%clojure-keyword-p x)
          (intern
           (concatenate 'string "c%"
@@ -10895,7 +10945,7 @@
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)
       (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)
-      (rontolisp::%clojure-unbound-p x)))
+      (rontolisp::%clojure-unbound-p x) (rontolisp::%clojure-meta-symbol-p x)))
 
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
@@ -10949,15 +10999,18 @@
       (rontolisp::%clojure-class-cast-exception-of "NaN? needs a number" x)))
 
 (defun rontolisp::%clojure-is-ident (x)
-  "ident?: a keyword or a symbol."
-  (or (rontolisp::%clojure-keyword-p x) (rontolisp::%clojure-real-symbol-p x)))
+  "ident?: a keyword or a symbol, one carrying metadata too."
+  (or (rontolisp::%clojure-keyword-p x) (rontolisp::%clojure-real-symbol-p x)
+      (rontolisp::%clojure-meta-symbol-p x)))
 
 (defun rontolisp::%clojure-is-qualified (x keywords symbols qualified)
-  "Whether X is a keyword (KEYWORDS true) or a symbol (SYMBOLS true) whose
-   namespace is present (QUALIFIED true) or absent: the simple-/qualified-
-   ident, keyword and symbol predicates."
+  "Whether X is a keyword (KEYWORDS true) or a symbol (SYMBOLS true, one
+   carrying metadata too) whose namespace is present (QUALIFIED true) or
+   absent: the simple-/qualified- ident, keyword and symbol predicates."
   (if (or (and keywords (rontolisp::%clojure-keyword-p x))
-          (and symbols (rontolisp::%clojure-real-symbol-p x)))
+          (and symbols
+               (or (rontolisp::%clojure-real-symbol-p x)
+                   (rontolisp::%clojure-meta-symbol-p x))))
       (if (rontolisp::%clojure-namespace x) qualified (not qualified))
       nil))
 
@@ -11034,14 +11087,16 @@
 
 (defun rontolisp::%clojure-is-special-symbol (x)
   "special-symbol?: one of the oracle's special form names."
-  (if (rontolisp::%clojure-real-symbol-p x)
-      (let ((s (rontolisp::%clojure-symbol-full-name x)) (found nil))
-        (dolist (f '("def" "loop*" "recur" "if" "case*" "let*" "letfn*" "do"
-                     "fn*" "quote" "var" "clojure.core/import*" "." "set!"
-                     "deftype*" "reify*" "try" "throw" "monitor-enter"
-                     "monitor-exit" "catch" "finally" "new" "&") found)
-          (if (equal s f) (setq found t))))
-      nil))
+  (if (rontolisp::%clojure-meta-symbol-p x)
+      (rontolisp::%clojure-is-special-symbol (car (cdr x)))
+      (if (rontolisp::%clojure-real-symbol-p x)
+          (let ((s (rontolisp::%clojure-symbol-full-name x)) (found nil))
+            (dolist (f '("def" "loop*" "recur" "if" "case*" "let*" "letfn*" "do"
+                         "fn*" "quote" "var" "clojure.core/import*" "." "set!"
+                         "deftype*" "reify*" "try" "throw" "monitor-enter"
+                         "monitor-exit" "catch" "finally" "new" "&") found)
+              (if (equal s f) (setq found t))))
+          nil)))
 
 (defun rontolisp::%clojure-is-identical (a b)
   "identical?: eql, except that two keywords of one spelling are one object,
@@ -11640,6 +11695,12 @@
          (rontolisp::%clojure-real-symbol-p b))
     (rontolisp::%clojure-compare-names (rontolisp::%clojure-symbol-full-name a)
      (rontolisp::%clojure-symbol-full-name b)))
+   ;; a symbol carrying metadata orders as its bare symbol: an arm of the
+   ;; symbol-meta family
+   ((or (rontolisp::%clojure-meta-symbol-p a)
+        (rontolisp::%clojure-meta-symbol-p b))
+    (rontolisp::%clojure-compare (rontolisp::%clojure-symbol-bare a)
+                                 (rontolisp::%clojure-symbol-bare b)))
    ((and (vectorp a) (not (stringp a)) (vectorp b) (not (stringp b)))
     (rontolisp::%clojure-compare-vectors a b))
    ;; an instant or a UUID orders against its own kind, like the oracle's
@@ -13843,20 +13904,26 @@
 ;; interpreter and the JVM). with-meta answers a fresh shallow copy,
 ;; like the oracle's new object: the original keeps its own metadata and = still
 ;; compares contents (a reify copy keeps its tag, so it dispatches the same and is
-;; a different object, like the oracle's); = on symbols compares names, so a
-;; symbol's fresh copy stays = to its interned name while identical? tells them
-;; apart, like the oracle's. The copy of a symbol carries the name verbatim, so
-;; a macro expansion decoding it spells the same symbol (a gensym keeps its own
-;; spelling below); the table keeps every object it was handed for the program's
-;; lifetime. The kinds that carry metadata are the oracle's IObj kinds the
-;; lowering has: symbols, maps, vectors, lists, sets, records, reify values,
-;; lazy seqs and functions (a wrapping closure).
+;; a different object, like the oracle's); the table keeps every object it was
+;; handed for the program's lifetime. The kinds that carry metadata are the
+;; oracle's IObj kinds the lowering has: symbols, maps, vectors, lists, sets,
+;; records, reify values, lazy seqs and functions (a wrapping closure).
+;;
+;; A symbol is interned, one object per name, so no metadata can sit on it: a
+;; symbol carrying metadata is the wrapper (:C%SYMBOL sym meta) over the bare
+;; symbol, made only with metadata -- by with-meta of a symbol, a quote or a read
+;; of ^m sym, and a macro argument or template carrying reader metadata. Every
+;; verb taking a symbol reads a wrapper as its bare symbol (= and the hashes
+;; too, so it is = to the bare symbol and to every other wrapper of it, while
+;; identical? tells them apart, like the oracle's), and a map key or set member
+;; is stored as the bare symbol. Each such reading is an arm of the symbol-meta
+;; family (clojure/ClojureArms), whose producers are what makes a wrapper, so a
+;; program making none compiles as before it existed.
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md): a
-;; derived value (assoc, conj, ...) starts without metadata where the oracle
-;; carries it over; a symbol answers itself without metadata (an interned symbol
-;; has no copy to hang it on, and = on symbols compares names); the table keeps
-;; every object it was handed for the program's lifetime.
+;; derived value (conj, dissoc, ...) starts without metadata where the oracle
+;; carries it over; a symbol keys a map or set without its metadata; the table
+;; keeps every object it was handed for the program's lifetime.
 
 (defvar rontolisp::%clojure-meta-guard (rontolisp:make-mutex))
 
@@ -13879,22 +13946,38 @@
       (setf (gethash x rontolisp::%clojure-meta-table) m)))
   x)
 
+(defun rontolisp::%clojure-meta-symbol-p (x)
+  "Whether X is a symbol carrying metadata: the (:C%SYMBOL sym meta) wrapper."
+  (and (consp x) (eq (car x) :C%SYMBOL)))
+
+(defun rontolisp::%clojure-symbol-with-meta (sym m)
+  "The bare symbol SYM carrying the metadata map M: a fresh wrapper, or SYM
+   itself for a nil M."
+  (if (null m) sym (list :C%SYMBOL sym m)))
+
+(defun rontolisp::%clojure-symbol-bare (x)
+  "X's bare symbol when X is a symbol carrying metadata, else X: what a case
+   dispatches on (the family's view, X itself in a program making none)."
+  (if (rontolisp::%clojure-meta-symbol-p x) (car (cdr x)) x))
+
 ;; A deftype implementing IObj answers its own withMeta, and one implementing
 ;; IMeta its own meta: arms of the meta-interface family ("Host interfaces").
-;; A symbol answers a fresh copy of itself carrying the metadata, like the
-;; oracle's new object: = still compares names (like every equal here), while
-;; identical?/eq tell the copy apart, like the oracle's. The copy carries the
-;; name verbatim (no case folding, the current package ignored), so a macro
-;; expansion decoding it spells the same symbol with its metadata as reader
-;; metadata -- test.check's defspec varies its name's metadata this way, and
-;; the defn it emits registers its :test below.
+;; A symbol answers a fresh wrapper carrying the metadata, like the oracle's new
+;; object: = reads it as its bare symbol, while identical? tells it apart, like
+;; the oracle's; a macro expansion decodes it as the symbol with its metadata as
+;; reader metadata -- test.check's defspec varies its name's metadata this way,
+;; and the defn it emits registers its :test below.
 (defun rontolisp::%clojure-with-meta (x m)
-  "A copy of X carrying the metadata map M, like the oracle's withMeta; the
-   copy of a symbol is fresh, so the interned name keeps no metadata and = on
-   symbols still compares names. Anything else that is no IObj in the oracle
-   signals, like its cast."
+  "A copy of X carrying the metadata map M, like the oracle's withMeta; a
+   symbol answers a fresh wrapper over its bare symbol (the symbol itself for
+   a nil M). Anything else that is no IObj in the oracle signals, like its
+   cast."
   (cond ((rontolisp::%clojure-iobj-p x)
          (funcall (rontolisp::%clojure-interface-entry x "withMeta") x m))
+        ;; ahead of the list arm: the wrapper is a cons
+        ((rontolisp::%clojure-meta-symbol-p x)
+         (rontolisp::%clojure-symbol-with-meta (car (cdr x))
+          (rontolisp::%clojure-check-meta m)))
         ((hash-table-p x)
          (let ((copy (make-hash-table :test 'equal)))
            (maphash (lambda (k v) (setf (gethash k copy) v)) x)
@@ -13913,8 +13996,8 @@
          (rontolisp::%clojure-put-meta (copy-list x) m))
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
-         (rontolisp::%clojure-check-meta m)
-         (rontolisp::%clojure-put-meta (intern (symbol-name x)) m))
+         (rontolisp::%clojure-symbol-with-meta x
+          (rontolisp::%clojure-check-meta m)))
         (t (rontolisp::%clojure-class-cast-exception-of
             "with-meta takes a collection, a record or a function" x))))
 
@@ -13925,10 +14008,12 @@
 
 (defun rontolisp::%clojure-meta (x)
   "X's metadata map, nil when it carries none."
-  (if (rontolisp::%clojure-imeta-p x)
-      (funcall (rontolisp::%clojure-interface-entry x "meta") x)
-      (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
-        (values (gethash x rontolisp::%clojure-meta-table)))))
+  (if (rontolisp::%clojure-meta-symbol-p x)
+      (car (cdr (cdr x)))
+      (if (rontolisp::%clojure-imeta-p x)
+          (funcall (rontolisp::%clojure-interface-entry x "meta") x)
+          (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
+            (values (gethash x rontolisp::%clojure-meta-table))))))
 
 (defun rontolisp::%clojure-meta-v (&rest args)
   "meta as a value."
@@ -19195,7 +19280,7 @@
   "^meta form, the caret consumed: the form carrying the metadata over its own
    (the outer ^ wins), like the oracle's MetaReader. A keyword is {k true}, a
    symbol or a string {:tag m}, a vector {:param-tags v} (not in EDN); a symbol
-   form keeps none (a symbol carries no metadata here)."
+   form is a fresh symbol carrying the metadata."
   (let* ((m (rontolisp::%clojure-rd-required rd))
          (form (rontolisp::%clojure-rd-required rd))
          (meta
@@ -19216,7 +19301,13 @@
                   "Metadata must be Symbol,Keyword,String or Map"))
                 (t (rontolisp::%clojure-illegal-argument-exception
                     "Metadata must be Symbol,Keyword,String,Vector or Map")))))
-    (cond ((or (null form) (rontolisp::%clojure-real-symbol-p form)) form)
+    (cond ((null form) form)
+          ((rontolisp::%clojure-real-symbol-p form)
+           (rontolisp::%clojure-symbol-with-meta form meta))
+          ((rontolisp::%clojure-meta-symbol-p form)
+           (rontolisp::%clojure-symbol-with-meta (car (cdr form))
+            (rontolisp::%clojure-plist-table (car (cdr (cdr form)))
+             (rontolisp::%clojure-table-plist meta))))
           ((or (hash-table-p form) (and (vectorp form) (not (stringp form)))
                (rontolisp::%clojure-set-p form)
                (rontolisp::%clojure-record-p form)

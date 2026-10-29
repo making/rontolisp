@@ -77,6 +77,7 @@ backends, zero divergences -- nothing to fix, pin or cut as a follow-up.
 | identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
+| symbol carrying metadata | `(:C%SYMBOL sym meta)` over the bare symbol | read as the symbol by every symbol verb ("Vars and metadata") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one, a copy sharing the table's structure ("The copy a map verb takes") | the shared runtime (`.kb/hash-tables.md`), whose copy shares structure, so persistence holds on all four backends at O(log n) a verb with no representation of its own; a persistent-map library would add one every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`); members `=` only once evaluated: "Literal keys equal once evaluated" |
@@ -3660,7 +3661,7 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `a-run-time-expansion-reads-template-symbols-as-data`.
 - **An argument datum travels quoted and its answer decodes back (`decodeDatum`)**, so
   every reader form must survive the round trip. Macro arguments keep their reader
-  metadata through it (`quoteForMacro`, above). A regex literal answers its
+  metadata through it ("Vars and metadata", reader `^m x`). A regex literal answers its
   `(:C%PATTERN ...)`, decoded to `(%regex source)` (a fresh pattern; the oracle's
   expansion holds the one object). `#()` needs no decoding since it READS as `fn*` over
   plain symbols; until 2026-10-04 it read as `(fn %anon ...)`, whose marker matched by
@@ -6058,9 +6059,9 @@ the oracle's `MapExpr`/`SetExpr`; checked on `clj` 1.12.6, 2026-10-08):
 - Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a
   symbol or string `{:tag x}`, a vector `{:param-tags v}` (EDN refuses it), merged over the
   form's own with the outer winning; a non-IMeta form (number, string, keyword, char,
-  boolean, pattern) is `Metadata can only be applied to IMetas`; a symbol form takes none
-  (symbols carry no metadata here), nil is left alone (`()` reads as nil). Until then the
-  reader dropped it.
+  boolean, pattern) is `Metadata can only be applied to IMetas`; a symbol form is a
+  symbol carrying the metadata ("Vars and metadata", since 2026-10-29), nil is left alone
+  (`()` reads as nil). Until then the reader dropped it.
 - Namespace maps (`%clojure-rd-ns-map`, the oracle's NamespaceMapReader): `#:ns{}`,
   `#::{}`/`#::alias{}` against the call site's context; refusals in the oracle's words.
   The source reader takes them too (`ClojureReader.readNamespaceMap`): `#::` spells a
@@ -6859,17 +6860,61 @@ resolve var`.
   `%clojure-meta-table`; `meta` reads it, both under `%clojure-meta-guard` (as the var and
   namespace tables are under `%clojure-var-guard`/`%clojure-ns-guard`; all three made
   eagerly, `.kb/concurrent-served-requests.md`). IObj kinds only (a string, number, keyword,
-  boolean, atom, deftype or pattern signals; a symbol answers itself).
+  boolean, atom, deftype or pattern signals); a symbol answers a symbol carrying metadata
+  (below).
+- **Symbols carrying metadata** (2026-10-29, g85). A Clojure symbol is an interned CL
+  symbol (the interpreter's `LispSymbol` is equal by name, a wasm symbol one object per
+  name), so no metadata can sit on it: a symbol carrying metadata is
+  `(:C%SYMBOL sym meta)` over the bare symbol, made only with metadata by
+  `%clojure-symbol-with-meta` (nil metadata answers the bare symbol) -- `with-meta`/
+  `vary-meta` of a symbol, a quote or template of `^m sym`, a macro argument, a read.
+  Every verb taking a symbol reads it as its bare symbol through an arm of
+  `ClojureArms.Family.SYMBOL_META` (test `%clojure-meta-symbol-p`, view
+  `%clojure-symbol-bare`): `meta`, `with-meta`, `symbol?` (`ClojureFnLowering.symbolTest`'s
+  disjunct; `instance?` binds the value for it), the ident predicates, `name`/`namespace`/
+  `symbol`/`keyword`, the printer (its metadata ahead under `*print-meta*`, after the
+  `print-meta` clause), `str` (no metadata, the oracle's `toString`), `=` (the clause before
+  `equal`, past every kind that tells a wrapper apart), `compare`, both hashes, a call,
+  `ifn?`, `class`/the protocol tag (`:symbol`), `special-symbol?` and a `java:` member's
+  argument; `case` dispatches on the view where a symbol constant stands; a map key or set
+  member is stored and found as the bare symbol (`%clojure-table-key`/`%clojure-store-key`),
+  so its metadata stays behind (deviation: the oracle's key keeps it). `identical?` tells a
+  wrapper from its symbol, like the oracle's fresh `Symbol`. Until then `with-meta` of a
+  symbol put the metadata on the interned symbol itself, so `(meta 'x)` answered it after
+  any `(with-meta 'x m)` and every later expansion spelling the name decoded with it. A
+  program making no wrapper compiles byte-identically (checked 2026-10-29: a program of
+  `symbol?`, `=`, `case` on a symbol constant, `class`, `instance?` and a protocol extended
+  to `clojure.lang.Symbol`, as wasm and class); `with-meta`/`vary-meta` of anything make
+  the family live. `:arglists` stays without its parameters' hints
+  (`ClojureLowerUtil.stripMetaDeep`), so a hinted `defn` behind a `#'` makes none.
+  Pinned by clojure-spec `a-symbol-carrying-metadata-reads-as-its-bare-symbol`,
+  `ClojureArmsTest#thePrintMetaFamilyAndTheSymbolMetaFamily...`.
 - Reader `^m x` reads as `(%with-meta x m)` (a head no Clojure call spells; `#^` reads the
   same): dropped everywhere except on a collection literal, where it attaches without a
   copy, and on a `fn`/`fn*` or `reify`/`reify*` form, where it attaches to the function
   or instance built (unless the macro name is shadowed) -- the oracle attaches there
   too (malli's `^{:type ::schema} (reify ...)`, 2026-10-13, f66). A type hint never reaches
   `with-meta`. Layers merge outer-wins; a keyword is
-  `{:k true}`, a symbol or string `{:tag x}`. Quoted data strips it, but a macro
-  argument keeps it: `quoteForMacro` carries each `(%with-meta form meta)` as a
-  three-element list over the quoted parts, so the expansion decodes back with it
-  (a mutable deftype flag below a selecting macro survives; 2026-10-13, f66).
+  `{:k true}`, a symbol or string `{:tag x}`, a vector `{:param-tags v}`
+  (`ClojureCoreLowering.metaDataEntries`). A quote keeps it, like the oracle's
+  (`ClojureLowering.quoteData`, `ClojureCoreLowering.quotedWithMeta`: a symbol carrying a
+  map of data, a vector/map/set the map put on its fresh construction, a list on a
+  `copy-list` of its constant), and so does a macro argument, the same `quoteData` --
+  until 2026-10-29 it travelled as the three-element list `(%with-meta form meta)`, so a
+  body saw a list where the oracle hands it a symbol or vector (`(symbol? n)` false,
+  `(name n)` refused, `(meta n)` nil). A syntax-quote template keeps it too
+  (`ClojureMacroLowering.syntaxQuotedMeta`, the oracle's `(with-meta form (sq meta))`: the
+  map syntax-quoted, so `^String s#` carries `{:tag java.lang.String}` and `^long`
+  `clojure.core/long`; an unquoted form answers its value WITHOUT the metadata, the
+  oracle's early return, so `` `(def ^:private ~n 1) `` defines a public var; `^:m ~@xs`
+  splices); until then the template read `(%with-meta ...)` as a call of `user/%with-meta`
+  and every hinted gensym binding failed to lower. A macro expansion decodes a symbol
+  carrying metadata and a collection the macro-time table holds metadata for
+  (`collectMetas` over the expansion's collections, one `metasOf` evaluation) back to
+  `(%with-meta datum (%hash-map ...))`, which lowers like reader metadata: read where a
+  name is consumed, evaluated on a literal (the oracle's `MetaExpr`: a macro answering
+  `(with-meta [1] {:a '(+ 1 2)})` gives `{:a 3}`, and `^String [1]` through an identity
+  macro `{:tag java.lang.String}`, where the literal written in place keeps the symbol).
   On a definition's
   name, `^:dynamic` and `^:private` (bare or a non-false map entry) are read.
 
@@ -7216,10 +7261,9 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   registers it under `run-tests` through the reporting wrapper, like a `deftest`'s, so
   a `defspec` run under `run-tests` counts and reports. Only a `(fn ...)` value
   registers; a bare `^:test` flag or anything else does not. A macro varying its defn
-  name's metadata keeps it: `with-meta` of a symbol answers a fresh copy of the same
-  name carrying the metadata (so `=` still compares names, while `identical?` tells
-  the copy apart, both like the oracle's), and a macro expansion decodes such a
-  symbol with its metadata as reader metadata.
+  name's metadata keeps it: `with-meta` of a symbol answers a symbol carrying the
+  metadata ("Vars and metadata"), which a macro expansion decodes with its metadata as
+  reader metadata.
 - Deviations: definition order (the oracle's is map order); `thrown?` matches like `catch`
   ("Catching": on shcloj4 `examples.test.interop` (2026-10-14) the suite reads one error on
   the interpreter and the JVM -- the

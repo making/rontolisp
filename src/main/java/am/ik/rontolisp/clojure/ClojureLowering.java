@@ -3928,7 +3928,7 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "quote")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "quote takes one form");
-			return quote(items.get(1));
+			return quoteData(items.get(1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "def")) {
 			return ClojureBindingLowering.def(this, form, items);
@@ -5813,28 +5813,25 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A macro argument datum quoted for the expander: like {@link #quote(LispVal)} but
-	 * reader metadata ({@code (%with-meta form meta)}) travels as a three-element list
-	 * over the quoted form and metadata, so the expansion decodes back with it -- the
-	 * oracle hands a macro its argument forms with metadata, and a mutable deftype field
-	 * below a selecting macro (dynaload's {@code if-bb}) lowers only with its
-	 * {@code ^:volatile-mutable} flag intact.
-	 * @param datum the argument datum
-	 * @return the core form evaluating to the argument value
+	 * A datum as the value the oracle's reader answers for it, reader metadata
+	 * ({@code (%with-meta form meta)}) included: what a quote answers and what a macro
+	 * receives as an argument. A symbol carrying metadata is a fresh symbol carrying it,
+	 * a collection takes it, as a map of data
+	 * ({@link ClojureCoreLowering#quotedWithMeta}); a macro expansion decodes either back
+	 * with it, so a mutable deftype field below a selecting macro (dynaload's
+	 * {@code if-bb}) lowers with its {@code ^:volatile-mutable} flag intact.
+	 * @param datum the datum
+	 * @return the core form evaluating to the value
 	 */
-	LispVal quoteForMacro(LispVal datum) {
+	LispVal quoteData(LispVal datum) {
 		return quote(datum, true);
 	}
 
 	LispVal quote(LispVal datum, boolean keepMeta) {
 		if (keepMeta) {
-			List<LispVal> parts = ClojureLowerUtil.items(datum);
-			if (parts != null && parts.size() == 3
-					&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
-				return ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"),
-						List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
-								ClojureLowerUtil.dataSym(ClojureLowerUtil.READER_META)), quote(parts.get(1), true),
-								quote(parts.get(2), true)));
+			List<LispVal> layers = ClojureCoreLowering.metaLayers(datum);
+			if (!layers.isEmpty()) {
+				return ClojureCoreLowering.quotedWithMeta(this, ClojureLowerUtil.stripMeta(datum), layers);
 			}
 		}
 		LispVal bare = ClojureLowerUtil.stripMeta(datum);
