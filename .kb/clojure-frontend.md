@@ -1751,8 +1751,9 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   `deps.edn` naming test.check makes `(gen/sample (s/gen #{:a :b}) 4)` answer, and without it
   `s/gen` refuses in the oracle's `Could not locate clojure/test/check/generators...`.
   `(c/symbol ns)` computes its spec since g90 (`ClojureNamespaceLowering.computesSpecs`: a
-  qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A
-  compiled program refuses each of these by name (`.todo/h00` for the JVM).
+  qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A wasm
+  module refuses each of these by name; a JVM class lowers them through its run-time
+  lowering (`.kb/jvm-run-time-lowering.md`, not measured against spec's own probe).
 - **Gaps**, each refused where it runs: a bare predicate explains by its var's name only
   where it is a `defn` or a `def`'d fn literal ("Java interop", `.getClass` of a fn; a named
   local `fn` explains as `:clojure.spec.alpha/unknown`);
@@ -3944,15 +3945,17 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 
 ## Lowering at run time
 
-**Invariant: the interpreter keeps a Clojure program's lowering for its run, so a lowering
-verb over computed arguments lowers when it runs; a compiled program carries none and
-refuses by name** (g83, 2026-10-29). Verbs: `eval`; `resolve`, `find-var`, `ns-resolve`,
+**Invariant: the interpreter keeps a Clojure program's lowering for its run, and a JVM class
+carries its program and lowers it again, so a lowering verb over computed arguments lowers
+when it runs; a wasm module carries none and refuses by name** (g83, 2026-10-29; the JVM
+2026-10-30, `.kb/jvm-run-time-lowering.md`). Verbs: `eval`; `resolve`, `find-var`, `ns-resolve`,
 `requiring-resolve` of a computed symbol; `require`, `use` (a computed spec, or as a
 value), `refer`, `alias`, `ns-unmap`, `ns-unalias`, `in-ns` of computed names; `load`,
 `load-file`, `load-string` of computed arguments, `load-reader`; the namespace mappings of
 a computed namespace. Each `clojure.lisp` entry hands its verb and arguments to
-`%clojure-lower-at-run-time`, which refuses with the entry's message (the JVM and both wasm
-backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
+`%clojure-lower-at-run-time`, which refuses with the entry's message (both wasm backends);
+`LispEvaluator.installClojureRunTime` replaces it on the interpreter, and a JVM class's
+library splices the hand-off to the compiler it carries in its place.
 
 - **The datum.** `ClojureRunTime.datum`: `eval`'s form decoded, else `(clojure.core/verb
   'arg ...)` -- core-spelled so no program macro or definition captures the head; a
@@ -3988,16 +3991,17 @@ backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
 - **A program lowers open when it names an entry** (`ClojureRunTime.ENTRIES`, every library
   function reaching `%clojure-lower-at-run-time`; `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry`
   keeps the set equal to the library's): `lowerWhole(..., runTimeTarget)` lowers it again with
-  `open` (and `threadBinders`), only for the interpreter (`SourceLanguage.readClojure`,
-  `features` holding `rontolisp-interpreter`); the misses still re-lower the whole program.
+  `open` (and `threadBinders`), for the interpreter and the JVM (`SourceLanguage.readClojure`,
+  `features` holding `rontolisp-interpreter` or `rontolisp-jvm`; the JVM's also
+  `carriesRuntimes`); the misses still re-lower the whole program.
   `noteRuntimesEmitted` records what the open program carried, so a run-time datum emits only
   what it first needs (a runtime emitted twice starts its state over). Such a program takes
   the whole library, unstripped (`LispEvaluator.clojureProgram(Clojure.Program)`).
-- **Where it runs**: the command line's interpreter, `ClojureSpecE2eTest`'s interpreter leg,
-  a REPL and the playground (`SourceSession.attach`). Not a `.clj` a Common Lisp `load`
-  reads (its lowering is dropped), and not the JVM: a compiled class has no lowerer and its
-  values are not the interpreter's, so it would need the forms compiled against the running
-  class (`.todo/h00`). An nREPL server over the interpreter's is `.todo/h01`.
+- **Where it runs**: the command line's interpreter, a REPL and the playground
+  (`SourceSession.attach`), and a JVM class, which compiles each call's forms against
+  itself (`.kb/jvm-run-time-lowering.md`); `ClojureSpecE2eTest`'s interpreter and JVM legs.
+  Not a `.clj` a Common Lisp `load` reads (its lowering is dropped), nor a wasm module. An
+  nREPL server over the interpreter's is `.todo/h01`.
 - **Computed require specs** (`ClojureNamespaceLowering.computesSpecs`): an unquoted symbol
   naming a local or var, or an unquoted call, is a computed spec, `%clojure-load-libs-v`;
   until 2026-10-29 `(let [n 'clojure.set] (require n))` looked for namespace `n`. A call's
@@ -4010,7 +4014,7 @@ backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
   time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
   `the-interpreter-lowers-at-run-time` and `intern-var-set-and-with-redefs-fn`.
 - Pins: those two cases, `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (the
-  compiled backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
+  wasm backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
   decision), `ClojureSessionTest#evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns`,
   `#aDeclaredNameStaysOpenForALaterBuffer`.
 

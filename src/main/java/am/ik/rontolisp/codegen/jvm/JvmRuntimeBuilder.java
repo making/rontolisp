@@ -68,18 +68,16 @@ final class JvmRuntimeBuilder {
 
 	static final String FUN_NAME_DESC = "(I)Ljava/lang/String;";
 
-	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
-			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
-			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassEntry thisClass,
-			ClassEntry objectArrayClass, ClassEntry integerClass, MethodRefEntry integerValue, ClassEntry objectClass,
-			ClassEntry stringClass, @org.jspecify.annotations.Nullable MethodRefEntry applyRef,
-			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef,
-			@org.jspecify.annotations.Nullable FunctionNamespace namespace,
-			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
-			JvmUnsupplied unsupplied) {
-		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
-				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, namespace, false,
-				dispatcherName(arity, false), false, dispatchable, arityReporting, unsupplied);
+	/**
+	 * The function ids a class linked to others makes ({@code JvmLinkage}): a dispatcher
+	 * of such a class hands a function value whose id is outside them -- one another
+	 * class made -- to the host's router, with its arguments as a list.
+	 *
+	 * @param start the class's first id
+	 * @param end one past its last
+	 * @param apply the host's {@code _foreignApply(fn, argList, depth)}
+	 */
+	record Foreign(int start, int end, MethodRefEntry apply) {
 	}
 
 	/**
@@ -177,9 +175,9 @@ final class JvmRuntimeBuilder {
 	static final String ARITY_CHK_DESC = "(Ljava/lang/Object;I)V";
 
 	/**
-	 * As above, with {@code spread} selecting the SPREAD dispatcher {@code _invoke_v}:
-	 * one method over EVERY callable, taking the argument list as a single cons list
-	 * instead of one parameter per argument.
+	 * The dispatcher of one arity, {@code _invoke_<arity>}, or with {@code spread} the
+	 * SPREAD dispatcher {@code _invoke_v}: one method over EVERY callable, taking the
+	 * argument list as a single cons list instead of one parameter per argument.
 	 *
 	 * <p>
 	 * It exists because {@code _apply} cannot be expressed with the per-arity
@@ -203,6 +201,8 @@ final class JvmRuntimeBuilder {
 	 * @param checksDepth whether the dispatcher answers a depth past the value-tail limit
 	 * with the call's bounce: the copy only value tails call, which receives the calling
 	 * value tail's depth plus one ({@link JvmTailBounce#emitCopyEntryCheck})
+	 * @param foreign the class's own function ids, outside which a function value goes to
+	 * the host's router, or null for a class linked to none
 	 * @return the dispatcher method(s): one, or a router plus segments
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
@@ -213,7 +213,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef,
 			@org.jspecify.annotations.Nullable FunctionNamespace namespace, boolean spread, String name,
 			boolean checksDepth, @org.jspecify.annotations.Nullable Set<Integer> dispatchable,
-			ArityReporting arityReporting, JvmUnsupplied unsupplied) {
+			ArityReporting arityReporting, JvmUnsupplied unsupplied,
+			@org.jspecify.annotations.Nullable Foreign foreign) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1, int depth) -> Object,
 		// or (Object funcval, Object argList, int depth) -> Object for the spread
 		// dispatcher (dispatcherDesc).
@@ -393,6 +394,46 @@ final class JvmRuntimeBuilder {
 			code.checkcast(integerClass);
 			code.invokevirtual(integerValue);
 			code.istore(idSlot);
+			if (segment == 0 && foreign != null) {
+				// A function value another class made: its id is outside this class's,
+				// and the host's router hands it to the class that made it.
+				MethodCode.Label own = code.newLabel();
+				MethodCode.Label away = code.newLabel();
+				code.iload(idSlot);
+				code.loadConstant(cp, foreign.start());
+				code.if_icmplt(away);
+				code.iload(idSlot);
+				code.loadConstant(cp, foreign.end());
+				code.if_icmplt(own);
+				code.labelBinding(away);
+				if (spread) {
+					code.aload(0);
+					code.aload(1);
+				}
+				else {
+					code.aconst_null();
+					code.astore(restSlot);
+					for (int j = arity - 1; j >= 0; j--) {
+						code.iconst_2();
+						code.anewarray(objectClass);
+						code.dup();
+						code.iconst_0();
+						code.aload(j + 1);
+						code.aastore();
+						code.dup();
+						code.iconst_1();
+						code.aload(restSlot);
+						code.aastore();
+						code.astore(restSlot);
+					}
+					code.aload(0);
+					code.aload(restSlot);
+				}
+				code.iload(depthSlot);
+				code.invokestatic(foreign.apply());
+				code.areturn();
+				code.labelBinding(own);
+			}
 			// Interpreted closure (funcId == -1, created by the eval runtime's
 			// lambda): delegate to _apply with the arguments collected into a cons
 			// list. Segment 0 only: a chained segment sees the same id. The copy's miss

@@ -3423,7 +3423,7 @@ class ClojureLoweringTest {
 	private static @Nullable ClojureRunTime runTimeOf(String source, boolean runTimeTarget) {
 		return Clojure
 			.program(source, null, ClojureMacroTime.create(), ClojureFiles.NONE, true, ClojureBoundary.NONE,
-					runTimeTarget)
+					runTimeTarget, false)
 			.runTime();
 	}
 

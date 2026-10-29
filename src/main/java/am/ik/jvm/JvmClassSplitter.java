@@ -206,12 +206,35 @@ public final class JvmClassSplitter {
 	 */
 	public static Split write(ClassDefinition definition, @Nullable Set<String> shakeRoots,
 			Predicate<ClassDefinition.Method> pinned, int limit, Target target) {
+		return write(definition, shakeRoots, pinned, limit, target, false);
+	}
+
+	/**
+	 * {@link #write(ClassDefinition, Set, Predicate, int, Target)}, every member of every
+	 * class written without {@code ACC_PRIVATE} when {@code packageAccess} is set, as the
+	 * classes of a split are: classes defined later into the same package -- the forms a
+	 * program lowers as it runs, compiled against it -- read its fields and call its
+	 * methods.
+	 * @param definition the class
+	 * @param shakeRoots the methods the shake keeps by name, or {@code null} to keep
+	 * every method and field
+	 * @param pinned the methods that must stay in the main class beyond the ones this
+	 * class pins by itself
+	 * @param limit the entries one class may be filled to
+	 * @param target the version and class hierarchy to write against
+	 * @param packageAccess whether every member is written with package access
+	 * @return the classes
+	 */
+	public static Split write(ClassDefinition definition, @Nullable Set<String> shakeRoots,
+			Predicate<ClassDefinition.Method> pinned, int limit, Target target, boolean packageAccess) {
 		Scan scan = new Scan(definition);
 		boolean[] keptMethod = scan.graph.reach(shakeRoots).kept();
-		boolean[] keptField = scan.usedFields(keptMethod, shakeRoots != null);
+		// a class compiled later may read any field of a class written with package
+		// access, so every one stays
+		boolean[] keptField = scan.usedFields(keptMethod, shakeRoots != null && !packageAccess);
 		if (scan.oneClassSize(keptMethod, keptField) <= limit) {
 			try {
-				return oneClass(scan, keptMethod, keptField).write(definition, target);
+				return oneClass(scan, keptMethod, keptField).write(definition, target, packageAccess);
 			}
 			catch (ConstantPoolOverflowException fullPool) {
 				// The frames' own entries were the ones that did not fit: a pool within a
@@ -219,7 +242,7 @@ public final class JvmClassSplitter {
 			}
 		}
 		int budget = limit >= ConstantPool.MAX_INDEX ? ConstantPool.MAX_INDEX - RESERVED_ENTRIES : limit;
-		return place(scan, keptMethod, keptField, pinned, budget).write(definition, target);
+		return place(scan, keptMethod, keptField, pinned, budget).write(definition, target, packageAccess);
 	}
 
 	/** Everything kept, in the main class. */
@@ -298,7 +321,7 @@ public final class JvmClassSplitter {
 	 */
 	private record Placement(Scan scan, List<Part> parts, int[] owner, boolean[] keptMethod, boolean[] keptField) {
 
-		Split write(ClassDefinition definition, Target target) {
+		Split write(ClassDefinition definition, Target target, boolean packageAccess) {
 			boolean split = this.parts.size() > 1;
 			// Per Methodref of the definition naming a moved own method, the part (1..)
 			// that declares it; 0 for every other entry.
@@ -329,7 +352,7 @@ public final class JvmClassSplitter {
 			ClassFile classFile = ClassFile.of(
 					ClassFile.ClassHierarchyResolverOption.of(StackMapFrames.resolver(target.classes())),
 					ClassFile.StackMapsOption.GENERATE_STACK_MAPS, ClassFile.ShortJumpsOption.FAIL_ON_SHORT_JUMPS);
-			byte[] mainBytes = this.writeClass(classFile, definition, target, 0, movedTo, split);
+			byte[] mainBytes = this.writeClass(classFile, definition, target, 0, movedTo, split || packageAccess);
 			Map<String, byte[]> written = new LinkedHashMap<>();
 			for (int p = 1; p < this.parts.size(); p++) {
 				written.put(this.parts.get(p).name, this.writeClass(classFile, definition, target, p, movedTo, true));

@@ -327,11 +327,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the bindings where the value is called.
 - `eval`, `resolve`, `find-var`, `ns-resolve` and `requiring-resolve` of a computed
   symbol, `require`, `use`, `refer`, `alias`, `in-ns`, `load`, `load-file` and
-  `load-string` of computed arguments, and `load-reader` lower as the program runs only on
-  the interpreter, which keeps the program's lowering for its run (the REPL its session's).
-  A compiled program carries none, so on the JVM and both wasm backends they throw an
-  `UnsupportedOperationException` at run time, where the oracle evaluates and resolves. On
-  the interpreter such a call lowers like one REPL input, in the namespace `*ns*` holds:
+  `load-string` of computed arguments, and `load-reader` lower as the program runs on the
+  interpreter, which keeps the program's lowering for its run (the REPL its session's), and
+  in a JVM class, which carries its program and the compiler: the first such call lowers the
+  program again, and each call compiles what it lowers to into a class linked against the
+  running one, so every call loads a class (the output carries the compiler: beside a
+  `.class`, inside a `.jar`). A wasm module carries no lowering, so on both wasm backends
+  they throw an `UnsupportedOperationException` at run time, where the oracle evaluates and
+  resolves. On the JVM a name the program only declares and such a call defines stays
+  undefined for the program's own compiled forms. Such a call lowers like one REPL input, in
+  the namespace `*ns*` holds:
   what it defines joins the program for the later calls and inputs, but the forms lowered
   before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
   after it, and a name only it defines is unknown to the program's own forms (an `intern`
@@ -396,17 +401,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program's `*file*` is the entry file's path when it was compiled. The namespace mappings
   (`ns-publics`, `ns-map`, ...) answer what the lowering knows when the call lowers: a
   `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class,
-  and anything computed answers when the call runs on the interpreter and refuses in a
-  compiled program. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
+  and anything computed answers when the call runs on the interpreter and in a JVM class
+  and refuses in a wasm module. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
   the program lowers, so inside a body they still reach the whole file (the oracle's run
   when the body runs); a `load-string` of a literal declares ahead like a file, so the
   same form may already name what it defines (the oracle's needs a later form). The
   standalone `(refer-clojure ...)` wires the same `(:refer-clojure ...)` filter that
   way (`:only`, `:exclude`, `:rename`, answering `nil`). As values (`(apply require
   nses)`), `require`, `use` and `in-ns` load and switch when the call runs on the
-  interpreter; a compiled program refuses every application at run time with an
-  `UnsupportedOperationException`, since its libraries load and namespaces switch while it
-  lowers, where the oracle loads and switches (of no spec, `require` and `use` throw its
+  interpreter and in a JVM class; a wasm module refuses every application at run time with
+  an `UnsupportedOperationException`, since its libraries load and namespaces switch while
+  it lowers, where the oracle loads and switches (of no spec, `require` and `use` throw its
   `Nothing specified to load` everywhere).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as

@@ -10,7 +10,11 @@ import java.lang.classfile.constantpool.PoolEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
+import org.jspecify.annotations.Nullable;
 
 /**
  * The constant pool a generator mints its entries in: one {@code java.lang.classfile}
@@ -39,6 +43,15 @@ public final class ConstantPool {
 	private static final int MAX_UTF8_BYTES = 0xFFFF;
 
 	private final ConstantPoolBuilder entries = ConstantPoolBuilder.of();
+
+	/** The class whose own fields {@link #linkedFields} names live elsewhere, or null. */
+	private @Nullable String linkedFrom;
+
+	/**
+	 * A field of {@link #linkedFrom}'s by {@code name:descriptor}, to the internal name
+	 * of the class that declares it instead ({@link #linkFields}).
+	 */
+	private final Map<String, String> linkedFields = new HashMap<>();
 
 	/** Creates a new empty pool whose first entry takes index 1. */
 	public ConstantPool() {
@@ -232,7 +245,7 @@ public final class ConstantPool {
 	 * @return the Fieldref
 	 */
 	public FieldRefEntry fieldRef(ClassEntry owner, String name, String descriptor) {
-		return this.entries.fieldRefEntry(owner, this.nameAndType(name, descriptor));
+		return this.entries.fieldRefEntry(this.fieldOwner(owner, name, descriptor), this.nameAndType(name, descriptor));
 	}
 
 	/**
@@ -242,7 +255,40 @@ public final class ConstantPool {
 	 * @return the Fieldref
 	 */
 	public FieldRefEntry fieldRef(ClassEntry owner, Utf8Entry name, Utf8Entry descriptor) {
-		return this.entries.fieldRefEntry(owner, this.entries.nameAndTypeEntry(name, descriptor));
+		return this.entries.fieldRefEntry(this.fieldOwner(owner, name.stringValue(), descriptor.stringValue()),
+				this.entries.nameAndTypeEntry(name, descriptor));
+	}
+
+	/**
+	 * Links fields of a class to the classes that declare them instead: every reference
+	 * minted afterwards to one of {@code self}'s fields the map names refers to that
+	 * class's field, and the class declares none of them ({@link #isLinkedField}). What a
+	 * class compiled against a running one shares with it -- its globals, its run-time
+	 * state -- is linked this way.
+	 * @param self the class whose fields are linked
+	 * @param fields each linked field, {@code name:descriptor}, to the internal name of
+	 * the class declaring it
+	 */
+	public void linkFields(ClassEntry self, Map<String, String> fields) {
+		this.linkedFrom = self.asInternalName();
+		this.linkedFields.putAll(fields);
+	}
+
+	/**
+	 * @param name a field name
+	 * @param descriptor its descriptor
+	 * @return whether the field of the linked class is declared by another class
+	 */
+	public boolean isLinkedField(String name, String descriptor) {
+		return this.linkedFrom != null && this.linkedFields.containsKey(name + ":" + descriptor);
+	}
+
+	private ClassEntry fieldOwner(ClassEntry owner, String name, String descriptor) {
+		if (this.linkedFrom == null || !owner.asInternalName().equals(this.linkedFrom)) {
+			return owner;
+		}
+		String linked = this.linkedFields.get(name + ":" + descriptor);
+		return linked == null ? owner : this.classEntry(linked);
 	}
 
 	/**

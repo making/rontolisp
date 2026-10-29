@@ -20,6 +20,7 @@ import java.util.stream.Stream;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
+import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
@@ -33,6 +34,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
@@ -116,6 +118,49 @@ class ClojureSpecE2eTest {
 		backends.add(wasmBackend("WASM", spec.on("wasm"), wasmPreview1));
 		backends.add(wasmBackend("WASM_COMPONENT", spec.on("wasm_component"), wasmComponent));
 		return backends.stream();
+	}
+
+	/**
+	 * The case a JVM class lowers as it runs, compiled by the command line to a class and
+	 * to a jar, each run as a process of its own with nothing but its own output on the
+	 * class path: the class carries the compiler it hands the lowering verbs to.
+	 */
+	@Test
+	void aClassThatLowersAtRunTimeRunsAloneAsAClassAndAsAJar() throws Exception {
+		Case lowering = loadSpec().cases()
+			.stream()
+			.filter(c -> c.name().equals("the-interpreter-lowers-at-run-time"))
+			.findFirst()
+			.orElseThrow();
+		Path dir = Files.createTempDirectory(workDir, "run-time-lowering");
+		Path source = dir.resolve("rtl.clj");
+		// in the namespace the corpus runs it in, an earlier case's in-ns
+		Files.writeString(source, "(ns lit)\n" + lowering.source());
+		Path classes = dir.resolve("classes");
+		Path jar = dir.resolve("rtl.jar");
+		CliStack.call("run-time-lowering", () -> {
+			for (Path output : List.of(classes.resolve("Rtl.class"), jar)) {
+				new RontoLispCli(InputStream.nullInputStream(), System.out)
+					.run(new String[] { source.toString(), "-o", output.toString() });
+			}
+			return null;
+		});
+		String java = ProcessHandle.current().info().command().orElse("java");
+		assertThat(splitLines(exec(dir, java, "-cp", classes.toString(), "Rtl")))
+			.containsExactlyElementsOf(lowering.expectedLines());
+		assertThat(splitLines(exec(dir, java, "-jar", jar.toString())))
+			.containsExactlyElementsOf(lowering.expectedLines());
+	}
+
+	private static String exec(Path dir, String... command) throws Exception {
+		Path errors = Files.createTempFile(dir, "stderr", ".txt");
+		Process process = new ProcessBuilder(command).directory(dir.toFile()).redirectError(errors.toFile()).start();
+		process.getOutputStream().close();
+		String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor(300, java.util.concurrent.TimeUnit.SECONDS)).as("%s timed out", List.of(command))
+			.isTrue();
+		assertThat(process.exitValue()).as("%s: %s", List.of(command), Files.readString(errors)).isZero();
+		return stdout;
 	}
 
 	// run is null when there is no wasmtime to run it on.

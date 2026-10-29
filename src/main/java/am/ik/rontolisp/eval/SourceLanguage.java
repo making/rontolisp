@@ -182,12 +182,15 @@ public enum SourceLanguage {
 
 	/**
 	 * Reads a whole Clojure program for a run that lowers as the program runs where its
-	 * target does -- the interpreter's: a program naming a lowering verb over computed
-	 * arguments ({@code eval}, a computed {@code resolve} or {@code require} ...) keeps
-	 * its lowering for the run ({@link Clojure.Program#runTime}), which
-	 * {@link LispEvaluator#clojureProgram(Clojure.Program)} hands those verbs to.
+	 * target does -- the interpreter's and the JVM's: a program naming a lowering verb
+	 * over computed arguments ({@code eval}, a computed {@code resolve} or
+	 * {@code require} ...) lowers open and keeps its lowering
+	 * ({@link Clojure.Program#runTime}), which the interpreter hands those verbs to
+	 * ({@link LispEvaluator#clojureProgram(Clojure.Program)}) and a compiled JVM class
+	 * lowers again when it first runs one ({@code cli/JvmRunTimeLowering}).
 	 * @param source the program text
-	 * @param features the active reader features: the interpreter's lower at run time
+	 * @param features the active reader features: the interpreter's and the JVM's lower
+	 * at run time
 	 * @param file the origin file for diagnostics and for the source path, or
 	 * {@code null} when unknown
 	 * @param standards what the program is read against
@@ -199,18 +202,18 @@ public enum SourceLanguage {
 		if (this != CLOJURE) {
 			throw new IllegalStateException(this + " is no Clojure source");
 		}
-		return SourceProvenance.readingProgramSource(
-				() -> clojure(source, features, file, standards, loader, features.contains("rontolisp-interpreter")));
+		return SourceProvenance.readingProgramSource(() -> clojure(source, features, file, standards, loader,
+				features.contains("rontolisp-interpreter") || features.contains("rontolisp-jvm")));
 	}
 
 	private static Clojure.Program clojure(String source, Features features, @Nullable String file,
 			SourceStandards standards, @Nullable SourceLoader loader, boolean runTimeTarget) {
 		// The host is wherever the target is no wasm one: a java: member can throw and
-		// take an exception there.
+		// take an exception there. A JVM class links its library when it is compiled.
 		return Clojure.program(source, file,
 				loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
 				clojureFiles(loader, standards), !features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE,
-				runTimeTarget);
+				runTimeTarget, runTimeTarget && features.contains("rontolisp-jvm"));
 	}
 
 	/**

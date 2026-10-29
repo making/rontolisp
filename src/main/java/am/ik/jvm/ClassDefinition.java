@@ -276,8 +276,19 @@ public final class ClassDefinition {
 		 * @return this builder
 		 */
 		public Builder addField(int access, Utf8Entry name, Utf8Entry descriptor) {
+			if (this.cp.isLinkedField(name.stringValue(), descriptor.stringValue())) {
+				// declared by the class it is linked to (ConstantPool.linkFields)
+				return this;
+			}
 			this.fields.add(new Field(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor)));
 			return this;
+		}
+
+		/**
+		 * @return the fields added so far, in order
+		 */
+		public List<Field> fields() {
+			return List.copyOf(this.fields);
 		}
 
 		/**

@@ -4303,16 +4303,18 @@ cases:
       (clojure.core/* 2 21)
       :refused
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
-    # A compiled program carries no lowering, so eval and resolve of a computed symbol
+    # A wasm module carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
     # require, use and in-ns as values refuse any application the same way:
     # libraries load and namespaces switch while the program lowers (the oracle
     # loads clojure.set, prints nil twice and the namespace; of no spec it
     # throws "Nothing specified to load" wrapped in a CompilerException, and
     # names clojure.lang.RT/1 in in-ns's arity error). The interpreter keeps the
-    # program's lowering as it runs and answers them (the next case).
+    # program's lowering as it runs, and a JVM class lowers it again when it first
+    # runs a verb; both answer them (the next case).
     skip:
       interpreter: the interpreter lowers the verbs as the program runs
+      jvm: the class lowers the verbs as the program runs
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
@@ -4336,12 +4338,13 @@ cases:
     # they run, in *ns*, and what they define joins the program. A value no literal
     # spells (a function) stands in an eval'd form as itself; a form that does not
     # lower throws the oracle's CompilerException, a library no root holds its
-    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A compiled
-    # program carries no lowering, so there the verbs refuse (the case above).
+    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A JVM class
+    # carries its program's image and lowers it again when it first runs a verb,
+    # compiling each lowered call into a class linked against itself. A wasm module
+    # carries no lowering, so there the verbs refuse (the case above).
     skip:
-      jvm: a compiled program carries no lowering, so the verbs refuse at run time
-      wasm: a compiled program carries no lowering, so the verbs refuse at run time
-      wasm_component: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm: a wasm module carries no lowering, so the verbs refuse at run time
+      wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
     source: |
       (defn rtl-twice [x] (* 2 x))
       (def rtl-base 10)
