@@ -4,11 +4,12 @@
 
 型を再定義せずにプロトコルの型の行を置換します。型・メソッドごとに1つの格納ラムダ
 （`defmethod` 行同様。繰り返した型は後のグループが先の行を置換します。オラクル同様）。対象は
-`class` が答える種類（`String`、`Number`、`Boolean`、`Keyword`、`Symbol`、
+`class` が答える種類（`String`、`Long`、`Double`、`clojure.lang.Ratio`、`clojure.lang.BigInt`、`Boolean`、`Keyword`、`Symbol`、
 `Character`、`Map`、`Vector`、`Set`、`List`/`Seq`、それに外れ既定としての `nil`
 と `Object`。`java.lang.String`、`clojure.lang.IPersistentMap` のようなパッケージ修飾の綴りも可）、既知の record/deftype 名、それに値がインスタンスでありうる他のクラスです。
 他のクラスとは、throwable（`Throwable`、`Exception`、`ExceptionInfo` など）、
-`clojure.lang.IRef` や `clojure.lang.IDeref` のようなインタフェース、`java.util.Date`
+`clojure.lang.IRef` や `clojure.lang.IDeref` のようなインタフェース、`Number`（すべての数値が
+届きます）、`java.util.Date`
 （`java.sql.Timestamp` もここに届きます）、インタプリタと JVM ではホストのクラスです。
 自分のクラスの行がない値は、オラクル同様、プロトコルを extend したそれらのクラスを
 スーパークラス、インタフェースの順に（どちらも自分のスーパータイプより先に）試し、最後に

@@ -196,8 +196,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
-  `class` answers for it, merging every numeric spelling into `:number` (where the
-  oracle tells `Long` from `Double`); a true nil maps onto the `(:C%NIL)` marker,
+  `class` answers for it; a true nil maps onto the `(:C%NIL)` marker,
   so no table ever keys on nil, while a dispatch value that literally is `:nil`
   keeps its keyword row, like the oracle (a `class` call inside the dispatch
   function answers nil itself for a nil argument, so the null test maps it onto
@@ -205,16 +204,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   / `def`'d function re-lowered from its recorded definition, or a call to one
   nested inside an inline dispatch datum (inlined at the call site the same way),
   like the oracle);
-  an `Object` method catches past the search but ahead of the default. A throwable or
-  stream class stores under its name as a keyword (the one `class` answers), and the search
+  an `Object` method catches past the search but ahead of the default. A throwable,
+  stream or number class stores under its name as a keyword (the one `class` answers:
+  `:java.lang.Long`, `:java.lang.Double`, `:clojure.lang.Ratio`, `:clojure.lang.BigInt`,
+  `:java.lang.Number`), and the search
   follows its Java supers like the oracle's inheritance, interfaces (`java.io.Serializable`,
   `java.io.Closeable`) and `Object` included; `isa?`, `derive`, `underive`, `parents`,
   `ancestors` and `descendants` read a class spelling as the same keyword, so
   `(isa? (class "a") String)` is `true` and `parents`/`ancestors` of a class add its Java
-  supers like the oracle. A core kind (`:string`, `:number`, ...) adds the supers of the
+  supers like the oracle. A core kind (`:string`, `:map`, ...) adds the supers of the
   values it stands for: a function `isa?` `clojure.lang.IFn` and its `ancestors` hold it,
   interfaces and `Object` included, like the oracle's inheritance; a class name in value
-  position reads as that keyword (`(= clojure.lang.IFn (class (fn [])))` stays `false`).
+  position reads as that keyword (`(= clojure.lang.IFn (class (fn [])))` stays `false`),
+  and so does a number's class (`(= Long (class 1))` is `true`; `Long` prints as
+  `:java.lang.Long`).
   A record or a deftype stands for host classes that are no one value here: it `isa?`
   `Object` and its `ancestors` add `Object`, but its host class's other supers are not
   modeled. Since the
@@ -226,8 +229,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `false`. Any other class (`java.util.AbstractList`) is its class object, in a dispatch value too,
   like the oracle.
   Protocol dispatch reads no hierarchy (`derive`): past the exact tag it tries only the
-  classes the protocol was extended to, then the `Object` default. It merges
-  `Long`/`Double` into `:number`, where the oracle tells them apart, and two
+  classes the protocol was extended to, then the `Object` default. Two
   `clojure.lang` interfaces one value implements are ordered by the kinds of value each
   holds (`IRef` ahead of `IDeref`), since `clojure.lang` is not on this class path.
 - `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
@@ -372,8 +374,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`; a bit operation takes an
   `N`-suffixed literal in range as its plain integer, where the oracle refuses its `BigInt`.
-- `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
-  the oracle answers host classes, which no wasm backend has. A record or deftype
+- `class` answers a keyword naming the kind (`:string`, `:keyword`, `:map`, ...);
+  the oracle answers host classes, which no wasm backend has. A number answers its
+  class's name as a keyword (`:java.lang.Long`, `:java.lang.Double`,
+  `:clojure.lang.Ratio`, `:clojure.lang.BigInt` past a long); `1N` is a `Long` and a
+  decimal a `Ratio` here, since both read as plain numbers. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - A [byte array](reference/byte-array.md) prints as the oracle's `#object["[B" ...]` without
   the identity hash, and `str` answers `[B` (the oracle's `[B@1b6d3586`). `aset` stores any
@@ -392,7 +397,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   member converts its fixnum argument as the oracle converts its number (one candidate
   of the arity takes its arguments however they convert, on both).
   `instance?` of `Byte`/`Short`/`Integer` is false for a cast (and of `Long` true),
-  `class` answers `:number`, and `.compareTo` reads the cast as its `Long` (the oracle
+  `class` answers `:java.lang.Long`, and `.compareTo` reads the cast as its `Long` (the oracle
   throws handing a `Long` to `Byte.compareTo`). Boxing the casts would move the whole
   value model (`+`, `=`, printing, every `unmarshal`) on every backend for that one
   overload family, so the casts stay plain integers.

@@ -22,6 +22,8 @@ class ClojureClassBasesTest {
 		names.addAll(ClojureClassBases.IO_SUPERS.keySet());
 		names.addAll(ClojureClassBases.TABLED_INTERFACES);
 		names.addAll(ClojureClassBases.TIME_VALUE_DISPATCH.keySet());
+		names.addAll(ClojureClassBases.NUMBER_SUPERS.keySet());
+		names.add(ClojureClassBases.NUMBER);
 		names.addAll(List.of(ClojureThrowables.THROWABLE, ClojureClassBases.OBJECT));
 		for (String name : names) {
 			if (name.startsWith("java.")) {

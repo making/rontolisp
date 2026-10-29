@@ -104,8 +104,11 @@ final class ClojureValueClasses {
 		/** {@code java.lang.Boolean}. */
 		BOOLEAN(List.of("java.lang.Boolean", SERIALIZABLE, COMPARABLE, CONSTABLE)),
 
-		/** An integer: {@code java.lang.Long} (a bignum too, the oracle's BigInt). */
+		/** An integer a long holds: {@code java.lang.Long}. */
 		LONG(List.of("java.lang.Long", SERIALIZABLE, COMPARABLE, NUMBER, CONSTABLE, CONSTANT_DESC)),
+
+		/** An integer past a long: {@code clojure.lang.BigInt}. */
+		BIGINT(List.of("clojure.lang.BigInt", SERIALIZABLE, NUMBER, "clojure.lang.IHashEq")),
 
 		/** {@code java.lang.Double}. */
 		DOUBLE(List.of("java.lang.Double", SERIALIZABLE, COMPARABLE, NUMBER, CONSTABLE, CONSTANT_DESC)),
@@ -273,6 +276,12 @@ final class ClojureValueClasses {
 
 	private static final Set<String> NAMED = named();
 
+	/**
+	 * The number kinds: a class every one of them is an instance of tests them at once
+	 * ({@code numberp}).
+	 */
+	static final List<Kind> NUMBER_KINDS = List.of(Kind.LONG, Kind.BIGINT, Kind.DOUBLE, Kind.RATIO);
+
 	private ClojureValueClasses() {
 	}
 
@@ -317,7 +326,10 @@ final class ClojureValueClasses {
 			case STRING -> "string";
 			case CHAR -> "char";
 			case BOOLEAN -> "boolean";
-			case LONG, DOUBLE, RATIO -> "number";
+			case LONG -> "java.lang.Long";
+			case BIGINT -> "clojure.lang.BigInt";
+			case DOUBLE -> "java.lang.Double";
+			case RATIO -> "clojure.lang.Ratio";
 			case KEYWORD -> "keyword";
 			case SYMBOL -> "symbol";
 			case VECTOR, MAP_ENTRY -> "vector";
@@ -347,18 +359,18 @@ final class ClojureValueClasses {
 	 * {@link ClojureClassBases#KINDS} names that name a kind here) to the kinds whose
 	 * values it stands for. A kind stands for the one host class its values have here, so
 	 * the row is every kind's classes -- the value's own first where it has one -- merged
-	 * in {@link Kind} order where a keyword stands for several ({@code :number} is
-	 * {@code Long}, {@code Double} and {@code Ratio}; {@code :vector} both a vector and a
-	 * map entry, the {@code map-entry?} deviation), with {@code java.lang.Object} last:
-	 * the oracle's {@code supers} include it for every one of these values' classes, and
-	 * the hierarchy bridge ({@code (isa? (class 1) :o)} past {@code (derive Object :o)})
-	 * walks through it.
+	 * in {@link Kind} order where a keyword stands for several ({@code :vector} both a
+	 * vector and a map entry, the {@code map-entry?} deviation), with
+	 * {@code java.lang.Object} last (a number's class is a chained class instead, with
+	 * the oracle's bases: {@link ClojureClassBases#NUMBER_SUPERS}): the oracle's
+	 * {@code supers} include it for every one of these values' classes, and the hierarchy
+	 * bridge ({@code (isa? (class 1) :o)} past {@code (derive Object :o)}) walks through
+	 * it.
 	 */
 	private static final Map<String, List<Kind>> KIND_SUPERS = Map.ofEntries(
 			Map.entry("boolean", List.of(Kind.BOOLEAN)), Map.entry("char", List.of(Kind.CHAR)),
 			Map.entry("string", List.of(Kind.STRING)), Map.entry("keyword", List.of(Kind.KEYWORD)),
-			Map.entry("symbol", List.of(Kind.SYMBOL)), Map.entry("number", List.of(Kind.LONG, Kind.DOUBLE, Kind.RATIO)),
-			Map.entry("vector", List.of(Kind.VECTOR, Kind.MAP_ENTRY)),
+			Map.entry("symbol", List.of(Kind.SYMBOL)), Map.entry("vector", List.of(Kind.VECTOR, Kind.MAP_ENTRY)),
 			Map.entry("list", List.of(Kind.LIST, Kind.LAZY_SEQ)), Map.entry("map", List.of(Kind.MAP, Kind.SORTED_MAP)),
 			Map.entry("set", List.of(Kind.SET, Kind.SORTED_SET)), Map.entry("function", List.of(Kind.FUNCTION)),
 			Map.entry("atom", List.of(Kind.ATOM)), Map.entry("pattern", List.of(Kind.PATTERN)),

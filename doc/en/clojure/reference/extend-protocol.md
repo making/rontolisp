@@ -4,12 +4,14 @@
 
 Replaces a protocol's row for a type without redefining the type: one stored lambda per
 method per type, like `defmethod` rows (a repeated type's later group replaces the
-earlier row, like the oracle). Targets are the kinds `class` answers (`String`, `Number`, `Boolean`,
+earlier row, like the oracle). Targets are the kinds `class` answers (`String`, `Long`, `Double`,
+`clojure.lang.Ratio`, `clojure.lang.BigInt`, `Boolean`,
 `Keyword`, `Symbol`, `Character`, `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil`
 and `Object` as the miss default; package-qualified spellings such as `java.lang.String` or
 `clojure.lang.IPersistentMap` too), known record/deftype names, and any other class a value
 may be an instance of: a throwable (`Throwable`, `Exception`, `ExceptionInfo`, ...), an
-interface such as `clojure.lang.IRef` or `clojure.lang.IDeref`, `java.util.Date` (which a
+interface such as `clojure.lang.IRef` or `clojure.lang.IDeref`, `Number` (which every number
+reaches), `java.util.Date` (which a
 `java.sql.Timestamp` reaches too), and on the interpreter and the JVM a host class. A value
 with no row of its own class tries those the protocol was extended to, like the oracle: the
 superclasses first, then the interfaces, each ahead of its own supertypes, then `Object`. An

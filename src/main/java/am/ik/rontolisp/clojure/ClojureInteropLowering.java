@@ -1602,8 +1602,10 @@ final class ClojureInteropLowering {
 	/**
 	 * A bare class name in value position ({@code String}, an imported class, a dotted
 	 * name): the class object, the same {@code Class.forName} answer the oracle's class
-	 * literal prints and compares by. Null when the name is no loadable class (a typo
-	 * keeps the unknown-name refusal at compile time) or names a record or deftype.
+	 * literal prints and compares by; a number's class ({@code Long}, {@code Double}) the
+	 * keyword {@code class} answers for its values. Null when the name is no loadable
+	 * class (a typo keeps the unknown-name refusal at compile time) or names a record or
+	 * deftype.
 	 */
 	static @Nullable LispVal classValue(ClojureLowering ctx, String name) {
 		if (name.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, name) || ctx.typeKeyOf(name) != null) {
@@ -1612,6 +1614,11 @@ final class ClojureInteropLowering {
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
 		if (!ClojureHostClasses.exists(cls)) {
 			return null;
+		}
+		if (ClojureClassBases.NUMBER_SUPERS.containsKey(cls)) {
+			// a number's class is the keyword class answers for its values, on every
+			// backend, so (= Long (class 1)) holds like the oracle's
+			return ClojureCollectionLowering.keywordForm(cls);
 		}
 		if (!ctx.hostTarget) {
 			// where no host is, a class literal is its (:C%CLASS name)

@@ -358,14 +358,13 @@ final class ClojureDispatchLowering {
 			return answer.apply(ClojureFnLowering.symbolRaw(ctx, lowered));
 		}
 		// every number kind is one numberp
-		boolean numbers = kinds.containsAll(List.of(ClojureValueClasses.Kind.LONG, ClojureValueClasses.Kind.DOUBLE,
-				ClojureValueClasses.Kind.RATIO));
+		boolean numbers = kinds.containsAll(ClojureValueClasses.NUMBER_KINDS);
 		List<Arm> arms = new ArrayList<>();
 		for (ClojureValueClasses.Kind kind : kinds) {
 			if (numbers && kind == ClojureValueClasses.Kind.LONG) {
 				arms.add(cl(Use.ONCE, "numberp"));
 			}
-			else if (!numbers || (kind != ClojureValueClasses.Kind.DOUBLE && kind != ClojureValueClasses.Kind.RATIO)) {
+			else if (!numbers || !ClojureValueClasses.NUMBER_KINDS.contains(kind)) {
 				arms.add(kindArm(ctx, kind));
 			}
 		}
@@ -489,7 +488,8 @@ final class ClojureDispatchLowering {
 					v -> ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), v, ClojureLowering.TRUE_CONST),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), v, ctx.falseVariable)));
-			case LONG -> cl(Use.ONCE, "integerp");
+			case LONG -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-INT");
+			case BIGINT -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-BIGINT");
 			case DOUBLE -> cl(Use.ONCE, "floatp");
 			case RATIO -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-RATIO");
 			case KEYWORD -> new Arm(Use.MANY, ClojureFilterLowering::keywordTest);
@@ -659,7 +659,7 @@ final class ClojureDispatchLowering {
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),
 				ClojureCollectionLowering.keywordForm("string")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), one),
-				ClojureCollectionLowering.keywordForm("number")));
+				ClojureLowerUtil.list(new LispSymbol(NUMBER_CLASS), one)));
 		branches.add(ClojureLowerUtil.list(ClojureCollectionLowering.isSetForm(one),
 				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), one),
@@ -695,6 +695,14 @@ final class ClojureDispatchLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
 	}
+
+	/**
+	 * The keyword of a number's class ({@code clojure.lisp}): {@code :java.lang.Long},
+	 * {@code :clojure.lang.BigInt} past a long, {@code :java.lang.Double} or
+	 * {@code :clojure.lang.Ratio}, so a {@code Long} method and a {@code Double} one are
+	 * two rows, like the oracle's two classes.
+	 */
+	static final String NUMBER_CLASS = "RONTOLISP::%CLOJURE-NUMBER-CLASS";
 
 	/** The keyword of the host class a stream's printer names ({@code clojure.lisp}). */
 	static LispVal streamClassKeyword(LispVal stream) {
@@ -815,19 +823,17 @@ final class ClojureDispatchLowering {
 	/**
 	 * The host spellings a {@code defmethod} dispatch value may name, to the
 	 * {@code class}-keyword the dispatcher actually produces for them. The table mirrors
-	 * {@code class} (and {@code extend-protocol} targets): every numeric spelling merges
-	 * into {@code :number} (the oracle tells {@code Long} from {@code Double}, which no
-	 * wasm backend has -- the documented merge), every collection spelling into its kind.
+	 * {@code class} (and {@code extend-protocol} targets): every collection spelling
+	 * merges into its kind. A number's class is no kind: {@code class} answers its own
+	 * name's keyword, a chained class ({@link ClojureClassBases#NUMBER_SUPERS}).
 	 */
 	static final Map<String, String> DISPATCH_CLASS_KEYWORDS = Map.ofEntries(Map.entry("String", "string"),
-			Map.entry("CharSequence", "string"), Map.entry("Number", "number"), Map.entry("Long", "number"),
-			Map.entry("Double", "number"), Map.entry("Integer", "number"), Map.entry("Float", "number"),
-			Map.entry("Short", "number"), Map.entry("Byte", "number"), Map.entry("Boolean", "boolean"),
-			Map.entry("Keyword", "keyword"), Map.entry("Symbol", "symbol"), Map.entry("Character", "char"),
-			Map.entry("Char", "char"), Map.entry("Map", "map"), Map.entry("IPersistentMap", "map"),
-			Map.entry("Vector", "vector"), Map.entry("IPersistentVector", "vector"), Map.entry("Set", "set"),
-			Map.entry("IPersistentSet", "set"), Map.entry("List", "list"), Map.entry("Seq", "list"),
-			Map.entry("Sequential", "list"), Map.entry("Collection", "list"), Map.entry("IPersistentList", "list"),
+			Map.entry("CharSequence", "string"), Map.entry("Boolean", "boolean"), Map.entry("Keyword", "keyword"),
+			Map.entry("Symbol", "symbol"), Map.entry("Character", "char"), Map.entry("Char", "char"),
+			Map.entry("Map", "map"), Map.entry("IPersistentMap", "map"), Map.entry("Vector", "vector"),
+			Map.entry("IPersistentVector", "vector"), Map.entry("Set", "set"), Map.entry("IPersistentSet", "set"),
+			Map.entry("List", "list"), Map.entry("Seq", "list"), Map.entry("Sequential", "list"),
+			Map.entry("Collection", "list"), Map.entry("IPersistentList", "list"),
 			Map.entry("IPersistentCollection", "list"), Map.entry("Fn", "function"), Map.entry("IFn", "function"),
 			Map.entry("Function", "function"), Map.entry("Atom", "atom"));
 
