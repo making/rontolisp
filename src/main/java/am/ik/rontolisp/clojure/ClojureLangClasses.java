@@ -31,6 +31,13 @@ final class ClojureLangClasses {
 	static final String PERSISTENT_QUEUE = "clojure.lang.PersistentQueue";
 
 	/**
+	 * {@code clojure.lang.PersistentArrayMap}, whose {@code EMPTY} and
+	 * {@code createAsIfByAssoc} map destructuring's expansion spells: the empty map and
+	 * the map of an array's keys and values ({@link #staticCall}), with no namespace.
+	 */
+	static final String PERSISTENT_ARRAY_MAP = "clojure.lang.PersistentArrayMap";
+
+	/**
 	 * Each class's static fields, by name, with the var of {@link #NAMESPACE} holding it.
 	 */
 	private static final Map<String, Map<String, String>> STATICS = Map.of(PERSISTENT_QUEUE,
@@ -110,6 +117,12 @@ final class ClojureLangClasses {
 			// is the same build over its array (tools.reader's map reader)
 			case "PersistentArrayMap/createWithCheck/1", "RT/map/1" ->
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CREATE-WITH-CHECK"), args.get(0));
+			// the map an array's keys and values make as if by assoc, a later key
+			// replacing an earlier one: map destructuring's coercion of a seq
+			case "PersistentArrayMap/createAsIfByAssoc/1" ->
+				ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
+						new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
+						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
 			// the duplicate-checking set build over a List's members (tools.reader's
 			// set reader)
 			case "PersistentHashSet/createWithCheck/1" -> ClojureLowerUtil.list(
@@ -172,6 +185,10 @@ final class ClojureLangClasses {
 		String global = runtimeStatic(cls, member);
 		if (global != null) {
 			return new LispSymbol(global);
+		}
+		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("EMPTY")) {
+			// the empty map, which map destructuring's expansion spells
+			return ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map")));
 		}
 		Map<String, String> statics = STATICS.get(cls);
 		String var = statics == null ? null : statics.get(member);

@@ -54,6 +54,37 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * The class name of a fn, what {@code .getClass} of one names ({@code clojure.lisp}):
+	 * the producer of {@link ClojureArms.Family#FN_CLASS}, whose registrations only a
+	 * program reading it keeps.
+	 */
+	static final String FN_CLASS_NAME = "RONTOLISP::%CLOJURE-FN-CLASS-NAME";
+
+	/**
+	 * The statement registering a var's function under the class the oracle compiles it
+	 * to ({@code clojure.lisp}).
+	 */
+	static final String NOTE_FN_CLASS = "RONTOLISP::%CLOJURE-NOTE-FN-CLASS";
+
+	/**
+	 * The statement behind a definition registering its function under the oracle's class
+	 * name for it, {@code ns$name} munged (a dot in the name {@code _DOT_}): a
+	 * {@code defn}'s, and a {@code def}'s whose value is a fn literal. A statement arm of
+	 * {@link ClojureArms.Family#FN_CLASS}, so only a program reading a fn's class keeps
+	 * it.
+	 * @param fn the pure read of the function (its {@code function} designator, or the
+	 * value cell once stored)
+	 * @param key the var key ({@code ns/name})
+	 * @return the statement
+	 */
+	static LispVal noteFnClass(LispVal fn, String key) {
+		int slash = key.indexOf('/');
+		String className = ClojureLowerUtil.munge(key.substring(0, slash)) + "$"
+				+ ClojureLowerUtil.munge(key.substring(slash + 1)).replace(".", "_DOT_");
+		return ClojureLowerUtil.list(new LispSymbol(NOTE_FN_CLASS), fn, LispString.literal(className));
+	}
+
+	/**
 	 * The receiver's local name inside an arm: the {@code %} suffix keeps it generated.
 	 */
 	private static final String RECV = "recv%";
@@ -428,12 +459,10 @@ final class ClojureValueMethodLowering {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
 		// a fn's own class, the designator of the class the oracle compiles it to (a
-		// core function's clojure.core$name, else an anonymous fn's), where class
-		// answers the one fn kind; any other value's class
-		row("getClass", 0,
-				new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
-						new LispSymbol(":C%CLASS"), part(ctx, "RONTOLISP::%CLOJURE-FN-CLASS-NAME"))),
-				arm(List.of(), core("class", R)));
+		// core function's clojure.core$name, a defn's ns$name, else an anonymous fn's),
+		// where class answers the one fn kind; any other value's class
+		row("getClass", 0, new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
+				new LispSymbol(":C%CLASS"), part(ctx, FN_CLASS_NAME))), arm(List.of(), core("class", R)));
 		// .isArray of a class keyword: only a byte array's class ([B) is an array
 		// class here (a char[] is a vector of characters, a host array unmarshals
 		// to a list), so its name decides, like the oracle's Class#isArray

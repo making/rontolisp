@@ -15683,28 +15683,43 @@
       (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
 
 ;; A function's class name, what (.getClass f) names: the oracle compiles every
-;; fn to a class of its own, ns$name for a defn or a core var's root and
-;; ns$enclosing$fn__N for an anonymous one, which demunging readers (spec.alpha's
-;; fn-sym, a stack trace printer) read back as the var. A core function shared
-;; through the table above knows its name, so it answers clojure.core$NAME; no
-;; other function here carries one, so it answers the spelling of an anonymous
-;; fn under clojure.lang.AFunction, the class type answers for every function.
+;; fn to a class of its own, ns$name for a defn, a def'd fn literal or a core
+;; var's root and ns$enclosing$fn__N for an anonymous one, which demunging
+;; readers (spec.alpha's fn-sym, a stack trace printer) read back as the var. A
+;; definition registers its function under its class name beside it (a
+;; statement only a program reading a fn's class keeps); a core function shared
+;; through the table above knows its name, so it answers clojure.core$NAME; any
+;; other function answers the spelling of an anonymous fn under
+;; clojure.lang.AFunction, the class type answers for every function.
+
+(defvar rontolisp::%clojure-fn-classes (make-hash-table :test 'eq))
+
+(defun rontolisp::%clojure-note-fn-class (f name)
+  "A statement: the function F registered under the class name NAME (the
+   oracle's ns$name of the var it defines); answers F."
+  (setf (gethash f rontolisp::%clojure-fn-classes) name)
+  f)
 
 (defun rontolisp::%clojure-fn-class-name (f)
-  "The oracle's class name of the function F: clojure.core$NAME munged for a
-   core function the shared-value table holds, else an anonymous fn's."
-  (let ((found nil))
-    (maphash (lambda (key value)
-               (if (and (null found) (eq value f))
-                   (let ((cut
-                          (position-if
-                           (lambda (c) (or (char= c #\Space) (char= c #\#)))
-                           key)))
-                     (setq found (if cut (subseq key 0 cut) key)))))
-             rontolisp::%clojure-shared-values)
+  "The oracle's class name of the function F: the one its definition
+   registered, clojure.core$NAME munged for a core function the shared-value
+   table holds, else an anonymous fn's."
+  (let ((found (gethash f rontolisp::%clojure-fn-classes)))
     (if found
-        (concatenate 'string "clojure.core$" (rontolisp::%clojure-munge found))
-        "clojure.lang.AFunction$fn")))
+        found
+        (progn
+          (maphash (lambda (key value)
+                     (if (and (null found) (eq value f))
+                         (let ((cut
+                                (position-if (lambda (c)
+                                               (or (char= c #\Space)
+                                                   (char= c #\#))) key)))
+                           (setq found (if cut (subseq key 0 cut) key)))))
+                   rontolisp::%clojure-shared-values)
+          (if found
+              (concatenate 'string "clojure.core$"
+                           (rontolisp::%clojure-munge found))
+              "clojure.lang.AFunction$fn")))))
 
 ;; clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts
 ;; sets and its assert reads: false until a program sets it (the oracle starts
@@ -15733,6 +15748,14 @@
 (defun rontolisp::%clojure-rt-next-id ()
   "RT/nextID: the next id, one above the last."
   (setq rontolisp::%clojure-next-id (+ rontolisp::%clojure-next-id 1)))
+
+(defun rontolisp::%clojure-auto-gensym (prefix)
+  "The fresh symbol a syntax-quote's PREFIX# names, spelled PREFIX__N__auto__
+   like the oracle's, N drawn from RT/nextID's count, so it never spells a name
+   tools.reader's syntax-quote spelled."
+  (make-symbol (concatenate 'string prefix "__"
+                            (princ-to-string (rontolisp::%clojure-rt-next-id))
+                            "__auto__")))
 
 ;;;; Atoms across request threads.
 ;;

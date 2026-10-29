@@ -121,6 +121,7 @@ final class ClojureBindingLowering {
 			// unbound one holds the unbound root
 			return valuelessDefForms(ctx, key, dynamic, metaStore, hoisted);
 		}
+		List<LispVal> forms;
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
 			// and proclaims it, so binding rebinds it with dynamic extent; the
@@ -137,19 +138,38 @@ final class ClojureBindingLowering {
 						ClojureLowering.boundDepthSym(key)));
 				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
-				return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key),
-						metaStore);
+				forms = new ArrayList<>(withMetaStore(
+						ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
 			}
-			List<LispVal> forms = new ArrayList<>(List.of(
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
-							ClojureStateLowering.validatedInit(value, key)),
-					ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
-							new LispInteger(0))));
-			forms.addAll(0, metaStore);
-			return forms;
+			else {
+				forms = new ArrayList<>(List.of(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
+								ClojureStateLowering.validatedInit(value, key)),
+						ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+								new LispInteger(0))));
+				forms.addAll(0, metaStore);
+			}
 		}
-		return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore);
+		else {
+			forms = new ArrayList<>(withMetaStore(
+					ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
+		}
+		if (isFnLiteral(items.get(at))) {
+			// the class the oracle compiles a def'd fn literal to, which .getClass names
+			forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowering.varSym(key), key));
+		}
+		return forms;
+	}
+
+	/**
+	 * Whether a {@code def}'s value datum is a fn literal ({@code fn}, {@code fn*}, a
+	 * {@code #(...)}), whose function the oracle compiles to the var's own class.
+	 */
+	private static boolean isFnLiteral(LispVal valueDatum) {
+		List<LispVal> parts = ClojureLowerUtil.items(valueDatum);
+		return parts != null && !parts.isEmpty() && (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn")
+				|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn*"));
 	}
 
 	/**
@@ -460,6 +480,9 @@ final class ClojureBindingLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key))));
 		}
+		// the class the oracle compiles the function to, which .getClass names
+		forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+				key));
 		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
 		return forms;
 	}
@@ -1181,7 +1204,7 @@ final class ClojureBindingLowering {
 		List<List<LispVal>> fnspecs = new ArrayList<>();
 		for (LispVal spec : specs) {
 			List<LispVal> parts = ClojureLowerUtil.items(spec);
-			if (parts == null || parts.size() < 3) {
+			if (parts == null || parts.size() < 2) {
 				throw new LispReadException("a letfn binding takes a name and a function, not " + spec.print());
 			}
 			scope.put(ClojureLowerUtil.plainName(parts.get(0), "letfn"), ClojureLowering.Kind.FUNCTION);
@@ -1222,6 +1245,118 @@ final class ClojureBindingLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), functions, ClojureLowerUtil
 						.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(copies), body)));
 		});
+	}
+
+	/**
+	 * {@code (let* [name init ...] body...)}: the special form under {@code let}, which
+	 * binds names only -- the macro destructured before it -- each init seeing the names
+	 * before it, and answers nil with no body, like the oracle's.
+	 */
+	static LispVal letStar(ClojureLowering ctx, List<LispVal> items) {
+		specialBindings(items);
+		return let(ctx, withBody(items));
+	}
+
+	/**
+	 * {@code (loop* [name init ...] body...)}: the special form under {@code loop}, a
+	 * recur target over names only.
+	 */
+	static LispVal loopStar(ClojureLowering ctx, List<LispVal> items) {
+		specialBindings(items);
+		return loop(ctx, withBody(items));
+	}
+
+	/**
+	 * {@code (letfn* [name (fn name [params] body...) ...] body...)}: the special form
+	 * under {@code letfn}, every name in reach of every function and of the body. Each
+	 * init is a function form, as the oracle's compiler requires, here one named like its
+	 * binding or not named at all (the {@code letfn} macro's shape), which lowers as the
+	 * {@code letfn} entry {@code (name [params] body...)}.
+	 */
+	static LispVal letfnStar(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> bindings = specialBindings(items);
+		List<LispVal> specs = new ArrayList<>();
+		specs.add(ClojureReader.VECTOR);
+		for (int i = 0; i < bindings.size(); i += 2) {
+			LispVal name = bindings.get(i);
+			String binding = ((LispSymbol) ClojureLowerUtil.stripMeta(name)).name();
+			List<LispVal> fn = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(bindings.get(i + 1)));
+			if (fn == null || fn.size() < 2 || !isFnHead(ClojureLowerUtil.stripMeta(fn.get(0)))) {
+				throw new LispReadException("letfn* binds a function form, not " + spelling(bindings.get(i + 1)));
+			}
+			int tail = 1;
+			if (ClojureLowerUtil.stripMeta(fn.get(1)) instanceof LispSymbol own) {
+				if (!own.name().equals(binding)) {
+					throw new LispReadException("letfn* binds " + binding + " to a function named " + own.name()
+							+ ": only a function named like its binding, or not named, is supported");
+				}
+				tail = 2;
+			}
+			List<LispVal> spec = new ArrayList<>();
+			spec.add(name);
+			spec.addAll(fn.subList(tail, fn.size()));
+			specs.add(ClojureLowerUtil.list(spec));
+		}
+		List<LispVal> letfn = new ArrayList<>(withBody(items));
+		letfn.set(0, new LispSymbol("letfn"));
+		letfn.set(1, ClojureLowerUtil.list(specs));
+		return letfn(ctx, letfn);
+	}
+
+	/** Whether a head names a function form: {@code fn*}, or {@code fn} bare or core. */
+	private static boolean isFnHead(LispVal head) {
+		return head instanceof LispSymbol s
+				&& (s.name().equals("fn*") || s.name().equals("fn") || s.name().equals(ClojureCoreNames.PREFIX + "fn"));
+	}
+
+	/**
+	 * The bindings of {@code let*}, {@code loop*} or {@code letfn*}: a vector of
+	 * unqualified names each followed by its init, any other shape refused with the
+	 * oracle's words.
+	 * @param items the form, head included
+	 * @return the bindings, names and inits alternating
+	 */
+	private static List<LispVal> specialBindings(List<LispVal> items) {
+		List<LispVal> vector = items.size() > 1 ? ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(items.get(1)))
+				: null;
+		if (vector == null || vector.isEmpty() || vector.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("Bad binding form, expected vector");
+		}
+		List<LispVal> bindings = vector.subList(1, vector.size());
+		if (bindings.size() % 2 != 0) {
+			throw new LispReadException("Bad binding form, expected matched symbol expression pairs");
+		}
+		for (int i = 0; i < bindings.size(); i += 2) {
+			if (!(ClojureLowerUtil.stripMeta(bindings.get(i)) instanceof LispSymbol name) || name.name().startsWith(":")
+					|| name.name().equals("&") || isLiteralName(name.name())) {
+				throw new LispReadException("Bad binding form, expected symbol, got: " + spelling(bindings.get(i)));
+			}
+			if (ClojureLowering.qualifierSlash(name.name()) > 0) {
+				throw new LispReadException("Can't let qualified name: " + name.name());
+			}
+		}
+		return bindings;
+	}
+
+	/** Whether a symbol datum is a literal ({@code nil}, {@code true}, {@code false}). */
+	private static boolean isLiteralName(String name) {
+		return name.equals("nil") || name.equals("true") || name.equals("false");
+	}
+
+	/** A special form's items with a nil body when it has none, which it then answers. */
+	private static List<LispVal> withBody(List<LispVal> items) {
+		if (items.size() > 2) {
+			return items;
+		}
+		List<LispVal> padded = new ArrayList<>(items);
+		padded.add(new LispSymbol("nil"));
+		return padded;
+	}
+
+	/** A datum as the oracle prints it in a refusal, or as read where that fails. */
+	private static String spelling(LispVal datum) {
+		String source = ClojureStringLowering.prSource(ClojureLowerUtil.stripMeta(datum));
+		return source != null ? source : datum.print();
 	}
 
 	/** The datum {@code (let [name init] body)}. */

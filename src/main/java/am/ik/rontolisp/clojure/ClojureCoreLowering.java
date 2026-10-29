@@ -484,8 +484,7 @@ final class ClojureCoreLowering {
 			case "clojure-version":
 				return refusedCall(ctx, items, "clojure-version is not supported yet: no release of Clojure runs here");
 			case "destructure":
-				return refusedCall(ctx, items,
-						"destructure is not supported yet: the destructuring map has no lowering");
+				return ClojureCoreMacros.destructureCall(ctx, items);
 			case "proxy-mappings", "proxy-name", "proxy-super", "proxy-call-with-super", "construct-proxy",
 					"init-proxy", "update-proxy", "get-proxy-class", "method-sig":
 				return refusedCall(ctx, items, name + " is not supported yet: proxy construction is not reified here");
@@ -760,8 +759,7 @@ final class ClojureCoreLowering {
 				refusedValue(name + " is not supported yet: host classes are not answered on every backend");
 			case "clojure-version" ->
 				refusedValue("clojure-version is not supported yet: no release of Clojure runs here");
-			case "destructure" ->
-				refusedValue("destructure is not supported yet: the destructuring map has no lowering");
+			case "destructure" -> ClojureCoreMacros.destructureValue(ctx);
 			case "proxy-mappings", "proxy-name", "proxy-super", "proxy-call-with-super", "construct-proxy",
 					"init-proxy", "update-proxy", "get-proxy-class", "method-sig" ->
 				refusedValue(name + " is not supported yet: proxy construction is not reified here");

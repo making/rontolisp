@@ -224,7 +224,10 @@ $ rontolisp test                      # test/**/*_test.clj を clojure.test で�
 パラメータのいずれでも同じで、ネストしたパターンは再帰します。マップパターンは seq を、その
 キーワード引数が表すマップとして読みます（[seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)）。
 したがって `(defn f [& {:keys [a]}] a)` は `(f :a 1)` も `(f {:a 1})` も受けます。不正な形は
-名前付き拒否です。
+名前付き拒否です。これらのマクロの展開が綴る下位の special form も lower されます。`let*` と
+`loop*` は名前だけを束縛し、`letfn*` は束縛と同じ名前の `fn` フォームを束縛し、`case*` は
+マップの `[test then]` の項目を等値で試します。`destructure` は oracle と同じく、`let` の
+展開先となる平らな束縛ベクターを返します。
 
 ## マクロ
 
@@ -265,14 +268,15 @@ special form（`def`、`&` など）はマクロの名前にでき、限定名�
 （special form は素のままです。核の名前は `clojure.core/name`、その他の解決できない
 シンボルは定義側の名前空間で綴ります）、`~` はそのフォームの値を埋め込み、`~@` は外側の
 リスト・ベクター・マップ・セットの中に列を継ぎ足します。各 `x#` は syntax-quote
-ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
-の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
+ごとに、oracle と同じく `x__N__auto__` と綴る新しいシンボルを 1 つ束縛します。1 展開に
+つき 1 シンボルであり、同じ展開の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
 splice はエラーです。値としての `unquote` と `unquote-splicing` は、oracle と同じく、その var の未束縛のルートを
 返します（`ifn?` は `true`、`fn?` は `false`、`str` は `Unbound: #'clojure.core/unquote`。呼ぶと
 `Attempting to call unbound fn: #'clojure.core/unquote` を投げます）。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
 いずれも展開結果を mangle されたデータそのものとして返すため、quote したフォームとの
-`=` が成り立ち、表示は oracle と同じ小文字綴りになります。`gensym` は
-評価ごとに新しい uninterned シンボルを返します。
+`=` が成り立ち、表示は oracle と同じ小文字綴りになります。core マクロの呼び出しも
+oracle と同じフォームに展開します（[macroexpand-1](reference/macroexpand-1.md)）。`gensym` は
+評価ごとに新しい uninterned シンボルを返し、接頭辞を渡さなければ `G__` で始めます。
 
 ```clojure
 (defmacro sem-unless [c t] (list 'if c nil t))

@@ -551,34 +551,9 @@ final class ClojureProtocolLowering {
 	 */
 	static String interfaceName(String protocolKey) {
 		int slash = protocolKey.indexOf('/');
-		return munge(protocolKey.substring(0, slash)) + "." + munge(protocolKey.substring(slash + 1));
+		return ClojureLowerUtil.munge(protocolKey.substring(0, slash)) + "."
+				+ ClojureLowerUtil.munge(protocolKey.substring(slash + 1));
 	}
-
-	/** The oracle's {@code munge}: each special character to its word. */
-	private static String munge(String name) {
-		StringBuilder out = new StringBuilder();
-		for (int i = 0; i < name.length(); i++) {
-			char c = name.charAt(i);
-			String word = MUNGED.get(c);
-			if (word != null) {
-				out.append(word);
-			}
-			else {
-				out.append(c);
-			}
-		}
-		return out.toString();
-	}
-
-	/** The oracle's {@code Compiler.CHAR_MAP}. */
-	private static final Map<Character, String> MUNGED = Map.ofEntries(Map.entry('-', "_"), Map.entry(':', "_COLON_"),
-			Map.entry('+', "_PLUS_"), Map.entry('>', "_GT_"), Map.entry('<', "_LT_"), Map.entry('=', "_EQ_"),
-			Map.entry('~', "_TILDE_"), Map.entry('!', "_BANG_"), Map.entry('@', "_CIRCA_"), Map.entry('#', "_SHARP_"),
-			Map.entry('\'', "_SINGLEQUOTE_"), Map.entry('"', "_DOUBLEQUOTE_"), Map.entry('%', "_PERCENT_"),
-			Map.entry('^', "_CARET_"), Map.entry('&', "_AMPERSAND_"), Map.entry('*', "_STAR_"), Map.entry('|', "_BAR_"),
-			Map.entry('{', "_LBRACE_"), Map.entry('}', "_RBRACE_"), Map.entry('[', "_LBRACK_"),
-			Map.entry(']', "_RBRACK_"), Map.entry('/', "_SLASH_"), Map.entry('\\', "_BSLASH_"),
-			Map.entry('?', "_QMARK_"));
 
 	/**
 	 * The protocol whose interface is the class name, with its var key, or null.

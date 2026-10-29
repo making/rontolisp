@@ -35,6 +35,11 @@ class ClojureLoweringTest {
 
 	private static final String FALSE_BINDING = "(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)\n";
 
+	/** The registration of a defn's function under its class name, printed. */
+	static String noteFnClass(String name, String className) {
+		return "(RONTOLISP::%CLOJURE-NOTE-FN-CLASS #'|c%" + name + "| \"" + className + "\")";
+	}
+
 	/**
 	 * The definition a program naming {@code +}, {@code -}, {@code *}, {@code inc} or
 	 * {@code dec} carries for the flag their worker reads (g28): the plain false object,
@@ -126,10 +131,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void defnIsADefunCalledDirectly() {
-		assertThat(lowered("(defn f [x] x) (f 1)"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n(|c%f| 1)");
-		assertThat(lowered("(defn f [x] x) f"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n#'|c%f|");
+		// behind it the registration of its class name, which a program reading no fn's
+		// class sheds (ClojureArms.Family.FN_CLASS)
+		String defun = FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n"
+				+ noteFnClass("f", "user$f");
+		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo(defun + "\n(|c%f| 1)");
+		assertThat(lowered("(defn f [x] x) f")).isEqualTo(defun + "\n#'|c%f|");
 	}
 
 	@Test
@@ -198,6 +205,19 @@ class ClojureLoweringTest {
 		assertThat(lowered("(loop [a 0] (recur 1))")).contains("LABELS");
 		assertThatThrownBy(() -> Clojure.read("(recur 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("recur outside loop");
+		// the special forms under them bind names only, refused in the oracle's words,
+		// and answer nil with no body
+		assertThat(lowered("(let* [x 1 y x] y)")).isEqualTo(lowered("(let [x 1 y x] y)"));
+		assertThat(lowered("(loop* [a 0] (recur 1))")).contains("LABELS");
+		assertThat(lowered("(let* [])")).isEqualTo(FALSE_BINDING + "(LET* NIL NIL)");
+		assertThatThrownBy(() -> Clojure.read("(let* [[a] [1]] a)", null))
+			.hasMessageContaining("Bad binding form, expected symbol, got: [a]");
+		assertThatThrownBy(() -> Clojure.read("(loop* [a] a)", null))
+			.hasMessageContaining("Bad binding form, expected matched symbol expression pairs");
+		assertThatThrownBy(() -> Clojure.read("(let* a a)", null))
+			.hasMessageContaining("Bad binding form, expected vector");
+		assertThatThrownBy(() -> Clojure.read("(let* [x/a 1] 1)", null))
+			.hasMessageContaining("Can't let qualified name: x/a");
 	}
 
 	@Test
@@ -214,6 +234,20 @@ class ClojureLoweringTest {
 			.contains("(LABELS ((|c%f| (|c%x|) " + arity("user/f") + " |c%x|)) (|c%f| 1))");
 		assertThatThrownBy(() -> Clojure.read("(letfn [f [x] x] (f 1))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a letfn binding takes a name and a function");
+		// letfn*, the special form under it, binds each name to a fn form named like it
+		assertThat(lowered("(letfn* [f (clojure.core/fn f [x] x)] (f 1))"))
+			.isEqualTo(lowered("(letfn [(f [x] x)] (f 1))"));
+		assertThat(lowered("(letfn* [f (fn* ([x] x))] (f 1))")).isEqualTo(lowered("(letfn [(f ([x] x))] (f 1))"));
+		assertThatThrownBy(() -> Clojure.read("(letfn* [f 1] f)", null))
+			.hasMessageContaining("letfn* binds a function form, not 1");
+		assertThatThrownBy(() -> Clojure.read("(letfn* [f (fn g [x] x)] f)", null))
+			.hasMessageContaining("letfn* binds f to a function named g");
+		// case*'s entries lower as case clauses; a skipped hash's then is a condp
+		assertThat(lowered("(let [k 1] (case* k 0 0 :d {1 [1 :a]} :compact :int))"))
+			.isEqualTo(lowered("(let [k 1] (case k (1) :a :d))"));
+		assertThatThrownBy(
+				() -> Clojure.read("(let [k 1] (case* k 0 0 :d {1 [1 :a]} :compact :hash-equiv #{1}))", null))
+			.hasMessageContaining("case* takes a skipped hash's then as the condp of its tests");
 	}
 
 	@Test
@@ -261,8 +295,8 @@ class ClojureLoweringTest {
 			.contains("(DEFUN |c%vr%*| (|c%a| |c%r|) (|c%vr%*| |c%a| |c%r|))")
 			.contains("(DEFUN |c%vr| (|c%a| &REST |c%r|) " + arity("user/vr") + " (|c%vr%*| |c%a| |c%r|))");
 		// an unused variadic keeps its single shape
-		assertThat(lowered("(defn vu [a & r] a)"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) " + arity("user/vu") + " |c%a|)");
+		assertThat(lowered("(defn vu [a & r] a)")).isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) "
+				+ arity("user/vu") + " |c%a|)\n" + noteFnClass("vu", "user$vu"));
 		// a named fn splits into a worker plus its &rest head inside labels
 		assertThat(lowered("(fn f [a & r] (recur a r))")).contains("(|c%f%*| (|c%a| |c%r|) (|c%f%*| |c%a| |c%r|))")
 			.contains("(|c%f| (|c%a| &REST |c%r|) " + arity("user/f") + " (|c%f%*| |c%a| |c%r|))");
@@ -1164,14 +1198,14 @@ class ClojureLoweringTest {
 		assertThat(wasmLowered("(pvalues 1 2)")).isEqualTo(FALSE_BINDING + "(LIST 1 2)");
 		assertThat(lowered("(pvalues)")).contains("(LIST)").doesNotContain("FUTURE-START");
 		assertThat(wasmLowered("(pvalues)")).isEqualTo(FALSE_BINDING + "(LIST)");
-		// g16's values: the three macros answer the run-time once-expansion
-		// delegate, while bound-fn* answers its function, capturing where the
-		// value is called
-		assertThat(lowered("(def x bound-fn)")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x with-local-vars)")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x pvalues)")).contains("C%MACROEXPAND-1");
+		// the three macros' values are their roots, functions of (&form &env &
+		// args) answering the call (no expansion as data here), while bound-fn*
+		// answers its function, capturing where the value is called
+		assertThat(lowered("(def x bound-fn)")).contains("(LAMBDA (|form| |env| &REST |args|) |form|)");
+		assertThat(lowered("(def x with-local-vars)")).contains("(LAMBDA (|form| |env| &REST |args|) |form|)");
+		assertThat(lowered("(def x pvalues)")).contains("(LAMBDA (|form| |env| &REST |args|) |form|)");
 		assertThat(lowered("(def x bound-fn*)")).contains("(RONTOLISP::%CLOJURE-BOUND-FN*")
-			.doesNotContain("C%MACROEXPAND-1");
+			.doesNotContain("|form| |env|");
 	}
 
 	@Test
@@ -2132,9 +2166,9 @@ class ClojureLoweringTest {
 		String source = "(defmacro m [] `(quote ~[(when &env (sort (map name (keys &env)))) &form]))";
 		assertThat(macroLowered(source + " (m)")).contains("(VECTOR 'NIL '(|c%m|))");
 		assertThat(macroLowered(source + " (let [a 1 b 2] (m))")).contains("\"a\"").contains("\"b\"");
-		// a run-time expansion binds &form where a macro reads it, and only there
-		assertThat(macroLowered(source + " (macroexpand '(m))")).contains("RONTOLISP::%CLOJURE-MACRO-FORM");
-		assertThat(macroLowered("(defmacro n [] 1) (macroexpand '(n))")).doesNotContain("%CLOJURE-MACRO-FORM");
+		// a run-time expansion calls the macro's root, which binds &form and &env
+		assertThat(macroLowered("(defmacro n [] 1) (macroexpand '(n))")).contains("RONTOLISP::%CLOJURE-MACRO-FORM")
+			.contains("RONTOLISP::%CLOJURE-MACRO-ENV");
 		assertThatThrownBy(() -> Clojure.read("(defn g [] &env)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: &env");
@@ -3273,7 +3307,7 @@ class ClojureLoweringTest {
 		String out = loweredWithMacros(macros + "\n(macroexpand '(mu-a 1))");
 		assertThat(out).contains("(PROGN (SETQ |c%mu-a%macro| 0) ")
 			.contains("(PROGN (SETQ |c%mu-b%macro| 1) ")
-			.contains("(C%MACRO-EXPANDER |cell|)")
+			.contains("(C%MACRO-EXPANDER (SYMBOL-VALUE |table|))")
 			.doesNotContain("FUNCTIONP");
 		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
 			.contains("(%UNSPELLED-QUOTE |c%clojure.core/dec|)")
@@ -3517,7 +3551,8 @@ class ClojureLoweringTest {
 	@Test
 	void clojureCoreSpellingsNameTheCoreVar() {
 		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)")).contains("(RONTOLISP::%CLOJURE-+ 1 1)");
-		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])")).doesNotContain("#'|c%inc|");
+		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])"))
+			.doesNotContain("(RONTOLISP::%CLOJURE-MAP #'|c%inc|");
 		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("(RONTOLISP::%CLOJURE-OUT)");
 		assertThatThrownBy(() -> Clojure.read("(clojure.core/nope 1)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
@@ -3545,21 +3580,21 @@ class ClojureLoweringTest {
 
 	@Test
 	void coreMacroNamesAnswerTheirExpanderAsAValue() {
-		// g16: a core-macro name with no value arm answers the macro's expander as a
-		// value -- the run-time once-expansion over the quoted form, shared per name
-		// like every other site-independent core value. Program-defined macros keep
-		// their refusal (macrosHaveNoValue).
-		assertThat(lowered("(def x when)")).contains("C%MACROEXPAND-1").contains("%CLOJURE-SHARED-VALUE");
-		assertThat(lowered("(def x (deref (resolve 'when)))")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x @(resolve 'when))")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x (deref (resolve 'cond->)))")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x clojure.core/when)")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(list when when)")).contains("%CLOJURE-SHARED-VALUE");
-		// the g22/g23/g25 slices left value-pinning to g16: their macros lower as
-		// values now, with no per-verb behavior change
-		assertThat(lowered("(def x amap)")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x sync)")).contains("C%MACROEXPAND-1");
-		assertThat(lowered("(def x definline)")).contains("C%MACROEXPAND-1");
+		// a core-macro name with no value arm answers the macro's function over (&form
+		// &env & args) as a value, its var's root: an expanded macro's the shipped
+		// expander, the namespace loaded and no run-time expansion carried; any other's
+		// a function answering the call, shared per name like every other
+		// site-independent core value
+		String expander = "#'|c%rontolisp.internal.core-macros/expand-";
+		assertThat(lowered("(def x when)")).contains(expander + "when|").doesNotContain("C%MACROEXPAND");
+		assertThat(lowered("(def x (deref (resolve 'when)))")).contains(expander + "when|");
+		assertThat(lowered("(def x @(resolve 'when))")).contains(expander + "when|");
+		assertThat(lowered("(def x (deref (resolve 'cond->)))")).contains(expander + "cond->|");
+		assertThat(lowered("(def x clojure.core/when)")).contains(expander + "when|");
+		assertThat(lowered("(def x amap)")).contains("%CLOJURE-SHARED-VALUE")
+			.contains("(LAMBDA (|form| |env| &REST |args|) |form|)")
+			.doesNotContain("core-macros");
+		assertThat(lowered("(list sync sync)")).contains("%CLOJURE-SHARED-VALUE \"sync\"");
 	}
 
 	@Test
@@ -3773,8 +3808,9 @@ class ClojureLoweringTest {
 			.contains("(ERROR \"supers is not supported yet: host classes are not answered on every backend\")");
 		assertThat(lowered("(clojure-version)"))
 			.contains("(ERROR \"clojure-version is not supported yet: no release of Clojure runs here\")");
+		// destructure is the shipped function the core macros' expanders call
 		assertThat(lowered("(let [x 1] (destructure x))"))
-			.contains("(ERROR \"destructure is not supported yet: the destructuring map has no lowering\")");
+			.contains("(|c%rontolisp.internal.core-macros/destructure| |c%x|)");
 		assertThat(lowered("(let [f inc] (future-call f))")).contains("(RONTOLISP::%CLOJURE-FUTURE-START")
 			.contains("java.util.concurrent.FutureTask");
 		assertThat(wasmLowered("(let [f inc] (future-call f))"))
@@ -3811,7 +3847,9 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
 		String out = loweredWithExpanders("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("(%UNSPELLED-QUOTE |c%user/a|)");
+		assertThat(out).contains("(RONTOLISP::%CLOJURE-AUTO-GENSYM \"s\")")
+			.contains("APPEND")
+			.contains("(%UNSPELLED-QUOTE |c%user/a|)");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -3858,9 +3896,10 @@ class ClojureLoweringTest {
 
 	@Test
 	void gensymLowersToThePrimitive() {
-		assertThat(lowered("(gensym)")).contains("(GENSYM)");
+		// the oracle's G__ prefix when none is given, as a call and as a value
+		assertThat(lowered("(gensym)")).contains("(GENSYM \"G__\")");
 		assertThat(lowered("(gensym \"p\")")).contains("(GENSYM \"p\")");
-		assertThat(lowered("gensym")).contains("#'GENSYM");
+		assertThat(lowered("gensym")).contains("\"G__\"");
 		assertThatThrownBy(() -> Clojure.read("(gensym 1 2)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("gensym takes an optional prefix");
 	}
@@ -3955,7 +3994,7 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\"");
 		assertThat(lowered("(defn str [] 1) #'str")).contains("\"user/str\"").doesNotContain("clojure.core/str");
 		assertThat(lowered("#'when")).contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/when\" (LAMBDA NIL")
-			.contains("C%MACROEXPAND-1")
+			.contains("#'|c%rontolisp.internal.core-macros/expand-when|")
 			.contains("(LIST :C%KEYWORD \"macro\") T");
 		assertThat(lowered("#'*out*"))
 			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL (RONTOLISP::%CLOJURE-OUT))")

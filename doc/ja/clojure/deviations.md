@@ -301,17 +301,26 @@
  の値）は見えますが、それ以外のトップレベル文はそこでは実行されず、本体が変えたもの
  （プログラムの atom への `swap!`）はプログラムからは見えません。oracle はコンパイルと
  実行を一つのプロセスで行います。プログラムのマクロが展開した `defmethod` やプロトコル
- 拡張はそこでは見えません。定義より上での呼び出しは拒否され、プログラム定義のマクロに関数値はありません。値としては、core マクロの
- 名前は quote したフォームに対する実行時の一回展開を答えます（`bound-fn`・`with-local-vars`・
- `pvalues` もその委譲を答えます）。`bound-fn*` はその関数を答え、値の呼び出し時に
- 束縛を取り込みます。special
+ 拡張はそこでは見えません。定義より上での呼び出しは拒否され、プログラム定義のマクロのむき出しの名前は oracle と同じく値を持ちません。special
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
- 受け付けます（special form なら呼び出し位置では無視します）。値としては、core マクロの
- 名前は quote したフォームに対する実行時の一回展開を答えます（`(def x when)` は
- `macroexpand-1` と同じ答えを渡します。core フォームに対してはフォーム自身です。
- 実行時の表が持つのはプログラム定義のマクロだけだからです）。oracle はむき出しの
- マクロ名を値位置でコンパイル時に拒否します。
+ 受け付けます（special form なら呼び出し位置では無視します）。core マクロのむき出しの
+ 名前は値としてその var のルートを答えます（`(def x when)`）。oracle はむき出しの
+ マクロ名を値位置でコンパイル時に拒否します。`bound-fn*` はその関数を答え、値の
+ 呼び出し時に束縛を取り込みます。
+- `macroexpand-1`、`macroexpand`、`clojure.walk/macroexpand-all` と core マクロの関数は、
+ `let`、`loop`、`fn`、`letfn`、`when`、`when-not`、`if-not`、`cond`、`condp`、`and`、
+ `or`、`case`、`if-let`、`when-let`、`if-some`、`when-some`、`when-first`、`->`、`->>`、
+ `as->`、`cond->`、`cond->>`、`some->`、`some->>`、`doto`、`..`、`dotimes`、`doseq`、
+ `for`、`while`、`comment`、`declare`、`defn`、`defn-`、`binding`、`assert`、`locking`、
+ `with-open`、`future` を、gensym の番号を除いて oracle と同じフォームに展開します。
+ それ以外の core マクロ（`lazy-seq`、`delay`、`defmacro`、`ns` など）は呼び出しそのものを
+ 答えます。oracle はその展開を答えます。誤った形の呼び出しの拒否は展開関数が投げた
+ まま伝わります。oracle はそれを `Compiler$CompilerException`（`Syntax error
+ macroexpanding ...`）に包みます。テストが 2 つ以上のハッシュバケットで衝突する `case` は、
+ スキップするハッシュを挿入順に並べます（セットの順序の差異）。実行中にこれらを呼ぶ
+ プログラムは展開関数を持ち運び、マクロ本体の中でだけ展開するプログラムは何も持ち
+ 運びません。
 - `eval`、計算で得たシンボルの `resolve`・`find-var`・`ns-resolve`・`requiring-resolve`、
  計算した引数の `require`・`use`・`refer`・`alias`・`in-ns`・`load`・`load-file`・
  `load-string`、そして `load-reader` が実行中に lower されるのはインタプリタだけです。
@@ -368,9 +377,8 @@
   見ます（オラクルの var はすぐに最新を見ます）。`:ns` は名前空間のシンボルです（オラクルは Namespace オブジェクト）。
   入口ファイルの `:file` は与えたままのパスです（オラクルは絶対パスにします）。
   `def`/`defn`/`defn-`/`defmacro` 以外（`defmulti`、`deftest`、レコードのファクトリなど）で
-  定義された var は `:name` と `:ns` だけを持ちます。プログラム定義のマクロの var の
-  deref はシグナルを上げます（オラクルは展開関数を答えます）。core マクロの var の
-  deref は、むき出しの core マクロ名と同じ一回展開を答えます。`clojure.core` の var の
+  定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref は、oracle と
+  同じく、呼び出し・環境・呼び出しの引数をとるその関数を答えます。`clojure.core` の var の
   メタデータは `:name`、`:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、
   `:doc`、`:added` と位置も持ちます）。ここで値を持たない core の var
   （`#'add-classpath`）は拒否されます。
@@ -454,8 +462,10 @@
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
   オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
-  それ以外の fn なら無名 fn の `clojure.lang.AFunction$fn` です。オラクルは `defn` を var の名前で
-  呼びます）。オラクルの
+  `defn` と fn リテラルを値とする `def` なら `ns$name`、それ以外の fn なら無名 fn の
+  `clojure.lang.AFunction$fn` です。オラクルはこの最後の名前に外側の関数と名前付き `fn` の名前を
+  含めます。別のフォームの中の `defn` もここでは `ns$name` で、オラクルは
+  `ns$eval123$name__124` です）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで
   `Method m taking N args is not supported for class C` として拒否し、オラクルのクラスが
   持ちうるがここでは答えないメソッド（`.reduce`・`.meta`・atom の `.compareAndSet`）は
@@ -913,9 +923,10 @@
   `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
-- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
-  述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
-  spec のマクロが受け取る述語は名前を保ちます）。`clojure.spec.test.alpha` の `instrument`
+- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` は素の述語が名前付き `fn`
+  （`(fn pos [x] ...)`）か、値が fn に展開されるマクロ呼び出しである `def` のとき
+  `:clojure.spec.alpha/unknown` と呼びます。オラクルはこれにも名前を付けます（`defn`、fn リテラルを
+  値とする `def`、core 関数、spec のマクロが受け取る述語は名前を保ちます）。`clojure.spec.test.alpha` の `instrument`
   （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
   resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
   `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を

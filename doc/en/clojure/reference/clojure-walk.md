@@ -34,8 +34,8 @@ and every value its metadata. A map's members are its `[key value]` entries.
 
 ## Differences
 
-- `macroexpand-all` expands the program's own macros. The core forms (`when`, `->`, ...)
-  are no macros here, so they stay as written, where Clojure answers their expansion
-  ([macroexpand](macroexpand.md)).
+- `macroexpand-all` expands the program's own macros and the core macros this front end
+  expands as data (`when`, `->`, `let` ..., [macroexpand-1](macroexpand-1.md)); any other
+  core macro (`lazy-seq`, ...) stays as written, where Clojure answers its expansion.
 - A map entry is a plain two-element vector ([Deviations](../deviations.md)), so a
   function testing `map-entry?` during a walk takes every pair vector for an entry.

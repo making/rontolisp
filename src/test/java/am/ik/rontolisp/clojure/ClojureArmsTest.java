@@ -537,6 +537,26 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theFnClassFamilyIsMadeByAFnsClassAndDropsTheRegistrationsOfAProgramReadingNone() {
+		// a registration goes at top level, in a progn and in a namespace init's lambda
+		// body, so each definition is the form it lowered to before
+		List<LispVal> forms = read("(defun c%f (x) x) (rontolisp::%clojure-note-fn-class (function c%f) \"user$f\")"
+				+ " (if a (progn (defun c%g () 1) (rontolisp::%clojure-note-fn-class (function c%g) \"user$g\")))"
+				+ " (setq i (lambda () (setq m/h (lambda (x) x)) (rontolisp::%clojure-note-fn-class m/h \"m$h\")))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.FN_CLASS);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.FN_CLASS).stream().map(LispVal::print)).containsExactly(
+				"(DEFUN C%F (X) X)", "(IF A (DEFUN C%G NIL 1))", "(SETQ I (LAMBDA NIL (SETQ M/H (LAMBDA (X) X))))");
+		// a registration weighs nothing in a namespace's init
+		assertThat(ClojureArms.weighsNothing(forms.get(1))).isTrue();
+		assertThat(ClojureArms.weighsNothing(forms.get(0))).isFalse();
+		assertThat(ClojureArms
+			.scan(read("(list :c%class (rontolisp::%clojure-fn-class-name x))"), ClojureArms.Family.FN_CLASS)
+			.builds()).isTrue();
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)
