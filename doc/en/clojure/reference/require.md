@@ -13,7 +13,8 @@ An unquoted vector spec is accepted too, though real Clojure rejects it.
 `clojure.core` itself loads nothing: `[clojure.core :as c]` makes `c/x` spell the core
 var `clojure.core/x` (malli's and cuerdas' alias), and its `:refer` brings back a name
 `(:refer-clojure :exclude [...])` left out.
-A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
+A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare, and so
+does a vector whose second element is no keyword (`'[clojure [set :as s] walk]`), like the oracle.
 `:reload` runs each named namespace again (`def` resets, `defonce` keeps its root);
 `:reload-all` re-runs their dependencies first. A `require` inside a function body loads
 when the body runs, answering `nil` like any other `require`; there, and inside a `try` or a

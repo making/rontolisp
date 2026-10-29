@@ -9,7 +9,8 @@ namespace (never a private one). A [built-in namespace](namespaces.md#built-in-n
 needs no file, any other namespace loads from its file on the source path;
 a bare library symbol refers all of it; an unknown namespace is an error.
 An unquoted vector spec is accepted too, though real Clojure rejects it.
-A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
+A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare, and so
+does a vector whose second element is no keyword (`'[clojure [set :as s] walk]`), like the oracle.
 As a value every application refuses at run time, since libraries load while the program
 lowers (of no spec, the oracle's `Nothing specified to load`).
 

@@ -1521,7 +1521,9 @@ final class ClojureBindingLowering {
 			throw new LispReadException(
 					"a map pattern " + spelled + " takes a vector of plain names, not " + names.print());
 		}
-		for (LispVal element : elements.subList(1, elements.size())) {
+		for (LispVal entry : elements.subList(1, elements.size())) {
+			// a hint on an entry ({:keys [^String class]}) only types the local
+			LispVal element = ClojureLowerUtil.stripMeta(entry);
 			String refusal = "a map pattern " + spelled + " takes a vector of plain names, not " + element.print();
 			ClojureLowerUtil.isTrue(element instanceof LispSymbol && !((LispSymbol) element).name().equals("&"),
 					refusal);

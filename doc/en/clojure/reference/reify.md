@@ -69,9 +69,15 @@ protocol.
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
 too, and so does a protocol extended to the interface. A method the body leaves out is the
 oracle's `AbstractMethodError` when called (a `java.util` default method keeps the
-interface's, refused by name when called), and any other interface (`IChunkedSeq`,
-`java.util.Deque` ...) is refused by name. The Java interfaces a body implements (`Runnable`,
-`Comparable`, `java.util.Comparator`, `Iterable`, a `java.util` collection) and the `Object` methods it overrides are
+interface's, refused by name when called), and any other `clojure.lang` interface
+(`IChunkedSeq` ...) is refused by name. Any other public host interface (`java.io.Closeable`,
+`java.util.concurrent.ThreadFactory`, `java.util.concurrent.locks.Lock` ...) stores its
+methods in the type's row under its binary name, like a `definterface`'s: `instance?` tests it
+(its super-interfaces too), a `.method` call no core function answers calls the row's method,
+and `with-open` closes a `Closeable`; a default method the body leaves out is refused when
+called from Clojure, where the oracle runs the interface's. The Java interfaces a body implements (`Runnable`,
+`Comparable`, `java.util.Comparator`, `Iterable`, a `java.util` collection, any host interface
+above) and the `Object` methods it overrides are
 what Java sees of the value too: it crosses into a Java member as an object implementing them
 ([Java interop](interop.md)). Deviations: a value overriding `toString` prints as
 `#object[user$reify "text"]`, without the oracle's class number and identity hash; a

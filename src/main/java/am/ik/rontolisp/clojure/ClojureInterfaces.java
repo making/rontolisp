@@ -187,6 +187,27 @@ final class ClojureInterfaces {
 	static final String DEFINED_ROW = "RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW";
 
 	/**
+	 * The store of a row of a host interface no core verb reads ({@code ThreadFactory},
+	 * {@code Lock}, {@code Closeable} ...): {@code (store tag interface-names methods)},
+	 * like every family's store ({@code clojure.lisp}, "Host interfaces").
+	 */
+	static final String HOST_ROW = "RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW";
+
+	/**
+	 * The test of a value whose row holds a host interface's method of a name at a count
+	 * ({@code "lock/1"}, the target counted), which an instance call of a method no core
+	 * verb answers asks first: a body implementing a host interface declaring it answers
+	 * its own method ({@link ClojureArms.Family#HOST_INTERFACE}).
+	 */
+	static final String HOST_METHOD_P = "RONTOLISP::%CLOJURE-HOST-INTERFACE-METHOD-P";
+
+	/**
+	 * {@code instance?} of a host interface no core verb reads: the value's row holds the
+	 * interface's binary name ({@link ClojureArms.Family#HOST_INTERFACE}).
+	 */
+	static final String HOST_ROW_P = "RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW-P";
+
+	/**
 	 * The library's reader of a value's interface row entry: an interface flag or a
 	 * method.
 	 */
@@ -232,7 +253,8 @@ final class ClojureInterfaces {
 			Map.entry(ClojureArms.Family.JAVA_COLLECTION, JAVA_COLLECTION_ROW),
 			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.HASHEQ, HASHEQ_ROW),
 			Map.entry(ClojureArms.Family.MARKER, MARKER_ROW),
-			Map.entry(ClojureArms.Family.DEFINED_INTERFACE, DEFINED_ROW));
+			Map.entry(ClojureArms.Family.DEFINED_INTERFACE, DEFINED_ROW),
+			Map.entry(ClojureArms.Family.HOST_INTERFACE, HOST_ROW));
 
 	/**
 	 * One interface: its binary name, the abstract methods it declares (name to the
@@ -670,7 +692,63 @@ final class ClojureInterfaces {
 		if (!host.isInterface()) {
 			throw new LispReadException("only interfaces are supported, had: " + name);
 		}
-		throw new LispReadException(name + " is not supported yet as an interface of " + what);
+		HostInterface reflected = reflected(host);
+		if (reflected == null) {
+			throw new LispReadException(name + " is not supported yet as an interface of " + what);
+		}
+		return reflected;
+	}
+
+	/**
+	 * A public host interface no core verb reads, as the host's classes describe it: the
+	 * instance methods it declares itself (abstract ones and defaults, {@code Object}'s
+	 * three left to {@link #OBJECT_METHODS}), its direct super-interfaces, and the
+	 * {@link ClojureArms.Family#HOST_INTERFACE} family, whose row an instance call and
+	 * {@code instance?} read; null for one that is not public or cannot link.
+	 * @param host the interface
+	 * @return the interface, or null
+	 */
+	static @Nullable HostInterface reflected(ClojureJavaClasses.JavaClass host) {
+		if (!host.isPublic()) {
+			return null;
+		}
+		List<ClojureJavaClasses.Member> declared;
+		try {
+			declared = host.methods();
+		}
+		catch (LinkageError | SecurityException _) {
+			return null;
+		}
+		Map<String, Set<Integer>> abstracts = new java.util.TreeMap<>();
+		Map<String, Set<Integer>> defaults = new java.util.TreeMap<>();
+		for (ClojureJavaClasses.Member method : declared) {
+			if (method.isStatic() || method.isBridge() || !method.declaringClass().equals(host.name())
+					|| OBJECT_METHODS.declares(method.name(), method.parameterCount() + 1)) {
+				continue;
+			}
+			(method.isAbstract() ? abstracts : defaults).computeIfAbsent(method.name(), ignored -> new TreeSet<>())
+				.add(method.parameterCount() + 1);
+		}
+		Map<String, Set<Integer>> methods = new LinkedHashMap<>();
+		abstracts.forEach((method, counts) -> methods.put(method, Set.copyOf(counts)));
+		Map<String, Set<Integer>> fallbacks = new LinkedHashMap<>();
+		defaults.forEach((method, counts) -> fallbacks.put(method, Set.copyOf(counts)));
+		return new HostInterface(host.name(), methods, fallbacks, List.copyOf(host.interfaces()),
+				ClojureArms.Family.HOST_INTERFACE, "");
+	}
+
+	/**
+	 * The interface a super-interface name names: a supported one, else a host interface
+	 * no core verb reads ({@link #reflected}); null for a {@code clojure.lang} one this
+	 * class does not support or one no host class holds.
+	 */
+	private static @Nullable HostInterface superInterface(String name) {
+		HostInterface known = INTERFACES.get(name);
+		if (known != null || name.startsWith("clojure.lang.")) {
+			return known;
+		}
+		ClojureJavaClasses.JavaClass host = ClojureHostClasses.find(name);
+		return host != null && host.isInterface() ? reflected(host) : null;
 	}
 
 	/**
@@ -692,7 +770,8 @@ final class ClojureInterfaces {
 			return;
 		}
 		for (String parent : one.supers()) {
-			HostInterface known = INTERFACES.get(parent);
+			HostInterface known = one.family() == ClojureArms.Family.HOST_INTERFACE ? superInterface(parent)
+					: INTERFACES.get(parent);
 			if (known != null) {
 				addClosure(known, out);
 			}
@@ -920,6 +999,9 @@ final class ClojureInterfaces {
 					addEntries(ctx, body, method, one, family, lambdas);
 				}
 			}
+			if (one.family() == ClojureArms.Family.HOST_INTERFACE) {
+				addCallableCounts(body, one, family);
+			}
 		}
 		for (String method : OBJECT_METHODS.methods().keySet()) {
 			if (body.methods().containsKey(method) && stored.add(method)) {
@@ -945,6 +1027,30 @@ final class ClojureInterfaces {
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), family.getValue())));
 		}
 		return forms;
+	}
+
+	/**
+	 * The {@code "name/count"} keys of a host interface's methods an instance call of
+	 * that count reaches through the row ({@link #HOST_METHOD_P}, the target counted):
+	 * every count an abstract method is declared at -- the body's arity or the stored
+	 * refusal answers -- and a default one's the body defines. A call of another count
+	 * keeps the oracle's refusal.
+	 */
+	private static void addCallableCounts(InterfaceBody body, HostInterface one, List<LispVal> out) {
+		Set<String> keys = new java.util.TreeSet<>();
+		one.methods().forEach((method, counts) -> counts.forEach(count -> keys.add(method + "/" + count)));
+		one.defaults().forEach((method, counts) -> {
+			for (ClojureLowering.MethodArity arity : body.methods().getOrDefault(method, List.of())) {
+				int count = ClojureBindingLowering.paramShape(arity.params()).fixed();
+				if (counts.contains(count)) {
+					keys.add(method + "/" + count);
+				}
+			}
+		});
+		for (String key : keys) {
+			out.add(LispString.literal(key));
+			out.add(ClojureLowering.TRUE_CONST);
+		}
 	}
 
 	/**

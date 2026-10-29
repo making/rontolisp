@@ -556,8 +556,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --,
   `CharSequence`, the collection interfaces (`IPersistentMap`, `ISeq`, `Sequential`,
   `Iterable`, `java.util.List` ...) and overrides `Object`'s methods
-  ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
-  `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
+  ([reify](reference/reify.md#host-interfaces)); any other `clojure.lang` interface
+  (`IChunkedSeq` ...) is refused by name, and any other host interface (`Closeable`, `Lock` ...)
+  answers `instance?` and its methods' calls, a default method the body leaves out refused when
+  called from Clojure (the oracle runs the interface's). `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
   `str` of a collection type spells its contents, `re-matcher` and `re-find` read a
   `CharSequence` type in prefixes of 16, 32, 64 ... characters (past where the oracle's
@@ -705,6 +707,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle leaves it unbound). `(await-for 0 a)` races the pool and may answer
   `false`, like the oracle's; on WASM the actions run first, so it answers `true`
   there.
+- `tap>` on the interpreter and the JVM queues its value for a tap thread, like the
+  oracle's (1024 values; a full queue answers `false`), so a value tapped just before the
+  program ends may never reach its taps. On the WASM legs -- single-threaded modules --
+  `tap>` calls every tap before it returns and always answers `true`. Taps are called in
+  the order they were added, and `remove-tap` finds a tap by `identical?` (the oracle's
+  set: by `=`).
 - A `defn` with no value cell validates its new function only once its definition is
   bound: where the validator refuses it, the call still reports the oracle's
   `Invalid reference state`, but later calls reach the refused definition (the oracle

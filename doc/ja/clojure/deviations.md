@@ -529,7 +529,10 @@
   `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、`CharSequence`、
   コレクションのインタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
   `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
-  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `clojure.lang` のインタフェース（`IChunkedSeq` など）は名前を挙げて拒否され、それ以外のホストの
+  インタフェース（`Closeable`、`Lock` など）は `instance?` とそのメソッドの呼び出しに答えます。本体が
+  書かなかった default メソッドを Clojure から呼ぶと拒否されます（オラクルはインタフェース側の実装を
+  実行します）。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
   ことがあり、コレクションの型の `str` は中身を綴り、`re-matcher` と `re-find` は `CharSequence`
   の型を先頭の 16、32、64 ... 文字と範囲を広げながら読み（オラクルのマッチャが止まる位置より先まで
@@ -669,6 +672,11 @@
   ます（外側は `nil`。オラクルでは unbound です）。`(await-for 0 a)` はプールと競合し
   `false` を答えることがあり、オラクルと同様です。WASM ではアクションが先に走るため、
   そこでは `true` を答えます。
+- `tap>` はインタプリタと JVM ではオラクルと同様に値を tap スレッド向けのキューに
+  入れます（1024 個。満杯なら `false` を答えます）。そのためプログラムの終了直前に tap した値は
+  tap に届かないことがあります。WASM レッグ（シングルスレッドのモジュール）では、`tap>` は
+  戻る前にすべての tap を呼び、常に `true` を答えます。tap は追加した順に呼ばれ、
+  `remove-tap` は tap を `identical?` で探します（オラクルの集合は `=` で探します）。
 - 値セルを持たない `defn` は新しい関数を定義の束縛の後に検証します。validator が拒否した場合もオラクルと同じ
   `Invalid reference state` を報告しますが、以降の呼び出しは拒否された定義に届きます
   （オラクルは古い定義を保ちます）。拒否された `defmacro` の再定義は新しいエクスパンダがそのまま使われます

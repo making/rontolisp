@@ -3,7 +3,8 @@
 `(keys m)`
 
 Answers the list of the map's keys in insertion order -- the order the map prints in
-(the oracle's array map's, up to eight entries). `keys` of `nil` is `nil`.
+(the oracle's array map's, up to eight entries). `keys` of `nil` is `nil`, and of a seq of map
+entries (`(keys (filter f m))`) each entry's key.
 
 As a value a one-argument lambda.
 

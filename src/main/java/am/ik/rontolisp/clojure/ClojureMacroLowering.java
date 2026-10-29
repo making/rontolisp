@@ -83,6 +83,14 @@ final class ClojureMacroLowering {
 			"in-ns");
 
 	/**
+	 * The reader heads of a syntax-quote, which the oracle's reader never spells (it
+	 * reads a template as the code building it): a program may define a macro of such a
+	 * name -- tools.reader's {@code clojure.tools.reader/syntax-quote} -- reached through
+	 * a qualified spelling, while the bare head stays the reader's form, never a call.
+	 */
+	static final Set<String> SYNTAX_QUOTE_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing");
+
+	/**
 	 * The names a syntax-quote leaves bare: the oracle's special forms, measured on
 	 * {@code clj} 1.12.6.1673. One less than {@link #SPECIAL_FORMS}: {@code import*} is
 	 * no special form there -- the oracle spells {@code ns/import*}.
@@ -130,7 +138,7 @@ final class ClojureMacroLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
 		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
-		ClojureLowerUtil.isTrue(!isReservedHead(name),
+		ClojureLowerUtil.isTrue(!isReservedHead(name) || SYNTAX_QUOTE_HEADS.contains(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
 		ClojureLowerUtil.isTrue(
 				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,

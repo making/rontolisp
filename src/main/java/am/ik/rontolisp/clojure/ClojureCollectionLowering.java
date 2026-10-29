@@ -947,6 +947,11 @@ final class ClojureCollectionLowering {
 		LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("nreverse"), acc));
+		// anything else is a seq of map entries, like the oracle's KeySeq over a seq:
+		// (vals (filter (comp empty? val) m))
+		walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), map), walked, ClojureLowerUtil
+					.list(new LispSymbol("RONTOLISP::%CLOJURE-ENTRY-COLUMN"), map, new LispInteger(keys ? 0 : 1)));
 		// a record answers its declared fields in order, then its extension keys
 		// (%clojure-record-entries), where a table walks in its own order
 		LispVal gathered = ClojureLowerUtil.list(

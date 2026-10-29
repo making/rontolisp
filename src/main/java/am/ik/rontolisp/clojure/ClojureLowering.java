@@ -3818,6 +3818,12 @@ public final class ClojureLowering {
 		if (items.isEmpty()) {
 			return NIL_CONST;
 		}
+		if (items.get(0) instanceof LispCons metaHead && ClojureInteropLowering.paramTags(metaHead) == null
+				&& ClojureLowerUtil.stripMeta(metaHead) instanceof LispSymbol bare) {
+			// reader metadata on a head symbol never changes what it names, like the
+			// oracle's: (^:once fn* [] ...), which core.async's go templates spell
+			return lowerInner(new LispCons(bare, ((LispCons) form).cdr()));
+		}
 		refusePendingTag(items);
 		if (items.get(0) instanceof LispSymbol op) {
 			String core = coreSpelling(op.name());
@@ -3918,6 +3924,7 @@ public final class ClojureLowering {
 		LispVal head = items.get(0);
 		if (!coreOnly && head instanceof LispSymbol s && qualifierSlash(s.name()) < 0
 				&& !ClojureMacroLowering.SPECIAL_FORMS.contains(s.name())
+				&& !ClojureMacroLowering.SYNTAX_QUOTE_HEADS.contains(s.name())
 				&& (isLocal(s.name()) || resolveVar(s.name()) != null)) {
 			// a local binding or program definition shadows every lowering row
 			// but the special forms', like the oracle (whose specials never

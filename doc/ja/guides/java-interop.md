@@ -367,7 +367,7 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 
 ```lisp
 (let ((e (java:static "java.util.concurrent.Executors" "newFixedThreadPool" 1)))
-  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => nil
+  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => NIL
 ```
 
 ### リフレクション警告

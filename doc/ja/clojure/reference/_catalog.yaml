@@ -472,6 +472,9 @@ categories:
       - { slug: promise, name: "promise" }
       - { slug: deliver, name: "deliver" }
       - { slug: future-cancel, name: "future-cancel" }
+      - { slug: tap-gt, name: "tap>" }
+      - { slug: add-tap, name: "add-tap" }
+      - { slug: remove-tap, name: "remove-tap" }
   - title: "マルチメソッドと階層"
     index_page: clojure/reference/multimethods.md
     functions:

@@ -112,10 +112,12 @@ public final class ClojureLibrary {
 	 * byte array) refuses by name, since the class has the constructor, and
 	 * {@code %clojure-agent-drain} (the sender-thread run: a send to an idle agent runs
 	 * its queue on the sender's thread until it is empty, like the host drain before the
-	 * shared pool). The pool's own defuns go with it: nothing references them where the
-	 * stand-in stands, so the pruner drops them and no thread primitive reaches a module.
-	 * A {@code java:} operator is a call-time error there and makes no host object, so
-	 * every other host arm answers as it does in a program naming none.
+	 * shared pool), and {@code %clojure-tap-send} ({@code tap>}: each tap called with the
+	 * value at the call, true). The pool's and the tap queue's own defuns go with them:
+	 * nothing references them where the stand-ins stand, so the pruner drops them and no
+	 * thread primitive reaches a module. A {@code java:} operator is a call-time error
+	 * there and makes no host object, so every other host arm answers as it does in a
+	 * program naming none.
 	 */
 	private static final String HOST_ARMS_WITHOUT_HOST = """
 			(defun rontolisp::%clojure-host-string-new (x more)
@@ -134,6 +136,10 @@ public final class ClojureLibrary {
 			            (setq mine t))))
 			    (if mine
 			        (rontolisp::%clojure-agent-pump agent))))
+			(defun rontolisp::%clojure-tap-send (x)
+			  (rontolisp::%clojure-tap-deliver
+			   x (rontolisp:with-mutex (rontolisp::%clojure-tap-guard) rontolisp::%clojure-taps))
+			  t)
 			""";
 
 	private static final String HELPER_PREFIX = "%CLOJURE-";
