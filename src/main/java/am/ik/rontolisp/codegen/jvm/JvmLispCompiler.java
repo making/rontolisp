@@ -1245,8 +1245,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A nested defun a run-time name can reach (a computed name, fmakunbound, eval)
 		// lives in the run-time function namespace instead of its global, so every
 		// reference reads it from there as for a setf-only symbol-function name
-		// (compiler/NestedDefunNamespace).
-		Set<String> namespaceNestedDefuns = NestedDefunNamespace.heldNames(program);
+		// (compiler/NestedDefunNamespace). Not in a host or a fragment: a Clojure program
+		// names a function at run time only through a lowering verb, whose fragment
+		// links the name at compile time, and the global is a field every later class
+		// shares (JvmLinkage.Global#nestedDefun) where the namespace is not.
+		Set<String> namespaceNestedDefuns = this.runTimeImage != null || this.fragment != null ? Set.of()
+				: NestedDefunNamespace.heldNames(program);
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
 		// Whether an instance value can exist in this class at all. The predicates and
@@ -2223,10 +2227,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// with none its indices.
 		globals.addAll(GlobalVarCollector.collectFreeAssigned(program));
 		if (linked != null) {
-			// a global of a class before this one, read and assigned through its field
-			for (String g : linked.linked().globals().keySet()) {
-				if (linkedNames.contains(g)) {
-					globals.add(g);
+			// a global of a class before this one, read and assigned through its field --
+			// the function of a defun it nested below the top level too, which this
+			// class's calls, #'name and redefinition read and store as their own
+			for (Map.Entry<String, JvmLinkage.Global> g : linked.linked().globals().entrySet()) {
+				if (linkedNames.contains(g.getKey())) {
+					globals.add(g.getKey());
+					if (g.getValue().nestedDefun()) {
+						nestedDefunNames.add(g.getKey());
+					}
 				}
 			}
 		}
@@ -5547,7 +5556,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			addModeIf(modes, JvmLinkage.Mode.INT_ARRAYS, usesIntArray);
 			addModeIf(modes, JvmLinkage.Mode.COMPLEX, usesComplex);
 			this.linkTable = ownLinkTable(programDefunNames, functions, globals, specialVars,
-					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition)
+					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nestedDefunNames,
+					nextFuncId[0], definition)
 				.merge(new JvmLinkage.Table(Map.of(), Map.of(), Map.of(), 0, linkedClasses(closRegistry), modes));
 		}
 		if (this.runTimeImage != null) {
@@ -6161,12 +6171,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The table of what this class defines for a later fragment to link against: its
-	 * functions (the defuns it compiled), its global variables and how each is stored,
-	 * and the end of its function ids.
+	 * functions (the defuns it compiled), its global variables and how each is stored (a
+	 * global of a class before it again where this class's defun below the top level
+	 * makes it hold a function), and the end of its function ids.
 	 */
 	private JvmLinkage.Table ownLinkTable(Set<String> programDefunNames, Map<String, FunctionInfo> functions,
 			Set<String> globals, Set<String> specialVars, Set<String> threadBound, Set<String> checkedGlobals,
-			int funcIdEnd, ClassDefinition.Builder definition) {
+			Set<String> nestedDefunNames, int funcIdEnd, ClassDefinition.Builder definition) {
 		Map<String, JvmLinkage.Function> fns = new LinkedHashMap<>();
 		for (String name : programDefunNames) {
 			FunctionInfo fi = functions.get(name);
@@ -6184,11 +6195,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, JvmLinkage.Global> gs = new LinkedHashMap<>();
 		JvmLinkage.Fragment linked = this.fragment;
 		for (String g : globals) {
-			if (linked != null && linked.linked().globals().containsKey(g)) {
-				continue;
+			boolean nested = nestedDefunNames.contains(g);
+			JvmLinkage.Global before = linked != null ? linked.linked().globals().get(g) : null;
+			if (before == null) {
+				gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
+						checkedGlobals.contains(g), nested));
 			}
-			gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
-					checkedGlobals.contains(g)));
+			else if (nested && !before.nestedDefun()) {
+				gs.put(g, new JvmLinkage.Global(before.owner(), before.special(), before.threadBound(),
+						before.checked(), true));
+			}
 		}
 		return new JvmLinkage.Table(fns, gs, fields, funcIdEnd, Map.of(), Set.of());
 	}

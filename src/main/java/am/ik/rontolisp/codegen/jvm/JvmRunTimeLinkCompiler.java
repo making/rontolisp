@@ -21,8 +21,9 @@ import am.ik.rontolisp.compiler.FunctionDesignators;
  * its forms embed ({@link JvmLinkage#CONSTANTS_FIELD}).</li>
  * <li>{@code (rontolisp::%run-time-redefine 'name fn)} -- in a host or a fragment, the
  * store of {@code fn} into the cell of the {@code notinline} function {@code name}
- * ({@link JvmFunctionCell}), which every call of it by name then reaches; answers
- * {@code fn}.</li>
+ * ({@link JvmFunctionCell}), which every call of it by name then reaches -- or, for a
+ * function a {@code defun} below the top level defines, into the global holding it;
+ * answers {@code fn}.</li>
  * </ul>
  */
 final class JvmRunTimeLinkCompiler {
@@ -59,13 +60,11 @@ final class JvmRunTimeLinkCompiler {
 				ctx.body.putstatic(cell.field());
 				return;
 			}
-			if (name != null && fi == null) {
-				// no function of the name this class reaches -- a defun nested in a body,
-				// which its class holds in its own function namespace: the
-				// undefined-function a call of it signals
+			if (name != null && fi == null && JvmFunctionFormCompiler.nestedDefun(name, ctx)) {
+				// a defun nested below the top level, this class's or a class's before:
+				// its global, which every call of it and #'name read
 				JvmExprCompiler.compileExpr(items.get(2), ctx, className);
-				ctx.body.pop();
-				JvmFunctionFormCompiler.emitUndefinedFunctionThrow(name, ctx);
+				JvmSetqCompiler.emitGlobalStore(name, ctx);
 				return;
 			}
 			throw new UnsupportedOperationException(

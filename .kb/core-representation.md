@@ -121,7 +121,9 @@ the program holds as a value -- a quoted symbol (not the first argument of `fbou
 string / keyword / `#:` spelling; a `(setf p)` writer through `p`. Method bodies a `defmethod`
 under a `let` defines are excluded: the dispatcher reads their global and tests it for the
 method's having been added (the corpus's `clos-defmethod-lambda-list-congruence` failed with
-`No applicable method` when they moved). The held names join `Ctx.fenvForwarders`, so `#'name`,
+`No applicable method` when they moved). A JVM host and its fragments hold none: the global is
+the field a later fragment links (`.kb/jvm-run-time-lowering.md`, "A defn in a body"). The held
+names join `Ctx.fenvForwarders`, so `#'name`,
 a direct call (`(funcall #'name ...)`), a literal `fboundp` / `symbol-function` / `fdefinition`
 and `_eval` read the namespace as for a setf-only symbol-function name
 (`.kb/symbol-runtime-api.md`); the definition compiles to `(%set-symbol-function 'name (lambda

@@ -4514,8 +4514,10 @@ cases:
     # var do: the program's own calls, a self tail call of a value taken before (which
     # keeps its code), a call of a count only the redefinition takes, the recursion of
     # a defn a def memoizes, and a name an earlier eval defined. A JVM host routes the
-    # calls of each such function through a cell the redefinition sets.
-    # Oracle-identical (clj 1.12.6, 2026-10-30).
+    # calls of each such function through a cell the redefinition sets. A defn in a
+    # body (the program's or an earlier eval's) is called, taken and redefined by a
+    # later eval through the global holding it. Oracle-identical (clj 1.12.6,
+    # 2026-10-30).
     host: eval redefines what the program defines
     skip:
       wasm: a wasm module carries no lowering, so the verbs refuse at run time
@@ -4546,11 +4548,19 @@ cases:
       (eval '(defn rd-late [] :late2))
       (eval '(defn rd-k [] :k2))
       (println (rd-call-late) (rd-call-k))
+      (let [k 10] (defn rd-nested [] k))
+      (println (eval '(rd-nested)))
+      (defn rd-call-nested [] (rd-nested))
+      (eval '(defn rd-nested [] :redefined))
+      (eval '(let [k 1] (defn rd-nested2 [] k)))
+      (println (rd-call-nested) (rd-nested) (eval '(map (fn [f] (f)) [rd-nested2])))
     expected: |
       2 1 (2) [:new 2] [50 60]
       75025 26
       :late1 :k1
       :late2 :k2
+      10
+      :redefined :redefined (1)
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time

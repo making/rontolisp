@@ -48,8 +48,11 @@ public final class JvmLinkage {
 	 * @param special whether it is special (a binding of it is dynamic)
 	 * @param threadBound whether a binding of it goes through its {@code _d$} ThreadLocal
 	 * @param checked whether a read of it checks for the unbound marker
+	 * @param nestedDefun whether it holds the function a {@code defun} below the top
+	 * level defines, which a later fragment's call, {@code #'name} and redefinition of
+	 * the name then read and store
 	 */
-	public record Global(String owner, boolean special, boolean threadBound, boolean checked) {
+	public record Global(String owner, boolean special, boolean threadBound, boolean checked, boolean nestedDefun) {
 	}
 
 	/**
@@ -229,7 +232,8 @@ public final class JvmLinkage {
 			new TreeMap<>(this.globals).forEach((name, g) -> {
 				fields.add(name);
 				fields.add(g.owner());
-				fields.add((g.special() ? "s" : "") + (g.threadBound() ? "t" : "") + (g.checked() ? "c" : "") + ".");
+				fields.add((g.special() ? "s" : "") + (g.threadBound() ? "t" : "") + (g.checked() ? "c" : "")
+						+ (g.nestedDefun() ? "f" : "") + ".");
 			});
 			fields.add(Integer.toString(this.fields.size()));
 			new TreeMap<>(this.fields).forEach((field, owner) -> {
@@ -287,7 +291,8 @@ public final class JvmLinkage {
 				String name = in.next();
 				String owner = in.next();
 				String flags = in.next();
-				globals.put(name, new Global(owner, flags.contains("s"), flags.contains("t"), flags.contains("c")));
+				globals.put(name, new Global(owner, flags.contains("s"), flags.contains("t"), flags.contains("c"),
+						flags.contains("f")));
 			}
 			Map<String, String> fields = new LinkedHashMap<>();
 			int fieldCount = Integer.parseInt(in.next());
@@ -496,7 +501,7 @@ public final class JvmLinkage {
 	 */
 	public static final String CONSTANTS_FIELD = "_constants";
 
-	private static final String VERSION = "rontolisp-link-3";
+	private static final String VERSION = "rontolisp-link-4";
 
 	private static final class Fields {
 

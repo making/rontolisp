@@ -190,7 +190,7 @@ oracle's calls through the var do; a function value taken before keeps its code.
 - The backend (`JvmFunctionCell`): in a linked class only (an ordinary class binds every
   call, the declaration or not), a notinline defun gets a volatile static `_fc$<name>` --
   null until `%run-time-redefine` stores into it -- shared with later fragments like a
-  global (`JvmLinkage.shared`, the table's `celled` flag, `rontolisp-link-3`). Each class
+  global (`JvmLinkage.shared`, the table's `celled` flag). Each class
   calling it by name has a named entry `_n$<name>` of its descriptor: the method while the
   cell is null, `_apply` of the cell over the arguments rebuilt as a list once set (an
   UNSUPPLIED optional ends them; `_apply` answers a value, never a bounce).
@@ -221,15 +221,39 @@ oracle's calls through the var do; a function value taken before keeps its code.
   a count only the redefinition takes, and every other line kept the replaced definition
   (`1 1 (1) :old`, `75025 242785`, `:late1 :k1` twice).
 
+## A defn in a body: its global, shared like any other
+
+**Invariant: a defun below the top level of a host or a fragment keeps its function in its
+global `_g$` -- never in `_fenv` -- and a later fragment's call, `#'name`, literal
+`fboundp` and redefinition of the name read and store that field.**
+
+- `NestedDefunNamespace.heldNames` is empty in a linked class (`JvmLispCompiler`). Elsewhere
+  a nested defun a run-time name can reach moves to `_fenv` (`.kb/core-representation.md`);
+  in a Clojure program the run-time names are the lowering verbs', and their fragment links
+  the name when it compiles. Measured before (2026-10-30): the host held every nested defun
+  (its unstripped library resolves names), its global stayed nil, and a fragment, which links
+  the global, called nil (`The function NIL is undefined`); its redefinition signalled.
+- The table's `Global.nestedDefun` (encoded `f`, `rontolisp-link-4`): a fragment adds a
+  linked global so flagged that it names to its `nestedDefunNames`, so every reference takes
+  the nested-defun path; a fragment whose nested defun makes a global of a class before hold
+  a function re-lists it flagged, owner kept. `%run-time-redefine` of such a name is the
+  store into the global (`JvmRunTimeLinkCompiler`); a name with no function and no such
+  global is a compile error.
+- Weighed: sharing `_fenv` instead (a shared field, the held names carried, `_envLookup` in
+  every fragment that names one). Rejected: a fragment's own nested defuns already lived in
+  their shared global, so `_fenv` would have been a second home for the same kind of
+  definition, and every fragment holding one would have carried the eval runtime
+  (`writesFunctionNamespace`) or a split-safe route to the host's `_envLookup`.
+- Pins: clojure-spec `a-run-time-redefinition-reaches-every-caller`'s last two lines (a
+  host's nested defn called and redefined by an eval, an eval's taken as a value by a later
+  one; oracle-identical). Before, the second line also failed on a fragment's nested defn
+  (`#'name` late-bound through `_lookup`, which never knew it).
+
 ## Limits (2026-10-30)
 
 - A computed symbol designator (`(funcall 'name)` through `_lookup`) reaches the definition's
   method, not its cell; Clojure code spells none. A Common Lisp `(setf (symbol-function
   'f) ...)` still reaches no compiled call (`.kb/symbol-runtime-api.md`).
-- A defn in a body is a nested defun its class holds in `_fenv`, which no fragment reaches:
-  a fragment's call of it, its `#'name` and its redefinition signal the undefined-function
-  (`%run-time-redefine` of a name no class before defines compiles to that signal;
-  `.todo/h16`).
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
   lowering again. Measured 2026-10-30 on spec's `instrument`/`check` probe
   (`.kb/clojure-frontend.md`, "clojure.spec.alpha"): 69 verbs -- 41 `resolve`s (the
