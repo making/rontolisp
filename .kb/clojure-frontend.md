@@ -201,6 +201,7 @@ answered `2 5 3` before).
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.reflect` | the same; host reflection on the interpreter and the JVM, a call-time refusal on WASM (`rontolisp.internal.reflect/hosted?` folded) | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.core.reducers` | the same, loaded at its `require`; cat's accumulator is `rontolisp.internal.reducers/NAME`, one call to `rontolisp::%clojure-reducers-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine, and the text of `cl-format`'s number directives and case conversion, is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
@@ -1603,8 +1604,9 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   `go`/`go-loop` bodies (`pipe`, `pipeline*`, `mult`, `mix`, `pub` ...) while it loads.
 - tools.analyzer.jvm, each blocker patched in a `:local/root` copy to see the next: the
   platform-neutral `clojure.tools.analyzer` (`.ast`, `.env`, `.passes`, `.utils`) loads
-  verbatim. Then (1) `clojure.reflect` is no shipped namespace (`jvm.utils` reflects on
-  `Object` at load); (2) tools.reader 1.3.6, which loads verbatim since g97
+  verbatim. Then (1) `clojure.reflect` was no shipped namespace (shipped 2026-10-29, "clojure.jar
+  namespaces"; `jvm.utils`'s `type-reflect` then stops at `(RT/baseLoader)`, `No such class:
+  clojure.lang.RT`); (2) tools.reader 1.3.6, which loads verbatim since g97
   (2026-10-29, "Library probes"); with it the analyzer
   loads and `(analyze 1)` runs to (3) `Compiler/LOADER` bound to `(RT/makeClassLoader)` (`No
   such class: clojure.lang.Compiler`), then (4) `build-ns-map`'s `ns-map` over `(all-ns)`
@@ -2315,9 +2317,9 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`,
 `clojure.instant`, `clojure.uuid` ("Instants and UUIDs"), `clojure.java.io`
 ("clojure.java.io"), `clojure.repl`, `clojure.main`, `clojure.java.shell` (host only),
-`clojure.xml` (2026-10-09). None of clojure.jar's own namespaces is left `unknown
-namespace` but the ones no measured library names (`inspector`, `java.browse`,
-`java.javadoc`, `java.process`, `parallel`, `reflect`, `repl.deps`, `core.server`,
+`clojure.xml` (2026-10-09), `clojure.reflect` (2026-10-29). None of clojure.jar's own
+namespaces is left `unknown namespace` but the ones no measured library names
+(`inspector`, `java.browse`, `java.javadoc`, `java.process`, `parallel`, `repl.deps`, `core.server`,
 `test.junit`/`tap`, `java.basis`, `tools.deps.interop`). The spec jars' namespaces are no
 longer the language's: they load from their own jars ("clojure.spec.alpha (g90)").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
@@ -2653,6 +2655,30 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   answers `(byte-array (.toByteArray out))`: a host `byte[]` crosses back as a Lisp list
   (empty: nil, todo `f13`). Oracle-identical on the interpreter and the JVM:
   `ClojureInteropTest#clojureJavaShellRunsAHostProcessLikeTheOracle`.
+- `clojure.reflect` (2026-10-29, for tools.analyzer.jvm's `jvm.utils`): Clojure source over
+  `java.lang.reflect` interop (`getDeclaredFields`/`-Methods`/`-Constructors`, `getModifiers`
+  through `flag-descriptors`), so the interpreter and the JVM reflect; the `Constructor`/
+  `Method`/`Field` records, `typename` (`<>` per array dimension in a symbol, `[]` in the
+  name), `:ancestors` (bases walked through the reflector, their members merged),
+  `resolve-class` over a `ClassLoader`. A class typeref is used as is, any other goes
+  through `(Class/forName (typename t) false loader)`, so `'int<>` and `'int` are the
+  oracle's `ClassNotFoundException`. A class spelled as a keyword here (`Long`, `(class 1)`)
+  reflects as that class; `reflect` of a value whose `class` is a kind keyword reflects the
+  oracle's class name (`rontolisp.internal.reflect/class-name`, datafy's worker), so `""`
+  is `java.lang.String`, while a Clojure collection, a typed array (a vector here) or a
+  `reify` names a `clojure.lang` class no host holds (`ClassNotFoundException`) or
+  `Object`. Not WASM: the namespace loads and every reflection throws
+  `UnsupportedOperationException` when called, not while lowering -- each host branch is an
+  `if` over `rontolisp.internal.reflect/hosted?` (a literal, so the branch folds; a `when` or
+  `if-not` does not fold, measured: a `JAVA:STATIC` warning in every program requiring it).
+  `->AsmReflector` is left out (clojure.jar's bundled ASM). Diffed against clj 1.12.6 (sets
+  sorted, the walk order being the backend's): `Object`, `String`, `java.util.List`,
+  `ArrayList` with `:ancestors` (203 members), `[I`, `Integer/TYPE`, bridge, varargs, enum and
+  annotation flags, identical on the interpreter and the JVM. Deviation: a protocol miss
+  (`(reflect nil)`) is the front end's `IllegalArgumentException` wording. Pins: clojure-spec
+  `clojure-reflect-describes-a-host-class-like-the-oracle` (interpreter, JVM),
+  `clojure-reflect-refuses-to-reflect-where-the-host-is-not` (both WASM legs),
+  `ClojureWasmHostArmsTest` (no `java:` warning).
 - `clojure.xml` (2026-10-09): `(parse s)` reads the document itself on every backend:
   `slurp` with `:encoding "ISO-8859-1"` (one character per byte), then the kernel
   `rontolisp.internal.xml/events` (`clojure.lisp` "clojure.xml: rontolisp.internal.xml"):

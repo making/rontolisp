@@ -64,6 +64,7 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.java.io` | [clojure.java.io](clojure-java-io.md) |
 | `clojure.java.shell`（インタープリターと JVM） | [clojure.java.shell](clojure-java-shell.md) |
 | `clojure.xml` | [clojure.xml](clojure-xml.md) |
+| `clojure.reflect`（WebAssembly では呼び出し時に拒否） | [clojure.reflect](clojure-reflect.md) |
 | `clojure.repl` | [clojure.repl](clojure-repl.md) |
 | `clojure.main` | [clojure.main](clojure-main.md) |
 | `clojure.test` | [テスト (clojure.test)](test.md) |

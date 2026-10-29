@@ -58,8 +58,11 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
 			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
 			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
-			Map.entry("clojure.pprint", Map.of()), Map.entry(ClojureLangClasses.NAMESPACE, Map.of()),
-			Map.entry("rontolisp.http-client", httpClientLeftOut()), Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
+			Map.entry("clojure.pprint", Map.of()),
+			Map.entry("clojure.reflect", Map.of("->AsmReflector",
+					"it reads class files with the ASM library inside clojure.jar; JavaReflector reflects through the host")),
+			Map.entry(ClojureLangClasses.NAMESPACE, Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
+			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}

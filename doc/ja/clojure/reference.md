@@ -32,6 +32,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.java.io](reference/clojure-java-io.md) | ファイル、URL と、その上のストリーム: `file`、`reader`/`writer`、`input-stream`/`output-stream`、`copy`、`resource`、`Coercions`/`IOFactory` プロトコル、`rontolisp:fetch` で読む `http:` URL |
 | [clojure.math](reference/clojure-math.md) | どのバックエンドでも同じビットを返す double の関数、丸めと隣の double、オーバーフローを拒否する long の算術 |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
+| [clojure.reflect](reference/clojure-reflect.md) | ホストのクラスの基底、フラグ、メンバーをデータで返す: `type-reflect`/`reflect`、`Constructor`/`Method`/`Field` のレコード、`typename` |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |
 | [clojure.walk](reference/clojure-walk.md) | 入れ子のデータの汎用走査: `walk`/`postwalk`/`prewalk`、`-replace` の組、`keywordize-keys`/`stringify-keys` |

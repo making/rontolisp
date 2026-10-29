@@ -18,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * A Clojure program the host has no part in compiles to either WASM target without a
  * {@code java:} warning: the host arms of its own lowering and of the library -- the
  * byte-array, charset and {@code Object}-method dispatch, the host faces of a deftype,
- * the hierarchy's host class walk, clojure.xml's SAX parser -- are dropped where no host
- * object can exist, while a call only the host answers still warns.
+ * the hierarchy's host class walk, clojure.xml's SAX parser, clojure.reflect's reflector
+ * -- are dropped where no host object can exist, while a call only the host answers still
+ * warns.
  */
 class ClojureWasmHostArmsTest {
 
@@ -34,7 +35,9 @@ class ClojureWasmHostArmsTest {
 			"(println (System/getProperty \"no.such.property\") (System/getProperty \"no.such.property\" \"d\"))",
 			"(println (.toUpperCase \"straße\" java.util.Locale/US) (.intern (str \"a\")))",
 			"(deftype K [s] Object (equals [this o] (and (instance? K o) (= s (.-s ^K o))))"
-					+ " (hashCode [this] (hash s)))" + " (println (= (K. 1) (K. 1)) (= (K. 1) (K. 2)))");
+					+ " (hashCode [this] (hash s)))" + " (println (= (K. 1) (K. 1)) (= (K. 1) (K. 2)))",
+			"(require '[clojure.reflect :as r]) (println (r/typename 'int<>)"
+					+ " (try (r/reflect \"\") (catch UnsupportedOperationException e :refused)))");
 
 	@ParameterizedTest
 	@ValueSource(booleans = { false, true })
