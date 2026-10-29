@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.DistClient;
@@ -332,7 +333,8 @@ public final class JvmSourceCompiler {
 				if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 					return Optional.empty();
 				}
-				Result compiled = compileProgram(frontend.program(), frontend.features(), classPath.entries());
+				Result compiled = compileProgram(frontend.program(), frontend.features(), classPath.entries(),
+						frontend.runTimeImage());
 				CompileDiagnostics.failOnWarnings(this.warningsAsErrors);
 				return Optional.of(compiled);
 			}
@@ -347,10 +349,23 @@ public final class JvmSourceCompiler {
 	 * @return the emitted class and the runtime classes that travel with it
 	 */
 	Result compileProgram(List<LispVal> program, Features features) {
-		return compileProgram(program, features, this.javaClasspath);
+		return compileProgram(program, features, null);
 	}
 
-	private Result compileProgram(List<LispVal> program, Features features, List<java.nio.file.Path> javaClasspath) {
+	/**
+	 * The backend half alone for a program that may lower as it runs.
+	 * @param program the expanded program
+	 * @param features the feature set it was read with
+	 * @param runTimeImage what the class carries to lower the program again as it runs
+	 * ({@link CompileFrontend.Result#runTimeImage()}), or {@code null}
+	 * @return the emitted class and the runtime classes that travel with it
+	 */
+	Result compileProgram(List<LispVal> program, Features features, @Nullable String runTimeImage) {
+		return compileProgram(program, features, this.javaClasspath, runTimeImage);
+	}
+
+	private Result compileProgram(List<LispVal> program, Features features, List<java.nio.file.Path> javaClasspath,
+			@Nullable String runTimeImage) {
 		// The JVM backend cannot parse PEM in hand-assembled bytecode, so rewrite
 		// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 		// (WASM keeps tls-listen-pem, which its compiler rejects outright).
@@ -369,12 +384,26 @@ public final class JvmSourceCompiler {
 			.javaClasspath(javaClasspath)
 			.warnJavaReflection(this.warnJavaReflection)
 			.javaStatic(this.javaStatic)
+			.runTimeImage(runTimeImage)
 			.build();
 		byte[] bytes = compiler.compile(TlsPemInliner.inline(program, this.baseDir));
 		// A :float-vector / :float-matrix export hands out a handle class; it travels
 		// beside the program's own class so the artifact still has no dependency
 		// (.kb/jvm-export.md).
-		return new Result(this.internalClassName, bytes, compiler.runtimeClassFiles());
+		if (runTimeImage == null) {
+			return new Result(this.internalClassName, bytes, compiler.runtimeClassFiles());
+		}
+		// A class that lowers its program as it runs calls the compiler it carries
+		// (JvmRunTimeLowering): the build's own classes and resources travel with it.
+		Map<String, byte[]> carried = RunTimeCompilerFiles.read();
+		if (carried.isEmpty()) {
+			CompileWarnings.note("warning: this compiler has no class files to carry: the class lowers its "
+					+ "program as it runs (eval, a computed resolve or require ...) only with the rontolisp jar "
+					+ "on its class path");
+		}
+		Map<String, byte[]> files = new java.util.HashMap<>(carried);
+		files.putAll(compiler.runtimeClassFiles());
+		return new Result(this.internalClassName, bytes, Map.copyOf(files));
 	}
 
 	/**

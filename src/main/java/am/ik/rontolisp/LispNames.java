@@ -6086,6 +6086,34 @@ public final class LispNames {
 	public static final String OCTETS_TO_STRING_PACKED_INTERNAL = "%OCTETS-TO-STRING-PACKED";
 
 	/**
+	 * The internal {@code rontolisp::%host-lower-at-run-time} primitive: a Clojure
+	 * lowering verb over computed arguments, lowered as the program runs by the compiler
+	 * a JVM class carries -- the verb, its arguments as forms, the metadata reader, the
+	 * refusal of a call that does not lower, and {@code *ns*} -> the value of the call.
+	 * Only the stand-in a program the class lowers again as it runs splices
+	 * ({@code eval/ClojureLibrary}) names it, and only the JVM backend compiles it
+	 * ({@code cli/JvmRunTimeLowering}, {@code .kb/clojure-frontend.md}, "Lowering at run
+	 * time").
+	 */
+	public static final String HOST_LOWER_AT_RUN_TIME_INTERNAL = "%HOST-LOWER-AT-RUN-TIME";
+
+	/**
+	 * The internal {@code rontolisp::%run-time-constant} primitive: the value a form
+	 * lowered as the program runs embeds -- a function or an atom the running program
+	 * handed a lowering verb, which no datum spells -- by its index among the constants
+	 * the class compiled for that form holds. Only such a class's forms name it.
+	 */
+	public static final String RUN_TIME_CONSTANT_INTERNAL = "%RUN-TIME-CONSTANT";
+
+	/**
+	 * The internal {@code rontolisp::%run-time-answer} primitive: the form whose value a
+	 * form lowered as the program runs answers, stored where the run-time half reads it
+	 * once the class compiled for those forms ran them. Only such a class's forms name
+	 * it.
+	 */
+	public static final String RUN_TIME_ANSWER_INTERNAL = "%RUN-TIME-ANSWER";
+
+	/**
 	 * The internal {@code rontolisp::%octets-join} helper: a list of
 	 * {@code (unsigned-byte 8)} vectors and their total length -> ONE packed vector
 	 * holding them in order (a single chunk is answered as it is, uncopied). The blit
@@ -7880,6 +7908,26 @@ public final class LispNames {
 	 */
 	public static final String OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
 			+ OCTETS_TO_STRING_PACKED_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%host-lower-at-run-time}
+	 * ({@link #HOST_LOWER_AT_RUN_TIME_INTERNAL}).
+	 */
+	public static final String HOST_LOWER_AT_RUN_TIME_QUALIFIED = RONTOLISP_PKG + "::"
+			+ HOST_LOWER_AT_RUN_TIME_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-constant}
+	 * ({@link #RUN_TIME_CONSTANT_INTERNAL}).
+	 */
+	public static final String RUN_TIME_CONSTANT_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_CONSTANT_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-answer}
+	 * ({@link #RUN_TIME_ANSWER_INTERNAL}).
+	 */
+	public static final String RUN_TIME_ANSWER_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_ANSWER_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of

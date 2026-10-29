@@ -392,7 +392,9 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   so the condition answers every member a program can call. Per arity, only where the class has
   the constructor: 0 `()`; 1 exactly `(String)`+`(Throwable)` -> `%clojure-exception-new-1`
   (an exception argument is the cause, its toString the message), `(String)` alone or a literal
-  string to any string-accepting one-argument constructor (`AssertionError(Object)`) -> the
+  string -- or an argument datum hinted `String` (`^String (str ...)`, a hinted local; the
+  oracle resolves it at compile time too, 2026-10-30) -- to any string-accepting one-argument
+  constructor (`AssertionError(Object)`, `IndexOutOfBoundsException(String|int|long)`) -> the
   message; 2 exactly `(String, Throwable)`. Anything else keeps `java:new`. A class with
   members (`java.net.URISyntaxException`) stays a host object until thrown.
 - `.getMessage`/`.getLocalizedMessage`/`.getCause` with no argument on a receiver of unknown
@@ -1225,8 +1227,8 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
   (spec.alpha's `decimal?` generator), `.unscaledValue`/`.scale` and `(BigDecimal. BigInteger
   int)` (nippy); next.jdbc names no `BigDecimal` (its NUMERIC column is `getObject`'s `Object`).
   tools.reader's `read-string "1.5M"` and data.generators' `bigdec` print the oracle's lines on
-  the interpreter and the JVM; on wasm tools.reader refuses before reading any number (`.todo/h07`) and
-  `bigdec` loops (`.todo/h08`).
+  the interpreter and the JVM; on wasm tools.reader reads numbers since 2026-10-30 ("Library
+  probes") and `bigdec` prints the oracle's decimals there too.
 - An index or count consumer
   (`nth`, `take`, `drop`, `repeat`, `subvec`, `char`, `dotimes`) refuses a decimal, where the
   oracle intCasts it: the same consumer-arm blast radius as the BigInt flag, for a use money
@@ -1681,7 +1683,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | math.combinatorics 0.3.2 | = | = | = | = | no transitive deps; the subsets walk prints a bare empty list, which is `nil` here (the pinned empty-list deviation), so the probe prints counts there |
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
-| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called; h06: `bigdec` prints the oracle's decimals on the interpreter and the JVM (on wasm its `BigInteger.` refusal is caught as a `NumberFormatException` and retried forever, `.todo/h08`) |
+| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called; h06: `bigdec` prints the oracle's decimals on the interpreter and the JVM; on wasm too since 2026-10-30, `bigint`'s `(BigInteger. bytes)` being portable ("Portable number statics"; it looped before, the `JAVA:NEW` refusal caught as a `NumberFormatException`, `.todo/h08`) |
 | test.check 1.1.3 | = | = | = | = | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). g31: `Math/abs`, `Long/bitCount` and `Long/numberOfLeadingZeros` of one argument answer portably ("Portable number statics"), `Double/MAX_VALUE` and its siblings load ("Boxed-integer limits ..."), and the seedless `next-rng`'s `proxy` of `ThreadLocal` is the portable single-threaded cell ("Portable ThreadLocal"), so the namespace loads and the 12-call probe -- three seeded `quick-check`s with `:seed` and `:max-size 10`, nine seeded small-valued `gen/generate`s -- prints the oracle's lines on both wasm backends too. The `JAVA:STATIC`+`JAVA:NEW` warnings on both wasm backends come from the double/uuid generators' bodies, off the probe's path. g33 (2026-10-21): the supported boundary is the probe's small-valued set -- `choose` ranges within about 0..25 and seeded `quick-check`s with `:seed` and `:max-size 10` answer on all four backends -- because `int-rose-tree` builds the whole shrink tree eagerly here (`(core/map int-rose-tree (shrink-int value))` over `shrink-long`'s long array, strict under the lazy-or-strict rule; the oracle's `map` is lazy, so only the consumed spine exists there). Measured node counts: 20 for 5, 254 for 10, 37,954 for 20 (pinned by clojure-spec `eager-shrink-trees-answer-only-at-small-magnitudes`), 631,314 for 26 (about 110 s on the interpreter, 2.5 s on the JVM, about a minute on both wasm backends), 3,337,928 for 30 (minutes on the interpreter and wasm, 3.4 s on the JVM), 2.6e9 for 42 and 7.5e26 for 126. So e.g. `(gen/generate (gen/choose 0 100) 5 99)` (drawn 26) crawls past a minute everywhere but the JVM; no laziness story: changing it would change global `map` strictness (the lazy-or-strict pins and their performance basis stand). g32: `clojure.test.check.clojure-test` loads on all four (`do-report`/`report` over the test runtime, `*testing-vars*`, the lower-time `assert-expr` method, `instance?` of `clojure.lang.MultiFn` answering false), and a passing and a failing `defspec` under `run-tests` count and report like the oracle's on the interpreter and the JVM (one stderr line, `report is not a multimethod`, where the oracle prints the trial/shrinking/complete/shrunk progress; the `:file`/`:line` names host frames, not the test file). On wasm the failing one reports as an error, still counted: test.check's file-and-line reads the host thread's stack (`Thread/currentThread`, a call-time error where no host is) |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s); g32: the `properties` macros (`defprop-roundtrip`, `defprop-idempotent`) expand and their test.check `defspec`s pass on the interpreter and the JVM (one stderr line from the check integration, as above). The JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
@@ -1691,7 +1693,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | integrant 1.0.1 + weavejester/dependency 1.0.0 | = | = | = | = | no transitive deps beyond dependency 1.0.0; g30: refused verbs refuse at call time, so `resources`/`load-hierarchy` define but never refuse the load (the 16-line probe -- init with refs, halt!, expand, refset, find-derived, resolve-key, read-string, ref?/refset?/derived-from?, :default init-key, valid-config-key?, partial init -- prints the oracle's lines); calling `load-hierarchy`/`resources` refuses at call time like any host access (`No such class: clojure.lang.RT` on the interpreter and JVM, the host-call refusal on wasm: no class loader exists here); `assoc` keeps the source's metadata, so the system map keeps `::origin` through `build`'s assocs |
 | cc.qbits/ex 0.1.3 | = | = | = | = | no transitive deps; g20: `derive`/`underive` as values ("Dispatch") |
 | spec.alpha 0.5.238 + core.specs.alpha 0.4.74 | = | = | = | = | no `deps.edn` needed: the built-in clojure's own dependencies, fetched at the first require; g90 ("clojure.spec.alpha (g90)" below: the 35-line probe, and the gaps it leaves) |
-| tools.reader 1.3.6 | = | = | load | load | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Both wasm backends load it; every read stops at `(LinkedList.)`, the pending-forms queue `read` makes (`JAVA:NEW` where no host is, `.todo/h07`) |
+| tools.reader 1.3.6 | = | = | 11/12 | 11/12 | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stops at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker (`.todo/h10`) |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -1839,8 +1841,9 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   `deps.edn` naming test.check makes `(gen/sample (s/gen #{:a :b}) 4)` answer, and without it
   `s/gen` refuses in the oracle's `Could not locate clojure/test/check/generators...`.
   `(c/symbol ns)` computes its spec since g90 (`ClojureNamespaceLowering.computesSpecs`: a
-  qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A
-  compiled program refuses each of these by name (`.todo/h00` for the JVM).
+  qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A wasm
+  module refuses each of these by name; a JVM class lowers them through its run-time
+  lowering (`.kb/jvm-run-time-lowering.md`, not measured against spec's own probe).
 - **Gaps**, each refused where it runs: a bare predicate explains by its var's name only
   where it is a `defn` or a `def`'d fn literal ("Java interop", `.getClass` of a fn; a named
   local `fn` explains as `:clojure.spec.alpha/unknown`);
@@ -3068,6 +3071,38 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
   `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
   host's); anything else keeps the host call. Each verified against clj 1.12.6.
+  tools.reader's read path joins them (2026-10-30): one-argument `Integer/parseInt`
+  (the radix reader's `36r...`) -- with it any literal int radix, the radix-16 worker
+  generalized to `%clojure-parse-int`, a radix outside 2 to 36 refused in the
+  oracle's words (`radix 37 greater than Character.MAX_RADIX`), the radix named in a
+  malformed string's message unless it is 10; a computed radix stays the host's
+  call --, `Double/parseDouble` (`Double/valueOf`'s string path; anything else, a
+  double included, the cast refusal to `String`), `Character/isWhitespace`,
+  `isDigit`, `digit` and `valueOf` (a char or a long in the int range as the code,
+  past it the oracle's `integer overflow`, anything else `No matching method
+  isDigit found taking 1 args`; `digit` -1 for none and for a radix outside 2 to
+  36, Latin letters ASCII and fullwidth as 10 to 35), and an untagged
+  `(BigInteger. s)`/`(BigInteger. s radix)` construction
+  (`ClojurePortableStaticsLowering.construction`, `%clojure-big-integer-new(-1)`):
+  `BigInteger(String,int)` ported -- radix range, empty string, embedded sign, sign
+  alone, leading zeros skipped, then digitsPerInt groups (the first short), the
+  first group holding a non-digit named as `Integer.parseInt` names it
+  (`(BigInteger. "12345678901x")` is `For input string: "45678901x"`); nil the
+  `String.length()` NPE, a non-string or non-long radix `No matching ctor found`,
+  a long radix narrowed to an int first, like the reflector. `(BigInteger. bytes)`
+  is the big-endian two's complement (empty: `Zero length BigInteger`) and
+  `(BigInteger. signum bytes)` the signed magnitude (`Invalid signum value`,
+  `signum-magnitude mismatch`; a nil second argument the `(int, Random)`
+  constructor's NPE): data.generators' `bigint`/`bigdec` print the oracle's lines on
+  both wasm backends since (they looped before, a `JAVA:NEW` refusal caught as
+  `NumberFormatException`, `.todo/h08`). `.longValue`/`.intValue`
+  of an integer are its low 64/32 bits on every backend
+  (`ClojureValueMethodLowering.bigIntegerMethod`, beside `.negate`/`.bitLength`):
+  the host call answered the same where a host is, and nothing did on wasm. The
+  decimal-digit table (`%clojure-decimal-digit-starts`, also `parse-long`'s) lacked
+  the eight supplementary blocks JDK 25's `Character.isDigit` adds (Garay 68928,
+  71376, 71386, 72688, 90416, 93552, 118000, 124401; checked over every code point
+  against `Character.isDigit`/`digit` on 25.0.4, 2026-10-30) and has them now.
 - `Long/valueOf` is `parse-long`'s grammar or the refusal: a malformed string
   the oracle's `NumberFormatException` naming it (`For input string: "s"`), an
   integer in the long range its `(long)` overload, nil its null-string refusal,
@@ -3110,8 +3145,9 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   nothing there; a host behavior change for no oracle gain).
 - **Pins**: clojure-spec `long-value-of-reads-like-the-host-static`,
   `long-parse-long-reads-like-the-host-static`,
-  `double-value-of-reads-like-the-host-static`,
-  `parse-int-of-radix-16-reads-like-the-host-static`,
+  `double-value-of-and-parse-double-read-like-the-host-statics`,
+  `parse-int-reads-like-the-host-static`,
+  `character-statics-and-big-integer-strings-answer-like-the-host`,
   `integer-to-hex-string-writes-like-the-host-static`,
   `math-min-of-two-answers-like-the-host-static`,
   `math-floor-ceil-and-log-read-like-the-host-statics`,
@@ -3181,6 +3217,44 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   keep the host's own),
   `ClojureLoweringTest#aRandomConstructionLowersToThePortableGeneratorWhereTheHostIsNot`
   and `#aRandomDrawLowersToThePortableWorkerWhereTheHostIsNot`.
+
+## Portable LinkedList
+
+- **The list** (2026-10-30; `ClojurePortableLinkedListLowering`,
+  `lib/rontolisp/internal/linked_list.clj`): an untagged zero-argument
+  `(java.util.LinkedList.)` (any spelling: `.`, `new`, `Class/new`, call or value)
+  where the host is not (wasm) is `(rontolisp.internal.linked-list/linked-list)`, a
+  `deftype LinkedList [^:unsynchronized-mutable items]` over a vector of the
+  INTERNAL shipped namespace (`ClojureBuiltinNamespaces.INTERNAL`, like the core
+  macros: no program requires it, no project file shadows it), preloaded where the
+  construction first lowers -- tools.reader's `read` makes one per call as its
+  pending-forms queue (`(if (seq pending-forms) (.remove ^List pending-forms 0)
+  ...)`, `.addAll ^List pending-forms 0` under `#?@`). Its body implements
+  `Seqable`, `Counted`, `Iterable` and the `java.util.List` members a queue uses
+  (`size`, `isEmpty`, `contains`, `indexOf`, `get`, `remove` of an index, `add` of
+  one or at an index, `addAll` of one or at an index, `clear`) plus `toString`
+  (`[8, null, 1, 2]`); indices refuse as `IndexOutOfBoundsException` `Index: i,
+  Size: n` (the hinted `^String` message, "Exceptions"). Where the host is, and
+  outside top-level datums (no namespace loads there), the construction keeps
+  `java:new`; so does a construction from a collection (dropped: `class` here
+  spells no oracle class name for a map or a string, so its `ClassCastException`
+  message could not be the oracle's).
+- **The simple-name leniency** (`ClojureLowering.typeKeyOf`'s last resort, "the
+  only deftype of that simple name anywhere") skips an internal namespace's types:
+  without it the imported spelling `LinkedList` (tools.reader's) resolved to the
+  internal deftype once loaded and `(LinkedList.)` became its one-field positional
+  constructor of no argument.
+- Deviations (wasm only): `class`, `instance? java.util.LinkedList` and `print`
+  read the deftype (`print` writes the members like `pr`, the oracle the host
+  object); `.remove` of an integer is always remove-at-index (the overload the
+  oracle's reflector picks for a long; `remove(Object)` is not offered).
+- **Pins**: clojure-spec
+  `a-linked-list-construction-is-a-mutable-list-where-the-host-is-not` (all four,
+  oracle-identical; the imported spelling pins the leniency skip).
+- Native image: `resource-config.json`'s `lib/rontolisp` pattern did not reach
+  `lib/rontolisp/internal/` (so `core_macros.clj` was absent from the binary too);
+  the pattern takes subdirectories now and `NativeImageResourceConfigTest` lists the
+  directory.
 
 ## Boxed-integer limits, class designators, number classes and date builder chains
 
@@ -4101,15 +4175,17 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 
 ## Lowering at run time
 
-**Invariant: the interpreter keeps a Clojure program's lowering for its run, so a lowering
-verb over computed arguments lowers when it runs; a compiled program carries none and
-refuses by name** (g83, 2026-10-29). Verbs: `eval`; `resolve`, `find-var`, `ns-resolve`,
+**Invariant: the interpreter keeps a Clojure program's lowering for its run, and a JVM class
+carries its program and lowers it again, so a lowering verb over computed arguments lowers
+when it runs; a wasm module carries none and refuses by name** (g83, 2026-10-29; the JVM
+2026-10-30, `.kb/jvm-run-time-lowering.md`). Verbs: `eval`; `resolve`, `find-var`, `ns-resolve`,
 `requiring-resolve` of a computed symbol; `require`, `use` (a computed spec, or as a
 value), `refer`, `alias`, `ns-unmap`, `ns-unalias`, `in-ns` of computed names; `load`,
 `load-file`, `load-string` of computed arguments, `load-reader`; the namespace mappings of
 a computed namespace. Each `clojure.lisp` entry hands its verb and arguments to
-`%clojure-lower-at-run-time`, which refuses with the entry's message (the JVM and both wasm
-backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
+`%clojure-lower-at-run-time`, which refuses with the entry's message (both wasm backends);
+`LispEvaluator.installClojureRunTime` replaces it on the interpreter, and a JVM class's
+library splices the hand-off to the compiler it carries in its place.
 
 - **The datum.** `ClojureRunTime.datum`: `eval`'s form decoded, else `(clojure.core/verb
   'arg ...)` -- core-spelled so no program macro or definition captures the head; a
@@ -4145,16 +4221,17 @@ backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
 - **A program lowers open when it names an entry** (`ClojureRunTime.ENTRIES`, every library
   function reaching `%clojure-lower-at-run-time`; `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry`
   keeps the set equal to the library's): `lowerWhole(..., runTimeTarget)` lowers it again with
-  `open` (and `threadBinders`), only for the interpreter (`SourceLanguage.readClojure`,
-  `features` holding `rontolisp-interpreter`); the misses still re-lower the whole program.
+  `open` (and `threadBinders`), for the interpreter and the JVM (`SourceLanguage.readClojure`,
+  `features` holding `rontolisp-interpreter` or `rontolisp-jvm`; the JVM's also
+  `carriesRuntimes`); the misses still re-lower the whole program.
   `noteRuntimesEmitted` records what the open program carried, so a run-time datum emits only
   what it first needs (a runtime emitted twice starts its state over). Such a program takes
   the whole library, unstripped (`LispEvaluator.clojureProgram(Clojure.Program)`).
-- **Where it runs**: the command line's interpreter, `ClojureSpecE2eTest`'s interpreter leg,
-  a REPL and the playground (`SourceSession.attach`). Not a `.clj` a Common Lisp `load`
-  reads (its lowering is dropped), and not the JVM: a compiled class has no lowerer and its
-  values are not the interpreter's, so it would need the forms compiled against the running
-  class (`.todo/h00`). An nREPL server over the interpreter's is `.todo/h01`.
+- **Where it runs**: the command line's interpreter, a REPL and the playground
+  (`SourceSession.attach`), and a JVM class, which compiles each call's forms against
+  itself (`.kb/jvm-run-time-lowering.md`); `ClojureSpecE2eTest`'s interpreter and JVM legs.
+  Not a `.clj` a Common Lisp `load` reads (its lowering is dropped), nor a wasm module. An
+  nREPL server over the interpreter's is `.todo/h01`.
 - **Computed require specs** (`ClojureNamespaceLowering.computesSpecs`): an unquoted symbol
   naming a local or var, or an unquoted call, is a computed spec, `%clojure-load-libs-v`;
   until 2026-10-29 `(let [n 'clojure.set] (require n))` looked for namespace `n`. A call's
@@ -4167,7 +4244,7 @@ backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
   time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
   `the-interpreter-lowers-at-run-time` and `intern-var-set-and-with-redefs-fn`.
 - Pins: those two cases, `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (the
-  compiled backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
+  wasm backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
   decision), `ClojureSessionTest#evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns`,
   `#aDeclaredNameStaysOpenForALaterBuffer`.
 
@@ -6723,7 +6800,7 @@ the oracle's `MapExpr`/`SetExpr`; checked on `clj` 1.12.6, 2026-10-08):
   (`ClojureInteropLowering.clojureLangConstruction`) to a function of the oracle's four arguments
   (`%clojure-lispreader-string` / `-regex`, `%clojure-reader-macro` in `clojure.lisp`) that
   reads the body past the quote from the stream with `%clojure-rd-string` / `%clojure-rd-regex`
-  and leaves the rest (`java.util.LinkedList.`, instaparse's pending forms, is a host `java:new`: undefined on wasm); the stream is checked like `read`'s, any other count is the oracle's
+  and leaves the rest (`java.util.LinkedList.`, instaparse's pending forms, is the portable list on wasm since 2026-10-30, "Portable LinkedList"); the stream is checked like `read`'s, any other count is the oracle's
   `ArityException` (`... passed to: clojure.lang.LispReader/StringReader`). On clj
   1.12.6 the oracle's instance is `ifn?` but not `fn?`, here `fn?` is true; the other reader
   macro classes (`ListReader` ...) construct in the oracle and stay `No such class` here. A

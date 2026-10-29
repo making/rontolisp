@@ -288,6 +288,24 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final boolean javaStatic;
 
 	/**
+	 * The run-time image a host class carries ({@link Builder#runTimeImage}), or
+	 * {@code null} for every other class.
+	 */
+	private final @Nullable String runTimeImage;
+
+	/**
+	 * What a fragment links against ({@link Builder#fragment}), or {@code null} for every
+	 * other class.
+	 */
+	private final JvmLinkage.@Nullable Fragment fragment;
+
+	/**
+	 * What the last {@link #compile} of a host or a fragment defined for a later fragment
+	 * to link against ({@link #linkTable()}).
+	 */
+	private JvmLinkage.Table linkTable = JvmLinkage.Table.EMPTY;
+
+	/**
 	 * The class-file major version this attempt stamps: {@link #CLASS_MAJOR_VERSION}, or
 	 * the version of the Java release a {@code java:} program's sites resolved against
 	 * when that is newer.
@@ -541,6 +559,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.javaClasspath = builder.javaClasspath;
 		this.warnJavaReflection = builder.warnJavaReflection;
 		this.javaStatic = builder.javaStatic;
+		this.runTimeImage = builder.runTimeImage;
+		this.fragment = builder.fragment;
+		if (this.runTimeImage != null && this.fragment != null) {
+			throw new IllegalArgumentException("a class is a host or a fragment, not both");
+		}
+	}
+
+	/**
+	 * What the last {@link #compile} of a host or a fragment defined: its functions, its
+	 * global variables, the fields it shares and the end of its function ids, for a later
+	 * fragment to link against. Empty for any other class.
+	 * @return the table
+	 */
+	public JvmLinkage.Table linkTable() {
+		return this.linkTable;
 	}
 
 	/**
@@ -588,6 +621,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		private boolean warnJavaReflection;
 
 		private boolean javaStatic;
+
+		private @Nullable String runTimeImage;
+
+		private JvmLinkage.@Nullable Fragment fragment;
 
 		private Builder() {
 		}
@@ -835,6 +872,35 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * Compiles a HOST class: a Clojure program that lowers as it runs, whose lowering
+		 * verbs over computed arguments the compiler the class carries lowers, compiles
+		 * against the class and runs ({@link JvmLinkage}). The class carries the image
+		 * the run-time half reads the program again from, and its link table; every
+		 * member is written with package access and every function stays, for the classes
+		 * compiled later to reach.
+		 * @param runTimeImage the image, opaque to the backend, or {@code null} for an
+		 * ordinary class
+		 * @return this builder
+		 */
+		public Builder runTimeImage(@Nullable String runTimeImage) {
+			this.runTimeImage = runTimeImage;
+			return this;
+		}
+
+		/**
+		 * Compiles a FRAGMENT: the forms a host's program lowered as it runs, linked
+		 * against the host and the fragments before this one ({@link JvmLinkage}). No
+		 * {@code main}: the run-time half runs {@link JvmLinkage#RUN_METHOD}.
+		 * @param fragment what the fragment links against, or {@code null} for an
+		 * ordinary class
+		 * @return this builder
+		 */
+		public Builder fragment(JvmLinkage.@Nullable Fragment fragment) {
+			this.fragment = fragment;
+			return this;
+		}
+
+		/**
 		 * Builds the compiler.
 		 * @return a new JVM compiler
 		 * @throws NullPointerException when no class name was set
@@ -950,6 +1016,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// See .kb/adjustable-arrays.md ("The array gate is a consequence, not a
 		// prediction").
 		Set<String> forced = new LinkedHashSet<>();
+		if (this.runTimeImage != null || this.fragment != null) {
+			// The run-time half calls the program's function values (its refusal) through
+			// _apply, and a function value another class applies through the spread
+			// dispatcher of the class that made it (JvmLinkage).
+			forced.add(GROUP_APPLY);
+		}
 		// The second retry dimension: the functions to cut into their own methods
 		// because the attempt that just ran MEASURED them over HotSpot's limit. Like
 		// `forced` it strictly grows -- a name is added, or its target shrinks toward
@@ -1219,8 +1291,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		// an unordered set here makes the emitted class differ per JVM run
 		// (.kb/emitted-output-determinism.md).
 		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
+		// A fragment names what the classes before it define: their functions by name,
+		// their globals through their fields, their specials bound dynamically
+		// (JvmLinkage). Only what it names joins it.
+		final JvmLinkage.@Nullable Fragment linked = this.fragment;
+		final Set<String> linkedNames = linked != null ? namedSymbols(program) : Set.of();
+		if (linked != null) {
+			for (Map.Entry<String, JvmLinkage.Global> g : linked.linked().globals().entrySet()) {
+				if (g.getValue().special() && linkedNames.contains(g.getKey())) {
+					specialVars.add(g.getKey());
+				}
+			}
+		}
 		ConstantPool cp = new ConstantPool();
 		ClassEntry thisClass = cp.classEntry(this.className);
+		if (linked != null) {
+			// the fields a fragment shares with the classes before it rather than
+			// declaring its own: their globals, their run-time state
+			cp.linkFields(thisClass, linked.linked().fields());
+		}
 		ClassEntry objectClass = cp.classEntry("java/lang/Object");
 
 		ClassEntry systemClass = cp.classEntry("java/lang/System");
@@ -1450,11 +1539,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Mutex helpers: emitted only when the program references one of the three
 		// rontolisp:*-mutex primitives, so a lock-free program keeps byte-identical
 		// output.
+		// with-mutex counts too: a whole program makes the mutex it holds, but a fragment
+		// holds the one its host made (JvmLinkage).
 		boolean usesMutexes = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_MUTEX))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_ACQUIRE))
-				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE));
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE))
+				|| programUsesSymbol(program, LispNames.WITH_MUTEX_QUALIFIED);
 		// Thread helpers: emitted only when the program references one of the five
 		// rontolisp thread primitives (the bordeaux-threads/bt2 shim delegates here), so
 		// a thread-free program keeps byte-identical output. The gate also forces every
@@ -1678,6 +1769,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			userDefinedNames.add(defun.name);
 		}
+		// The functions a fragment calls that the classes before it define: a static
+		// method of theirs, called by name.
+		Map<String, JvmLinkage.Function> externalFunctions = new LinkedHashMap<>();
+		if (linked != null) {
+			for (Map.Entry<String, JvmLinkage.Function> fn : linked.linked().functions().entrySet()) {
+				if (!userDefinedNames.contains(fn.getKey()) && linkedNames.contains(fn.getKey())) {
+					externalFunctions.put(fn.getKey(), fn.getValue());
+				}
+			}
+		}
+		// What a later fragment links against: the program's own functions, not the
+		// wrappers and runtimes this compile injects beside them.
+		final Set<String> programDefunNames = Set.copyOf(userDefinedNames);
+		userDefinedNames.addAll(externalFunctions.keySet());
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer:
 		// computed here, before the wrappers are generated, and threaded into Ctx so the
 		// lowering only emits calls to a helper that is actually present. The registry
@@ -2090,6 +2195,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// global (a special a local declaration proclaims) keeps its place and a program
 		// with none its indices.
 		globals.addAll(GlobalVarCollector.collectFreeAssigned(program));
+		if (linked != null) {
+			// a global of a class before this one, read and assigned through its field
+			for (String g : linked.linked().globals().keySet()) {
+				if (linkedNames.contains(g)) {
+					globals.add(g);
+				}
+			}
+		}
 		// The one dispatch every access of a global by name goes through -- a computed
 		// symbol-value, a set, the eval runtime's variable lookup and assignment -- here
 		// because its arms are the FINAL global set. A program that only reads gets the
@@ -2132,8 +2245,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// implementation's callback, an objc: method, block or main-thread hand-over, or
 		// an ffi:callback's upcall. A generated implementation is predicted from the
 		// forms and checked against the callbacks the attempt made (GROUP_OTHER_THREADS).
+		// A class a program lowers into as it runs, and that program's own, share their
+		// specials: a fragment may bind any of the host's, on any thread.
+		boolean linkedClass = this.runTimeImage != null || linked != null;
 		boolean lispOnOtherThreads = usesThreads || usesAsyncSpawn || !exportDecls.isEmpty() || usesJavaBridge
-				|| javaCallsBack || usesObjc || usesFfi || forcedGroups.contains(GROUP_OTHER_THREADS);
+				|| javaCallsBack || usesObjc || usesFfi || forcedGroups.contains(GROUP_OTHER_THREADS) || linkedClass;
 		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
 		// more than one thread -- one register per thread (JvmMvChannel).
 		FieldRefEntry mvSpillField = globalFields.get(LispNames.MV_SPILL);
@@ -2152,7 +2268,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LispVal> compiledForms = new ArrayList<>(program);
 		compiledForms.addAll(injectedForms);
 		SequencedSet<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(compiledForms, specialVars);
-		if (usesThreads) {
+		if (usesThreads || linkedClass) {
 			// Every special becomes runtime-bindable by name through make-thread's
 			// bindings alist, so each needs its _d$ ThreadLocal (the _dtl dispatch in
 			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
@@ -2192,6 +2308,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// value included -- which keep their plain start.
 		SequencedSet<String> checkedGlobals = new java.util.LinkedHashSet<>(unboundGlobals);
 		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
+		if (linked != null) {
+			// a linked global its class reads checked for the marker is read so here
+			for (String g : globals) {
+				JvmLinkage.Global global = linked.linked().globals().get(g);
+				if (global != null && global.checked()) {
+					checkedGlobals.add(g);
+				}
+			}
+		}
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
@@ -2215,7 +2340,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// group with one among its members -- a member's method may run any member's code
 		// (JvmTailBounce). Each takes the value-tail depth after its parameters.
 		Set<String> bouncingDefuns = JvmTailBounce.bouncingDefuns(defuns, defunGroups, specialVars);
-		int[] nextFuncId = { 0 };
+		// A fragment's function values carry ids past every id of the classes before it,
+		// so a value one class makes and another applies reaches the class that made it
+		// (JvmLinkage.FOREIGN_APPLY).
+		final int funcIdBase = linked != null ? linked.funcIdBase() : 0;
+		int[] nextFuncId = { funcIdBase };
 		Map<String, FunctionInfo> functions = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
@@ -2227,6 +2356,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
 					false, methodref, nameUtf8, descUtf8, bounces));
+		}
+		for (Map.Entry<String, JvmLinkage.Function> external : externalFunctions.entrySet()) {
+			// the static method of the class that defines it; a value of it is this
+			// class's own function value, whose dispatch case calls that method
+			JvmLinkage.Function fn = external.getValue();
+			String descriptor = "(" + "Ljava/lang/Object;".repeat(fn.paramCount()) + (fn.bounces() ? "I" : "")
+					+ ")Ljava/lang/Object;";
+			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(external.getKey()));
+			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
+			functions.put(external.getKey(),
+					new FunctionInfo(nextFuncId[0]++, fn.paramCount(), fn.variadic(), fn.optionals(), false,
+							cp.methodRef(cp.classEntry(fn.owner()), nameUtf8, descUtf8), nameUtf8, descUtf8,
+							fn.bounces()));
 		}
 		Map<String, JvmTailGroup.Member> defunMembers = new HashMap<>();
 		for (JvmTailGroup group : defunGroups) {
@@ -2637,8 +2779,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// concurrent (three fields where there was one).
 		SequencedSet<String> rawGlobalExcluded = new java.util.LinkedHashSet<>(boundSpecialVars);
 		rawGlobalExcluded.addAll(checkedGlobals);
-		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, rawGlobalExcluded, intFusion
-				&& !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime && !usesSockets);
+		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, rawGlobalExcluded,
+				intFusion && !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime
+						&& !usesSockets && !linkedClass);
 		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = new HashMap<>();
 		List<Utf8Entry> rawGlobalLongFieldNameUtfs = new ArrayList<>();
 		List<Utf8Entry> rawGlobalFlagFieldNameUtfs = new ArrayList<>();
@@ -3003,7 +3146,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// and a war whose top level stayed in main deploys, finds the class, and 500s
 		// on every request with an unfilled handler slot (measured: exactly that
 		// failure).
-		boolean topLevelInClinit = !exportDecls.isEmpty() || this.servletMode;
+		boolean topLevelInClinit = (!exportDecls.isEmpty() || this.servletMode) && this.fragment == null;
+		// A fragment has no main: the run-time half runs its top level through _run,
+		// which answers the value its answering form stored (JvmLinkage).
+		boolean emitsMain = !this.noMain && this.fragment == null;
+		final @Nullable FieldRefEntry answerField = this.fragment != null
+				? cp.fieldRef(thisClass, JvmLinkage.ANSWER_FIELD, "Ljava/lang/Object;") : null;
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
 		if (mvChannel != null) {
@@ -3025,7 +3173,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		Ctx topRunnerCtx = null;
 		Ctx entryCtx = mainCtx;
-		if (topLevelInClinit) {
+		if (topLevelInClinit || answerField != null) {
 			topRunnerCtx = ctxBuilder.build();
 			topRunnerCtx.evalStoreRef = evalStoreRef;
 			entryCtx = topRunnerCtx;
@@ -3047,10 +3195,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			entryCtx.body.getstatic(systemOut);
 			entryCtx.body.invokevirtual(cp.methodRef(cp.classEntry("java/io/PrintStream"), "flush", "()V"));
 		}
-		if (flushStreamsMethod != null) {
+		if (flushStreamsMethod != null && answerField == null) {
 			entryCtx.body.invokestatic(flushStreamsMethod);
 		}
-		entryCtx.body.return_();
+		if (answerField != null) {
+			entryCtx.body.getstatic(answerField);
+			entryCtx.body.areturn();
+		}
+		else {
+			entryCtx.body.return_();
+		}
 		// A condition nobody caught reports itself on standard error instead of
 		// unwinding out of main as a stack trace through mangled Lisp names. Last, so
 		// every handler main already carries dispatches first. In _top$run the same
@@ -3058,7 +3212,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (which also poisons the class permanently) — the reactor's failure shape,
 		// stated in the docs rather than designed around. Appended once the lambdas are
 		// compiled too: only then is it known whether anything was located to report.
-		JvmUncaughtHandler.Prepared uncaughtHandler = JvmUncaughtHandler.prepare(entryCtx);
+		// A fragment's condition reaches the program that ran the lowering verb, as the
+		// verb's own: no report of its own.
+		JvmUncaughtHandler.Prepared uncaughtHandler = answerField != null ? null : JvmUncaughtHandler.prepare(entryCtx);
 		if (topLevelInClinit) {
 			// main (when kept) has nothing left to do: invoking it already triggered
 			// <clinit>, which ran the top level.
@@ -3203,7 +3359,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final boolean recordsAsyncBoundaries = asyncCrossRef != null;
-		uncaughtHandler.append(whereRef);
+		if (uncaughtHandler != null) {
+			uncaughtHandler.append(whereRef);
+		}
 
 		// Pass 2d: emit the outlined fused-site method bodies (JvmIntFusionCompiler).
 		// After every program body, because Pass 2 is what registers the sites; before
@@ -3548,6 +3706,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The dispatchers over a set of funcIds: built here over every dispatchable one,
 		// and again, once the class is assembled, over the ones a kept body can make a
 		// value of (rebuildDispatchers).
+		// A class linked to others hands a function value another made to the host's
+		// router (JvmLinkage); its own ids are fixed once every lambda is numbered.
+		java.util.function.Supplier<JvmRuntimeBuilder.@Nullable Foreign> foreignRange = () -> {
+			if (this.runTimeImage == null && linked == null) {
+				return null;
+			}
+			ClassEntry router = linked != null ? cp.classEntry(linked.host()) : thisClass;
+			return new JvmRuntimeBuilder.Foreign(funcIdBase, nextFuncId[0],
+					cp.methodRef(router, JvmLinkage.FOREIGN_APPLY, JvmLinkage.FOREIGN_APPLY_DESC));
+		};
 		java.util.function.Function<Set<Integer>, List<DispatchMethod>> dispatchers = funcIds -> {
 			List<DispatchMethod> built = new ArrayList<>();
 			valueTailCopies.clear();
@@ -3565,8 +3733,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int arity : indirectCallArities) {
 				List<DispatchMethod> shared = JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 						lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-						stringClass, applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, funcIds,
-						arityReporting, mainCtx.unsupplied);
+						stringClass, applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
+						JvmRuntimeBuilder.dispatcherName(arity, false), false, funcIds, arityReporting,
+						mainCtx.unsupplied, foreignRange.get());
 				built.addAll(shared);
 				// A value tail's real call goes through a copy of its arity's
 				// dispatcher, whose profile holds only what value tails reach. An arity
@@ -3577,7 +3746,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 							applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 							JvmTailBounce.valueTailDispatcherName(arity), true, funcIds, arityReporting,
-							mainCtx.unsupplied));
+							mainCtx.unsupplied, foreignRange.get()));
 					valueTailCopies.add(arity);
 				}
 			}
@@ -3588,7 +3757,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp,
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 						applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, true,
-						JvmRuntimeBuilder.dispatcherName(0, true), false, funcIds, arityReporting, mainCtx.unsupplied));
+						JvmRuntimeBuilder.dispatcherName(0, true), false, funcIds, arityReporting, mainCtx.unsupplied,
+						foreignRange.get()));
 			}
 			return built;
 		};
@@ -4052,7 +4222,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// caller's thread before main could move anything). A program that reaches objc:
 		// also hands thread 0 to the run loop when it is a native image's main
 		// (.kb/objc.md, "AppKit belongs to thread 0").
-		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit
+		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = emitsMain && !topLevelInClinit
 				? JvmSizedMainBuilder.build(cp, thisClass, this.className, cp.methodRef(thisClass, "<init>", "()V"),
 						cp.utf8Entry("([Ljava/lang/String;)V"),
 						usesObjc ? JvmObjcRuntimeBuilder.mainThreadName(this.className) : null)
@@ -4197,8 +4367,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The typed jvm-export wrapper methods (and their marshalling helpers), plus
 		// the _top$run method <clinit> calls to run the top level (see mainCtx above).
 		// Built here so every constant they mint precedes the pool serialization below.
-		final Utf8Entry topRunnerName = topLevelInClinit ? cp.utf8Entry("_top$run") : null;
-		final MethodRefEntry topRunnerRef = topRunnerName == null ? null
+		final Utf8Entry topRunnerName = topLevelInClinit ? cp.utf8Entry("_top$run")
+				: answerField != null ? cp.utf8Entry(JvmLinkage.RUN_METHOD) : null;
+		final Utf8Entry topRunnerDesc = answerField != null ? cp.utf8Entry(JvmLinkage.RUN_DESC) : topChunkDesc;
+		final MethodRefEntry topRunnerRef = !topLevelInClinit || topRunnerName == null ? null
 				: cp.methodRef(thisClass, topRunnerName, topChunkDesc);
 		final List<JvmExportRuntimeBuilder.BuiltMethod> exportMethods = exportDecls.isEmpty() ? List.of()
 				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions, usesArrays, mvChannel);
@@ -4636,7 +4808,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				definition.addMethod(access, sm.name(), sm.desc(), sm.code());
 			}
 		}
-		if (!this.noMain) {
+		if (emitsMain) {
 			mainCtx.addTo(definition,
 					sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
 							: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
@@ -4645,7 +4817,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (topRunnerCtxFinal != null) {
 			// _top$run: the top-level body <clinit> runs (see mainCtx above).
 			topRunnerCtxFinal.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc);
+					java.util.Objects.requireNonNull(topRunnerName), topRunnerDesc);
 		}
 		for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
 			definition.addMethod(
@@ -4887,11 +5059,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				// rebuildDispatchers reassembles the initializer without this
 				// piece and drops the field with it.
 				MethodCode fill = new MethodCode();
-				emitIntConstant(fill, cp, funcrefIds.isEmpty() ? 1 : funcrefIds.get(funcrefIds.size() - 1) + 1);
+				// a fragment's ids start past every id before it: its table starts there
+				emitIntConstant(fill, cp,
+						funcrefIds.isEmpty() ? 1 : funcrefIds.get(funcrefIds.size() - 1) + 1 - funcIdBase);
 				fill.anewarray(objectClass);
 				fill.putstatic(funcrefsFieldRef);
 				if (funcrefIds.size() <= FUNCREF_FILL_CHUNK) {
-					emitFuncrefFill(fill, funcrefsFieldRef, funcrefIds, objectClass, integerValueOf, cp);
+					emitFuncrefFill(fill, funcrefsFieldRef, funcrefIds, objectClass, integerValueOf, cp, funcIdBase);
 				}
 				else {
 					int segment = 0;
@@ -4899,7 +5073,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						MethodCode fillCode = new MethodCode();
 						emitFuncrefFill(fillCode, funcrefsFieldRef,
 								funcrefIds.subList(from, Math.min(from + FUNCREF_FILL_CHUNK, funcrefIds.size())),
-								objectClass, integerValueOf, cp);
+								objectClass, integerValueOf, cp, funcIdBase);
 						fillCode.return_();
 						Utf8Entry fillName = cp.utf8Entry("_funcref$fill$" + segment);
 						Utf8Entry fillDesc = cp.utf8Entry("()V");
@@ -4937,6 +5111,25 @@ public final class JvmLispCompiler implements LispCompiler {
 									: standardOutputClinitDesc != null ? standardOutputClinitDesc
 											: funcrefClinitDesc != null ? funcrefClinitDesc
 													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
+			if (linked != null) {
+				// A fragment shares the state its initializer would make with the class
+				// that made it first: each write of a linked field goes to a field of its
+				// own nothing reads, so the shared one keeps what it holds.
+				Map<String, FieldRefEntry> deadFields = new LinkedHashMap<>();
+				java.util.function.Function<FieldRefEntry, @Nullable FieldRefEntry> retarget = field -> {
+					if (field.owner().asInternalName().equals(this.className)) {
+						return null;
+					}
+					String name = "_init$" + field.name().stringValue();
+					return deadFields.computeIfAbsent(name + ":" + field.type().stringValue(),
+							key -> cp.fieldRef(thisClass, name, field.type().stringValue()));
+				};
+				clinitHeadCode.retargetFieldWrites(retarget);
+				clinitTailCode.retargetFieldWrites(retarget);
+				for (FieldRefEntry dead : deadFields.values()) {
+					definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dead.name(), dead.type());
+				}
+			}
 			// The initializer from its pieces (see clinitHeadCode above): the head,
 			// the table fill when there is one, and the tail.
 			MethodCode assembledClinit = new MethodCode().append(clinitHeadCode);
@@ -5227,10 +5420,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			funcrefCode = new MethodCode();
 			funcrefCode.getstatic(funcrefsFieldRef);
 			funcrefCode.iload(0);
+			if (funcIdBase != 0) {
+				emitIntConstant(funcrefCode, cp, funcIdBase);
+				funcrefCode.isub();
+			}
 			funcrefCode.aaload();
 			funcrefCode.areturn();
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry("_funcref"),
 					cp.utf8Entry("(I)Ljava/lang/Object;"), funcrefCode);
+		}
+		if (this.runTimeImage != null || answerField != null) {
+			// What a fragment compiled later links against (JvmLinkage): every function
+			// and global this class defines.
+			// raw globals are off in a linked class: every global is its _g$ field
+			this.linkTable = ownLinkTable(programDefunNames, functions, globals, specialVars,
+					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition);
+		}
+		if (this.runTimeImage != null) {
+			emitHostRunTime(definition, cp, thisClass, this.runTimeImage, this.linkTable);
+		}
+		if (answerField != null) {
+			definition.addField(AccessFlag.ACC_STATIC, cp.utf8Entry(JvmLinkage.ANSWER_FIELD),
+					cp.utf8Entry("Ljava/lang/Object;"));
+			definition.addField(AccessFlag.ACC_STATIC, cp.utf8Entry(JvmLinkage.CONSTANTS_FIELD),
+					cp.utf8Entry("[Ljava/lang/Object;"));
 		}
 		// The gated complex helpers, present only when the program may
 		// create a complex -- a complex-free program keeps its bytes.
@@ -5356,8 +5569,22 @@ public final class JvmLispCompiler implements LispCompiler {
 			// tls-connect's
 			// :insecure trust-all manager is present.
 			roots = new java.util.HashSet<>();
-			if (!this.noMain) {
+			if (emitsMain) {
 				roots.add("main");
+			}
+			if (answerField != null) {
+				roots.add(JvmLinkage.RUN_METHOD);
+			}
+			if (this.runTimeImage != null || this.fragment != null) {
+				// A fragment compiled later calls any function of the class by name, and
+				// the run-time half reads the class's link table and image.
+				for (DefunDecl defun : defuns) {
+					roots.add(mangleMethodName(defun.name));
+				}
+				roots.add(JvmLinkage.TABLE_METHOD);
+				roots.add(JvmLinkage.IMAGE_METHOD);
+				roots.add(JvmLinkage.FOREIGN_APPLY);
+				roots.add("_apply");
 			}
 			// Every jvm-export wrapper is a root: a host calls it directly, an edge no
 			// bytecode in the class can show. This is the directive's whole point under
@@ -5473,9 +5700,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<Integer, Boolean> made = new HashMap<>();
 		List<FunctionInfo> infos = new ArrayList<>(functions.values());
 		infos.addAll(lambdaFuncInfos);
+		String self = definition.thisClass().asInternalName();
 		for (FunctionInfo fi : infos) {
 			if (dispatchable.contains(fi.funcId())) {
-				made.merge(fi.funcId(), valued.contains(fi.nameUtf8().stringValue() + fi.descUtf8().stringValue()),
+				// a function of another class (JvmLinkage) has no method here for a kept
+				// body to make a value of: its case stays with every value of it
+				boolean external = !fi.methodref().owner().asInternalName().equals(self);
+				made.merge(fi.funcId(),
+						external || valued.contains(fi.nameUtf8().stringValue() + fi.descUtf8().stringValue()),
 						Boolean::logicalOr);
 			}
 		}
@@ -5686,9 +5918,17 @@ public final class JvmLispCompiler implements LispCompiler {
 			pinnedNames.add(decl.methodName());
 			pinnedNames.add(mangleMethodName(decl.name()));
 		}
+		boolean linked = this.runTimeImage != null || this.fragment != null;
+		if (linked) {
+			// What the run-time half and the fragments find by name stays in the class
+			// they name (JvmLinkage).
+			pinnedNames.addAll(List.of(JvmLinkage.TABLE_METHOD, JvmLinkage.IMAGE_METHOD, JvmLinkage.FOREIGN_APPLY,
+					JvmLinkage.RUN_METHOD, JvmRuntimeBuilder.dispatcherName(0, true)));
+		}
 		ConstantPool cp = definition.cp();
 		JvmClassSplitter.Split split = JvmClassSplitter.write(definition, roots,
-				method -> pinnedNames.contains(method.name().stringValue()), this.classPoolLimit, this.writeTarget());
+				method -> pinnedNames.contains(method.name().stringValue()), this.classPoolLimit, this.writeTarget(),
+				linked);
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
 			parts.put(part.getKey() + ".class", part.getValue());
@@ -5716,6 +5956,118 @@ public final class JvmLispCompiler implements LispCompiler {
 			System.err.println(report);
 		}
 		return split.mainClass();
+	}
+
+	/** Every symbol name the forms spell, at any depth. */
+	private static Set<String> namedSymbols(List<LispVal> forms) {
+		Set<String> names = new HashSet<>();
+		Deque<LispVal> pending = new ArrayDeque<>(forms);
+		java.util.Set<LispVal> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		while (!pending.isEmpty()) {
+			LispVal form = pending.pop();
+			while (form instanceof LispCons cons && seen.add(cons)) {
+				pending.push(cons.car());
+				form = cons.cdr();
+			}
+			if (form instanceof LispSymbol symbol) {
+				names.add(symbol.name());
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * The table of what this class defines for a later fragment to link against: its
+	 * functions (the defuns it compiled), its global variables and how each is stored,
+	 * and the end of its function ids.
+	 */
+	private JvmLinkage.Table ownLinkTable(Set<String> programDefunNames, Map<String, FunctionInfo> functions,
+			Set<String> globals, Set<String> specialVars, Set<String> threadBound, Set<String> checkedGlobals,
+			int funcIdEnd, ClassDefinition.Builder definition) {
+		Map<String, JvmLinkage.Function> fns = new LinkedHashMap<>();
+		for (String name : programDefunNames) {
+			FunctionInfo fi = functions.get(name);
+			if (fi != null) {
+				fns.put(name, new JvmLinkage.Function(this.className, fi.paramCount(), fi.variadic(), fi.optionals(),
+						fi.bounceVisible()));
+			}
+		}
+		Map<String, String> fields = new LinkedHashMap<>();
+		for (ClassDefinition.Field field : definition.fields()) {
+			if (JvmLinkage.shared(field.name().stringValue())) {
+				fields.put(field.name().stringValue() + ":" + field.descriptor().stringValue(), this.className);
+			}
+		}
+		Map<String, JvmLinkage.Global> gs = new LinkedHashMap<>();
+		JvmLinkage.Fragment linked = this.fragment;
+		for (String g : globals) {
+			if (linked != null && linked.linked().globals().containsKey(g)) {
+				continue;
+			}
+			gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
+					checkedGlobals.contains(g)));
+		}
+		return new JvmLinkage.Table(fns, gs, fields, funcIdEnd);
+	}
+
+	/**
+	 * The host class's run-time members: its image and link table, the hand-off of a
+	 * lowering verb to the run-time half ({@link JvmLinkage#LOWER_METHOD}, which passes
+	 * the class's own full-privilege lookup), and the router of a function value of
+	 * another class ({@link JvmLinkage#FOREIGN_APPLY} over
+	 * {@link JvmLinkage#FOREIGN_FIELD}, installed by the run-time half).
+	 */
+	private static void emitHostRunTime(ClassDefinition.Builder definition, ConstantPool cp, ClassEntry thisClass,
+			String image, JvmLinkage.Table table) {
+		addStringMethod(definition, cp, JvmLinkage.IMAGE_METHOD, image);
+		addStringMethod(definition, cp, JvmLinkage.TABLE_METHOD, table.encode());
+		MethodCode lower = new MethodCode();
+		lower.invokestatic(cp.methodRef(cp.classEntry("java/lang/invoke/MethodHandles"), "lookup",
+				"()Ljava/lang/invoke/MethodHandles$Lookup;"));
+		for (int i = 0; i < 5; i++) {
+			lower.aload(i);
+		}
+		lower.invokestatic(cp.methodRef(cp.classEntry(JvmLinkage.RUN_TIME_CLASS), JvmLinkage.RUN_TIME_METHOD,
+				JvmLinkage.RUN_TIME_DESC));
+		lower.areturn();
+		definition.addMethod(AccessFlag.ACC_STATIC, cp.utf8Entry(JvmLinkage.LOWER_METHOD),
+				cp.utf8Entry(JvmLinkage.LOWER_DESC), lower);
+		String handleDesc = "Ljava/lang/invoke/MethodHandle;";
+		definition.addField(AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, cp.utf8Entry(JvmLinkage.FOREIGN_FIELD),
+				cp.utf8Entry(handleDesc));
+		MethodCode foreign = new MethodCode();
+		foreign.getstatic(cp.fieldRef(thisClass, JvmLinkage.FOREIGN_FIELD, handleDesc));
+		foreign.aload(0);
+		foreign.aload(1);
+		foreign.iload(2);
+		foreign.invokevirtual(cp.methodRef(cp.classEntry("java/lang/invoke/MethodHandle"), "invokeExact",
+				JvmLinkage.FOREIGN_APPLY_DESC));
+		foreign.areturn();
+		definition.addMethod(AccessFlag.ACC_STATIC, cp.utf8Entry(JvmLinkage.FOREIGN_APPLY),
+				cp.utf8Entry(JvmLinkage.FOREIGN_APPLY_DESC), foreign);
+	}
+
+	/** A static method answering a string constant of any length. */
+	private static void addStringMethod(ClassDefinition.Builder definition, ConstantPool cp, String name, String text) {
+		MethodCode code = new MethodCode();
+		List<String> chunks = JvmLinkage.constantChunks(text);
+		if (chunks.size() == 1) {
+			code.ldc(cp.stringEntry(chunks.get(0)));
+		}
+		else {
+			ClassEntry builder = cp.classEntry("java/lang/StringBuilder");
+			code.new_(builder);
+			code.dup();
+			code.invokespecial(cp.methodRef(builder, "<init>", "()V"));
+			MethodRefEntry append = cp.methodRef(builder, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+			for (String chunk : chunks) {
+				code.ldc(cp.stringEntry(chunk));
+				code.invokevirtual(append);
+			}
+			code.invokevirtual(cp.methodRef(builder, "toString", "()Ljava/lang/String;"));
+		}
+		code.areturn();
+		definition.addMethod(AccessFlag.ACC_STATIC, cp.utf8Entry(name), cp.utf8Entry("()Ljava/lang/String;"), code);
 	}
 
 	private static int poolEntries(byte[] classFile) {
@@ -5905,10 +6257,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * once per {@code _funcref$fill$} segment.
 	 */
 	private static void emitFuncrefFill(MethodCode code, FieldRefEntry funcrefsFieldRef, List<Integer> ids,
-			ClassEntry objectClass, MethodRefEntry integerValueOf, ConstantPool cp) {
+			ClassEntry objectClass, MethodRefEntry integerValueOf, ConstantPool cp, int base) {
 		for (int id : ids) {
 			code.getstatic(funcrefsFieldRef);
-			emitIntConstant(code, cp, id);
+			emitIntConstant(code, cp, id - base);
 			code.iconst_1();
 			code.anewarray(objectClass);
 			code.dup();

@@ -27786,13 +27786,14 @@
 (defvar rontolisp::%clojure-decimal-digit-starts
   '(48 1632 1776 1984 2406 2534 2662 2790 2918 3046 3174 3302 3430 3558 3664
     3792 3872 4160 4240 6112 6160 6470 6608 6784 6800 6992 7088 7232 7248 42528
-    43216 43264 43472 43504 43600 44016 65296 66720 68912 69734 69872 69942
-    70096 70384 70736 70864 71248 71360 71472 71904 72016 72784 73040 73120
-    73552 92768 92864 93008 120782 120792 120802 120812 120822 123200 123632
-    124144 125264 130032)
+    43216 43264 43472 43504 43600 44016 65296 66720 68912 68928 69734 69872
+    69942 70096 70384 70736 70864 71248 71360 71376 71386 71472 71904 72016
+    72688 72784 73040 73120 73552 90416 92768 92864 93008 93552 118000 120782
+    120792 120802 120812 120822 123200 123632 124144 124401 125264 130032)
   "The code of every decimal digit zero: ASCII 0-9 first, then every Unicode
    decimal-digit block's, each ten consecutive codes. Character.digit's
-   radix-10 table, which Long/valueOf reads (clj 1.12.6).")
+   radix-10 table and Character.isDigit's set, which Long/valueOf reads (clj
+   1.12.6 on JDK 25).")
 
 (defun rontolisp::%clojure-decimal-digit-value (code)
   "CODE's decimal digit value, or nil: Character.digit of radix 10 over
@@ -28003,11 +28004,14 @@
 ;;;; of radix 16, Integer/toHexString and Math/min of two, which data.json's
 ;;;; read path calls, and Math/floor, Math/ceil, Math/log, Math/abs,
 ;;;; Long/bitCount and Long/numberOfLeadingZeros of one argument, which
-;;;; data.generators and test.check call. Where the host is not (wasm) the
+;;;; data.generators and test.check call; Integer/parseInt of radix 10 or
+;;;; any literal radix, Double/parseDouble, Character/isWhitespace, isDigit,
+;;;; digit and valueOf and the BigInteger string constructions, which
+;;;; tools.reader's read path calls. Where the host is not (wasm) the
 ;;;; static call lowers to one of these
 ;;;; (clojure/ClojurePortableStaticsLowering); where the host is it stays
 ;;;; the host's call. Each measured against clj 1.12.6, 2026-10-13, the
-;;;; test.check three 2026-10-21.
+;;;; test.check three 2026-10-21, the tools.reader ones 2026-10-30.
 
 (defun rontolisp::%clojure-long-value-of (s)
   "(Long/valueOf s): the long S spells, its NumberFormatException naming the
@@ -28066,20 +28070,44 @@
         (t (rontolisp::%clojure-illegal-argument-exception
             "No matching method valueOf found taking 1 args"))))
 
-(defun rontolisp::%clojure-base16-digit-value (code)
-  "CODE's hex digit value, or nil: every decimal digit Character.digit reads
-   at radix 16 (the decimal blocks' 0-9) and a-f/A-F in ASCII and fullwidth."
-  (or (rontolisp::%clojure-decimal-digit-value code)
-      (cond ((and (>= code 65) (<= code 70)) (- code 55))
-            ((and (>= code 97) (<= code 102)) (- code 87))
-            ((and (>= code 65313) (<= code 65318)) (- code 65303))
-            ((and (>= code 65345) (<= code 65350)) (- code 65335)))))
+(defun rontolisp::%clojure-character-digit-value (code radix)
+  "Character.digit of the code CODE in RADIX as a value, or nil: a decimal
+   digit of any Unicode block, or a Latin letter, ASCII or fullwidth, as 10 to
+   35, below RADIX; nil for a RADIX outside 2 to 36."
+  (if (and (>= radix 2) (<= radix 36))
+      (let ((v (rontolisp::%clojure-decimal-digit-value code)))
+        (if (null v)
+            (setq v
+                  (cond ((and (>= code 65) (<= code 90)) (- code 55))
+                   ((and (>= code 97) (<= code 122)) (- code 87))
+                   ((and (>= code 65313) (<= code 65338)) (- code 65303))
+                   ((and (>= code 65345) (<= code 65370)) (- code 65335)))))
+        (if (and v (< v radix)) v nil))
+      nil))
 
-(defun rontolisp::%clojure-parse-int-16 (s)
-  "(Integer/parseInt s 16): the int S spells in hex, an optional sign and hex
-   digits, refused past the int range; nil is the oracle's null-string
-   refusal, anything else its cast refusal to String."
-  (cond ((stringp s)
+(defun rontolisp::%clojure-input-string-refusal (s radix)
+  "The oracle's NumberFormatException of the string S read in RADIX, Java's
+   forInputString: the radix named unless it is 10."
+  (rontolisp::%clojure-number-format-exception
+   (concatenate 'string "For input string: \"" s "\""
+                (if (= radix 10)
+                    ""
+                    (concatenate 'string " under radix "
+                                 (princ-to-string radix))))))
+
+(defun rontolisp::%clojure-parse-int (s radix)
+  "(Integer/parseInt s) of radix 10, and (Integer/parseInt s radix) of a
+   literal int RADIX: the int S spells, an optional sign and Character.digit
+   digits, refused past the int range; a radix outside 2 to 36 is refused
+   once S is a string. nil is the oracle's null-string refusal, anything else
+   its cast refusal to String."
+  (cond ((and (stringp s) (or (< radix 2) (> radix 36)))
+         (rontolisp::%clojure-number-format-exception
+          (concatenate 'string "radix " (princ-to-string radix)
+                       (if (< radix 2)
+                           " less than Character.MIN_RADIX"
+                           " greater than Character.MAX_RADIX"))))
+        ((stringp s)
          (let ((n (length s))
                (i 0)
                (neg nil)
@@ -28095,25 +28123,206 @@
            (do ()
                ((or (>= i n) (not ok)))
              (let ((d
-                    (rontolisp::%clojure-base16-digit-value
-                     (char-code (char s i)))))
-               (if (or (null d) (> value (truncate (/ (- limit d) 16))))
+                    (rontolisp::%clojure-character-digit-value
+                     (char-code (char s i)) radix)))
+               (if (or (null d) (> value (truncate (/ (- limit d) radix))))
                    (setq ok nil)
                    (progn
-                     (setq value (+ (* value 16) d))
+                     (setq value (+ (* value radix) d))
                      (setq digits (+ digits 1))
                      (setq i (+ i 1))))))
            (if (and ok (> digits 0))
                (if neg (- value) value)
-               (rontolisp::%clojure-number-format-exception
-                (concatenate 'string "For input string: \"" s
-                             "\" under radix 16")))))
+               (rontolisp::%clojure-input-string-refusal s radix))))
         ((null s)
          (rontolisp::%clojure-number-format-exception
           "Cannot parse null string"))
         (t (rontolisp::%clojure-class-cast-exception
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
                          " cannot be cast to class java.lang.String")))))
+
+(defun rontolisp::%clojure-parse-double-static (s)
+  "(Double/parseDouble s): the double the string S spells, Double/valueOf's
+   grammar and NumberFormatException; nil its NullPointerException, anything
+   else its cast refusal to String (the reflector casts the argument)."
+  (if (or (stringp s) (null s))
+      (rontolisp::%clojure-double-value-of s)
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
+                    " cannot be cast to class java.lang.String"))))
+
+(defun rontolisp::%clojure-character-code-of (x method count)
+  "X as a Character static METHOD of COUNT arguments (a string) reads its char
+   or int: a character its code, a long its int (the oracle's integer
+   overflow past the int range); anything else the oracle's
+   no-matching-method refusal."
+  (cond ((characterp x) (char-code x))
+        ((typep x '(signed-byte 64)) (rontolisp::%clojure-int-cast x))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "No matching method " method " found taking "
+                         count " args")))))
+
+(defun rontolisp::%clojure-character-is-whitespace (x)
+  "(Character/isWhitespace x) of a char or an int code: whether it is Java
+   whitespace, a space separator but the no-break ones, or a tab, line,
+   form, file, group, record or unit separator."
+  (let ((code (rontolisp::%clojure-character-code-of x "isWhitespace" "1")))
+    (if (or (and (>= code 9) (<= code 13)) (and (>= code 28) (<= code 32))
+            (= code 5760) (and (>= code 8192) (<= code 8198))
+            (and (>= code 8200) (<= code 8202)) (= code 8232) (= code 8233)
+            (= code 8287) (= code 12288))
+        t
+        rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-character-is-digit (x)
+  "(Character/isDigit x) of a char or an int code: whether it is a decimal
+   digit of any Unicode block."
+  (if (rontolisp::%clojure-decimal-digit-value
+       (rontolisp::%clojure-character-code-of x "isDigit" "1"))
+      t
+      rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-character-digit (x radix)
+  "(Character/digit x radix) of a char or an int code and an int radix: the
+   digit's value in RADIX, -1 for none (a radix outside 2 to 36 included)."
+  (let ((code (rontolisp::%clojure-character-code-of x "digit" "2")))
+    (if (typep radix '(signed-byte 64))
+        (or (rontolisp::%clojure-character-digit-value code
+             (rontolisp::%clojure-int-cast radix)) -1)
+        (rontolisp::%clojure-illegal-argument-exception
+         "No matching method digit found taking 2 args"))))
+
+(defun rontolisp::%clojure-character-value-of (x)
+  "(Character/valueOf x): the character X itself; nil the oracle's
+   NullPointerException, anything else its cast refusal to Character."
+  (cond ((characterp x) x)
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Character.charValue()\" because \"null\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Character")))))
+
+(defvar rontolisp::%clojure-big-integer-group-digits
+  #(0 0 30 19 15 13 11 11 10 9 9 8 8 8 8 7 7 7 7 7 7 7 6 6 6 6 6 6 6 6 6 6 6 6 6
+    6 5)
+  "BigInteger's digitsPerInt by radix: the digits of each group its string
+   constructor parses with Integer.parseInt.")
+
+(defun rontolisp::%clojure-big-integer-no-ctor ()
+  "The oracle's refusal of a BigInteger construction no constructor takes."
+  (rontolisp::%clojure-illegal-argument-exception
+   "No matching ctor found for class java.math.BigInteger"))
+
+(defun rontolisp::%clojure-big-integer-octets (octets signed)
+  "The big-endian integer of the byte vector OCTETS: two's complement when
+   SIGNED, else a magnitude."
+  (let ((n (length octets)) (v 0))
+    (dotimes (i n) (setq v (+ (* v 256) (aref octets i))))
+    (if (and signed (> n 0) (>= (aref octets 0) 128)) (- v (ash 1 (* 8 n))) v)))
+
+(defun rontolisp::%clojure-big-integer-new-1 (x)
+  "new BigInteger(x) where no host is (wasm): a string's decimal integer (the
+   radix-10 read below), a byte array's big-endian two's complement (an empty
+   one the oracle's Zero length BigInteger)."
+  (if (rontolisp::%clojure-bytes-p x)
+      (if (= (length (car (cdr x))) 0)
+          (rontolisp::%clojure-number-format-exception "Zero length BigInteger")
+          (rontolisp::%clojure-big-integer-octets (car (cdr x)) t))
+      (rontolisp::%clojure-big-integer-new x 10)))
+
+(defun rontolisp::%clojure-big-integer-new (s radix)
+  "new BigInteger of two arguments where no host is (wasm): a string S and a
+   RADIX, or a signum S and a byte-array magnitude RADIX. A string reads as
+   the integer it spells in RADIX, an optional leading sign and
+   Character.digit digits, refused in the oracle's words and order -- the
+   radix range, an empty string, an embedded sign, a sign alone, then the
+   first digit group (leading zeros skipped, the first group short) holding a
+   non-digit, named as Integer.parseInt names it. A signum outside -1 to 1 is
+   Invalid signum value, 0 over a nonzero magnitude signum-magnitude mismatch.
+   A long radix or signum is narrowed to an int first, like the oracle's
+   reflector; nil and anything else are its NullPointerExceptions and its
+   missing constructor."
+  (cond ((null s)
+         (if (typep radix '(signed-byte 64))
+             (rontolisp::%clojure-null-pointer-exception
+              "Cannot invoke \"String.length()\" because \"val\" is null")
+             (rontolisp::%clojure-big-integer-no-ctor)))
+        ((typep s '(signed-byte 64))
+         (cond ((rontolisp::%clojure-bytes-p radix)
+                (let ((signum (rontolisp::%clojure-wrap-bits s 32))
+                      (magnitude
+                       (rontolisp::%clojure-big-integer-octets (car (cdr radix))
+                                                               nil)))
+                  (if (or (< signum -1) (> signum 1))
+                      (rontolisp::%clojure-number-format-exception
+                       "Invalid signum value"))
+                  (if (and (= signum 0) (/= magnitude 0))
+                      (rontolisp::%clojure-number-format-exception
+                       "signum-magnitude mismatch"))
+                  (* signum magnitude)))
+               ((null radix)
+                (rontolisp::%clojure-null-pointer-exception
+                 "Cannot invoke \"java.util.Random.nextBytes(byte[])\" because \"rnd\" is null"))
+               (t (rontolisp::%clojure-big-integer-no-ctor))))
+        ((or (not (stringp s)) (not (typep radix '(signed-byte 64))))
+         (rontolisp::%clojure-big-integer-no-ctor))
+        (t
+         (let ((radix (rontolisp::%clojure-wrap-bits radix 32))
+               (len (length s))
+               (minus -1)
+               (plus -1)
+               (cursor 0)
+               (sign 1))
+           (if (or (< radix 2) (> radix 36))
+               (rontolisp::%clojure-number-format-exception
+                "Radix out of range"))
+           (if (= len 0)
+               (rontolisp::%clojure-number-format-exception
+                "Zero length BigInteger"))
+           (dotimes (i len)
+             (if (char= (char s i) #\-) (setq minus i))
+             (if (char= (char s i) #\+) (setq plus i)))
+           (cond ((>= minus 0)
+                  (if (or (/= minus 0) (>= plus 0))
+                      (rontolisp::%clojure-number-format-exception
+                       "Illegal embedded sign character"))
+                  (setq sign -1)
+                  (setq cursor 1))
+                 ((>= plus 0)
+                  (if (/= plus 0)
+                      (rontolisp::%clojure-number-format-exception
+                       "Illegal embedded sign character"))
+                  (setq cursor 1)))
+           (if (= cursor len)
+               (rontolisp::%clojure-number-format-exception
+                "Zero length BigInteger"))
+           (do ()
+               ((or (>= cursor len)
+                    (not
+                     (eql (rontolisp::%clojure-character-digit-value
+                           (char-code (char s cursor)) radix) 0))))
+             (setq cursor (+ cursor 1)))
+           (let ((per (aref rontolisp::%clojure-big-integer-group-digits radix))
+                 (glen 0)
+                 (value 0))
+             (setq glen (rem (- len cursor) per))
+             (if (= glen 0) (setq glen per))
+             (do ()
+                 ((>= cursor len))
+               (let ((end (+ cursor glen)))
+                 (do ((j cursor (+ j 1)))
+                     ((>= j end))
+                   (let ((d
+                          (rontolisp::%clojure-character-digit-value
+                           (char-code (char s j)) radix)))
+                     (if d
+                         (setq value (+ (* value radix) d))
+                         (rontolisp::%clojure-input-string-refusal
+                          (subseq s cursor end) radix))))
+                 (setq cursor end)
+                 (setq glen per)))
+             (* sign value))))))
 
 (defun rontolisp::%clojure-int-hex (n)
   "The non-negative int N in lowercase hex, no leading zeros."

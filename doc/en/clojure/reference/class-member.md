@@ -15,10 +15,12 @@ key is nil and `(System/getProperty k dflt)` its default on the wasm backends, w
 no properties exist (nil is the oracle's `NullPointerException`); a computed key stays
 the host call. `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs)
 is itself on the wasm backends, where no host field exists; any other member stays the
-host field. One-argument `Long/valueOf`, `Double/valueOf` and `Long/parseLong`,
-`Integer/parseInt` of a string and a literal radix 16, one-argument
-`Integer/toHexString` and two-argument `Math/min` evaluate portably on the wasm backends
-too, in the oracle's grammar and refusals; any other arity stays the host call.
+host field. One-argument `Long/valueOf`, `Double/valueOf`, `Double/parseDouble` and
+`Long/parseLong`, `Integer/parseInt` of a string alone or with a literal radix,
+one-argument `Integer/toHexString`, two-argument `Math/min`, and `Character/isWhitespace`,
+`isDigit`, `digit` and `valueOf` evaluate portably on the wasm backends too, in the
+oracle's grammar and refusals; any other arity, and a computed radix, stays the host
+call.
 The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a

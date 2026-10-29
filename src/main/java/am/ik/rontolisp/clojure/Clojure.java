@@ -100,7 +100,7 @@ public final class Clojure {
 	public static List<LispVal> read(String source, @Nullable String file,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
-		return program(source, file, macroEvaluator, files, hostTarget, boundary, false).forms();
+		return program(source, file, macroEvaluator, files, hostTarget, boundary, false, false).forms();
 	}
 
 	/**
@@ -128,15 +128,20 @@ public final class Clojure {
 	 * @param hostTarget whether the target is one where the host is
 	 * @param boundary the host boundary
 	 * @param runTimeTarget whether the target lowers as the program runs
+	 * @param compiledTarget whether that target is a compiled class, whose run-time
+	 * library links what it calls when it is compiled: a program lowering open there
+	 * carries every runtime the library reaches from the start, where the interpreter
+	 * takes one when a later form first needs it
 	 * @return the forms, and the lowering kept for the run
 	 */
 	public static Program program(String source, @Nullable String file, @Nullable ClojureMacroEvaluator macroEvaluator,
-			ClojureFiles files, boolean hostTarget, ClojureBoundary boundary, boolean runTimeTarget) {
+			ClojureFiles files, boolean hostTarget, ClojureBoundary boundary, boolean runTimeTarget,
+			boolean compiledTarget) {
 		ClojureReader reader = new ClojureReader(source, file);
 		ClojureJavaClasses classes = files.javaClasses();
 		return ClojureHostClasses.lowering(classes, () -> {
 			ClojureLowering.Whole whole = ClojureLowering.lowerWhole(reader.readAll(), reader, macroEvaluator, files,
-					hostTarget, boundary, runTimeTarget);
+					hostTarget, boundary, runTimeTarget, compiledTarget);
 			ClojureLowering kept = whole.runTime();
 			return new Program(whole.forms(), kept == null ? null : new ClojureRunTime(kept, classes));
 		});

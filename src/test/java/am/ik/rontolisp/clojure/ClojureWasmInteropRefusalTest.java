@@ -45,12 +45,12 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void memberValueRefusesOnPreview1() throws Exception {
-		assertRefusal("(println (every? Character/isWhitespace \"   \"))", "JAVA:STATIC", false);
+		assertRefusal("(println (every? Character/isLetter \"abc\"))", "JAVA:STATIC", false);
 	}
 
 	@Test
 	void memberValueRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println (every? Character/isWhitespace \"   \"))", "JAVA:STATIC", true);
+		assertRefusal("(println (every? Character/isLetter \"abc\"))", "JAVA:STATIC", true);
 	}
 
 	@Test

@@ -15,6 +15,7 @@ import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.FfiInterop;
 import am.ik.rontolisp.eval.CheckpointLibrary;
 import am.ik.rontolisp.eval.ClojureLibrary;
+import am.ik.rontolisp.eval.ClojureProgramLowering;
 import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.GgufLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
@@ -83,8 +84,25 @@ final class CompileFrontend {
 	 * @param serve whether the program is a {@code rontolisp:http-handler} component
 	 * @param witWorld whether the program declared a {@code rontolisp:wit-export} world
 	 * @param features the feature set the program was read with
+	 * @param runTimeImage what a JVM class carries to lower the program again as it runs
+	 * ({@link RunTimeImage#encode()}), or {@code null} for a program that does not
 	 */
-	record Result(List<LispVal> program, boolean serve, boolean witWorld, Features features) {
+	record Result(List<LispVal> program, boolean serve, boolean witWorld, Features features,
+			@Nullable String runTimeImage) {
+
+		Result(List<LispVal> program, boolean serve, boolean witWorld, Features features) {
+			this(program, serve, witWorld, features, null);
+		}
+
+		/**
+		 * This result for a program a JVM class lowers again as it runs.
+		 * @param image the encoded run-time image
+		 * @return the result
+		 */
+		Result lowersAtRunTime(String image) {
+			return new Result(this.program, this.serve, this.witWorld, this.features, image);
+		}
+
 	}
 
 	/**
@@ -377,8 +395,11 @@ final class CompileFrontend {
 	 * @param features the feature set the forms were read with
 	 * @param standards the standards the forms were read against: a Scheme program's
 	 * run-time {@code eval} table follows them
+	 * @param lowersAtRunTime whether the forms are a Clojure program a JVM class lowers
+	 * again as it runs ({@link RunTimeImage}): it takes the whole run-time library, every
+	 * arm of it, and the class lowers its lowering verbs instead of refusing them
 	 */
-	record Loaded(List<LispVal> forms, Features features, SourceStandards standards) {
+	record Loaded(List<LispVal> forms, Features features, SourceStandards standards, boolean lowersAtRunTime) {
 
 		/**
 		 * Forms read against every language's default standard.
@@ -387,6 +408,16 @@ final class CompileFrontend {
 		 */
 		Loaded(List<LispVal> forms, Features features) {
 			this(forms, features, SourceStandards.DEFAULT);
+		}
+
+		/**
+		 * Forms that do not lower as the program runs.
+		 * @param forms the top-level forms
+		 * @param features the feature set the forms were read with
+		 * @param standards what the forms were read against
+		 */
+		Loaded(List<LispVal> forms, Features features, SourceStandards standards) {
+			this(forms, features, standards, false);
 		}
 
 	}
@@ -500,13 +531,31 @@ final class CompileFrontend {
 		}
 		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
 				request.javaClassPath());
-		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards(), files);
+		List<LispVal> read;
+		RunTimeImage image = null;
+		if (language == SourceLanguage.CLOJURE && !wasm) {
+			// A JVM class lowers a Clojure program's lowering verbs over computed
+			// arguments as it runs: it reads the program again then, through every file
+			// answer this read got (RunTimeImage), so the lowering it rebuilds names the
+			// functions and globals it holds (JvmRunTimeLowering).
+			RunTimeImage.Recording recording = new RunTimeImage.Recording(files);
+			ClojureProgramLowering clojure = ClojureProgramLowering.read(request.source(), features, entryFile,
+					request.standards(), recording);
+			read = clojure.forms();
+			if (clojure.lowersAtRunTime()) {
+				image = recording.image(request.source(), entryFile, request.standards());
+			}
+		}
+		else {
+			read = language.read(request.source(), features, entryFile, request.standards(), files);
+		}
 		// A Common Lisp entry file is the file being loaded, so its forms run inside its
 		// own load context (LoadInliner brackets it, the interpreter binds it). The
 		// other languages have no *load-truename* to answer.
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
 				request.dists(), request.standards(), language == SourceLanguage.COMMON_LISP ? entryFile : null);
-		return expand(new Loaded(loaded, features, request.standards()), options);
+		Result result = expand(new Loaded(loaded, features, request.standards(), image != null), options);
+		return image == null ? result : result.lowersAtRunTime(image.encode());
 	}
 
 	/**
@@ -759,13 +808,15 @@ final class CompileFrontend {
 		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
 		// before any library is spliced.
 		// The lowered languages' run-time libraries first: a Clojure one strips the arms
-		// of a value only the host makes when the target has none (wasm).
+		// of a value only the host makes when the target has none (wasm), and a program
+		// a JVM class lowers again as it runs takes every arm and its lowering hand-off.
 		// InflateLibrary right OUTSIDE ClojureLibrary: the decoder of a compressed reply
 		// is named only by clojure.lisp's HTTP client, and a wasm target compiles the
 		// Lisp one (the interpreter and the JVM have runtime/RontoInflate); inside the
 		// prelude, which supplies what the decoder is written over.
-		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary
-			.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features, input.standards()), !wasm),
+		List<LispVal> languages = InflateLibrary.process(
+				ClojureLibrary.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)),
+						features, input.standards()), !wasm, input.lowersAtRunTime()),
 				witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary

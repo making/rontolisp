@@ -3099,7 +3099,9 @@ cases:
     # clauses in order; an exception no clause takes passes on to the handlers
     # outside, after the finally. ExceptionInfo is what ex-info builds, a thrown
     # nil a NullPointerException and any other value no exception a
-    # ClassCastException.
+    # ClassCastException. A computed message hinted ^String picks the String
+    # constructor of a class with int ones too, like the oracle's compiler
+    # (2026-10-30).
     source: |
       (println (try (throw (IllegalArgumentException. "x")) (catch ArithmeticException e :arith) (catch IllegalArgumentException e :iae)))
       (println (try (throw (NumberFormatException. "m")) (catch IllegalArgumentException e :iae)))
@@ -3111,6 +3113,7 @@ cases:
       (println (try (try (throw (Exception. "m")) (catch clojure.lang.ExceptionInfo e :ex-info)) (catch Throwable t :outer)))
       (println (try (try (throw (java.io.IOException. "io")) (catch RuntimeException e :rte)) (catch java.io.IOException e (.getMessage e))))
       (println (try (throw (StringIndexOutOfBoundsException. "m")) (catch ArrayIndexOutOfBoundsException e :array) (catch IndexOutOfBoundsException e :index)))
+      (println (try (throw (IndexOutOfBoundsException. ^String (str "Index: " 1))) (catch IndexOutOfBoundsException e (ex-message e))))
       (println (try (try (throw (Exception. "inner")) (catch IllegalStateException e :ise) (finally (println "fin"))) (catch Exception e (ex-message e))))
       (println (try (throw (try (throw (IllegalStateException. "again")) (catch Exception e e))) (catch IllegalStateException e (ex-message e))))
       (println (try (throw nil) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
@@ -3126,6 +3129,7 @@ cases:
       :outer
       io
       :index
+      Index: 1
       fin
       inner
       again
@@ -4392,16 +4396,18 @@ cases:
       [1 2] {:a 3, :b 2} {}
       3
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
-    # A compiled program carries no lowering, so eval and resolve of a computed symbol
+    # A wasm module carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
     # require, use and in-ns as values refuse any application the same way:
     # libraries load and namespaces switch while the program lowers (the oracle
     # loads clojure.set, prints nil twice and the namespace; of no spec it
     # throws "Nothing specified to load" wrapped in a CompilerException, and
     # names clojure.lang.RT/1 in in-ns's arity error). The interpreter keeps the
-    # program's lowering as it runs and answers them (the next case).
+    # program's lowering as it runs, and a JVM class lowers it again when it first
+    # runs a verb; both answer them (the next case).
     skip:
       interpreter: the interpreter lowers the verbs as the program runs
+      jvm: the class lowers the verbs as the program runs
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
@@ -4425,12 +4431,13 @@ cases:
     # they run, in *ns*, and what they define joins the program. A value no literal
     # spells (a function) stands in an eval'd form as itself; a form that does not
     # lower throws the oracle's CompilerException, a library no root holds its
-    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A compiled
-    # program carries no lowering, so there the verbs refuse (the case above).
+    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A JVM class
+    # carries its program's image and lowers it again when it first runs a verb,
+    # compiling each lowered call into a class linked against itself. A wasm module
+    # carries no lowering, so there the verbs refuse (the case above).
     skip:
-      jvm: a compiled program carries no lowering, so the verbs refuse at run time
-      wasm: a compiled program carries no lowering, so the verbs refuse at run time
-      wasm_component: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm: a wasm module carries no lowering, so the verbs refuse at run time
+      wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
     source: |
       (defn rtl-twice [x] (* 2 x))
       (def rtl-base 10)
@@ -14657,14 +14664,17 @@ cases:
       [:ok :ok :ok :ok :ok]
       "For input string: \"abc\"" "Cannot parse null string"
       [:ok :ok :ok]
-  - name: double-value-of-reads-like-the-host-static
+  - name: double-value-of-and-parse-double-read-like-the-host-statics
     # (Double/valueOf s) where no host is lowers to the portable reader: the
     # double the string spells (parse-double's grammar), a double as is; a
     # malformed string is the oracle's NumberFormatException (empty String of
     # nothing but blanks), nil its NullPointerException. Anything else is the
     # oracle's no-matching-method refusal on wasm (ClojureWasmInteropRefusalTest);
-    # the host's own answers or refuses its own way. Oracle-identical (clj
-    # 1.12.6, 2026-10-13).
+    # the host's own answers or refuses its own way. (Double/parseDouble s)
+    # (tools.reader's float reader) reads strings the same way; anything else,
+    # a double included, is its cast refusal to String (pinned at the class:
+    # the message's module tail names no JVM here). Oracle-identical (clj
+    # 1.12.6, 2026-10-13; parseDouble 2026-10-30).
     source: |
       (defmacro dv-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
       (prn (map Double/valueOf ["1.5" "1e3" "NaN" "Infinity" "-Infinity" "0x1p3" "1.5f" " 1.5 " "1e1000" "1e-323"]))
@@ -14672,31 +14682,85 @@ cases:
       (prn [(dv-rfc NumberFormatException (Double/valueOf "abc")) (dv-rfc NumberFormatException (Double/valueOf "")) (dv-rfc NumberFormatException (Double/valueOf " "))])
       (prn (dv-rfc NullPointerException (Double/valueOf nil)))
       (prn (try (Double/valueOf "abc") (catch NumberFormatException e (ex-message e))) (try (Double/valueOf "") (catch NumberFormatException e (ex-message e))) (try (Double/valueOf nil) (catch NullPointerException e (ex-message e))))
+      (prn (map #(Double/parseDouble %) ["2.5" " 1e3 " "NaN" "0x1p3"]))
+      (prn [(dv-rfc ClassCastException (Double/parseDouble 5)) (dv-rfc ClassCastException (Double/parseDouble 2.5))] (try (Double/parseDouble "x") (catch NumberFormatException e (ex-message e))) (try (Double/parseDouble "") (catch NumberFormatException e (ex-message e))) (try (Double/parseDouble nil) (catch NullPointerException e (ex-message e))))
     expected: |
       (1.5 1000.0 ##NaN ##Inf ##-Inf 8.0 1.5 1.5 ##Inf 9.9E-324)
       1.5 (1.5 2.5)
       [:ok :ok :ok]
       :ok
       "For input string: \"abc\"" "empty String" "Cannot invoke \"String.length()\" because \"in\" is null"
-  - name: parse-int-of-radix-16-reads-like-the-host-static
-    # (Integer/parseInt s 16) where no host is lowers to the portable hex
-    # reader: an optional sign and hex digits (ASCII and fullwidth a-f, every
-    # Unicode decimal-digit block's 0-9, like Character.digit), refused past the
-    # int range; nil is the oracle's null-string refusal. Anything else is the
+      (2.5 1000.0 ##NaN 8.0)
+      [:ok :ok] "For input string: \"x\"" "empty String" "Cannot invoke \"String.length()\" because \"in\" is null"
+  - name: parse-int-reads-like-the-host-static
+    # (Integer/parseInt s 16) where no host is lowers to the portable reader:
+    # an optional sign and hex digits (ASCII and fullwidth a-f, every Unicode
+    # decimal-digit block's 0-9, like Character.digit), refused past the int
+    # range; nil is the oracle's null-string refusal. Anything else is the
     # oracle's cast refusal to String on wasm (ClojureWasmInteropRefusalTest);
-    # the host's own refuses its own way. Any other radix stays the host's call.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # the host's own refuses its own way. The one-argument call (radix 10,
+    # tools.reader's radix reader) and any other literal radix read the same
+    # way, a radix outside 2 to 36 refused in the oracle's words; a computed
+    # radix stays the host's call. Oracle-identical (clj 1.12.6, 2026-10-13;
+    # radix 10 and the others 2026-10-30).
     source: |
       (defmacro pi-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
       (prn (map #(Integer/parseInt % 16) ["ff" "FF" "-a" "+1" "0" "7fffffff" "-80000000" "ｆｆ" "٣"]))
       (prn (map #(Integer/parseInt % 16) ["12" "ff"]))
       (prn [(pi-rfc NumberFormatException (Integer/parseInt "zz" 16)) (pi-rfc NumberFormatException (Integer/parseInt "" 16)) (pi-rfc NumberFormatException (Integer/parseInt "80000000" 16)) (pi-rfc NumberFormatException (Integer/parseInt "100000000" 16)) (pi-rfc NumberFormatException (Integer/parseInt "Ｚ" 16)) (pi-rfc NumberFormatException (Integer/parseInt nil 16))])
       (prn (try (Integer/parseInt "zz" 16) (catch NumberFormatException e (ex-message e))) (try (Integer/parseInt nil 16) (catch NumberFormatException e (ex-message e))))
+      (prn (map #(Integer/parseInt %) ["42" "-2147483648" "+7" "٥" "007"]) (Integer/parseInt "zz" 36) (Integer/parseInt "-101" 2))
+      (prn [(pi-rfc NumberFormatException (Integer/parseInt "2147483648")) (pi-rfc NumberFormatException (Integer/parseInt "")) (pi-rfc NumberFormatException (Integer/parseInt "+")) (pi-rfc NumberFormatException (Integer/parseInt nil)) (pi-rfc ClassCastException (Integer/parseInt 5))])
+      (prn (try (Integer/parseInt "x") (catch NumberFormatException e (ex-message e))) (try (Integer/parseInt "12" 37) (catch NumberFormatException e (ex-message e))) (try (Integer/parseInt "12" 1) (catch NumberFormatException e (ex-message e))) (try (Integer/parseInt "2" 2) (catch NumberFormatException e (ex-message e))))
     expected: |
       (255 255 -10 1 0 2147483647 -2147483648 255 3)
       (18 255)
       [:ok :ok :ok :ok :ok :ok]
       "For input string: \"zz\" under radix 16" "Cannot parse null string"
+      (42 -2147483648 7 5 7) 1295 -5
+      [:ok :ok :ok :ok :ok]
+      "For input string: \"x\"" "radix 37 greater than Character.MAX_RADIX" "radix 1 less than Character.MIN_RADIX" "For input string: \"2\" under radix 2"
+  - name: character-statics-and-big-integer-strings-answer-like-the-host
+    # tools.reader's read path where no host is (wasm): Character/isWhitespace,
+    # isDigit, digit and valueOf of a char or an int code lower to portable
+    # workers (Java whitespace, every Unicode decimal-digit block, Garay's
+    # included, Latin letters ASCII and fullwidth as digits 10 to 35, -1 for
+    # none); a (BigInteger. s) or (BigInteger. s radix) construction is the
+    # integer the string spells, refused in BigInteger's words and order (the
+    # first failing digit group named), a (BigInteger. bytes) the big-endian
+    # two's complement and (BigInteger. signum bytes) the signed magnitude
+    # (data.generators' bigint); .longValue and .intValue of an integer
+    # are its low bits. Anything no overload takes is the oracle's refusal, a
+    # long past the int range its integer overflow. The interpreter and the
+    # JVM keep the host's calls and answer the same lines. Oracle-identical
+    # (clj 1.12.6, 2026-10-30) but for the cast messages' module tail (pinned
+    # at the class) and a big BigInteger's printed N (spelled through str).
+    source: |
+      (defmacro cs-msg [form] `(try ~form (catch Exception e# (ex-message e#))))
+      (defmacro cs-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
+      (prn (map #(Character/isWhitespace %) [\space \a (char 160) (char 8195) \tab (char 28)]) (Character/isWhitespace 32) (Character/isWhitespace 5760) (Character/isWhitespace -1) (Character/isWhitespace 2097151))
+      (prn (map #(Character/isDigit %) [\5 (char 1637) \a]) (Character/isDigit 120782) (Character/isDigit 68928) (Character/isDigit 53))
+      (prn (Character/digit \7 10) (Character/digit \z 36) (Character/digit \Z 36) (Character/digit (char 65313) 16) (Character/digit (char 1637) 10) (Character/digit \8 8) (Character/digit \1 1) (Character/digit \1 37) (Character/digit 55 10) (Character/digit (int \f) (int 16)) (Character/digit 120782 10) (Character/digit -5 10))
+      (prn (Character/valueOf \a) (cs-rfc ClassCastException (Character/valueOf 97)) (cs-rfc ClassCastException (Character/valueOf "a")))
+      (prn (cs-msg (Character/isWhitespace "a")) (cs-msg (Character/isDigit nil)) (cs-msg (Character/digit \1 1.5)) (cs-msg (Character/digit 9999999999 10)))
+      (prn (BigInteger. "123") (str (BigInteger. "-123456789012345678901234567890")) (BigInteger. "+5") (BigInteger. "zz" 36) (BigInteger. "-ff" 16) (BigInteger. "000") (BigInteger. (str "1" (char 65297))))
+      (prn (cs-msg (BigInteger. "")) (cs-msg (BigInteger. "-")) (cs-msg (BigInteger. "1-2")) (cs-msg (BigInteger. "12" 37)) (cs-msg (BigInteger. 5)))
+      (prn (cs-msg (BigInteger. "12345678901x")) (cs-msg (BigInteger. "x2345678901")) (cs-msg (BigInteger. "zzzzzzz1" 8)))
+      (prn (BigInteger. (byte-array [1 0])) (BigInteger. (byte-array [-1])) (BigInteger. (byte-array [0 -1])) (BigInteger. 1 (byte-array [-1])) (BigInteger. -1 (byte-array [1 0])) (BigInteger. 1 (byte-array 0)))
+      (prn (cs-msg (BigInteger. (byte-array 0))) (cs-msg (BigInteger. 0 (byte-array [1]))) (cs-msg (BigInteger. 2 (byte-array [1]))) (cs-msg (BigInteger. (byte-array [1]) 1)))
+      (prn (.longValue (BigInteger. "123456789012345678901234567890")) (.longValue 5) (.intValue 4294967297))
+    expected: |
+      (true false false true true true) true true false false
+      (true true false) true true true
+      7 35 35 10 5 -1 -1 -1 7 15 0 -1
+      \a :ok :ok
+      "No matching method isWhitespace found taking 1 args" "No matching method isDigit found taking 1 args" "No matching method digit found taking 2 args" "integer overflow"
+      123 "-123456789012345678901234567890" 5 1295 -255 0 11
+      "Zero length BigInteger" "Zero length BigInteger" "Illegal embedded sign character" "Radix out of range" "No matching ctor found for class java.math.BigInteger"
+      "For input string: \"45678901x\"" "For input string: \"x2\"" "For input string: \"zzzzzzz1\" under radix 8"
+      256 -1 255 255 -256 0
+      "Zero length BigInteger" "signum-magnitude mismatch" "Invalid signum value" "No matching ctor found for class java.math.BigInteger"
+      -4362896299872285998 5 1
   - name: integer-to-hex-string-writes-like-the-host-static
     # (Integer/toHexString x) where no host is lowers to the portable writer:
     # an integer in the int range in lowercase hex, two's complement past the
@@ -14855,6 +14919,38 @@ cases:
       [1.1419053154730547 0.9194079489827879]
       [-1192035722 1672896916]
       [:ok :ok :ok]
+  - name: a-linked-list-construction-is-a-mutable-list-where-the-host-is-not
+    # (java.util.LinkedList.) where no host is (wasm) is the deftype of the
+    # internal namespace rontolisp.internal.linked-list, loaded where the
+    # construction first lowers -- tools.reader's pending-forms queue, a
+    # JAVA:NEW call-time error there before. seq, count and the java.util.List
+    # members tools.reader and a queue use (add of one or at an index, addAll
+    # of one or at an index, remove at an index, get, size, isEmpty, contains,
+    # indexOf, clear, toString) answer what the host's LinkedList answers,
+    # index refusals in its words. The class is spelled imported, as
+    # tools.reader spells it: the internal deftype of the same simple name is
+    # never the class a program's spelling names. The interpreter and the JVM
+    # keep the host's object and answer the same lines. Oracle-identical (clj
+    # 1.12.6, 2026-10-30).
+    source: |
+      (import 'java.util.LinkedList)
+      (let [q (LinkedList.)]
+        (prn (seq q) (.isEmpty q) (.size q) (count q) (instance? java.util.List q))
+        (prn (.add q 1) (.add q 2) (.addAll ^java.util.List q 0 [7 8]) (.addAll q []) (seq q))
+        (prn (.remove ^java.util.List q 0) (.get q 0) (.contains q 2) (.indexOf q 2) (.indexOf q 9) (seq q))
+        (prn (.add q 1 nil) (str q) (vec q) (count q) (into [] (map some?) q))
+        (prn (.clear q) (seq q) (.isEmpty q))
+        (prn (try (.remove q 0) (catch IndexOutOfBoundsException e (ex-message e)))
+             (try (.get q 1) (catch IndexOutOfBoundsException e (ex-message e)))
+             (try (.add q 1 :y) (catch IndexOutOfBoundsException e (ex-message e)))
+             (try (.addAll q -1 [1]) (catch IndexOutOfBoundsException e (ex-message e)))))
+    expected: |
+      nil true 0 0 true
+      true true true false (7 8 1 2)
+      7 8 true 2 -1 (8 1 2)
+      nil "[8, null, 1, 2]" [8 nil 1 2] 4 [true false true true]
+      nil nil true
+      "Index: 0, Size: 0" "Index: 1, Size: 0" "Index: 1, Size: 0" "Index: -1, Size: 0"
   - name: object-array-to-array-and-into-array-answer-vectors
     # object-array of a number is that many nils, else the members as a vector;
     # to-array is always an Object vector; into-array infers the component from

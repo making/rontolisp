@@ -260,6 +260,16 @@ public final class ClojureLowering {
 	boolean open;
 
 	/**
+	 * Whether an open program carries every runtime the run-time library reaches from the
+	 * start -- the ex-info, hierarchy, protocol and STM runtimes -- rather than the ones
+	 * its own forms use: a compiled class's library links what it calls when the class is
+	 * compiled, so a value a form lowered as it runs makes (an exception, a protocol's
+	 * extension) must find the runtime there. The interpreter resolves a function when it
+	 * is called, so a runtime travels with the form that first needs it.
+	 */
+	boolean carriesRuntimes;
+
+	/**
 	 * Whether the datum being lowered lowers after code before it already ran: a
 	 * session's buffer, or a form lowered at run time. Nothing lowered before can lower
 	 * again, so a miss that would lower a whole program again ({@link #redefMisses})
@@ -1703,7 +1713,7 @@ public final class ClojureLowering {
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
-		return lowerWhole(datums, reader, macroEvaluator, files, hostTarget, boundary, false).forms();
+		return lowerWhole(datums, reader, macroEvaluator, files, hostTarget, boundary, false, false).forms();
 	}
 
 	/**
@@ -1731,12 +1741,15 @@ public final class ClojureLowering {
 	 * @param files where required namespace files are read from
 	 * @param hostTarget whether the target is one where the host is
 	 * @param boundary the host boundary
-	 * @param runTimeTarget whether the target lowers at run time (the interpreter)
+	 * @param runTimeTarget whether the target lowers at run time (the interpreter, a JVM
+	 * class)
+	 * @param compiledTarget whether the target is a compiled class, which carries every
+	 * runtime the library reaches from the start ({@link #carriesRuntimes})
 	 * @return the forms, and the open lowering where the program lowers at run time
 	 */
 	static Whole lowerWhole(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
-			ClojureBoundary boundary, boolean runTimeTarget) {
+			ClojureBoundary boundary, boolean runTimeTarget, boolean compiledTarget) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
 		Map<String, Set<String>> guards = new LinkedHashMap<>();
@@ -1748,6 +1761,7 @@ public final class ClojureLowering {
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.open = open;
+			lowering.carriesRuntimes = open && compiledTarget;
 			lowering.rootSetters = rootSetters;
 			// what runs later may bind any dynamic var through its var object
 			lowering.threadBinders = threadBinders || open;
@@ -1820,6 +1834,13 @@ public final class ClojureLowering {
 		// wrappers of the WIT members the program names run first
 		lowering.forms.addAll(ClojureWasmLowering.flush(lowering));
 		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
+		if (lowering.carriesRuntimes) {
+			lowering.expandsAtRunTime = true;
+			lowering.usedHierarchy = true;
+			lowering.usedProtocols = true;
+			lowering.usedExInfo = true;
+			lowering.usedStm = true;
+		}
 		if (lowering.expandsAtRunTime) {
 			// the macro runtime travels with the program, like the false value
 			// (an open program's table holds each expander, like a session's: a form
@@ -1871,6 +1892,11 @@ public final class ClojureLowering {
 		// the contents of the resources literal names found are kept before anything
 		// reads one, like the false value
 		lowering.forms.addAll(1, ClojureIoLowering.keptResources(lowering));
+		if (lowering.open) {
+			// what the program hands the lowering as it runs lowers in the namespace *ns*
+			// holds, which a compiled class's hand-off reads
+			lowering.usedSpecials.add("*ns*");
+		}
 		if (!lowering.usedSpecials.isEmpty()) {
 			// the specials are special before anything binds them
 			lowering.forms.addAll(1, ClojureCoreSpecials.definitions(lowering, lowering.usedSpecials));
@@ -3083,7 +3109,8 @@ public final class ClojureLowering {
 	 * own, an imported or dotted class name matching one's host class name (a
 	 * {@code clojure.lang} class of the shipped namespace loaded first,
 	 * {@link #loadLangClass}), or -- the flat lowering's leniency, kept -- the only one
-	 * of that simple name anywhere. Null when it names none.
+	 * of that simple name anywhere outside the internal namespaces. Null when it names
+	 * none.
 	 */
 	@Nullable String typeKeyOf(String name) {
 		if (name.indexOf('/') >= 0) {
@@ -3108,7 +3135,10 @@ public final class ClojureLowering {
 		}
 		String only = null;
 		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
-			if (type.getValue().tagSpelling().equals(name)) {
+			// an internal namespace's deftype (the portable LinkedList) is no program's
+			// class: only its own namespace names it
+			if (type.getValue().tagSpelling().equals(name) && !ClojureBuiltinNamespaces
+				.isInternal(type.getKey().substring(0, type.getKey().lastIndexOf('/')))) {
 				if (only != null) {
 					return null;
 				}

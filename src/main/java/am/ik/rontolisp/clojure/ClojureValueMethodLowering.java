@@ -642,14 +642,21 @@ final class ClojureValueMethodLowering {
 	 * The call of a {@code java.math.BigInteger} method {@code java.lang.Long} lacks, on
 	 * an integer (tools.reader's number reader): {@code negate} and {@code bitLength},
 	 * the length past the sign bit, and {@code clojure.lang.BigInt}'s
-	 * {@code toBigInteger}, the integer itself (data.generators' {@code bigdec}); null
-	 * for any other method.
+	 * {@code toBigInteger}, the integer itself (data.generators' {@code bigdec}); and the
+	 * {@code longValue} and {@code intValue} both classes answer, the low bits (the
+	 * number reader's {@code .longValue}, which no host answers where none is); null for
+	 * any other method.
 	 */
 	private static @Nullable LispVal bigIntegerMethod(String method, LispSymbol recv, List<LispVal> args) {
 		return switch (method + "/" + args.size()) {
 			case "negate/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), recv);
 			case "bitLength/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integer-length"), recv);
 			case "toBigInteger/0" -> recv;
+			// the low 64 or 32 bits, as BigInteger's and Long's both answer
+			case "longValue/0" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-WRAP-BITS"), recv, new LispInteger(64));
+			case "intValue/0" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-WRAP-BITS"), recv, new LispInteger(32));
 			default -> null;
 		};
 	}

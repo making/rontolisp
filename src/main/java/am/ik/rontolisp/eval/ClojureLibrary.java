@@ -145,6 +145,95 @@ public final class ClojureLibrary {
 			  t)
 			""";
 
+	/**
+	 * The stand-in a target that lowers as the program runs splices in place of the
+	 * refusing {@code %clojure-lower-at-run-time}: a JVM class hands the verb, its
+	 * arguments as forms carried as plain data ({@link #HOST_TRANSPORT}), the values they
+	 * embed, the refusal and {@code *ns*} to the compiler it carries
+	 * ({@code rontolisp::%host-lower-at-run-time}, {@code cli/JvmRunTimeLowering}), which
+	 * lowers the call, compiles what it lowers to against the running class and runs it.
+	 */
+	private static final String HOST_LOWERING = """
+			(defun rontolisp::%clojure-lower-at-run-time (verb args message)
+			  (declare (ignore message))
+			  (let ((consts (cons 0 nil)))
+			    (rontolisp::%host-lower-at-run-time
+			     verb
+			     (rontolisp::%clojure-transport
+			      (rontolisp::%clojure-run-time-arguments verb args) consts)
+			     consts (function rontolisp::%clojure-refuse) rontolisp::%clojure-ns)))
+			""";
+
+	/**
+	 * The arguments of a lowering verb as plain data -- lists, strings, symbols, numbers,
+	 * characters -- which the compiler a JVM class carries reads back into the values the
+	 * lowering decodes ({@code ClojureProgramLowering}): a string as the name of a fresh
+	 * symbol (a string a program builds is a mutable character vector there, a symbol's
+	 * name never), a vector {@code (:c%t-vector e ...)}, a map
+	 * {@code (:c%t-map k v ...)}, a set {@code (:c%t-set e ...)}, a collection carrying
+	 * metadata {@code (:c%t-meta datum meta)}, a keyword, an instant, a UUID, a decimal
+	 * and a symbol carrying metadata as their own wrappers, and any other value -- a
+	 * function, an atom, a record, a host object -- {@code (:c%t-embed i)}: the value
+	 * itself, the {@code i}th of the constants cell {@code (count . reversed-values)},
+	 * which the form lowered from it embeds.
+	 */
+	private static final String HOST_TRANSPORT = """
+			(defun rontolisp::%clojure-transport (x consts)
+			  (let ((datum (rontolisp::%clojure-transport-datum x consts)))
+			    (if (or (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x))))
+			        (let ((meta (rontolisp::%clojure-meta x)))
+			          (if meta
+			              (list :c%t-meta datum (rontolisp::%clojure-transport meta consts))
+			              datum))
+			        datum)))
+			(defun rontolisp::%clojure-transport-datum (x consts)
+			  (cond ((stringp x) (symbol-name (make-symbol x)))
+			        ((or (null x) (numberp x) (characterp x) (symbolp x)) x)
+			        ((consp x)
+			         (let ((tag (car x)))
+			           (cond ((not (keywordp tag)) (rontolisp::%clojure-transport-list x consts))
+			                 ((or (eq tag :c%keyword) (eq tag :c%inst) (eq tag :c%uuid)
+			                      (eq tag :c%decimal))
+			                  x)
+			                 ((eq tag :c%symbol)
+			                  (list :c%symbol (car (cdr x))
+			                        (rontolisp::%clojure-transport (car (cdr (cdr x))) consts)))
+			                 ((eq tag :c%set)
+			                  (let ((acc nil))
+			                    (maphash (lambda (k v)
+			                               (declare (ignore v))
+			                               (setq acc (cons (rontolisp::%clojure-transport k consts) acc)))
+			                             (car (cdr x)))
+			                    (cons :c%t-set acc)))
+			                 (t (rontolisp::%clojure-transport-embed x consts)))))
+			        ((hash-table-p x)
+			         (let ((acc nil))
+			           (maphash (lambda (k v)
+			                      (setq acc (cons (rontolisp::%clojure-transport v consts)
+			                                      (cons (rontolisp::%clojure-transport k consts) acc))))
+			                    x)
+			           (cons :c%t-map (nreverse acc))))
+			        ((vectorp x)
+			         (let ((acc nil))
+			           (dotimes (i (length x))
+			             (setq acc (cons (rontolisp::%clojure-transport (aref x i) consts) acc)))
+			           (cons :c%t-vector (nreverse acc))))
+			        (t (rontolisp::%clojure-transport-embed x consts))))
+			(defun rontolisp::%clojure-transport-list (x consts)
+			  (let ((acc nil) (p x))
+			    (do () ((not (consp p)))
+			      (setq acc (cons (rontolisp::%clojure-transport (car p) consts) acc))
+			      (setq p (cdr p)))
+			    (let ((out (if p (rontolisp::%clojure-transport p consts) nil)))
+			      (dolist (e acc out)
+			        (setq out (cons e out))))))
+			(defun rontolisp::%clojure-transport-embed (x consts)
+			  (let ((i (car consts)))
+			    (rplaca consts (+ i 1))
+			    (rplacd consts (cons x (cdr consts)))
+			    (list :c%t-embed i)))
+			""";
+
 	private static final String HELPER_PREFIX = "%CLOJURE-";
 
 	private static final String NAMESPACE_VAR_PREFIX = "c%clojure.";
@@ -245,7 +334,23 @@ public final class ClojureLibrary {
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program, boolean hostTarget) {
-		Splice splice = splice(program, hostTarget);
+		return process(program, hostTarget, false);
+	}
+
+	/**
+	 * {@link #process(List, boolean)} for a program a JVM class lowers again as it runs
+	 * ({@code cli/RunTimeImage}): what it lowers then may make a value of any kind and
+	 * meet any arm, so it takes the whole library -- the host arms and every family's,
+	 * nothing stripped from it or from the program -- and the hand-off of the lowering
+	 * verbs to the compiler the class carries ({@link #HOST_LOWERING}) in place of their
+	 * refusal.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param hostTarget whether the target is one where the host is (the JVM)
+	 * @param lowersAtRunTime whether the class lowers the program again as it runs
+	 * @return the program with the library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, boolean hostTarget, boolean lowersAtRunTime) {
+		Splice splice = lowersAtRunTime ? new Splice(hostLoweringForms(), program) : splice(program, hostTarget);
 		if (splice.library().isEmpty()) {
 			return splice.program();
 		}
@@ -253,6 +358,20 @@ public final class ClojureLibrary {
 		out.addAll(splice.program());
 		return out;
 	}
+
+	/**
+	 * The whole library with the lowering verbs handed to the compiler the class carries.
+	 */
+	private static List<LispVal> hostLoweringForms() {
+		List<LispVal> library = forms();
+		return FORMS.computeIfAbsent(HOST_LOWERING_KEY, ignored -> {
+			List<LispVal> out = new ArrayList<>(standingIn(library, HOST_LOWERING));
+			out.addAll(LispReader.readAllFromString(HOST_TRANSPORT));
+			return List.copyOf(out);
+		});
+	}
+
+	private static final String HOST_LOWERING_KEY = "host-lowering";
 
 	/**
 	 * {@link #process(List, boolean)} with its two halves apart: the library a WHOLE

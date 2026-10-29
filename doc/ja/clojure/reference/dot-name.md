@@ -10,6 +10,8 @@
 
 引数なしの `(Object.)` はホストがない場合（wasm バックエンド）に新しい uninterned シンボルになるため、ロード時のロック（dynaload の `dynalock`）が構築できます。2 つの構築はホストのオブジェクトと同様に `=` にも `identical?` にもなりません。ホストがある場合はホストのオブジェクトのまま残ります。
 
+引数なしの `(java.util.LinkedList.)` はホストがない場合（wasm バックエンド）に可変のリストになります。`seq`・`count` と `java.util.List` のメンバー `.add`（1 つの値、または添字の位置へ）・`.addAll`（コレクション、または添字の位置へ）・添字の `.remove`・`.get`・`.size`・`.isEmpty`・`.contains`・`.indexOf`・`.clear`・`.toString` はホストのリストと同じ値を返し、範囲外の添字は JDK の文言で拒否します。ホストがある場合はホストの `LinkedList` のまま残り、コレクションからの構築は全域でホストの構築のまま残ります。`(BigInteger. s)` と `(BigInteger. s radix)` の構築は wasm バックエンドでも文字列が表す整数に、`(BigInteger. bytes)` はビッグエンディアンの 2 の補数に、`(BigInteger. signum bytes)` は符号付きの絶対値になり、いずれも `BigInteger` の文言で拒否します。
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -26,4 +28,5 @@
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 (println (identical? (Object.) (Object.))) ; false
+(let [q (java.util.LinkedList.)] (.add q 1) (.addAll q 0 [0]) (println (seq q) (.remove q 0) (.size q))) ; (0 1) 0 1
 ```

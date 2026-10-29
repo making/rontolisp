@@ -65,6 +65,17 @@ backends), so a load-time lock (dynaload's `dynalock`) builds; two constructions
 never `=` or `identical?`, like two host objects. Where the host is it stays the host
 object.
 
+A zero-argument `(java.util.LinkedList.)` is a mutable list where the host is not (the
+wasm backends): `seq`, `count` and the `java.util.List` members `.add` (of one value or at
+an index), `.addAll` (of a collection or at an index), `.remove` at an index, `.get`,
+`.size`, `.isEmpty`, `.contains`, `.indexOf`, `.clear` and `.toString` answer what the
+host's list answers, an index outside it refused in the JDK's words. Where the host is it
+stays the host's `LinkedList`; a construction from a collection keeps the host
+construction everywhere. A `(BigInteger. s)` or `(BigInteger. s radix)` construction is
+the integer the string spells on the wasm backends too, `(BigInteger. bytes)` the
+big-endian two's complement and `(BigInteger. signum bytes)` the signed magnitude, each
+refused in `BigInteger`'s words.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -81,4 +92,5 @@ object.
 (println (.toUpperCase "straße" java.util.Locale/US) (.intern "hi")) ; STRASSE hi
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 (println (identical? (Object.) (Object.))) ; false
+(let [q (java.util.LinkedList.)] (.add q 1) (.addAll q 0 [0]) (println (seq q) (.remove q 0) (.size q))) ; (0 1) 0 1
 ```
