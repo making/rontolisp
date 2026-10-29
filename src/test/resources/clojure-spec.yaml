@@ -10133,6 +10133,56 @@ cases:
       :cancelled
       true
       [boom {:k 1}]
+  - name: taps-receive-every-tapped-value
+    # Oracle-identical (clj 1.12.6): add-tap and remove-tap answer nil, a second
+    # add-tap of one function adds nothing, tap> answers true and hands its value
+    # (nil too) to every tap, a tap's failure reaches no other tap, and a removed
+    # tap receives nothing more; the three verbs work as values. The interpreter
+    # and the JVM deliver on the tap thread, the WASM legs at the tap> call, so
+    # each read waits under locking until the value arrived.
+    source: |
+      (def tp-seen (atom []))
+      (defn tp-record [x] (swap! tp-seen conj x))
+      (defn tp-boom [x] (throw (ex-info "tap-boom" {})))
+      (defn tp-wait [a n] (loop [] (when (< (count (locking a @a)) n) (recur))))
+      (println [(add-tap tp-record) (add-tap tp-record) (add-tap tp-boom)])
+      (println [(tap> 1) (tap> nil) (tap> :k)])
+      (tp-wait tp-seen 3)
+      (println @tp-seen)
+      (println [(remove-tap tp-record) (remove-tap tp-boom)])
+      (let [t tap> a add-tap r remove-tap seen (atom []) f #(swap! seen conj %)]
+        (println [(a f) (t :v)])
+        (tp-wait seen 1)
+        (println [@seen @tp-seen (r f)]))
+    expected: |
+      [nil nil nil]
+      [true true true]
+      [1 nil :k]
+      [nil nil]
+      [nil true]
+      [[:v] [1 nil :k] nil]
+  - name: a-full-tap-queue-answers-false
+    # Oracle-identical (clj 1.12.6): the tap queue holds 1024 values; while a tap
+    # blocks on the value it took, the 1025th tap> answers false. The WASM legs
+    # deliver at the tap> call, so no queue fills there.
+    skip:
+      wasm: taps are called at the tap> call where no thread exists
+      wasm_component: taps are called at the tap> call where no thread exists
+    source: |
+      (def tq-started (promise))
+      (def tq-gate (promise))
+      (def tq-count (atom 0))
+      (defn tq-tap [x] (deliver tq-started true) @tq-gate (locking tq-count (swap! tq-count inc)))
+      (add-tap tq-tap)
+      (tap> :first)
+      @tq-started
+      (println (frequencies (map (fn [_] (tap> :x)) (range 1030))))
+      (deliver tq-gate :go)
+      (loop [] (when (< (locking tq-count @tq-count) 1025) (recur)))
+      (println (remove-tap tq-tap))
+    expected: |
+      {true 1024, false 6}
+      nil
   - name: special-symbol-names-the-special-forms
     # Oracle-identical (clj 1.12.6).
     source: |

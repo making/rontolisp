@@ -16543,6 +16543,127 @@
       (rontolisp::%clojure-class-cast-exception-of
        "deref needs a number as its timeout" ms)))
 
+;;;; Taps: tap>, add-tap and remove-tap.
+;;
+;; The taps are (key . fn) entries, oldest first, under %clojure-tap-guard: KEY
+;; the value add-tap was handed (remove-tap finds it by identical?, a second
+;; add-tap of it adds nothing, like the oracle's set), FN a real function over
+;; it. On a host target tap> offers its value to a bounded queue -- 1024, the
+;; oracle's ArrayBlockingQueue, so a full one answers false -- which one thread
+;; at a time drains, calling every tap present at each take and ignoring a
+;; tap's failure. The thread ends with the queue empty and the next tap> starts
+;; another, so nothing polls while no value waits, and where a spawn runs its
+;; body at once (the browser playground's interpreter) tap> delivers before it
+;; returns. Where no thread exists (wasm) %clojure-tap-send is replaced by the
+;; synchronous delivery (eval/ClojureLibrary, the host-arms stand-ins), so the
+;; queue and its thread never reach a module.
+
+(defvar rontolisp::%clojure-taps
+  nil
+  "The taps: (key . fn) entries, oldest first, replaced whole under the guard.")
+
+(defvar rontolisp::%clojure-tap-guard (rontolisp:make-mutex))
+
+(defvar rontolisp::%clojure-tap-queue
+  (vector nil nil 0 nil)
+  "The tap queue: #(head tail count draining), DRAINING true while a thread
+   drains it.")
+
+(defun rontolisp::%clojure-tap-entry (key)
+  "The tap entry of KEY, nil when none; the caller holds the guard."
+  (dolist (entry rontolisp::%clojure-taps nil)
+    (if (rontolisp::%clojure-is-identical (car entry) key) (return entry))))
+
+(defun rontolisp::%clojure-tap-add (key fn)
+  "add-tap: the tap KEY, called through the real function FN, unless it is one
+   already; answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+    (unless (rontolisp::%clojure-tap-entry key)
+      (setq rontolisp::%clojure-taps
+            (append rontolisp::%clojure-taps (list (cons key fn))))))
+  nil)
+
+(defun rontolisp::%clojure-tap-remove (key)
+  "remove-tap: the tap KEY removed, when it is one; answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+    (let ((entry (rontolisp::%clojure-tap-entry key)))
+      (if entry
+          (setq rontolisp::%clojure-taps
+                (remove entry rontolisp::%clojure-taps)))))
+  nil)
+
+(defun rontolisp::%clojure-tap-deliver (x taps)
+  "X handed to each of the TAPS entries in turn, a tap's failure ignored."
+  (dolist (tap taps) (handler-case (funcall (cdr tap) x) (error () nil))))
+
+(defun rontolisp::%clojure-tap-send (x)
+  "tap>: X offered to the tap queue, starting a thread to drain it unless one
+   does; true when it was queued, false when the queue was full."
+  (let ((queue rontolisp::%clojure-tap-queue) (queued nil) (start nil))
+    (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+      (if (< (aref queue 2) 1024)
+          (let ((cell (list x)))
+            (if (aref queue 1)
+                (setf (cdr (aref queue 1)) cell)
+                (setf (aref queue 0) cell))
+            (setf (aref queue 1) cell)
+            (setf (aref queue 2) (+ (aref queue 2) 1))
+            (setq queued t)
+            (if (null (aref queue 3))
+                (progn
+                  (setf (aref queue 3) t)
+                  (setq start t))))))
+    (if start
+        (rontolisp:make-thread
+         (lambda () (rontolisp::%clojure-tap-drain queue))))
+    (if queued t rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-tap-drain (queue)
+  "A tap thread's run over QUEUE: take the oldest value and hand it to the
+   taps present at the take, until the queue is empty. The empty take clears
+   the draining flag, the unwind an abnormal exit, so the next tap> starts
+   another thread."
+  (let ((done nil))
+    (unwind-protect (loop
+                      (let ((taken nil) (x nil) (taps nil))
+                        (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+                          (if (aref queue 0)
+                              (progn
+                                (setq taken t)
+                                (setq x (car (aref queue 0)))
+                                (setq taps rontolisp::%clojure-taps)
+                                (setf (aref queue 0) (cdr (aref queue 0)))
+                                (if (null (aref queue 0))
+                                    (setf (aref queue 1) nil))
+                                (setf (aref queue 2) (- (aref queue 2) 1)))
+                              (progn
+                                (setf (aref queue 3) nil)
+                                (setq done t))))
+                        (if taken
+                            (rontolisp::%clojure-tap-deliver x taps)
+                            (return nil))))
+      (if done
+          nil
+          (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+            (setf (aref queue 3) nil))))))
+
+(defun rontolisp::%clojure-tap-send-v (&rest args)
+  "tap> as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "tap>")
+  (rontolisp::%clojure-tap-send (car args)))
+
+(defun rontolisp::%clojure-tap-add-v (&rest args)
+  "add-tap as a value: its argument called through the IFn dispatcher unless
+   it is a real function."
+  (rontolisp::%clojure-check-arity args 1 1 "add-tap")
+  (rontolisp::%clojure-tap-add (car args)
+                               (rontolisp::%clojure-as-fn (car args))))
+
+(defun rontolisp::%clojure-tap-remove-v (&rest args)
+  "remove-tap as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "remove-tap")
+  (rontolisp::%clojure-tap-remove (car args)))
+
 ;;;; Parallel map: one future per element, dereferenced in order with the
 ;;;; oracle's lookahead.
 ;;

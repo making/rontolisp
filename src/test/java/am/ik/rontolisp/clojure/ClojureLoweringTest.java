@@ -3732,8 +3732,6 @@ class ClojureLoweringTest {
 			.contains("(ERROR \"future-call is not supported yet on this backend");
 		assertThat(lowered("(let [x 1] (seque x))"))
 			.contains("(ERROR \"seque is not supported yet: there is no thread pool on any backend\")");
-		assertThat(lowered("(let [x 1] (tap> x))"))
-			.contains("(ERROR \"tap> is not supported yet: taps have no rendezvous design\")");
 		assertThat(lowered("(let [e 1 a 2 f inc] (send-via e a f))"))
 			.contains("(ERROR \"send-via is not supported yet: agents take no custom executor on any backend\")");
 		assertThat(lowered("(let [x 1] (enumeration-seq x))"))

@@ -705,6 +705,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle leaves it unbound). `(await-for 0 a)` races the pool and may answer
   `false`, like the oracle's; on WASM the actions run first, so it answers `true`
   there.
+- `tap>` on the interpreter and the JVM queues its value for a tap thread, like the
+  oracle's (1024 values; a full queue answers `false`), so a value tapped just before the
+  program ends may never reach its taps. On the WASM legs -- single-threaded modules --
+  `tap>` calls every tap before it returns and always answers `true`. Taps are called in
+  the order they were added, and `remove-tap` finds a tap by `identical?` (the oracle's
+  set: by `=`).
 - A `defn` with no value cell validates its new function only once its definition is
   bound: where the validator refuses it, the call still reports the oracle's
   `Invalid reference state`, but later calls reach the refused definition (the oracle

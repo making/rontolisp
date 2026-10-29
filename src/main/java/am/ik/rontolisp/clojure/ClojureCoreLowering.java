@@ -500,7 +500,7 @@ final class ClojureCoreLowering {
 				return refusedCall(ctx, items,
 						name + " is not supported yet: agents take no custom executor on any backend");
 			case "tap>", "add-tap", "remove-tap":
-				return refusedCall(ctx, items, name + " is not supported yet: taps have no rendezvous design");
+				return ClojureTapLowering.callOf(ctx, name, items);
 			case "enumeration-seq":
 				return refusedCall(ctx, items,
 						"enumeration-seq is not supported yet: host enumerations stop at the host boundary");
@@ -777,8 +777,7 @@ final class ClojureCoreLowering {
 				refusedValue(name + " is not supported yet: there is no thread pool on any backend");
 			case "send-via", "release-pending-sends", "set-agent-send-executor!", "set-agent-send-off-executor!" ->
 				refusedValue(name + " is not supported yet: agents take no custom executor on any backend");
-			case "tap>", "add-tap", "remove-tap" ->
-				refusedValue(name + " is not supported yet: taps have no rendezvous design");
+			case "tap>", "add-tap", "remove-tap" -> ClojureTapLowering.valueOf(name);
 			case "enumeration-seq" ->
 				refusedValue("enumeration-seq is not supported yet: host enumerations stop at the host boundary");
 			case "resultset-seq" -> refusedValue("resultset-seq is not supported yet: JDBC stops at the host boundary");
