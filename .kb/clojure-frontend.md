@@ -5194,7 +5194,12 @@ host alone answers ("Host arms where the host is not").
   refused).
 - Clojure 1.12 qualified members (`ClojureInteropLowering.memberCall`/`memberValue`, one
   `qualifiedMember` split): `Class/.m` is `instanceCallLoweredWithClass` with the class as
-  the known receiver class (so the string/stream/boolean rules apply); `Class/new` is
+  the known receiver class (so the string/stream/boolean rules apply, and the call is typed);
+  a known class a Clojure value may be an instance of (`ClojureValueClasses.mayHoldValue`:
+  `Object`, an interface, a kind's class -- `Runnable`, `Comparator`, `IFn`, `String`) is
+  dropped before the arms, so the receiver takes `(.m x)`'s value arms (`(Runnable/.run
+  f)` ran `java:call` on the fn before, 2026-10-29; a `..` step's declared return the same);
+  `Class/new` is
   `hostConstruction`, the one construction path `(Class. ...)`/`new` share; `R/new` of a
   record or deftype is `->R`. Values are `arityLambda` over the public instance-method
   arities (+1 for the target) or constructor arities; none, or variadic-only, is refused
