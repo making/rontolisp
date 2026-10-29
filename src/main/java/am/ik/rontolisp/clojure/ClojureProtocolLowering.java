@@ -1151,7 +1151,17 @@ final class ClojureProtocolLowering {
 		if (ctx.localKind(name) != null || programVar || !"*assert*".equals(ClojureCoreSpecials.targetName(name))) {
 			return null;
 		}
-		LispVal value = items.get(2);
+		return literalFlag(items.get(2));
+	}
+
+	/**
+	 * The truth a {@code set!} of a lower-time flag assigns: false for {@code false} or
+	 * {@code nil}, true for any other literal, null for a computed value (a symbol naming
+	 * something, a call).
+	 * @param value the assigned datum
+	 * @return the truth, or null when only the run knows it
+	 */
+	static @Nullable Boolean literalFlag(LispVal value) {
 		if (value instanceof LispSymbol symbol) {
 			return switch (symbol.name()) {
 				case "false", "nil" -> false;

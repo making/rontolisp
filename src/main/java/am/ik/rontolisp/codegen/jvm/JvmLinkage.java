@@ -49,6 +49,97 @@ public final class JvmLinkage {
 	}
 
 	/**
+	 * A class (a {@code defclass}, a {@code define-condition}, the built-in condition
+	 * hierarchy) a later fragment's type tests and slot reads know: what the fragment's
+	 * registry needs so a {@code handler-case} clause or a {@code typep} there takes an
+	 * instance the host made.
+	 *
+	 * @param superclasses its direct superclasses, in local precedence order
+	 * @param cpl its class precedence list
+	 * @param ancestors the class and its ancestors
+	 * @param slots its effective slots' names, in layout order
+	 * @param slotBases the same slots' package-stripped names
+	 */
+	public record ClassLink(List<String> superclasses, List<String> cpl, List<String> ancestors, List<String> slots,
+			List<String> slotBases) {
+
+		public ClassLink {
+			superclasses = List.copyOf(superclasses);
+			cpl = List.copyOf(cpl);
+			ancestors = List.copyOf(ancestors);
+			slots = List.copyOf(slots);
+			slotBases = List.copyOf(slotBases);
+		}
+
+		/** The lists the encoding writes, in order. */
+		List<List<String>> parts() {
+			return List.of(this.superclasses, this.cpl, this.ancestors, this.slots, this.slotBases);
+		}
+	}
+
+	/**
+	 * A program-wide shape a class compiles under that a value or a condition carries
+	 * into another: a fragment compiles under every one its host or an earlier fragment
+	 * took, whatever its own forms use, since what it takes may come from them.
+	 */
+	public enum Mode {
+
+		/**
+		 * The restart system: signal hooks and the landing pads' handlers-ran records.
+		 */
+		RESTART,
+
+		/**
+		 * {@code handler-case} clause types on the dynamic stack {@code signal} reads.
+		 */
+		SIGNAL_CLAUSE_MATCH,
+
+		/** A non-local exit a {@code handler-case} region must let pass. */
+		BLOCK_EXIT,
+
+		/** Instances: the predicates' and {@code typep}'s instance arms. */
+		INSTANCES,
+
+		/** A landing pad, which a program error carries its instance to. */
+		LANDING_PAD,
+
+		/** Stream values. */
+		STREAM_VALUES,
+
+		/** The printer-control variables every printing operator applies. */
+		PRINT_CONTROLS,
+
+		/** A printer-control variable named, not only {@code *package*}. */
+		PRINT_CONTROL_VARIABLES,
+
+		/**
+		 * {@code equalp} tables: the hash helpers fold such a table's keys, wherever it
+		 * was made.
+		 */
+		HASH_EQUALP,
+
+		/**
+		 * {@code eq}/{@code eql} tables: the hash helpers key such a table by identity,
+		 * wherever it was made (a fragment putting into the host's table must find what
+		 * the host puts and gets).
+		 */
+		HASH_IDENTITY,
+
+		/** The array helpers. */
+		ARRAYS,
+
+		/** Packed float arrays, which the array operations dispatch on. */
+		FLOAT_ARRAYS,
+
+		/** Packed integer vectors, which the array operations dispatch on. */
+		INT_ARRAYS,
+
+		/** Complex numbers, which the arithmetic takes. */
+		COMPLEX
+
+	}
+
+	/**
 	 * What a class defines that a later fragment links against.
 	 *
 	 * @param functions its functions by canonical name
@@ -57,21 +148,26 @@ public final class JvmLinkage {
 	 * ({@link #shared}) -- its globals' fields, its run-time state, its layouts -- by
 	 * {@code name:descriptor}, to the internal name of the class declaring each
 	 * @param funcIdEnd one past the highest function id the class's function values carry
+	 * @param classes the classes its registry knew, by canonical name
+	 * @param modes the program-wide shapes it compiled under
 	 */
 	public record Table(Map<String, Function> functions, Map<String, Global> globals, Map<String, String> fields,
-			int funcIdEnd) {
+			int funcIdEnd, Map<String, ClassLink> classes, Set<Mode> modes) {
 
 		/** A table of nothing. */
-		public static final Table EMPTY = new Table(Map.of(), Map.of(), Map.of(), 0);
+		public static final Table EMPTY = new Table(Map.of(), Map.of(), Map.of(), 0, Map.of(), Set.of());
 
 		public Table {
 			functions = Map.copyOf(functions);
 			globals = Map.copyOf(globals);
 			fields = Map.copyOf(fields);
+			classes = Map.copyOf(classes);
+			modes = modes.isEmpty() ? Set.of() : java.util.Collections.unmodifiableSet(java.util.EnumSet.copyOf(modes));
 		}
 
 		/**
-		 * This table with a later class's on top: a later definition of a name wins.
+		 * This table with a later class's on top: a later definition of a name wins, and
+		 * the modes add up.
 		 * @param later the later class's table
 		 * @return the merged table
 		 */
@@ -82,7 +178,12 @@ public final class JvmLinkage {
 			gs.putAll(later.globals);
 			Map<String, String> fs = new LinkedHashMap<>(this.fields);
 			fs.putAll(later.fields);
-			return new Table(fns, gs, fs, Math.max(this.funcIdEnd, later.funcIdEnd));
+			Map<String, ClassLink> cs = new LinkedHashMap<>(this.classes);
+			cs.putAll(later.classes);
+			Set<Mode> ms = java.util.EnumSet.noneOf(Mode.class);
+			ms.addAll(this.modes);
+			ms.addAll(later.modes);
+			return new Table(fns, gs, fs, Math.max(this.funcIdEnd, later.funcIdEnd), cs, ms);
 		}
 
 		/**
@@ -100,7 +201,7 @@ public final class JvmLinkage {
 				fns.put(name, owner == null ? fn
 						: new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(), fn.bounces()));
 			});
-			return new Table(fns, this.globals, this.fields, this.funcIdEnd);
+			return new Table(fns, this.globals, this.fields, this.funcIdEnd, this.classes, this.modes);
 		}
 
 		/**
@@ -131,6 +232,21 @@ public final class JvmLinkage {
 				fields.add(field);
 				fields.add(owner);
 			});
+			fields.add(Integer.toString(this.classes.size()));
+			new TreeMap<>(this.classes).forEach((name, c) -> {
+				fields.add(name);
+				for (List<String> names : c.parts()) {
+					fields.add(Integer.toString(names.size()));
+					fields.addAll(names);
+				}
+			});
+			// a fixed order: the enum's
+			fields.add(Integer.toString(this.modes.size()));
+			for (Mode mode : Mode.values()) {
+				if (this.modes.contains(mode)) {
+					fields.add(mode.name());
+				}
+			}
 			StringBuilder out = new StringBuilder();
 			for (String field : fields) {
 				out.append(field.length()).append(':').append(field);
@@ -172,7 +288,27 @@ public final class JvmLinkage {
 			for (int i = 0; i < fieldCount; i++) {
 				fields.put(in.next(), in.next());
 			}
-			return new Table(functions, globals, fields, funcIdEnd);
+			Map<String, ClassLink> classes = new LinkedHashMap<>();
+			int classCount = Integer.parseInt(in.next());
+			for (int i = 0; i < classCount; i++) {
+				String name = in.next();
+				List<List<String>> parts = new ArrayList<>();
+				for (int part = 0; part < 5; part++) {
+					List<String> names = new ArrayList<>();
+					int count = Integer.parseInt(in.next());
+					for (int j = 0; j < count; j++) {
+						names.add(in.next());
+					}
+					parts.add(names);
+				}
+				classes.put(name, new ClassLink(parts.get(0), parts.get(1), parts.get(2), parts.get(3), parts.get(4)));
+			}
+			Set<Mode> modes = java.util.EnumSet.noneOf(Mode.class);
+			int modeCount = Integer.parseInt(in.next());
+			for (int i = 0; i < modeCount; i++) {
+				modes.add(Mode.valueOf(in.next()));
+			}
+			return new Table(functions, globals, fields, funcIdEnd, classes, modes);
 		}
 
 	}
@@ -293,7 +429,7 @@ public final class JvmLinkage {
 	 */
 	public static final String CONSTANTS_FIELD = "_constants";
 
-	private static final String VERSION = "rontolisp-link-1";
+	private static final String VERSION = "rontolisp-link-2";
 
 	private static final class Fields {
 

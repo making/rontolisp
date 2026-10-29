@@ -4444,8 +4444,10 @@ cases:
     # lower throws the oracle's CompilerException, a library no root holds its
     # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A JVM class
     # carries its program's image and lowers it again when it first runs a verb,
-    # compiling each lowered call into a class linked against itself. A wasm module
-    # carries no lowering, so there the verbs refuse (the case above).
+    # compiling each lowered call into a class linked against itself, whose type
+    # tests know the classes before it: an eval'd catch takes an ex-info the
+    # program throws (2026-10-30). A wasm module carries no lowering, so there the
+    # verbs refuse (the case above).
     host: eval and the other verbs over computed arguments
     skip:
       wasm: a wasm module carries no lowering, so the verbs refuse at run time
@@ -4467,6 +4469,8 @@ cases:
       (println (load-reader (java.io.PushbackReader. (java.io.StringReader. "(+ 2 3) (* 6 7)"))))
       (println (try (eval '(rtl-no-such 1)) (catch clojure.lang.Compiler$CompilerException e :refused)))
       (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
+      (defn rtl-thrower [] (throw (ex-info "thrown here" {})))
+      (println ((eval '(fn [f] (try (f) (catch clojure.lang.ExceptionInfo e (ex-message e))))) rtl-thrower))
     expected: |
       10 11 6
       #'rtl/rtl-added 15
@@ -4480,6 +4484,7 @@ cases:
       42
       :refused
       Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
+      thrown here
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
@@ -10071,7 +10076,9 @@ cases:
     # it, a binding included, over a function value and a core var, and a non-var signals
     # where deref of an atom would answer (a reduced value is no var). A var answers
     # clojure.lang.Var's isDynamic, ns, sym, toSymbol, isMacro, isPublic and isBound
-    # (tools.analyzer's dynamic? and create-var).
+    # (tools.analyzer's dynamic? and create-var). A var keys a map or a set by its
+    # identity, found through another site of it (each site re-points what the var
+    # reads; spec.test.alpha's instrumented-vars, an atom of a map keyed by vars).
     source: |
       (def vg-x 5)
       (def ^:dynamic *vg-d* 1)
@@ -10084,12 +10091,16 @@ cases:
       (defmacro vg-m [] 1)
       (declare vg-u)
       (prn (.isDynamic #'*vg-d*) (.isDynamic #'vg-x) (.isDynamic #'*out*) (ns-name (.ns #'vg-x)) (.sym #'vg-x) (.toSymbol #'vg-x) (.isMacro #'vg-m) (.isMacro #'vg-x) (.isPublic #'vg-q) (.isPublic #'vg-x) (.isBound #'vg-x) (.isBound #'vg-u) (ns-name (.ns #'inc)) (.sym #'inc))
+      (def vg-keys {#'vg-x :x #'vg-f :f})
+      (defn vg-key-of [] [(get vg-keys #'vg-x) (get vg-keys #'vg-f) (contains? #{#'vg-f} #'vg-f) (count (assoc vg-keys #'vg-x :y))])
+      (prn (vg-key-of))
     expected: |
       5 1 7 true
       9 9
       (5 1) 5 2
       :refused :refused :refused
       true false true reading vg-x reading/vg-x true false false true true false clojure.core inc
+      [:x :f true 2]
   - name: print-length-level-and-readably-shape-the-printer
     # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
     # collection or record after that many members with ... (an infinite seq realizes only
@@ -17398,14 +17409,16 @@ cases:
     # under (set! *unchecked-math* :warn-on-boxed) -- while a double, ratio or
     # out-of-range-integer operand takes the plain verb (a bigint promotes,
     # like the oracle's) and the bit operations keep refusing a bigint. The
-    # flag is read when the call runs, not when it compiles, and no boxed-math
-    # warning is ever emitted (:warn-on-boxed wraps exactly like true). The
-    # draws replicate the port's mix-64/mix-gamma/split over fixed seeds
-    # (longify expanded, the population count portable); the printed numbers
-    # are the oracle's for the same code. The default line pins the other
-    # half: the flag down the verbs promote to an integer past the long range,
-    # which prints as the oracle's BigInt (the oracle throws, a pinned deviation
-    # of the default arithmetic, unchanged by g28).
+    # flag is read where the call lowers, as the oracle's compiler reads it, so
+    # a function defined under it keeps wrapping once the flag is down again
+    # (the lexical line; h05: test.check's port wraps on whatever thread calls
+    # it), and no boxed-math warning is ever emitted (:warn-on-boxed wraps
+    # exactly like true). The draws replicate the port's mix-64/mix-gamma/split
+    # over fixed seeds (longify expanded, the population count portable); the
+    # printed numbers are the oracle's for the same code. The default line pins
+    # the other half: the flag down the verbs promote to an integer past the
+    # long range, which prints as the oracle's BigInt (the oracle throws, a
+    # pinned deviation of the default arithmetic, unchanged by g28).
     source: |
       (prn :default (+ 9223372036854775807 1) (* 9223372036854775807 2) (- -9223372036854775808 1) (inc 9223372036854775807) (dec -9223372036854775808))
       (set! *unchecked-math* :warn-on-boxed)
@@ -17445,8 +17458,10 @@ cases:
             state2 (+ uw-golden-gamma state1)
             gamma1 (uw-mix-gamma state2)]
         (prn :split [(uw-mix-64 state2) (uw-mix-64 state1) gamma1 (uw-mix-64 gamma1)]))
+      (defn uw-add [a b] (+ a b))
       (set! *unchecked-math* false)
       (prn :restored (+ 1 2))
+      (prn :lexical (uw-add 9223372036854775807 1) (uw-mix-64 (+ 42 uw-golden-gamma)))
     expected: |
       :default 9223372036854775808N 18446744073709551614N -9223372036854775809N 9223372036854775808N -9223372036854775809N
       :wrapped -9223372036854775808 -2 9223372036854775807 -9223372036854775808 9223372036854775807
@@ -17457,6 +17472,7 @@ cases:
       :gamma1 540350159304224773
       :split [2949826092126892291 -4767286540954276203 540350159304224773 -2488624846224467125]
       :restored 3
+      :lexical -9223372036854775808 -4767286540954276203
   - name: refused-verbs-signal-at-call-time
     # Oracle notes (g30, 2026-10-21): naming a refused verb compiles -- a library
     # merely defining such a function loads (integrant 1.0.1 defines resources and
@@ -17560,31 +17576,19 @@ cases:
       true
       true
       :g29-fn! :g29-dflt
-  - name: eager-shrink-trees-answer-only-at-small-magnitudes
-    # g33 (cut from g28): test.check 1.1.3's int-rose-tree builds a value's
-    # whole shrink tree EAGERLY here -- (core/map int-rose-tree (shrink-int
-    # value)) over shrink-long's long array, and map over a strict input is
-    # strict (the lazy-or-strict rule, "Laziness": lazy only when an input is
-    # lazy; the per-verb pins and the strict-loop performance notes stand, so
-    # this shape stays strict and no laziness story is built for it). The
-    # oracle's map is always lazy, so only the consumed spine exists there.
-    # The child count of a value near 2^k is about k, each child nearly as
-    # large, so the eager tree holds on the order of k^k nodes; measured node
-    # counts (g33 probe, test.check 1.1.3 verbatim on all four backends): 20
-    # for 5, 254 for 10, 37,954 for 20 (this case: seconds on the
-    # interpreter, milliseconds on the JVM and both wasm backends), 631,314
-    # for 26 (about 110 s on the interpreter, 2.5 s on the JVM, about a
-    # minute on both wasm backends), 3,337,928 for 30 (minutes on the
-    # interpreter and both wasm backends, 3.4 s on the JVM), 2.6e9 for 42 and
-    # 7.5e26 for 126 (infeasible everywhere). So the supported boundary is
-    # the g28 probe's small-valued set: choose ranges within about 0..25 and
-    # seeded quick-checks with :max-size 10 answer on all four backends,
-    # while a larger-valued draw such as (gen/generate (gen/choose 0 100)
-    # 5 99) (drawn 26) crawls past a minute everywhere but the JVM and never
-    # answers past about 30 on the interpreter and wasm. The replication
-    # below is shrink-long/int-rose-tree verbatim (long array, aset, quot
-    # halving; a two-vector stands in for the deftype), counting the nodes
-    # at 5, 10 and 20.
+  - name: a-recursion-through-a-lazy-verb-walks-lazily
+    # Oracle-identical (clj 1.12.6, 2026-10-30): a map, filter, mapcat, keep or
+    # for whose function (or body) spells the definition it stands in answers
+    # lazily over a strict input too, as the oracle's verbs always do, where the
+    # lazy-or-strict rule would realize at once ("Laziness"). test.check 1.1.3's
+    # int-rose-tree is the shape -- (core/map int-rose-tree (shrink-int value))
+    # over shrink-long's long array -- whose eager shrink tree holds on the
+    # order of k^k nodes for a value near 2^k (g33: 37,954 for 20, 2.6e9 for
+    # 42), so generators beyond about 25 crawled; replicated verbatim below (a
+    # two-vector for the deftype). Consumed whole the tree counts the same; its
+    # root over the largest long answers at once, and so does the first
+    # permutation of 30 (a for re-entering its definition), and a filter whose
+    # predicate re-enters its definition stays unrealized until walked.
     source: |
       (defn g33-shrink [x]
         (let [size (- 64 (Long/numberOfLeadingZeros (Math/abs x)))
@@ -17599,5 +17603,15 @@ cases:
       (defn g33-nodes [t]
         (inc (reduce + 0 (map g33-nodes (second t)))))
       (println (g33-nodes (g33-tree 5)) (g33-nodes (g33-tree 10)) (g33-nodes (g33-tree 20)))
+      (let [t (g33-tree 9223372036854775807)]
+        (println (realized? (second t)) (first t) (map first (take 3 (second t))) (count (second t))))
+      (defn g33-perms [s]
+        (if (empty? s) [[]] (for [x s p (g33-perms (disj s x))] (cons x p))))
+      (println (first (g33-perms (apply sorted-set (range 30)))) (second (g33-perms (apply sorted-set (range 30)))))
+      (defn g33-kids [n] (filter #(seq (g33-kids (dec %))) (range n)))
+      (println (realized? (g33-kids 3)) (g33-kids 3))
     expected: |
       20 254 37954
+      false 9223372036854775807 (0 4611686018427387904 6917529027641081856) 63
+      (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29) (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 29 28)
+      false ()

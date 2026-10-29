@@ -5217,6 +5217,15 @@
   (or (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-seqable-p x)
       (rontolisp::%clojure-iterable-p x) (rontolisp::%clojure-jmap-p x)))
 
+(defun rontolisp::%clojure-lazy-input (coll)
+  "COLL as a lazy input of a lazy-or-strict verb: itself when it is one, else a
+   lazy seq over it, so the verb answers lazily. The lowering hands it the
+   collection of a verb whose function re-enters the definition the call stands
+   in, which the oracle's lazy verb builds as far as a consumer walks."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      coll
+      (rontolisp::%clojure-make-lazy (lambda () coll))))
+
 (defun rontolisp::%clojure-any-lazy-p (colls)
   "Whether any member of the COLLS list is a lazy input."
   (if (null colls)
@@ -11280,9 +11289,9 @@
 
 (defun rontolisp::%clojure-is-thread-bound (vars)
   "thread-bound?: every one of VARS is a dynamic var under a binding right now.
-   A var site of a ^:dynamic var carries its binding-depth reader as a fourth
-   element, so any other var is never thread-bound, like the oracle's; anything
-   that is no var signals, like its cast. Stops at the first var that is not."
+   A var site of a ^:dynamic var carries its binding-depth reader in its cell,
+   so any other var is never thread-bound, like the oracle's; anything that is
+   no var signals, like its cast. Stops at the first var that is not."
   (let ((ok t))
     (dolist (v vars ok)
       (if ok
@@ -11290,8 +11299,8 @@
             (if (not (rontolisp::%clojure-var-p v))
                 (rontolisp::%clojure-class-cast-exception-of
                  "thread-bound? needs vars" v))
-            (let ((depth (cdr (cdr (cdr v)))))
-              (if (or (null depth) (<= (funcall (car depth)) 0))
+            (let ((depth (aref (car (cdr (cdr v))) 1)))
+              (if (or (null depth) (<= (funcall depth) 0))
                   (setq ok nil))))))))
 
 (defun rontolisp::%clojure-is-thread-bound-v (&rest args)
@@ -14782,15 +14791,53 @@
    signalling, so the unchecked-math workers can pick the wrapping path."
   (and (integerp x) (typep x '(signed-byte 64))))
 
+;; + - * under *unchecked-math*: the lowering reads the flag where the call
+;; stands, as the oracle's compiler does -- the plain verb below no set!, the
+;; wrapping worker below a top-level set! of a truthy literal -- and only a
+;; call whose flag it cannot know (a computed set!, a datum lowered as the
+;; program runs) reads the flag as it runs, through %clojure-+ and its kin. No
+;; boxed-math warning is ever emitted: :warn-on-boxed wraps exactly like true
+;; (a documented difference).
+(defun rontolisp::%clojure-wrapping-+ (&rest xs)
+  "(+ xs) compiled under a truthy *unchecked-math*: the sum, wrapped mod 2^64
+   when every operand is a 64-bit integer, like the oracle's unchecked add;
+   the plain sum of anything else."
+  ;; a decimal among the operands is the oracle's decimal sum: an arm of the
+  ;; decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :add xs)
+      (if (every #'rontolisp::%clojure-long-p xs)
+          (%mask-signed-field 64 (apply #'+ xs))
+          (apply #'+ xs))))
+
+(defun rontolisp::%clojure-wrapping-- (&rest xs)
+  "(- xs) compiled under a truthy *unchecked-math*: the difference (of one
+   operand, its negation), wrapped like %clojure-wrapping-+."
+  ;; a decimal among the operands is the oracle's decimal difference: an arm of
+  ;; the decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :subtract xs)
+      (if (every #'rontolisp::%clojure-long-p xs)
+          (%mask-signed-field 64 (apply #'- xs))
+          (apply #'- xs))))
+
+(defun rontolisp::%clojure-wrapping-* (&rest xs)
+  "(* xs) compiled under a truthy *unchecked-math*: the product, wrapped like
+   %clojure-wrapping-+ -- the SplittableRandom port's mix functions depend on
+   it."
+  ;; a decimal among the operands is the oracle's decimal product: an arm of the
+  ;; decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :multiply xs)
+      (if (every #'rontolisp::%clojure-long-p xs)
+          (%mask-signed-field 64 (apply #'* xs))
+          (apply #'* xs))))
+
 (defun rontolisp::%clojure-+ (&rest xs)
-  "(+ xs): the sum. While *unchecked-math* is truthy (true or :warn-on-boxed)
-   and every operand is a 64-bit integer, the sum wraps mod 2^64, like the
-   oracle's unchecked add; anything else -- and the flag down -- is the plain
-   sum. The flag is read when the call runs, not when it compiles: a binding
-   around the call wraps where the oracle (which bakes the flag into the
-   compiled call) throws, and calling after a top-level set! wraps a function
-   defined before it. No boxed-math warning is ever emitted: :warn-on-boxed
-   wraps exactly like true (a documented difference)."
+  "(+ xs) whose *unchecked-math* only the run knows: the sum. While the flag is
+   truthy (true or :warn-on-boxed) and every operand is a 64-bit integer, the
+   sum wraps mod 2^64, like the oracle's unchecked add; anything else -- and
+   the flag down -- is the plain sum."
   ;; a decimal among the operands is the oracle's decimal sum: an arm of the
   ;; decimal family
   (if (rontolisp::%clojure-bd-in-p xs)
@@ -14818,10 +14865,9 @@
 (defun rontolisp::%clojure-* (&rest xs)
   "(* xs): the product. While *unchecked-math* is truthy (true or
    :warn-on-boxed) and every operand is a 64-bit integer, the product wraps
-   mod 2^64, like the oracle's unchecked multiply -- the SplittableRandom
-   port's mix functions depend on it; anything else -- and the flag down --
-   is the plain product. Read at run time, like %clojure-+, and never
-   warning."
+   mod 2^64, like the oracle's unchecked multiply; anything else -- and the
+   flag down -- is the plain product. Read at run time, like %clojure-+, and
+   never warning."
   ;; a decimal among the operands is the oracle's decimal product: an arm of the
   ;; decimal family
   (if (rontolisp::%clojure-bd-in-p xs)
@@ -17042,12 +17088,17 @@
 
 ;;;; Vars: #'x as a value.
 ;;
-;; A var is (:C%VAR "ns/name" getter), interned per name in
+;; A var is (:C%VAR "ns/name" cell), interned per name in
 ;; rontolisp::%clojure-var-table (read and written under %clojure-var-guard: a
 ;; Ring handler runs one thread per request), so #'x answers the same object at
-;; every site, like the oracle's one Var per name. GETTER is a
-;; closure over the lowered value of the name, so deref and an invocation read
-;; the root through it; its metadata lives in %clojure-meta-table like any other
+;; every site, like the oracle's one Var per name. CELL is the vector
+;; #(getter depth binder setter): GETTER a closure over the lowered value of the
+;; name, so deref and an invocation read the root through it; DEPTH the binding
+;; depth reader of a dynamic var, BINDER the closure binding it around a call,
+;; SETTER a with-local-vars cell's store (each nil where none). A site re-points
+;; what the cell holds, never the list, so a var keys an equal table (a map, a
+;; set) by its identity: equal compares the cell with eq, and the list's hash
+;; never moves. Its metadata lives in %clojure-meta-table like any other
 ;; value's. Each site hands both in: the lowering records a definition's
 ;; metadata at lower time (docstring, arglists, position, name metadata), and a
 ;; site lowered after a redefinition sees the newest one. An unbound var's root
@@ -17065,7 +17116,7 @@
   "The interned vars: an equal table from \"ns/name\" to its var.")
 
 (defun rontolisp::%clojure-var-p (x)
-  "Whether X is the (:C%VAR name getter) var #'x lowers to."
+  "Whether X is the (:C%VAR name cell) var #'x lowers to."
   (and (consp x) (eq (car x) :C%VAR)))
 
 (defvar rontolisp::%clojure-var-generations
@@ -17085,9 +17136,9 @@
     (let ((v (gethash name rontolisp::%clojure-var-table))
           (seen (gethash name rontolisp::%clojure-var-generations)))
       (if v
-          (rplaca (cdr (cdr v)) getter)
+          (setf (aref (car (cdr (cdr v))) 0) getter)
           (progn
-            (setq v (list :C%VAR name getter))
+            (setq v (list :C%VAR name (vector getter nil nil nil)))
             (setf (gethash name rontolisp::%clojure-var-table) v)))
       (if (or (null seen) (< seen generation))
           (progn
@@ -17098,11 +17149,13 @@
 (defun rontolisp::%clojure-var-dynamic
     (name getter meta depth &optional (generation 1) binder)
   "The var NAME of a ^:dynamic var: as the plain var, and DEPTH, a closure over
-   its binding-depth counter, recorded as the fourth element for thread-bound?;
-   BINDER, the closure binding the var around a call, as the fifth in a program
-   binding vars through var objects (%clojure-with-bindings)."
-  (let ((v (rontolisp::%clojure-var name getter meta generation)))
-    (rplacd (cdr (cdr v)) (if binder (list depth binder) (list depth)))
+   its binding-depth counter, recorded in its cell for thread-bound?; BINDER,
+   the closure binding the var around a call, beside it in a program binding
+   vars through var objects (%clojure-with-bindings)."
+  (let* ((v (rontolisp::%clojure-var name getter meta generation))
+         (cell (car (cdr (cdr v)))))
+    (setf (aref cell 1) depth)
+    (setf (aref cell 2) binder)
     v))
 
 ;; with-bindings, with-bindings* and a push-thread-bindings followed by a try
@@ -17125,7 +17178,7 @@
              (concatenate 'string "class "
                           (rontolisp::%clojure-class-name-of var)
                           " cannot be cast to class clojure.lang.Var")))
-        (let ((binder (car (cdr (cdr (cdr (cdr var)))))))
+        (let ((binder (aref (car (cdr (cdr var))) 2)))
           (if (null binder)
               (rontolisp::%clojure-illegal-state-exception
                (concatenate 'string "Can't dynamically bind non-dynamic var: "
@@ -17160,23 +17213,25 @@
    thread-bound? the depth, the binder save/restores both around a call, and
    var-set stores through it when bound. Fresh per evaluation, never interned."
   (let ((v
-         (list :C%VAR name (lambda () (car box)) (lambda () (cdr box))
-               (lambda (value thunk)
-                 (let ((old-value (car box)) (old-depth (cdr box)))
-                   (rplaca box value)
-                   (rplacd box (+ old-depth 1))
-                   (unwind-protect (funcall thunk)
-                     (rplaca box old-value)
-                     (rplacd box old-depth))))
-               (lambda (value)
-                 (if (<= (cdr box) 0)
-                     (rontolisp::%clojure-illegal-state-exception
-                      (concatenate 'string
-                       "Can't change/establish root binding of: "
-                       (rontolisp::%clojure-var-short-name (list :C%VAR name))
-                       " with set")))
-                 (rplaca box value)
-                 value))))
+         (list :C%VAR name
+               (vector (lambda () (car box)) (lambda () (cdr box))
+                       (lambda (value thunk)
+                         (let ((old-value (car box)) (old-depth (cdr box)))
+                           (rplaca box value)
+                           (rplacd box (+ old-depth 1))
+                           (unwind-protect (funcall thunk)
+                             (rplaca box old-value)
+                             (rplacd box old-depth))))
+                       (lambda (value)
+                         (if (<= (cdr box) 0)
+                             (rontolisp::%clojure-illegal-state-exception
+                              (concatenate 'string
+                               "Can't change/establish root binding of: "
+                               (rontolisp::%clojure-var-short-name
+                                (list :C%VAR name))
+                               " with set")))
+                         (rplaca box value)
+                         value)))))
     (rontolisp::%clojure-put-meta v
                                   (rontolisp::%clojure-map-literal
                                    (list (list :C%KEYWORD "ns") nil
@@ -17194,12 +17249,12 @@
 
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."
-  (funcall (car (cdr (cdr v)))))
+  (funcall (aref (car (cdr (cdr v))) 0)))
 
 (defun rontolisp::%clojure-var-dynamic-p (v)
   "Var.isDynamic: whether the var V's site carries a binding depth, which only
    a dynamic var's (a ^:dynamic def, a core special) does."
-  (not (null (cdr (cdr (cdr v))))))
+  (not (null (aref (car (cdr (cdr v))) 1))))
 
 (defun rontolisp::%clojure-var-ns (v)
   "The var V's namespace (its public ns field): the part of its name before
@@ -17742,7 +17797,7 @@
                  (getter (lambda () (car cell)))
                  (setter (lambda (n) (setf (car cell) n))))
             (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-              (setq v (list :C%VAR key getter))
+              (setq v (list :C%VAR key (vector getter nil nil nil)))
               (setf (gethash key rontolisp::%clojure-var-table) v))
             (rontolisp::%clojure-var-setter v setter)
             v)
@@ -17757,7 +17812,8 @@
                        (values (gethash v rontolisp::%clojure-var-setters)))))
                 (if setter
                     (funcall setter new)
-                    (rplaca (cdr (cdr v)) (let ((n new)) (lambda () n))))
+                    (setf (aref (car (cdr (cdr v))) 0)
+                          (let ((n new)) (lambda () n))))
                 (rontolisp::%clojure-ref-notify v old new)
                 v))))))
 
@@ -17781,7 +17837,7 @@
    root through set, like the oracle's."
   (if (not (rontolisp::%clojure-var-p v))
       (rontolisp::%clojure-class-cast-exception-of "var-set needs a var" v))
-  (let ((setter (car (cdr (cdr (cdr (cdr (cdr v))))))))
+  (let ((setter (aref (car (cdr (cdr v))) 3)))
     (if (not (null setter))
         (funcall setter val)
         (rontolisp::%clojure-illegal-state-exception
@@ -17814,10 +17870,10 @@
                (setter
                 (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
                   (values (gethash v rontolisp::%clojure-var-setters))))
-               (getter (car (cdr (cdr v)))))
+               (getter (aref (car (cdr (cdr v))) 0)))
           (if setter
               (funcall setter new)
-              (rplaca (cdr (cdr v)) (let ((n new)) (lambda () n))))
+              (setf (aref (car (cdr (cdr v))) 0) (let ((n new)) (lambda () n))))
           (setq restores
                 (cons (let ((var v) (was old) (had getter) (through setter))
                         (lambda ()
@@ -17827,7 +17883,7 @@
                                   (rontolisp::%clojure-ref-validator var))))
                             (if through
                                 (funcall through back)
-                                (rplaca (cdr (cdr var)) had))
+                                (setf (aref (car (cdr (cdr var))) 0) had))
                             (rontolisp::%clojure-ref-notify var now back))))
                       restores))
           (rontolisp::%clojure-ref-notify v old new))))

@@ -112,6 +112,21 @@ Pins: `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake`, clojure-spec
   methodref names its class, with a fragment-local id (a value of it is this class's value,
   whose case calls that class); ids from `funcIdBase` (`_funcrefs` indexed `id - base`);
   `_run` answers `_answer`; no `main`, no uncaught report.
+- **What a fragment compiles under** (h05, 2026-10-30): the link table also carries each
+  class's registry classes (`JvmLinkage.ClassLink`: supers, precedence list, ancestors,
+  slots by name) and its program-wide shapes (`JvmLinkage.Mode`: the restart system, the
+  signal clause match, the non-local-exit channel, instances, landing pads, stream values,
+  the printer controls, `equalp` and identity tables, arrays, packed float and integer
+  arrays, complex numbers). A fragment seeds its registry with the classes
+  (`seedLinkedClasses`), so a `handler-case` clause's type test -- a `%obj-is` over the
+  descendants' tags its registry knows -- takes the host's `C%E-EXCEPTION`, and compiles
+  under every shape, its helper groups forced to the host's, so its `_hashPut` keys the
+  host's `eq` table by identity. Measured before: an eval'd `catch` took no ex-info and no
+  host exception the program threw, and spec.test.alpha's setter table missed what a
+  fragment put (`_hashPut` without the identity helpers); test.check's property, loaded as
+  the program runs, let spec's returned ex-info escape its `catch Throwable`. Pins:
+  clojure-spec `the-interpreter-lowers-at-run-time` (its eval'd catch),
+  `ClojureAlterVarRootE2eTest`.
 - **Shared fields** (`JvmLinkage.shared`): `_g$`, `_d$`, `_ly$`, the stream table, `_col`,
   `_gensymCtr`, the condition / non-local-exit / wrong-type channels, `_jexMap`, `_jsigTl`,
   `_unbound`, `_unsupplied`, the multiple-value register, `_curThreadTl`, `_handoffTl`, the
@@ -139,7 +154,12 @@ Pins: `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake`, clojure-spec
   interpreter resolves it when the call runs), and a native binary's host carries no
   compiler (`.todo/h11`).
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
-  lowering again.
+  lowering again. Measured 2026-10-30 on spec's `instrument`/`check` probe
+  (`.kb/clojure-frontend.md`, "clojure.spec.alpha"): 69 verbs -- 41 `resolve`s (the
+  registry walk, `instrument`, `check`) and 28 `require`s (gen's `dynaload`, once per
+  combinator, most of a namespace already loaded) -- each a fragment of about 300 KB, most
+  of it the per-class runtime helpers; about 60 s where the interpreter takes 8 s
+  (`.todo/h15`).
 - The image keeps the files the lowering read, not a `deps.edn` dependency's jars or
   coordinates: those resolve again where the class runs.
 
