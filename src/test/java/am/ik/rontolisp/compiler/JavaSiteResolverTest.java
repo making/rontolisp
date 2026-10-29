@@ -100,7 +100,12 @@ class JavaSiteResolverTest {
 			.isEqualTo("java.util.PriorityQueue java.util.PriorityQueue(java.util.Comparator)");
 		assertThat(member("(java:new \"java.util.ArrayList\" (lambda () nil))"))
 			.isEqualTo("java.util.ArrayList java.util.ArrayList(java.util.Collection)");
+		// Callable before Runnable: a function answers a value, which submit keeps
+		assertThat(member(SUBMIT + "\"submit\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.util.concurrent.Callable)");
 	}
+
+	private static final String SUBMIT = "(java:call (the (java:object \"java.util.concurrent.ExecutorService\") e) ";
 
 	// :java-false is no argument either, before or after :functional: it makes a boolean
 	// answer t or |false| (a Boolean one nil too), so a site taking such an answer
@@ -228,6 +233,16 @@ class JavaSiteResolverTest {
 			.contains("no public static method max matching max(java.lang.String,_)");
 		assertThat(resolve("(java:static \"java.lang.Math\" \"max(long\" 3 7)").reason())
 			.contains("malformed parameter tag");
+		// An argument hint (a Clojure :tag) keeps the candidates whose parameter its
+		// class
+		// is assignable to, every candidate when it keeps none, as the oracle's compiler
+		// falls back to reflection.
+		assertThat(member(SUBMIT + "\"submit(^java.lang.Runnable)\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.lang.Runnable)");
+		assertThat(member(SUBMIT + "\"submit(^java.lang.String)\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.util.concurrent.Callable)");
+		assertThat(member(SUBMIT + "\"submit(^java.lang.Runnable,_)\" (lambda () 42) 1)"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.lang.Runnable,java.lang.Object)");
 	}
 
 	@Test
@@ -508,6 +523,12 @@ class JavaSiteResolverTest {
 			.isEqualTo(List.of("int", "[J", "[Ljava.lang.String;", "java.util.Map$Entry", "_", "[D"));
 		assertThat(JavaOverloads.parseMember("f()").tag()).isEqualTo(List.of());
 		assertThat(JavaOverloads.parseMember("f").tag()).isNull();
+		assertThat(JavaOverloads.parseMember("f(^java.util.concurrent.Callable,_)"))
+			.isEqualTo(new JavaOverloads.Member("f", null, List.of("java.util.concurrent.Callable", "_")));
+		assertThat(JavaOverloads.parseMember("f(^java.util.concurrent.Callable,_)").designator())
+			.isEqualTo("f(^java.util.concurrent.Callable,_)");
+		assertThatThrownBy(() -> JavaOverloads.parseMember("f(^java.lang.String,int)"))
+			.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> JavaOverloads.parseMember("f(int,)")).isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> JavaOverloads.parseMember("f)")).isInstanceOf(IllegalArgumentException.class);
 	}

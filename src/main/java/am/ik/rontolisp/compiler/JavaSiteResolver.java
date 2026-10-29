@@ -397,7 +397,8 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, result,
 					"class " + type.name() + " is " + (type.isInterface() ? "an interface" : "abstract"));
 		}
-		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.constructors(), member.tag());
+		List<? extends JavaExecutable> candidates = JavaOverloads
+			.filterByHints(JavaOverloads.filterByTag(type.constructors(), member.tag()), member.hints(), this.lookup);
 		return select(op, type, member, designator.value(), candidates, parts.subList(2, parts.size()), result,
 				javaFalse);
 	}
@@ -421,8 +422,9 @@ public final class JavaSiteResolver {
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
 		// java:static calls a static method: an instance method of the name is no
 		// candidate (the run-time rule, JavaOverloads.staticMethods).
-		List<? extends JavaExecutable> candidates = JavaOverloads
-			.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag());
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByHints(
+				JavaOverloads.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag()),
+				member.hints(), this.lookup);
 		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
 				javaFalse);
 	}
@@ -441,8 +443,9 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
 		}
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
-		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(callableMethods(type, member.name()),
-				member.tag());
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByHints(
+				JavaOverloads.filterByTag(callableMethods(type, member.name()), member.tag()), member.hints(),
+				this.lookup);
 		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
 				javaFalse);
 	}

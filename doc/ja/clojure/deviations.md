@@ -794,6 +794,14 @@
 - パラメータタグの `_` はその引数を `java:` サーフェスのコスト規則に任せるため、
   `(^[_] Math/abs -2)` は `2` を答えます。オラクルは複数のオーバーロードが残るタグを
   拒否します。
+- 引数の `:tag`（引数自身のもの、またはヒント付きの `let` ローカルやパラメータのもの）は、
+  呼び出しのクラスが実行前にわかる場合、オラクルのコンパイラと同じくオーバーロードを選びます。
+  receiver のヒントは捨てるため、`(defn f [^ExecutorService e ^Runnable r] (.submit e r))`
+  はヒントを読まないリフレクションで呼びます。`Callable` と別のインターフェースの両方が
+  受け取れる位置の fn は `Callable` です。`(.submit e (fn [] 1))` は `1` の future を答えます。
+  オラクルは型のわかる receiver に対するヒントなしの呼び出しを拒否し
+  （`More than one matching method found: submit`）、`ScheduledThreadPoolExecutor` に対する
+  リフレクションでは `submit(Runnable)` を選びます（その `getMethods()` の順序。`nil` の future）。
 - `(.thenComparing c (fn [a b] ...))` は fn 引数を `Comparator` として受け取り、それで比較します。
   オラクルはその位置の fn リテラルやローカルをコンパイル時に拒否します
   （`More than one matching method found: thenComparing`。`Function` のオーバーロードも受け取れるため）。

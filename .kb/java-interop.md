@@ -1333,6 +1333,23 @@ same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,li
   Pins: `JavaImplementationPrograms.FUNCTION_OBJECT` row 4 (unknown-receiver, nested
   list/vector, dispatched rows on both backends).
 - Tagged designators (`put(byte)`) resolve explicitly and convert UNCHECKED, as before.
+- Argument hints (2026-10-29): a designator whose entries are `^C` or `_`
+  (`submit(^java.lang.Runnable,_)`) is no tag: `JavaOverloads.Member.hints`, `tag` null, so
+  nothing about tagged/unchecked changes. `JavaOverloads.filterByHints` (the resolver only,
+  after `filterByTag`) keeps candidates of the hint count whose hinted reference parameters
+  take the hint's class (`isAssignableFrom`; a primitive parameter never dropped, an unfound
+  class hints nothing), all candidates when none is kept. The run-time paths (interpreter
+  `JavaInterop.invoke`/`newInstance`, the bridge's `parseMember`) parse it and read no hint:
+  Clojure's reflector reads none. Mixing a hint and a tag type is malformed. The Clojure front
+  end spells its arguments' `:tag`s this way (`.kb/clojure-frontend.md`, "Java interop").
+- A function costs `COST_FUNCTION_CALLABLE` (7) for `java.util.concurrent.Callable`, below
+  every other interface (2026-10-29): `ExecutorService.submit` of a function is
+  `submit(Callable)` and its future keeps the answer (before, the signature tie-break picked
+  `submit(Runnable)`, a future of nil). The oracle's reflector picks `Callable` for
+  `ThreadPoolExecutor`, `ForkJoinPool`, `ExecutorCompletionService` and the virtual-thread
+  executor, `Runnable` for `ScheduledThreadPoolExecutor.submit` (HotSpot `getMethods()` order,
+  not reproducible). Mirrored in the bridge, pinned by
+  `JavaBridgeTemplateParityTest#aFunctionCostsLessForAFunctionalInterface`.
 - Test note: `(byte x)` answers a fixnum here (the oracle's `Byte`), which the reflector
   refuses for `byte` parameters -- so `ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItself`
   writes through `putChar` (a character unboxes on both), oracle-measured `[0 97]` etc.

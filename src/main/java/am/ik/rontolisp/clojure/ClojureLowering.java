@@ -571,6 +571,14 @@ public final class ClojureLowering {
 	final List<Map<String, Kind>> scopes = new ArrayList<>();
 
 	/**
+	 * The class hints of hinted locals ({@code (let [^Runnable r ...])},
+	 * {@code (fn [^Runnable r] ...)}), per scope by identity: what a host call's argument
+	 * naming the local hints ({@code ClojureInteropLowering.classHint}). An entry dies
+	 * with its scope.
+	 */
+	final Map<Map<String, Kind>, Map<String, String>> localHints = new IdentityHashMap<>();
+
+	/**
 	 * The macros defined so far: a user {@code defmacro}'s var key to its expander, a
 	 * lowered lambda over the call's argument list (one value) applying each arity's
 	 * parameters to the lowered body. Expansion is datum to datum at lower time: the call
@@ -6133,7 +6141,49 @@ public final class ClojureLowering {
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
+			this.localHints.remove(scope);
 		}
+	}
+
+	/**
+	 * Records the class hint of a local {@code scope} binds -- its binding datum's tag,
+	 * else the hint of the datum it is bound to, as the oracle's local takes its init's
+	 * class -- or forgets the name's hint when there is none.
+	 * @param scope the scope binding the local
+	 * @param name the local's name
+	 * @param binding the binding datum, its reader metadata intact
+	 * @param init the datum the local is bound to, or null for a parameter
+	 */
+	void noteLocalHint(Map<String, Kind> scope, String name, LispVal binding, @Nullable LispVal init) {
+		String hint = ClojureInteropLowering.tagHint(this, binding);
+		if (hint == null && init != null) {
+			hint = ClojureInteropLowering.classHint(this, init);
+		}
+		if (hint != null) {
+			this.localHints.computeIfAbsent(scope, k -> new HashMap<>()).put(name, hint);
+			return;
+		}
+		Map<String, String> hints = this.localHints.get(scope);
+		if (hints != null) {
+			hints.remove(name);
+		}
+	}
+
+	/**
+	 * The class hint of the local a name refers to, or null when the innermost scope
+	 * binding it recorded none or no scope binds it.
+	 * @param name the name
+	 * @return the hinted class
+	 */
+	@Nullable String localHint(String name) {
+		for (int i = this.scopes.size() - 1; i >= 0; i--) {
+			Map<String, Kind> scope = this.scopes.get(i);
+			if (scope.containsKey(name)) {
+				Map<String, String> hints = this.localHints.get(scope);
+				return hints == null ? null : hints.get(name);
+			}
+		}
+		return null;
 	}
 
 	/**

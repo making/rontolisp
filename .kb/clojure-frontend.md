@@ -4585,9 +4585,9 @@ as itself.
 - Checked 2026-10-10 against clj 1.12.6, interpreter and JVM: before, `(Thread. (Task.))` was
   `No matching constructor`, a TreeSet of a Comparable deftype `ClassCastException`, a HashSet of
   two equal Ps size 2; after, every row of the pins oracle-identical but the documented
-  deviations (dropped type hints: an IFn type, both `Runnable` and `Callable`, passed to
-  `ExecutorService.submit` takes the overload the signature order picks, where the oracle
-  follows a hint or refuses the ambiguity).
+  deviations (an IFn type, both `Runnable` and `Callable`, passed to an unhinted
+  `ExecutorService.submit` takes `submit(Callable)`, where the oracle refuses the ambiguity on
+  a typed receiver; argument hints: "Java interop", "Argument type hints").
 - Pins: `ClojureInteropTest#aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces`,
   `#aRecordReachesJavaAsAMapImplementingItsBodysInterfaces`,
   `#aTypeImplementingNoComparableRefusesATreeSetInTheOraclesWords`,
@@ -5196,6 +5196,22 @@ host alone answers ("Host arms where the host is not").
   throws `UnsupportedOperationException`. Multi-arity methods, a second class, a final
   superclass are refused.
 - No host-field `set!`: the `java:` surface has no write primitive.
+- Argument type hints (2026-10-29): `ClojureInteropLowering.hintedDesignator` spells an
+  untagged instance, static or construction member `m(^C,_)` when an argument carries a class
+  `:tag` (`classHint`: the datum's own outermost tag, else a bare local's,
+  `ClojureLowering.localHint` -- a `let` binding's tag or its init's hint, a `fn`/`defn`
+  parameter's tag, kept per scope by identity in `localHints`); primitive and array tags, a
+  record/deftype and an unknown class hint nothing; never where no host is (wasm bytes
+  unchanged). The `java:` hint designator (`.kb/java-interop.md`, "Argument hints") narrows a
+  site resolved before it runs, as the oracle's compiler reads `:tag`s; a reflective site reads
+  none, as its reflector. A receiver's hint is still dropped, so a hinted `defn` parameter
+  receiver stays reflective (user doc deviation). With the function cost's `Callable`
+  preference, oracle-identical on interpreter and JVM (clj 1.12.6): `@(.submit pool (fn [] 1))`
+  1 on an untyped receiver, `^Runnable` nil and `^Callable` 42 on a typed one, `^String`
+  (no overload) 5, a hinted local/parameter nil. Before, every row was `submit(Runnable)`: nil.
+  Default import `Callable` is not resolved here (the oracle imports it, with `BigInteger` and
+  `BigDecimal`), so `^Callable` hints nothing -- harmless, `Callable` is the default. Pin:
+  `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`.
 - Host collections under the seq verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.seq`
   takes an `Iterable`, a `Map` (its `entrySet`) and a `CharSequence`; `RT.count` a
   `Collection`, `Map` or `CharSequence` (another `Iterable` is `count not supported on this
