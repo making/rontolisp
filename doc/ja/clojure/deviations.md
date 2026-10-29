@@ -232,9 +232,10 @@
  クラスだけを試し、それから `Object` 既定です。1つの値が実装する2つの `clojure.lang` インタフェースは
  それぞれが受ける値の種類で順序づけます（`IRef` が `IDeref` より先）。`clojure.lang` は
  このクラスパスにないためです。
-- `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
-  名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
-  ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
+- `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は multimethod の名前
+  （`defmulti` の var。alias や refer 経由も可）を降低時に読むため、`defmulti` が作っていない
+  名前はそこで拒否します。それ以外の引数（ローカル、var の deref）は値と同じく下の実行時
+  レジストリを読みます。`methods` が返すマップはホストクラスの行を `class` が
   答えるキーワードで引き、オラクルは `Class` 自身で引きます。`prefers` は各ディスパッチ値と
   優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
   multimethod を返します。どちらも名前の取り方は同じです。値としては（`methods`・
@@ -300,14 +301,28 @@
  `macroexpand-1` と同じ答えを渡します。core フォームに対してはフォーム自身です。
  実行時の表が持つのはプログラム定義のマクロだけだからです）。oracle はむき出しの
  マクロ名を値位置でコンパイル時に拒否します。
-- `eval` と、計算で得たシンボルの `resolve` は、プログラムの lower 中（マクロ本体と
- そこから呼ぶもの）でだけ動きます。実行時は `UnsupportedOperationException` を投げ、
- oracle は評価・解決します。`resolve` は、このフロントエンドにない `clojure.core` の
+- `eval`、計算で得たシンボルの `resolve`・`find-var`・`ns-resolve`・`requiring-resolve`、
+ 計算した引数の `require`・`use`・`refer`・`alias`・`in-ns`・`load`・`load-file`・
+ `load-string`、そして `load-reader` が実行中に lower されるのはインタプリタだけです。
+ インタプリタはプログラムの lower を実行中も保持します（REPL はセッションのものを）。
+ コンパイル済みプログラムはそれを持たないため、JVM と 2 つの wasm バックエンドでは実行時に
+ `UnsupportedOperationException` を投げ、oracle は評価・解決します。インタプリタでは、
+ そうした呼び出しは REPL の 1 入力と同じく `*ns*` の名前空間で lower されます。それが
+ 定義したものは以後の呼び出しと入力から見えますが、それより前に lower されたフォームは
+ lower したときのものを使い続けます。再定義した `defn` が届くのはその後に lower された
+ フォームだけで、それだけが定義する名前をプログラム自身のフォームは知りません（クォート
+ した名前の `intern` は別で、その場所で var を定義します）。そうした呼び出しを含む
+ プログラムはセッションと同じく開いた形で lower されるため、プロトコルはクラスをたどって
+ ディスパッチし、宣言だけの名前は開いたままです。リテラルで綴れない値（関数、atom）は
+ その値自身として `eval` するフォームに入ります（oracle は関数は埋め込みますが atom は
+ `Can't embed object in code` で拒否します）。lower できないフォームは lower の文言の
+ `Compiler$CompilerException` を投げます。マクロ本体の中の `eval` と計算したシンボルの
+ `resolve` はどのバックエンドでもプログラムの lower 中に動き、そこで `eval` したフォームが
+ 作る定義は lower 中にだけ存在します。`resolve` は、このフロントエンドにない `clojure.core` の
  var（oracle は var）、レコードや型の名前（oracle はクラス）、lower に組み込まれた
  名前空間（`clojure.string`）の var に対して `nil` を返します。quote したシンボルは
  呼び出しが lower される名前空間で解決され（oracle は呼び出しの実行時の `*ns*` を
- 読みます）、呼び出しより下の定義にも解決されます。`eval` したフォームが作る定義は
- lower 中にだけ存在します。
+ 読みます）、呼び出しより下の定義にも解決されます。
 - `#(...)` はソース、クオートの下、`read-string`/`read` のいずれでもオラクルと同じ
   `(fn* [p1__N# ...] (body))` と読まれますが、N はトップレベルのフォーム（読む datum）
   ごとに 1 から数え直します。オラクルのカウンタはプロセス全体で進むため、引数名が異なり、
@@ -357,15 +372,15 @@
   名前空間は変えません。それはリテラルの名前をとる `ns` と `in-ns` が決めます。コンパイル
   したプログラムの `*file*` は、コンパイル時のエントリファイルのパスです。名前空間の対応
   （`ns-publics`、`ns-map` など）は呼び出しを下ろすときに分かることだけを答えます。サブセットにない
-  `clojure.core` の var は載らず、import はクラスのシンボルに対応し、求まる形でないものは拒否されます。
+  `clojure.core` の var は載らず、import はクラスのシンボルに対応し、求まる形でないものはインタプリタでは呼び出しの実行時に答え、コンパイル済みプログラムでは拒否されます。
   `alias`、`refer`、`ns-unmap`、`ns-unalias` はプログラムを下ろしながら結線するため、本体の中でも
   ファイル全体に届きます（oracle は本体の実行時に走ります）。単独の `(refer-clojure ...)` も
   同じ `(:refer-clojure ...)` フィルタ（`:only`・`:exclude`・`:rename`、`nil` を返す）を
   同じように結線します。値としての `require`、`use`、`in-ns`（`(apply require nses)`）は、
-  実行時のどの適用も `UnsupportedOperationException` で拒否します。ライブラリのロードと
-  名前空間の切り替えはプログラムを下ろすときに行うためです（oracle はロードし、切り替えます。
-  spec を 1 つも渡さない `require` と `use` は、ここでも oracle と同じ `Nothing specified to load`
-  を投げます）。リテラルの `load-string` はファイルと
+  インタプリタでは呼び出しの実行時にロードし、切り替えます。コンパイル済みプログラムは
+  ライブラリのロードと名前空間の切り替えをプログラムを下ろすときに行うため、実行時のどの適用も
+  `UnsupportedOperationException` で拒否します（oracle はロードし、切り替えます。spec を 1 つも
+  渡さない `require` と `use` は、どこでも oracle と同じ `Nothing specified to load` を投げます）。リテラルの `load-string` はファイルと
   同じく先に宣言するため、同じ形が定義したものをもう名乗れます（oracle は後の形が必要です）。
   lazy-or-strict 動詞が strict に実現した seq の `bounded-count` は全部数えます（oracle は lazy のまま
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は
@@ -426,7 +441,10 @@
   失敗した delay の `:val` は例外のレポートで、オラクルはその `#error` マップを印字します。`str` は
   `clojure.lang.Delay` を返します（オラクルは `clojure.lang.Delay@hash`）。
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
-  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。オラクルの
+  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
+  オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
+  それ以外の fn なら無名 fn の `clojure.lang.AFunction$fn` です。オラクルは `defn` を var の名前で
+  呼びます）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで
   `Method m taking N args is not supported for class C` として拒否し、オラクルのクラスが
   持ちうるがここでは答えないメソッド（`.reduce`・`.meta`・atom の `.compareAndSet`）は
@@ -665,8 +683,8 @@
   別スレッドのトランザクションを
   待つ本体は終わらず、トランザクションの外側の読み出しは実行中のトランザクションの
   書き込みを見ることがあります（オラクルはコミット済みの値だけを見ます）。
-- agent はインタプリタと JVM では 4 本のワーカースレッドからなる共有プールでアクションを
-  走らせます。送信はアクションをキューに入れて agent を答えるだけで戻り、1 つの agent の
+- agent はインタプリタと JVM では最大 4 本のワーカースレッドからなる共有プールでアクションを
+  走らせます。ワーカーは待つ agent がなくなると終了します。送信はアクションをキューに入れて agent を答えるだけで戻り、1 つの agent の
   アクションは送った順に1つずつ走ります。`send-off` は同じプールを共有します（オラクルは
   専用の無制限プールを持ちます）。生成時の束縛は新しいスレッドに届きません（引き継ぐのは
   `bound-fn*` だけです）。対照的に WASM レッグ（シングルスレッドのモジュール）では、
@@ -884,3 +902,13 @@
   `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
+- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
+  述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
+  spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
+  （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
+  （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
+  resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
+  `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を
+  使います）は、インタプリタでは動き、コンパイルしたプログラムでは拒否します。`check-asserts` が設定する
+  `clojure.lang.RT/checkSpecAsserts` は false で始まり、システムプロパティ
+  `clojure.spec.check-asserts` は読みません。

@@ -293,6 +293,8 @@ sections:
             title: "(clojure.math)"
           - file: clojure/reference/clojure-pprint.md
             title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-reflect.md
+            title: "(clojure.reflect)"
           - file: clojure/reference/clojure-repl.md
             title: "(clojure.repl)"
           - file: clojure/reference/clojure-stacktrace.md

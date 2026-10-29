@@ -400,7 +400,7 @@ final class ClojureDataReaders {
 			if (value != null) {
 				root = value;
 			}
-			else if (ctx.session) {
+			else if (ctx.open) {
 				// a later input may define it: the function, else the value cell, else
 				// unbound (the session runs on the interpreter, where both probes are
 				// cheap)

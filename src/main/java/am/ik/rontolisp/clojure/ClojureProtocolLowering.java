@@ -265,7 +265,7 @@ final class ClojureProtocolLowering {
 	 */
 	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
 		return protocolRuntime(ctx,
-				ctx.session || !ctx.walkingProtocols.isEmpty() || ctx.usedProtocolValues || guardsReachable(ctx));
+				ctx.open || !ctx.walkingProtocols.isEmpty() || ctx.usedProtocolValues || guardsReachable(ctx));
 	}
 
 	/**
@@ -1094,12 +1094,23 @@ final class ClojureProtocolLowering {
 	 * global or an unbound dynamic one (the run-time
 	 * {@code Can't change/establish root binding}, after the value evaluates). A
 	 * {@code clojure.core} special ({@link ClojureCoreSpecials}) assigns like a dynamic
-	 * var, a flag {@code clojure.main} binds at the top level too. A host field stays
-	 * refused by name.
+	 * var, a flag {@code clojure.main} binds at the top level too. A {@code clojure.lang}
+	 * static field the run-time library holds ({@link ClojureLangClasses#runtimeStatic})
+	 * stores a boolean, refusing anything else as the oracle's cast to {@code Boolean}
+	 * does, and answers the value. Any other host field stays refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
 		LispVal target = ClojureLowerUtil.stripMeta(items.get(1));
+		String global = ClojureLangClasses.runtimeStaticTarget(ctx, target);
+		if (global != null) {
+			LispSymbol value = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(value, ctx.lower(items.get(2)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), new LispSymbol(global),
+							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BOOLEAN-FIELD-VALUE"), value)),
+					value);
+		}
 		List<LispVal> parts = ClojureLowerUtil.items(target);
 		if (parts != null && !parts.isEmpty() && parts.get(0) instanceof LispSymbol head
 				&& (head.name().equals(".") || head.name().startsWith(".-"))) {
@@ -2111,7 +2122,7 @@ final class ClojureProtocolLowering {
 
 	/** Whether the protocol's dispatchers walk the classes of their target. */
 	static boolean walks(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
-		return ctx.session || ctx.walkingProtocols.contains(def.methodsVar().name());
+		return ctx.open || ctx.walkingProtocols.contains(def.methodsVar().name());
 	}
 
 	/**
@@ -2221,7 +2232,7 @@ final class ClojureProtocolLowering {
 	static void noteRecordGuards(ClojureLowering ctx) {
 		if (definesRecord(ctx)) {
 			for (String protocol : ctx.recordGuards) {
-				if (!ctx.session && !ctx.walkingProtocols.contains(protocol)) {
+				if (!ctx.open && !ctx.walkingProtocols.contains(protocol)) {
 					guard(ctx, protocol, RECORD_P);
 				}
 			}

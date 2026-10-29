@@ -40,4 +40,5 @@ Divide by zero
   含みません。`err->msg` と `repl-caught` は `(REPL:1)` の位置として報告します。
 - `:clojure.error/path` はデータが与えたソースパスそのままです。Clojure は作業ディレクトリの下の
   パスを相対パスにします。
-- spec の問題を含む `ex-str` は拒否します。`clojure.spec.alpha` は組み込まれていません。
+- spec の問題を含む `ex-str` は拒否します。Clojure の `clojure.main` はそれを
+  `clojure.spec.alpha` で説明しますが、この `clojure.main` はそのライブラリを読み込みません。

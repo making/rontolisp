@@ -3,6 +3,8 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -20,6 +22,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.clojure.ClojureRunTime;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -52,6 +55,45 @@ class ClojureLibraryTest {
 		}
 		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
 		assertThat(twice).isEmpty();
+	}
+
+	@Test
+	void everyFunctionReachingTheRunTimeLoweringIsAnEntry() {
+		// a program naming one lowers at run time, so the front end must know it to lower
+		// the program open where its target lowers then (ClojureRunTime.ENTRIES): every
+		// library function calling %clojure-lower-at-run-time, at any remove
+		Map<String, Set<String>> callers = new HashMap<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFUN")
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				Set<String> named = new HashSet<>();
+				symbolsOf(rest.cdr(), named);
+				for (String callee : named) {
+					callers.computeIfAbsent(callee, ignored -> new HashSet<>()).add(name.name());
+				}
+			}
+		}
+		Set<String> reaching = new TreeSet<>(Set.of("RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME"));
+		Deque<String> pending = new ArrayDeque<>(reaching);
+		while (!pending.isEmpty()) {
+			for (String caller : callers.getOrDefault(pending.pop(), Set.of())) {
+				if (reaching.add(caller)) {
+					pending.push(caller);
+				}
+			}
+		}
+		assertThat(ClojureRunTime.ENTRIES).containsExactlyInAnyOrderElementsOf(reaching);
+	}
+
+	private static void symbolsOf(LispVal form, Set<String> out) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			symbolsOf(cons.car(), out);
+			rest = cons.cdr();
+		}
+		if (rest instanceof LispSymbol symbol) {
+			out.add(symbol.name());
+		}
 	}
 
 	@Test

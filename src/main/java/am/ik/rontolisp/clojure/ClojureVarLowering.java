@@ -644,7 +644,7 @@ final class ClojureVarLowering {
 			throw new LispReadException("with-redefs of " + key
 					+ " is not supported: only a def or defn var can be redefined, not a multimethod, protocol method, record constructor or test");
 		}
-		if (ctx.session) {
+		if (ctx.incremental) {
 			throw new LispReadException("with-redefs of " + key
 					+ ": an earlier input defined it as a function called directly; define it ^:redef to redefine it");
 		}
@@ -764,7 +764,8 @@ final class ClojureVarLowering {
 			return var;
 		}
 		if (!hasValueCell(ctx, key)) {
-			if (!ctx.session && ctx.globals.get(key) != ClojureLowering.Kind.MACRO && !ctx.redefinable.contains(key)) {
+			if (!ctx.incremental && ctx.globals.get(key) != ClojureLowering.Kind.MACRO
+					&& !ctx.redefinable.contains(key)) {
 				// a computed alter-var-root may reach this var: the program lowers
 				// again with the function redefinable, so the var has a value cell
 				ctx.redefMisses.add(key);
@@ -899,7 +900,7 @@ final class ClojureVarLowering {
 				return ClojureLowerUtil.list(runtime("ALTER-ROOT"), var, rootSetterOf(ctx, key), f, args);
 			}
 			if (key != null && ctx.globals.get(key) != ClojureLowering.Kind.MACRO && !ctx.redefinable.contains(key)
-					&& !ctx.session) {
+					&& !ctx.incremental) {
 				// this pass is thrown away: the program lowers again with the var
 				// redefinable
 				ctx.redefMisses.add(key);
@@ -973,7 +974,7 @@ final class ClojureVarLowering {
 			}
 			return ClojureLowerUtil.list(reader);
 		}
-		if (kind == ClojureLowering.Kind.DECLARED && ctx.session) {
+		if (kind == ClojureLowering.Kind.DECLARED && ctx.open) {
 			return sessionDeclaredRoot(ClojureLowering.varSym(key));
 		}
 		return ClojureLowering.varSym(key);
@@ -1037,7 +1038,7 @@ final class ClojureVarLowering {
 	 */
 	static @Nullable LispVal unboundRoot(ClojureLowering ctx, String key) {
 		ctx.unboundCapable.add(key);
-		if (!ctx.session) {
+		if (!ctx.incremental) {
 			ctx.unboundRoots.add(key);
 			return null;
 		}

@@ -34,7 +34,9 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * converge after await, failures still stop a {@code :fail} agent until
  * {@code restart-agent} (or go on under {@code :continue}) and the error handler still
  * runs, all oracle-identical (clj 1.12.6). The WASM legs keep the sender-thread run
- * (single-threaded modules): a send to an idle agent runs its action before it returns.
+ * (single-threaded modules): a send to an idle agent runs its action before it returns;
+ * so does the interpreter where a spawn runs its body at once (the browser playground),
+ * since a pool worker ends with the queue empty.
  */
 class ClojureAgentPoolTest {
 
@@ -68,7 +70,12 @@ class ClojureAgentPoolTest {
 			(println @g38-c)
 			""";
 
-	/** The error modes over the pool: fail, restart, continue and the handler. */
+	/**
+	 * The error modes over the pool: fail, restart, continue and the handler. The
+	 * handler's send goes straight to the queue (the oracle's too), possibly behind the
+	 * first await's marker; that marker runs only after the handler returned, so the
+	 * second await waits for the handler's action whichever thread won.
+	 */
 	private static final String ERRORS = """
 			(defn g38-wait [a] (loop [] (when-not (agent-error a) (try (await-for 10 a) (catch RuntimeException e nil)) (recur))))
 			(def g38-fa (agent 1 :validator pos?))
@@ -84,6 +91,7 @@ class ClojureAgentPoolTest {
 			(send g38-fc (fn [_] (throw (Exception. "boom"))))
 			(send g38-fc inc)
 			(await g38-fc)
+			(await g38-fc)
 			(println [@g38-fc (agent-error g38-fc)])
 			""";
 
@@ -96,22 +104,36 @@ class ClojureAgentPoolTest {
 			(println @g38-w :ok)
 			""";
 
+	/**
+	 * Common Lisp run before the program: the browser playground's spawn
+	 * ({@code Target_AsyncRuntime.spawnThread}), whose body runs to completion before
+	 * make-thread returns.
+	 */
+	private static final String SYNCHRONOUS_SPAWN = """
+			(defun rontolisp:make-thread (fn &optional bindings) (funcall fn))
+			""";
+
 	@Test
 	void slowActionsDoNotBlockTheSender() throws Exception {
-		assertThat(interpret(NON_BLOCKING)).isEqualTo("true\n:sent\n1\n");
+		assertThat(interpret("", NON_BLOCKING)).isEqualTo("true\n:sent\n1\n");
 		assertThat(runOnJvm(NON_BLOCKING)).isEqualTo("true\n:sent\n1\n");
 	}
 
 	@Test
 	void actionsRunOneAtATimeInSendOrder() throws Exception {
-		assertThat(interpret(ORDERED)).isEqualTo("[0 1 2 3 4]\n200\n");
+		assertThat(interpret("", ORDERED)).isEqualTo("[0 1 2 3 4]\n200\n");
 		assertThat(runOnJvm(ORDERED)).isEqualTo("[0 1 2 3 4]\n200\n");
 	}
 
 	@Test
 	void errorModesMatchTheOracle() throws Exception {
-		assertThat(interpret(ERRORS)).isEqualTo("[1 true]\n:refused\n[5 5]\n6\n[101 nil]\n");
+		assertThat(interpret("", ERRORS)).isEqualTo("[1 true]\n:refused\n[5 5]\n6\n[101 nil]\n");
 		assertThat(runOnJvm(ERRORS)).isEqualTo("[1 true]\n:refused\n[5 5]\n6\n[101 nil]\n");
+	}
+
+	@Test
+	void synchronousSpawnRunsTheQueueBeforeSendReturns() throws Exception {
+		assertThat(interpret(SYNCHRONOUS_SPAWN, SENDER_THREAD)).isEqualTo("41\n41 :ok\n");
 	}
 
 	@Test
@@ -124,8 +146,11 @@ class ClojureAgentPoolTest {
 		assertThat(runOnWasm(SENDER_THREAD, true)).isEqualTo("41\n41 :ok\n");
 	}
 
-	/** Runs the program on the interpreter, failing instead of hanging past 3 minutes. */
-	private static String interpret(String program) throws Exception {
+	/**
+	 * Runs the Common Lisp prelude, then the program, on the interpreter, failing instead
+	 * of hanging past 3 minutes.
+	 */
+	private static String interpret(String prelude, String program) throws Exception {
 		java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 		try {
 			return pool.submit(() -> {
@@ -133,6 +158,10 @@ class ClojureAgentPoolTest {
 				CliStack.call("clojure-agent-pool", () -> {
 					LispEvaluator evaluator = new LispEvaluator(
 							new java.io.PrintStream(out, true, StandardCharsets.UTF_8));
+					for (LispVal form : SourceLanguage.COMMON_LISP.read(prelude, Features.INTERPRETER, "prelude.lisp",
+							SourceStandards.DEFAULT, SourceLoader.fileSystem())) {
+						evaluator.eval(form);
+					}
 					for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.read(program,
 							Features.INTERPRETER, "test.clj", SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
 						evaluator.eval(form);

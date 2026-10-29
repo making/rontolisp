@@ -447,7 +447,16 @@ final class ClojureSeqLowering {
 	 * {@code nth} refuses) and refusing the rest as {@code seq} does.
 	 */
 	static LispVal secondForm(LispVal coll) {
-		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-NTH"), coll, new LispInteger(1),
+		return seqNthForm(coll, new LispInteger(1));
+	}
+
+	/**
+	 * The item at an index of an already-lowered collection's seq view, nil past the end:
+	 * the spliced {@code %clojure-seq-nth}, over every seqable collection (see
+	 * {@link #secondForm}).
+	 */
+	static LispVal seqNthForm(LispVal coll, LispVal index) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-NTH"), coll, index,
 				ClojureLowering.NIL_CONST);
 	}
 

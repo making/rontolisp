@@ -158,7 +158,7 @@ final class ClojureJavaFaces {
 			listed.add(0, MAP);
 		}
 		Pending pending = new Pending(cell, body, List.copyOf(listed), className, record);
-		if (ctx.session) {
+		if (ctx.incremental) {
 			register(ctx, pending);
 		}
 		else {

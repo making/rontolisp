@@ -246,9 +246,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   classes the protocol was extended to, then the `Object` default. Two
   `clojure.lang` interfaces one value implements are ordered by the kinds of value each
   holds (`IRef` ahead of `IDeref`), since `clojure.lang` is not on this class path.
-- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
-  name (a `defmulti` var, through an alias or a referred one), not an expression: a local
-  bound to a multimethod is refused at lowering. The map `methods` answers keys a host
+- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` read a multimethod's
+  name (a `defmulti` var, through an alias or a referred one) where the program lowers, so
+  a name no `defmulti` made is refused there; any other argument (a local, a var's deref)
+  reads the run-time registry below, like the values. The map `methods` answers keys a host
   class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
   `prefers` answers each dispatch value with the set preferred over it, and
   `remove-all-methods` clears the methods and the preferences, answering the
@@ -318,14 +319,29 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a bare macro name in value position at compile time. `bound-fn`, `with-local-vars`
   and `pvalues` answer that delegate too; `bound-fn*` answers its function, capturing
   the bindings where the value is called.
-- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
-  macro body and what it calls); at run time they throw an
-  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+- `eval`, `resolve`, `find-var`, `ns-resolve` and `requiring-resolve` of a computed
+  symbol, `require`, `use`, `refer`, `alias`, `in-ns`, `load`, `load-file` and
+  `load-string` of computed arguments, and `load-reader` lower as the program runs only on
+  the interpreter, which keeps the program's lowering for its run (the REPL its session's).
+  A compiled program carries none, so on the JVM and both wasm backends they throw an
+  `UnsupportedOperationException` at run time, where the oracle evaluates and resolves. On
+  the interpreter such a call lowers like one REPL input, in the namespace `*ns*` holds:
+  what it defines joins the program for the later calls and inputs, but the forms lowered
+  before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
+  after it, and a name only it defines is unknown to the program's own forms (an `intern`
+  of a quoted name is not: it defines the var where it stands). A program naming such a
+  call lowers open, like a session, so its protocols dispatch through the class walk and
+  a name it only declares stays open. A value no literal spells (a function, an atom)
+  stands in an `eval`'d form as itself, where the oracle embeds a function but refuses an
+  atom (`Can't embed object in code`); a form that does not lower throws a
+  `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
+  `resolve` of a computed symbol run while the program lowers on every backend, and a
+  definition such an `eval`'d form makes exists only there. `resolve`
   answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
   record or type name (the oracle's class) and for a var of a namespace built into the
   lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
   in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
-  too. A definition an `eval`'d form makes exists only while the program lowers.
+  too.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -374,16 +390,18 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program's `*file*` is the entry file's path when it was compiled. The namespace mappings
   (`ns-publics`, `ns-map`, ...) answer what the lowering knows when the call lowers: a
   `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class,
-  and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
+  and anything computed answers when the call runs on the interpreter and refuses in a
+  compiled program. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
   the program lowers, so inside a body they still reach the whole file (the oracle's run
   when the body runs); a `load-string` of a literal declares ahead like a file, so the
   same form may already name what it defines (the oracle's needs a later form). The
   standalone `(refer-clojure ...)` wires the same `(:refer-clojure ...)` filter that
   way (`:only`, `:exclude`, `:rename`, answering `nil`). As values (`(apply require
-  nses)`), `require`, `use` and `in-ns` refuse every application at run time with an
-  `UnsupportedOperationException`: libraries load and namespaces switch while the program
+  nses)`), `require`, `use` and `in-ns` load and switch when the call runs on the
+  interpreter; a compiled program refuses every application at run time with an
+  `UnsupportedOperationException`, since its libraries load and namespaces switch while it
   lowers, where the oracle loads and switches (of no spec, `require` and `use` throw its
-  `Nothing specified to load` here too).
+  `Nothing specified to load` everywhere).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`.
@@ -455,7 +473,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   failed one's `:val` the exception's report where the oracle prints its `#error` map, and `str`
   answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
-  functions and shares their deviations (`.getClass` answers what `class` does). A method of a
+  functions and shares their deviations (`.getClass` answers what `class` does, but of a fn: the
+  class the oracle compiles it to, whose `.getName` is a core function's `clojure.core$name`
+  and any other fn's that of an anonymous fn, `clojure.lang.AFunction$fn`, where the oracle
+  names a `defn` by its var). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as
   `Method m taking N args is not supported for class C`, and so is, on every backend, a method
   the oracle's class may have that nothing here answers (`.reduce`, `.meta`, an atom's
@@ -701,8 +722,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   waits for another thread's transaction never finishes, and a read outside a
   transaction may see a running one's write, where the oracle's sees only
   committed values.
-- Agents run their actions on a shared pool of four worker threads on the
-  interpreter and the JVM: a send only queues the action and answers the agent at
+- Agents run their actions on a shared pool of up to four worker threads on the
+  interpreter and the JVM, a worker ending once no agent waits: a send only queues the action and answers the agent at
   once, and one agent's actions run one at a time in send order. `send-off` shares
   the pool (the oracle gives it an unbounded pool of its own), and no creation-time
   bindings reach the new thread (only `bound-fn*` conveys any). On the WASM legs, by
@@ -918,3 +939,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `class`, protocol dispatch and `=` read.
 - A name referred from two namespaces keeps the later refer (the oracle refuses it), and
   a definition replaces a refer of its name without the oracle's warning.
+- `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate
+  function a program defined `:clojure.spec.alpha/unknown` (a fn carries no name here; a
+  core function and every predicate a spec macro takes keep theirs). `multi-spec` is
+  refused when it conforms (no multimethod answers `.dispatchFn`), and so are
+  `clojure.spec.test.alpha`'s `instrument` (a `defn`'s calls do not go through its var) and
+  `check`. What resolves a symbol or requires a namespace computed as the program runs --
+  `explain` of a regex spec over a value that is no sequence, `form` of `nilable`, the
+  generators (`gen`, `exercise`, over test.check from the `deps.edn`) -- runs on the
+  interpreter and is refused in a compiled program.
+  `clojure.lang.RT/checkSpecAsserts`, which `check-asserts` sets, starts false: the
+  `clojure.spec.check-asserts` system property is not read.

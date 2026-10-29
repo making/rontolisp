@@ -58,8 +58,11 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
 			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
 			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
-			Map.entry("clojure.pprint", Map.of()), Map.entry(ClojureLangClasses.NAMESPACE, Map.of()),
-			Map.entry("rontolisp.http-client", httpClientLeftOut()), Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
+			Map.entry("clojure.pprint", Map.of()),
+			Map.entry("clojure.reflect", Map.of("->AsmReflector",
+					"it reads class files with the ASM library inside clojure.jar; JavaReflector reflects through the host")),
+			Map.entry(ClojureLangClasses.NAMESPACE, Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
+			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
@@ -199,10 +202,11 @@ final class ClojureBuiltinNamespaces {
 			"clojure.spec.alpha", "clojure.spec.gen.alpha", "clojure.string", "clojure.uuid");
 
 	/**
-	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends
-	 * on: the language's own, which are lowerings or built-in files here and never
-	 * project files. Any other {@code clojure.*} namespace (a contrib library such as
-	 * {@code clojure.data.json}) is a library like any other, found on the source path.
+	 * The namespaces clojure.jar 1.12.6 defines: the language's own, which are lowerings
+	 * or built-in files here and never project files. Any other {@code clojure.*}
+	 * namespace (a contrib library such as {@code clojure.data.json}, or one of the spec
+	 * jars the built-in clojure depends on, {@link ClojureBuiltinLibs}) is a library like
+	 * any other, found on the source path.
 	 */
 	private static final Set<String> LANGUAGE = Set.of("clojure.core", "clojure.core.protocols",
 			"clojure.core.reducers", "clojure.core.server", "clojure.data", "clojure.datafy", "clojure.edn",
@@ -212,8 +216,7 @@ final class ClojureBuiltinNamespaces {
 			"clojure.pprint", "clojure.reflect", "clojure.repl", "clojure.repl.deps", "clojure.set",
 			"clojure.stacktrace", "clojure.string", "clojure.template", "clojure.test", "clojure.test.junit",
 			"clojure.test.tap", "clojure.tools.deps.interop", "clojure.uuid", "clojure.walk", "clojure.xml",
-			"clojure.zip", "clojure.spec.alpha", "clojure.spec.gen.alpha", "clojure.spec.test.alpha",
-			"clojure.core.specs.alpha");
+			"clojure.zip");
 
 	/**
 	 * The language's namespaces the oracle's REPL requires that are not shipped, with
@@ -255,8 +258,8 @@ final class ClojureBuiltinNamespaces {
 	}
 
 	/**
-	 * Whether the namespace is one of the language's own (clojure.jar's, or a spec jar's
-	 * it depends on), which no project file defines.
+	 * Whether the namespace is one of the language's own (clojure.jar's), which no
+	 * project file defines.
 	 * @param ns the namespace
 	 * @return whether it is the language's
 	 */

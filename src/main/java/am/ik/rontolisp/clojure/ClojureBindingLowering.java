@@ -1295,7 +1295,7 @@ final class ClojureBindingLowering {
 			if (ctx.isFunction(s.name())) {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.symOf(s.name()));
 			}
-			if (ctx.session && ctx.isDeclaredOnly(s.name())) {
+			if (ctx.open && ctx.isDeclaredOnly(s.name())) {
 				return ClojureVarLowering.sessionDeclaredRoot(ctx.symOf(s.name()));
 			}
 			return ctx.symOf(s.name());
@@ -1356,16 +1356,24 @@ final class ClojureBindingLowering {
 
 	/**
 	 * A vector pattern against an already-lowered init: each element binds positionally
-	 * through the seq view, so maps seq to entry vectors and anything past the end is
-	 * nil; {@code &} binds the rest as a seq, {@code :as} the whole. Elements destructure
-	 * recursively. The shape is the oracle's {@code seq-binding-form}: positional
-	 * patterns, then an optional {@code & rest}, then an optional {@code :as name}, which
-	 * ends the pattern ({@code [tag & content :as all]}).
+	 * and anything past the end is nil; {@code &} binds the rest as a seq, {@code :as}
+	 * the whole. Elements destructure recursively. The shape is the oracle's
+	 * {@code seq-binding-form}: positional patterns, then an optional {@code & rest},
+	 * then an optional {@code :as name}, which ends the pattern
+	 * ({@code [tag & content :as all]}). Like the oracle's {@code destructure}, a pattern
+	 * without {@code &} reads each element through {@code nth} (a map or a set refused),
+	 * and one with it through the seq view ({@code first} after each {@code next}), so it
+	 * takes any seqable: {@code [[k v] & ks]} over a map walks its entries (spec.alpha's
+	 * {@code map-spec-impl}).
 	 */
 	static void destructureVector(ClojureLowering ctx, List<LispVal> elements, LispVal init, List<LispVal> pairs,
 			Map<String, ClojureLowering.Kind> scope, String what) {
 		LispSymbol whole = ctx.freshTemp();
 		pairs.add(ClojureLowerUtil.list(whole, init));
+		boolean hasRest = false;
+		for (LispVal element : elements) {
+			hasRest |= ClojureLowerUtil.isSymbolNamed(element, "&");
+		}
 		int position = 0;
 		for (int i = 0; i < elements.size(); i++) {
 			LispVal element = elements.get(i);
@@ -1387,9 +1395,11 @@ final class ClojureBindingLowering {
 				destructureInto(ctx, elements.get(++i), dropView(ctx, whole, position), pairs, scope, what);
 				continue;
 			}
+			LispVal index = new LispInteger(position);
 			destructureInto(ctx, element,
-					ClojureSeqLowering.nthForm(ctx, whole, new LispInteger(position), ClojureLowering.NIL_CONST), pairs,
-					scope, what);
+					hasRest ? ClojureSeqLowering.seqNthForm(whole, index)
+							: ClojureSeqLowering.nthForm(ctx, whole, index, ClojureLowering.NIL_CONST),
+					pairs, scope, what);
 			position++;
 		}
 	}

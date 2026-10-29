@@ -1379,6 +1379,11 @@ final class ClojureInteropLowering {
 			// an Iterable's own iterator, else the iterator over the seq
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
 		}
+		if (cls.equals("clojure.lang.Compiler") && member.equals("demunge") && args.size() == 1) {
+			// a class name spelled back as the var it was munged from, $ as /, on
+			// every backend (spec.alpha's fn-sym reads a function's class this way)
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEMUNGE"), args.get(0));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));

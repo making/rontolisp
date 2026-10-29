@@ -61,9 +61,9 @@ final class ClojureMacroLowering {
 	static final String MACRO_SCOPE = "C%MACRO-SCOPE";
 
 	/**
-	 * The oracle's special forms ({@code Compiler.specials}): a call site never reaches a
-	 * macro of one of these names, so a {@code defmacro} of one is refused by name (the
-	 * oracle accepts it and ignores it).
+	 * The oracle's special forms ({@code Compiler.specials}): a bare head of one of these
+	 * names never reaches a macro, so a {@code defmacro} of one is reached only through a
+	 * qualified spelling ({@link #namesQualifiedMacro}).
 	 */
 	static final Set<String> SPECIAL_FORMS = Set.of("def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do",
 			"fn*", "quote", "var", "import*", ".", "set!", "deftype*", "reify*", "try", "throw", "monitor-enter",
@@ -109,6 +109,16 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * Whether a reserved head may still name a macro, reached only through a qualified
+	 * spelling while the bare head keeps its own meaning: a special form, which the
+	 * oracle's compiler tests before any var ({@code clojure.spec.alpha/def}, spelled
+	 * {@code s/def}), and a syntax-quote head, which its reader never spells.
+	 */
+	static boolean namesQualifiedMacro(String name) {
+		return SPECIAL_FORMS.contains(name) || SYNTAX_QUOTE_HEADS.contains(name);
+	}
+
+	/**
 	 * {@code (defmacro name doc? attr? ([params] body...)+)}: a compile-time expander
 	 * plus its runtime table entry, so {@code macroexpand-1} sees the same function the
 	 * lower-time expansion runs. One entry per arity is overkill here (unlike
@@ -136,9 +146,10 @@ final class ClojureMacroLowering {
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
-		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
-		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
-		ClojureLowerUtil.isTrue(!isReservedHead(name) || SYNTAX_QUOTE_HEADS.contains(name),
+		// & is a special form too, so a macro of it is reached only qualified (s/&)
+		String name = ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol amp && amp.name().equals("&") ? "&"
+				: ClojureLowerUtil.plainName(items.get(1), "defmacro");
+		ClojureLowerUtil.isTrue(!isReservedHead(name) || namesQualifiedMacro(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
 		ClojureLowerUtil.isTrue(
 				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,
@@ -212,7 +223,7 @@ final class ClojureMacroLowering {
 			}
 		}
 		List<LispVal> forms = new ArrayList<>();
-		if (ctx.session) {
+		if (ctx.open) {
 			forms.add(setq);
 		}
 		else {
@@ -590,9 +601,11 @@ final class ClojureMacroLowering {
 			bindings
 				.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteData(ClojureLowerUtil.list(items))));
 		}
+		// the answer as a form: a lazy seq in it (a concat, a lazy map) realizes, since
+		// no datum spells one (until 2026-10-29 a concat answer was an unreadable value)
 		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted)));
+				ClojureLowerUtil.list(FORM_OF, ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted))));
 		handOverCaughtClasses(ctx, ctx.macroEvaluator);
 		LispVal value;
 		try {
@@ -619,6 +632,12 @@ final class ClojureMacroLowering {
 			ctx.macroDepth--;
 		}
 	}
+
+	/**
+	 * The run-time library's value as a form: every lazy seq in its lists and vectors
+	 * realized, the value itself where none is ({@code %clojure-form-of}).
+	 */
+	static final LispSymbol FORM_OF = new LispSymbol("RONTOLISP::%CLOJURE-FORM-OF");
 
 	static String exMessage(RuntimeException ex) {
 		String message = ex.getMessage();
@@ -668,7 +687,11 @@ final class ClojureMacroLowering {
 	 * evaluator cannot answer.
 	 */
 	private static Map<LispVal, LispVal> collectMetas(ClojureLowering ctx, LispVal value) {
-		if (ctx.macroEvaluator == null) {
+		// a run-time value's metadata is the running program's, a macro-time value's
+		// the macro-time evaluator's
+		ClojureRunTime.Host host = ctx.decodingFor;
+		ClojureMacroEvaluator macroEvaluator = ctx.macroEvaluator;
+		if (host == null && macroEvaluator == null) {
 			return Map.of();
 		}
 		List<LispVal> nodes = new ArrayList<>();
@@ -676,7 +699,8 @@ final class ClojureMacroLowering {
 		if (nodes.isEmpty()) {
 			return Map.of();
 		}
-		List<LispVal> metas = ctx.macroEvaluator.metasOf(nodes);
+		List<LispVal> metas = host != null ? host.metasOf(nodes)
+				: macroEvaluator != null ? macroEvaluator.metasOf(nodes) : null;
 		if (metas == null || metas.size() != nodes.size()) {
 			return Map.of();
 		}
@@ -766,6 +790,9 @@ final class ClojureMacroLowering {
 			if (symbol.startsWith(ClojureLowering.PREFIX)) {
 				return new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
 			}
+			if (ctx.decodingFor != null) {
+				return embedded(ctx, value);
+			}
 			throw new LispReadException("an unreadable symbol: " + value.print());
 		}
 		if (value instanceof LispCons cons) {
@@ -794,6 +821,11 @@ final class ClojureMacroLowering {
 				}
 				if (tag.name().equals(ClojureDecimalLowering.TAG)) {
 					return decodeDecimal(cons);
+				}
+				if (ctx.decodingFor != null && tag.name().startsWith(":")) {
+					// any other run-time value of a tagged kind -- an atom, a var, a
+					// deftype, a delay ... -- is the object itself where it is evaluated
+					return embedded(ctx, value);
 				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
@@ -845,7 +877,23 @@ final class ClojureMacroLowering {
 				return own;
 			}
 		}
+		if (ctx.decodingFor != null) {
+			return embedded(ctx, value);
+		}
 		throw new LispReadException("an unreadable value: " + value.print());
+	}
+
+	/**
+	 * A run-time value no datum spells -- a function, an atom, a host object -- as the
+	 * object itself, the oracle's compiler's constant: the marker over the core form the
+	 * running program evaluates to the very object ({@link ClojureRunTime#EMBEDDED}).
+	 */
+	private static LispVal embedded(ClojureLowering ctx, LispVal value) {
+		ClojureRunTime.Host host = ctx.decodingFor;
+		if (host == null) {
+			throw new LispReadException("an unreadable value: " + value.print());
+		}
+		return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, host.constant(value));
 	}
 
 	/**
@@ -1249,8 +1297,9 @@ final class ClojureMacroLowering {
 			if (imported != null) {
 				return imported;
 			}
-			if (ClojureNamespaceLowering.JAVA_LANG.contains(name)) {
-				return "java.lang." + name;
+			String defaulted = ClojureNamespaceLowering.DEFAULT_IMPORTS.get(name);
+			if (defaulted != null) {
+				return defaulted;
 			}
 			if (name.indexOf('.') >= 0) {
 				return name;
@@ -1270,8 +1319,9 @@ final class ClojureMacroLowering {
 		if (imported != null) {
 			return imported + "/" + tail;
 		}
-		if (ClojureNamespaceLowering.JAVA_LANG.contains(head)) {
-			return "java.lang." + name;
+		String defaulted = ClojureNamespaceLowering.DEFAULT_IMPORTS.get(head);
+		if (defaulted != null) {
+			return defaulted + "/" + tail;
 		}
 		return name;
 	}

@@ -67,6 +67,9 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.clojure.Clojure;
+import am.ik.rontolisp.clojure.ClojureRunTime;
+import am.ik.rontolisp.clojure.ClojureTopLevel;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
@@ -267,6 +270,13 @@ public final class LispEvaluator {
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
 	private boolean clojureLibraryStripped = false;
+
+	/**
+	 * The lowering a Clojure program or session keeps for its run, which the run-time
+	 * library's lowering verbs over computed arguments reach
+	 * ({@link #setClojureRunTime}); null where none runs.
+	 */
+	private @Nullable ClojureRunTime clojureRunTime;
 
 	private boolean usocketLibraryLoaded = false;
 
@@ -5765,10 +5775,151 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * {@link #clojureProgram(List)} for a program lowered with the lowering it keeps for
+	 * its run: one naming a lowering verb over computed arguments -- {@code eval}, a
+	 * computed {@code resolve}, {@code require} or {@code load-string} -- takes the whole
+	 * library, since what it lowers as it runs may make a value of any kind, and its
+	 * lowering answers those verbs ({@link #setClojureRunTime}). Any other program takes
+	 * the strip.
+	 * @param program the lowered program
+	 * @return the forms to evaluate, in order
+	 */
+	public List<LispVal> clojureProgram(Clojure.Program program) {
+		ClojureRunTime runTime = program.runTime();
+		if (runTime == null) {
+			return clojureProgram(program.forms());
+		}
+		requireWholeClojureLibrary("a second Clojure program");
+		setClojureRunTime(runTime);
+		loadClojureLibrary();
+		return program.forms();
+	}
+
+	/**
+	 * Hands the run-time library's lowering verbs over computed arguments
+	 * ({@code %clojure-lower-at-run-time}, which refuses where no lowering runs) to the
+	 * lowering a Clojure program or session keeps for its run: the call lowers in the
+	 * namespace {@code *ns*} holds and its forms evaluate here, the last value the
+	 * call's, like the oracle's {@code eval}.
+	 * @param runTime the lowering
+	 */
+	public void setClojureRunTime(ClojureRunTime runTime) {
+		this.clojureRunTime = runTime;
+		if (this.clojureLibraryLoaded) {
+			installClojureRunTime();
+		}
+	}
+
+	/** The Clojure library, every arm of it, then the run-time lowering if one runs. */
+	private void loadClojureLibrary() {
+		if (this.clojureLibraryLoaded) {
+			return;
+		}
+		this.clojureLibraryLoaded = true;
+		// evalResolved, like the Scheme library: the shape is the same (canonical
+		// rontolisp:: helpers over bare cl names)
+		for (LispVal form : ClojureLibrary.forms()) {
+			evalResolved(form);
+		}
+		if (this.clojureRunTime != null) {
+			installClojureRunTime();
+		}
+	}
+
+	/** The run-time library's function every lowering verb at run time reaches. */
+	private static final String LOWER_AT_RUN_TIME = "RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME";
+
+	/** The run-time library's preparation of a verb's arguments as forms. */
+	private static final LispSymbol RUN_TIME_ARGUMENTS = new LispSymbol("RONTOLISP::%CLOJURE-RUN-TIME-ARGUMENTS");
+
+	/** The run-time library's metadata of a value. */
+	private static final LispSymbol CLOJURE_META = new LispSymbol("RONTOLISP::%CLOJURE-META");
+
+	/** The special {@code *ns*} lowers to. */
+	private static final String CLOJURE_NS = "RONTOLISP::%CLOJURE-NS";
+
+	/** The classes a lowering failure at run time is thrown as, the oracle's. */
+	private static final LispVal COMPILER_EXCEPTION = consList(
+			List.of(LispString.literal("clojure.lang.Compiler$CompilerException"),
+					LispString.literal("java.lang.RuntimeException"), LispString.literal("java.lang.Exception"),
+					LispString.literal("java.lang.Throwable")));
+
+	private void installClojureRunTime() {
+		this.globalEnv.defineFunction(LOWER_AT_RUN_TIME,
+				new LispFunction(LOWER_AT_RUN_TIME, args -> lowerClojureAtRunTime(args.get(0), args.get(1))));
+	}
+
+	/**
+	 * One lowering verb at run time: its arguments as forms, the call lowered in the
+	 * namespace {@code *ns*} holds, its forms evaluated in order; the value of the call's
+	 * own entry answers. A call that does not lower throws the oracle's
+	 * {@code Compiler$CompilerException} with the lowering's words.
+	 */
+	private LispVal lowerClojureAtRunTime(LispVal verbValue, LispVal argsValue) {
+		ClojureRunTime runTime = this.clojureRunTime;
+		if (runTime == null || !(verbValue instanceof LispString verb)) {
+			throw new LispEvalException(LOWER_AT_RUN_TIME + ": no lowering runs here");
+		}
+		LispVal prepared = applyGlobal(RUN_TIME_ARGUMENTS, List.of(verbValue, argsValue));
+		List<LispVal> args = prepared instanceof LispCons cons ? cons.toList() : List.of();
+		List<ClojureTopLevel> lowered;
+		try {
+			lowered = runTime.lower(verb.value(), args, currentClojureNamespace(), new ClojureRunTime.Host() {
+				@Override
+				public @Nullable List<LispVal> metasOf(List<LispVal> values) {
+					return clojureMetasOf(values);
+				}
+
+				@Override
+				public LispVal constant(LispVal value) {
+					LispFunction thunk = new LispFunction("clojure-constant", ignored -> value);
+					return consList(List.of(new LispSymbol(LispNames.FUNCALL),
+							consList(List.of(new LispSymbol(LispNames.QUOTE), thunk))));
+				}
+			});
+		}
+		catch (LispReadException ex) {
+			String message = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+			return applyGlobal(new LispSymbol("RONTOLISP::%CLOJURE-REFUSE"),
+					List.of(COMPILER_EXCEPTION, LispString.literal(message)));
+		}
+		LispVal value = LispNil.INSTANCE;
+		for (ClojureTopLevel top : lowered) {
+			LispVal last = LispNil.INSTANCE;
+			for (LispVal form : top.forms()) {
+				last = eval(form);
+			}
+			if (top.echoes()) {
+				value = last;
+			}
+		}
+		return value;
+	}
+
+	/** The name of the namespace the Clojure {@code *ns*} holds, {@code user} unbound. */
+	private String currentClojureNamespace() {
+		LispVal ns = currentSpecialValue(CLOJURE_NS);
+		if (ns instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispString name) {
+			return name.value();
+		}
+		return "user";
+	}
+
+	/** The run-time library's metadata of each value, in order. */
+	private @Nullable List<LispVal> clojureMetasOf(List<LispVal> values) {
+		List<LispVal> metas = new ArrayList<>();
+		for (LispVal value : values) {
+			metas.add(applyGlobal(CLOJURE_META, List.of(value)));
+		}
+		return metas;
+	}
+
+	/**
 	 * Refuses Clojure source arriving after {@link #clojureProgram} loaded a library
 	 * without the arms of the families that program makes no value of: what the new
-	 * source makes may need them. No Clojure program reaches here -- its {@code load} and
-	 * {@code require} are read while it is lowered, and it has no {@code eval}.
+	 * source makes may need them. A Clojure program reaches here only through its own
+	 * lowering, which keeps the whole library ({@link #clojureProgram(Clojure.Program)}).
 	 */
 	private void requireWholeClojureLibrary(String what) {
 		if (this.clojureLibraryStripped) {
@@ -10952,12 +11103,7 @@ public final class LispEvaluator {
 			// loads the same way on the first resolution of a rontolisp::%clojure-
 			// helper, which only a lowered Clojure program names.
 			if (!this.clojureLibraryLoaded && ClojureLibrary.isClojureFunction(name)) {
-				this.clojureLibraryLoaded = true;
-				// evalResolved, like the Scheme library above: the shape is the same
-				// (canonical rontolisp:: helpers over bare cl names).
-				for (LispVal form : ClojureLibrary.forms()) {
-					evalResolved(form);
-				}
+				loadClojureLibrary();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

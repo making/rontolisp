@@ -8,8 +8,9 @@ to: a program var, a `clojure.core` var this front end implements, a core macro,
 of a library it implements as a lowering (`clojure.string/upper-case`). Any
 other name answers `nil`, a core var this front end lacks included, so a library that
 chooses code by the `clojure.core` it runs on (a `compile-if` over `resolve`) chooses the
-code that lowers here. A computed symbol resolves only in a macro body; at run time it
-throws an `UnsupportedOperationException`. `(resolve env sym)` is
+code that lowers here. A computed symbol resolves in a macro body and, on the interpreter,
+when the call runs, in the namespace `*ns*` holds; a compiled program throws an
+`UnsupportedOperationException` at run time. `(resolve env sym)` is
 [ns-resolve](ns-resolve.md) in the current namespace: nil for a symbol the environment (a
 macro's `&env`) holds. Also names a function value.
 

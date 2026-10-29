@@ -3408,7 +3408,8 @@ cases:
     # instance? of any class answers what the oracle's isInstance does for every kind
     # of value: an interface the kind's host class implements (java.util.List of a
     # vector), a class no value here has (java.io.File) false. Measured against clj
-    # 1.12.6, identical.
+    # 1.12.6, identical. Callable, BigInteger and BigDecimal are default imports there
+    # beside java.lang (2026-10-29; before, "unknown name: Callable").
     source: |
       (defprotocol IokP (iok-m [x]))
       (defrecord IokR [a])
@@ -3455,6 +3456,9 @@ cases:
       (iok-row Integer)
       (iok-row java.io.File)
       (iok-row java.util.AbstractList)
+      (iok-row Callable)
+      (iok-row BigInteger)
+      (iok-row BigDecimal)
       (println (instance? java.util.Map {1 2}) (instance? clojure.lang.Sorted 1/2) (instance? Comparable 1.5) (instance? java.io.Writer *out*) (instance? clojure.lang.Named :k) (instance? clojure.lang.IDeref (atom 1)) (instance? Integer 1))
     expected: |
       java.util.List fffffffftttfffffffffffffff
@@ -3495,6 +3499,9 @@ cases:
       Integer ffffffffffffffffffffffffff
       java.io.File ffffffffffffffffffffffffff
       java.util.AbstractList ffffffffffffffffffffffffff
+      Callable fffffftttfftttttfftfffffff
+      BigInteger ffffffffffffffffffffffffff
+      BigDecimal ffffffffffffffffffffffffff
       true false true true true true false
   - name: instance-of-a-protocol-interface-tests-the-body-implementations
     # A protocol defines the interface ns.P (munged): a record, deftype or reify naming
@@ -4154,7 +4161,8 @@ cases:
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
     # the same function at run time. The expanders answer the mangled data itself, so
     # expansions print the oracle's lowercase spelling and = against a quoted form
-    # holds.
+    # holds. An answer holding a lazy seq (a concat) realizes into a list, the oracle's
+    # form (it was an unreadable value until 2026-10-29).
     source: |
       (defmacro sp-unless [c t] (list 'if c nil t))
       (println (macroexpand-1 '(sp-unless true 1)))
@@ -4164,6 +4172,8 @@ cases:
       (println (macroexpand-1 '(+ 1 2)))
       (println (= (macroexpand-1 '(sp-unless true 1)) '(if true nil 1)))
       (println (= (macroexpand-1 '(+ 1 2)) '(+ 1 2)))
+      (defmacro sp-sum [& xs] (concat '(+) xs))
+      (println (sp-sum 1 2 3) (macroexpand-1 '(sp-sum 1 2)))
     expected: |
       (if true nil 1)
       (if false nil 42)
@@ -4172,6 +4182,7 @@ cases:
       (+ 1 2)
       true
       true
+      6 (+ 1 2)
   - name: a-macro-may-take-a-trailing-dot-name-without-a-class
     # shcloj4's ?. macro (examples/utils.clj): a trailing-dot name with no class
     # base is no construction at a call site (only X. over a class spelling is),
@@ -4288,7 +4299,10 @@ cases:
     # libraries load and namespaces switch while the program lowers (the oracle
     # loads clojure.set, prints nil twice and the namespace; of no spec it
     # throws "Nothing specified to load" wrapped in a CompilerException, and
-    # names clojure.lang.RT/1 in in-ns's arity error).
+    # names clojure.lang.RT/1 in in-ns's arity error). The interpreter keeps the
+    # program's lowering as it runs and answers them (the next case).
+    skip:
+      interpreter: the interpreter lowers the verbs as the program runs
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
@@ -4305,6 +4319,48 @@ cases:
       Nothing specified to load
       in-ns of a computed name is not supported at run time: namespaces switch while the program lowers
       Wrong number of args (0) passed to: clojure.core/in-ns
+  - name: the-interpreter-lowers-at-run-time
+    # The interpreter keeps the program's lowering as it runs: eval, resolve,
+    # find-var, ns-resolve and requiring-resolve of a computed symbol, require of a
+    # computed spec, alias of computed names, load-string and load-reader lower when
+    # they run, in *ns*, and what they define joins the program. A value no literal
+    # spells (a function) stands in an eval'd form as itself; a form that does not
+    # lower throws the oracle's CompilerException, a library no root holds its
+    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A compiled
+    # program carries no lowering, so there the verbs refuse (the case above).
+    skip:
+      jvm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm_component: a compiled program carries no lowering, so the verbs refuse at run time
+    source: |
+      (defn rtl-twice [x] (* 2 x))
+      (def rtl-base 10)
+      (println (eval (list 'rtl-twice (list 'inc 4))) (eval `(+ ~rtl-base 1)) (eval (concat '(+) [1 2 3])))
+      (println (eval '(defn rtl-added [a] (+ a rtl-base))) (eval '(rtl-added 5)))
+      (println ((eval '(fn [x] (* x x))) 7) (eval (list (fn [x] (str "got " x)) 42)))
+      (println (eval '(do (defmacro rtl-m [x] (list '* 2 x)) (rtl-m 21))) (eval '(rtl-m 4)))
+      (println (let [s (symbol "inc")] ((resolve s) 41)) (load-string (str "(+ 1" " 2)")))
+      (let [n 'clojure.set] (require n) (println ((ns-resolve n 'union) #{1} #{2})))
+      (println @(find-var (symbol (str *ns*) "rtl-base")) (map eval ['(+ 1 1) '(* 2 3)]))
+      (println (eval (read-string "[1 2 #{3}]")) @(future (eval '(+ 40 2))))
+      (alias (symbol "rtl-s") (symbol "clojure.string"))
+      (println (eval '(rtl-s/upper-case "ab")) ((requiring-resolve (symbol "clojure.string" "join")) "-" [1 2]))
+      (println (load-reader (java.io.PushbackReader. (java.io.StringReader. "(+ 2 3) (* 6 7)"))))
+      (println (try (eval '(rtl-no-such 1)) (catch clojure.lang.Compiler$CompilerException e :refused)))
+      (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
+    expected: |
+      10 11 6
+      #'lit/rtl-added 15
+      49 got 42
+      42 8
+      42 3
+      #{1 2}
+      10 (2 6)
+      [1 2 #{3}] 42
+      AB 1-2
+      42
+      :refused
+      Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
@@ -6925,9 +6981,11 @@ cases:
       :a/b
       true
   - name: symbol-builds-mangled-names
-    # symbol answers itself for a symbol and the spelled symbol (mangled behind
-    # the prefix, so it prints and compares whole) for a keyword or a string; a
-    # nil namespace is the one-argument shape; anything else signals.
+    # symbol answers itself for a symbol, the spelled symbol (mangled behind
+    # the prefix, so it prints and compares whole) for a keyword or a string, and a
+    # var's qualified name (spec.alpha's ->sym of what resolve answers); a nil
+    # namespace is the one-argument shape; anything else signals in the oracle's
+    # words. Oracle-identical (clj 1.12.6).
     source: |
       (println (symbol "b"))
       (println (symbol 'a))
@@ -6939,7 +6997,8 @@ cases:
       (println (namespace (symbol "a" "b")))
       (println (map symbol ["x" "y"]))
       (println (apply symbol ["a" "b"]))
-      (println (try (symbol 1) (catch Exception e :refused)))
+      (println (symbol #'clojure.core/str) (symbol (var clojure.core/inc)))
+      (println (try (symbol 1) (catch IllegalArgumentException e (ex-message e))))
     expected: |
       b
       a
@@ -6951,7 +7010,8 @@ cases:
       a
       (x y)
       a/b
-      :refused
+      clojure.core/str clojure.core/inc
+      no conversion to symbol
   - name: assert-answers-nil-and-throws-lazily
     # assert answers nil when the test is truthy and signals otherwise; the
     # message form sits in the else branch, so it never evaluates on success.
@@ -8639,7 +8699,10 @@ cases:
     # metadata on a template form travels as (with-meta form meta) over the
     # syntax-quoted map, a class tag qualified: core.async's (^:once fn* [] ...) and a
     # hinted gensym parameter. A namespace may define a macro named syntax-quote
-    # (tools.reader's), reached qualified, while its backquotes stay the reader's.
+    # (tools.reader's), reached qualified, while its backquotes stay the reader's;
+    # likewise a macro named like a special form (spec.alpha's s/def and s/&) is
+    # reached qualified while the bare def, and the & of a parameter vector, stay
+    # the special forms.
     # Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
       (ns sq (:require [clojure.string :as s]))
@@ -8656,6 +8719,11 @@ cases:
       (println ((thunk 7)) (slen "abc") (:tag (meta (first (nth (macroexpand-1 '(hinted q)) 2)))))
       (defmacro syntax-quote [x] (list 'quote [:mine x]))
       (println (sq/syntax-quote 1) `loose)
+      (defmacro def [k v] `(swap! sq-registry assoc ~k '~v))
+      (defmacro & [x] `[:amp ~x])
+      (def sq-registry (atom {}))
+      (sq/def :a (inc 1))
+      (println @sq-registry (sq/& 3) (let [[x & r] [1 2]] [x r]))
       (ns excl (:refer-clojure :exclude [map]))
       (println `map `filter)
       (println `java.io.StringWriter `String)
@@ -8664,6 +8732,7 @@ cases:
       sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       7 3 java.lang.String
       [:mine 1] sq/loose
+      {:a (inc 1)} [:amp 3] [1 (2)]
       excl/map clojure.core/filter
       java.io.StringWriter java.lang.String
   - name: var-quote-metadata-and-test
@@ -10891,7 +10960,8 @@ cases:
     # namespace ns and in-ns switch to while the file runs, read when a function runs, so
     # nsv-here answers its caller's; binding rebinds it. *file* and *source-path* name the
     # file (a path that differs per leg), *repl* is false and not thread-bound, and the REPL
-    # history vars are nil and thread-bound.
+    # history vars are nil and thread-bound. A namespace's .name and .getName are its name
+    # symbol (spec.alpha's ns-qualify reads (.name *ns*) while s/def expands).
     source: |
       (ns nsv-a)
       (prn *ns* (str *ns*) (ns-name *ns*) (symbol? (ns-name *ns*)))
@@ -10903,6 +10973,7 @@ cases:
       (prn (= *ns* (the-ns 'nsv-a)) (identical? *ns* (find-ns 'nsv-a)) (find-ns 'nsv-none) (str (the-ns *ns*)) (ns-name 'nsv-b))
       (prn (binding [*ns* (the-ns 'nsv-b)] (nsv-here)) (nsv-here) (map ns-name [(the-ns 'nsv-b)]) (some? (find-ns 'clojure.core)))
       (prn (try (the-ns 'nsv-none) (catch Exception e (ex-message e))))
+      (prn (.name *ns*) (.getName (the-ns 'nsv-b)))
       (prn (class *ns*) (thread-bound? #'*ns*) #'*ns* (meta *ns*) (seq? *ns*) (coll? *ns*))
       (prn [(string? *file*) (string? *source-path*) *repl* *1 *2 *3 *e])
       (prn (map thread-bound? [#'*file* #'*source-path* #'*1 #'*2 #'*3 #'*e #'*repl*]))
@@ -10914,6 +10985,7 @@ cases:
       true true nil "nsv-a" nsv-b
       "nsv-b" "nsv-a" (nsv-b) true
       "No namespace: nsv-none found"
+      nsv-a nsv-b
       :clojure.lang.Namespace true #'clojure.core/*ns* nil false false
       [true true false nil nil nil nil]
       (true true true true true true false)
@@ -13746,6 +13818,73 @@ cases:
       "Already seen doctype."
       "The processing instruction must begin with the name of the target."
       [:encoding "bogus"]
+  - name: clojure-reflect-describes-a-host-class-like-the-oracle
+    # The built-in clojure.reflect reflects through the host: bases, class flags, the
+    # declared constructors, methods (bridges and natives flagged) and fields as records,
+    # array types spelled with <>, :ancestors, a class, a symbol, a value (Long a class
+    # here too), the oracle's ClassNotFoundException for a symbol forName misses. Sets
+    # print sorted: a set's walk order is the backend's. Oracle-identical (clj 1.12.6,
+    # 2026-10-29); the WASM legs refuse the reflection (the next case).
+    skip:
+      wasm: no host class to reflect on; the next case pins the refusal
+      wasm_component: no host class to reflect on; the next case pins the refusal
+    source: |
+      (require '[clojure.reflect :as reflect])
+      (defn rh-norm [x]
+        (cond (set? x) (vec (sort-by pr-str (map rh-norm x)))
+              (map? x) (into (sorted-map) (map (fn [[k v]] [k (rh-norm v)])) x)
+              (vector? x) (mapv rh-norm x)
+              :else x))
+      (defn rh [f] (try (rh-norm (f)) (catch Exception e [(.getName (class e)) (ex-message e)])))
+      (defn rh-named [n m] (set (filter #(= n (:name %)) (:members m))))
+      (prn (rh #(reflect/type-reflect Runnable :reflector (reflect/->JavaReflector nil))))
+      (prn (rh #(dissoc (reflect/reflect "") :members)) (rh #(dissoc (reflect/reflect Long) :members)))
+      (prn (rh #(rh-named 'wait (reflect/type-reflect Object))))
+      (prn (rh #(rh-named 'compareTo (reflect/type-reflect String))))
+      (prn (rh #(set (filter (fn [m] (instance? clojure.reflect.Constructor m)) (:members (reflect/type-reflect java.util.ArrayList))))))
+      (prn (rh #(dissoc (reflect/type-reflect java.util.ArrayList :ancestors true) :members)))
+      (prn (rh #(:ancestors (reflect/type-reflect Object :ancestors true))))
+      (prn (rh #(reflect/type-reflect (Class/forName "[I"))) (rh #(reflect/type-reflect Integer/TYPE)))
+      (prn (rh #(reflect/type-reflect 'int<>)) (rh #(reflect/type-reflect 'no.Such)))
+      (prn (reflect/typename String) (reflect/typename 'int<>) (reflect/typename (Class/forName "[[Ljava.lang.String;")))
+      (prn (rh #(set (map (juxt :name :type :flags) (rh-named 'MAX_VALUE (reflect/type-reflect Integer))))))
+      (prn (rh #(:flags (reflect/type-reflect java.lang.annotation.Retention))) (rh #(:flags (reflect/type-reflect java.lang.Thread$State))))
+      (prn (rh #(dissoc (reflect/reflect (java.util.ArrayList.)) :members)))
+      (prn (some? (reflect/resolve-class (.getContextClassLoader (Thread/currentThread)) 'java.lang.String)))
+      (prn (rh-norm (reflect/->Method 'a 'int 'x [] [] #{})) (record? (reflect/->Field 'f 'int 'x #{})) (count reflect/flag-descriptors))
+    expected: |
+      {:bases nil, :flags [:abstract :interface :public], :members [{:declaring-class java.lang.Runnable, :exception-types [], :flags [:abstract :public], :name run, :parameter-types [], :return-type void}]}
+      {:bases [java.io.Serializable java.lang.CharSequence java.lang.Comparable java.lang.Object java.lang.constant.Constable java.lang.constant.ConstantDesc], :flags [:final :public]} {:bases [java.lang.Comparable java.lang.Number java.lang.constant.Constable java.lang.constant.ConstantDesc], :flags [:final :public]}
+      [{:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [], :return-type void} {:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [long int], :return-type void} {:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [long], :return-type void}]
+      [{:declaring-class java.lang.String, :exception-types [], :flags [:bridge :public :synthetic], :name compareTo, :parameter-types [java.lang.Object], :return-type int} {:declaring-class java.lang.String, :exception-types [], :flags [:public], :name compareTo, :parameter-types [java.lang.String], :return-type int}]
+      [{:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types []} {:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types [int]} {:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types [java.util.Collection]}]
+      {:ancestors [java.io.Serializable java.lang.Cloneable java.lang.Iterable java.lang.Object java.util.AbstractCollection java.util.AbstractList java.util.Collection java.util.List java.util.RandomAccess java.util.SequencedCollection], :bases [java.io.Serializable java.lang.Cloneable java.util.AbstractList java.util.List java.util.RandomAccess], :flags [:public]}
+      []
+      {:bases [java.io.Serializable java.lang.Cloneable java.lang.Object], :flags [:abstract :final :public], :members []} {:bases nil, :flags [:abstract :final :public], :members []}
+      ["java.lang.ClassNotFoundException" "int[]"] ["java.lang.ClassNotFoundException" "no.Such"]
+      "java.lang.String" "int[]" "java.lang.String[][]"
+      [[MAX_VALUE int [:final :public :static]]]
+      [:abstract :annotation :interface :public] [:enum :final :public]
+      {:bases [java.io.Serializable java.lang.Cloneable java.util.AbstractList java.util.List java.util.RandomAccess], :flags [:public]}
+      true
+      {:declaring-class x, :exception-types [], :flags [], :name a, :parameter-types [], :return-type int} true 17
+  - name: clojure-reflect-refuses-to-reflect-where-the-host-is-not
+    # On WASM the namespace loads (its records, flag-descriptors and the symbol
+    # typename work) and a reflection throws UnsupportedOperationException when called.
+    skip:
+      interpreter: the host reflects (the case above)
+      jvm: the host reflects (the case above)
+    source: |
+      (require '[clojure.reflect :as reflect])
+      (prn (reflect/typename 'int<>) (reflect/typename 'java.lang.String<><>))
+      (prn (reflect/->Method 'a 'int 'x [] [] #{}) (record? (reflect/map->Field {:name 'f})) (count reflect/flag-descriptors))
+      (prn (try (reflect/reflect "") (catch UnsupportedOperationException e (ex-message e))))
+      (prn (try (reflect/type-reflect 'java.lang.Object :ancestors true) (catch UnsupportedOperationException e (ex-message e))))
+    expected: |
+      "int[]" "java.lang.String[][]"
+      #clojure.reflect.Method{:name a, :return-type int, :declaring-class x, :parameter-types [], :exception-types [], :flags #{}} true 17
+      "clojure.reflect/do-reflect reflects on a host class, which this target has not"
+      "clojure.reflect/do-reflect reflects on a host class, which this target has not"
   - name: hash-is-the-oracles-hasheq-of-every-kind
     # clojure.core/hash is Util.hasheq: Murmur3 over a long, a string's
     # String.hashCode (its UTF-16 units), a keyword's or symbol's name and
@@ -15190,19 +15329,24 @@ cases:
     # The oracle's seq-binding-form: positional patterns, an optional & rest, then an
     # optional :as name, which ends the pattern (hiccup's [tag & content :as tag-content],
     # honeysql's [x expr & tail :as with]); a type-hinted for/doseq name binds too.
-    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    # A pattern with & reads its positions through the seq view (first after each
+    # next), as the oracle's destructure does, so it takes a map or a set (spec.alpha's
+    # map-spec-impl loops [[k v] & ks] over a map). Oracle-identical (clj 1.12.6,
+    # 2026-10-12; the map and set line 2026-10-29).
     source: |
       (prn (let [[a & r :as all] [1 2 3]] [a r all]) (let [[a & r :as all] '(1 2 3)] [a r all]))
       (prn (let [[a & [b & c :as bc] :as all] [1 2 3 4]] [a b c bc all]) (let [[a & r :as all] nil] [a r all]))
       (prn ((fn [[tag & content :as tc]] [tag content tc]) [:p 1 2]) (let [[a & {:keys [x] :as m} :as all] [1 :x 2]] [a x m all]))
       (prn (for [[k & vs :as row] [[1 2] [3]]] [k vs row]) (loop [[x & xs :as all] [1 2 3] acc []] (if x (recur xs (conj acc (count all))) acc)))
       (prn (for [^String s ["a" "b"]] (str s s)) (doseq [^String s ["c"]] (print s)))
+      (prn (let [[a & r] {:x 1 :y 2}] [a r]) (let [[x & _] #{7}] x) (loop [[[k v] & ks] {:a 1 :b 2} acc []] (if k (recur ks (conj acc [v k])) acc)))
     expected: |
       [1 (2 3) [1 2 3]] [1 (2 3) (1 2 3)]
       [1 2 (3 4) (2 3 4) [1 2 3 4]] [nil nil nil]
       [:p (1 2) [:p 1 2]] [1 2 {:x 2} [1 :x 2]]
       ([1 (2) [1 2]] [3 nil [3]]) [3 2 1]
       c("aa" "bb") nil
+      [[:x 1] ([:y 2])] 7 [[1 :a] [2 :b]]
   - name: partition-takes-a-pad-filling-the-incomplete-tail
     # (partition n step pad coll): an incomplete tail is kept, filled from the pad
     # (which may be endless, tools.cli's (repeat nil)) up to n. Oracle lines (clj
@@ -15503,15 +15647,43 @@ cases:
       "\\n" "\\t" nil
       "newline" "space" nil
   - name: munge-and-namespace-munge
-    # munge spells every special character _NAME_ (a dash is an underscore)
-    # and namespace-munge only the dashes, over the str of the value.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # munge spells every special character _NAME_ (a dash is an underscore;
+    # the quotes and brackets in the oracle's 1.12 spellings, which were
+    # _SQUOTE_/_DQUOTE_ and none until 2026-10-29) and namespace-munge only the
+    # dashes, over the str of the value. clojure.lang.Compiler/demunge spells a
+    # class name back, $ as /. A fn's .getClass names the class the oracle
+    # compiles it to: a core function's clojure.core$name (spec.alpha's fn-sym
+    # demunges it to name a bare predicate), any other fn an anonymous one's
+    # (the oracle's ns$enclosing$fn__N, here no fn carries its own name).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the last two lines 2026-10-29).
     source: |
       (prn (munge "foo-bar") (munge "+") (munge "a,b") (munge 1))
       (prn (namespace-munge "a.b-c") (namespace-munge "a/b"))
+      (prn (munge "a'b\"c[d]") (clojure.lang.Compiler/demunge "clojure.core$int_QMARK_") (clojure.lang.Compiler/demunge "a_SINGLEQUOTE_b_LBRACK_c$d"))
+      (prn (.getName (.getClass int?)) (.. inc getClass getName) (boolean (re-matches #".*\$fn(__\d+)?" (.getName (.getClass (fn [x] x))))))
     expected: |
       "foo_bar" "_PLUS_" "a,b" "1"
       "a.b_c" "a/b"
+      "a_SINGLEQUOTE_b_DOUBLEQUOTE_c_LBRACK_d_RBRACK_" "clojure.core/int?" "a'b[c/d"
+      "clojure.core$int_QMARK_" "clojure.core$inc" true
+  - name: rt-check-spec-asserts-is-a-boolean-static-a-program-sets
+    # clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts sets
+    # and its assert reads, by Class/field and by (. Class field): false at the start, a
+    # boolean store answering the value, anything else refused as the oracle's cast to
+    # Boolean (nil its unboxing NullPointerException), the field unchanged.
+    # Oracle-identical (clj 1.12.6, 2026-10-29; no clojure.spec.check-asserts property).
+    source: |
+      (prn clojure.lang.RT/checkSpecAsserts (. clojure.lang.RT checkSpecAsserts))
+      (prn (set! (. clojure.lang.RT checkSpecAsserts) true) clojure.lang.RT/checkSpecAsserts)
+      (prn (set! clojure.lang.RT/checkSpecAsserts false) clojure.lang.RT/checkSpecAsserts)
+      (prn (try (set! clojure.lang.RT/checkSpecAsserts :yes) (catch ClassCastException e :cast))
+           (try (set! clojure.lang.RT/checkSpecAsserts nil) (catch NullPointerException e :npe))
+           clojure.lang.RT/checkSpecAsserts)
+    expected: |
+      false false
+      true true
+      false false
+      :cast :npe false
   - name: print-simple-print-dup-and-print-ctor
     # print-simple writes as print writes, print-dup as pr writes except for
     # the readable #= constructions, and print-ctor wraps a writer's output in
@@ -15607,20 +15779,24 @@ cases:
       nil
       nil
   - name: intern-var-set-and-with-redefs-fn
-    # intern makes a var over a cell of its own, var-set refuses one that is
+    # intern makes a var -- of a quoted name in the current namespace the var the
+    # forms below name, its root rebound over a def's -- var-set refuses one that is
     # not thread-locally bound, and with-redefs-fn rebinds roots for its call.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the forms below, 2026-10-29).
     source: |
       (println (intern 'user 'f67-iv 7))
       (println @(intern 'user 'f67-iv))
       (println (try (var-set (intern 'user 'f67-iv) 8) (catch IllegalStateException e (.getMessage e))))
       (def f67-rd 1)
       (println (with-redefs-fn {(var f67-rd) 99} (fn [] f67-rd)) f67-rd)
+      (intern *ns* 'f67-in 5)
+      (println f67-iv f67-in (intern *ns* 'f67-rd 2) f67-rd)
     expected: |
       #'user/f67-iv
       7
       Can't change/establish root binding of: f67-iv with set
       99 1
+      7 5 #'user/f67-rd 2
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
     # load-string of a literal runs where the call stands.
@@ -15813,7 +15989,9 @@ cases:
     # beside the dispatch function. Higher-order and (def x NAME) application,
     # keyword, nil, class-spelling and vector dispatch values, mutations in
     # both directions (a value removal and a head call sees it, a head prefers
-    # a value reads it). Oracle-identical (clj 1.12.6, 2026-10-26) except the
+    # a value reads it). A call over a computed multimethod -- a local, a var's
+    # deref (spec.alpha's (methods @mmvar)) -- reads the same registry
+    # (2026-10-29). Oracle-identical (clj 1.12.6, 2026-10-26) except the
     # two wordings the head already customizes: a value applied to the wrong
     # count reports the head call's words (like g39's isa?/aget), and a
     # non-multimethod reports the value's refusal where the oracle throws
@@ -15852,6 +16030,9 @@ cases:
       (println (= (get-method g40-h ::g40-child) (g40-gm g40-h ::g40-child)))
       (def g40-pf prefers)
       (println (= (g40-pf g40-h) (prefers g40-h)))
+      (let [mm g40-h] (println (count (methods mm)) ((get-method mm ::g40-child) {})))
+      (def g40-hv #'g40-h)
+      (println (= (prefers @g40-hv) {::g40-child #{::g40-parent}}) (count (methods (deref g40-hv))))
       (println (= (g40-pm g40-m :x :y) g40-m))
       (println (= (g40-pf g40-m) {:x #{:y}}))
       (println (= (prefers g40-m) (g40-pf g40-m)))
@@ -15887,6 +16068,8 @@ cases:
       :C!
       true
       true
+      2 :C!
+      true 2
       true
       true
       true

@@ -206,8 +206,9 @@ final class ClojureFnLowering {
 	/**
 	 * {@code symbol} over one or two arguments: the spliced
 	 * {@code rontolisp::%clojure-symbol-1} (itself for a symbol, the spelled one for a
-	 * keyword or a string, else a signal) or {@code rontolisp::%clojure-symbol-2} (a
-	 * mangled symbol over the slash-joined spelling, so it prints and compares whole).
+	 * keyword or a string, a var's qualified name, else a signal) or
+	 * {@code rontolisp::%clojure-symbol-2} (a mangled symbol over the slash-joined
+	 * spelling, so it prints and compares whole).
 	 */
 	static LispVal symbolOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;

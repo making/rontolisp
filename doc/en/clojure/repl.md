@@ -11,7 +11,9 @@ notation, readably; a top-level `def`, `defn`, `defn-`, `defmacro`, `defmulti` o
 `defonce` echoes the var it defined (`#'user/twice`), and a `defonce` over a bound var `nil`.
 `defprotocol` echoes its name (`P`), `defrecord` and `deftype` their class name (`user.R`),
 `declare` the last name's var, and a `def` nested in another form its var as well. In a file a
-nested `def` answers the value.
+nested `def` answers the value. `eval`, a computed `resolve` or `require` and the other
+lowering verbs over computed arguments lower like one more input as they run, in the
+namespace `*ns*` holds, so what an `eval` defines a later input names.
 
 Like the oracle's REPL, `*1`, `*2` and `*3` hold the values of the last three inputs (an
 `ns` input records `nil`) and `*e` the last exception an input threw, which leaves them

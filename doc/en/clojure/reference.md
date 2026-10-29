@@ -33,6 +33,7 @@ has them.
 | [clojure.java.io](reference/clojure-java-io.md) | Files, URLs and the streams over them: `file`, `reader`/`writer`, `input-stream`/`output-stream`, `copy`, `resource`, the `Coercions`/`IOFactory` protocols, and `http:` URLs read through `rontolisp:fetch` |
 | [clojure.math](reference/clojure-math.md) | Functions over doubles that answer the same bits on every backend, rounding and the neighbors of a double, and long arithmetic that refuses to overflow |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
+| [clojure.reflect](reference/clojure-reflect.md) | A host class's bases, flags and members as data: `type-reflect`/`reflect`, the `Constructor`/`Method`/`Field` records, `typename` |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | Printing throwables and their causes: `root-cause`, `print-throwable`, `print-stack-trace`, `print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | Expression templates: `apply-template`, `do-template` |
 | [clojure.walk](reference/clojure-walk.md) | Generic traversal of nested data: `walk`/`postwalk`/`prewalk`, the `-replace` pair, `keywordize-keys`/`stringify-keys` |

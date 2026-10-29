@@ -184,7 +184,8 @@
   [triage-data]
   (when (:clojure.error/spec triage-data)
     (throw (UnsupportedOperationException.
-            "clojure.main/ex-str of spec problems: clojure.spec.alpha is not built in")))
+            (str "clojure.main/ex-str of spec problems: clojure.spec.alpha is a library"
+                 " this clojure.main does not load"))))
   (let [{phase :clojure.error/phase source :clojure.error/source path :clojure.error/path
          line :clojure.error/line column :clojure.error/column symbol :clojure.error/symbol
          class :clojure.error/class cause :clojure.error/cause} triage-data

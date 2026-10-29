@@ -100,9 +100,46 @@ public final class Clojure {
 	public static List<LispVal> read(String source, @Nullable String file,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
+		return program(source, file, macroEvaluator, files, hostTarget, boundary, false).forms();
+	}
+
+	/**
+	 * A Clojure program lowered, with the lowering it keeps for its run.
+	 *
+	 * @param forms the top-level core forms
+	 * @param runTime the lowering the program hands its lowering verbs over computed
+	 * arguments to as it runs ({@code eval}, a computed {@code resolve} ...), or null
+	 * when it names none or its target lowers nothing at run time
+	 */
+	public record Program(List<LispVal> forms, @Nullable ClojureRunTime runTime) {
+	}
+
+	/**
+	 * {@link #read(String, String, ClojureMacroEvaluator, ClojureFiles, boolean, ClojureBoundary)}
+	 * for a target that may lower as the program runs -- the interpreter: a program
+	 * naming a lowering verb over computed arguments lowers open and keeps its lowering
+	 * for its run ({@link ClojureRunTime}).
+	 * @param source the program text
+	 * @param file the origin file for diagnostics and for the source path, or
+	 * {@code null} when unknown (the working directory is the root)
+	 * @param macroEvaluator who evaluates one macro application in the macro-time
+	 * environment, or {@code null} when macro call sites must fail
+	 * @param files where required namespace files and WIT files are read from
+	 * @param hostTarget whether the target is one where the host is
+	 * @param boundary the host boundary
+	 * @param runTimeTarget whether the target lowers as the program runs
+	 * @return the forms, and the lowering kept for the run
+	 */
+	public static Program program(String source, @Nullable String file, @Nullable ClojureMacroEvaluator macroEvaluator,
+			ClojureFiles files, boolean hostTarget, ClojureBoundary boundary, boolean runTimeTarget) {
 		ClojureReader reader = new ClojureReader(source, file);
-		return ClojureHostClasses.lowering(files.javaClasses(),
-				() -> ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget, boundary));
+		ClojureJavaClasses classes = files.javaClasses();
+		return ClojureHostClasses.lowering(classes, () -> {
+			ClojureLowering.Whole whole = ClojureLowering.lowerWhole(reader.readAll(), reader, macroEvaluator, files,
+					hostTarget, boundary, runTimeTarget);
+			ClojureLowering kept = whole.runTime();
+			return new Program(whole.forms(), kept == null ? null : new ClojureRunTime(kept, classes));
+		});
 	}
 
 	/**

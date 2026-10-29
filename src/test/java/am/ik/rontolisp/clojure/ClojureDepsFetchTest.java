@@ -19,8 +19,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 1.12.6, measured 2026-10-08 over a {@code file:} Maven repository and {@code file://}
  * git repositories of the same shape), its jars and directories spelled as this front
  * end's roots, and every refusal the oracle's words. The built-in
- * {@code org.clojure/clojure} contributes nothing, so the oracle's clojure and spec jars
- * are absent from each expected path.
+ * {@code org.clojure/clojure} contributes no root, and its own dependencies (the spec
+ * jars) none until a lookup asks for one of their namespaces, so the oracle's clojure and
+ * spec jars are absent from each expected path.
  */
 class ClojureDepsFetchTest {
 
@@ -221,9 +222,26 @@ class ClojureDepsFetchTest {
 		MemoryClojureFiles files = fixture.files("{:deps {fixture/clj-lib {:mvn/version \"1.0\"} my/gitlib "
 				+ "{:git/url \"" + GITLIB + "\" :git/sha \"" + C2 + "\"}}}");
 		// a program requiring nothing still puts the jars holding classes on the class
-		// path
+		// path, and asks nothing of the built-in clojure's own dependencies
 		Clojure.read("(println 1)", "main.clj", null, files);
 		assertThat(files.javaClassPath).containsExactly(jar("java-lib", "1.0") + " fixture:java-lib:1.0");
+		assertThat(fixture.repositories.asked).noneMatch(question -> question.contains("org.clojure"));
+		// a namespace one of those holds fetches its jar alone, where a lookup first asks
+		// for it, read in place with its classes kept off the class path
+		Fixture specs = new Fixture();
+		String specJar = "m2/org/clojure/spec.alpha/0.5.238/spec.alpha-0.5.238.jar";
+		Map<String, String> spec = new LinkedHashMap<>();
+		spec.put("clojure/spec/alpha.clj", "(ns clojure.spec.alpha) (defn valid? [pred x] (pred x))");
+		spec.put("clojure/spec/alpha__init.class", "");
+		specs.archives.put(specJar, spec);
+		specs.repositories.jars.put("org.clojure:spec.alpha:jar:0.5.238", specJar);
+		MemoryClojureFiles specFiles = specs.files("{}");
+		assertThat(Clojure
+			.read("(require '[clojure.spec.alpha :as s]) (println (s/valid? int? 1))", "main.clj", null, specFiles)
+			.stream()
+			.map(LispVal::print)).anyMatch(form -> form.contains("|c%clojure.spec.alpha/valid?|"));
+		assertThat(specs.repositories.asked).containsExactly("jar org.clojure:spec.alpha:jar:0.5.238");
+		assertThat(specFiles.javaClassPath).isEmpty();
 		List<String> forms = Clojure
 			.read("(require '[fixture.clj-lib :as c] '[gitlib.core :as g]) (println (c/hello) g/version)", "main.clj",
 					null, fixture.files("{:deps {fixture/clj-lib {:mvn/version \"1.0\"} my/gitlib {:git/url \"" + GITLIB

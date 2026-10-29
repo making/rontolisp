@@ -977,7 +977,7 @@ final class ClojureStateLowering {
 	 * bound itself.
 	 */
 	private static boolean tracksHistory(ClojureLowering ctx, @Nullable LispVal min, @Nullable LispVal max) {
-		return ctx.usedRefHistory || ctx.session || min != null || max != null;
+		return ctx.usedRefHistory || ctx.open || min != null || max != null;
 	}
 
 	/**
@@ -2490,7 +2490,7 @@ final class ClojureStateLowering {
 	 * the interpreter.
 	 */
 	static boolean hostExceptions(ClojureLowering ctx) {
-		return ctx.session || (ctx.hostTarget && ctx.namedHost && !ctx.hostExceptionClasses.isEmpty());
+		return ctx.open || (ctx.hostTarget && ctx.namedHost && !ctx.hostExceptionClasses.isEmpty());
 	}
 
 	/** The function building the host exception a chain, message and cause stand for. */

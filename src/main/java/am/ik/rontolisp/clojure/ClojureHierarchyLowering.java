@@ -447,7 +447,7 @@ final class ClojureHierarchyLowering {
 		boolean host = ctx.hostClassWalk;
 		List<LispVal> runtime = new ArrayList<>();
 		runtime.add(isaDefun(true, host));
-		runtime.addAll(readerDefuns(true, host, ctx.readsDescendants || ctx.session));
+		runtime.addAll(readerDefuns(true, host, ctx.readsDescendants || ctx.open));
 		if (host) {
 			List<LispVal> kinds = new ArrayList<>();
 			new TreeMap<>(ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS).forEach(
@@ -759,6 +759,9 @@ final class ClojureHierarchyLowering {
 	 */
 	static LispVal preferMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 4, "prefer-method takes a multimethod and two dispatch values");
+		if (ClojureDispatchLowering.isComputedMultimethod(ctx, items.get(1))) {
+			return ClojureDispatchLowering.computedCall(ctx, "prefer-method", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "prefer-method");
 		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
 		LispSymbol prefers = ClojureDispatchLowering.tableGlobal(key, "%prefers");

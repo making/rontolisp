@@ -64,6 +64,7 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.java.io` | [clojure.java.io](clojure-java-io.md) |
 | `clojure.java.shell` (interpreter and JVM) | [clojure.java.shell](clojure-java-shell.md) |
 | `clojure.xml` | [clojure.xml](clojure-xml.md) |
+| `clojure.reflect` (refused when called on WebAssembly) | [clojure.reflect](clojure-reflect.md) |
 | `clojure.repl` | [clojure.repl](clojure-repl.md) |
 | `clojure.main` | [clojure.main](clojure-main.md) |
 | `clojure.test` | [Tests (clojure.test)](test.md) |

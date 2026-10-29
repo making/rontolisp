@@ -1230,8 +1230,8 @@
 
 (defun rontolisp::%clojure-munge-char (code)
   "The munged spelling of the character of code CODE: a dash is an
-   underscore, every other mapped character its _NAME_, anything else the
-   character itself."
+   underscore, every other mapped character its _NAME_ (the oracle's
+   Compiler/CHAR_MAP), anything else the character itself."
   (cond ((= code 45) "_")
         ((= code 43) "_PLUS_")
         ((= code 42) "_STAR_")
@@ -1240,8 +1240,8 @@
         ((= code 60) "_LT_")
         ((= code 62) "_GT_")
         ((= code 61) "_EQ_")
-        ((= code 39) "_SQUOTE_")
-        ((= code 34) "_DQUOTE_")
+        ((= code 39) "_SINGLEQUOTE_")
+        ((= code 34) "_DOUBLEQUOTE_")
         ((= code 47) "_SLASH_")
         ((= code 58) "_COLON_")
         ((= code 126) "_TILDE_")
@@ -1253,8 +1253,45 @@
         ((= code 124) "_BAR_")
         ((= code 123) "_LBRACE_")
         ((= code 125) "_RBRACE_")
+        ((= code 91) "_LBRACK_")
+        ((= code 93) "_RBRACK_")
         ((= code 92) "_BSLASH_")
         (t (string (code-char code)))))
+
+(defvar rontolisp::%clojure-demunge-spellings
+  '(("_DOUBLEQUOTE_" . "\"") ("_SINGLEQUOTE_" . "'") ("_AMPERSAND_" . "&")
+    ("_PERCENT_" . "%") ("_LBRACE_" . "{") ("_RBRACE_" . "}") ("_LBRACK_" . "[")
+    ("_RBRACK_" . "]") ("_BSLASH_" . "\\") ("_COLON_" . ":") ("_TILDE_" . "~")
+    ("_CIRCA_" . "@") ("_SHARP_" . "#") ("_CARET_" . "^") ("_SLASH_" . "/")
+    ("_QMARK_" . "?") ("_PLUS_" . "+") ("_BANG_" . "!") ("_STAR_" . "*")
+    ("_BAR_" . "|") ("_GT_" . ">") ("_LT_" . "<") ("_EQ_" . "=") ("_" . "-")
+    ("$" . "/"))
+  "Each munged spelling with the text it stands for, the longest first, so
+   that one never takes the head of another: the oracle's DEMUNGE_MAP, $ as /.")
+
+(defun rontolisp::%clojure-demunge (s)
+  "clojure.lang.Compiler/demunge of the string S: each munged spelling (the
+   longest at a place) spelled back, $ as /, like the oracle's; nil its
+   NullPointerException."
+  (if (null s)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"java.lang.CharSequence.length()\" because \"this.text\" is null"))
+  (let ((n (length s)) (i 0) (acc nil))
+    (do ()
+        ((>= i n) (apply #'concatenate 'string (reverse acc)))
+      (let ((hit nil))
+        (dolist (entry rontolisp::%clojure-demunge-spellings)
+          (let ((spelling (car entry)))
+            (if (and (null hit) (<= (+ i (length spelling)) n)
+                     (string= spelling (subseq s i (+ i (length spelling)))))
+                (setq hit entry))))
+        (if hit
+            (progn
+              (setq acc (cons (cdr hit) acc))
+              (setq i (+ i (length (car hit)))))
+            (progn
+              (setq acc (cons (string (char s i)) acc))
+              (setq i (+ i 1))))))))
 
 (defun rontolisp::%clojure-munge (x)
   "(munge x): the str of X with every character munged, like the oracle's."
@@ -5961,7 +5998,8 @@
 
 (defun rontolisp::%clojure-symbol-1 (x)
   "The symbol for X: itself for a symbol (one carrying metadata too), the
-   spelled one for a keyword or a string; anything else signals."
+   spelled one for a keyword or a string, a var's qualified name (the oracle's
+   Var.toSymbol); anything else signals in the oracle's words."
   (cond ((rontolisp::%clojure-real-symbol-p x) x)
         ((rontolisp::%clojure-meta-symbol-p x) x)
         ((rontolisp::%clojure-keyword-p x)
@@ -5971,8 +6009,12 @@
         ((stringp x)
          (intern
           (concatenate 'string "c%" (rontolisp::%clojure-escape-part x))))
+        ((rontolisp::%clojure-var-p x)
+         (intern
+          (concatenate 'string "c%"
+                       (rontolisp::%clojure-escape-part (car (cdr x))))))
         (t (rontolisp::%clojure-illegal-argument-exception
-            "symbol needs a string, keyword or symbol"))))
+            "no conversion to symbol"))))
 
 (defun rontolisp::%clojure-keyword-2 (ns nm)
   "The keyword for namespace NS and name NM (a NIL namespace drops, like the
@@ -15029,6 +15071,48 @@
   (or (gethash name rontolisp::%clojure-shared-values)
       (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
 
+;; A function's class name, what (.getClass f) names: the oracle compiles every
+;; fn to a class of its own, ns$name for a defn or a core var's root and
+;; ns$enclosing$fn__N for an anonymous one, which demunging readers (spec.alpha's
+;; fn-sym, a stack trace printer) read back as the var. A core function shared
+;; through the table above knows its name, so it answers clojure.core$NAME; no
+;; other function here carries one, so it answers the spelling of an anonymous
+;; fn under clojure.lang.AFunction, the class type answers for every function.
+
+(defun rontolisp::%clojure-fn-class-name (f)
+  "The oracle's class name of the function F: clojure.core$NAME munged for a
+   core function the shared-value table holds, else an anonymous fn's."
+  (let ((found nil))
+    (maphash (lambda (key value)
+               (if (and (null found) (eq value f))
+                   (let ((cut
+                          (position-if
+                           (lambda (c) (or (char= c #\Space) (char= c #\#)))
+                           key)))
+                     (setq found (if cut (subseq key 0 cut) key)))))
+             rontolisp::%clojure-shared-values)
+    (if found
+        (concatenate 'string "clojure.core$" (rontolisp::%clojure-munge found))
+        "clojure.lang.AFunction$fn")))
+
+;; clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts
+;; sets and its assert reads: false until a program sets it (the oracle starts
+;; it from the clojure.spec.check-asserts system property, which this runtime
+;; does not read).
+(defvar rontolisp::%clojure-check-spec-asserts '|false|)
+
+(defun rontolisp::%clojure-boolean-field-value (v)
+  "V as a store into a boolean static field takes it: a boolean itself, nil
+   the oracle's NullPointerException of the unboxing, anything else its
+   ClassCastException to Boolean."
+  (cond ((or (eq v t) (eq v rontolisp::%clojure-false)) v)
+        ((null v)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Boolean.booleanValue()\" because the value is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of v)
+                         " cannot be cast to class java.lang.Boolean")))))
+
 ;;;; Atoms across request threads.
 ;;
 ;; A Ring handler runs one thread per request on the interpreter and the JVM, and an
@@ -15554,66 +15638,70 @@
 ;;
 ;; On a host target (the interpreter and the JVM, where threads exist), an
 ;; elected runner hands its agent to the shared pool instead of running the
-;; queue itself: four worker threads, started on the first send that needs one,
-;; each pumping queued agents between sleeps of a millisecond. The pool is one
-;; for sends
-;; and send-offs alike (the oracle gives send-off its own unbounded pool; here
-;; a blocking action holds a worker like any other). A CPU-bound action
-;; therefore no longer blocks its sender -- or a request thread -- while await
-;; still blocks the caller until the queued actions complete. Where no thread
-;; exists (wasm, single-threaded by construction), this whole section is
-;; pruned: the drain the module splices instead runs the queue on the elected
-;; runner's own thread (eval/ClojureLibrary, the host-arms stand-ins).
+;; queue itself: up to four worker threads, each pumping queued agents until
+;; the pool's queue is empty and then ending, so the next submit starts another
+;; (the taps' shape). Nothing polls while no agent waits, and where a spawn
+;; runs its body at once (the browser playground's interpreter) a send runs its
+;; action before it returns. The pool is one for sends and send-offs alike (the
+;; oracle gives send-off its own unbounded pool; here a blocking action holds a
+;; worker like any other). A CPU-bound action therefore no longer blocks its
+;; sender -- or a request thread -- while await still blocks the caller until
+;; the queued actions complete. Where no thread exists (wasm, single-threaded
+;; by construction), this whole section is pruned: the drain the module splices
+;; instead runs the queue on the elected runner's own thread
+;; (eval/ClojureLibrary, the host-arms stand-ins).
 
 (defvar rontolisp::%clojure-agent-pool
-  nil
-  "The shared pool: #(queue workers) once started, nil before. The queue holds
-   the agents whose queue wants pumping, oldest first; the workers pump one
-   each. Stays nil where no thread exists, where the sender runs each queue
-   itself.")
+  (vector nil 0)
+  "The shared pool: #(queue workers) under %clojure-agent-pool-guard. QUEUE
+   holds the agents whose queue wants pumping, oldest first; WORKERS counts the
+   threads pumping them, at most four, like the oracle's small fixed send
+   pool.")
 
 (defvar rontolisp::%clojure-agent-pool-guard (rontolisp:make-mutex))
 
 (defun rontolisp::%clojure-agent-pool-submit (agent)
-  "Queue AGENT for a pump on the shared pool, starting its crew on the first
-   call: one pump queued per election, like one inline run per election."
-  (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
-    (if (null rontolisp::%clojure-agent-pool)
-        (setf rontolisp::%clojure-agent-pool (vector nil nil)))
-    (let ((pool rontolisp::%clojure-agent-pool))
-      (if (null (aref pool 1))
-          (setf (aref pool 1) (rontolisp::%clojure-agent-pool-start pool)))
-      (setf (aref pool 0) (append (aref pool 0) (list agent))))))
-
-(defun rontolisp::%clojure-agent-pool-start (pool)
-  "Start the shared pool's crew over POOL, answering its worker handles: each
-   loops taking the oldest queued agent and pumping it, sleeping between takes
-   of an empty queue, so a worker never holds a lock while an action runs.
-   Four workers, like the oracle's small fixed send pool."
-  (let ((crew nil))
-    (dotimes (i 4)
-      (setq crew
-            (cons (rontolisp:make-thread
-                   (lambda () (rontolisp::%clojure-agent-pool-work pool)))
-                  crew)))
-    crew))
+  "Queue AGENT for a pump on the shared pool, starting a worker unless four
+   run: one pump queued per election, like one inline run per election. The
+   worker starts outside the guard, so a spawn that runs its body at once
+   takes the guard like any other worker."
+  (let ((pool rontolisp::%clojure-agent-pool) (start nil))
+    (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+      (setf (aref pool 0) (append (aref pool 0) (list agent)))
+      (if (< (aref pool 1) 4)
+          (progn
+            (setf (aref pool 1) (+ (aref pool 1) 1))
+            (setq start t))))
+    (if start
+        (rontolisp:make-thread
+         (lambda () (rontolisp::%clojure-agent-pool-work pool))))))
 
 (defun rontolisp::%clojure-agent-pool-work (pool)
-  "One pool thread's loop over POOL: pump the oldest queued agent, else sleep
-   a millisecond. A pump that signals anyway (an action's own failure stays in
-   the agent, so only a bug can) is dropped and the loop goes on, so the crew
-   never shrinks."
-  (loop
-    (let ((agent
-           (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
-             (if (aref pool 0)
-                 (let ((next (car (aref pool 0))))
-                   (setf (aref pool 0) (cdr (aref pool 0)))
-                   next)
-                 nil))))
-      (if agent
-          (handler-case (rontolisp::%clojure-agent-pump agent) (error () nil))
-          (sleep 0.001)))))
+  "One worker's run over POOL: pump the oldest queued agent, outside every
+   lock, until the queue is empty. The empty take counts the worker out, the
+   unwind an abnormal exit, so the next submit starts another. A pump that
+   signals anyway (an action's own failure stays in the agent, so only a bug
+   can) is dropped and the run goes on."
+  (let ((done nil))
+    (unwind-protect (loop
+                      (let ((agent
+                             (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+                               (if (aref pool 0)
+                                   (let ((next (car (aref pool 0))))
+                                     (setf (aref pool 0) (cdr (aref pool 0)))
+                                     next)
+                                   (progn
+                                     (setf (aref pool 1) (- (aref pool 1) 1))
+                                     (setq done t)
+                                     nil)))))
+                        (if agent
+                            (handler-case (rontolisp::%clojure-agent-pump agent)
+                              (error () nil))
+                            (return nil))))
+      (if done
+          nil
+          (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+            (setf (aref pool 1) (- (aref pool 1) 1)))))))
 
 (defun rontolisp::%clojure-agent-pump (agent)
   "Run AGENT's queue until it is empty or an action fails, one action after
@@ -16659,12 +16747,59 @@
   (rontolisp::%clojure-check-arity args 2 2 "reset-meta!")
   (rontolisp::%clojure-reset-meta (car args) (car (cdr args))))
 
-;;;; eval, and resolve of a computed symbol: the lowering's own work, so they run
-;;;; only while the program lowers. The macro-time evaluator (eval/ClojureMacroTime)
-;;;; replaces both with calls back into the lowering, so a macro body (and every
-;;;; helper it calls) evaluates a form and resolves a name at expansion time; a
-;;;; compiled program carries no lowering, so here both refuse. resolve of a
-;;;; quoted symbol never comes here: it resolves while the program lowers.
+;;;; The lowering verbs at run time: eval, resolve, find-var, ns-resolve and
+;;;; requiring-resolve of a computed symbol, load-string, load-file, load-reader
+;;;; and load of a computed argument, require, use and in-ns of computed specs
+;;;; or names, alias, refer, ns-unmap and ns-unalias of computed names, and the
+;;;; namespace mappings of a computed namespace. Each is the lowering's own work
+;;;; -- of literal arguments it happens while the program lowers -- so each
+;;;; reaches %clojure-lower-at-run-time with its verb and its arguments. The
+;;;; interpreter keeps the program's lowering as it runs and replaces that
+;;;; function by one lowering the call of the verb over the arguments, quoted, in
+;;;; *ns*, and evaluating what it lowers to (eval/LispEvaluator); a compiled
+;;;; program carries no lowering, so here it refuses. The macro-time evaluator
+;;;; (eval/ClojureMacroTime) answers eval, resolve, find-var and ns-resolve
+;;;; through the lowering instead, so a macro body (and every helper it calls)
+;;;; evaluates a form and resolves a name at expansion time.
+
+(defun rontolisp::%clojure-lower-at-run-time (verb args message)
+  "The lowering verb VERB (a string) over the list ARGS at run time: refused
+   with MESSAGE where no lowering runs as the program runs."
+  (declare (ignore verb args))
+  (rontolisp::%clojure-unsupported-operation-exception message))
+
+(defun rontolisp::%clojure-forms-of (items)
+  "The proper list ITEMS with each member a form (%clojure-form-of), ITEMS
+   itself where no member changed."
+  (let ((acc nil) (changed nil))
+    (dolist (item items)
+      (let ((form (rontolisp::%clojure-form-of item)))
+        (if (not (eq form item)) (setq changed t))
+        (setq acc (cons form acc))))
+    (if changed (nreverse acc) items)))
+
+(defun rontolisp::%clojure-form-of (x)
+  "X as a form: every lazy seq in its lists and vectors realized into a list,
+   X itself where it holds none -- what eval's argument and a macro's answer
+   decode back to a datum from, since a lazy seq has no spelling a form reads.
+   A list whose spine ends in a wrapper (a realized seq's lazy tail) realizes
+   whole; any other tagged value stays as it is."
+  (cond ((rontolisp::%clojure-lazy-p x)
+         (rontolisp::%clojure-forms-of (rontolisp::%clojure-realize-all x)))
+        ((and (consp x) (not (keywordp (car x))))
+         (let ((p x) (tail nil))
+           (do ()
+               ((or tail (not (consp (cdr p)))))
+             (if (keywordp (car (cdr p))) (setq tail t) (setq p (cdr p))))
+           (cond (tail (rontolisp::%clojure-forms-of
+                        (rontolisp::%clojure-realize-all x)))
+                 ((null (cdr p)) (rontolisp::%clojure-forms-of x))
+                 (t x))))
+        ((and (vectorp x) (not (stringp x)))
+         (let* ((items (coerce x 'list))
+                (forms (rontolisp::%clojure-forms-of items)))
+           (if (eq forms items) x (coerce forms 'vector))))
+        (t x)))
 
 ;; A macro body's &env and &form: the call's locals (a map of each local's symbol
 ;; to itself, nil without one) and the call itself, which an expansion while the
@@ -16676,16 +16811,14 @@
 (defvar rontolisp::%clojure-macro-form nil)
 
 (defun rontolisp::%clojure-eval (form)
-  "eval at run time: refused."
-  (declare (ignore form))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "eval is not supported at run time: only a macro body's eval runs, while the program lowers"))
+  "eval at run time: the lowering's (%clojure-lower-at-run-time)."
+  (rontolisp::%clojure-lower-at-run-time "eval" (list form)
+                                         "eval is not supported at run time: only a macro body's eval runs, while the program lowers"))
 
 (defun rontolisp::%clojure-resolve (symbol)
-  "resolve of a computed symbol at run time: refused."
-  (declare (ignore symbol))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "resolve of a computed symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "resolve" (list symbol)
+                                         "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-find-var (symbol)
   "find-var of a computed symbol: an unqualified one is the oracle's refusal, a
@@ -16702,10 +16835,9 @@
         (t (rontolisp::%clojure-find-var-resolve symbol))))
 
 (defun rontolisp::%clojure-find-var-resolve (symbol)
-  "find-var of a computed qualified symbol at run time: refused."
-  (declare (ignore symbol))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "find-var of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "find-var of a computed qualified symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "find-var" (list symbol)
+                                         "find-var of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-find-var-v (&rest args)
   "find-var as a value."
@@ -16714,11 +16846,10 @@
 
 (defun rontolisp::%clojure-ns-resolve-in (pair)
   "ns-resolve of the symbol (second PAIR) in the namespace (first PAIR) at run
-   time: refused, like resolve. The macro-time evaluator resolves it through the
-   lowering instead."
-  (declare (ignore pair))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-resolve of a computed namespace or symbol is not supported at run time: vars exist only while the program lowers"))
+   time: the lowering's, like resolve. The macro-time evaluator resolves it
+   through the lowering instead."
+  (rontolisp::%clojure-lower-at-run-time "ns-resolve" pair
+                                         "ns-resolve of a computed namespace or symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-ns-resolve (ns symbol)
   "ns-resolve of a namespace or symbol computed at run time: a nil namespace is
@@ -17024,19 +17155,17 @@
 
 (defun rontolisp::%clojure-ns-computed-here (what x)
   "(ns-publics ns-interns ns-map ns-refers ns-aliases ns-imports of a
-   computed namespace at run time: refused -- only what the lowering knows
-   maps."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   (concatenate 'string what
-                " of a computed namespace is not supported at run time: only what the lowering knows maps")))
+   computed namespace at run time: the lowering's -- of a literal one, what
+   the lowering knows maps."
+  (rontolisp::%clojure-lower-at-run-time what (list x)
+                                         (concatenate 'string what
+                                                      " of a computed namespace is not supported at run time: only what the lowering knows maps")))
 
 (defun rontolisp::%clojure-load-string-here (x)
-  "(load-string x) of a computed string at run time: refused -- only a
-   literal string loads, where the call stands."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-string of a computed string is not supported at run time: only a literal string loads, where the call stands"))
+  "(load-string x) of a computed string at run time: the lowering's -- a
+   literal string loads where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load-string" (list x)
+                                         "load-string of a computed string is not supported at run time: only a literal string loads, where the call stands"))
 
 (defun rontolisp::%clojure-load-string-v (&rest args)
   "load-string as a value."
@@ -17044,11 +17173,10 @@
   (rontolisp::%clojure-load-string-here (car args)))
 
 (defun rontolisp::%clojure-load-file-here (x)
-  "(load-file x) of a computed path at run time: refused -- only a literal
-   path loads, where the call stands."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-file of a computed path is not supported at run time: only a literal path loads, where the call stands"))
+  "(load-file x) of a computed path at run time: the lowering's -- a literal
+   path loads where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load-file" (list x)
+                                         "load-file of a computed path is not supported at run time: only a literal path loads, where the call stands"))
 
 (defun rontolisp::%clojure-load-file-v (&rest args)
   "load-file as a value."
@@ -17056,22 +17184,29 @@
   (rontolisp::%clojure-load-file-here (car args)))
 
 (defun rontolisp::%clojure-load-reader (x)
-  "(load-reader x): refused -- nothing reads a reader at run time."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-reader is not supported at run time: only load-string and load-file of literals load, where the call stands"))
+  "(load-reader x): the lowering's, over the text read from X to its end."
+  (rontolisp::%clojure-lower-at-run-time "load-reader" (list x)
+                                         "load-reader is not supported at run time: only load-string and load-file of literals load, where the call stands"))
 
 (defun rontolisp::%clojure-load-reader-v (&rest args)
   "load-reader as a value."
   (rontolisp::%clojure-check-arity args 1 1 "load-reader")
   (rontolisp::%clojure-load-reader (car args)))
 
+(defun rontolisp::%clojure-load-here (paths)
+  "(load paths...) of computed paths at run time: the lowering's -- literal
+   paths load where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load" paths
+                                         "load of a computed path is not supported at run time: only literal paths load, where the call stands"))
+
+(defun rontolisp::%clojure-load-v (&rest paths)
+  "load as a value: nil of no path, like the call of none."
+  (if paths (rontolisp::%clojure-load-here paths) nil))
+
 (defun rontolisp::%clojure-requiring-resolve-here (x)
-  "(requiring-resolve x) of a computed symbol at run time: refused -- vars
-   exist only while the program lowers."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "requiring-resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "(requiring-resolve x) of a computed symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "requiring-resolve" (list x)
+                                         "requiring-resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-requiring-resolve-v (&rest args)
   "requiring-resolve as a value."
@@ -17079,34 +17214,31 @@
   (rontolisp::%clojure-requiring-resolve-here (car args)))
 
 (defun rontolisp::%clojure-alias-here (x y)
-  "(alias x y) of computed names at run time: refused -- aliases wire while
-   the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "alias of computed names is not supported at run time: aliases wire while the program lowers"))
+  "(alias x y) of computed names at run time: the lowering's -- of literal
+   names, aliases wire while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "alias" (list x y)
+                                         "alias of computed names is not supported at run time: aliases wire while the program lowers"))
 
 (defun rontolisp::%clojure-alias-v (&rest args)
   "alias as a value."
   (rontolisp::%clojure-check-arity args 2 2 "alias")
   (rontolisp::%clojure-alias-here (car args) (car (cdr args))))
 
-(defun rontolisp::%clojure-refer-here (&rest args)
-  "(refer ...) of computed names at run time: refused -- refers wire while
-   the program lowers."
-  (declare (ignore args))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "refer of computed names is not supported at run time: refers wire while the program lowers"))
+(defun rontolisp::%clojure-refer-here (ns filters)
+  "(refer ns filters...) of computed names at run time: the lowering's -- of
+   literal names, refers wire while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "refer" (cons ns filters)
+                                         "refer of computed names is not supported at run time: refers wire while the program lowers"))
 
 (defun rontolisp::%clojure-refer-v (&rest args)
   "refer as a value."
-  (rontolisp::%clojure-refer-here args))
+  (rontolisp::%clojure-refer-here (car args) (cdr args)))
 
 (defun rontolisp::%clojure-ns-unmap-here (x y)
-  "(ns-unmap x y) of computed names at run time: refused -- mappings unmap
-   while the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-unmap of computed names is not supported at run time: mappings unmap while the program lowers"))
+  "(ns-unmap x y) of computed names at run time: the lowering's -- of literal
+   names, mappings unmap while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "ns-unmap" (list x y)
+                                         "ns-unmap of computed names is not supported at run time: mappings unmap while the program lowers"))
 
 (defun rontolisp::%clojure-ns-unmap-v (&rest args)
   "ns-unmap as a value."
@@ -17114,11 +17246,10 @@
   (rontolisp::%clojure-ns-unmap-here (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-ns-unalias-here (x y)
-  "(ns-unalias x y) of computed names at run time: refused -- aliases unalias
-   while the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-unalias of computed names is not supported at run time: aliases unalias while the program lowers"))
+  "(ns-unalias x y) of computed names at run time: the lowering's -- of
+   literal names, aliases unalias while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "ns-unalias" (list x y)
+                                         "ns-unalias of computed names is not supported at run time: aliases unalias while the program lowers"))
 
 (defun rontolisp::%clojure-ns-unalias-v (&rest args)
   "ns-unalias as a value."
@@ -17126,14 +17257,15 @@
   (rontolisp::%clojure-ns-unalias-here (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-load-libs-v (name args)
-  "require or use (NAME) as a value: libraries load while the program lowers,
-   so any spec refuses at run time; of none, the oracle's own refusal."
+  "require or use (NAME) of computed specs, or as a value: the lowering's --
+   of literal specs, libraries load while the program lowers; of none, the
+   oracle's own refusal."
   (if (null args)
       (rontolisp::%clojure-exception "Nothing specified to load")
-      (rontolisp::%clojure-unsupported-operation-exception
-       (format nil
-               "~A of computed specs is not supported at run time: libraries load while the program lowers"
-               name))))
+      (rontolisp::%clojure-lower-at-run-time name args
+                                             (format nil
+                                                     "~A of computed specs is not supported at run time: libraries load while the program lowers"
+                                                     name))))
 
 (defun rontolisp::%clojure-require-v (&rest args)
   "require as a value."
@@ -17144,10 +17276,24 @@
   (rontolisp::%clojure-load-libs-v "use" args))
 
 (defun rontolisp::%clojure-in-ns-v (&rest args)
-  "in-ns as a value: refused -- namespaces switch while the program lowers."
+  "in-ns of a computed name, or as a value: the lowering's -- of a literal
+   name, namespaces switch while the program lowers."
   (rontolisp::%clojure-check-arity args 1 1 "in-ns")
-  (rontolisp::%clojure-unsupported-operation-exception
-   "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
+  (rontolisp::%clojure-lower-at-run-time "in-ns" args
+                                         "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
+
+(defun rontolisp::%clojure-run-time-arguments (verb args)
+  "The arguments the lowering verb VERB takes at run time out of ARGS, each a
+   form (%clojure-form-of): load-reader's reader read to its end, its text
+   what lowers. The interpreter asks before it lowers (eval/LispEvaluator)."
+  (if (equal verb "load-reader")
+      (if (streamp (car args))
+          (list
+           (rontolisp::%clojure-read-to-end
+            (rontolisp::%clojure-open-reader (car args))))
+          (rontolisp::%clojure-class-cast-exception-of "load-reader needs a reader: a clojure.java.io/reader, a PushbackReader over one, or *in*"
+                                                       (car args)))
+      (rontolisp::%clojure-forms-of args)))
 
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result

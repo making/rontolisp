@@ -170,11 +170,11 @@ final class ClojureNamespaceLowering {
 			"index-of", "last-index-of", "replace", "replace-first", "escape", "re-quote-replacement", "reverse");
 
 	/**
-	 * The {@code java.lang} classes a simple name resolves to without an import: the
-	 * oracle's fixed default-import list (not every {@code java.lang} class -- {@code
-	 * AutoCloseable}, {@code Record} and {@code Module} are unresolved there too).
+	 * The {@code java.lang} half of the oracle's fixed default-import list (not every
+	 * {@code java.lang} class -- {@code AutoCloseable}, {@code Record} and {@code Module}
+	 * are unresolved there too).
 	 */
-	static final Set<String> JAVA_LANG = Set.of("AbstractMethodError", "Appendable", "ArithmeticException",
+	private static final Set<String> JAVA_LANG = Set.of("AbstractMethodError", "Appendable", "ArithmeticException",
 			"ArrayIndexOutOfBoundsException", "ArrayStoreException", "AssertionError", "Boolean", "Byte", "Character",
 			"CharSequence", "Class", "ClassCastException", "ClassCircularityError", "ClassFormatError", "ClassLoader",
 			"ClassNotFoundException", "CloneNotSupportedException", "Cloneable", "Comparable", "Deprecated", "Double",
@@ -192,6 +192,25 @@ final class ClojureNamespaceLowering {
 			"ThreadLocal", "Throwable", "TypeNotPresentException", "UnknownError", "UnsatisfiedLinkError",
 			"UnsupportedClassVersionError", "UnsupportedOperationException", "VerifyError", "VirtualMachineError",
 			"Void");
+
+	/**
+	 * The classes a simple name resolves to without an import, simple name to FQN: the
+	 * oracle's {@code (ns-imports 'user)} (clj 1.12.6) -- {@link #JAVA_LANG} plus
+	 * {@code Callable}, {@code BigInteger} and {@code BigDecimal}; its
+	 * {@code clojure.lang.Compiler} is no class here.
+	 */
+	static final Map<String, String> DEFAULT_IMPORTS = defaultImports();
+
+	private static Map<String, String> defaultImports() {
+		Map<String, String> imports = new java.util.HashMap<>();
+		for (String name : JAVA_LANG) {
+			imports.put(name, "java.lang." + name);
+		}
+		imports.put("Callable", "java.util.concurrent.Callable");
+		imports.put("BigInteger", "java.math.BigInteger");
+		imports.put("BigDecimal", "java.math.BigDecimal");
+		return Map.copyOf(imports);
+	}
 
 	/**
 	 * Whether a core name is visible: everything outside a
@@ -943,13 +962,10 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The imported classes of TARGET in PAIRS, each a symbol of its FQN: the explicit
-	 * imports over the default {@code java.lang} ones they shadow.
+	 * imports over the default ones they shadow.
 	 */
 	private static void importPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
-		Map<String, String> imports = new java.util.TreeMap<>();
-		for (String name : JAVA_LANG) {
-			imports.put(name, "java.lang." + name);
-		}
+		Map<String, String> imports = new java.util.TreeMap<>(DEFAULT_IMPORTS);
 		ClojureNsState state = ctx.namespaces.get(target);
 		if (state != null) {
 			imports.putAll(state.classNames);
@@ -1238,20 +1254,31 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * {@code load} as a value: paths arrive evaluated, but only literal paths load --
-	 * where the call stands -- so only the no-argument shape runs (nil, like the call of
-	 * none), and anything else refuses at run time.
+	 * {@code load} as a value: paths arrive evaluated, so they load where a lowering runs
+	 * as the program runs and refuse where none does; of none, nil, like the call of
+	 * none.
 	 * @return the value form
 	 */
 	static LispVal loadValue() {
-		LispSymbol args = new LispSymbol(ClojureLowering.mangle("load-args"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowering.NIL_CONST,
-						ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
-								LispString.literal("load of a computed path is not supported"
-										+ " at run time: only literal paths load, where the call stands"))));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-LOAD-V"));
+	}
+
+	/**
+	 * A {@code load} call of a computed path: the paths evaluated and handed to the
+	 * run-time library's load, which lowers the call over them where a lowering runs as
+	 * the program runs and refuses where none does.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered call, or null when every path is a string literal
+	 */
+	static @Nullable LispVal computedLoadOf(ClojureLowering ctx, List<LispVal> items) {
+		for (LispVal path : items.subList(1, items.size())) {
+			if (!(path instanceof LispString)) {
+				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOAD-HERE"),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -1294,6 +1321,53 @@ final class ClojureNamespaceLowering {
 	static List<LispVal> specsOf(List<LispVal> items, String what) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, what + " takes library specs");
 		return items.subList(1, items.size());
+	}
+
+	/**
+	 * Whether a {@code require} or {@code use} call computes a spec, as the oracle
+	 * evaluates every argument of the function: an unquoted symbol naming a local or a
+	 * var, or an unquoted list calling a local, a var, a {@code clojure.core} name or any
+	 * qualified name (no prefix list's head has a namespace: spec.alpha's gen requires
+	 * {@code (c/symbol ns)} through an alias of {@code clojure.core}). A bare symbol
+	 * naming nothing, a bare vector and a bare prefix list stay the specs the leniency
+	 * reads ({@link #unwrapQuote}); until 2026-10-29 a local's name was read as a
+	 * library's ({@code (let [n 'clojure.set] (require n))} looked for {@code n}).
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return {@code true} when the call loads at run time
+	 */
+	static boolean computesSpecs(ClojureLowering ctx, List<LispVal> items) {
+		for (LispVal spec : items.subList(1, items.size())) {
+			LispVal bare = ClojureLowerUtil.stripMeta(spec);
+			if (bare != unwrapQuote(bare)) {
+				continue;
+			}
+			if (bare instanceof LispSymbol symbol && !symbol.name().startsWith(":") && ctx.known(symbol.name())) {
+				return true;
+			}
+			List<LispVal> parts = ClojureLowerUtil.items(bare);
+			if (parts != null && !parts.isEmpty() && !ClojureBindingLowering.isVectorDatum(bare)
+					&& parts.get(0) instanceof LispSymbol head
+					&& (ctx.known(head.name()) || ClojureCoreNames.contains(head.name())
+							|| ClojureLowering.qualifierSlash(head.name()) >= 0)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A {@code require} or {@code use} of computed specs: every argument evaluated and
+	 * handed to the run-time library's load, which lowers the call over the values where
+	 * a lowering runs as the program runs and refuses where none does.
+	 * @param ctx the hub
+	 * @param what {@code require} or {@code use}
+	 * @param items the call, head included
+	 * @return the lowered call
+	 */
+	static LispVal computedLoad(ClojureLowering ctx, String what, List<LispVal> items) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOAD-LIBS-V"), LispString.literal(what),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 	}
 
 	/**
@@ -1362,7 +1436,7 @@ final class ClojureNamespaceLowering {
 				|| ctx.requiredLibraries.contains(head);
 	}
 
-	/** A class name resolved: dotted as written, imported, or {@code java.lang}. */
+	/** A class name resolved: dotted as written, imported, or a default import. */
 	static String resolveClass(ClojureLowering ctx, String name) {
 		if (name.indexOf('.') >= 0) {
 			return name;
@@ -1371,18 +1445,15 @@ final class ClojureNamespaceLowering {
 		if (imported != null) {
 			return imported;
 		}
-		if (JAVA_LANG.contains(name)) {
-			return "java.lang." + name;
-		}
-		return name;
+		return DEFAULT_IMPORTS.getOrDefault(name, name);
 	}
 
 	/**
-	 * Whether the slash form's head names a class: imported, java.lang, dotted or
+	 * Whether the slash form's head names a class: imported, a default import, dotted or
 	 * capitalized.
 	 */
 	static boolean isClasslike(ClojureLowering ctx, String head) {
-		return ctx.ns().classNames.containsKey(head) || JAVA_LANG.contains(head) || head.indexOf('.') >= 0
+		return ctx.ns().classNames.containsKey(head) || DEFAULT_IMPORTS.containsKey(head) || head.indexOf('.') >= 0
 				|| (!head.isEmpty() && Character.isUpperCase(head.charAt(0)));
 	}
 

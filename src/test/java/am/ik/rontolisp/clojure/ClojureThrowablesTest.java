@@ -60,10 +60,10 @@ class ClojureThrowablesTest {
 					.isEqualTo(row.getValue());
 			}
 		}
-		for (String simple : ClojureNamespaceLowering.JAVA_LANG) {
-			Class<?> type = Class.forName("java.lang." + simple);
+		for (String fqn : ClojureNamespaceLowering.DEFAULT_IMPORTS.values()) {
+			Class<?> type = Class.forName(fqn);
 			if (Throwable.class.isAssignableFrom(type) && type != Throwable.class) {
-				assertThat(ClojureThrowables.PARENTS).as(simple).containsKey(type.getName());
+				assertThat(ClojureThrowables.PARENTS).as(fqn).containsKey(type.getName());
 			}
 		}
 	}

@@ -251,10 +251,29 @@ public final class ClojureLowering {
 	final Set<String> declaredAbove = new HashSet<>();
 
 	/**
-	 * Whether this lowering reads a session's buffers one at a time: no pre-scan sees a
-	 * later buffer, so a name only declared so far may still be defined.
+	 * Whether code this lowering has not seen may still join the program: a session's
+	 * later buffers, or what a program lowering at run time ({@link ClojureRunTime})
+	 * hands the lowering as it runs. A decision that must hold for code no pre-scan sees
+	 * takes its open shape: a protocol's dispatchers walk, a ref tracks its history, a
+	 * macro's table holds its expander, a name only declared so far may still be defined.
 	 */
-	boolean session;
+	boolean open;
+
+	/**
+	 * Whether the datum being lowered lowers after code before it already ran: a
+	 * session's buffer, or a form lowered at run time. Nothing lowered before can lower
+	 * again, so a miss that would lower a whole program again ({@link #redefMisses})
+	 * refuses instead, and what a whole program settles once lowered (an unbound root, a
+	 * caught binding, a Java face) settles at the site.
+	 */
+	boolean incremental;
+
+	/**
+	 * Whether this lowering reads a REPL's inputs: {@code *repl*} is true, the REPL's
+	 * refers resolve, and an input may read the class of the condition its {@code *e}
+	 * holds.
+	 */
+	boolean repl;
 
 	/**
 	 * Whether the program is lowered for a target where the host is: the interpreter and
@@ -943,7 +962,7 @@ public final class ClojureLowering {
 	 */
 	boolean needsExceptionReader() {
 		return !this.usedExInfo && (!this.caughtChains.isEmpty() || this.readsExceptionParts
-				|| (this.readsConditionClass && (this.usedCatch || this.session)));
+				|| (this.readsConditionClass && (this.usedCatch || this.repl)));
 	}
 
 	/**
@@ -1038,7 +1057,7 @@ public final class ClojureLowering {
 		LispCons params = (LispCons) clause.cdr();
 		LispSymbol variable = (LispSymbol) ((LispCons) params.car()).car();
 		CaughtBinding binding = new CaughtBinding((LispCons) params.cdr(), variable);
-		if (this.session) {
+		if (this.incremental) {
 			bindCaught(binding);
 		}
 		else {
@@ -1672,17 +1691,54 @@ public final class ClojureLowering {
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
+		return lowerWhole(datums, reader, macroEvaluator, files, hostTarget, boundary, false).forms();
+	}
+
+	/**
+	 * A whole program lowered, and the lowering it leaves behind for the program's run
+	 * when the program lowers at run time.
+	 *
+	 * @param forms the core forms
+	 * @param runTime the lowering, open for what the program hands it as it runs, or null
+	 * when the program never lowers at run time or its target lowers nothing then
+	 */
+	record Whole(List<LispVal> forms, @Nullable ClojureLowering runTime) {
+	}
+
+	/**
+	 * {@link #lower(List, ClojureReader, ClojureMacroEvaluator, ClojureFiles, boolean, ClojureBoundary)}
+	 * for a target that may lower at run time. A program naming a lowering verb over
+	 * computed arguments ({@link ClojureRunTime#ENTRIES}: {@code eval}, a computed
+	 * {@code resolve}, {@code require} ...) lowers again, open ({@link #open}): what the
+	 * program hands the lowering as it runs joins it like a session's later buffer, so
+	 * every decision code not seen yet could miss takes its open shape from the start.
+	 * The program itself still lowers whole, so a miss lowers it again as before.
+	 * @param datums the program's datums
+	 * @param reader the reader they came out of, for error positions
+	 * @param macroEvaluator who evaluates one macro application at lower time
+	 * @param files where required namespace files are read from
+	 * @param hostTarget whether the target is one where the host is
+	 * @param boundary the host boundary
+	 * @param runTimeTarget whether the target lowers at run time (the interpreter)
+	 * @return the forms, and the open lowering where the program lowers at run time
+	 */
+	static Whole lowerWhole(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
+			ClojureBoundary boundary, boolean runTimeTarget) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
 		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
 		boolean rootSetters = false;
 		boolean threadBinders = false;
+		boolean open = false;
 		Set<String> dynamicSeed = new HashSet<>();
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
+			lowering.open = open;
 			lowering.rootSetters = rootSetters;
-			lowering.threadBinders = threadBinders;
+			// what runs later may bind any dynamic var through its var object
+			lowering.threadBinders = threadBinders || open;
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
 			lowering.dynamicVars.addAll(dynamicSeed);
@@ -1701,8 +1757,10 @@ public final class ClojureLowering {
 			boolean binders = lowering.threadBinderMiss && !threadBinders;
 			threadBinders |= lowering.threadBinderMiss;
 			boolean dynamics = lowering.boundFnUsed && dynamicSeed.addAll(lowering.dynamicVars);
-			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics) {
-				return forms;
+			boolean opens = runTimeTarget && !open && ClojureRunTime.namesAny(forms);
+			open |= opens;
+			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics && !opens) {
+				return new Whole(forms, open ? lowering : null);
 			}
 			sourcePath = lowering.sourcePath;
 		}
@@ -1745,7 +1803,10 @@ public final class ClojureLowering {
 		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
 		if (lowering.expandsAtRunTime) {
 			// the macro runtime travels with the program, like the false value
-			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering, lowering.macroExpanders));
+			// (an open program's table holds each expander, like a session's: a form
+			// lowered as the program runs may define another)
+			lowering.forms.addAll(1,
+					ClojureMacroLowering.macroRuntime(lowering, lowering.open ? null : lowering.macroExpanders));
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);
@@ -1817,7 +1878,45 @@ public final class ClojureLowering {
 			}
 			lowering.forms.addAll(1, inits);
 		}
+		if (lowering.open) {
+			lowering.noteRuntimesEmitted();
+		}
 		return lowering.forms;
+	}
+
+	/**
+	 * Records the runtimes a whole open program carries ahead of its forms as emitted,
+	 * the way a session records what travelled with its buffers, so a form the program
+	 * hands the lowering as it runs ({@link #lowerAtRunTime}) carries only the runtimes
+	 * it is the first to need -- a runtime emitted again would start its state over.
+	 */
+	private void noteRuntimesEmitted() {
+		this.falseBound = true;
+		if (this.usedHierarchy) {
+			this.hierarchyEmitted = true;
+			this.classChainsEmitted = this.usedClassChains;
+			this.hostClassWalkEmitted = this.hostClassWalk;
+		}
+		if (this.usedProtocols) {
+			this.protocolsEmitted = true;
+			this.walkTestsEmitted = this.walkTests.size();
+		}
+		if (this.expandsAtRunTime) {
+			this.macrosEmitted = true;
+			this.macroScopeEmitted = ClojureMacroLowering.macroScopeDefinition(this).print();
+		}
+		this.exInfoEmitted = this.usedExInfo;
+		this.emittedCatches.addAll(this.caughtChains.keySet());
+		this.catchReaderEmitted = needsExceptionReader();
+		this.stmEmitted = this.usedStm;
+		this.httpUrlsEmitted = this.readsHttpUrls;
+		this.emittedSpecials.addAll(this.usedSpecials);
+		this.testEmitted = this.usedTest;
+		if (this.usedReader) {
+			for (TypeDef type : this.types.values()) {
+				this.readRegistered.put(type.className(), type);
+			}
+		}
 	}
 
 	/**
@@ -1958,10 +2057,76 @@ public final class ClojureLowering {
 	}
 
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
-		this.session = true;
+		this.open = true;
+		this.incremental = true;
+		this.repl = true;
 		this.threadBinders = true;
 		this.reader = buffer;
-		List<LispVal> datums = buffer.readAll();
+		return lowerAfterRun(buffer.readAll(), buffer, true);
+	}
+
+	/**
+	 * One call of a lowering verb as the program runs, lowered like a session's buffer of
+	 * one datum in the namespace the program's {@code *ns*} names: {@code eval}'s form
+	 * itself, or {@code (verb 'arg ...)} with each argument as a literal -- the call the
+	 * lowering takes while the program lowers, here over the values the program computed.
+	 * What the datum defines joins the lowering, so a later call sees it; the runtimes it
+	 * is the first to need travel ahead of it.
+	 * @param verb the verb ({@code eval}, {@code resolve}, {@code require} ...)
+	 * @param args the arguments, as the run-time library holds them
+	 * @param namespace the name of the namespace {@code *ns*} holds
+	 * @param host the running program's half of the decoding: the metadata of the
+	 * arguments' symbols, and the form standing for a value no datum spells
+	 * @return the forms to evaluate, in order: the datum's own entry is the one that
+	 * echoes, its last form's value the call's; the others are the runtimes travelling
+	 * ahead of it and what runs after it
+	 */
+	synchronized List<ClojureTopLevel> lowerAtRunTime(String verb, List<LispVal> args, String namespace,
+			ClojureRunTime.Host host) {
+		ClojureReader outerReader = this.reader;
+		boolean outerIncremental = this.incremental;
+		this.reader = null;
+		this.incremental = true;
+		// and a switch the datum makes stays the lowering's, like a session buffer's
+		this.currentNs = namespace;
+		try {
+			LispVal datum;
+			ClojureRunTime.Host outerHost = this.decodingFor;
+			this.decodingFor = host;
+			try {
+				datum = ClojureRunTime.datum(this, verb, args);
+			}
+			finally {
+				this.decodingFor = outerHost;
+			}
+			return lowerAfterRun(List.of(datum), null, false);
+		}
+		finally {
+			this.reader = outerReader;
+			this.incremental = outerIncremental;
+		}
+	}
+
+	/**
+	 * The running program's half of decoding a run-time value while
+	 * {@link #lowerAtRunTime} decodes its arguments, or null -- at lower time, and while
+	 * the datum lowers, where a macro's answer is a macro-time value the macro-time
+	 * evaluator answers for.
+	 */
+	ClojureRunTime.@Nullable Host decodingFor;
+
+	/**
+	 * Lowers datums after the code before them already ran -- a session's buffer, a call
+	 * lowered as the program runs: each declares its top-level names first, keeping what
+	 * the lowering already said of a name (a later datum may call what an earlier one
+	 * defined), and the runtimes they are the first to need travel ahead of them.
+	 * @param datums the datums
+	 * @param source the reader they came out of, or null for datums with none
+	 * @param history whether each datum's value and exception go to the REPL's history
+	 * ({@code *1}, {@code *e}) -- a session's -- or the last form answers it
+	 * @return one entry per datum, in order, runtimes ahead
+	 */
+	private List<ClojureTopLevel> lowerAfterRun(List<LispVal> datums, @Nullable ClojureReader source, boolean history) {
 		resolveProject(datums);
 		// A buffer's pre-scan must not clobber what earlier buffers already
 		// defined: its inits evaluate against the OLD binding (e.g. (def p
@@ -1973,7 +2138,7 @@ public final class ClojureLowering {
 			this.globals.put(kept.getKey(), kept.getValue());
 		}
 		List<ClojureTopLevel> out = new ArrayList<>();
-		Datums pass = new Datums(buffer, datums);
+		Datums pass = new Datums(source, datums);
 		while (true) {
 			List<LispVal> forms = new ArrayList<>();
 			LispVal datum = pass.next(forms);
@@ -1984,8 +2149,18 @@ public final class ClojureLowering {
 			// an ns form shows nothing, also when its requires loaded namespaces
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
-			if (!forms.isEmpty() || !ns) {
-				out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
+			if (history) {
+				if (!forms.isEmpty() || !ns) {
+					out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
+				}
+			}
+			else {
+				// the datum's own entry ends in its value: the oracle's eval of an ns
+				// form answers nil, and so does a datum lowering to nothing
+				if (ns || forms.isEmpty()) {
+					forms.add(NIL_CONST);
+				}
+				out.add(new ClojureTopLevel(forms, true));
 			}
 		}
 		// the contents of the resources its literal names found are kept before the
@@ -2592,7 +2767,7 @@ public final class ClojureLowering {
 				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
 			return head;
 		}
-		if ((ClojureBuiltinNamespaces.isStartup(head) || this.session && ClojureBuiltinNamespaces.isReplRequire(head)
+		if ((ClojureBuiltinNamespaces.isStartup(head) || this.repl && ClojureBuiltinNamespaces.isReplRequire(head)
 				&& ClojureBuiltinNamespaces.isShipped(head)) && this.topLevelDepth > 0
 				&& !this.loadingNamespaces.contains(head)) {
 			// the oracle loaded it before the program (or its REPL before the first
@@ -2687,7 +2862,7 @@ public final class ClojureLowering {
 	 */
 	private void loadReplRefer(String name, VarRef referred) {
 		String ns = referred.ns();
-		if (!this.session || this.topLevelDepth == 0 || !ClojureBuiltinNamespaces.isReplRequire(ns) || isLocal(name)) {
+		if (!this.repl || this.topLevelDepth == 0 || !ClojureBuiltinNamespaces.isReplRequire(ns) || isLocal(name)) {
 			return;
 		}
 		String why = ClojureBuiltinNamespaces.replRefusal(ns, referred.var());
@@ -3818,6 +3993,10 @@ public final class ClojureLowering {
 		if (items.isEmpty()) {
 			return NIL_CONST;
 		}
+		if (items.get(0) == ClojureRunTime.EMBEDDED && items.size() == 2) {
+			// a run-time value standing in a form as itself: already its core form
+			return items.get(1);
+		}
 		if (items.get(0) instanceof LispCons metaHead && ClojureInteropLowering.paramTags(metaHead) == null
 				&& ClojureLowerUtil.stripMeta(metaHead) instanceof LispSymbol bare) {
 			// reader metadata on a head symbol never changes what it names, like the
@@ -4205,15 +4384,25 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "require")) {
+			if (ClojureNamespaceLowering.computesSpecs(this, items)) {
+				return ClojureNamespaceLowering.computedLoad(this, "require", items);
+			}
 			List<LispVal> calls = requireSpecsWhere(form, ClojureNamespaceLowering.specsOf(items, "require"), false);
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "load")
 				&& (coreOnly || !known("load") && ClojureNamespaceLowering.coreAllowed(this, "load"))) {
+			LispVal computed = ClojureNamespaceLowering.computedLoadOf(this, items);
+			if (computed != null) {
+				return computed;
+			}
 			List<LispVal> calls = ClojureNamespaceLowering.loadForms(this, items.subList(1, items.size()));
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "use")) {
+			if (ClojureNamespaceLowering.computesSpecs(this, items)) {
+				return ClojureNamespaceLowering.computedLoad(this, "use", items);
+			}
 			List<LispVal> calls = requireSpecsWhere(form, ClojureNamespaceLowering.specsOf(items, "use"), true);
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
@@ -4633,13 +4822,20 @@ public final class ClojureLowering {
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
 		}
-		if (!isFunction(name) && !(this.session && isDeclaredOnly(name))) {
+		if (this.open && isDeclaredOnly(name)) {
+			// a name an open lowering only declared so far may be defined by code
+			// not seen yet (a later buffer, a form lowered as the program runs):
+			// the call takes its function once one is defined, else its root,
+			// whose unbound root signals like the oracle's
+			return callableApply(ClojureVarLowering.sessionDeclaredRoot(symOf(name)),
+					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
+		}
+		if (!isFunction(name)) {
 			// a parameter, a let/loop binding or a def'd variable holds the
 			// function in the VALUE cell (Lisp-2): a direct call would read the
 			// function cell and miss, so call through funcall instead. A defn
-			// stays direct, and so does a session's declared name (a later
-			// buffer may define it); a file's declared-never-defined name calls
-			// its unbound root, which signals like the oracle's. A
+			// stays direct; a file's declared-never-defined name calls its
+			// unbound root, which signals like the oracle's. A
 			// variable whose value may hold a collection goes through the
 			// prelude dispatcher instead, which funcalls real functions.
 			if (!isDirectVar(name)) {
@@ -5754,7 +5950,7 @@ public final class ClojureLowering {
 		if (isFunction(name)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
 		}
-		if (this.session && isDeclaredOnly(name)) {
+		if (this.open && isDeclaredOnly(name)) {
 			return ClojureVarLowering.sessionDeclaredRoot(symOf(name));
 		}
 		return symOf(name);
@@ -5877,6 +6073,10 @@ public final class ClojureLowering {
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> items = ClojureLowerUtil.items(datum, List.of());
+			if (items.size() == 2 && items.get(0) == ClojureRunTime.EMBEDDED) {
+				// a run-time value quoted as itself
+				return items.get(1);
+			}
 			refusePendingTag(items);
 			if (!items.isEmpty() && items.get(0) == ClojureReader.VECTOR) {
 				List<LispVal> out = new ArrayList<>();

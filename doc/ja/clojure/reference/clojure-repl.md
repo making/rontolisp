@@ -48,4 +48,5 @@ user/add-one
   出力します。
 - var でない名前（名前空間を含む）の `doc` は変換時の `Unable to resolve var` です。Clojure は
   名前空間の docstring を出力するか、何も出力しません。キーワード（spec）の `doc` は拒否します。
+  それは `clojure.spec.alpha` を読みますが、この `clojure.repl` はそのライブラリを読み込みません。
 - ここでの throwable はスタックフレームを持たないため、`pst` はフレームを出力しません。

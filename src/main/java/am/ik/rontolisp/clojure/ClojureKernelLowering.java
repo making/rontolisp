@@ -38,6 +38,8 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, an exception's too, which {@code class} (a kind keyword here) does not
  * answer.</li>
+ * <li>{@code rontolisp.internal.reflect} for {@code clojure.reflect}: the oracle's class
+ * name of a value, and whether the target has the host classes it reflects on.</li>
  * <li>{@code rontolisp.internal.throwable} for {@code clojure.stacktrace},
  * {@code clojure.repl} and {@code clojure.main}: the class name of a throwable, a host
  * one too, which {@code class} answers as a keyword or a host class; a call emits the
@@ -149,6 +151,13 @@ final class ClojureKernelLowering {
 	}
 
 	/**
+	 * {@code hosted?}: whether the target has the host, a constant a Clojure {@code if}
+	 * folds, so a built-in file's host branch never reaches a program for a target
+	 * without one.
+	 */
+	private static final Inline HOSTED = (ctx, args) -> ctx.hostTarget ? ClojureLowering.TRUE_CONST : ctx.falseVariable;
+
+	/**
 	 * {@code rontolisp.internal.xml}: the workers of {@code events} and {@code blank?},
 	 * and two questions about the host in place -- {@code host?} of a value (the worker
 	 * where the host is; false where it is not, wasm, since nothing makes a host object
@@ -166,7 +175,7 @@ final class ClojureKernelLowering {
 			return value instanceof LispCons
 					? ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), value, ctx.falseVariable)
 					: ctx.falseVariable;
-		}, "hosted?", (ctx, args) -> ctx.hostTarget ? ClojureLowering.TRUE_CONST : ctx.falseVariable);
+		}, "hosted?", HOSTED);
 		return new Kernels("clojure.xml", "RONTOLISP::%CLOJURE-XML-",
 				Map.of("events", 1, "blank?", 1, "host?", 1, "hosted?", 0), Map.of(), false, inline);
 	}
@@ -237,6 +246,10 @@ final class ClojureKernelLowering {
 							Map.entry("case-out", 0), Map.entry("with-case-out", 2)))),
 			Map.entry("rontolisp.internal.datafy",
 					new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-DATAFY-", Map.of("class-name", 1))),
+			Map.entry("rontolisp.internal.reflect",
+					new Kernels("clojure.reflect", "RONTOLISP::%CLOJURE-", Map.of("class-name", 1, "hosted?", 0),
+							Map.of("class-name", "RONTOLISP::%CLOJURE-DATAFY-CLASS-NAME"), false,
+							Map.of("hosted?", HOSTED))),
 			Map.entry("rontolisp.internal.throwable",
 					new Kernels("clojure.stacktrace, clojure.repl and clojure.main", "RONTOLISP::%CLOJURE-",
 							Map.of("class-name", 1), Map.of("class-name", "RONTOLISP::%CLOJURE-DATAFY-CLASS-NAME"),
