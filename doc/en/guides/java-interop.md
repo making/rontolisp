@@ -572,7 +572,7 @@ call resolved when it runs reads no hint. `C` is a binary class name:
 
 ```lisp
 (let ((e (java:static "java.util.concurrent.Executors" "newFixedThreadPool" 1)))
-  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => nil
+  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => NIL
 ```
 
 ### Reflection warnings
