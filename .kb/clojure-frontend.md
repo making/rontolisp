@@ -354,10 +354,11 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   a host arm: NIL stand-in without `java:`) a new exception of its class chain (read at run time,
   `%clojure-host-chain`), message and cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
   `C%E-PARTS` (a host throwable has no data). `ex-message` of a non-exception is `nil` (was the
-  rendering before 2026-10-03); of a CL condition its report (`Division by zero`, the oracle's
-  `Divide by zero`; the spec's `ex-message` case uses `(assoc [0 1] :a :x)`, from when wasm-GC
-  trapped on division by zero -- it signals since 2026-10-04, and clojure-spec
-  `catch-takes-a-division-by-zero-as-an-arithmetic-exception` pins the catch, oracle-identical).
+  rendering before 2026-10-03); of a CL condition its report, except a `division-by-zero`'s,
+  the oracle's `Divide by zero` (the report `Division by zero` until 2026-10-29; `str` and the
+  uncaught report still print the report). clojure-spec
+  `catch-takes-a-division-by-zero-as-an-arithmetic-exception` pins the catch and the message,
+  oracle-identical; `unchecked-divide-int`/`-remainder-int`'s refusal is Java's `/ by zero`.
 - `ex-info` takes an optional cause; nil data is `{}` (the oracle's); a non-exception cause is
   refused.
 - `Throwable->map` (2026-10-08) is `%clojure-throwable-to-map`, a reader like `ex-data`
@@ -3861,7 +3862,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `ClojureLoweringTest#hierarchyVerbsNameValues`).
 - `defprotocol`: an `equal`-table global plus one dispatcher `defun` per method over
   `C%PROTOCOL-TAG`; exact tag, then (a walking protocol, below) the walked classes, then the
-  method's `Object` row, else a signal. The
+  method's `Object` row, else a signal. A protocol of no methods (a marker; core.async's
+  `UnblockingBuffer`) is the table and registry alone, refused until 2026-10-29 (pin:
+  clojure-spec `extends-reads-the-protocol-table`, oracle-identical). The
   multimethod shape over runtimes all four backends already run, not a per-backend value
   model (`.todo/artefacts/b13-protocols/spike.md`).
 - **A method declares one parameter vector per arity** (`(m [x] [x y] "doc")`;

@@ -3,7 +3,7 @@
 `(ex-message ex)`
 
 Answers an exception's message: an `ex-info`'s or a throwable construction's (`nil` when it
-has none), a caught runtime error's report, `nil` for a value that is no exception, like the
+has none), a caught runtime error's report (a division by zero's the oracle's `Divide by zero`), `nil` for a value that is no exception, like the
 oracle. `.getMessage` and `.getLocalizedMessage` answer the same. Works as a function value
 too.
 

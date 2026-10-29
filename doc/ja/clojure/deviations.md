@@ -151,7 +151,8 @@
 - 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは
   ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の
   report（失敗した `(inc nil)` の `(.getMessage e)` は `+: The value NIL is not of type
-  NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
+  NUMBER` で、オラクルでは `NullPointerException` の文言。ゼロ除算のメッセージはオラクルと
+  同じ `Divide by zero`）、`str` はオラクルのクラス名の
   接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
   （`java.net.URISyntaxException`）はホストオブジェクトのままです。インタプリタと JVM では、

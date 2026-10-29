@@ -91,7 +91,7 @@ class PlaygroundReplTest {
 		assertThat(repl.eval("*1")).isEqualTo("[3 2 1]");
 		assertThatThrownBy(() -> repl.eval("(/ 1 0)")).hasMessageContaining("Division by zero");
 		assertThat(repl.eval("[(first *1) (ex-message *e) (class *e)]"))
-			.isEqualTo("[3 \"Division by zero\" :java.lang.ArithmeticException]");
+			.isEqualTo("[3 \"Divide by zero\" :java.lang.ArithmeticException]");
 		assertThatThrownBy(() -> repl.eval("(def hist-x (throw (ex-info \"in a def\" {})))"))
 			.hasMessageContaining("in a def");
 		assertThat(repl.eval("(ex-message *e)")).isEqualTo("\"in a def\"");

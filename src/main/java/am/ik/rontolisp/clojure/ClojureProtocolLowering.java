@@ -693,7 +693,6 @@ final class ClojureProtocolLowering {
 							+ items.get(at).print());
 			arities.put(method, Set.copyOf(counts));
 		}
-		ClojureLowerUtil.isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
 		String var = ClojureLowering.varSym(key).name();
 		return new ClojureLowering.ProtocolDef(methods, arities, new LispSymbol(var + "%methods"),
 				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null,

@@ -153,8 +153,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - An exception is a condition carrying its class, a message, data and a cause. A runtime
   error is the Common Lisp condition the runtime signals, whose message is the Common Lisp
   report (`(.getMessage e)` of a failed `(inc nil)` is `+: The value NIL is not of type
-  NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
-  without the oracle's class prefix. A throwable construction is an exception only
+  NUMBER`, the oracle's a `NullPointerException` text; a division by zero's is the
+  oracle's `Divide by zero`) and whose `str` is that report without the oracle's class
+  prefix. A throwable construction is an exception only
   for a class that carries nothing but a message and a cause; one with members of its own
   (`java.net.URISyntaxException`) stays a host object. On the interpreter and the JVM, an
   exception a Java member throws, and a host object thrown, is the host's own, like the
