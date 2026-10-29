@@ -5885,16 +5885,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * Pushes an int onto a {@code MethodCode} body in its shortest form -- the
 	 * {@code iconst/bipush/sipush} half of {@link JvmEmitHelper#emitIntConst}, which
-	 * needs a {@code Ctx}, plus the {@code ldc} a wider funcId takes. A funcId past the
-	 * short range needs a program of absurd size to exist, but the fill shares the fix.
+	 * needs a {@code Ctx}, plus the {@code ldc} a wider funcId takes (the clojure-spec
+	 * corpus passed 32767 functions on 2026-10-29).
 	 */
 	private static void emitIntConstant(MethodCode code, ConstantPool cp, int value) {
-		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			code.loadConstant(value);
-		}
-		else {
-			code.ldc(cp.entries().intEntry(value));
-		}
+		code.loadConstant(cp, value);
 	}
 
 	/**

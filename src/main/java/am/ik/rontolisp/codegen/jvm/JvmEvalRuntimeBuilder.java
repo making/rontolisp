@@ -651,11 +651,7 @@ final class JvmEvalRuntimeBuilder {
 
 	/** Pushes an int constant, pooled when it is past {@code sipush} range. */
 	private void ldcInt(MethodCode a, int value) {
-		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			a.loadConstant(value);
-			return;
-		}
-		a.ldc(this.k.cp().entries().intEntry(value));
+		a.loadConstant(this.k.cp(), value);
 	}
 
 	// === shared high-level emit helpers ===
@@ -1107,7 +1103,7 @@ final class JvmEvalRuntimeBuilder {
 				a.anewarray(this.k.objectClass());
 				a.dup();
 				a.loadConstant(0);
-				a.loadConstant(fi.funcId());
+				ldcInt(a, fi.funcId());
 				a.invokestatic(this.k.integerValueOf());
 				a.aastore();
 				a.dup();

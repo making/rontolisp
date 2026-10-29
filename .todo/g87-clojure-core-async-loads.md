@@ -18,7 +18,7 @@ a library probe like the others: it is the JVM Clojure compiler's analyzer, writ
 the oracle's runtime model. Plan, in order:
 
 1. `clojure.reflect` (`.todo/g96`).
-2. tools.reader loads verbatim (`.todo/g97`).
+2. tools.reader loads verbatim (done 2026-10-29: `.kb/clojure-frontend.md`, "Library probes").
 3. Core macros expand to the oracle's special forms as data, macro vars callable with
    `&form`/`&env`, and `let*`/`loop*`/`letfn*`/`case*` lowered (`.todo/g98`).
 4. Here: what `analyze` reads of the runtime, at macro time only -- `all-ns`, `ns-map`,

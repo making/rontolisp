@@ -2018,9 +2018,9 @@ final class ClojureStateLowering {
 	/**
 	 * The map of the bindings in effect where a {@code bound-fn*} call stands: every
 	 * program dynamic var and core special, each read only when thread-bound, plus the
-	 * lexically enclosing {@code with-local-vars} cells. A program definition shadowing a
-	 * special without being dynamic is skipped (it is not bindable); the unbound root a
-	 * cell holds outside its extent is skipped the same way.
+	 * lexically enclosing {@code with-local-vars} cells. A program var shadowing a
+	 * special's name is a var of its own beside the special; the unbound root a cell
+	 * holds outside its extent is skipped.
 	 */
 	private static LispVal captureForm(ClojureLowering ctx) {
 		List<LispVal> unconditional = new ArrayList<>();
@@ -2040,14 +2040,13 @@ final class ClojureStateLowering {
 					ClojureLowering.NIL_CONST));
 		}
 		for (String name : ClojureCoreSpecials.names()) {
-			String key = ctx.lookupVar(name);
+			// the special itself, spelled absolutely: a program var shadowing its name
+			// here (a namespace excluding it) is another var, captured above when
+			// dynamic, while code elsewhere may still bind the special
 			ClojureCoreSpecials.Special special = ClojureCoreSpecials.required(name);
-			if (key != null && !ctx.dynamicVars.contains(key)) {
-				continue;
-			}
 			LispVal var = ClojureVarLowering.varOf(ctx,
-					List.of(new LispSymbol("var"), new LispSymbol(key != null ? key : name)));
-			LispVal value = key != null ? ClojureLowering.varSym(key) : ctx.specialValue(special);
+					List.of(new LispSymbol("var"), new LispSymbol(ClojureCoreNames.NAMESPACE + "/" + name)));
+			LispVal value = ctx.specialValue(special);
 			if (special.counter() == null) {
 				unconditional.add(var);
 				unconditional.add(value);

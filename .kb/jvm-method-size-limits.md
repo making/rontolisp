@@ -20,7 +20,11 @@ the write phase's time and every written class's size and pool count.
   silently into a class that VERIFIES and computes the wrong number — reachable via a character
   above the BMP (`.kb/characters-code-points.md`). Now `ldc`/`ldc_w`; `MethodCode.loadConstant`
   refuses a value past the short range (the caller `ldc`s an Integer entry, as `JvmQuotePool`'s
-  table size does).
+  table size does), and `MethodCode.loadConstant(cp, value)` is that choice in one call. A
+  function id passes it: the clojure-spec corpus reached 33,246 functions on 2026-10-29 (g97)
+  and the dispatchers' search trees (`JvmRuntimeBuilder.emitSegmentRouter`/`emitDispatchTree`)
+  and the eval registry's rows refused it (`not a short: 33246`); they take the pool overload
+  since (`MethodCodeTest#anIntPastTheShortRangeIsNotAPush`, the corpus's JVM leg).
 - **65534 constant-pool entries per CLASS** (`ConstantPool.MAX_INDEX`). Every distinct integer
   literal costs TWO entries (boxed `long` = `CONSTANT_Long`); ~25,000 distinct numbers suffice.
   Not a program limit: past it the program is SPLIT (below). The limit is checked where a class

@@ -1582,13 +1582,22 @@ cases:
       11
       21
   - name: declare-forward-declares
+    # A declared name a namespace excludes from clojure.core is its own above the
+    # definition too (tools.reader.edn's (declare read)), on all four backends.
     source: |
       (declare dcl-f)
       (defn dcl-g [] (dcl-f 1))
       (defn dcl-f [x] (* 2 x))
       (println (dcl-g))
+      (ns dcl-ns (:refer-clojure :exclude [read]))
+      (declare read)
+      (defn- dcl-h [x] (read x))
+      (defn read [x] (if (= x :again) :inner (dcl-h :again)))
+      (println (read :x))
+      (in-ns 'user)
     expected: |
       2
+      :inner
   - name: chars-are-characters
     # Character literals print as their glyphs; equality and str see through.
     # Whitespace characters only ever print inside strings here, so no expected
@@ -14589,9 +14598,26 @@ cases:
     # PersistentArrayMap/createWithCheck builds the map of a flat object array's
     # alternating keys and values: a repeated key is the oracle's Duplicate key
     # (even a dangling last one, which itself is dropped), nil the oracle's
-    # NullPointerException. Runs on every backend. Oracle-identical (clj 1.12.6,
-    # 2026-10-13).
+    # NullPointerException. RT/map is the same build, PersistentHashSet/
+    # createWithCheck the set's, PersistentList/create a list of a List's
+    # members; RT/nextID counts up; BigInt/fromBigInteger and
+    # Numbers/reduceBigInt keep the integer, and an integer answers BigInteger's
+    # negate and bitLength (tools.reader's readers). A clojure.lang class of the
+    # oracle's jar is a dispatch value no value here answers. Runs on every
+    # backend. Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29).
     source: |
+      (println (pr-str (clojure.lang.RT/map (object-array [:a 1 :b 2]))))
+      (println (pr-str (try (clojure.lang.RT/map (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
+      (println (pr-str (clojure.lang.PersistentHashSet/createWithCheck [1 2])))
+      (println (pr-str (try (clojure.lang.PersistentHashSet/createWithCheck [1 1]) (catch IllegalArgumentException e (ex-message e)))))
+      (println (pr-str (clojure.lang.PersistentList/create [1 2 3])))
+      (println (pr-str (let [a (clojure.lang.RT/nextID) b (clojure.lang.RT/nextID)] (< a b))))
+      (println (pr-str [(= 5 (clojure.lang.BigInt/fromBigInteger (biginteger 5))) (= 7 (clojure.lang.Numbers/reduceBigInt (bigint 7)))]))
+      (println (pr-str [(.negate (biginteger 5)) (.bitLength (biginteger 255)) (.bitLength (biginteger -256))]))
+      (defmulti treader-cm class)
+      (defmethod treader-cm clojure.lang.PersistentVector$ChunkedSeq [_] :chunked)
+      (defmethod treader-cm :default [_] :other)
+      (println (pr-str [(treader-cm [1]) (treader-cm "s")]))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2]))))
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array []))))
@@ -14602,6 +14628,15 @@ cases:
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck nil) (catch NullPointerException e :nil))))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2 :c 3]))))
     expected: |
+      {:a 1, :b 2}
+      :dup
+      #{1 2}
+      "Duplicate key: 1"
+      (1 2 3)
+      true
+      [true true]
+      [-5 8 8]
+      [:other :other]
       {:a 1, :b 2}
       :dup
       {}
@@ -15608,15 +15643,20 @@ cases:
       nil
   - name: ns-map-answers-interns-refers-and-core-vars
     # ns-map holds the interns, the refers and the referred core vars, each
-    # as its var. Oracle-identical (clj 1.12.6, 2026-10-13).
+    # as its var -- read by a macro body too, while it expands (tools.reader's
+    # resolve-symbol under its syntax-quote macro). Oracle-identical (clj
+    # 1.12.6, 2026-10-13; the macro, 2026-10-29).
     source: |
       (println (get (ns-map 'user) 'f67-pub-x))
       (println (get (ns-map 'user) 'map))
       (println (get (ns-map 'user) 'f67-no-such-var))
+      (defmacro treader-mapped? [s] (contains? (ns-map *ns*) s))
+      (println (treader-mapped? map) (treader-mapped? treader-no-such-var))
     expected: |
       #'user/f67-pub-x
       #'clojure.core/map
       nil
+      true false
   - name: alias-refer-ns-unmap-and-ns-unalias-wire-namespaces
     # alias wires an alias and refer refers vars for the forms below; ns-unmap
     # and ns-unalias forget them again. Oracle-identical (clj 1.12.6,
@@ -16635,10 +16675,15 @@ cases:
     # lexically enclosing with-local-vars cells, and pushes them over the
     # caller's own bindings when the function runs -- so a var bound nowhere at
     # creation stays out of the map, and a call on another extent sees the
-    # captured values. Every line is the oracle's (clj 1.12.6) but the arity
-    # message, which names the anonymous fn the house way, on all four backends.
+    # captured values. A program var shadowing a core special's name (the
+    # namespace excludes it) is captured as itself, beside the special. Every
+    # line is the oracle's (clj 1.12.6) but the arity message, which names the
+    # anonymous fn the house way, on all four backends.
     source: |
-      (ns g24-bound-fn)
+      (ns g24-bound-fn (:refer-clojure :exclude [*suppress-read*]))
+      (def ^:dynamic *suppress-read* :own)
+      (binding [*suppress-read* :bound *print-length* 3]
+        (println ((bound-fn [] [*suppress-read* *print-length*]))))
       (def ^:dynamic *bf-x* 1)
       (def ^:dynamic *bf-y* 10)
       (binding [*bf-x* 2]
@@ -16664,6 +16709,7 @@ cases:
       (println (try ((bound-fn [x y] x) 1) (catch Exception e (ex-message e))))
       (in-ns 'user)
     expected: |
+      [:bound 3]
       2
       false
       [true 2]

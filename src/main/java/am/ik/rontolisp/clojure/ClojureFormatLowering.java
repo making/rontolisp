@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * {@code format}: {@code java.util.Formatter} over Clojure values.
@@ -101,22 +102,30 @@ final class ClojureFormatLowering {
 
 	}
 
-	/** A refusal of the parse or of the print: the carrier and its message. */
+	/**
+	 * A refusal of the parse or of the print: the carrier and its message. A null carrier
+	 * is a directive this front end does not render ({@code %t}, {@code %h}, {@code %a}):
+	 * the plain error the run-time parse signals, at call time like every refused
+	 * construct, so a namespace defining such a call loads.
+	 */
 	static final class Refused extends Exception {
 
 		private static final long serialVersionUID = 1L;
 
-		final String carrier;
+		final @Nullable String carrier;
 
 		final String words;
 
-		Refused(String carrier, String words) {
+		Refused(@Nullable String carrier, String words) {
 			super(words, null, false, false);
 			this.carrier = carrier;
 			this.words = words;
 		}
 
 		LispVal form() {
+			if (this.carrier == null) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal(this.words));
+			}
 			return ClojureRefusals.refusal(this.carrier, LispString.literal(this.words));
 		}
 
@@ -349,7 +358,7 @@ final class ClojureFormatLowering {
 		int width = (m.group(3) != null) ? number(m.group(3), m) : -1;
 		int precision = (m.group(4) != null) ? number(m.group(4).substring(1), m) : -1;
 		if (m.group(5) != null) {
-			throw new LispReadException("format directive %" + m.group(5) + " is not supported yet");
+			throw new Refused(null, "format directive %" + m.group(5) + " is not supported yet");
 		}
 		char conversion = m.group(6).charAt(0);
 		if (CONVERSIONS.indexOf(conversion) < 0) {
@@ -368,7 +377,7 @@ final class ClojureFormatLowering {
 			default -> checkText(spec);
 		}
 		if (kind == 'h' || kind == 'a') {
-			throw new LispReadException("format directive %" + conversion + " is not supported yet");
+			throw new Refused(null, "format directive %" + conversion + " is not supported yet");
 		}
 		return spec;
 	}

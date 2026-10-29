@@ -96,6 +96,9 @@ public final class ClojureLibrary {
 			(defun rontolisp::%clojure-host-class-rows (name)
 			  (declare (ignore name))
 			  nil)
+			(defun rontolisp::%clojure-host-print-method (x table)
+			  (declare (ignore x table))
+			  nil)
 			(defun rontolisp::%clojure-host-method (x method)
 			  (declare (ignore x))
 			  (rontolisp::%clojure-illegal-argument-exception

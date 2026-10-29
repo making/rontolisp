@@ -16,7 +16,7 @@ one of the wrong class is the oracle's refusal (`MissingFormatWidthException`,
 arguments are evaluated. A literal format string is parsed when the program is read, a
 computed one when the call runs, with the same renderings and refusals -- so `format`
 works as a value too (`(apply format fmt cols)`). `%h`, `%a` and the date conversions
-`%t` are refused.
+`%t` are refused when the call runs, so a function spelling one is defined.
 
 ```clojure
 (println (format "%s=%d" :a 5)) ; :a=5

@@ -158,10 +158,18 @@ class MethodCodeTest {
 		assertThatIllegalStateException().isThrownBy(() -> c.labelBinding(label));
 	}
 
+	// Given the pool, an int past the short range is an ldc of its Integer entry (a
+	// function id past 32767 in a large program's dispatch tree).
 	@Test
-	void anIntPastTheShortRangeIsNotAPush() {
+	void anIntPastTheShortRangeIsNotAPush() throws Exception {
 		assertThatIllegalArgumentException().isThrownBy(() -> new MethodCode().loadConstant(40_000))
 			.withMessageContaining("ldc");
+		Fixture f = new Fixture("Wide");
+		MethodCode c = new MethodCode();
+		c.loadConstant(f.cp, 40_000).loadConstant(f.cp, 7).iadd().ireturn();
+		f.add("run", "()I", c);
+		assertThat(opcodes(f.write(), "run")).startsWith(Opcode.LDC, Opcode.BIPUSH);
+		assertThat(f.load().getMethod("run").invoke(null)).isEqualTo(40_007);
 	}
 
 	// invokeinterface's count operand -- the argument slots, the receiver included, a

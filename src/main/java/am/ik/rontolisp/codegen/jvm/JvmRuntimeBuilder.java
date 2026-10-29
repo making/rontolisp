@@ -428,7 +428,7 @@ final class JvmRuntimeBuilder {
 				// (so a String-designator lookup happens once) with the arguments
 				// unchanged. An id below the first segment's range, or above the last
 				// one's, lands in a real segment whose tree answers null for it.
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, args -> {
+				emitSegmentRouter(code, cp, cases, ranges, 0, ranges.size() - 1, idSlot, args -> {
 					args.aload(fvSlot);
 					for (int i = 0; i < dispatchArgs; i++) {
 						args.aload(i + 1);
@@ -439,7 +439,7 @@ final class JvmRuntimeBuilder {
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
 				MethodCode.Label miss = code.newLabel();
-				emitDispatchTree(code, cases, range[0], range[1], idSlot, miss);
+				emitDispatchTree(code, cp, cases, range[0], range[1], idSlot, miss);
 				// Default: an id no case of this arity claims. For a per-arity
 				// dispatcher that is a CALL with the wrong number of arguments -- the
 				// callee exists, it just has another shape -- so the arm reports it
@@ -501,8 +501,8 @@ final class JvmRuntimeBuilder {
 	 * compares the id against the largest id its left half holds, each leaf loads the
 	 * segment's arguments ({@code segmentArgs}) and tail-calls that segment.
 	 */
-	private static void emitSegmentRouter(MethodCode code, List<Case> cases, List<int[]> ranges, int lo, int hi,
-			int idSlot, Consumer<MethodCode> segmentArgs, List<MethodRefEntry> segmentRefs) {
+	private static void emitSegmentRouter(MethodCode code, ConstantPool cp, List<Case> cases, List<int[]> ranges,
+			int lo, int hi, int idSlot, Consumer<MethodCode> segmentArgs, List<MethodRefEntry> segmentRefs) {
 		if (lo == hi) {
 			segmentArgs.accept(code);
 			code.invokestatic(segmentRefs.get(lo));
@@ -511,12 +511,12 @@ final class JvmRuntimeBuilder {
 		}
 		int mid = (lo + hi) >>> 1;
 		code.iload(idSlot);
-		code.loadConstant(cases.get(ranges.get(mid)[1]).funcId());
+		code.loadConstant(cp, cases.get(ranges.get(mid)[1]).funcId());
 		MethodCode.Label ifRight = code.newLabel();
 		code.if_icmpgt(ifRight);
-		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, segmentArgs, segmentRefs);
+		emitSegmentRouter(code, cp, cases, ranges, lo, mid, idSlot, segmentArgs, segmentRefs);
 		code.labelBinding(ifRight);
-		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, segmentArgs, segmentRefs);
+		emitSegmentRouter(code, cp, cases, ranges, mid + 1, hi, idSlot, segmentArgs, segmentRefs);
 	}
 
 	/**
@@ -1569,26 +1569,26 @@ final class JvmRuntimeBuilder {
 	 * loading another class-defining library taxed every hot indirect call in the
 	 * program.
 	 */
-	private static void emitDispatchTree(MethodCode code, List<Case> cases, int lo, int hi, int idSlot,
+	private static void emitDispatchTree(MethodCode code, ConstantPool cp, List<Case> cases, int lo, int hi, int idSlot,
 			MethodCode.Label miss) {
 		if (lo > hi) {
 			return;
 		}
 		if (lo == hi) {
 			code.iload(idSlot);
-			code.loadConstant(cases.get(lo).funcId());
+			code.loadConstant(cp, cases.get(lo).funcId());
 			code.if_icmpne(miss);
 			code.append(cases.get(lo).body());
 			return;
 		}
 		int mid = (lo + hi) >>> 1;
 		code.iload(idSlot);
-		code.loadConstant(cases.get(mid).funcId());
+		code.loadConstant(cp, cases.get(mid).funcId());
 		MethodCode.Label ifRight = code.newLabel();
 		code.if_icmpgt(ifRight);
-		emitDispatchTree(code, cases, lo, mid, idSlot, miss);
+		emitDispatchTree(code, cp, cases, lo, mid, idSlot, miss);
 		code.labelBinding(ifRight);
-		emitDispatchTree(code, cases, mid + 1, hi, idSlot, miss);
+		emitDispatchTree(code, cp, cases, mid + 1, hi, idSlot, miss);
 	}
 
 	/** The dispatcher method name: per-arity, or the single spread one. */
@@ -3574,12 +3574,12 @@ final class JvmRuntimeBuilder {
 			String name = segment == 0 ? FUN_NAME_NAME : FUN_NAME_NAME + "$" + (segment - 1);
 			MethodCode code = new MethodCode();
 			if (routed && segment == 0) {
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, 0, args -> args.iload(0), segmentRefs);
+				emitSegmentRouter(code, cp, cases, ranges, 0, ranges.size() - 1, 0, args -> args.iload(0), segmentRefs);
 			}
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
 				MethodCode.Label miss = code.newLabel();
-				emitDispatchTree(code, cases, range[0], range[1], 0, miss);
+				emitDispatchTree(code, cp, cases, range[0], range[1], 0, miss);
 				code.labelBinding(miss);
 				code.aconst_null();
 				code.areturn();
