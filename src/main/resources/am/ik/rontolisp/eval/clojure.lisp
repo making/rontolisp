@@ -14015,6 +14015,13 @@
    dispatches on (the family's view, X itself in a program making none)."
   (if (rontolisp::%clojure-meta-symbol-p x) (car (cdr x)) x))
 
+(defun rontolisp::%clojure-auto-gensym (prefix)
+  "The fresh symbol a syntax-quote's PREFIX# names, spelled PREFIX__N__auto__
+   like the oracle's."
+  (make-symbol
+   (concatenate 'string (symbol-name (gensym (concatenate 'string prefix "__")))
+                "__auto__")))
+
 ;; A deftype implementing IObj answers its own withMeta, and one implementing
 ;; IMeta its own meta: arms of the meta-interface family ("Host interfaces").
 ;; A symbol answers a fresh wrapper carrying the metadata, like the oracle's new

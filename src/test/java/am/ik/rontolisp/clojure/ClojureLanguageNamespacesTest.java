@@ -37,6 +37,14 @@ class ClojureLanguageNamespacesTest {
 		assertThat(lowered("(ns a (:require [clojure.walk :as w])) (w/walk inc identity [1])", files))
 			.doesNotContain("mine")
 			.contains("(DEFUN |c%clojure.walk/walk|");
+		// nor the core macros' expanders, which no program requires
+		Map<String, String> expanders = Map.of("src/rontolisp/internal/core_macros.clj",
+				"(ns rontolisp.internal.core-macros) (defn expand-when [f e & r] :mine)");
+		assertThat(lowered("(macroexpand-1 '(when a b))", expanders)).doesNotContain("mine")
+			.contains("(DEFUN |c%rontolisp.internal.core-macros/expand-when|");
+		assertThatThrownBy(() -> Clojure.read("(require 'rontolisp.internal.core-macros)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.core-macros is the lowering's own namespace, no user surface");
 	}
 
 	@Test

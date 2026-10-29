@@ -31,6 +31,33 @@ final class ClojureLangClasses {
 	static final String PERSISTENT_QUEUE = "clojure.lang.PersistentQueue";
 
 	/**
+	 * {@code clojure.lang.PersistentArrayMap}, whose {@code EMPTY} and
+	 * {@code createAsIfByAssoc} map destructuring's expansion spells: the empty map and
+	 * the map of an array's keys and values ({@link #staticCall}), with no namespace.
+	 */
+	static final String PERSISTENT_ARRAY_MAP = "clojure.lang.PersistentArrayMap";
+
+	/**
+	 * A static method of a {@code clojure.lang} class this front end answers in place:
+	 * {@code PersistentArrayMap/createAsIfByAssoc} of an array of keys and values, the
+	 * map a {@code hash-map} of them makes (a later key replaces an earlier one, an odd
+	 * count is refused with the oracle's words).
+	 * @param ctx the hub
+	 * @param cls the class's binary name
+	 * @param member the method
+	 * @param args the lowered arguments
+	 * @return the lowered call, or null for any other method
+	 */
+	static @Nullable LispVal staticCall(ClojureLowering ctx, String cls, String member, List<LispVal> args) {
+		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("createAsIfByAssoc") && args.size() == 1) {
+			return ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
+					new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
+					ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
+		}
+		return null;
+	}
+
+	/**
 	 * Each class's static fields, by name, with the var of {@link #NAMESPACE} holding it.
 	 */
 	private static final Map<String, Map<String, String>> STATICS = Map.of(PERSISTENT_QUEUE,
@@ -121,6 +148,10 @@ final class ClojureLangClasses {
 		String global = runtimeStatic(cls, member);
 		if (global != null) {
 			return new LispSymbol(global);
+		}
+		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("EMPTY")) {
+			// the empty map, which map destructuring's expansion spells
+			return ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map")));
 		}
 		Map<String, String> statics = STATICS.get(cls);
 		String var = statics == null ? null : statics.get(member);

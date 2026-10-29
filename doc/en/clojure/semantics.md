@@ -227,7 +227,10 @@ explicit locals, `:as`, `:or` defaults) -- in `let`, `loop` and
 `fn`/`defn` parameters alike; nested patterns recurse. A map pattern reads a seq as the map
 its keyword arguments stand for ([seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)),
 so `(defn f [& {:keys [a]}] a)` takes `(f :a 1)` and `(f {:a 1})`. Malformed shapes are
-named refusals.
+named refusals. The special forms under these macros, which their expansions spell, lower
+too: `let*` and `loop*` over names only, `letfn*` over `fn` forms named like their
+bindings, `case*` testing its map's `[test then]` entries by equality; `destructure`
+answers the plain binding vector a `let` expands to, like the oracle's.
 
 ## Macros
 
@@ -267,16 +270,18 @@ captures `fn` call sites, never `#(...)` (read as the special form `fn*`).
 defining namespace sees qualifies with that var's namespace like the oracle (a special
 form stays bare; a core name spells `clojure.core/name`, any other unresolved spelling
 the defining namespace), `~` inserts its form's value, `~@` splices a sequence into the enclosing
-list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
-one symbol per expansion, the same at every occurrence within it. An unquote outside
+list, vector, map or set, and each `x#` binds one fresh symbol spelled `x__N__auto__`,
+like the oracle's, per syntax-quote -- one symbol per expansion, the same at every
+occurrence within it. An unquote outside
 any syntax-quote is an error, as is a splice outside a sequence; as values, `unquote`
 and `unquote-splicing` answer the unbound root of their vars, like the oracle's (`ifn?`
 but not `fn?`, `str` `Unbound: #'clojure.core/unquote`; a call throws
 `Attempting to call unbound fn: #'clojure.core/unquote`). `macroexpand-1`
 expands once and `macroexpand` to the fixpoint, each answering the expansion as the
 mangled data itself, so `=` against a quoted form holds and printing spells the
-oracle's lowercase; `gensym` answers a fresh uninterned symbol per
-evaluation.
+oracle's lowercase -- a core macro's call expanding to the oracle's form
+([macroexpand-1](reference/macroexpand-1.md)); `gensym` answers a fresh uninterned symbol per
+evaluation, prefixed `G__` without a prefix.
 
 ```clojure
 (defmacro sem-unless [c t] (list 'if c nil t))

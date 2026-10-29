@@ -4264,33 +4264,120 @@ cases:
       :x3 :f4 :new :yes
       [3 ab [1 2]] 6 1 :caught true false
       #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
-  - name: core-macro-names-answer-their-expander-as-a-value
-    # g16: a core-macro name with no value arm answers the macro's expander as a
-    # value -- the run-time once-expansion over the quoted form. (def x when),
-    # @(resolve 'when) and (deref (resolve 'cond->)) lower and run on all four
-    # backends; calling the value answers what macroexpand-1 answers, for a core
-    # form (the run-time table holds program macros only, so the form itself) and
-    # for a program macro's expansion alike. Program-defined macros keep their
-    # refusal. Deviation: the oracle refuses a bare macro name in value position
-    # at compile time; here it answers the delegate, like deref does there.
+  - name: a-macros-var-root-is-its-function-of-form-env-and-args
+    # A macro's var root is the oracle's macro function over (&form &env & args): a
+    # core macro's the expander answering its expansion as data, a program macro's
+    # its expander with &form and &env bound for the body, so @#'when, (resolve
+    # 'cond) and #'g16-twice called with a call, an environment and the arguments
+    # expand like the oracle's. Oracle-identical (clj 1.12.6) but the first line:
+    # the oracle refuses a bare macro name in value position at compile time, here it
+    # is the var's root as deref of the var is there, and sync, which this front end
+    # does not expand as data, answers the call itself.
     source: |
       (def g16-x when)
-      (def g16-sync sync)
-      (def g16-amap amap)
       (defmacro g16-twice [a] `(* 2 ~a))
-      (println (fn? g16-x) (fn? @(resolve 'when)) (fn? (deref (resolve 'cond->))))
-      (println (fn? g16-sync) (fn? g16-amap))
-      (println (= (g16-x '(when true 1)) (macroexpand-1 '(when true 1))))
-      (println (= (g16-x '(g16-twice 21)) (macroexpand-1 '(g16-twice 21))))
-      (println (g16-x '(g16-twice 21)))
-      (println (try (deref #'g16-twice) (catch Exception e :refused)))
+      (defmacro g16-envy [] (if (contains? &env 'q) :local :none))
+      (defmacro g16-form-of [& xs] (list 'quote &form))
+      (println (g16-x '(when true 1) nil true 1) (@#'sync '(sync nil 1) nil nil 1))
+      (println (fn? @#'when) (fn? @(resolve 'when)) (fn? (deref (resolve 'cond->))))
+      (println (#'when '(when a b) nil 'a 'b) (apply (resolve 'cond) '(cond a 1) nil '(a 1)) (apply #'and '(and) nil []))
+      (println (#'g16-twice '(g16-twice 21) nil 21) (apply #'g16-twice '(g16-twice 3) nil [3]) (fn? @#'g16-twice))
+      (println (#'g16-envy '(g16-envy) {'q 1}) (#'g16-envy '(g16-envy) nil) (#'g16-form-of '(g16-form-of 1 2) nil 1 2))
     expected: |
+      (if true (do 1)) (sync nil 1)
       true true true
-      true true
-      true
-      true
-      (clojure.core/* 2 21)
-      :refused
+      (if a (do b)) (if a 1 (clojure.core/cond)) true
+      (clojure.core/* 2 21) (clojure.core/* 2 3) true
+      :local :none (quote (g16-form-of 1 2))
+  - name: core-macros-expand-to-the-oracles-forms-as-data
+    # macroexpand-1, macroexpand and clojure.walk/macroexpand-all expand the core
+    # macros to the oracle's forms -- let*, loop*, letfn*, fn*, case* over the
+    # destructured bindings, the hashed case map and the chunked doseq/for walks --
+    # through the expanders of the shipped rontolisp.internal.core-macros, while the
+    # program's own calls of them keep their lowering. cmx-norm renumbers gensyms in
+    # order of appearance, so an expansion prints the oracle's line. The head
+    # resolves in *ns*: a definition or an exclusion hides a core macro, a rename and
+    # an alias of clojure.core reach it. Every line is the oracle's (clj 1.12.6).
+    source: |
+      (defn cmx-norm [form]
+        (let [seen (atom {})]
+          (clojure.walk/prewalk
+           (fn [x]
+             (if-let [[_ prefix _ suffix] (and (symbol? x) (re-matches #"(.+?_)(\d+)(__auto__)?" (name x)))]
+               (or (get @seen x)
+                   (let [renamed (symbol (str prefix (inc (count @seen)) suffix))]
+                     (swap! seen assoc x renamed)
+                     renamed))
+               x))
+           form)))
+      (prn (macroexpand-1 '(when x 1 2)) (macroexpand-1 '(if-not a b)) (macroexpand-1 '(cond a 1 :else 2)))
+      (prn (macroexpand-1 '(-> x (f a) g)) (macroexpand-1 '(letfn [(f [x] x)] (f 1))) (macroexpand-1 '(.. x f (g 1))))
+      (prn (cmx-norm (macroexpand-1 '(let [[a b] v {:keys [c]} m] (+ a b c)))))
+      (prn (cmx-norm (macroexpand-1 '(loop [[a] v n 0] (recur a n)))))
+      (prn (cmx-norm (macroexpand-1 '(fn f [x & [y]] {:pre [x]} y))))
+      (prn (cmx-norm (macroexpand-1 '(and a b))) (cmx-norm (macroexpand-1 '(if-let [x (f)] x :no))))
+      (prn (cmx-norm (macroexpand-1 '(case k 1 :a (2 3) :b :c))))
+      (prn (cmx-norm (macroexpand-1 '(case k :a 1 "Aa" 2 "BB" 3 nil))))
+      (prn (cmx-norm (macroexpand-1 '(condp = x 1 :a 2 :>> inc :c))))
+      (prn (cmx-norm (macroexpand-1 '(doseq [x xs :when (odd? x)] (prn x)))))
+      (prn (cmx-norm (macroexpand-1 '(for [x xs :let [y (inc x)]] y))))
+      (prn (cmx-norm (macroexpand '(when-let [x (f)] (-> x g)))))
+      (prn (cmx-norm (clojure.walk/macroexpand-all '(when (or a b) (some-> x f)))))
+      (prn (cmx-norm (destructure '[[a & r] v {:keys [b] :or {b 1} :as m} x])))
+      (prn (macroexpand-1 '(foo 1)) (macroexpand-1 '(clojure.core/when-not a b)))
+      (ns cmx-shadow (:refer-clojure :exclude [when] :rename {cond kond}) (:require [clojure.core :as cc]))
+      (defn when [x] x)
+      (defmacro unless [c x] (list 'if c nil x))
+      (prn (macroexpand-1 '(when a b)) (macroexpand-1 '(kond a 1)) (macroexpand-1 '(cond a 1)))
+      (prn (macroexpand-1 '(cc/when a b)) (macroexpand-1 '(clojure.core/when a b)) (macroexpand-1 '(unless a b)))
+      (prn (macroexpand-1 '(when-not a b)) (macroexpand '(cc/when-not a b)))
+      (in-ns 'lit)
+      (prn (macroexpand-1 '(when a b)) (macroexpand-1 '(cmx-shadow/unless a b)) (macroexpand-1 '(unless a b)))
+    expected: |
+      (if x (do 1 2)) (clojure.core/if-not a b nil) (if a 1 (clojure.core/cond :else 2))
+      (g (f x a)) (letfn* [f (clojure.core/fn f [x] x)] (f 1)) (.. (. x f) (g 1))
+      (let* [vec__1 v a (clojure.core/nth vec__1 0 nil) b (clojure.core/nth vec__1 1 nil) map__2 m map__2 (if (clojure.core/seq? map__2) (if (clojure.core/next map__2) (clojure.lang.PersistentArrayMap/createAsIfByAssoc (clojure.core/to-array map__2)) (if (clojure.core/seq map__2) (clojure.core/first map__2) clojure.lang.PersistentArrayMap/EMPTY)) map__2) c (clojure.core/get map__2 :c)] (+ a b c))
+      (clojure.core/let [G__1 v [a] G__1 n 0] (loop* [G__1 G__1 n n] (clojure.core/let [[a] G__1 n n] (recur a n))))
+      (fn* f ([x & p__1] (clojure.core/let [[y] p__1] (clojure.core/assert x) y)))
+      (clojure.core/let [and__1__auto__ a] (if and__1__auto__ (clojure.core/and b) and__1__auto__)) (clojure.core/let [temp__1__auto__ (f)] (if temp__1__auto__ (clojure.core/let [x temp__1__auto__] x) :no))
+      (clojure.core/let [G__1 k] (case* G__1 0 0 :c {1 [1 :a], 2 [2 :b], 3 [3 :b]} :compact :int))
+      (clojure.core/let [G__1 k] (case* G__1 0 1 nil {0 [2112 (clojure.core/condp clojure.core/= G__1 (quote "Aa") 2 (quote "BB") 3 nil)], 1 [:a 1]} :compact :hash-equiv #{0}))
+      (clojure.core/let [pred__1 = expr__2 x] (if (pred__1 1 expr__2) :a (clojure.core/if-let [p__3__auto__ (pred__1 2 expr__2)] (inc p__3__auto__) :c)))
+      (clojure.core/loop [seq_1 (clojure.core/seq xs) chunk_2 nil count_3 0 i_4 0] (if (clojure.core/< i_4 count_3) (clojure.core/let [x (.nth chunk_2 i_4)] (if (odd? x) (do (do (prn x)) (recur seq_1 chunk_2 count_3 (clojure.core/unchecked-inc i_4))) (recur seq_1 chunk_2 count_3 (clojure.core/unchecked-inc i_4)))) (clojure.core/when-let [seq_1 (clojure.core/seq seq_1)] (if (clojure.core/chunked-seq? seq_1) (clojure.core/let [c__5__auto__ (clojure.core/chunk-first seq_1)] (recur (clojure.core/chunk-rest seq_1) c__5__auto__ (clojure.core/int (clojure.core/count c__5__auto__)) (clojure.core/int 0))) (clojure.core/let [x (clojure.core/first seq_1)] (if (odd? x) (do (do (prn x)) (recur (clojure.core/next seq_1) nil 0 0)) (recur (clojure.core/next seq_1) nil 0 0)))))))
+      (clojure.core/let [iter__1__auto__ (clojure.core/fn iter__2 [s__3] (clojure.core/lazy-seq (clojure.core/loop [s__3 s__3] (clojure.core/when-let [s__3 (clojure.core/seq s__3)] (if (clojure.core/chunked-seq? s__3) (clojure.core/let [c__4__auto__ (clojure.core/chunk-first s__3) size__5__auto__ (clojure.core/int (clojure.core/count c__4__auto__)) b__6 (clojure.core/chunk-buffer size__5__auto__)] (if (clojure.core/loop [i__7 (clojure.core/int 0)] (if (clojure.core/< i__7 size__5__auto__) (clojure.core/let [x (.nth c__4__auto__ i__7)] (clojure.core/let [y (inc x)] (do (clojure.core/chunk-append b__6 y) (recur (clojure.core/unchecked-inc i__7))))) true)) (clojure.core/chunk-cons (clojure.core/chunk b__6) (iter__2 (clojure.core/chunk-rest s__3))) (clojure.core/chunk-cons (clojure.core/chunk b__6) nil))) (clojure.core/let [x (clojure.core/first s__3)] (clojure.core/let [y (inc x)] (clojure.core/cons y (iter__2 (clojure.core/rest s__3))))))))))] (iter__1__auto__ xs))
+      (let* [temp__1__auto__ (f)] (clojure.core/when temp__1__auto__ (clojure.core/let [x temp__1__auto__] (-> x g))))
+      (if (let* [or__1__auto__ a] (if or__1__auto__ or__1__auto__ b)) (do (let* [G__2 x] (if (clojure.core/nil? G__2) nil (f G__2)))))
+      [vec__1 v seq__2 (clojure.core/seq vec__1) first__3 (clojure.core/first seq__2) seq__2 (clojure.core/next seq__2) a first__3 r seq__2 map__4 x map__4 (if (clojure.core/seq? map__4) (if (clojure.core/next map__4) (clojure.lang.PersistentArrayMap/createAsIfByAssoc (clojure.core/to-array map__4)) (if (clojure.core/seq map__4) (clojure.core/first map__4) clojure.lang.PersistentArrayMap/EMPTY)) map__4) m map__4 b (clojure.core/get map__4 :b 1)]
+      (foo 1) (if a nil (do b))
+      (when a b) (if a 1 (clojure.core/cond)) (cond a 1)
+      (if a (do b)) (if a (do b)) (if a nil b)
+      (if a nil (do b)) (if a nil (do b))
+      (if a (do b)) (if a nil b) (unless a b)
+  - name: let-star-loop-star-letfn-star-and-case-star-are-special-forms
+    # The special forms the core macros expand to lower like the oracle's: let* and
+    # loop* over names only, letfn* over fn forms named like their bindings, case*
+    # testing its map's [test then] entries by equality -- a skipped hash's then, the
+    # condp of the tests sharing it, contributing its tests -- and map destructuring's
+    # PersistentArrayMap statics. Every line is the oracle's (clj 1.12.6).
+    source: |
+      (prn (let* [a 1 b (+ a 1)] [a b]) (let* []) (loop* [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc i)) acc)))
+      (prn (letfn* [ev (fn ev [n] (if (zero? n) true (od (dec n)))) od (fn* ([n] (if (zero? n) false (ev (dec n)))))]
+             [(ev 4) (od 4)]))
+      (prn (let [k 2] (case* k 0 0 :d {1 [1 :a] 2 [2 :b]} :compact :int))
+           (let [k 1.0] (case* k 0 0 :d {1 [1 :a]} :compact :int)))
+      (prn (let [k "BB"] (case* k 0 0 :none {2112 [2112 (clojure.core/condp clojure.core/= k (quote "Aa") 1 (quote "BB") 2 :none)]} :compact :hash-equiv #{2112}))
+           (let [k 2112] (case* k 0 0 :none {2112 [2112 (clojure.core/condp clojure.core/= k (quote "Aa") 1 (quote "BB") 2 :none)]} :compact :hash-equiv #{2112})))
+      (prn (let [{:keys [a b]} (list :a 1 :b 2)] [a b])
+           (clojure.lang.PersistentArrayMap/createAsIfByAssoc (to-array [:a 1 :b 2 :a 3]))
+           clojure.lang.PersistentArrayMap/EMPTY)
+      (prn (letfn [(sfl ([n] n))] (sfl 3)))
+    expected: |
+      [1 2] nil [0 1 2]
+      [true false]
+      :b :d
+      2 :none
+      [1 2] {:a 3, :b 2} {}
+      3
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
     # A compiled program carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
@@ -16818,13 +16905,14 @@ cases:
       pmap-boom
       [pboom {}]
   - name: bound-fn-and-friends-answer-values
-    # g16's values reach the three macros: a bare bound-fn, with-local-vars or
-    # pvalues answers the run-time once-expansion delegate, so calling it answers
-    # what macroexpand-1 answers (the form itself for these core forms -- the
-    # run-time table holds program macros only). bound-fn* answers its function,
+    # The three macros' values: a bare bound-fn, with-local-vars or pvalues
+    # answers the macro's function over (&form &env & args), its var's root, which
+    # answers the call itself -- this front end does not expand these three as
+    # data, so macroexpand-1 answers the form too. bound-fn* answers its function,
     # capturing the bindings where the value is called: a maker taken under one
-    # binding still reads the caller's extent. Deviation: the oracle refuses a
-    # bare macro name in value position at compile time. All four backends.
+    # binding still reads the caller's extent. Deviations: the oracle refuses a
+    # bare macro name in value position at compile time, and its macro functions
+    # answer the three expansions. All four backends.
     source: |
       (ns g24-values)
       (def g24-bf bound-fn)
@@ -16832,9 +16920,9 @@ cases:
       (def g24-pv pvalues)
       (def g24-bfs bound-fn*)
       (println (fn? g24-bf) (fn? g24-wlv) (fn? g24-pv) (fn? g24-bfs))
-      (println (g24-bf '(bound-fn [a] a)))
-      (println (g24-wlv '(with-local-vars [a 1] a)))
-      (println (g24-pv '(pvalues 1 2)))
+      (println (g24-bf '(bound-fn [a] a) nil '[a] 'a))
+      (println (g24-wlv '(with-local-vars [a 1] a) nil '[a 1] 'a))
+      (println (g24-pv '(pvalues 1 2) nil 1 2))
       (println (fn? @(resolve 'bound-fn)) (fn? (deref (resolve 'pvalues))))
       (println (fn? @#'bound-fn) (fn? @#'with-local-vars) (fn? @#'bound-fn*))
       (def ^:dynamic *vx* 1)

@@ -1277,11 +1277,14 @@ public final class LibraryDefunPruner {
 	 * {@link #prunableNames()}, or of the Scheme or Clojure front end's run-time library.
 	 * Those two are asked only for a name that can be theirs ({@code mayDefine}), so a
 	 * program of neither language never reads them: their read was 0.33 s of a 0.9 s
-	 * compile ({@code .kb/library-defun-pruning.md}).
+	 * compile ({@code .kb/library-defun-pruning.md}). The Clojure core macros' shipped
+	 * expanders are keyed by their namespace's prefix: a program loads them for a
+	 * macro-time expansion as well as a run-time one.
 	 */
 	private static boolean isBundledName(String name) {
 		return prunableNames().contains(name) || SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
-				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name);
+				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)
+				|| ClojureLowering.isCoreMacroDefinition(name);
 	}
 
 	private static Set<String> schemeDefinitionNames() {

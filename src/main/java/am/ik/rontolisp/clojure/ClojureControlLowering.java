@@ -91,6 +91,84 @@ final class ClojureControlLowering {
 	}
 
 	/**
+	 * {@code (case* e shift mask default case-map switch-type test-type skip-check?)}:
+	 * the special form under {@code case}, whose map holds a {@code [test then]} entry
+	 * under each test's hash. The hashes only steer the oracle's jump table, so the form
+	 * lowers as the {@code case} of its entries' tests, each by equality like every
+	 * {@code case} constant; an entry whose hash several tests shared (one in
+	 * {@code skip-check}) holds the {@code condp} of those tests ending in the default,
+	 * whose tests it contributes instead. A test is one constant, never a list of
+	 * alternatives.
+	 */
+	static LispVal caseStar(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 8 || items.size() == 9,
+				"case* takes an expression, a shift, a mask, a default, a case map, a switch type, a test type"
+						+ " and the hashes it skips the check of");
+		List<LispVal> entries = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(items.get(5)));
+		if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")) {
+			throw new LispReadException("case* takes its tests in a map of hash to [test then]");
+		}
+		Set<String> skipped = new HashSet<>();
+		if (items.size() == 9) {
+			List<LispVal> skip = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(items.get(8)));
+			if (skip != null && !skip.isEmpty() && ClojureLowerUtil.isSymbolNamed(skip.get(0), "%hash-set")) {
+				for (LispVal hash : skip.subList(1, skip.size())) {
+					skipped.add(ClojureLowerUtil.stripMeta(hash).print());
+				}
+			}
+		}
+		List<LispVal> clauses = new ArrayList<>();
+		clauses.add(new LispSymbol(ClojureCoreNames.PREFIX + "case"));
+		clauses.add(items.get(1));
+		for (int i = 1; i + 1 < entries.size(); i += 2) {
+			List<LispVal> entry = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(entries.get(i + 1)));
+			if (entry == null || entry.size() != 3 || entry.get(0) != ClojureReader.VECTOR) {
+				throw new LispReadException("case* takes each test and its then in a vector");
+			}
+			if (skipped.contains(ClojureLowerUtil.stripMeta(entries.get(i)).print())) {
+				collidedClauses(entry.get(2), clauses);
+			}
+			else {
+				clauses.add(ClojureLowerUtil.list(entry.get(1)));
+				clauses.add(entry.get(2));
+			}
+		}
+		clauses.add(items.get(4));
+		return caseOf(ctx, clauses);
+	}
+
+	/**
+	 * The clauses of a {@code case*} entry whose hash several tests shared: its
+	 * {@code (condp = e 'test then ... default)}, each test's clause, the default being
+	 * the form's own.
+	 */
+	private static void collidedClauses(LispVal then, List<LispVal> clauses) {
+		String shape = "case* takes a skipped hash's then as the condp of its tests: (condp = e 'test then ... default)";
+		List<LispVal> condp = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(then));
+		if (condp == null || condp.size() < 4 || condp.size() % 2 != 0 || !isCoreName(condp.get(0), "condp")
+				|| !isCoreName(condp.get(1), "=")) {
+			throw new LispReadException(shape);
+		}
+		for (int i = 3; i + 2 < condp.size(); i += 2) {
+			List<LispVal> quoted = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(condp.get(i)));
+			if (quoted == null || quoted.size() != 2 || !ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")) {
+				throw new LispReadException(shape);
+			}
+			clauses.add(ClojureLowerUtil.list(quoted.get(1)));
+			clauses.add(condp.get(i + 1));
+		}
+	}
+
+	/**
+	 * Whether a datum is the symbol of a core name, bare or {@code clojure.core/}
+	 * spelled.
+	 */
+	private static boolean isCoreName(LispVal datum, String name) {
+		return ClojureLowerUtil.isSymbolNamed(datum, name)
+				|| ClojureLowerUtil.isSymbolNamed(datum, ClojureCoreNames.PREFIX + name);
+	}
+
+	/**
 	 * A clause's test constants: a list datum's members, anything else itself. An empty
 	 * list lists none, which the oracle refuses when it compiles (as an arity error of
 	 * the {@code max} it takes over the alternatives' hashes).

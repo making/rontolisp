@@ -296,16 +296,26 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   changes (a `swap!` of a program atom) the program never sees -- the oracle compiles
   and runs in one process. A `defmethod` or protocol extension a program macro expands
   to is not seen there. A call above a macro's definition is refused, and a program
-  macro has no function value. A `defmacro` of a special
+  macro's bare name has no value, like the oracle's. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
-  accepts it (and ignores it at call sites, for a special form). As values, core
-  macro names answer the run-time once-expansion over the quoted form: `(def x
-  when)` hands out the same answer `macroexpand-1` gives (for a core form the form
-  itself -- the run-time table holds program macros only), where the oracle refuses
-  a bare macro name in value position at compile time. `bound-fn`, `with-local-vars`
-  and `pvalues` answer that delegate too; `bound-fn*` answers its function, capturing
-  the bindings where the value is called.
+  accepts it (and ignores it at call sites, for a special form). A core macro's bare
+  name answers its var's root as a value (`(def x when)`), where the oracle refuses a
+  bare macro name in value position at compile time; `bound-fn*` answers its function,
+  capturing the bindings where the value is called.
+- `macroexpand-1`, `macroexpand`, `clojure.walk/macroexpand-all` and a core macro's
+  function expand `let`, `loop`, `fn`, `letfn`, `when`, `when-not`, `if-not`, `cond`,
+  `condp`, `and`, `or`, `case`, `if-let`, `when-let`, `if-some`, `when-some`,
+  `when-first`, `->`, `->>`, `as->`, `cond->`, `cond->>`, `some->`, `some->>`, `doto`,
+  `..`, `dotimes`, `doseq`, `for`, `while`, `comment`, `declare`, `defn`, `defn-`,
+  `binding`, `assert`, `locking`, `with-open` and `future` to the oracle's forms, but
+  for the gensym numbers; any other core macro (`lazy-seq`, `delay`, `defmacro`, `ns`,
+  ...) answers the call itself, where the oracle answers its expansion. A malformed
+  call's refusal propagates as the expander throws it, where the oracle wraps it in a
+  `Compiler$CompilerException` (`Syntax error macroexpanding ...`), and a `case` whose
+  tests collide in two or more hash buckets lists the skipped hashes in insertion order
+  (the set-order deviation). A program calling one of these as it runs carries the
+  expanders; a program expanding only in its macro bodies carries none.
 - `eval`, `resolve`, `find-var`, `ns-resolve` and `requiring-resolve` of a computed
   symbol, `require`, `use`, `refer`, `alias`, `in-ns`, `load`, `load-file` and
   `load-string` of computed arguments, and `load-reader` lower as the program runs only on
@@ -362,9 +372,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is a Namespace object), `:file` of the entry file is the path as given (the oracle
   absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
   (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
-  Deref of a program macro's var signals (the oracle answers its expander function);
-  deref of a core macro's var answers the same once-expansion a bare core-macro
-  name does. A `clojure.core` var's metadata is only `:name`, `:ns` and a macro's
+  Deref of a macro's var answers its function of the call, the environment and the
+  call's arguments, like the oracle's. A `clojure.core` var's metadata is only `:name`, `:ns` and a macro's
   `:macro` (the oracle's also carries `:arglists`, `:doc`, `:added` and the position),
   and a core var with no value here (`#'add-classpath`) is refused.
 - A namespace prints as the oracle's `#object[clojure.lang.Namespace "user"]` without the

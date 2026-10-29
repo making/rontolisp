@@ -34,8 +34,8 @@ rontolisp 向けに書いた Clojure ソースで、すべてのバックエン�
 
 ## 違い
 
-- `macroexpand-all` が展開するのはプログラム自身のマクロです。コアのフォーム（`when`、`->` など）は
-  ここではマクロではないため書かれたまま残り、Clojure が返す展開形にはなりません
-  （[macroexpand](macroexpand.md)）。
+- `macroexpand-all` が展開するのは、プログラム自身のマクロと、このフロントエンドがデータとして
+  展開する core マクロ（`when`、`->`、`let` など。[macroexpand-1](macroexpand-1.md)）です。
+  それ以外の core マクロ（`lazy-seq` など）は書かれたまま残り、Clojure が返す展開形にはなりません。
 - マップのエントリはただの 2 要素ベクターなので（[仕様との差異](../deviations.md)）、走査中に `map-entry?` で
   判定する関数は、2 要素のベクターをすべてエントリとみなします。

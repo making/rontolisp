@@ -436,9 +436,6 @@ public final class ClojureLowering {
 	 */
 	boolean macroReadsEnv;
 
-	/** Whether a macro body read {@code &form}, so a run-time expansion binds it. */
-	boolean readsMacroForm;
-
 	/**
 	 * The macros whose bodies read {@code &env} or {@code &form}, by var key: their
 	 * expansions while the program lowers bind both ({@link ClojureMacroLowering}).
@@ -1599,6 +1596,21 @@ public final class ClojureLowering {
 	boolean expandsAtRunTime;
 
 	/**
+	 * Whether a whole program reads a program macro's var root (a deref or call of
+	 * {@code #'m}): short of a run-time expansion it carries the part of the macro
+	 * runtime the root reads ({@link ClojureMacroLowering#macroRootRuntime}).
+	 */
+	boolean takesMacroRoots;
+
+	/**
+	 * Whether a whole program's macro body expands, takes a core macro's var root or
+	 * destructures ({@link ClojureCoreMacros#need}): the macro-time evaluator holds the
+	 * core macros' expanders, and the program loads them once every datum has lowered
+	 * only where a program macro's root reaches its bodies as it runs.
+	 */
+	boolean coreMacrosInBodies;
+
+	/**
 	 * A whole program's macro expanders, in definition order: each {@code defmacro}'s
 	 * table global holds its index here ({@link ClojureMacroLowering#macroRuntime}).
 	 */
@@ -1794,6 +1806,13 @@ public final class ClojureLowering {
 		for (LispVal datum = pass.next(lowering.forms); datum != null; datum = pass.next(lowering.forms)) {
 			lowering.forms.addAll(lowering.topLevels(datum));
 		}
+		if (lowering.takesMacroRoots && lowering.coreMacrosInBodies) {
+			// a program macro's root reaches the bodies that use the core macros'
+			// expanders as the program runs: they are defined ahead of everything
+			ClojureCoreMacros.load(lowering);
+			lowering.forms.addAll(1, lowering.hoisted);
+			lowering.hoisted.clear();
+		}
 		// a run-time read asks the data readers first
 		lowering.forms.addAll(1, ClojureDataReaders.noteRuntimeReads(lowering));
 		// the host boundary: the exports, resolved once every definition has lowered,
@@ -1807,6 +1826,10 @@ public final class ClojureLowering {
 			// lowered as the program runs may define another)
 			lowering.forms.addAll(1,
 					ClojureMacroLowering.macroRuntime(lowering, lowering.open ? null : lowering.macroExpanders));
+		}
+		else if (lowering.takesMacroRoots) {
+			// a program macro's var root reads only its expander
+			lowering.forms.addAll(1, ClojureMacroLowering.macroRootRuntime(lowering.macroExpanders));
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);
@@ -4165,6 +4188,20 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "letfn")) {
 			return ClojureBindingLowering.letfn(this, items);
 		}
+		// the special forms under let, loop, letfn and case, which their expansions
+		// spell (macroexpand of the core macros, an analyzer re-emitting them)
+		if (ClojureLowerUtil.isSymbolNamed(head, "let*")) {
+			return ClojureBindingLowering.letStar(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "loop*")) {
+			return ClojureBindingLowering.loopStar(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "letfn*")) {
+			return ClojureBindingLowering.letfnStar(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "case*")) {
+			return ClojureControlLowering.caseStar(this, items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "declare")) {
 			return ClojureVarLowering.declareForm(this, form, items);
 		}
@@ -5639,6 +5676,7 @@ public final class ClojureLowering {
 			case "not" -> sharedValue("not", ClojureFnLowering.notValue(this));
 			case "EMPTY-NODE" -> ClojureSeqLowering.emptyNodeValue();
 			case "eval" -> ClojureMacroLowering.evalValue();
+			case "gensym" -> ClojureMacroLowering.gensymValue();
 			case "resolve" -> ClojureVarLowering.resolveValue();
 			case "ns-resolve" -> ClojureVarLowering.nsResolveValue();
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
@@ -5688,10 +5726,10 @@ public final class ClojureLowering {
 					yield filter;
 				}
 				if (ClojureCoreNames.isMacro(name)) {
-					// a core-macro name with no value arm answers the macro's expander
-					// as a value (g16): the run-time once-expansion over the quoted
-					// form, shared per name like every other site-independent value
-					yield ClojureMacroLowering.coreMacroValue(this);
+					// a core-macro name with no value arm answers the macro's function
+					// as a value: its expander over (&form &env & args), shared per name
+					// like every other site-independent value
+					yield ClojureMacroLowering.coreMacroValue(this, name);
 				}
 				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
 				if (predicate != null) {
@@ -5897,7 +5935,6 @@ public final class ClojureLowering {
 			// a macro body's implicit arguments: the call's locals and the call itself,
 			// which the expansion binds (ClojureMacroLowering.expandMacro)
 			this.macroReadsEnv = true;
-			this.readsMacroForm |= name.equals("&form");
 			return new LispSymbol(
 					name.equals("&env") ? ClojureMacroLowering.MACRO_ENV : ClojureMacroLowering.MACRO_FORM);
 		}
@@ -6206,13 +6243,27 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Whether a definition is one of the core macros' expanders or their helpers, the
+	 * shipped {@code rontolisp.internal.core-macros} ({@link ClojureCoreMacros}): the
+	 * library pruner keys them like the macro runtime, so a program loading them only for
+	 * a macro body's expansion at macro time, or reaching none of them, drops them with
+	 * every run-time helper they call.
+	 * @param name the definition's name
+	 * @return whether it is theirs
+	 */
+	public static boolean isCoreMacroDefinition(String name) {
+		return name.startsWith(PREFIX + ClojureCoreMacros.NAMESPACE + "/");
+	}
+
+	/**
 	 * Every per-program runtime a lowered definition may call, for the macro-time
 	 * evaluator, in the order a program carries them: the STM, ex-info, protocol,
-	 * hierarchy and macro runtimes. A program carries only the ones it uses, so its
-	 * output stays small; the macro-time evaluator writes no output and holds them all,
-	 * since a helper a macro body calls may use one before the lowering has seen a use of
-	 * it. The class rows are the built-in ones (a program's records join only its own
-	 * hierarchy runtime), and exceptions are the program's own, not the host's.
+	 * hierarchy and macro runtimes, and the core macros' expanders the macro runtime
+	 * reaches. A program carries only the ones it uses, so its output stays small; the
+	 * macro-time evaluator writes no output and holds them all, since a helper a macro
+	 * body calls may use one before the lowering has seen a use of it. The class rows are
+	 * the built-in ones (a program's records join only its own hierarchy runtime), and
+	 * exceptions are the program's own, not the host's.
 	 * @return the forms
 	 */
 	public static List<LispVal> macroTimeRuntimeForms() {
@@ -6224,6 +6275,7 @@ public final class ClojureLowering {
 		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));
 		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));
 		forms.addAll(ClojureMacroLowering.macroRuntime(ctx, null));
+		forms.addAll(ClojureCoreMacros.macroTimeForms());
 		return forms;
 	}
 

@@ -62,7 +62,13 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.reflect", Map.of("->AsmReflector",
 					"it reads class files with the ASM library inside clojure.jar; JavaReflector reflects through the host")),
 			Map.entry(ClojureLangClasses.NAMESPACE, Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
-			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
+			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()), Map.entry(ClojureCoreMacros.NAMESPACE, Map.of()));
+
+	/**
+	 * The shipped namespaces the lowering loads for itself, no user surface: no project
+	 * file shadows one and no program requires one ({@link ClojureCoreMacros}).
+	 */
+	private static final Set<String> INTERNAL = Set.of(ClojureCoreMacros.NAMESPACE);
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
@@ -255,6 +261,15 @@ final class ClojureBuiltinNamespaces {
 	 */
 	static boolean isShipped(String ns) {
 		return SHIPPED.containsKey(ns);
+	}
+
+	/**
+	 * Whether the namespace is one the lowering loads for itself ({@link #INTERNAL}).
+	 * @param ns the namespace
+	 * @return whether no project file shadows it and no program requires it
+	 */
+	static boolean isInternal(String ns) {
+		return INTERNAL.contains(ns);
 	}
 
 	/**

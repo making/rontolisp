@@ -1615,11 +1615,9 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   (refused for a computed namespace; re-run after every expansion of a macro outside
   `ns-safe-macro`).
 - Read off the code, not yet reached: (5) `macroexpand-1` calls a macro's var as `(apply v
-  form (:locals env) (rest form))`, while a program macro's var root is a signal and a core
-  macro's the one-argument run-time delegate (g16); a core macro must answer the oracle's
-  expansion into the special forms, which the go machine's raw code re-emits, so the
-  lowering must take `let*`, `loop*`, `letfn*` and `case*` (`unknown name: let*` today);
-  (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
+  form (:locals env) (rest form))` -- since g98 (2026-10-29) a macro's var root is that
+  function, a core macro's answering the oracle's expansion into the special forms, which
+  the lowering takes (`let*`, `loop*`, `letfn*`, `case*`; "Macros", the core macros); (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
   local mapping to itself here; (7) the passes tag nodes with `class` -- kind keywords here,
   which `maybe-class` answers nil through its `:default`, so most paths degrade, while
   `analyze-host-expr` and `validate` reflect on tag classes through `clojure.reflect`; (8)
@@ -2368,9 +2366,10 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `into` here starts a derived value without metadata ("Deviations") where the oracle's
   keeps `empty`'s; only when there is metadata, so a walk never copies a node to record
   nil. A strict seq is a list, so `walk` keeps it a list (the oracle realizes a
-  `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
-  program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
-  where the oracle answers `(if x (do y))`.
+  `LongRange` as a seq: printed alike). `macroexpand-all` expands the program's macros
+  and the core macros expanded as data ("Macros", the core macros), so `(when x y)` is the
+  oracle's `(if x (do y))`; any other core macro stays as written (until 2026-10-29 every
+  core form did).
 - `clojure.template`: `do-template` calls `apply-template`, which calls
   `clojure.walk/postwalk-replace`, at expansion time ("Macros": a body sees the
   definitions above it, a required namespace's too).
@@ -3618,12 +3617,12 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   same lambda expands call sites datum-to-datum at lower time (through
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
   time. Docstring and attr map skipped, `&` rest works. A call
-  above the definition names the missing expander; a program macro has no function
-  value (a core macro's name answers its expander as a value instead: the run-time
-  once-expansion over the quoted form, `ClojureMacroLowering.coreMacroValue`, shared
-  per name like every other site-independent value -- g16; the oracle refuses a bare
-  macro name in value position at compile time and hands back the fn through deref
-  of the var, while here both positions answer the delegate); a
+  above the definition names the missing expander; a program macro's bare name has no
+  value (`is a macro, not a function`, the oracle's compile-time refusal), while its var's
+  root is the oracle's macro function over `(&form &env & args)`
+  (`ClojureMacroLowering.programMacroRoot`, "The core macros expand as data" below); a
+  core macro's bare name answers its var's root (`ClojureCoreMacros.root`), where the
+  oracle refuses it at compile time and hands the fn out only through deref of the var; a
   later `def`/`defn` wins the call sites back. A redefined `defmacro` (or a first one
   over a macro, function, valued or declared root) validates and notifies like the
   oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
@@ -3651,16 +3650,19 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   expansion binds them (`ClojureMacroLowering.expandMacro`): `&form` the quoted call,
   `&env` nil without a local in reach (`visibleLocals`; the oracle's nil, inside a `fn` too)
   else a map of each local's symbol to itself (the oracle's values are `LocalBinding`s;
-  generated destructuring locals are not in it). A run-time expansion binds `&form` in
-  `C%MACROEXPAND-1`/`WALK` only where some macro body read it (`readsMacroForm`, so other
-  programs keep their bytes; a session decides when its runtime is first emitted) and leaves
-  `&env` nil, the oracle's. As parameter names both are refused. Pins: clojure-spec
+  generated destructuring locals are not in it). A run-time expansion calls the macro's
+  root (`C%MACRO-ROOT-OF`), which binds `&form` to the call and `&env` to the environment
+  argument -- nil from `macroexpand`, the oracle's -- whatever the body reads (until
+  2026-10-29 only where some body read `&form`, `readsMacroForm`). As parameter names both
+  are refused. Pins: clojure-spec
   `macro-env-and-form-ns-resolve-and-a-require-that-runs-later` (four backends,
   oracle-identical), `ClojureLoweringTest#aMacroBodyReadsItsCallAndTheCallsLocalsThroughFormAndEnv`.
 - **The run-time table of a whole program holds an index, not the expander**:
   `(setq |c%ns/m%macro| 3)`, and every expander sits in one `C%MACRO-EXPANDER`
   (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
-  `C%MACROEXPAND(-1)` call. A program lowering no `macroexpand`/`macroexpand-1` call or
+  `C%MACROEXPAND(-1)` call -- and `C%MACRO-ROOT-OF`, a macro's var root: a whole program
+  reading a program macro's root (`#'m`) and expanding nothing at run time carries those two
+  alone (`takesMacroRoots`, `macroRootRuntime`). A program lowering no `macroexpand`/`macroexpand-1` call or
   value carries none of them (`ClojureLowering.expandsAtRunTime`; until 2026-10-09 every
   `defmacro` spliced them and the pruner took them out), and
   `ClojureLowering.programMacroRuntimeForms` keys them in `LibraryDefunPruner`, so one
@@ -3797,8 +3799,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   even unresolved -- a visible core name as `clojure.core/name`, else the defining
   namespace, an alias head with its namespace, a class head with its full name
   (`System/nanoTime` -> `java.lang.System/nanoTime`). `~` lowers as code, `~@` splices
-  into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
-  expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
+  into lists, vectors, maps and sets; `x#` is one fresh `x__N__auto__`
+  (`%clojure-auto-gensym`, the oracle's spelling) per syntax-quote node per expansion
+  (fresher than the oracle's read-time symbol, which every expansion of the template
+  shares), and `(gensym)` is `G__N` like the oracle's (both since 2026-10-29: `xN` and `GN`
+  before, so expansions did not print the oracle's shapes). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
   Reader metadata on a template form (`(%with-meta form meta)`) travels with it, the
   oracle's `(with-meta form meta)` over the syntax-quoted map (`^String` ->
@@ -3842,7 +3847,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   a `read-string` program carries the run-time `#()` reader.
 - `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=` against a quoted form
   holds and the printer (demangling `c%`) spells the oracle's lowercase; a non-macro head
-  answers the form. **The head resolves in `*ns*` when the expansion runs**, like the
+  answers the form, and `macroexpand` stops where an expansion answers its form itself
+  (`eq`, the oracle's `identical?`: a core macro not expanded as data). **The head resolves in `*ns*` when the expansion runs**, like the
   oracle (2026-10-09; until then through the call site's namespace, so
   `clojure.walk/macroexpand-all` called from `(ns mac5)` expanded none of mac5's bare
   names): `C%MACRO-FN` reads the name out of `%clojure-ns` and asks
@@ -3860,6 +3866,67 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   oracle-identical), `ClojureLoweringTest#aRunTimeExpansionResolvesItsHeadThroughTheScopeOfTheNamespaceItRunsIn`,
   `ClojureSessionTest#aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo`.
   `gensym` is the ordinary uninterned symbol.
+- **The core macros expand as data** (g98, 2026-10-29). `macroexpand-1`, `macroexpand`,
+  `clojure.walk/macroexpand-all` and a core macro's var root answer the oracle's expansion
+  of `let`, `loop`, `fn`, `letfn`, `when`, `when-not`, `if-not`, `cond`, `condp`, `and`,
+  `or`, `case`, `if-let`, `when-let`, `if-some`, `when-some`, `when-first`, `->`, `->>`,
+  `as->`, `cond->`, `cond->>`, `some->`, `some->>`, `doto`, `..`, `dotimes`, `doseq`, `for`,
+  `while`, `comment`, `declare`, `defn`, `defn-`, `binding`, `assert`, `locking`,
+  `with-open` and `future` (`ClojureCoreMacros.EXPANDERS`), while a program's own call
+  sites keep their lowering rows. The expanders are Clojure source,
+  `lib/rontolisp/internal/core_macros.clj` (`rontolisp.internal.core-macros`: shipped, never
+  shadowed by a project file, refused to a program's `require` --
+  `ClojureBuiltinNamespaces.INTERNAL`), written from the documented behaviour and diffed
+  against clj 1.12.6 with gensyms renumbered in order of appearance: every shape matches,
+  `destructure` (clojure.core's own function, refused until then) and `case`'s hashed `case*`
+  map included (`.hashCode` is the oracle's, the shift/mask search the documented one). The
+  read-time auto-gensyms the oracle shares across a `doseq`'s or `for`'s levels (`c#`,
+  `iterys#`, ...) are made once per expansion and handed down. Each expander takes
+  `(&form &env & args)`; a core macro outside the list answers its call (its root is
+  `(fn [form env & _] form)`), so a walker stops there as at a function call.
+  - Run time: `C%MACRO-FN` answers a macro function -- the scope first (`C%MACRO-SCOPE` also
+    lists, per namespace, the core macros a definition, refer, `:exclude` or `:rename` hides,
+    as nil, and a rename's spelling and an alias of `clojure.core`, as the core name), then
+    the program's table (`C%MACRO-ROOT-OF`), then `C%CORE-MACRO` for a bare or
+    `clojure.core/` name. `C%MACROEXPAND-1` is `(apply f form nil args)`.
+  - Loading (`ClojureCoreMacros.need`): code the program runs -- a `macroexpand` call or
+    value, a core macro's var root or value, `destructure` -- loads the namespace; a whole
+    program's macro body only notes it (`coreMacrosInBodies`): the macro-time evaluator holds
+    the expanders from its start (`ClojureCoreMacros.macroTimeForms`, lowered once per
+    process through `Clojure.read`), and the program loads them after its datums only where
+    a program macro's root (`takesMacroRoots`) reaches the bodies as it runs. An open
+    lowering (a session, a run-time target) loads at once.
+  - The library pruner keys every definition of the namespace by its prefix
+    (`ClojureLowering.isCoreMacroDefinition`, `LibraryDefunPruner.isBundledName`), like the
+    macro runtime: `#'when` keeps `expand-when` and what it calls, a run-time expansion all.
+  - Cost, measured 2026-10-29 (wasm P1, default level): a program that never expands at run
+    time is byte-identical, its macro bodies' expansions included (`(defmacro ex [f] (list
+    'quote (macroexpand f)))` 275,776 B before and after); one calling `macroexpand-1` carries
+    the expanders: `(prn (macroexpand-1 '(m 1)))` 421,290 -> 772,631 B, under `clojure.pprint`
+    1,442,255 -> 1,672,481 B (`ClojureMacroRuntimeTableTest`). Funnelling every vector `conj`
+    through one `push` (`(vec (concat v xs))`) took that from 972,318 B: a `conj` of n items
+    lowers its every collection arm n times at its site (11.7 KB of IR for four items).
+  - The special forms the expansions spell lower (`lowerRow`): `let*`/`loop*` through the
+    `let`/`loop` rows over names only, with the oracle's refusals (`Bad binding form,
+    expected symbol, got: [a]`, `... expected vector`, `... expected matched symbol expression
+    pairs`, `Can't let qualified name`); `letfn*` as the `letfn` entries of its fn forms,
+    named like their bindings or not at all (another name is refused); `case*` as the `case`
+    of its map's `[test then]` entries, each test one constant compared by equality -- the
+    hashes only steer the oracle's jump table -- a skipped hash's then, the case macro's
+    `(condp = e 'test then ... default)`, contributing its tests (any other then is refused).
+    Map destructuring's `PersistentArrayMap/createAsIfByAssoc` and `/EMPTY` lower in place
+    (`ClojureLangClasses`).
+  - Deviations: a malformed call's refusal propagates as the expander throws it (the oracle's
+    `Syntax error macroexpanding` wraps it); a `case` whose tests collide in two or more
+    buckets lists the skipped hashes in insertion order; a BigDecimal test hashes as its
+    ratio; the macros outside the list answer their call. Pins: clojure-spec
+    `core-macros-expand-to-the-oracles-forms-as-data`,
+    `a-macros-var-root-is-its-function-of-form-env-and-args`,
+    `let-star-loop-star-letfn-star-and-case-star-are-special-forms` (oracle-identical but the
+    noted lines), `ClojureMacroRuntimeTableTest#aProgramExpandingNothingAtRunTimeKeepsNoExpander`,
+    `ClojureCoreNamesTest` (the table against the file's expanders),
+    `ClojureLoweringTest#letIsSequentialAndLoopIsALabelsSelfCall`,
+    `#letfnLowersToLabelsWithEveryNamePreScanned`.
 
 ## Lowering at run time
 

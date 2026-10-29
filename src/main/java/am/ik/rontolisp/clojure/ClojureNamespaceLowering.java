@@ -500,6 +500,10 @@ final class ClojureNamespaceLowering {
 			return null;
 		}
 		boolean library = isKnownNamespace(ns);
+		if (ClojureBuiltinNamespaces.isInternal(ns)) {
+			// the lowering loads it for itself where it needs it
+			throw new LispReadException(ns + " is the lowering's own namespace, no user surface");
+		}
 		if (ClojureKernelLowering.isKernelNamespace(ns)) {
 			// the kernels are the built-in namespaces' own, no user surface
 			String owner = ctx.loadingNamespaces.peek();
