@@ -151,7 +151,8 @@
 - 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは
   ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の
   report（失敗した `(inc nil)` の `(.getMessage e)` は `+: The value NIL is not of type
-  NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
+  NUMBER` で、オラクルでは `NullPointerException` の文言。ゼロ除算のメッセージはオラクルと
+  同じ `Divide by zero`）、`str` はオラクルのクラス名の
   接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
   （`java.net.URISyntaxException`）はホストオブジェクトのままです。インタプリタと JVM では、
@@ -191,22 +192,23 @@
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
  `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える
- キーワードの下に格納され、すべての数値綴りは `:number` にまとまります（オラクルは
- `Long` と `Double` を区別します）。真の nil は `(:C%NIL)` マーカーへ写されるので、
+ キーワードの下に格納されます。真の nil は `(:C%NIL)` マーカーへ写されるので、
  どの表も nil をキーにしません。一方リテラルに `:nil` な値はキーワード行のままです
  （オラクル通り。ディスパッチ関数の中の `class` 呼び出しは nil 引数に nil 自身を答えるので、
   null 判定でそこでもマーカーへ写ります。素のものでも他の関数で包んだものでも、記録した定義から再降低される名前付き `defn`・`def` 済み関数経由でも、インラインなディスパッチ datum の中でそれらを呼び出す場合（呼び出し位置で同じ降低をインライン化）でも同様です）。
- `Object` メソッドは検索の後・デフォルトの先に捕まえます。throwable やストリームのクラスは
- その名前のキーワード（`class` が答えるもの）の下に格納され、検索はオラクルの継承と同じく
+ `Object` メソッドは検索の後・デフォルトの先に捕まえます。throwable、ストリーム、数値のクラスは
+ その名前のキーワード（`class` が答えるもの。`:java.lang.Long`・`:java.lang.Double`・
+ `:clojure.lang.Ratio`・`:clojure.lang.BigInt`・`:java.lang.Number`）の下に格納され、検索はオラクルの継承と同じく
  Java のスーパータイプをたどります。インタフェース（`java.io.Serializable`、
  `java.io.Closeable`）と `Object` も含みます。`isa?`・`derive`・`underive`・`parents`・
  `ancestors`・`descendants` はクラス名を同じキーワードとして読むので
  `(isa? (class "a") String)` は `true` で、クラスの `parents`/`ancestors` はオラクルと同じく
- Java のスーパータイプを加えます。コアの種類（`:string`、`:number` など）はそれが表す値の
+ Java のスーパータイプを加えます。コアの種類（`:string`、`:map` など）はそれが表す値の
  スーパータイプを加えます。関数は `clojure.lang.IFn` に `isa?` で、その `ancestors` は
  それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。値の位置の
  クラス名はそのキーワードとして読みます（`(= clojure.lang.IFn (class (fn [])))` は
- `false` のままです）。record や deftype は
+ `false` のままです）。数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
+ `:java.lang.Long` と印字します。record や deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
  `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。ここではキーワードがクラス
  そのものなので、`:java.lang.Exception` と綴ったキーワードもそのクラスです。ホストの
@@ -216,8 +218,7 @@
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
 クラス（`java.util.AbstractList`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
  ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
- クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
- （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
+ クラスだけを試し、それから `Object` 既定です。1つの値が実装する2つの `clojure.lang` インタフェースは
  それぞれが受ける値の種類で順序づけます（`IRef` が `IDeref` より先）。`clojure.lang` は
  このクラスパスにないためです。
 - `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
@@ -359,8 +360,11 @@
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は
   `toString`）。ビット演算は範囲内の `N` サフィックス付きリテラルをふつうの整数として取ります
   （oracle は `BigInt` として拒否します）。
-- `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
-  ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
+- `class` は種類名のキーワードで答えます（`:string`・`:keyword`・`:map` 等）。オラクルは
+  ホストクラスを返しますが、wasm バックエンドにはありません。数値はそのクラス名の
+  キーワードで答えます（`:java.lang.Long`・`:java.lang.Double`・`:clojure.lang.Ratio`、long を
+  超える整数は `:clojure.lang.BigInt`）。`1N` と小数はふつうの数として読むため、ここでは
+  それぞれ `Long` と `Ratio` です。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
 - [バイト配列](reference/byte-array.md)は、オラクルの `#object["[B" ...]` から識別ハッシュを
   除いた形で印字し、`str` は `[B` を返します（オラクルは `[B@1b6d3586`）。`aset` は -128 から
@@ -378,7 +382,7 @@
   （`(.put bb (byte-array [7]))` はどちらでも `[7 0]` になります）。候補が1つしかない
   `short`・`int`・`long` メンバーは、オラクルが数を変換するのと同様に fixnum 引数を変換します
   （どちらも、引数の個数に合う候補が1つだけなら、その候補が引数をどう変換しても受け取ります）。`instance?` の `Byte`・`Short`・`Integer` はキャスト結果に偽で
-  （`Long` には真）、`class` は `:number` を答え、`.compareTo` はキャスト結果を `Long`
+  （`Long` には真）、`class` は `:java.lang.Long` を答え、`.compareTo` はキャスト結果を `Long`
   として読みます（オラクルは `Long` を `Byte.compareTo` に渡すと例外を投げます）。
   キャストをボックス化すると、その1系統のオーバーロードのために全バックエンドの値モデル
   全体（`+`・`=`・印字・すべての `unmarshal`）が動くため、キャストは普通の整数のままです。

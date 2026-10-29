@@ -2046,11 +2046,14 @@
 
 (defun rontolisp::%clojure-ex-message (x)
   "ex-message and .getMessage: an exception's message (nil when it has none),
-   a runtime error's report, NIL for anything that is no exception."
+   a runtime error's report (a division by zero's the oracle's ArithmeticException
+   message), NIL for anything that is no exception."
   (let ((e (rontolisp::%clojure-exception-of x)))
     (if e
         (let ((parts (c%e-parts e)))
-          (if parts (car (cdr parts)) (format nil "~a" e))))))
+          (cond (parts (car (cdr parts)))
+                ((typep e 'division-by-zero) "Divide by zero")
+                (t (format nil "~a" e)))))))
 
 (defun rontolisp::%clojure-ex-data (x)
   "ex-data: an exception's data (ex-info's map), NIL for anything else."
@@ -10197,15 +10200,12 @@
 ;; is not in the map (the lowering special-cases it to :object) and is tested
 ;; by its full name below.
 (defvar rontolisp::%clojure-dispatch-class-names
-  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
-    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
-    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
-    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
-    ("Character" . "char") ("Char" . "char") ("Map" . "map")
-    ("IPersistentMap" . "map") ("Vector" . "vector")
-    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
-    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
-    ("Collection" . "list") ("IPersistentList" . "list")
+  '(("String" . "string") ("CharSequence" . "string") ("Boolean" . "boolean")
+    ("Keyword" . "keyword") ("Symbol" . "symbol") ("Character" . "char")
+    ("Char" . "char") ("Map" . "map") ("IPersistentMap" . "map")
+    ("Vector" . "vector") ("IPersistentVector" . "vector") ("Set" . "set")
+    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
+    ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
     ("Function" . "function") ("Atom" . "atom"))
   "Simple class names to the kind keyword spelling dispatch stores.")
@@ -10325,15 +10325,12 @@
 ;; not in the map (the lowering special-cases it to the default) and is
 ;; tested by its full name below.
 (defvar rontolisp::%clojure-extends-kind-names
-  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
-    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
-    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
-    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
-    ("Character" . "char") ("Char" . "char") ("Map" . "map")
-    ("IPersistentMap" . "map") ("Vector" . "vector")
-    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
-    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
-    ("Collection" . "list") ("IPersistentList" . "list")
+  '(("String" . "string") ("CharSequence" . "string") ("Boolean" . "boolean")
+    ("Keyword" . "keyword") ("Symbol" . "symbol") ("Character" . "char")
+    ("Char" . "char") ("Map" . "map") ("IPersistentMap" . "map")
+    ("Vector" . "vector") ("IPersistentVector" . "vector") ("Set" . "set")
+    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
+    ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
     ("Function" . "function") ("Atom" . "atom"))
   "Simple class names to the kind keyword spelling an extend target
@@ -10432,9 +10429,9 @@
   (cond ((equal spelling "object") :default)
         ((or (gethash x rontolisp::%clojure-protocol-type-tags)
           (member spelling
-                  '("string" "number" "boolean" "keyword" "symbol" "char" "map"
-                    "vector" "set" "list" "function" "atom" "nil" "reify"
-                    "pattern" "matcher")
+                  '("string" "boolean" "keyword" "symbol" "char" "map" "vector"
+                    "set" "list" "function" "atom" "nil" "reify" "pattern"
+                    "matcher")
                   :test #'equal)
           (assoc spelling rontolisp::%clojure-extends-time-names :test #'equal)
           (member spelling rontolisp::%clojure-extends-io-names :test #'equal))
@@ -10464,8 +10461,7 @@
                             :test #'equal))
                     (cdr
                      (assoc name rontolisp::%clojure-extends-time-names
-                            :test #'equal))
-                    (if (equal name "clojure.lang.BigInt") "number"))))
+                            :test #'equal)))))
            (if (and kind
                     (not
                      (member (rontolisp::%clojure-extends-walked name)
@@ -10693,8 +10689,9 @@
 ;; cast of a class the lowering names is the instance test inline; of a
 ;; computed one this worker, like instance? of a class value: a class keyword
 ;; casts by the protocol tag (what class answers for every value but a host
-;; object), a host class object by the kind its name has here (numbers by
-;; numberp, like the oracle's Long) else by asking the host, nil is the
+;; object), a host class object by the kind its name has here (a number's
+;; class by its keyword, any other numeric class by numberp: an int is a Long
+;; here) else by asking the host, nil is the
 ;; oracle's NullPointerException and anything else its ClassCastException. nil
 ;; casts to nil past a class.
 
@@ -10707,14 +10704,15 @@
           ((or (equal name "java.lang.String")
                (equal name "java.lang.CharSequence"))
            "string")
-          ((or (equal name "java.lang.Long") (equal name "java.lang.Integer")
-               (equal name "java.lang.Short") (equal name "java.lang.Byte")
-               (equal name "java.lang.Double") (equal name "java.lang.Float")
+          ((or (equal name "java.lang.Long") (equal name "java.lang.Double")
+               (equal name "clojure.lang.BigInt")
+               (equal name "clojure.lang.Ratio"))
+           name)
+          ((or (equal name "java.lang.Integer") (equal name "java.lang.Short")
+               (equal name "java.lang.Byte") (equal name "java.lang.Float")
                (equal name "java.lang.Number")
                (equal name "java.math.BigInteger")
-               (equal name "java.math.BigDecimal")
-               (equal name "clojure.lang.BigInt")
-               (equal name "clojure.lang.Ratio") (equal name "long")
+               (equal name "java.math.BigDecimal") (equal name "long")
                (equal name "int") (equal name "short") (equal name "byte")
                (equal name "double") (equal name "float"))
            "number")
@@ -10765,9 +10763,10 @@
                 nil
                 (let ((kind (rontolisp::%clojure-cast-kind name)))
                   (if (or (equal name "java.lang.Object")
-                          (and kind (equal (c%protocol-tag x) kind))
-                          (and (null kind)
-                               (rontolisp::%clojure-host-class-instance-p c x)))
+                       (and kind (equal (c%protocol-tag x) kind))
+                       (and kind (equal (car (cdr kind)) "number") (numberp x))
+                       (and (null kind)
+                            (rontolisp::%clojure-host-class-instance-p c x)))
                       x
                       (rontolisp::%clojure-class-cast-exception
                        (concatenate 'string "Cannot cast "
@@ -10901,6 +10900,21 @@
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
   (and (integerp x) (<= -9223372036854775808 x 9223372036854775807)))
+
+(defun rontolisp::%clojure-is-bigint (x)
+  "instance? clojure.lang.BigInt: an integer past a long (the integer 1N
+   reads as is a Long here)."
+  (and (integerp x) (not (rontolisp::%clojure-is-int x))))
+
+(defun rontolisp::%clojure-number-class (x)
+  "class of the number X: the keyword of the oracle's class -- a Long, a
+   BigInt past a long, a Double, else a Ratio."
+  (cond ((integerp x)
+         (if (rontolisp::%clojure-is-int x)
+             '(:c%keyword "java.lang.Long")
+             '(:c%keyword "clojure.lang.BigInt")))
+        ((floatp x) '(:c%keyword "java.lang.Double"))
+        (t '(:c%keyword "clojure.lang.Ratio"))))
 
 (defun rontolisp::%clojure-is-nat-int (x)
   "nat-int?: an int? that is not negative."
@@ -13322,7 +13336,7 @@
    32 bits (only -2147483648 / -1 wraps); a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
-        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
         (%mask-signed-field 32 (truncate x y)))))
 
 (defun rontolisp::%clojure-unchecked-remainder-int (a b)
@@ -13330,7 +13344,7 @@
    dividend; a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
-        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
         (rem x y))))
 
 (defun rontolisp::%clojure-unchecked-inc-v (&rest args)

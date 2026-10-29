@@ -208,7 +208,7 @@ final class ClojureProtocolLowering {
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),
 				ClojureCollectionLowering.keywordForm("string")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), one),
-				ClojureCollectionLowering.keywordForm("number")));
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.NUMBER_CLASS), one)));
 		branches.add(ClojureLowerUtil.list(ClojureCollectionLowering.isSetForm(one),
 				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), one),
@@ -1940,14 +1940,14 @@ final class ClojureProtocolLowering {
 			// a clojure.java.io value dispatches as its class's keyword
 			return ClojureCollectionLowering.keywordForm(fqn);
 		}
+		String number = walkedName(ctx, typeName);
+		if (ClojureClassBases.NUMBER_SUPERS.containsKey(number)) {
+			// a number dispatches on its class's keyword, like class
+			return ClojureCollectionLowering.keywordForm(number);
+		}
 		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
-		}
-		if (kind == null && fqn.equals("clojure.lang.BigInt")) {
-			// 1N reads as the integer 1 here, so an extension to BigInt reads and
-			// writes every integer through the number's row, like Long's
-			kind = "number";
 		}
 		if (kind != null && reachesOtherKinds(ctx, typeName)) {
 			return ClojureCollectionLowering.keywordForm(walkedName(ctx, typeName));
@@ -2050,11 +2050,11 @@ final class ClojureProtocolLowering {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
-		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))
-				|| fqn.equals("clojure.lang.BigInt")) {
+		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))) {
 			return reachesOtherKinds(ctx, typeName) ? walkedName(ctx, typeName) : null;
 		}
-		if (ClojureIoLowering.EXTENDABLE.contains(fqn)) {
+		if (ClojureIoLowering.EXTENDABLE.contains(fqn)
+				|| ClojureClassBases.NUMBER_SUPERS.containsKey(walkedName(ctx, typeName))) {
 			return null;
 		}
 		if (ClojureClassBases.TIME_VALUE_DISPATCH.containsKey(fqn)) {

@@ -1220,8 +1220,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def h (make-hierarchy)) (defmulti area :shape :hierarchy h)")).contains("C%H-DISPATCH");
 		assertThat(lowered("(defmulti area :shape)")).contains("|c%area%object|");
 		assertThat(lowered("(defmulti area class) (defmethod area String [s] s)")).contains("\"string\"");
-		assertThat(lowered("(defmulti area class) (defmethod area Number [n] n)")).contains("\"number\"");
-		assertThat(lowered("(defmulti area class) (defmethod area Long [n] n)")).contains("\"number\"");
+		assertThat(lowered("(defmulti area class) (defmethod area Number [n] n)")).contains("\"java.lang.Number\"");
+		assertThat(lowered("(defmulti area class) (defmethod area Long [n] n)")).contains("\"java.lang.Long\"")
+			.doesNotContain("\"number\"");
 		assertThat(lowered("(defmulti area class) (defmethod area java.util.Map [m] m)")).contains("\"map\"");
 		assertThat(lowered("(defmulti area class) (defmethod area clojure.lang.IPersistentVector [v] v)"))
 			.contains("\"vector\"");
@@ -1236,7 +1237,7 @@ class ClojureLoweringTest {
 			.contains("VECTOR");
 		assertThat(lowered("(defmulti area :t) (defmethod area ::k [x] x)")).contains("\"user/k\"");
 		assertThat(lowered("(defmulti area :t) (remove-method area String)")).contains("\"string\"");
-		assertThat(lowered("(defmulti area :t) (get-method area Number)")).contains("\"number\"");
+		assertThat(lowered("(defmulti area :t) (get-method area Number)")).contains("\"java.lang.Number\"");
 		assertThat(lowered("(defmulti area :t) (methods area)")).contains("RONTOLISP::%CLOJURE-METHODS")
 			.contains("|c%area%methods|");
 		assertThatThrownBy(() -> Clojure.read("(methods missing)", null)).isInstanceOf(LispReadException.class)
