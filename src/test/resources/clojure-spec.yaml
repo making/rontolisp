@@ -4253,7 +4253,9 @@ cases:
     # answers the var or nil, of a quoted symbol while the program lowers, of a computed
     # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
     # compile-if. clj 1.12.6, oracle-identical.
+    host: evm-true? and the macro bodies eval and resolve computed forms
     source: |
+      (in-ns 'lit)
       (defmacro evm-compile-if [test then else] (if (eval test) then else))
       (def evm-x 3)
       (defn evm-f [] 4)
@@ -4433,10 +4435,12 @@ cases:
     # carries its program's image and lowers it again when it first runs a verb,
     # compiling each lowered call into a class linked against itself. A wasm module
     # carries no lowering, so there the verbs refuse (the case above).
+    host: eval and the other verbs over computed arguments
     skip:
       wasm: a wasm module carries no lowering, so the verbs refuse at run time
       wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
     source: |
+      (ns rtl)
       (defn rtl-twice [x] (* 2 x))
       (def rtl-base 10)
       (println (eval (list 'rtl-twice (list 'inc 4))) (eval `(+ ~rtl-base 1)) (eval (concat '(+) [1 2 3])))
@@ -4454,7 +4458,7 @@ cases:
       (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
     expected: |
       10 11 6
-      #'lit/rtl-added 15
+      #'rtl/rtl-added 15
       49 got 42
       42 8
       42 3
@@ -15703,6 +15707,7 @@ cases:
     # #' and resolve of a clojure.string var (a lowering, no var of its own): a var
     # whose root is the function value, at run time and while a macro expands
     # (camel-snake-kebab's defconversion). Oracle-identical (clj 1.12.6, 2026-10-12).
+    host: lv-mac's body resolves a computed symbol
     source: |
       (require '[clojure.string :as lv-str])
       (prn (#'lv-str/capitalize "abc") ((resolve 'clojure.string/upper-case) "x") (var clojure.string/join) (map #'lv-str/trim [" a "]))
@@ -16041,14 +16046,17 @@ cases:
     # as its var -- read by a macro body too, while it expands (tools.reader's
     # resolve-symbol under its syntax-quote macro). Oracle-identical (clj
     # 1.12.6, 2026-10-13; the macro, 2026-10-29).
+    host: treader-mapped?'s body reads the map of a computed namespace
     source: |
-      (println (get (ns-map 'user) 'f67-pub-x))
+      (in-ns 'user)
+      (def nsm-pub-x 1)
+      (println (get (ns-map 'user) 'nsm-pub-x))
       (println (get (ns-map 'user) 'map))
       (println (get (ns-map 'user) 'f67-no-such-var))
       (defmacro treader-mapped? [s] (contains? (ns-map *ns*) s))
       (println (treader-mapped? map) (treader-mapped? treader-no-such-var))
     expected: |
-      #'user/f67-pub-x
+      #'user/nsm-pub-x
       #'clojure.core/map
       nil
       true false
@@ -16764,6 +16772,7 @@ cases:
     # all six share one program-wide cell through %clojure-shared-value, with
     # no per-snapshot key. A qualified spelling shares the bare name's cell, a
     # let-bound value stays identical, and a shared value works as a map key.
+    host: a namespace-mapping value takes a computed namespace
     source: |
       (println (= ns-publics ns-publics) (identical? ns-publics ns-publics))
       (println (= ns-interns ns-interns) (identical? ns-interns ns-interns))
