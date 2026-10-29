@@ -11300,8 +11300,7 @@
                 (rontolisp::%clojure-class-cast-exception-of
                  "thread-bound? needs vars" v))
             (let ((depth (aref (car (cdr (cdr v))) 1)))
-              (if (or (null depth) (<= (funcall depth) 0))
-                  (setq ok nil))))))))
+              (if (or (null depth) (<= (funcall depth) 0)) (setq ok nil))))))))
 
 (defun rontolisp::%clojure-is-thread-bound-v (&rest args)
   "thread-bound? as a value."
@@ -17228,8 +17227,7 @@
                               (concatenate 'string
                                "Can't change/establish root binding of: "
                                (rontolisp::%clojure-var-short-name
-                                (list :C%VAR name))
-                               " with set")))
+                                (list :C%VAR name)) " with set")))
                          (rplaca box value)
                          value)))))
     (rontolisp::%clojure-put-meta v

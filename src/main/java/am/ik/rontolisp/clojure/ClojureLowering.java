@@ -1851,8 +1851,8 @@ public final class ClojureLowering {
 			boolean dynamics = lowering.boundFnUsed && dynamicSeed.addAll(lowering.dynamicVars);
 			boolean opens = runTimeTarget && !open && ClojureRunTime.reachesAny(forms, lowering.mappedCoreVars);
 			open |= opens;
-			// an open program altering a computed root: a function it names as data may be
-			// the var a verb resolves as it runs
+			// an open program altering a computed root: a function it names as
+			// data may be the var a verb resolves as it runs
 			boolean named = false;
 			if (open && lowering.rootSetters) {
 				for (String name : lowering.quotedNames) {

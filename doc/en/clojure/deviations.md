@@ -90,10 +90,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `list?`, `coll?`, `sequential?` and `counted?` answer `false` for `()`; a seq a verb answers
   over a strict input is a list, so `list?`, `counted?` and `realized?` answer `true` for it
   (the oracle's lazy or chunked seq: `false`), unless the verb's function names the
-  definition it stands in, whose seq is lazy like the oracle's; no seq is chunked (`chunked-seq?` is always
-  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. `identical?`
-  compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
-  two keywords of one spelling as one object.
+  definition it stands in, whose seq is lazy like the oracle's; no seq is chunked
+  (`chunked-seq?` is always `false`), and an `iterate`/`cycle` seq is `realized?` only once
+  forced. `identical?` compares numbers, characters and symbols by value
+  (`(identical? 1000 1000)` is `true`) and two keywords of one spelling as one object.
 - An integer inside the long range is a plain integer whatever made it: an `N` literal
   (`2N`), `bigint`, `biginteger`, a `BigInt` sum or product (`(+ 1N 2)`) and an integral
   ratio answer (`(* 1/2 2)`, `(rationalize 1.0)`) print without the oracle's `N` (`3`, not
@@ -984,9 +984,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   literal, a core function and every predicate a spec macro takes keep their names).
   `clojure.spec.test.alpha`'s `instrument` reaches a function its `fdef` (or any quote)
   names: a function named only by a symbol the program builds keeps direct calls, so its
-  `alter-var-root` is refused. What resolves a symbol or requires a namespace computed as the program runs --
-  `instrument`, `check`, `explain` of a regex spec over a value that is no sequence, `form`
-  of `nilable`, the generators (`gen`, `exercise`, over test.check from the `deps.edn`) --
-  runs on the interpreter and in a JVM class and is refused in a wasm module.
+  `alter-var-root` is refused. What resolves a symbol or requires a namespace computed as
+  the program runs -- `instrument`, `check`, `explain` of a regex spec over a value that is
+  no sequence, `form` of `nilable`, the generators (`gen`, `exercise`, over test.check from
+  the `deps.edn`) -- runs on the interpreter and in a JVM class and is refused in a wasm
+  module.
   `clojure.lang.RT/checkSpecAsserts`, which `check-asserts` sets, starts false: the
   `clojure.spec.check-asserts` system property is not read.
