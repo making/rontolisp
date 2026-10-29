@@ -15753,9 +15753,9 @@
   "The fresh symbol a syntax-quote's PREFIX# names, spelled PREFIX__N__auto__
    like the oracle's, N drawn from RT/nextID's count, so it never spells a name
    tools.reader's syntax-quote spelled."
-  (make-symbol (concatenate 'string prefix "__"
-                            (princ-to-string (rontolisp::%clojure-rt-next-id))
-                            "__auto__")))
+  (make-symbol
+   (concatenate 'string prefix "__"
+                (princ-to-string (rontolisp::%clojure-rt-next-id)) "__auto__")))
 
 ;;;; Atoms across request threads.
 ;;
