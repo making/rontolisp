@@ -137,7 +137,7 @@ answered `2 5 3` before).
 | destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`) -- in a pattern with `&` through the seq view instead (`%clojure-seq-nth`, the oracle's `first` after each `next`), so `[[k v] & ks]` walks a map or a set (spec.alpha's `map-spec-impl`; g90, clojure-spec `a-vector-pattern-takes-as-after-its-rest`) --, `&` rest through `%clojure-drop`, `:as`, in the oracle's `seq-binding-form` order -- patterns, an optional `& rest`, an optional `:as name` ending the pattern (`[tag & content :as all]`: hiccup, honeysql; refused until 2026-10-12, as is `:as` not last now); `collectPatternNames` strips a pattern's type hint (`(for [^String s ...])`, tools.cli); map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, verified against clj 1.12.6, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`; a hinted entry `{:keys [^String class]}` binds the bare name, tools.analyzer.jvm's `validate.clj`, g87, clojure-spec `map-destructuring-reads-through-get`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur"; each `recur` is a fresh call with fresh parameters, so a closure the body creates captures its own iteration's value like the oracle's (g41, clojure-spec `dotimes-and-loop-closures-capture-the-iteration`) |
-| `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals |
+| `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals; a step carrying reader metadata (`^Class (box)`) takes the value inside and keeps its metadata (`ClojureLoopLowering.threadInsert`; g87, 2026-10-29: tools.analyzer.jvm's `members*` called `(box)` bare; clojure-spec `threading-threads-first-and-last`) |
 | `list*` | a right fold of `cons` over the seq view | of one argument, its seq; as a value a `&rest` lambda over the same fold (of one argument, its seq), a wrong count the call's arity refusal (g39, clojure-spec `core-functions-resolve-as-values`) |
 | `doseq` | nested `do` loops stepping the seq view with `%clojure-seq-rest`, answering `nil` (`ClojureLoopLowering.stepOf`) | never `dolist`: a realized lazy cons's tail is a wrapper, not list structure. `:when` skips, `:while` ends its level (an outer one the whole form), `:let` binds; an empty vector runs the body once |
 | `for` | `(rontolisp::%clojure-for coll step depth)` | "Laziness". Modifiers as in `doseq` (an inner `:while` ends only its level); unknown keywords the oracle's `Invalid ... keyword`; an empty vector refused |
@@ -219,7 +219,7 @@ answered `2 5 3` before).
 | `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `vec` refuses a non-collection as the oracle's `RuntimeException` ("Refusals"); `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, or with a pad keeps it filled from the pad up to the size (`%clojure-partition-pad`, the pad read lazily: tools.cli's `(repeat nil)`); `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
-| `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
+| `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat`; several collections step in lockstep (`%clojure-map-strict`) and end with the shortest, so an infinite one beside a finite one ends (g87, 2026-10-29: tools.analyzer's `(mapv f params (range))` hung realizing the range; clojure-spec `mapv-answers-vectors`, `mapcat-concats-mapped-views`) |
 | `ffirst` `nfirst` `fnext` `nnext` | `car`/`cdr` of the seq of the head / of the tail | each level seqs (`fnext`/`nnext` since 2026-10-10, clojure-spec `fnext-and-nnext-step-past-the-head`, oracle-identical) |
 | `range` | a strict list (1/2/3-arity); without an end the infinite lazy integers from 0 (`%clojure-range`, 2026-10-13, f66) | a zero step signals; the end-less range is lazy like the oracle's (`take`, `nth`, `map`, `filter`, `drop`, `reduce` walk it; no chunking, like every lazy seq here) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
@@ -236,7 +236,7 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, two functions by identity (one shared function object per `defun` on every backend, so two references to one definition are `=` and `identical?` while two closures over one body never are; the interpreter's closures used to compare structurally as records; a site-independent core value (a predicate, `not`, `boolean`) is one object program-wide through `%clojure-shared-value`, so two references to `pos-int?` are `=` and `identical?` like the oracle's var roots, and it works as a map key (malli's registry keys its schemas by predicate values; f92, after f85's identity `=` told per-site lambdas apart and looped `-lookup` through `:function`); every other site-independent core value the same way (f95: the seq verbs with their transducer arities, `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline`, the state verbs, the constructors, `not=` and the comparisons, so two references to `map` are `=` and `identical?`; values snapshotting lower-time state share one cell per snapshot through `%clojure-shared-value` keyed by the snapshot's digest (f97, 2026-10-13: `the-ns`/`find-ns`/`ns-name`/`all-ns` over the namespaces known where the reference stands, `loaded-libs` over the libraries loaded so far, `read`/`read-string` over the namespace and its aliases so far, so two references under one snapshot are `=` and `identical?` like the oracle's var roots while references under different snapshots keep distinct objects and a call through a value still reads its own site's snapshot; `default-data-readers` is no snapshot -- always the same two shipped reader vars -- and shares one cell program-wide))), sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site. Sharing cost (2026-10-13): a program taking no static function value is byte-identical on wasm and carries only the library's own sites on the JVM; a defn-heavy `=` program grows by the canonical boxes. Extending the worker to the remaining site-independent family (f95, 2026-10-13): a program taking no core value is still byte-identical on wasm, and a program taking values pays only a little more -- one shared call per site instead of one lambda, so the savings land where references repeat. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `function-values-compare-by-identity`, `predicate-values-are-shared-across-references`, `core-function-values-are-shared-across-references`, `snapshotting-core-values-share-one-object-per-snapshot`, `snapshotting-namespace-values-keep-their-sites-snapshot`, `read-string-values-keep-their-sites-reader-context` |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `boolean?`/`true?`/`false?` as values are the same lambdas a function position takes (malli's `{:pred boolean?}`, 2026-10-13, f66). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value one program-wide object per name through `%clojure-shared-value` over the same test (f92; two references are `=` and `identical?`, and it works as a map key; the remaining site-independent core family the same way since f95) | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` is `(progn x false)`, `decimal?` the decimal family's `(%clojure-bd-is-decimal x false)` (an alias of `progn` where nothing makes a decimal, "Decimals"), `number?` and `rational?` its decimal-aware helpers (aliases of `numberp`/`rationalp`), and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"), `bytes?` where nothing makes a byte array ("Byte arrays") and `delay?` where nothing makes a delay ("Laziness", delays): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-literals-are-decimals-and-small-bigint-literals-plain-integers`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value one program-wide object per name through `%clojure-shared-value` over the same test (f92; two references are `=` and `identical?`, and it works as a map key; the remaining site-independent core family the same way since f95) | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` is `(progn x false)`, `decimal?` the decimal family's `(%clojure-bd-is-decimal x false)` (an alias of `progn` where nothing makes a decimal, "Decimals"), `number?` and `rational?` its decimal-aware helpers (aliases of `numberp`/`rationalp`), and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"), `bytes?` where nothing makes a byte array ("Byte arrays") and `delay?` where nothing makes a delay ("Laziness", delays): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` of two names reads the protocol's tables at the type's `extendKeyForm` tag; of a computed protocol or type (a form, a local) it is the value arm's `%clojure-extends-p` over the run-time registry (g87, 2026-10-29: core.async's `unblocking-buffer?` is `(extends? impl/UnblockingBuffer (class buff))`, `extends? takes a type name` before). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-literals-are-decimals-and-small-bigint-literals-plain-integers`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` | `rontolisp::%clojure-int-cast` / `%clojure-long-cast` (`ClojureCoreLowering.castOf`; `-int-v` / `-long-v` as a value, arity checked at run time), a literal argument folded at lower time through the cast of its own type (`foldedCast`: a double literal's `intCast(double)`, a long's, a bigint's or ratio's object cast), an out-of-range literal folding to its refusal carrier with the oracle's message | the oracle's `RT.intCast` / `RT.longCast` of an object: range checks and messages included; a non-literal double takes the object cast (`(int x)` of a var holding `1e10` "integer overflow", where the oracle's primitive-typed double -- a `let` local, `(* 2.0 x)` -- says "Value out of range for int: 2.0E10"); pinned oracle-identical (clj 1.12.6, 2026-10-08) by clojure-spec `int-and-long-are-the-oracles-range-checked-casts`. `int` answers a plain integer where the oracle answers `Integer` (g02: the `byte`/`short` row below, clojure-spec `narrowing-casts-answer-plain-integers`) |
 | `cast` | `ClojureCoreLowering`: of a class the lowering names the `instance?` test inline over one temporary (nil casting to nil, anything else the oracle's `Cannot cast A to B` refusal), of anything else one call to `rontolisp::%clojure-cast`; as a value `#'rontolisp::%clojure-cast-v` | a computed class casts by the protocol tag (what `class` answers), a computed host class by the kind its name has here (`%clojure-cast-kind`: numbers by `numberp`, like the oracle's `Long`), else by asking the host; a nil class is the oracle's `NullPointerException`, anything but a class its `ClassCastException`. A host class no value here has always refuses (host classes exist on no wasm backend). Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `cast-casts-or-refuses-with-the-oracles-classes` |
 | `char` | `rontolisp::%clojure-char`, the oracle's `charCast` (`%clojure-char-cast`: a character itself, a number in `0..65535` -- a double refused past its edges, any other number truncated first) | nil its `NullPointerException`, anything else and a number outside it the oracle's refusal; pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `char-refuses-numbers-outside-the-char-range` |
@@ -324,8 +324,8 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- An error naming no class (a refusal of a construct the oracle accepts) is
-  taken by any catch but `ExceptionInfo`'s ("Catching"); a misuse a lower verb refuses first
+- An error naming no class (a refusal by name, a `java:` call on wasm) is a
+  `RuntimeException`: no catch of a subclass takes it ("Catching"); a misuse a lower verb refuses first
   carries that verb's class ("Refusals"). Exceptions: see "Exceptions" and "Host exceptions".
 - Dispatch: class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
@@ -453,10 +453,18 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   type (the JVM pad's type-error synthesized from a raw host failure: a compiled `char` past
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
-  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
-  of a construct the oracle accepts) matches every catch but
-  `ExceptionInfo`'s, so a program that caught one keeps working. A host exception goes by the
-  host's class ("Host exceptions").
+  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A host failure of a class it cannot
+  tell -- a type error naming no type, the message-less `simple-error` the JVM pad builds of any
+  other raw throwable (a `StackOverflowError`, slot 0 read in place) -- matches every catch but
+  `ExceptionInfo`'s, so the JVM still runs `(thrown? StackOverflowError ...)`. Any other condition naming no
+  class -- a refusal by name, an undefined function (a `java:` call on wasm, "Host arms where
+  the host is not") -- is the `RuntimeException` that `class`/`instance?` answer for it: taken
+  by a catch of `RuntimeException`, `Exception` or `Throwable` only. Until 2026-10-30 it
+  matched every catch but `ExceptionInfo`'s, so `(catch NumberFormatException e ...)` took a
+  wasm `java:` call's undefined-function error and data.generators' `bigint` retry looped
+  forever on both wasm backends. Pinned by clojure-spec
+  `a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws`. A host exception goes
+  by the host's class ("Host exceptions").
 - A program that catches by class but builds no exception carries `C%E-PARTS` answering NIL
   (`catchRuntime`'s reader) instead of the exception runtime. A session emits the reader while no buffer built an
   exception; the exception runtime's own `C%E-PARTS` replaces it once one does.
@@ -1693,7 +1701,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | integrant 1.0.1 + weavejester/dependency 1.0.0 | = | = | = | = | no transitive deps beyond dependency 1.0.0; g30: refused verbs refuse at call time, so `resources`/`load-hierarchy` define but never refuse the load (the 16-line probe -- init with refs, halt!, expand, refset, find-derived, resolve-key, read-string, ref?/refset?/derived-from?, :default init-key, valid-config-key?, partial init -- prints the oracle's lines); calling `load-hierarchy`/`resources` refuses at call time like any host access (`No such class: clojure.lang.RT` on the interpreter and JVM, the host-call refusal on wasm: no class loader exists here); `assoc` keeps the source's metadata, so the system map keeps `::origin` through `build`'s assocs |
 | cc.qbits/ex 0.1.3 | = | = | = | = | no transitive deps; g20: `derive`/`underive` as values ("Dispatch") |
 | spec.alpha 0.5.238 + core.specs.alpha 0.4.74 | = | = | = | = | no `deps.edn` needed: the built-in clojure's own dependencies, fetched at the first require; g90 ("clojure.spec.alpha (g90)" below: the 35-line probe, and the gaps it leaves) |
-| tools.reader 1.3.6 | = | = | 11/12 | 11/12 | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stops at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker (`.todo/h10`) |
+| tools.reader 1.3.6 | = | = | = | = | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stopped at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker until h10 (2026-10-30, "Portable GregorianCalendar"): the 12-line probe is `=` on all four. Past the probe, on wasm: `read-instant-calendar` prints the oracle's line, and so does `read-instant-timestamp` (a Timestamp's `.setNanos`, "Instants and UUIDs"); on the interpreter and the JVM the host Calendar's `print-calendar` stops at `format`'s `%t` |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -1731,6 +1739,9 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
 - What stops the probe: `clojure.core.async` requires `impl.ioc-macros`, whose `go` calls
   tools.analyzer.jvm 1.2.3's `analyze` at macro time on every body -- the namespace's own
   `go`/`go-loop` bodies (`pipe`, `pipeline*`, `mult`, `mix`, `pub` ...) while it loads.
+  The lowering of `clojure.core.async` first stopped earlier, at `unblocking-buffer?`'s
+  `(extends? impl/UnblockingBuffer (class buff))` (a computed type, fixed: the lowering
+  table's type-predicates row); past it the first `go` expands.
 - tools.analyzer.jvm, each blocker patched in a `:local/root` copy to see the next: the
   platform-neutral `clojure.tools.analyzer` (`.ast`, `.env`, `.passes`, `.utils`) loads
   verbatim. Then (1) `clojure.reflect` was no shipped namespace (shipped 2026-10-29, "clojure.jar
@@ -1739,19 +1750,56 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   (2026-10-29, "Library probes"); with it the analyzer
   loads and `(analyze 1)` runs to (3) `Compiler/LOADER` bound to `(RT/makeClassLoader)` (`No
   such class: clojure.lang.Compiler`), then (4) `build-ns-map`'s `ns-map` over `(all-ns)`
-  (refused for a computed namespace; re-run after every expansion of a macro outside
-  `ns-safe-macro`).
+  (refused for a computed namespace at macro time; re-run after every expansion of a macro
+  outside `ns-safe-macro`).
+- **Class values block the analyzer** (measured 2026-10-29, second pass). `analyze` run at
+  run time on the interpreter -- where a computed `ns-map` lowers ("Lowering at run time"),
+  so the macro-time gaps (3)/(4) are out of the way -- over a copy with `RT/baseLoader`,
+  `RT/classForName` and `Compiler/LOADER` patched to host calls: `1`, `(let [x 1] x)`,
+  `(:a {:a 1})`, `(throw ...)`, `'(1 2)`, a var, `case` and `letfn` analyze; every form
+  holding a string, keyword, vector, map, set or fn refuses in the `validate` pass, `Class
+  not found: :string` (`:keyword`, `:vector`, `:clojure.lang.AFunction`; a map's and a set's
+  tags are `:map`/`:set` the same way):
+  `annotate-tag` tags a constant with `(class val)`, a kind keyword here, and `validate-tag`
+  needs `maybe-class` -- a multimethod on `class` with `Class`, `String` and `Symbol`
+  methods -- to resolve it, while `(class :string)` is `:keyword`, which reaches the nil
+  `:default`. With that throw patched out too (measurement only): an import (`catch
+  Exception`, `(instance? String x)`: `Could not resolve var: Exception`), a `Class/member`
+  (`Math/PI`, `String/valueOf`: `No such namespace: Math`) and map destructuring's
+  `clojure.lang.PersistentArrayMap/createAsIfByAssoc` refuse next -- `ns-map` maps an import
+  to a symbol of its class here where the oracle maps the `Class`, and no `clojure.lang`
+  class is on this class path -- and `new`/`.toString` reach `members*`, which calls
+  `.getName` on `(maybe-class tag)`, nil (`NullPointerException`); `box` and `infer-tag`
+  call `.isAssignableFrom` on tags. So the passes need every class value to be a
+  `java.lang.Class`, which this front end's kind keywords are not ("Boxed-integer limits,
+  class designators, number classes ..."; `(= (class "a") String)` is false here):
+  `.todo/h09`. The earlier reading "most paths degrade" through `maybe-class`'s nil does
+  not hold: `validate` throws.
+- Fixed on the way (2026-10-29), each in its own section: `mapv`/`mapcat` of several
+  collections in lockstep (`analyze-fn-method`'s `(mapv f params (range))` hung realizing
+  the range), a threading step carrying reader metadata (`members*`'s `(-> c maybe-class
+  ^Class (box) .getName)` called `(box)` bare), `intern` of a symbol carrying metadata
+  (`create-var`), the `clojure.lang.Var` members (`dynamic?`'s `.isDynamic`, `create-var`'s
+  `.ns`; "Vars and metadata"), `extends?` of a computed type.
+- **Cost of the namespace maps** (measured 2026-10-29, interpreter, run-time lowering):
+  every namespace's `ns-map` holds clojure.core's ~770 referred vars, each a var site
+  lowered and evaluated: `(ns-map 'clojure.core)` 173 ms literal, 205-290 ms computed, the
+  11 namespaces of a small program 1.7 s. `build-ns-map` over the analyzer's ~45 namespaces
+  is therefore 7-10 s, run once per `go` (`global-env`) and again after every expansion of
+  a macro outside `ns-safe-macro` (`doseq`'s analysis spent 30 s in three rebuilds): the
+  macro-time maps need a cache keyed by each namespace's state.
 - Read off the code, not yet reached: (5) `macroexpand-1` calls a macro's var as `(apply v
   form (:locals env) (rest form))` -- since g98 (2026-10-29) a macro's var root is that
   function, a core macro's answering the oracle's expansion into the special forms, which
-  the lowering takes (`let*`, `loop*`, `letfn*`, `case*`; "Macros", the core macros); (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
-  local mapping to itself here; (7) the passes tag nodes with `class` -- kind keywords here,
-  which `maybe-class` answers nil through its `:default`, so most paths degrade, while
-  `analyze-host-expr` and `validate` reflect on tag classes through `clojure.reflect`; (8)
-  the emitted machine calls `clojure.lang.Var/getThreadBindingFrame` and
-  `resetThreadBindingFrame` and builds an `AtomicReferenceArray`; (9) every `go` body runs
-  the analyzer and its passes in the macro-time interpreter, `build-ns-map` over every
-  namespace per macro step.
+  the lowering takes (`let*`, `loop*`, `letfn*`, `case*`; "Macros", the core macros); (6)
+  `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each local
+  mapping to itself here; (7) at macro time `all-ns`, `find-ns` and `the-ns` answer the
+  namespaces created above their call site (`%clojure-all-ns`'s KNOWN), which predates
+  `clojure.core.async` itself; (8) the emitted machine calls
+  `clojure.lang.Var/getThreadBindingFrame` and `resetThreadBindingFrame`, builds an
+  `AtomicReferenceArray` and embeds the analyzer's `Class` objects (a `:static-call`'s
+  class, `instance?`'s, a catch's) in `.`/`new`/`instance?` forms; (9) every `go` body runs
+  the analyzer and its passes in the macro-time interpreter.
 - No other Clojure runs tools.analyzer.jvm: cljw stops at `Long/getLong`, ClojureScript and
   ClojureCLR port the analyzer to their platform, babashka maps `go` to `thread`. The
   remaining chain is `.todo/g87`'s plan.
@@ -3216,6 +3264,51 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   the pattern takes subdirectories now and `NativeImageResourceConfigTest` lists the
   directory.
 
+## Portable GregorianCalendar
+
+- **The chain** (2026-10-30, h10; `ClojurePortableCalendarLowering`, `clojure.lisp`
+  "Portable GregorianCalendar"; tools.reader's `construct-calendar`/`construct-date`):
+  where the host is not (wasm) an untagged `(GregorianCalendar. y m d [h mi [s]])` is
+  `(%clojure-calendar-new ...)`, the existing Calendar kind `(:C%CALENDAR ms offset zone)`
+  in UTC (the oracle's measured JVM zone), each argument `%clojure-int-cast`; of no
+  argument the current instant. `Calendar/X` and `GregorianCalendar/X` (`BC`, `AD`)
+  constants are their integers (both field sites, like the numeric limits);
+  `TimeZone/getTimeZone` of one argument is `(:C%TIME-ZONE id offset)`: `GMT`, `UTC` and
+  the JDK's custom ids (`GMT` sign `h`/`hh`/`hmm`/`hhmm`/`h:mm`/`hh:mm`, normalized
+  `GMT+05:00`, a zero offset keeping its sign), anything else refused by name
+  (`UnsupportedOperationException`; the JDK answers `GMT` for an unknown id, but no tzdb
+  exists here to tell unknown from named). Where the host is all three stay the host's.
+- **The methods, every backend** (`ClojureTimeValueLowering.methodArm`, a `CALENDAR_P`
+  arm ahead of the by-name refusal, so a `clojure.instant` Calendar takes them on the
+  interpreter and the JVM too): `getTime` (a Date), `getTimeInMillis`, `get`, `set` of 2,
+  3, 5 or 6 arguments, `setTimeZone` (an own zone, or a host `TimeZone` through its
+  `getID`). A receiver known to be `Calendar`/`GregorianCalendar` is treated as unknown
+  (`instanceCallLoweredWithClass`), since tools.reader's `^GregorianCalendar` return hint
+  would otherwise compile `java:call`. `set` takes `ERA YEAR MONTH DAY_OF_MONTH HOUR_OF_DAY
+  MINUTE SECOND MILLISECOND`, `get` also `DAY_OF_WEEK AM_PM HOUR ZONE_OFFSET DST_OFFSET`;
+  another field is refused by name, one past 16 the oracle's
+  `ArrayIndexOutOfBoundsException`.
+- **Laziness, the JDK's**: a fifth element `(TIME-SET . FIELDS)` holds the fields while
+  they are not the instant's own in the current zone -- pending (`TIME-SET` NIL: after a
+  construction or `set`; `setTimeZone` re-reads them in the new zone) or stale (T: a
+  `setTimeZone` after a computation keeps the instant; the next `set` edits the old zone's
+  fields, as the JDK's `areFieldsSet` false skips `computeFields`). `getTime*` computes
+  pending fields (clean), `get` any (clean). MS is kept eagerly at what `getMillisOf`
+  answers, so the printer, `compare` and hash read it; `%clojure-inst-equal` compares a
+  Calendar's three slots, not the tail. The arithmetic is `%clojure-calendar-millis`
+  (month normalized, Gregorian when the year is 1582+ and the Gregorian day is on or after
+  the cutover, else Julian -- the JDK's `calculateFixedDate` without the `calsys` overlap
+  case, which no field values reach), which `%clojure-instant-millis` now calls.
+- Producers: `%clojure-calendar-new`/`-now` join the instant family, so a program making
+  no Calendar sheds the arms.
+- Deviations (user doc, instants): the default zone is UTC where no host is; a zone with
+  rules refused; the zone value prints as a list; printing a pending Calendar leaves it
+  pending (the oracle's printer `get`s, completing it).
+- **Pins**: clojure-spec `a-gregorian-calendar-is-the-oracles-lenient-lazy-calendar` (all
+  four, oracle-identical; no line reads the default zone, which is the machine's on the
+  host legs), `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`
+  (UTC default and the two refusals, both wasm backends).
+
 ## Boxed-integer limits, class designators, number classes and date builder chains
 
 - **The limits** (2026-10-13, f92; `ClojureNumericLimitsLowering`):
@@ -3862,7 +3955,10 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
   `C%MACROEXPAND(-1)` call -- and `C%MACRO-ROOT-OF`, a macro's var root: a whole program
   reading a program macro's root (`#'m`) and expanding nothing at run time carries those two
-  alone (`takesMacroRoots`, `macroRootRuntime`). A program lowering no `macroexpand`/`macroexpand-1` call or
+  alone (`takesMacroRoots`, `macroRootRuntime`), `C%MACRO-EXPANDER` holding only the
+  expanders of the macros whose var it takes outside a macro body (`macroRootsRead`, since
+  2026-10-30: so another macro's body runs only while the program lowers,
+  `.kb/jvm-run-time-lowering.md`, "What opens a program"). A program lowering no `macroexpand`/`macroexpand-1` call or
   value carries none of them (`ClojureLowering.expandsAtRunTime`; until 2026-10-09 every
   `defmacro` spliced them and the pruner took them out), and
   `ClojureLowering.programMacroRuntimeForms` keys them in `LibraryDefunPruner`, so one
@@ -4178,9 +4274,13 @@ library splices the hand-off to the compiler it carries in its place.
   roots, caught bindings and Java faces settle at the site); `repl` -- `*repl*`, the REPL
   refers, `*e`'s class reader. A session is all three; a run-time datum `open` and
   `incremental`.
-- **A program lowers open when it names an entry** (`ClojureRunTime.ENTRIES`, every library
-  function reaching `%clojure-lower-at-run-time`; `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry`
-  keeps the set equal to the library's): `lowerWhole(..., runTimeTarget)` lowers it again with
+- **A program lowers open when its run-time code reaches an entry** (`ClojureRunTime.ENTRIES`,
+  every library function reaching `%clojure-lower-at-run-time`;
+  `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry` keeps the set equal
+  to the library's; `ClojureRunTime.reachesAny`, from the top-level forms through every
+  function a reached form names, so a verb only a macro body or a helper only macro bodies
+  call names runs while the program lowers -- `.kb/jvm-run-time-lowering.md`, "What opens a
+  program"; until 2026-10-30 any lowered form naming one): `lowerWhole(..., runTimeTarget)` lowers it again with
   `open` (and `threadBinders`), for the interpreter and the JVM (`SourceLanguage.readClojure`,
   `features` holding `rontolisp-interpreter` or `rontolisp-jvm`; the JVM's also
   `carriesRuntimes`); the misses still re-lower the whole program.
@@ -4204,7 +4304,10 @@ library splices the hand-off to the compiler it carries in its place.
   var, at no cost per call -- measured against calls through the var's cell before choosing
   (`.kb/nrepl.md`, "Redefinition in an open lowering"). A JVM fragment's definition reaches
   only the forms lowered after it (`.kb/jvm-run-time-lowering.md`, Limits; `.todo/h14`).
-- Deviations: a quoted `resolve` answers at lower time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
+- Deviations: a quoted `resolve` answers at lower time; `in-ns` answers nil; a verb taken
+  out of a namespace's mapping (`@(get (ns-map 'user) 'eval)`) and called over computed
+  arguments refuses, as on wasm, unless something else opened the program. Measured against
+  clj 1.12.6: every line of clojure-spec
   `the-interpreter-lowers-at-run-time` and `intern-var-set-and-with-redefs-fn`.
 - Pins: those two cases, `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (the
   wasm backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
@@ -6981,7 +7084,9 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   protocol-tag branches (`ClojureDispatchLowering.timeValueClassBranches`), `instance?`'s
   kinds (`ClojureValueClasses` DATE/TIMESTAMP/CALENDAR/UUID) and the instance-call rows
   (`getTime`, `before`/`after` by milliseconds, `setTime` in place, a Timestamp's
-  `getNanos`, `compareTo`, the UUID halves, `version`, `variant`). `uuid?` lowers to
+  `getNanos` and `setNanos` in place -- tools.reader's `read-instant-timestamp`, h10 --
+  `compareTo`, the UUID halves, `version`, `variant`); a Calendar's methods are the
+  `CALENDAR_P` arm of "Portable GregorianCalendar". `uuid?` lowers to
   `(%clojure-is-uuid x "java.util.UUID")`, an alias of the host test. Producers: the two
   constructors, every read entry (`Reads.ENTRIES`), the `clojure.instant` kernels,
   `random-uuid`/`parse-uuid`, and the host members below (`%clojure-new-date`,
@@ -7038,7 +7143,7 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   answers the instant itself instead (f89, 2026-10-13): the portable ISO_INSTANT
   formatter ("The ISO_INSTANT formatter") then spells it, like the host `Instant` --
   data.json 2.5.2's `write-date` to `write-instant`, which refused every such write on
-  wasm before. Where the host is the call stays the host's. A Calendar never crosses (no host object; its methods refused by name).
+  wasm before. Where the host is the call stays the host's. A Calendar never crosses (no host object; its methods but "Portable GregorianCalendar"'s refused by name).
   Host to own is not converted: a host Date/Timestamp/UUID a member answers stays host, `=`
   to the own one by the first's `equals` (`%clojure-host-equal-p`'s clauses, the instant
   clause of `%clojure-equal` falling through to it), ordered by `compareTo`
@@ -7396,6 +7501,12 @@ resolve var`.
   (flatland.ordered's `empty-ordered-map` def, g20), like `^Type` reader metadata already
   does, where the oracle stores the class -- a type is no class here, and a bare name in
   value position stays an unknown-name refusal (`ClojureInteropLowering.classValue`).
+- **`clojure.lang.Var` members** (g87, 2026-10-29; `ClojureValueMethodLowering.varRows`, on
+  every backend): `.isDynamic` (the site's depth element, `%clojure-var-dynamic-p`, so a
+  core special's var is dynamic), `.ns` (`%clojure-var-ns`, a producer of the namespace
+  family), `.sym`, `.toSymbol`, `.isMacro`, `.isPublic`, `.isBound` -- tools.analyzer's
+  `dynamic?` and tools.analyzer.jvm's `create-var` read them. Pin: clojure-spec
+  `var-get-answers-the-root-of-a-var` (oracle-identical).
 - **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's
   unbound var: the value cell holds `(:C%UNBOUND "ns/name")` (`%clojure-unbound`), truthy,
   `str` `Unbound: #'ns/name`, printing `#<Unbound: #'ns/name>` (the oracle's `#object` has a
@@ -7657,7 +7768,7 @@ resolve var`.
   `ClojureProjectNamespacesTest#aLoadingFileReadsItsOwnNamespaceAndPath*` (all four backends),
   `ClojureArmsTest#theSwitchFamiliesDropTheSwitchesOfAProgramReadingNoLoadSpecial`,
   `ClojureLibraryTest#aProgramReadingNoLoadSpecialShedsTheirSwitches`.
-- **Mappings and wirings** (2026-10-13, `.todo/f67`): `all-ns` answers the created names minus removed ones, `loaded-libs` the required libraries, ran files and loaded startup namespaces (never `user` or `clojure.core`), `create-ns`/`remove-ns` intern and unintern at run time (a literal joins the lower-time namespaces too, so a later `find-ns` sees it), `intern` keeps an existing var (rebinding like `bindRoot` when given a value) else makes one over a cell of its own, `var-set` always refuses like the oracle's `IllegalStateException`, and `with-redefs-fn` validates, binds (through the value cell where a registered setter reaches it, `needRootSetters`, else a getter swap) and restores. `ns-publics`/`ns-interns`/`ns-map`/`ns-refers`/`ns-aliases`/`ns-imports` of a literal namespace map what the lowering knows (a core var the subset lacks stays out, an import maps to a symbol of its class); past a hundred pairs the map is built in per-`defun` pieces merged at run time (`%clojure-ns-map-merge`), so no method outgrows the backends; each piece is handed to the macro-time evaluator too, so a macro body reading a mapping calls it while it expands (g97: tools.reader's `resolve-symbol` under its `syntax-quote` macro, `The function __clojure_N is undefined` until 2026-10-29; clojure-spec `ns-map-answers-interns-refers-and-core-vars`). A `*ns*` in a function body designates the namespace the body lowers in (the oracle reads it when the call runs). `alias`/`refer`/`ns-unmap`/`ns-unalias` of literals wire while the program lowers (`refer` loads and refers like `require`); `requiring-resolve` of a quoted symbol loads then resolves; anything computed refuses at run time. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `all-ns-*`, `create-ns-*`, `ns-publics-*`, `ns-map-*`, `alias-refer-*`, `intern-var-set-*`, `requiring-resolve-*`, `namespace-mapping-values-are-shared-across-references` (g00, 2026-10-13: the six mapping values share one program-wide `%clojure-shared-value` cell, so two references are `=` and `identical?` like the oracle's var roots) and `ClojureLoweringTest#namespaceMappingsAnswerWhatTheLoweringKnows`, `#hostOnlyVarsAreRefusedWhenCalled`.
+- **Mappings and wirings** (2026-10-13, `.todo/f67`): `all-ns` answers the created names minus removed ones, `loaded-libs` the required libraries, ran files and loaded startup namespaces (never `user` or `clojure.core`), `create-ns`/`remove-ns` intern and unintern at run time (a literal joins the lower-time namespaces too, so a later `find-ns` sees it), `intern` keeps an existing var (rebinding like `bindRoot` when given a value) else makes one over a cell of its own, and a name carrying metadata gives the var that map plus `:name`/`:ns`, the oracle's `setMeta` (g87, 2026-10-29: tools.analyzer.jvm's `create-var` interns `(with-meta sym meta)`, refused as no symbol before; clojure-spec `intern-var-set-and-with-redefs-fn`), `var-set` always refuses like the oracle's `IllegalStateException`, and `with-redefs-fn` validates, binds (through the value cell where a registered setter reaches it, `needRootSetters`, else a getter swap) and restores. `ns-publics`/`ns-interns`/`ns-map`/`ns-refers`/`ns-aliases`/`ns-imports` of a literal namespace map what the lowering knows (a core var the subset lacks stays out, an import maps to a symbol of its class); past a hundred pairs the map is built in per-`defun` pieces merged at run time (`%clojure-ns-map-merge`), so no method outgrows the backends; each piece is handed to the macro-time evaluator too, so a macro body reading a mapping calls it while it expands (g97: tools.reader's `resolve-symbol` under its `syntax-quote` macro, `The function __clojure_N is undefined` until 2026-10-29; clojure-spec `ns-map-answers-interns-refers-and-core-vars`). A `*ns*` in a function body designates the namespace the body lowers in (the oracle reads it when the call runs). `alias`/`refer`/`ns-unmap`/`ns-unalias` of literals wire while the program lowers (`refer` loads and refers like `require`); `requiring-resolve` of a quoted symbol loads then resolves; anything computed refuses at run time. Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `all-ns-*`, `create-ns-*`, `ns-publics-*`, `ns-map-*`, `alias-refer-*`, `intern-var-set-*`, `requiring-resolve-*`, `namespace-mapping-values-are-shared-across-references` (g00, 2026-10-13: the six mapping values share one program-wide `%clojure-shared-value` cell, so two references are `=` and `identical?` like the oracle's var roots) and `ClojureLoweringTest#namespaceMappingsAnswerWhatTheLoweringKnows`, `#hostOnlyVarsAreRefusedWhenCalled`.
 - `assert` reads `*assert*` at lower time, like the oracle's macroexpansion:
   `ClojureLowering.assertEnabled`, set by a TOP-LEVEL `(set! *assert* literal)`
   (`topLevelsOf`, so a required namespace's too, and a REPL input's for the next input;

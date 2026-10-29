@@ -271,7 +271,6 @@ final class ClojurePredicateLowering {
 
 	/**
 	 * A predicate as a function value, or null when the name is none of them.
-	 * {@code extends?} has none: its protocol and type are names read at lower time.
 	 * @param ctx the hub
 	 * @param name the Clojure name
 	 * @return the value form, or null
@@ -445,12 +444,18 @@ final class ClojurePredicateLowering {
 	 * {@code (extends? Protocol Type)}: whether the type has a row in the protocol's
 	 * table -- an inline implementation or an extension -- or, for {@code Object},
 	 * whether the protocol was extended to {@code Object}, like the oracle (which counts
-	 * an {@code Object} extension for no other type). Both are literal names, like
-	 * {@code satisfies?}'s protocol.
+	 * an {@code Object} extension for no other type). Literal names read the tables at
+	 * lower time; a computed protocol or type -- a form ({@code (class buff)},
+	 * core.async's {@code unblocking-buffer?}) or a local -- reads the run-time registry,
+	 * as the value does.
 	 */
 	private static LispVal extendsOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extends? takes a protocol name");
-		ClojureLowerUtil.isTrue(items.get(2) instanceof LispSymbol, "extends? takes a type name");
+		if (isComputedName(ctx, items.get(1)) || isComputedName(ctx, items.get(2))) {
+			ctx.usedProtocols = true;
+			ctx.usedProtocolValues = true;
+			return ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.EXTENDS_CALL), ctx.lower(items.get(1)),
+					ctx.lower(items.get(2)));
+		}
 		String protocol = ((LispSymbol) items.get(1)).name();
 		ClojureLowering.ProtocolDef def = ClojureProtocolLowering.protocolOf(ctx, protocol);
 		if (def == null) {
@@ -473,6 +478,11 @@ final class ClojurePredicateLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(miss,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ctx.booleanAnswer(ClojureLowerUtil.list(hits)));
+	}
+
+	/** Whether an {@code extends?} operand is computed: no symbol, or a local's name. */
+	private static boolean isComputedName(ClojureLowering ctx, LispVal operand) {
+		return !(operand instanceof LispSymbol name) || ctx.isLocal(name.name());
 	}
 
 	/** Whether the table holds a row under the key: its lookup is not the miss marker. */

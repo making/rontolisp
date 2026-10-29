@@ -135,6 +135,13 @@ final class JvmFunctionCallCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
 				return;
 			}
+			if (ctx.linked) {
+				// A host's or a fragment's: a fragment defined later may define the name,
+				// so the call applies #'name, resolved when the call runs
+				// (JvmFunctionFormCompiler.compileNamed).
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx, className);
+				return;
+			}
 			if (ctx.bindsRuntimeFunctionNames) {
 				// A program that can bind the name at run time (eval's defun, load, a
 				// write through a computed name): the call applies what _fenv holds

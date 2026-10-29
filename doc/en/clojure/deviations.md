@@ -159,8 +159,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
   `assert` an `AssertionError`, which an `Exception` catch does not take). An error naming no
   class -- a refusal of a construct the oracle accepts (a regex `\X`,
-  `(partition 0 coll)`) -- is taken by the first catch of any class but
-  `clojure.lang.ExceptionInfo`. A misuse a lower verb refuses first carries that verb's class:
+  `(partition 0 coll)`), a Java call on WASM, where no host is -- is the
+  `java.lang.RuntimeException` that `class` answers for it: a catch of `RuntimeException`,
+  `Exception` or `Throwable` takes it, a catch of a subclass (`NumberFormatException`) or of an
+  `Error` does not. A misuse a lower verb refuses first carries that verb's class:
   `(shuffle 5)` is the `IllegalArgumentException` of `seq`, where the oracle casts to
   `java.util.Collection`. An index past its bound is an
   `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's
@@ -273,9 +275,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `get-method`, and a multimethod's `.getMethod` and `.dispatchFn`, answer what the
   oracle's `MultiFn` does, but a multimethod's `Object` method also answers a keyword
   dispatch value (`class` answers a keyword for a value's class here).
-- `satisfies?` takes the protocol's name and a value, `extends?` the protocol's and
-  the type's names, `extend` the type's name and then a protocol and a method map any
-  number of times: a local bound to a protocol or a type is refused at lowering. As
+- `satisfies?` takes the protocol's name and a value, `extend` the type's name and then
+  a protocol and a method map any number of times: a local bound to a protocol or a type
+  is refused at lowering. `extends?` of two names reads the tables at lowering; of a
+  computed protocol or type (a form such as `(class x)`, or a local) it reads the
+  registry below, as its value does. As
   values they check the argument count in the oracle's words, then read the run-time
   registry the `defprotocol` populates beside the methods table, running what the calls
   run: `satisfies?` the tag's row, the inline table's first, the walk behind the
@@ -348,17 +352,22 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   running one, so every call loads a class (the output carries the compiler: beside a
   `.class`, inside a `.jar`). A wasm module carries no lowering, so on both wasm backends
   they throw an `UnsupportedOperationException` at run time, where the oracle evaluates and
-  resolves. On the JVM a name the program only declares and such a call defines stays
-  undefined for the program's own compiled forms. Such a call lowers like one REPL input, in
+  resolves. A name the program only declares and such a call defines answers the program's
+  own forms from then on, as the oracle's. Such a call lowers like one REPL input, in
   the namespace `*ns*` holds:
   what it defines joins the program for the later calls and inputs. On the interpreter a
   redefined `defn` reaches every caller, as in the REPL; a JVM class's own compiled forms
   keep calling the definition they were compiled against. A name only such a call defines is
   unknown to the program's own forms (an `intern` of a quoted name is not: it defines the var
-  where it stands). A program naming such a
-  call lowers open, like a session, so its protocols dispatch through the class walk and
-  a name it only declares stays open. A value no literal spells (a function, an atom)
-  stands in an `eval`'d form as itself, where the oracle embeds a function but refuses an
+  where it stands). A program that may make such a call as it runs -- the call itself, or
+  the verb taken as a value or as a var -- lowers open, like a session, so its protocols
+  dispatch through the class walk and a name it only declares stays open. A call in a macro
+  body, or in a function only macro bodies call, runs while the program lowers and opens it
+  only where the program also expands macros as it runs or takes that macro's var; a verb
+  taken out of a namespace's mapping (`@(get (ns-map 'user) 'eval)`) never opens it, so
+  called over computed arguments in a program nothing else opens, it throws the
+  `UnsupportedOperationException`. A value no literal spells (a function, an atom) stands in
+  an `eval`'d form as itself, where the oracle embeds a function but refuses an
   atom (`Can't embed object in code`); a form that does not lower throws a
   `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
   `resolve` of a computed symbol run while the program lowers on every backend, and a

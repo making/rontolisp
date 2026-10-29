@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.codegen.jvm.JvmLinkage;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
@@ -33,8 +34,6 @@ import am.ik.rontolisp.testsupport.YamlResources;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
-import org.junit.jupiter.api.DynamicTest;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
@@ -63,6 +62,17 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * legs never see the names it defines.
  *
  * <p>
+ * A case with a {@code host:} reason reaches a lowering verb over computed arguments as
+ * the program runs -- alone, or beside the corpus's run-time expansions, which reach
+ * every macro body -- which makes the JVM class it is compiled into a host carrying its
+ * image and the compiler ({@code .kb/jvm-run-time-lowering.md}): one such case would make
+ * the whole corpus a host and leave the ordinary class untested. The JVM leg keeps these
+ * cases out of its corpus (which it refuses as a host) and concatenates them into a host
+ * program of their own, compiled by the command line to a class and to a jar, each run as
+ * a process with nothing but its own output on the class path. A host case must be
+ * self-contained.
+ *
+ * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
  * same front end the CLI runs ({@code SourceLanguage.CLOJURE}, {@code JvmSourceCompiler},
  * {@code CompileFrontendAccess}), in process, so it is part of {@code ./mvnw test}. The
@@ -73,10 +83,16 @@ class ClojureSpecE2eTest {
 
 	private static final String SPEC_RESOURCE = "/clojure-spec.yaml";
 
-	record Case(String name, String source, String expected, @Nullable Map<String, String> skip) {
+	record Case(String name, String source, String expected, @Nullable Map<String, String> skip,
+			@Nullable String host) {
 
 		boolean runsOn(String leg) {
 			return this.skip == null || !this.skip.containsKey(leg);
+		}
+
+		// A host case runs on the JVM leg in the host program, outside the corpus.
+		boolean inCorpusOf(String leg) {
+			return runsOn(leg) && (this.host == null || !leg.equals("jvm"));
 		}
 
 		List<String> expectedLines() {
@@ -88,12 +104,20 @@ class ClojureSpecE2eTest {
 	record Spec(List<Case> cases) {
 
 		List<Case> on(String leg) {
-			return this.cases.stream().filter(c -> c.runsOn(leg)).toList();
+			return this.cases.stream().filter(c -> c.inCorpusOf(leg)).toList();
+		}
+
+		List<Case> jvmHosts() {
+			return this.cases.stream().filter(c -> c.runsOn("jvm") && !c.inCorpusOf("jvm")).toList();
 		}
 
 		String program(String leg) {
+			return program(on(leg));
+		}
+
+		static String program(List<Case> cases) {
 			StringBuilder program = new StringBuilder();
-			for (Case c : on(leg)) {
+			for (Case c : cases) {
 				program.append(c.source());
 			}
 			return program.toString();
@@ -110,46 +134,46 @@ class ClojureSpecE2eTest {
 		boolean wasm = HostWasmtime.isAvailable();
 		Callable<String> interpreter = started(() -> interpret(spec.program("interpreter")));
 		Callable<String> jvm = started(() -> runOnJvm(spec.program("jvm")));
+		List<Case> hosts = spec.jvmHosts();
+		Callable<List<String>> hostRuns = hosts.isEmpty() ? null : started(() -> runHosts(Spec.program(hosts)));
 		Callable<String> wasmPreview1 = wasm ? started(() -> runOnWasm(spec.program("wasm"), false)) : null;
 		Callable<String> wasmComponent = wasm ? started(() -> runOnWasm(spec.program("wasm_component"), true)) : null;
 		List<DynamicNode> backends = new ArrayList<>();
-		backends.add(backend("INTERPRETER", spec.on("interpreter"), interpreter));
-		backends.add(backend("JVM", spec.on("jvm"), jvm));
+		backends.add(backend("INTERPRETER", spec.on("interpreter"), interpreter, List.of()));
+		backends.add(backend("JVM", spec.on("jvm"), jvm,
+				hostRuns == null ? List.of()
+						: List.of(backend("HOST_CLASS", hosts, () -> hostRuns.call().get(0), List.of()),
+								backend("HOST_JAR", hosts, () -> hostRuns.call().get(1), List.of()))));
 		backends.add(wasmBackend("WASM", spec.on("wasm"), wasmPreview1));
 		backends.add(wasmBackend("WASM_COMPONENT", spec.on("wasm_component"), wasmComponent));
 		return backends.stream();
 	}
 
 	/**
-	 * The case a JVM class lowers as it runs, compiled by the command line to a class and
-	 * to a jar, each run as a process of its own with nothing but its own output on the
-	 * class path: the class carries the compiler it hands the lowering verbs to.
+	 * The host cases' program compiled by the command line to a class and to a jar, each
+	 * run as a process of its own with nothing but its own output on the class path: the
+	 * class carries the compiler it hands the lowering verbs to.
+	 * @return the class's output and the jar's
 	 */
-	@Test
-	void aClassThatLowersAtRunTimeRunsAloneAsAClassAndAsAJar() throws Exception {
-		Case lowering = loadSpec().cases()
-			.stream()
-			.filter(c -> c.name().equals("the-interpreter-lowers-at-run-time"))
-			.findFirst()
-			.orElseThrow();
-		Path dir = Files.createTempDirectory(workDir, "run-time-lowering");
-		Path source = dir.resolve("rtl.clj");
-		// in the namespace the corpus runs it in, an earlier case's in-ns
-		Files.writeString(source, "(ns lit)\n" + lowering.source());
+	private static List<String> runHosts(String program) throws Exception {
+		Path dir = Files.createTempDirectory(workDir, "host");
+		Path source = dir.resolve("host.clj");
+		Files.writeString(source, program);
 		Path classes = dir.resolve("classes");
-		Path jar = dir.resolve("rtl.jar");
-		CliStack.call("run-time-lowering", () -> {
-			for (Path output : List.of(classes.resolve("Rtl.class"), jar)) {
+		Path jar = dir.resolve("host.jar");
+		CliStack.call("clojure-spec-host", () -> {
+			for (Path output : List.of(classes.resolve("Host.class"), jar)) {
 				new RontoLispCli(InputStream.nullInputStream(), System.out)
 					.run(new String[] { source.toString(), "-o", output.toString() });
 			}
 			return null;
 		});
+		if (!Files.exists(classes.resolve("am/ik/rontolisp/cli/JvmRunTimeLowering.class"))) {
+			throw new IllegalStateException("the host: cases compiled as an ordinary class: drop the mark of "
+					+ "each that no longer lowers at run time");
+		}
 		String java = ProcessHandle.current().info().command().orElse("java");
-		assertThat(splitLines(exec(dir, java, "-cp", classes.toString(), "Rtl")))
-			.containsExactlyElementsOf(lowering.expectedLines());
-		assertThat(splitLines(exec(dir, java, "-jar", jar.toString())))
-			.containsExactlyElementsOf(lowering.expectedLines());
+		return List.of(exec(dir, java, "-cp", classes.toString(), "Host"), exec(dir, java, "-jar", jar.toString()));
 	}
 
 	private static String exec(Path dir, String... command) throws Exception {
@@ -169,12 +193,12 @@ class ClojureSpecE2eTest {
 			return dynamicContainer(leg,
 					Stream.of(dynamicTest("(skipped)", () -> abort("no usable wasmtime on PATH"))));
 		}
-		return backend(leg, cases, run);
+		return backend(leg, cases, run, List.of());
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.
-	private static Callable<String> started(Callable<String> run) {
-		FutureTask<String> task = new FutureTask<>(run);
+	private static <T> Callable<T> started(Callable<T> run) {
+		FutureTask<T> task = new FutureTask<>(run);
 		Thread.ofPlatform().name("clojure-spec-corpus").start(task);
 		return () -> {
 			try {
@@ -192,15 +216,18 @@ class ClojureSpecE2eTest {
 		};
 	}
 
-	private static DynamicContainer backend(String leg, List<Case> cases, Callable<String> run) {
+	// alone: the leg's containers of the cases it runs outside its corpus program
+	private static DynamicContainer backend(String leg, List<Case> cases, Callable<String> run,
+			List<DynamicNode> alone) {
+		List<DynamicNode> tests = new ArrayList<>(alone);
 		List<String> actual;
 		try {
 			actual = splitLines(run.call()).stream().map(ClojureSpecE2eTest::normalizeTestLocation).toList();
 		}
 		catch (Exception | StackOverflowError ex) {
-			return dynamicContainer(leg, Stream.of(dynamicTest("(execution failed)", () -> fail(leg + ": " + ex, ex))));
+			tests.add(dynamicTest("(execution failed)", () -> fail(leg + ": " + ex, ex)));
+			return dynamicContainer(leg, tests.stream());
 		}
-		List<DynamicTest> tests = new ArrayList<>();
 		int expectedTotal = cases.stream().mapToInt(c -> c.expectedLines().size()).sum();
 		tests.add(dynamicTest("total-line-count",
 				() -> assertThat(actual).as("%s produced a different number of output lines than the spec", leg)
@@ -258,7 +285,14 @@ class ClojureSpecE2eTest {
 				return super.findClass(n);
 			}
 		};
-		Method main = loader.loadClass(name).getMethod("main", String[].class);
+		Class<?> corpus = loader.loadClass(name);
+		// One case naming a lowering verb over computed arguments makes the whole
+		// corpus a host: the library unstripped, threads mode, no raw globals.
+		if (Stream.of(corpus.getDeclaredMethods()).anyMatch(m -> m.getName().equals(JvmLinkage.IMAGE_METHOD))) {
+			throw new IllegalStateException("the JVM corpus compiled as a host class: mark the case that lowers "
+					+ "at run time host: so the JVM leg runs it in the host program");
+		}
+		Method main = corpus.getMethod("main", String[].class);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (var _ = ThreadStdio.out(out)) {
 			CliStack.call("clojure-spec", () -> main.invoke(null, (Object) new String[0]));

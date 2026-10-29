@@ -70,9 +70,17 @@ final class ClojureLoopLowering {
 	 * marker takes the value second (first) or last; anything else -- a bare name, a
 	 * keyword, a literal -- calls or reads with it. A list headed by another list inserts
 	 * blindly, like the oracle's purely syntactic rule; a marker-headed literal cannot
-	 * take the value and signals when called.
+	 * take the value and signals when called. A list carrying reader metadata
+	 * ({@code ^Class (box)}, tools.analyzer.jvm's {@code members*}) takes the value
+	 * inside and keeps its metadata, the oracle's {@code (with-meta ... (meta form))}.
 	 */
 	static LispVal threadInsert(LispVal form, LispVal acc, boolean last) {
+		List<LispVal> layer = ClojureLowerUtil.items(form);
+		if (layer != null && layer.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(layer.get(0), ClojureLowerUtil.READER_META)
+				&& ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(layer.get(1))) != null) {
+			return ClojureLowerUtil.list(layer.get(0), threadInsert(layer.get(1), acc, last), layer.get(2));
+		}
 		List<LispVal> parts = ClojureLowerUtil.items(form);
 		if (parts != null && !parts.isEmpty() && !isThreadAtomHead(parts.get(0))) {
 			List<LispVal> out = new ArrayList<>();

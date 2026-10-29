@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntPredicate;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -243,6 +244,7 @@ final class ClojureMacroLowering {
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table,
 					new LispInteger(ctx.macroExpanders.size())));
 			ctx.macroExpanders.add(expander);
+			ctx.macroExpanderKeys.add(key);
 		}
 		// the present expander noted under the var key, ahead of the notify
 		// statement: a refused redefinition still serves its new expander, so the
@@ -1677,6 +1679,7 @@ final class ClojureMacroLowering {
 			// a macro body reads the root at macro time, through the macro-time
 			// runtime's reader
 			ctx.takesMacroRoots = true;
+			ctx.macroRootsRead.add(key);
 		}
 		return ClojureLowerUtil.list(new LispSymbol(MACRO_ROOT_OF),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), macroTable(key)));
@@ -1832,7 +1835,8 @@ final class ClojureMacroLowering {
 	 * @return the runtime's definitions
 	 */
 	static List<LispVal> macroRuntime(ClojureLowering ctx, @Nullable List<LispVal> expanders) {
-		List<LispVal> runtime = new ArrayList<>(macroRootRuntime(expanders));
+		// the head of a run-time expansion is computed as it runs: any macro's
+		List<LispVal> runtime = new ArrayList<>(macroRootRuntime(expanders, id -> true));
 		runtime.add(macroScopeDefinition(ctx));
 		runtime.add(ClojureCoreMacros.lookupDefinition(CORE_MACRO));
 		LispSymbol op = new LispSymbol("op");
@@ -1941,11 +1945,14 @@ final class ClojureMacroLowering {
 	 * {@code (defun C%MACRO-EXPANDER (id) (case id (0 expander) ...))} and the root
 	 * itself, {@code (defun C%MACRO-ROOT-OF (table) ...)} -- the expander a table global
 	 * holds (or indexes) over the oracle's {@code (&form &env & args)}, binding
-	 * {@code &form} and {@code &env} for its body. Nil for a table no definition set.
+	 * {@code &form} and {@code &env} for its body. Nil for a table no definition set, and
+	 * for one whose expander nothing reaches.
 	 * @param expanders a whole program's expanders, or null where the globals hold them
+	 * @param reached whether the run time reaches the expander at an index: a run-time
+	 * expansion reaches any macro, a read of a root its macro's alone
 	 * @return the definitions
 	 */
-	static List<LispVal> macroRootRuntime(@Nullable List<LispVal> expanders) {
+	static List<LispVal> macroRootRuntime(@Nullable List<LispVal> expanders, IntPredicate reached) {
 		List<LispVal> runtime = new ArrayList<>();
 		if (expanders != null) {
 			// the only reference to a whole program's expanders, so the shake drops
@@ -1955,7 +1962,9 @@ final class ClojureMacroLowering {
 			arms.add(ClojureLowerUtil.sym("case"));
 			arms.add(id);
 			for (int i = 0; i < expanders.size(); i++) {
-				arms.add(ClojureLowerUtil.list(new LispInteger(i), expanders.get(i)));
+				if (reached.test(i)) {
+					arms.add(ClojureLowerUtil.list(new LispInteger(i), expanders.get(i)));
+				}
 			}
 			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowering.NIL_CONST));
 			runtime.add(ClojureHierarchyLowering.hdefun(MACRO_EXPANDER, List.of(id), ClojureLowerUtil.list(arms)));

@@ -5884,11 +5884,11 @@ public final class LispEvaluator {
 
 	/**
 	 * {@link #clojureProgram(List)} for a program lowered with the lowering it keeps for
-	 * its run: one naming a lowering verb over computed arguments -- {@code eval}, a
-	 * computed {@code resolve}, {@code require} or {@code load-string} -- takes the whole
-	 * library, since what it lowers as it runs may make a value of any kind, and its
-	 * lowering answers those verbs ({@link #setClojureRunTime}). Any other program takes
-	 * the strip.
+	 * its run: one whose run-time code reaches a lowering verb over computed arguments --
+	 * {@code eval}, a computed {@code resolve}, {@code require} or {@code load-string} --
+	 * takes the whole library, since what it lowers as it runs may make a value of any
+	 * kind, and its lowering answers those verbs ({@link #setClojureRunTime}). Any other
+	 * program takes the strip.
 	 * @param program the lowered program
 	 * @return the forms to evaluate, in order
 	 */

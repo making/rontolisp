@@ -305,6 +305,14 @@ final class ClojureTimeValueLowering {
 				taken.addAll(instants);
 			}
 		}
+		LispVal calendar = ClojurePortableCalendarLowering.methodCall(method, recv, args);
+		if (calendar != null && !taken.contains(ClojurePredicateLowering.CALENDAR_P)) {
+			// a Calendar made here answers its own method (mutating it in place, like
+			// the host object) on every backend
+			otherwise = arm(List.of(ClojurePredicateLowering.CALENDAR_P), recv, calendar, otherwise);
+			taken = new HashSet<>(taken);
+			taken.add(ClojurePredicateLowering.CALENDAR_P);
+		}
 		List<String> hosted = new ArrayList<>();
 		List<String> unsupported = new ArrayList<>();
 		List<String> missing = new ArrayList<>();

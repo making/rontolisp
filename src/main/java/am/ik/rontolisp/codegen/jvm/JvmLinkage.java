@@ -33,8 +33,9 @@ public final class JvmLinkage {
 	 * @param variadic whether the last one takes the rest
 	 * @param optionals its physical optionals
 	 * @param bounces whether it takes the value-tail depth and may answer a bounce
+	 * @param id the id its function values carry, which its class's dispatchers take
 	 */
-	public record Function(String owner, int paramCount, boolean variadic, int optionals, boolean bounces) {
+	public record Function(String owner, int paramCount, boolean variadic, int optionals, boolean bounces, int id) {
 	}
 
 	/**
@@ -98,7 +99,7 @@ public final class JvmLinkage {
 			this.functions.forEach((name, fn) -> {
 				String owner = declaring.get(methodName(name) + descriptor(fn));
 				fns.put(name, owner == null ? fn
-						: new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(), fn.bounces()));
+						: new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(), fn.bounces(), fn.id()));
 			});
 			return new Table(fns, this.globals, this.fields, this.funcIdEnd);
 		}
@@ -118,7 +119,7 @@ public final class JvmLinkage {
 				fields.add(name);
 				fields.add(fn.owner());
 				fields.add(fn.paramCount() + "," + fn.optionals() + "," + (fn.variadic() ? 1 : 0) + ","
-						+ (fn.bounces() ? 1 : 0));
+						+ (fn.bounces() ? 1 : 0) + "," + fn.id());
 			});
 			fields.add(Integer.toString(this.globals.size()));
 			new TreeMap<>(this.globals).forEach((name, g) -> {
@@ -157,7 +158,7 @@ public final class JvmLinkage {
 				String owner = in.next();
 				String[] shape = in.next().split(",");
 				functions.put(name, new Function(owner, Integer.parseInt(shape[0]), shape[2].equals("1"),
-						Integer.parseInt(shape[1]), shape[3].equals("1")));
+						Integer.parseInt(shape[1]), shape[3].equals("1"), Integer.parseInt(shape[4])));
 			}
 			Map<String, Global> globals = new LinkedHashMap<>();
 			int globalCount = Integer.parseInt(in.next());
@@ -246,6 +247,40 @@ public final class JvmLinkage {
 	 */
 	public static final String FOREIGN_FIELD = "_foreign";
 
+	/**
+	 * The static method a host's or a fragment's {@code _lookup} asks on a miss
+	 * ({@code (Object name) -> Object[]}): the run-time half answers the registry row of
+	 * a function of that name a fragment defined -- {@code {Integer id, Integer arity}},
+	 * the row's shape -- or null. A host defines it; a fragment calls its host's.
+	 */
+	public static final String FOREIGN_LOOKUP = "_foreignLookup";
+
+	/** {@link #FOREIGN_LOOKUP}'s descriptor. */
+	public static final String FOREIGN_LOOKUP_DESC = "(Ljava/lang/Object;)[Ljava/lang/Object;";
+
+	/**
+	 * The host's static field holding the run-time half's {@link #FOREIGN_LOOKUP}, a
+	 * {@code MethodHandle} of {@code (Object) -> Object[]}; null until a lowering verb
+	 * started the session (before it no fragment defined anything).
+	 */
+	public static final String FOREIGN_LOOKUP_FIELD = "_foreignNames";
+
+	/**
+	 * The static method a host's or a fragment's {@code _funcref} hands an id of another
+	 * class to ({@code (int id) -> Object}): the run-time half answers the function value
+	 * of that id, the box of the class that made it where that class has one.
+	 */
+	public static final String FOREIGN_FUNCREF = "_foreignFuncref";
+
+	/** {@link #FOREIGN_FUNCREF}'s descriptor. */
+	public static final String FOREIGN_FUNCREF_DESC = "(I)Ljava/lang/Object;";
+
+	/**
+	 * The host's static field holding the run-time half's {@link #FOREIGN_FUNCREF}, a
+	 * {@code MethodHandle} of {@code (int) -> Object}.
+	 */
+	public static final String FOREIGN_FUNCREF_FIELD = "_foreignBoxes";
+
 	/** The host's static method answering its run-time image ({@code ()String}). */
 	public static final String IMAGE_METHOD = "_rtImage";
 
@@ -293,7 +328,7 @@ public final class JvmLinkage {
 	 */
 	public static final String CONSTANTS_FIELD = "_constants";
 
-	private static final String VERSION = "rontolisp-link-1";
+	private static final String VERSION = "rontolisp-link-2";
 
 	private static final class Fields {
 

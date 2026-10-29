@@ -928,6 +928,12 @@ final class ClojureInteropLowering {
 			if (bigInteger != null) {
 				return bigInteger;
 			}
+			// where no host is, a GregorianCalendar is the Calendar of this front
+			// end's own (tools.reader's #inst reader); the host's object elsewhere
+			LispVal calendar = ClojurePortableCalendarLowering.construction(cls, lowered);
+			if (calendar != null) {
+				return calendar;
+			}
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
 		if (timeValue != null) {
@@ -1382,6 +1388,12 @@ final class ClojureInteropLowering {
 			if (dateStatic != null) {
 				return dateStatic;
 			}
+			// where no host is, TimeZone/getTimeZone is the zone a Calendar of
+			// this front end's own takes; the host's object elsewhere
+			LispVal zone = ClojurePortableCalendarLowering.staticCall(cls, member, args);
+			if (zone != null) {
+				return zone;
+			}
 		}
 		LispVal pattern = cls.equals("java.util.regex.Pattern") ? patternStatic(member, args) : null;
 		if (pattern != null) {
@@ -1470,6 +1482,12 @@ final class ClojureInteropLowering {
 			LispVal chrono = ClojureDateBuilderLowering.field(cls, member);
 			if (chrono != null) {
 				return chrono;
+			}
+			// where no host is, a Calendar field constant is its integer; the
+			// host's field elsewhere
+			LispVal calendarField = ClojurePortableCalendarLowering.field(cls, member);
+			if (calendarField != null) {
+				return calendarField;
 			}
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
@@ -1566,6 +1584,12 @@ final class ClojureInteropLowering {
 			LispVal chrono = ClojureDateBuilderLowering.field(cls, member);
 			if (chrono != null) {
 				return chrono;
+			}
+			// where no host is, a Calendar field constant is its integer; the
+			// host's field elsewhere
+			LispVal calendarField = ClojurePortableCalendarLowering.field(cls, member);
+			if (calendarField != null) {
+				return calendarField;
 			}
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
@@ -1704,6 +1728,10 @@ final class ClojureInteropLowering {
 			LispVal bigInteger = ClojurePortableStaticsLowering.construction(cls, args);
 			if (bigInteger != null) {
 				return bigInteger;
+			}
+			LispVal calendar = ClojurePortableCalendarLowering.construction(cls, args);
+			if (calendar != null) {
+				return calendar;
 			}
 		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
@@ -2644,10 +2672,11 @@ final class ClojureInteropLowering {
 				hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false)), cls, designator,
 				args.size(), false);
 		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls)
-				|| ClojureDecimalLowering.CLASSES.contains(cls) || cls.equals("java.math.BigInteger"))) {
-			// a Date, Timestamp, UUID, BigDecimal, MathContext or RoundingMode may be a
-			// value made here, and a BigInteger is always an integer (converted at the
-			// java: boundary): the value arms take it
+				|| ClojurePortableCalendarLowering.CLASSES.contains(cls) || ClojureDecimalLowering.CLASSES.contains(cls)
+				|| cls.equals("java.math.BigInteger"))) {
+			// a Date, Timestamp, UUID, Calendar, BigDecimal, MathContext or
+			// RoundingMode may be a value made here, and a BigInteger is always an
+			// integer (converted at the java: boundary): the value arms take it
 			cls = null;
 		}
 		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {

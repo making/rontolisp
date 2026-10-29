@@ -116,9 +116,9 @@ public final class Clojure {
 
 	/**
 	 * {@link #read(String, String, ClojureMacroEvaluator, ClojureFiles, boolean, ClojureBoundary)}
-	 * for a target that may lower as the program runs -- the interpreter: a program
-	 * naming a lowering verb over computed arguments lowers open and keeps its lowering
-	 * for its run ({@link ClojureRunTime}).
+	 * for a target that may lower as the program runs -- the interpreter: a program whose
+	 * run-time code reaches a lowering verb over computed arguments lowers open and keeps
+	 * its lowering for its run ({@link ClojureRunTime}).
 	 * @param source the program text
 	 * @param file the origin file for diagnostics and for the source path, or
 	 * {@code null} when unknown (the working directory is the root)
