@@ -2568,12 +2568,19 @@ final class ClojureInteropLowering {
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
 		String cls = knownClass;
+		if (cls != null && ClojureValueClasses.mayHoldValue(cls)) {
+			// a declared class a Clojure value may be an instance of (Runnable/.run of a
+			// fn, a .. step answering Object): the receiver takes the arms (.m x) takes
+			cls = null;
+		}
 		if (cls == null) {
 			cls = constructedClass(receiver);
 			if (cls == null && receiver instanceof LispSymbol ref) {
 				cls = hostClassOf(ctx, ref);
 			}
 		}
+		// a declared class compiles the call against it (the oracle's typed refusals)
+		boolean typed = knownClass != null || cls != null || receiver instanceof LispString;
 		LispVal call = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
 		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls) || cls.equals("java.math.BigInteger"))) {
 			// a Date, Timestamp or UUID may be a value made here, and a BigInteger is
@@ -2609,7 +2616,6 @@ final class ClojureInteropLowering {
 			call = ClojurePortableStaticsLowering.doublePredicateArm(ctx, method, recv, call);
 		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
-		boolean typed = cls != null || receiver instanceof LispString;
 		// where the host is not (wasm) the string arm is known ahead of the host arm,
 		// which no string then reaches
 		LispVal mapped = ctx.hostTarget ? null : stringMethod(ctx, method, recv, args, typed);

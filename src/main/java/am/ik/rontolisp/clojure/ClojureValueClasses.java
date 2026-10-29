@@ -481,6 +481,17 @@ final class ClojureValueClasses {
 	}
 
 	/**
+	 * Whether a Clojure value may be an instance of the class: {@code Object}, an
+	 * interface (a reify, deftype or record may implement one) or a class some kind's
+	 * values have.
+	 * @param className the class's binary name
+	 * @return {@code true} when a value receiver is possible
+	 */
+	static boolean mayHoldValue(String className) {
+		return className.equals(ClojureClassBases.OBJECT) || isInterface(className) || !kindsOf(className).isEmpty();
+	}
+
+	/**
 	 * Whether the host loads the class.
 	 * @param className the class's binary name
 	 * @return {@code true} when it resolves
