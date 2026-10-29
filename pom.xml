@@ -519,6 +519,10 @@ gitBranch=${git.branch}
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+								<!-- The build's own files as one resource: the compiler a JVM
+									 class lowering its Clojure program at run time carries
+									 (.kb/jvm-run-time-lowering.md). -->
+								<buildArg>--features=am.ik.rontolisp.cli.RunTimeCompilerFeature</buildArg>
 								<!-- The interpreter's opt-in simd flag (VecSimdKernels) uses the
 									 incubator Vector API; the module must be in the image's
 									 module graph. Build-time only: the produced binary needs

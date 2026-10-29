@@ -90,6 +90,18 @@ final class JvmFunctionFormCompiler {
 		JvmEmitHelper.compileStringLiteral("NIL", ctx);
 		ctx.body.astore(symSlot);
 		ctx.body.labelBinding(named);
+		emitResolvedFunction(symSlot, ctx, className);
+	}
+
+	/**
+	 * Pushes the function the symbol in {@code symSlot} names when the code runs: what
+	 * {@code _fenv} binds, where the eval runtime exists, else the registry's row boxed
+	 * ({@code _funcref}), else the undefined-function naming the symbol.
+	 * @param symSlot the local holding the symbol, never nil
+	 * @param ctx the method context
+	 * @param className the class being emitted
+	 */
+	private static void emitResolvedFunction(int symSlot, JvmLispCompiler.Ctx ctx, String className) {
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.evalStoreRef != null) {
 			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className));
@@ -116,7 +128,8 @@ final class JvmFunctionFormCompiler {
 		// interpreter, where the function namespace holds one object. A row the
 		// registry answers is always covered by the <clinit> fill (JvmLispCompiler
 		// sizes the table over the registry when a runtime box can run), so the
-		// cell is never null here.
+		// cell is never null here; a linked class's _funcref hands a row of another
+		// class (its _lookup asked the run-time half) to that half.
 		ctx.body.checkcast(ctx.integerClass).invokevirtual(ctx.integerValue);
 		ctx.body.invokestatic(funcrefRef(ctx, className));
 		ctx.computedFunctionBox[0] = true;
@@ -168,6 +181,19 @@ final class JvmFunctionFormCompiler {
 		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileFunctionRef(name, ctx, className);
+		}
+		else if (ctx.linked && undefinedFunction(name, ctx)) {
+			// A host's or a fragment's: a fragment defined later may define the name,
+			// so it is resolved in the function namespace when the reference runs --
+			// _lookup's miss asks the run-time half -- the same signal on a miss. A
+			// global of the name is a Clojure var's root, never its function. No
+			// warning: a run that lowers as it goes expects names to arrive.
+			JvmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
+					ctx, className);
+			int symSlot = ctx.allocTemp();
+			ctx.body.astore(symSlot);
+			emitResolvedFunction(symSlot, ctx, className);
 		}
 		else if (ctx.globals.contains(name)) {
 			// A top-level (setq name (lambda ...)) the same way.
@@ -233,9 +259,18 @@ final class JvmFunctionFormCompiler {
 	 * @param ctx the method context
 	 */
 	static boolean undefined(String name, JvmLispCompiler.Ctx ctx) {
+		return undefinedFunction(name, ctx) && !ctx.globals.contains(name);
+	}
+
+	/**
+	 * {@return whether no function of {@code name} exists -- {@link #undefined} without
+	 * the variable holding one}
+	 * @param name the function name
+	 * @param ctx the method context
+	 */
+	private static boolean undefinedFunction(String name, JvmLispCompiler.Ctx ctx) {
 		return !ctx.functions.containsKey(name) && !LispNames.isCarCdrComposition(name) && !ctx.dynamic
-				&& !ctx.globals.contains(name) && !PackageRegistry.isClFunctionName(name)
-				&& !BuiltinFunctionWrappers.isWrappedBuiltin(name);
+				&& !PackageRegistry.isClFunctionName(name) && !BuiltinFunctionWrappers.isWrappedBuiltin(name);
 	}
 
 	/**

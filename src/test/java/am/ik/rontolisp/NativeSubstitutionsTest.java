@@ -49,6 +49,11 @@ class NativeSubstitutionsTest {
 		List<String> problems = new ArrayList<>();
 		for (Path source : sources) {
 			String text = Files.readString(source);
+			if (!TARGET.matcher(text).find()) {
+				// a Feature, which javac checks against the main tree when the image
+				// builds
+				continue;
+			}
 			Class<?> target = target(source, text);
 			for (Matcher m = ALIAS_FIELD.matcher(text); m.find();) {
 				for (String name : m.group(1).split("\\s*,\\s*")) {

@@ -4480,6 +4480,30 @@ cases:
       42
       :refused
       Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
+  - name: a-declared-name-a-run-time-eval-defines-is-called-where-the-program-names-it
+    # A name the program only declares, defined later by eval or load-string, is
+    # called, applied and taken as a value by the program's own forms from then on;
+    # before that a call is the unbound var's. A JVM host's forms find the definition
+    # in the class compiled for the eval. Oracle-identical (clj 1.12.6, 2026-10-30).
+    host: eval and load-string define declared names
+    skip:
+      wasm: a wasm module carries no lowering, so the verbs refuse at run time
+      wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
+    source: |
+      (ns rtl-late)
+      (declare lb-f lb-h lb-k)
+      (defn lb-g [] (lb-f 2))
+      (defn lb-later [] (lb-k 1 2))
+      (eval '(defn lb-f [x] (* 10 x)))
+      (load-string "(defn lb-h [] :h)")
+      (println (lb-g) (lb-h) (map lb-f [1 2]) (fn? lb-f) (apply lb-f [3]))
+      (println (try (lb-later) (catch IllegalStateException e (ex-message e))))
+      (eval '(defn lb-k [a b] (+ a b)))
+      (println (lb-later))
+    expected: |
+      20 :h (10 20) true 30
+      Attempting to call unbound fn: #'rtl-late/lb-k
+      3
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time

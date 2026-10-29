@@ -352,8 +352,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   running one, so every call loads a class (the output carries the compiler: beside a
   `.class`, inside a `.jar`). A wasm module carries no lowering, so on both wasm backends
   they throw an `UnsupportedOperationException` at run time, where the oracle evaluates and
-  resolves. On the JVM a name the program only declares and such a call defines stays
-  undefined for the program's own compiled forms. Such a call lowers like one REPL input, in
+  resolves. A name the program only declares and such a call defines answers the program's
+  own forms from then on, as the oracle's. Such a call lowers like one REPL input, in
   the namespace `*ns*` holds:
   what it defines joins the program for the later calls and inputs, but the forms lowered
   before it keep what they lowered against -- a redefined `defn` reaches only forms lowered

@@ -971,12 +971,15 @@ final class JvmEvalRuntimeBuilder {
 	 * time at all (see the alias loop below)
 	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * (JvmLispCompiler.Ctx.spelledLiterals) -- the alias probe reads it
+	 * @param foreignLookup what a class linked to others asks on a miss
+	 * ({@code JvmLinkage.FOREIGN_LOOKUP}), or null for every other class
 	 * @return the segment bodies
 	 */
 	static List<MethodCode> buildLookupSegments(EvalConstants k, ClassEntry thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
-			Set<String> spelledLiterals) {
-		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable, spelledLiterals);
+			Set<String> spelledLiterals, @org.jspecify.annotations.Nullable MethodRefEntry foreignLookup) {
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable, spelledLiterals,
+				foreignLookup);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -1046,7 +1049,7 @@ final class JvmEvalRuntimeBuilder {
 
 	private List<MethodCode> lookupSegments(ClassEntry thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
-			Set<String> spelledLiterals) {
+			Set<String> spelledLiterals, @org.jspecify.annotations.Nullable MethodRefEntry foreignLookup) {
 		// Only the names a runtime designator can carry (registryFuncIds), each of
 		// which the dispatchers keep a case for -- a name whose funcId had no case
 		// would resolve here and then fall through the dispatcher's search tree, so
@@ -1125,7 +1128,15 @@ final class JvmEvalRuntimeBuilder {
 				segments.add(a);
 				continue;
 			}
-			a.aconst_null();
+			if (foreignLookup != null) {
+				// A name no row of this class answers may be a function another class
+				// of the run defines: the run-time half answers its row.
+				a.aload(0);
+				a.invokestatic(foreignLookup);
+			}
+			else {
+				a.aconst_null();
+			}
 			a.areturn();
 			segments.add(a);
 			return segments;

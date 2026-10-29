@@ -44,10 +44,19 @@ their own and refuses a corpus class that has `_rtImage`.
   (every special has its `_d$` ThreadLocal: a fragment may bind any of them) and raw globals
   off (one storage protocol a fragment can follow).
 - The output: `JvmSourceCompiler` adds `cli/RunTimeCompilerFiles` -- every class and resource
-  of the build, read once off its code source (jar or classes directory, `META-INF/` left
-  out) -- to the travelling files: beside `-o App.class`, inside `-o app.jar` (the spec case's
-  jar: 9.99 MB). A native image has no code source: it warns and carries nothing (the class
-  then needs the rontolisp jar on its class path).
+  of the build, read once off its code source (jar or classes directory; `META-INF/` and the
+  native output's shims and stubs, `am/ik/rontolisp/native/`, left out) -- to the travelling
+  files: beside `-o App.class`, inside `-o app.jar` (the spec case's jar: 9.99 MB). A native
+  image holds no class files (opened as a jar, its code source failed with `zip END header
+  not found`): `src/native/java/.../cli/RunTimeCompilerFeature` (`--features` of the
+  `native` profile) stores the same files, read off the image's class path while it builds,
+  as the resource `am/ik/rontolisp/cli/run-time-compiler.zip`, which `RunTimeCompilerFiles`
+  reads first; the binary's `-o App.class` / `-o app.jar` (9.92 MB) of the late-binding case
+  run with nothing else on the class path (2026-10-30). Decided against resolving the
+  binary's version through `am.ik.maven`: that costs the binary nothing but hands a snapshot
+  binary whatever snapshot jar was published last, a compiler other than the one that
+  compiled the host. The archive is about the main jar's 9.5 MB, beside the 135 MB
+  linux-amd64 binary of 2026-10-29.
 
 ## Run time: the fragments
 
@@ -96,12 +105,25 @@ their own and refuses a corpus class that has `_rtImage`.
 - Found on the way: `usesMutexes` counts `with-mutex` (a fragment holds its host's mutex and
   makes none).
 
+## Late binding
+
+A name no definition of a linked class (host or fragment, `Ctx.linked`) has resolves when
+the code runs: a literal `fboundp` probes, `#'name` boxes what `_lookup` answers
+(`JvmFunctionFormCompiler.emitResolvedFunction`; a global of the name is a Clojure var's root,
+never its function, so it does not decide), a call applies that `#'name`. The open lowering's
+declared-only call `(%clojure-call (if (fboundp 'f) #'f f) ...)` takes this path. Every
+program defun of a linked class is a registry row (so dispatchable), `JvmLinkage.Function`
+carries its id, and `_lookup`'s miss calls the host's `_foreignLookup`, which asks the
+session's merged table and answers `{id, arity}`; the calling class's dispatcher hands the
+foreign id to `_foreignApply`. `_funcref` of an id outside the class's range calls the host's
+`_foreignFuncref`: the owning class's own box (its `_funcref`), else one the session keeps
+per id. Before the first verb the handles are unset and `_foreignLookup` answers null.
+clojure-spec `a-declared-name-a-run-time-eval-defines-is-called-where-the-program-names-it`.
+
 ## Limits (2026-10-30)
 
-- The host's compiled forms see no name a fragment defines: a name the program only
-  declares and a later call defines stays undefined at the host's call sites (the
-  interpreter resolves it when the call runs), and a native binary's host carries no
-  compiler (`.todo/h11`).
+- A fragment's redefinition of a name the host defines reaches the forms lowered after it
+  only: the host's own calls and its `_lookup` row keep the host's function.
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
   lowering again.
 - The image keeps the files the lowering read, not a `deps.edn` dependency's jars or
