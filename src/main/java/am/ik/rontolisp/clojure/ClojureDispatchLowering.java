@@ -142,6 +142,19 @@ final class ClojureDispatchLowering {
 	/** The host class name a dispatch value names, or nil ({@code clojure.lisp}). */
 	static final String DISPATCH_NAME = "RONTOLISP::%CLOJURE-DISPATCH-NAME";
 
+	/**
+	 * {@code MultiFn.getMethod} of a registered dispatch function and a run-time dispatch
+	 * value ({@code clojure.lisp}): the exact row, the dispatcher's search past a miss,
+	 * else nil -- what {@code get-method} and {@code .getMethod} answer.
+	 */
+	static final String MULTI_GET_METHOD = "RONTOLISP::%CLOJURE-MULTIFN-GET-METHOD";
+
+	/**
+	 * {@code MultiFn.dispatchFn} of a registered dispatch function
+	 * ({@code clojure.lisp}).
+	 */
+	static final String MULTI_DISPATCH_FN = "RONTOLISP::%CLOJURE-MULTIFN-DISPATCH-FN";
+
 	/** The map a {@code methods} call or value answers ({@code clojure.lisp}). */
 	static final String MULTI_METHODS = "RONTOLISP::%CLOJURE-METHODS";
 
@@ -174,11 +187,12 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * {@code get-method} as a value: over a multimethod and a dispatch value, like the
-	 * call -- the method table the registry holds for the dispatch function, read under
-	 * the same key the call's shape reads (nil to the marker, a class object or
-	 * designator to the keyword a class spelling stores). A function the registry holds
-	 * no tables for -- anything but a defined multimethod's dispatch function -- refuses
-	 * at run time, like before. The count is checked first, in the call's words.
+	 * call -- {@code MultiFn.getMethod} through the registry's finder for the dispatch
+	 * function, the value under the same key the call's shape reads (nil to the marker, a
+	 * class object or designator to the keyword a class spelling stores). A function the
+	 * registry holds no tables for -- anything but a defined multimethod's dispatch
+	 * function -- refuses at run time, like before. The count is checked first, in the
+	 * call's words.
 	 * @return the value form
 	 */
 	static LispVal getMethodValue() {
@@ -186,10 +200,8 @@ final class ClojureDispatchLowering {
 		LispVal count = ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args);
 		LispSymbol multi = new LispSymbol(ClojureLowering.mangle("get-method-multi"));
 		LispSymbol record = new LispSymbol(ClojureLowering.mangle("get-method-record"));
-		LispVal methods = recordGetter(record, "car");
-		LispVal key = ClojureLowerUtil.list(new LispSymbol(DISPATCH_KEY),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args), methods);
-		LispVal found = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, methods);
+		LispVal found = ClojureLowerUtil.list(new LispSymbol(MULTI_GET_METHOD), multi,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args));
 		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(record,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), multi, new LispSymbol(MULTI_REGISTRY)))),
@@ -1222,15 +1234,7 @@ final class ClojureDispatchLowering {
 		LispSymbol fallback = tableGlobal(key, "%default");
 		LispSymbol prefers = tableGlobal(key, "%prefers");
 		LispSymbol object = tableGlobal(key, "%object");
-		LispVal dispatchFn;
-		boolean wasDispatch = ctx.inDispatchFn;
-		ctx.inDispatchFn = true;
-		try {
-			dispatchFn = ClojureBindingLowering.fnValue(ctx, dispatchDatumFor(ctx, dispatchDatum));
-		}
-		finally {
-			ctx.inDispatchFn = wasDispatch;
-		}
+		LispVal dispatchFn = dispatchFnValue(ctx, dispatchDatum);
 		LispVal defaultForm = defaultDatum == null ? ClojureCollectionLowering.keywordForm("default")
 				: ctx.lower(defaultDatum);
 		LispVal hierarchyForm = hierarchyDatum == null ? ClojureHierarchyLowering.hierarchyGlobal()
@@ -1240,13 +1244,8 @@ final class ClojureDispatchLowering {
 		LispSymbol raw = ctx.freshTemp();
 		LispSymbol found = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
-		LispVal missCall = ClojureLowerUtil.list(new LispSymbol(ClojureHierarchyLowering.HIERARCHY_DISPATCH),
-				LispString.literal(name), methods, prefers, hierarchyForm, fallback, disp, args);
-		LispVal missForm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), object,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-								ClojureLowerUtil.list(new LispSymbol("C%H-CANDIDATES"), methods, hierarchyForm, disp))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), object, args), missCall);
+		LispVal missForm = ClojureLowerUtil.list(new LispSymbol(ClojureHierarchyLowering.HIERARCHY_DISPATCH),
+				LispString.literal(name), methods, prefers, hierarchyForm, fallback, object, disp, args);
 		// A `class` call inside the dispatch function answers nil itself for a nil
 		// argument (see classForm), so the one null test maps every class-produced
 		// nil onto the marker while an explicit `:nil` keyword keeps its keyword row,
@@ -1287,13 +1286,41 @@ final class ClojureDispatchLowering {
 		// what it answered before the registry existed
 		LispVal clearer = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST));
+		// .dispatchFn reads the dispatch function as written (a keyword stays one,
+		// like the oracle's) through a getter, so it is evaluated when read, as the
+		// dispatcher evaluates it per call, and lowered again so no lambda node sits
+		// in two forms; .getMethod and get-method read the finder: a run-time
+		// dispatch value's row, else the dispatcher's own search past a miss
+		LispVal dispatchValue = dispatchDatum instanceof LispSymbol s && s.name().startsWith(":")
+				? ClojureCollectionLowering.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(ctx, s.name()))
+				: dispatchFnValue(ctx, dispatchDatum);
+		LispSymbol wanted = ctx.freshTemp();
+		LispVal finder = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(wanted),
+				ClojureLowerUtil.list(new LispSymbol(ClojureHierarchyLowering.HIERARCHY_GET_METHOD),
+						LispString.literal(name), methods, prefers, hierarchyForm, fallback, object, wanted));
 		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_MULTI),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), fn),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), methods),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), prefers), clearer));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), prefers), clearer,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), dispatchValue), finder));
 		ctx.usedHierarchy = true;
 		return forms;
+	}
+
+	/**
+	 * A {@code defmulti}'s dispatch function as a value, lowered in the dispatch mode
+	 * ({@link #classForm(LispVal)} answering nil itself for nil).
+	 */
+	private static LispVal dispatchFnValue(ClojureLowering ctx, LispVal dispatchDatum) {
+		boolean wasDispatch = ctx.inDispatchFn;
+		ctx.inDispatchFn = true;
+		try {
+			return ClojureBindingLowering.fnValue(ctx, dispatchDatumFor(ctx, dispatchDatum));
+		}
+		finally {
+			ctx.inDispatchFn = wasDispatch;
+		}
 	}
 
 	/**
@@ -1506,14 +1533,14 @@ final class ClojureDispatchLowering {
 		LispVal keyDatum = items.get(2);
 		if (keyDatum instanceof LispSymbol s && isObjectClassName(ctx, s.name())) {
 			// the table row (for get-method) and the catch-all slot the dispatcher
-			// tries past the hierarchy search but ahead of the default
+			// tries past the hierarchy search but ahead of the default -- one closure
+			// in both, so get-method answers the same method either way
 			LispSymbol object = tableGlobal(key, "%object");
-			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), List.of(
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
 									ClojureCollectionLowering.keywordForm("object"), methods),
-							lambda),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, lambda)));
+							lambda));
 		}
 		return ClojureCollectionLowering.tablePut(methods, dispatchKeyForm(ctx, keyDatum), lambda);
 	}
@@ -1582,6 +1609,12 @@ final class ClojureDispatchLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
 	}
 
+	/**
+	 * {@code (get-method name dispatch-value)}: {@code MultiFn.getMethod} through the
+	 * registry's finder -- the exact row, else the dispatcher's search past a miss (the
+	 * hierarchy, the {@code Object} slot, the default), else nil. A computed multimethod
+	 * calls the value ({@link #computedCall}).
+	 */
 	static LispVal getMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
 		if (isComputedMultimethod(ctx, items.get(1))) {
@@ -1592,10 +1625,9 @@ final class ClojureDispatchLowering {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-GET"),
 					printMethodTag(ctx, items.get(2)));
 		}
-		LispSymbol methods = tableGlobal(multimethodKey(ctx, name), "%methods");
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-				ClojureCollectionLowering.lookupKey(dispatchKeyForm(ctx, items.get(2)), methods), methods,
-				ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.list(new LispSymbol(MULTI_GET_METHOD), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(multimethodKey(ctx, name))),
+				dispatchKeyForm(ctx, items.get(2)));
 	}
 
 	/**

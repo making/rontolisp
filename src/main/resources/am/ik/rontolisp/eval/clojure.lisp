@@ -10396,22 +10396,35 @@
 ;; calls do), so a captured old function introspects what it calls, like the
 ;; oracle's old multimethod object answering its own tables. The Object slot
 ;; is rebound (never edited), so the record carries only a clearer closure
-;; over it.
+;; over it. The record also answers clojure.lang.MultiFn's dispatchFn (a getter
+;; over the dispatch function) and getMethod (a finder of one run-time dispatch
+;; value's method, the dispatcher's own search: spec.alpha's multi-spec).
 
 (defvar rontolisp::%clojure-multimethods
   (make-hash-table :test 'eq)
-  "A dispatch function to its (methods-getter prefers-getter clearer), made
-   by every defmulti beside its tables.")
+  "A dispatch function to its (methods-getter prefers-getter clearer
+   dispatch-getter finder), made by every defmulti beside its tables.")
 
 (defun rontolisp::%clojure-register-multimethod
-    (name fn methods prefers clearer)
+    (name fn methods prefers clearer dispatch finder)
   "Register FN's table getters, answering NAME (what defun answers, so a
-   defmulti answers what it answered before the registry existed). METHODS and
-   PREFERS are zero-argument closures over the method and prefers globals,
-   CLEARER one zeroing the Object slot."
+   defmulti answers what it answered before the registry existed). METHODS,
+   PREFERS and DISPATCH are zero-argument closures over the method and prefers
+   globals and the dispatch function, CLEARER one zeroing the Object slot,
+   FINDER one of a run-time dispatch value answering its method or nil."
   (setf (gethash fn rontolisp::%clojure-multimethods)
-        (list methods prefers clearer))
+        (list methods prefers clearer dispatch finder))
   name)
+
+(defun rontolisp::%clojure-multifn-dispatch-fn (fn)
+  "MultiFn.dispatchFn of the multimethod FN's dispatch function: the dispatch
+   function as the defmulti wrote it. FN is registered."
+  (funcall (nth 3 (gethash fn rontolisp::%clojure-multimethods))))
+
+(defun rontolisp::%clojure-multifn-get-method (fn dv)
+  "MultiFn.getMethod of the multimethod FN's dispatch function: the method
+   the run-time dispatch value DV reaches, or nil. FN is registered."
+  (funcall (nth 4 (gethash fn rontolisp::%clojure-multimethods)) dv))
 
 ;; Simple class names to the kind keyword spelling a class spelling stores
 ;; under (clojure/ClojureDispatchLowering, DISPATCH_CLASS_KEYWORDS): a

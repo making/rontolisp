@@ -1357,7 +1357,7 @@ class ClojureLoweringTest {
 		// registry holds no tables for -- anything but a defined multimethod's
 		// dispatch function -- and otherwise read the registry's tables
 		assertThat(lowered("(def x get-method)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
-			.contains("RONTOLISP::%CLOJURE-DISPATCH-KEY");
+			.contains("RONTOLISP::%CLOJURE-MULTIFN-GET-METHOD");
 		assertThat(lowered("(def x remove-method)")).contains("RONTOLISP::%CLOJURE-MULTIMETHODS")
 			.contains("RONTOLISP::%CLOJURE-DISPATCH-KEY")
 			.contains("RONTOLISP::%CLOJURE-DISPATCH-NAME");

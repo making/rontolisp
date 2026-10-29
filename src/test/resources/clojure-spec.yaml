@@ -2305,7 +2305,8 @@ cases:
       :cce 2 3
   - name: multimethods-dispatch-over-a-table
     # defmulti is a method table plus a dispatcher defun; defmethod stores,
-    # remove-method drops, get-method reads, and a miss falls back to the
+    # remove-method drops, get-method reads (past a miss, the default's method,
+    # like the oracle's MultiFn.getMethod), and a miss falls back to the
     # default dispatch value (:default without an option) or signals.
     source: |
       (defmulti m05 :shape)
@@ -2324,7 +2325,7 @@ cases:
       (println (m05c {:t :a} 41))
       (println ((get-method m05 :circle) {:shape :circle}))
       (remove-method m05 :circle)
-      (println (get-method m05 :circle))
+      (println (= (get-method m05 :circle) (get-method m05 :default)))
       (println (m05 {:shape :circle}))
     expected: |
       1
@@ -2334,7 +2335,7 @@ cases:
       99
       42
       1
-      nil
+      true
       0
   - name: hierarchies-derive-isa-and-prefer
     # derive/underive rewrite the global hierarchy value; isa?/parents/ancestors/
@@ -16059,7 +16060,11 @@ cases:
     # both directions (a value removal and a head call sees it, a head prefers
     # a value reads it). A call over a computed multimethod -- a local, a var's
     # deref (spec.alpha's (methods @mmvar)) -- reads the same registry
-    # (2026-10-29). Oracle-identical (clj 1.12.6, 2026-10-26) except the
+    # (2026-10-29). get-method and a multimethod's MultiFn members
+    # .getMethod and .dispatchFn (spec.alpha's multi-spec reads them through a
+    # hinted var deref) answer MultiFn.getMethod: the exact row, the hierarchy
+    # search, the Object slot (never for nil), the default, else nil
+    # (2026-10-30). Oracle-identical (clj 1.12.6, 2026-10-26) except the
     # two wordings the head already customizes: a value applied to the wrong
     # count reports the head call's words (like g39's isa?/aget), and a
     # non-multimethod reports the value's refusal where the oracle throws
@@ -16120,6 +16125,23 @@ cases:
       (println (try (g40-m {:tag :b}) (catch IllegalArgumentException e :no-method)))
       (println (try ((fn [f m] (f m)) g40-gm g40-m) (catch clojure.lang.ArityException e (.getMessage e))))
       (println (try ((fn [f] (f 42 :a)) g40-gm) (catch UnsupportedOperationException e (.getMessage e))))
+      (defmulti mfn-d :tag)
+      (defmethod mfn-d :a [_] :A!)
+      (defmethod mfn-d ::g40-parent [_] :P!)
+      (defmethod mfn-d :default [_] :D!)
+      (def mfn-v #'mfn-d)
+      (let [^clojure.lang.MultiFn mm @mfn-v
+            f (fn [x] (when (.getMethod mm ((.dispatchFn mm) x)) (mm x)))]
+        (println (map f [{:tag :a} {:tag ::g40-child} {:tag :zz}])))
+      (println ((.dispatchFn ^clojure.lang.MultiFn @mfn-v) {:tag :q}) (.dispatchFn g40-h))
+      (println (= (get-method mfn-d ::g40-child) (g40-gm mfn-d ::g40-parent) (.getMethod mfn-d ::g40-child))
+               (= (get-method mfn-d :zz) (.getMethod mfn-d nil) (get-method mfn-d :default))
+               (.getMethod g40-h :zz) (g40-gm g40-h nil))
+      (defmethod g40-c Object [_] :O!)
+      (println (= (get-method g40-c Long) (g40-gm g40-c Object)) (get-method g40-c nil)
+               (try (g40-c nil) (catch IllegalArgumentException e :no-method)))
+      (println (try (.dispatchFn (fn [x] x)) (catch IllegalArgumentException e :not-a-multifn))
+               (try (.getMethod inc 1) (catch IllegalArgumentException e :not-a-multifn)))
     expected: |
       (:y :y)
       :A!
@@ -16154,6 +16176,11 @@ cases:
       :no-method
       get-method takes a multimethod and a dispatch value
       get-method of a computed multimethod is not supported at run time: only a literal multimethod name reads, where the call stands
+      (:A! :P! :D!)
+      :q :tag
+      true true nil nil
+      true nil :no-method
+      :not-a-multifn :not-a-multifn
   - name: protocol-value-arms-run-where-calls-run
     # g42: satisfies?, extends? and extend run as values what the calls
     # run -- over the run-time registry the defprotocol populates beside

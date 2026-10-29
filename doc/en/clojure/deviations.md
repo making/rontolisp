@@ -265,9 +265,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   function, running what the call runs: `get-method`/`remove-method` read under
   the same key the call's shape reads, `remove-method` of the `Object` class
   and `remove-all-methods` clear the slot, answering the multimethod like the
-  calls. A function holding no registered multimethod still refuses there, and
-  a hierarchy or default fallback `get-method` skips stays shared with the head
-  call.
+  calls. A function holding no registered multimethod still refuses there.
+  `get-method`, and a multimethod's `.getMethod` and `.dispatchFn`, answer what the
+  oracle's `MultiFn` does, but a multimethod's `Object` method also answers a keyword
+  dispatch value (`class` answers a keyword for a value's class here).
 - `satisfies?` takes the protocol's name and a value, `extends?` the protocol's and
   the type's names, `extend` the type's name and then a protocol and a method map any
   number of times: a local bound to a protocol or a type is refused at lowering. As
@@ -949,10 +950,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate that is
   a named `fn` (`(fn pos [x] ...)`) or a `def` whose value is a macro call expanding to a fn
   `:clojure.spec.alpha/unknown`, where the oracle names it (a `defn`, a `def` of a fn
-  literal, a core function and every predicate a spec macro takes keep their names). `multi-spec` is
-  refused when it conforms (no multimethod answers `.dispatchFn`), and so are
+  literal, a core function and every predicate a spec macro takes keep their names).
   `clojure.spec.test.alpha`'s `instrument` (a `defn`'s calls do not go through its var) and
-  `check`. What resolves a symbol or requires a namespace computed as the program runs --
+  `check` are refused. What resolves a symbol or requires a namespace computed as the program runs --
   `explain` of a regex spec over a value that is no sequence, `form` of `nilable`, the
   generators (`gen`, `exercise`, over test.check from the `deps.edn`) -- runs on the
   interpreter and is refused in a compiled program.

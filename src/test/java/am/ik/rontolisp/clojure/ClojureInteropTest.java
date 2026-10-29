@@ -498,9 +498,10 @@ class ClojureInteropTest {
 				+ " (defmethod f :default [x] :default)"
 				+ " (println (f (java.io.File. \"x\")) (f (java.util.ArrayList.)) (f (java.util.ArrayDeque.))"
 				+ " (f (java.util.LinkedList.)) (f 1))"
-				+ " (println (some? (get-method f java.io.File)) (some? (get-method f java.util.HashMap)))"
+				+ " (println (some? (get-method f java.io.File)) (= (get-method f java.util.HashMap) (get-method f :default))"
+				+ " (= (get-method f java.util.ArrayList) (get-method f java.util.AbstractList)))"
 				+ " (remove-method f java.io.File) (println (f (java.io.File. \"x\")))",
-				":file :alist :acoll :alist :default\ntrue false\n:default\n");
+				":file :alist :acoll :alist :default\ntrue true true\n:default\n");
 		// a class value dispatched on itself, a dispatch vector, and prefer-method
 		assertBothEqual("(defmulti g identity) (defmethod g java.util.AbstractMap [x] :amap)"
 				+ " (defmethod g :default [x] :default)"
