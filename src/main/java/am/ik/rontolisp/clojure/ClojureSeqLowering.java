@@ -489,7 +489,7 @@ final class ClojureSeqLowering {
 		LispSymbol first = new LispSymbol(ClojureLowering.mangle("quot-a"));
 		LispSymbol second = new LispSymbol(ClojureLowering.mangle("quot-b"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(first, second)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), first, second));
+				ClojureDecimalLowering.call("truncate", List.of(first, second)));
 	}
 
 	/** {@code seq} as a value: the seq view as a one-argument lambda. */

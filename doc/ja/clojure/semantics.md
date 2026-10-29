@@ -406,8 +406,8 @@ WASM バックエンドでは呼び出しが代わりに拒否されます。`pr
 `with-open` は束縛して
 `unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
 closeable は他の interop 同様 JVM が要ります）。`with-precision` は本体の周囲で
-`*math-context*` を評価された精度に束縛し、最後の値を返します。除算は正確なまま
-（oracle の `BigDecimal` ではなく有理数）なので、この束縛は範囲を区切るだけです。`(. stream write x)` は
+`*math-context*` を評価された精度（と `:rounding` のモード）の math context に束縛し、最後の
+値を返します。その中の 10 進数の演算はオラクルと同じく精度に丸められます。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
 `read-line` 越しに読み（末尾越しはオラクル同様 `nil`）、`(.read stream)` は次の
 文字のコードを答えます（末尾越しは `-1`）。

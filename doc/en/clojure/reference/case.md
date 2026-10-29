@@ -11,12 +11,10 @@ Without one, no matching clause throws `IllegalArgumentException`
 lowers (`Duplicate case test constant`).
 
 Constants compare like Clojure's `case`: a number matches only its own category
-(`1N` is `1`, `1.0` is not, `-0.0` is not `0.0`, `##NaN` matches nothing), a character
-never matches its code, and a vector, map or set constant matches by `=`, so a vector
-constant matches a list or lazy seq of the same members.
-
-Deviation: `1M` and `1` are the same constant, because decimal literals are exact
-rationals.
+(`1N` is `1`, `1.0` is not, `1M` is not, `-0.0` is not `0.0`, `##NaN` matches nothing, a
+decimal constant matches a decimal of its value whatever the scale), a character never
+matches its code, and a vector, map or set constant matches by `=`, so a vector constant
+matches a list or lazy seq of the same members.
 
 ```clojure
 (defn kind [x]

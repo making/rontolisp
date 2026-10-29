@@ -49,9 +49,11 @@ Integers read in radix: `0xFF` hexadecimal, `2r101` and `8r17` arbitrary-radix `
 notation, and a leading-`0` octal; the sign applies outside the radix prefix. A shaped
 token that parses to nothing is an `Invalid number` refusal.
 
-`1M` lowers to an exact ratio (`0.1M` is `1/10`), so decimal arithmetic stays exact and
-prints as the ratio without its mark; a `2N` past the `long` range is a bignum, also
-printing without its mark. Ratios read as `1/2`.
+`1.50M` is a decimal, the oracle's `BigDecimal`: it keeps the scale its digits spell and
+prints with its mark (`1.50M`, `1E+3M` for `1e3M`), and its arithmetic, comparisons and
+rounding follow the oracle's (`(+ 0.1M 0.2M)` is `0.3M`, `with-precision` rounds). An
+integer past the `long` range is the oracle's `BigInt` and prints with its `N`; a `2N`
+inside the range reads as a plain integer and prints without it. Ratios read as `1/2`.
 
 `##NaN`, `##Inf` and `##-Inf` read as doubles, in source and under `read-string`/`read`,
 and `pr`, `prn` and `println` print them in the same spelling (also inside a collection);

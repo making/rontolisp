@@ -426,10 +426,13 @@ final class ClojureDispatchLowering {
 	 * the kind's own test ({@link ClojureArms.Family#HOST}'s aliases). A
 	 * {@code CharSequence}'s answers a type implementing it too, which a program storing
 	 * no such row calls as the host test ({@link ClojureArms.Family#CHAR_SEQUENCE}'s
+	 * alias, ahead of the host family's), and a {@code Number}'s a decimal too, which a
+	 * program making none calls as the host test ({@link ClojureArms.Family#DECIMAL}'s
 	 * alias, ahead of the host family's).
 	 */
 	private static final Map<String, String> HOST_ALIASES = Map.of("java.lang.Number",
-			"RONTOLISP::%CLOJURE-HOST-NUMBER-P", "java.lang.CharSequence", ClojureInterfaces.CHAR_SEQUENCE_INSTANCE_P);
+			ClojureDecimalLowering.NUMBER_INSTANCE_P, "java.lang.CharSequence",
+			ClojureInterfaces.CHAR_SEQUENCE_INSTANCE_P);
 
 	/** {@code instance?}'s host arm ({@code clojure.lisp}). */
 	static final String HOST_OBJECT_P = "RONTOLISP::%CLOJURE-HOST-OBJECT-P";
@@ -505,6 +508,7 @@ final class ClojureDispatchLowering {
 			case BIGINT -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-BIGINT");
 			case DOUBLE -> cl(Use.ONCE, "floatp");
 			case RATIO -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-RATIO");
+			case DECIMAL -> runtime(Use.VARIABLE, ClojureDecimalLowering.DECIMAL_P);
 			case KEYWORD -> new Arm(Use.MANY, ClojureFilterLowering::keywordTest);
 			case SYMBOL -> new Arm(Use.VARIABLE, v -> ClojureFnLowering.symbolTest(ctx, v));
 			case VECTOR -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-VECTOR");
@@ -641,6 +645,10 @@ final class ClojureDispatchLowering {
 		// making none sheds (ClojureArms.Family.DELAY)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.DELAY_P), one),
 				ClojureCollectionLowering.keywordForm("clojure.lang.Delay")));
+		// a decimal or a math context answers its class's keyword (its wrapper is a
+		// cons): an arm a program making neither sheds (ClojureArms.Family.DECIMAL)
+		branches
+			.add(ClojureLowerUtil.list(ClojureDecimalLowering.classTest(one), ClojureDecimalLowering.classKey(one)));
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),

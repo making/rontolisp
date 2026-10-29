@@ -18,14 +18,15 @@ import org.jspecify.annotations.Nullable;
  * one test answering a Common Lisp boolean -- a CL type predicate or a spliced
  * {@code rontolisp::%clojure-is-} helper in {@code clojure.lisp} -- wrapped in
  * {@code (if test T false)}; as a value it is a one-argument lambda over the same test. A
- * predicate whose kind no value here can have ({@code delay?}, {@code decimal?}, ...)
- * answers false after evaluating its argument; {@code future?} and the future verbs
- * ({@code future-done?}, {@code future-cancelled?}, {@code future-cancel}) know the three
- * kinds that exist, a host {@code java.util.concurrent.Future}, the rontolisp future
- * {@code rontolisp.http-client} answers under {@code :async true}, and the Clojure
- * futures {@code future} and {@code future-call} make. {@code set?} and
- * {@code reversible?} name the sorted-aware helpers, which a program building no sorted
- * collection calls as the plain ones ({@link ClojureArms.Family#SORTED}).
+ * predicate whose kind no value of the program can have ({@code delay?},
+ * {@code decimal?}, ...) answers false after evaluating its argument; {@code future?} and
+ * the future verbs ({@code future-done?}, {@code future-cancelled?},
+ * {@code future-cancel}) know the three kinds that exist, a host
+ * {@code java.util.concurrent.Future}, the rontolisp future {@code rontolisp.http-client}
+ * answers under {@code :async true}, and the Clojure futures {@code future} and
+ * {@code future-call} make. {@code set?} and {@code reversible?} name the sorted-aware
+ * helpers, which a program building no sorted collection calls as the plain ones
+ * ({@link ClojureArms.Family#SORTED}).
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -91,10 +92,10 @@ final class ClojurePredicateLowering {
 			Map.entry("seqable?", helper("IS-SEQABLE")), Map.entry("associative?", helper("IS-ASSOCIATIVE")),
 			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-INDEXED-TRANSIENT")),
 			Map.entry("reversible?", helper("IS-REVERSIBLE")), Map.entry("ifn?", helper("IS-IFN")),
-			Map.entry("sorted?", helper("IS-SORTED")), Map.entry("number?", cl("NUMBERP")),
+			Map.entry("sorted?", helper("IS-SORTED")), Map.entry("number?", decimalAware("NUMBERP")),
 			Map.entry("integer?", cl("INTEGERP")), Map.entry("int?", helper("IS-INT")),
 			Map.entry("double?", cl("FLOATP")), Map.entry("float?", cl("FLOATP")),
-			Map.entry("ratio?", helper("IS-RATIO")), Map.entry("rational?", cl("RATIONALP")),
+			Map.entry("ratio?", helper("IS-RATIO")), Map.entry("rational?", decimalAware("RATIONALP")),
 			Map.entry("nat-int?", helper("IS-NAT-INT")), Map.entry("pos-int?", helper("IS-POS-INT")),
 			Map.entry("neg-int?", helper("IS-NEG-INT")), Map.entry("infinite?", helper("IS-INFINITE")),
 			Map.entry("NaN?", helper("IS-NAN")), Map.entry("keyword?", helper("KEYWORD-P")),
@@ -130,14 +131,24 @@ final class ClojurePredicateLowering {
 	}
 
 	/**
-	 * The predicates of a kind no value here can have: no chunked seq or decimal exists
-	 * on any backend, so each answers false for every value, which is the oracle's answer
-	 * for every value a program here can build. {@code bytes?} is
-	 * {@link ClojureBytesLowering#bytesPredicate} and {@code delay?} the delay family's
-	 * {@code (is-delay value false)}: the same {@code (progn value false)} where the
-	 * program makes no byte array or delay.
+	 * The predicates of a kind no value here can have: no chunked seq exists on any
+	 * backend, so it answers false for every value, which is the oracle's answer for
+	 * every value a program here can build. {@code bytes?} is
+	 * {@link ClojureBytesLowering#bytesPredicate}, {@code delay?} the delay family's
+	 * {@code (is-delay value false)} and {@code decimal?} the decimal family's
+	 * {@code (is-decimal value false)}: the same {@code (progn value false)} where the
+	 * program makes no byte array, delay or decimal.
 	 */
-	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?");
+	private static final List<String> NEVER = List.of("chunked-seq?");
+
+	/**
+	 * A numeric type test through its decimal-aware helper, the plain test once the
+	 * decimal family folds ({@link ClojureDecimalLowering}): a decimal is a number and a
+	 * rational.
+	 */
+	private static Test decimalAware(String test) {
+		return new Test(ClojureDecimalLowering.helper(test).name(), List.of());
+	}
 
 	/**
 	 * The predicates of a reader conditional and a tagged literal, each to its library
@@ -213,6 +224,11 @@ final class ClojurePredicateLowering {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.IS_DELAY), ctx.lower(items.get(1)),
 					ctx.falseVariable);
 		}
+		if (name.equals("decimal?")) {
+			ClojureCoreLowering.arity(name, n, 1, 1);
+			return ClojureLowerUtil.list(new LispSymbol(ClojureDecimalLowering.IS_DECIMAL), ctx.lower(items.get(1)),
+					ctx.falseVariable);
+		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
@@ -282,11 +298,12 @@ final class ClojurePredicateLowering {
 			return ctx.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 					ClojureLowerUtil.list(one), ClojureBytesLowering.bytesPredicate(ctx, one)));
 		}
-		if (name.equals("delay?")) {
+		if (name.equals("delay?") || name.equals("decimal?")) {
 			LispSymbol one = ctx.freshTemp();
-			return ctx
-				.sharedValue(name, ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-						ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.IS_DELAY), one, ctx.falseVariable)));
+			String kindTest = name.equals("delay?") ? ClojureLazyLowering.IS_DELAY : ClojureDecimalLowering.IS_DECIMAL;
+			return ctx.sharedValue(name,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+							ClojureLowerUtil.list(new LispSymbol(kindTest), one, ctx.falseVariable)));
 		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {

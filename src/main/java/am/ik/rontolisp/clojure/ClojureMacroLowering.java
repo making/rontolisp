@@ -792,6 +792,9 @@ final class ClojureMacroLowering {
 						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
 					return decodeTagged(cons);
 				}
+				if (tag.name().equals(ClojureDecimalLowering.TAG)) {
+					return decodeDecimal(cons);
+				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
 				}
@@ -968,6 +971,21 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * A decimal answer back to its literal's marker, {@code (%decimal unscaled scale)},
+	 * which lowers to the same decimal: the oracle's compiler embeds the BigDecimal
+	 * constant itself.
+	 */
+	static LispVal decodeDecimal(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 3
+				&& (parts.get(1) instanceof LispInteger || parts.get(1) instanceof am.ik.rontolisp.LispBigInteger)
+				&& parts.get(2) instanceof LispInteger) {
+			return ClojureLowerUtil.list(ClojureDecimalLowering.MARKER, parts.get(1), parts.get(2));
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
 	 * A var answer back to its {@code (var ns/name)} datum, which lowers back to the same
 	 * var: what {@code #=(var x)} stands as, and what a macro answering a var expands to.
 	 */
@@ -1077,6 +1095,10 @@ final class ClojureMacroLowering {
 		if (!marked.isEmpty() && ClojureDefaultReaders.isMarker(marked.get(0))) {
 			// so is an #inst or #uuid literal
 			return ClojureDefaultReaders.construction(marked);
+		}
+		if (!marked.isEmpty() && ClojureDecimalLowering.isMarker(marked.get(0))) {
+			// and a decimal literal
+			return ClojureDecimalLowering.literal(ctx, marked);
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> parts = ClojureLowerUtil.items(datum);

@@ -42,7 +42,7 @@ final class ClojureFnLowering {
 	static LispVal incValue(ClojureLowering ctx, String name) {
 		LispSymbol x = new LispSymbol(ClojureLowering.mangle("inc-x"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(x),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym(name.equals("inc") ? "+" : "-"), x, new LispInteger(1)));
+				ClojureDecimalLowering.call(name.equals("inc") ? "+" : "-", List.of(x, new LispInteger(1))));
 	}
 
 	/**

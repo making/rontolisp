@@ -67,8 +67,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   function, an atom, a var, an exception, a deftype or reify implementing neither `hasheq`
   nor `hashCode` --, whose number differs (between backends and runs too, as between the
   oracle's runs); `()` and an empty `rest`, `nil` here, which hash to `0` (the oracle's are
-  an empty seq's); a decimal (`1.5M`), a ratio here; and a `Calendar`, hashed as the `Date`
-  of its milliseconds. `hash-ordered-coll` walks a map's, set's or record's members in this
+  an empty seq's); and a `Calendar`, hashed as the `Date` of its milliseconds.
+  `hash-ordered-coll` walks a map's, set's or record's members in this
   implementation's order (the unordered hashes agree). A refusal's `ClassCastException`
   message leaves out the oracle's module and loader text.
 - `seq` and the verbs over it, `count`, `empty?`, `get`, `contains?`, `keys` and `vals` read a
@@ -88,12 +88,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `list?`, `coll?`, `sequential?` and `counted?` answer `false` for `()`; a seq a verb answers
   over a strict input is a list, so `list?`, `counted?` and `realized?` answer `true` for it
   (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
-  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
-  literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
-  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`); for the same
-  reason a map or set literal holding `1` and `1M` is refused as a duplicate. `identical?`
+  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. `identical?`
   compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
   two keywords of one spelling as one object.
+- An integer inside the long range is a plain integer whatever made it: an `N` literal
+  (`2N`), `bigint`, `biginteger`, a `BigInt` sum or product (`(+ 1N 2)`) and an integral
+  ratio answer (`(* 1/2 2)`, `(rationalize 1.0)`) print without the oracle's `N` (`3`, not
+  `3N`), `int?` answers `true` and `class` `:java.lang.Long` for them, and a bit operation
+  takes them where the oracle refuses its `BigInt`. An integer past the long range is the
+  oracle's `BigInt` and prints its `N` under `pr` and `print` (`str` leaves it out, like the
+  oracle's toString); a `biginteger` past it prints the `N` too, where the oracle's
+  `BigInteger` prints none.
+- A decimal (`1.50M`, `bigdec`, a read of one) is the oracle's `BigDecimal` in its scale,
+  spelling, arithmetic, comparisons, hash and `with-precision` rounding, and Java takes it as
+  a `java.math.BigDecimal`, but it answers none of its Java methods (`.setScale`, `.scale`,
+  `.toPlainString` ...), a `BigDecimal` Java answers stays a host object, and
+  `(BigDecimal. "1.5")` and `BigDecimal/valueOf` make a host object where a host is, no
+  decimal. Where an index or a count is read (`nth`, `take`, `drop`, `repeat`, `subvec`,
+  `char`, `dotimes`) a decimal refuses, where the oracle casts it to an int; `subs` and
+  `range` take it.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
@@ -208,7 +221,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   an `Object` method catches past the search but ahead of the default. A throwable,
   stream or number class stores under its name as a keyword (the one `class` answers:
   `:java.lang.Long`, `:java.lang.Double`, `:clojure.lang.Ratio`, `:clojure.lang.BigInt`,
-  `:java.lang.Number`), and the search
+  `:java.math.BigDecimal`, `:java.lang.Number`), and the search
   follows its Java supers like the oracle's inheritance, interfaces (`java.io.Serializable`,
   `java.io.Closeable`) and `Object` included; `isa?`, `derive`, `underive`, `parents`,
   `ancestors` and `descendants` read a class spelling as the same keyword, so
@@ -373,13 +386,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Nothing specified to load` here too).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
-  `pr` prints it, where the oracle prints its `toString`; a bit operation takes an
-  `N`-suffixed literal in range as its plain integer, where the oracle refuses its `BigInt`.
+  `pr` prints it, where the oracle prints its `toString`.
 - `class` answers a keyword naming the kind (`:string`, `:keyword`, `:map`, ...);
   the oracle answers host classes, which no wasm backend has. A number answers its
   class's name as a keyword (`:java.lang.Long`, `:java.lang.Double`,
-  `:clojure.lang.Ratio`, `:clojure.lang.BigInt` past a long); `1N` is a `Long` and a
-  decimal a `Ratio` here, since both read as plain numbers. A record or deftype
+  `:clojure.lang.Ratio`, `:clojure.lang.BigInt` past a long, `:java.math.BigDecimal`);
+  `1N` is a `Long` here, since it reads as a plain integer. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - A [byte array](reference/byte-array.md) prints as the oracle's `#object["[B" ...]` without
   the identity hash, and `str` answers `[B` (the oracle's `[B@1b6d3586`). `aset` stores any
@@ -606,9 +618,6 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   warning is ever emitted, so `:warn-on-boxed` wraps exactly like `true`. As values
   (`+`, `apply +`, `map inc`, ...) the verbs keep the default promoting behavior on
   every flag, where the oracle's function values throw on overflow.
-- `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
-  prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
-  decimal expansion signals, like the oracle.
 - `format` renders and refuses as `java.util.Formatter` does (a computed format string parses
   when the call runs), except: `%h`, `%a` and `%t` are refused; an integer past the long range
   renders as a `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a
@@ -726,9 +735,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
   go through the var while the definition stays direct); reader metadata on names
   and locals otherwise parses and drops, never affecting dispatch. `with-precision`
-  binds `*math-context*` to the evaluated precision around its body (`nil` at the root,
-  where the oracle binds its default context); division stays exact -- a ratio, never the
-  oracle's `BigDecimal` -- so the binding scopes the extent without rounding anything.
+  binds `*math-context*` to the math context of the evaluated precision and rounding mode
+  around its body, which the decimal arithmetic rounds under like the oracle's; it prints
+  as the oracle's `#object` without the identity hash.
   `bound-fn` is `bound-fn*` over `fn`: the captured creation-time bindings are
   pushed over the caller's own, so a call on another thread sees them; a var
   bound nowhere at creation stays out of the map, and a `bound-fn*` created

@@ -1920,23 +1920,6 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (with-precision precision body...)}: the body with {@code *math-context*}
-	 * bound to the evaluated precision, answering its last value (nil for an empty body).
-	 * Division stays exact here -- a ratio, never the oracle's {@code BigDecimal} -- so
-	 * the binding scopes the dynamic extent (nesting rebinds, leaving restores the root)
-	 * without rounding anything. The body lowers behind the {@code try} barrier like a
-	 * {@code binding} body, which the oracle wraps in a {@code try} too.
-	 */
-	static LispVal withPrecisionOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() >= 2, "with-precision takes a precision and a body");
-		LispVal precision = ctx.lower(items.get(1));
-		List<LispVal> pairs = new ArrayList<>();
-		pairs.add(ClojureLowerUtil.list(ctx.specialValue(ClojureCoreSpecials.required("*math-context*")), precision));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
-				barrierBody(ctx, items, 2));
-	}
-
-	/**
 	 * {@code bound-fn*} as the run-time library calls it: the function and its bindings.
 	 */
 	private static final LispSymbol BOUND_FN_STAR = new LispSymbol("RONTOLISP::%CLOJURE-BOUND-FN*");

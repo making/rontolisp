@@ -77,12 +77,13 @@ final class ClojureClassBases {
 
 	/**
 	 * The superclass of each class a number's {@code class} answers
-	 * ({@code clojure.lisp}, {@code %clojure-number-class}): the number half of the class
-	 * chains, read off clj 1.12.6 on JDK 25 (2026-10-29). {@code Number}'s own is
-	 * {@code Object}.
+	 * ({@code clojure.lisp}, {@code %clojure-number-class}, and a decimal's
+	 * {@code java.math.BigDecimal}): the number half of the class chains, read off clj
+	 * 1.12.6 on JDK 25 (2026-10-29). {@code Number}'s own is {@code Object}.
 	 */
 	static final Map<String, String> NUMBER_SUPERS = Map.of("java.lang.Long", "java.lang.Number", "java.lang.Double",
-			"java.lang.Number", "clojure.lang.Ratio", "java.lang.Number", "clojure.lang.BigInt", "java.lang.Number");
+			"java.lang.Number", "clojure.lang.Ratio", "java.lang.Number", "clojure.lang.BigInt", "java.lang.Number",
+			"java.math.BigDecimal", "java.lang.Number");
 
 	/** The root of the number half. */
 	static final String NUMBER = "java.lang.Number";
@@ -128,7 +129,8 @@ final class ClojureClassBases {
 			Map.entry("java.lang.Double",
 					List.of("java.lang.Comparable", "java.lang.constant.Constable", "java.lang.constant.ConstantDesc")),
 			Map.entry("clojure.lang.Ratio", List.of("java.lang.Comparable")),
-			Map.entry("clojure.lang.BigInt", List.of("clojure.lang.IHashEq")));
+			Map.entry("clojure.lang.BigInt", List.of("clojure.lang.IHashEq")),
+			Map.entry("java.math.BigDecimal", List.of("java.lang.Comparable")));
 
 	/** The interfaces among the tabled classes' supers. */
 	static final Set<String> TABLED_INTERFACES = Set.of("java.io.Serializable", "clojure.lang.IExceptionInfo",

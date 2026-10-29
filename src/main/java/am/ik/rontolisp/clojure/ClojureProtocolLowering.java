@@ -234,6 +234,10 @@ final class ClojureProtocolLowering {
 		// Object default takes it, an arm a program making none sheds
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), one),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
+		// a decimal (its wrapper is a cons) dispatches as its class, like class: an arm a
+		// program making none sheds
+		branches
+			.add(ClojureLowerUtil.list(ClojureDecimalLowering.classTest(one), ClojureDecimalLowering.classKey(one)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),

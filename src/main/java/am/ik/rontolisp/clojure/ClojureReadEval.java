@@ -145,7 +145,7 @@ final class ClojureReadEval {
 				|| ClojureLowerUtil.isSymbolNamed(head, "%hash-set") || head == ClojureReader.REGEX
 				|| head == ClojureReader.RECORD || head == ClojureReader.TAGGED || head == ClojureReader.PENDING_TAG
 				|| head == ClojureReader.READ_EVAL || ClojureLowerUtil.isSymbolNamed(head, ClojureLowerUtil.READER_META)
-				|| ClojureDefaultReaders.isMarker(head);
+				|| ClojureDefaultReaders.isMarker(head) || ClojureDecimalLowering.isMarker(head);
 	}
 
 	/**

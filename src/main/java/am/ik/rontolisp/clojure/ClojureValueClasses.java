@@ -116,6 +116,9 @@ final class ClojureValueClasses {
 		/** {@code clojure.lang.Ratio}. */
 		RATIO(List.of("clojure.lang.Ratio", SERIALIZABLE, COMPARABLE, NUMBER)),
 
+		/** A decimal: {@code java.math.BigDecimal}. */
+		DECIMAL(List.of("java.math.BigDecimal", SERIALIZABLE, COMPARABLE, NUMBER)),
+
 		/** {@code clojure.lang.Keyword}. */
 		KEYWORD(List.of("clojure.lang.Keyword", "clojure.lang.IFn", "clojure.lang.IHashEq", "clojure.lang.Named",
 				SERIALIZABLE, COMPARABLE, RUNNABLE, CALLABLE)),
@@ -330,6 +333,7 @@ final class ClojureValueClasses {
 			case BIGINT -> "clojure.lang.BigInt";
 			case DOUBLE -> "java.lang.Double";
 			case RATIO -> "clojure.lang.Ratio";
+			case DECIMAL -> "java.math.BigDecimal";
 			case KEYWORD -> "keyword";
 			case SYMBOL -> "symbol";
 			case VECTOR, MAP_ENTRY -> "vector";
