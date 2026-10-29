@@ -4,8 +4,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -36,8 +39,8 @@ public final class ClojureRunTime {
 	/**
 	 * The run-time library's functions that hand a lowering verb to the lowering as the
 	 * program runs: {@code %clojure-lower-at-run-time} and every function reaching it. A
-	 * program whose lowered forms name one lowers at run time, so its target, where it
-	 * lowers then, lowers it open.
+	 * program whose run-time code reaches one ({@link #reachesAny}) lowers at run time,
+	 * so its target, where it lowers then, lowers it open.
 	 */
 	public static final Set<String> ENTRIES = Set.of("RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME",
 			"RONTOLISP::%CLOJURE-EVAL", "RONTOLISP::%CLOJURE-RESOLVE", "RONTOLISP::%CLOJURE-FIND-VAR",
@@ -115,22 +118,81 @@ public final class ClojureRunTime {
 	}
 
 	/**
-	 * Whether lowered forms name a run-time library function handing a lowering verb to
-	 * the lowering as the program runs ({@link #ENTRIES}), at any depth.
-	 * @param forms the forms
-	 * @return {@code true} when one is named
+	 * The statements handing a definition's root to a table that never calls it: the
+	 * present expander a {@code defmacro} notes, a redefinition's validate-and-notify and
+	 * a fn's class name. A validator or a watch meets a root only through the var, whose
+	 * object names the root itself, and the class-name table answers names.
 	 */
-	static boolean namesAny(List<LispVal> forms) {
+	private static final Set<String> ROOT_NOTES = Set.of(ClojureStateLowering.NOTE_MACRO_EXPANDER.name(),
+			ClojureStateLowering.VAR_DEFN_NOTIFY.name(), ClojureValueMethodLowering.NOTE_FN_CLASS);
+
+	/**
+	 * Whether a whole program's run-time code reaches a run-time library function handing
+	 * a lowering verb to the lowering ({@link #ENTRIES}): the top-level forms and,
+	 * transitively, every {@code defun} a reached form names. A function runs only where
+	 * a reached form names it -- the run-time library calls none the lowering defines but
+	 * the ex-info, protocol and hierarchy runtimes', which reach no verb -- so a verb a
+	 * macro body names, or a helper only macro bodies call, runs while the program
+	 * lowers: the expanders sit in the note behind each {@code defmacro} and, only for a
+	 * run-time expansion or a read of a macro's root, in the macro runtime's
+	 * {@code C%MACRO-EXPANDER}. Neither the notes ({@link #ROOT_NOTES}) nor a core var a
+	 * namespace's mapping lists is a use: the program names a verb by calling it, taking
+	 * it as a value or taking its var, never by reading a mapping, whose core vars are
+	 * the lowering's own (a verb taken out of one and called over computed arguments
+	 * refuses).
+	 * @param forms the top-level forms of a whole program
+	 * @param mapped the core var forms a namespace's mapping lists, by identity
+	 * @return {@code true} when one is reached
+	 */
+	static boolean reachesAny(List<LispVal> forms, Set<LispVal> mapped) {
+		Map<String, List<LispVal>> definitions = new HashMap<>();
+		Deque<LispVal> pending = new ArrayDeque<>();
+		Deque<LispVal> top = new ArrayDeque<>(forms);
+		while (!top.isEmpty()) {
+			LispVal form = top.pop();
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head) {
+				if (head.name().equals("PROGN")) {
+					List<LispVal> members = new ArrayList<>();
+					for (LispVal rest = cons.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
+						members.add(cell.car());
+					}
+					for (int i = members.size() - 1; i >= 0; i--) {
+						top.push(members.get(i));
+					}
+					continue;
+				}
+				if (head.name().equals("DEFUN") && cons.cdr() instanceof LispCons named
+						&& named.car() instanceof LispSymbol name) {
+					definitions.computeIfAbsent(name.name(), ignored -> new ArrayList<>()).add(form);
+					continue;
+				}
+			}
+			pending.push(form);
+		}
 		Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-		Deque<LispVal> pending = new ArrayDeque<>(forms);
+		Set<String> reached = new HashSet<>();
 		while (!pending.isEmpty()) {
 			LispVal form = pending.pop();
-			while (form instanceof LispCons cons && seen.add(cons)) {
-				pending.push(cons.car());
-				form = cons.cdr();
+			if (form instanceof LispCons cons) {
+				if (!seen.add(cons) || mapped.contains(cons)
+						|| cons.car() instanceof LispSymbol head && ROOT_NOTES.contains(head.name())) {
+					continue;
+				}
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell && (cell == cons || seen.add(cell))) {
+					pending.push(cell.car());
+					rest = cell.cdr();
+				}
+				pending.push(rest);
 			}
-			if (form instanceof LispSymbol symbol && ENTRIES.contains(symbol.name())) {
-				return true;
+			else if (form instanceof LispSymbol symbol) {
+				if (ENTRIES.contains(symbol.name())) {
+					return true;
+				}
+				List<LispVal> defined = definitions.get(symbol.name());
+				if (defined != null && reached.add(symbol.name())) {
+					pending.addAll(defined);
+				}
 			}
 		}
 		return false;

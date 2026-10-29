@@ -356,10 +356,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   what it defines joins the program for the later calls and inputs, but the forms lowered
   before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
   after it, and a name only it defines is unknown to the program's own forms (an `intern`
-  of a quoted name is not: it defines the var where it stands). A program naming such a
-  call lowers open, like a session, so its protocols dispatch through the class walk and
-  a name it only declares stays open. A value no literal spells (a function, an atom)
-  stands in an `eval`'d form as itself, where the oracle embeds a function but refuses an
+  of a quoted name is not: it defines the var where it stands). A program that may make
+  such a call as it runs -- the call itself, or the verb taken as a value or as a var --
+  lowers open, like a session, so its protocols dispatch through the class walk and a name
+  it only declares stays open. A call in a macro body, or in a function only macro bodies
+  call, runs while the program lowers and opens it only where the program also expands
+  macros as it runs or takes that macro's var; a verb taken out of a namespace's mapping
+  (`@(get (ns-map 'user) 'eval)`) never opens it, so called over computed arguments in a
+  program nothing else opens, it throws the `UnsupportedOperationException`. A value no
+  literal spells (a function, an atom) stands in an `eval`'d form as itself, where the
+  oracle embeds a function but refuses an
   atom (`Can't embed object in code`); a form that does not lower throws a
   `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
   `resolve` of a computed symbol run while the program lowers on every backend, and a

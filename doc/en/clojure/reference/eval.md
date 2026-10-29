@@ -11,7 +11,11 @@ literal spells (a function, an atom) stands in the form as itself, and a form th
 lower throws a `clojure.lang.Compiler$CompilerException` with the lowering's words. A JVM
 class does the same: it carries its program and the compiler, lowers the program again at
 its first run-time `eval`, and compiles each form into a class linked against itself, so a
-`.class` output has the compiler beside it and a `.jar` inside it. A wasm module carries no
+`.class` output has the compiler beside it and a `.jar` inside it. Only a program that may
+call `eval` as it runs carries the compiler: the `eval` of a macro body, or of a function
+only macro bodies call, runs while the program lowers and adds none by itself, while a
+program that also expands macros as it runs, or takes that macro's var, may run the body
+again then and carries it. A wasm module carries no
 lowering, so there `eval` at run time throws an `UnsupportedOperationException`. Also names
 a function value.
 

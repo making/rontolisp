@@ -910,7 +910,7 @@ final class ClojureNamespaceLowering {
 				LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + var);
 				if (value != ClojureLowering.NIL_CONST) {
 					pairs.add(quotedSymbol(ctx, var));
-					pairs.add(value);
+					pairs.add(mappedCoreVar(ctx, value));
 				}
 			}
 			return;
@@ -955,7 +955,7 @@ final class ClojureNamespaceLowering {
 			LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + var);
 			if (value != ClojureLowering.NIL_CONST) {
 				pairs.add(quotedSymbol(ctx, var));
-				pairs.add(value);
+				pairs.add(mappedCoreVar(ctx, value));
 			}
 		}
 		ClojureNsState state = ctx.namespaces.get(target);
@@ -964,10 +964,21 @@ final class ClojureNamespaceLowering {
 				LispVal value = ClojureVarLowering.resolved(ctx, ClojureCoreNames.PREFIX + rename.getValue());
 				if (value != ClojureLowering.NIL_CONST) {
 					pairs.add(quotedSymbol(ctx, rename.getKey()));
-					pairs.add(value);
+					pairs.add(mappedCoreVar(ctx, value));
 				}
 			}
 		}
+	}
+
+	/**
+	 * A core var a mapping lists, noted as such: its root is the lowering's own value, so
+	 * the verb's among them -- {@code eval}, {@code require}, {@code ns-map} ... -- is no
+	 * name the program spells, and reading a mapping makes no program lower at run time
+	 * ({@link ClojureRunTime#reachesAny}).
+	 */
+	private static LispVal mappedCoreVar(ClojureLowering ctx, LispVal var) {
+		ctx.mappedCoreVars.add(var);
+		return var;
 	}
 
 	/**

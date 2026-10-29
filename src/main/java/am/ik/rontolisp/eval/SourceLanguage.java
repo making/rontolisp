@@ -182,9 +182,9 @@ public enum SourceLanguage {
 
 	/**
 	 * Reads a whole Clojure program for a run that lowers as the program runs where its
-	 * target does -- the interpreter's and the JVM's: a program naming a lowering verb
-	 * over computed arguments ({@code eval}, a computed {@code resolve} or
-	 * {@code require} ...) lowers open and keeps its lowering
+	 * target does -- the interpreter's and the JVM's: a program whose run-time code
+	 * reaches a lowering verb over computed arguments ({@code eval}, a computed
+	 * {@code resolve} or {@code require} ...) lowers open and keeps its lowering
 	 * ({@link Clojure.Program#runTime}), which the interpreter hands those verbs to
 	 * ({@link LispEvaluator#clojureProgram(Clojure.Program)}) and a compiled JVM class
 	 * lowers again when it first runs one ({@code cli/JvmRunTimeLowering}).

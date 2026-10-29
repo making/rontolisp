@@ -3902,7 +3902,10 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
   `C%MACROEXPAND(-1)` call -- and `C%MACRO-ROOT-OF`, a macro's var root: a whole program
   reading a program macro's root (`#'m`) and expanding nothing at run time carries those two
-  alone (`takesMacroRoots`, `macroRootRuntime`). A program lowering no `macroexpand`/`macroexpand-1` call or
+  alone (`takesMacroRoots`, `macroRootRuntime`), `C%MACRO-EXPANDER` holding only the
+  expanders of the macros whose var it takes outside a macro body (`macroRootsRead`, since
+  2026-10-30: so another macro's body runs only while the program lowers,
+  `.kb/jvm-run-time-lowering.md`, "What opens a program"). A program lowering no `macroexpand`/`macroexpand-1` call or
   value carries none of them (`ClojureLowering.expandsAtRunTime`; until 2026-10-09 every
   `defmacro` spliced them and the pruner took them out), and
   `ClojureLowering.programMacroRuntimeForms` keys them in `LibraryDefunPruner`, so one
@@ -4218,9 +4221,13 @@ library splices the hand-off to the compiler it carries in its place.
   roots, caught bindings and Java faces settle at the site); `repl` -- `*repl*`, the REPL
   refers, `*e`'s class reader. A session is all three; a run-time datum `open` and
   `incremental`.
-- **A program lowers open when it names an entry** (`ClojureRunTime.ENTRIES`, every library
-  function reaching `%clojure-lower-at-run-time`; `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry`
-  keeps the set equal to the library's): `lowerWhole(..., runTimeTarget)` lowers it again with
+- **A program lowers open when its run-time code reaches an entry** (`ClojureRunTime.ENTRIES`,
+  every library function reaching `%clojure-lower-at-run-time`;
+  `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry` keeps the set equal
+  to the library's; `ClojureRunTime.reachesAny`, from the top-level forms through every
+  function a reached form names, so a verb only a macro body or a helper only macro bodies
+  call names runs while the program lowers -- `.kb/jvm-run-time-lowering.md`, "What opens a
+  program"; until 2026-10-30 any lowered form naming one): `lowerWhole(..., runTimeTarget)` lowers it again with
   `open` (and `threadBinders`), for the interpreter and the JVM (`SourceLanguage.readClojure`,
   `features` holding `rontolisp-interpreter` or `rontolisp-jvm`; the JVM's also
   `carriesRuntimes`); the misses still re-lower the whole program.
@@ -4241,7 +4248,9 @@ library splices the hand-off to the compiler it carries in its place.
   leniency's spec.
 - Deviations: forms lowered before the call keep what they lowered against (a redefined
   `defn` reaches only forms below it, as in a session); a quoted `resolve` answers at lower
-  time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
+  time; `in-ns` answers nil; a verb taken out of a namespace's mapping (`@(get (ns-map
+  'user) 'eval)`) and called over computed arguments refuses, as on wasm, unless something
+  else opened the program. Measured against clj 1.12.6: every line of clojure-spec
   `the-interpreter-lowers-at-run-time` and `intern-var-set-and-with-redefs-fn`.
 - Pins: those two cases, `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (the
   wasm backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
