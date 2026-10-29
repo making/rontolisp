@@ -4938,10 +4938,26 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-BD-P X)");
 		// and so does bigdec as a value
 		assertThat(prunedForms("(println (map bigdec [1]))")).contains("(DEFUN RONTOLISP::%CLOJURE-BD-STRING ");
+		// BigDecimal's methods fold on a program making no decimal; where the host is, so
+		// does the view a member that may answer a BigDecimal answers through
+		String methods = "(defn g [x y] [(.add x y) (.scale x) (.setScale x 2) (.compareTo x y) (.sqrt x)])"
+				+ " (println (g 1 2) (.parse (java.text.DecimalFormat.) \"1\"))";
+		assertThat(prunedForms(methods)).doesNotContain("%CLOJURE-BD-");
+		assertThat(prunedForms(methods, false)).doesNotContain("%CLOJURE-BD-");
+		// a construction, a static, a constant and a member declaring a BigDecimal make
+		// one
+		assertThat(prunedForms("(println (BigDecimal/valueOf 1))")).contains("(DEFUN RONTOLISP::%CLOJURE-BD-VALUE-OF ");
+		assertThat(prunedForms("(println java.math.RoundingMode/UP)")).contains("(DEFUN RONTOLISP::%CLOJURE-BD-WRITE ");
+		assertThat(prunedForms("(println (.nextBigDecimal (java.util.Scanner. \"1\")))", false))
+			.contains("(RONTOLISP::%CLOJURE-BD-OF-HOST ");
 	}
 
 	private static String prunedForms(String source) {
-		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false)
+		return prunedForms(source, true);
+	}
+
+	private static String prunedForms(String source, boolean wasm) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, wasm, false)
 			.forms()
 			.stream()
 			.map(LispVal::print)

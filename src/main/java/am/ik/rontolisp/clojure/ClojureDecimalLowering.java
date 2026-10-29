@@ -24,7 +24,12 @@ import org.jspecify.annotations.Nullable;
  * names neither the tag nor a decimal helper once the decimal family's arms are folded
  * ({@link ClojureArms.Family#DECIMAL}): every operator below lowers to its decimal-aware
  * helper, which the fold renames back to the plain operator, so such a program compiles
- * to the bytes it did before decimals existed.
+ * to the bytes it did before decimals existed. {@code BigDecimal}'s methods, its and
+ * {@code MathContext}'s constructions, statics and constants, and the
+ * {@code RoundingMode} constants are values of this front end's own on every backend too
+ * ({@link #methodArm}, {@link #construction}, {@link #staticCall}, {@link #field}); a
+ * {@code BigDecimal} a {@code java:} member answers comes back as a decimal
+ * ({@link #hostAnswer}).
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -282,6 +287,375 @@ final class ClojureDecimalLowering {
 		pairs.add(ClojureLowerUtil.list(ctx.specialValue(ClojureCoreSpecials.required("*math-context*")), context));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
 				ClojureStateLowering.barrierBody(ctx, items, bodyFrom));
+	}
+
+	/** The host class a decimal is the oracle's value of. */
+	static final String HOST = "java.math.BigDecimal";
+
+	/**
+	 * The classes whose values are made here ({@code clojure.lisp}, "Decimal methods"): a
+	 * receiver known to be one may be such a value, so its instance calls keep the value
+	 * arms.
+	 */
+	static final Set<String> CLASSES = Set.of(HOST, "java.math.MathContext", "java.math.RoundingMode");
+
+	/** The tag of a math context's wrapper; quoted data holding it makes one. */
+	static final String CONTEXT_TAG = ":C%MATH-CONTEXT";
+
+	/** The tag of a rounding mode's wrapper; quoted data holding it makes one. */
+	static final String ROUNDING_TAG = ":C%ROUNDING-MODE";
+
+	/** {@code new BigDecimal} of one argument. */
+	static final String NEW = PREFIX + "NEW";
+
+	/** {@code new BigDecimal} of two arguments. */
+	static final String NEW_2 = PREFIX + "NEW-2";
+
+	/** {@code new BigDecimal} of three arguments. */
+	static final String NEW_3 = PREFIX + "NEW-3";
+
+	/** {@code BigDecimal/valueOf} of one argument. */
+	static final String VALUE_OF = PREFIX + "VALUE-OF";
+
+	/** {@code BigDecimal/valueOf} of an unscaled value and a scale. */
+	static final String VALUE_OF_SCALED = PREFIX + "VALUE-OF-SCALED";
+
+	/** {@code new MathContext} of a precision and a rounding mode. */
+	static final String NEW_MATH_CONTEXT = PREFIX + "NEW-MATH-CONTEXT";
+
+	/** {@code RoundingMode/valueOf}. */
+	static final String ROUNDING_MODE_OF = PREFIX + "ROUNDING-MODE-OF";
+
+	/**
+	 * The answer of a {@code java:} member declaring a {@code BigDecimal}, as a decimal:
+	 * a producer, since Java hands the program one.
+	 */
+	static final String OF_HOST = PREFIX + "OF-HOST";
+
+	/**
+	 * The answer of a {@code java:} member whose declared type a {@code BigDecimal} may
+	 * be ({@code Object}, {@code Number} ...), as a decimal when it is one: the family's
+	 * view, the answer itself in a program making no decimal.
+	 */
+	static final String HOST_VIEW = PREFIX + "HOST-VIEW";
+
+	/** The decimal a host {@code BigDecimal} stands for ({@code clojure.lisp}). */
+	private static final String FROM_HOST = PREFIX + "FROM-HOST";
+
+	/**
+	 * The supertypes of {@code BigDecimal}, which a member may declare and answer one.
+	 */
+	private static final Set<String> SUPERTYPES = Set.of("java.lang.Object", "java.lang.Number", "java.lang.Comparable",
+			"java.io.Serializable");
+
+	/** Every producer the family names: the reads, the makers and the tags. */
+	static final Set<String> PRODUCERS = Set.of(TAG, CONTEXT_TAG, ROUNDING_TAG, BIGDEC, BIGDEC_V, MATH_CONTEXT, NEW,
+			NEW_2, NEW_3, VALUE_OF, VALUE_OF_SCALED, NEW_MATH_CONTEXT, ROUNDING_MODE_OF, OF_HOST);
+
+	/**
+	 * A method a value of the family answers on every backend: its kernel
+	 * ({@code clojure.lisp}, called with the receiver, the arguments and the extra
+	 * literal arguments), whether any value of the family takes it (a math context's or a
+	 * rounding mode's method, which refuses a decimal) or only a decimal, and whether it
+	 * answers a boolean.
+	 */
+	private record Method(String kernel, boolean anyValue, boolean bool, List<LispVal> extra) {
+
+	}
+
+	/** The methods, by {@code name/arity}. */
+	private static final Map<String, Method> METHODS = methods();
+
+	private static Map<String, Method> methods() {
+		Map<String, Method> out = new HashMap<>();
+		decimal(out, "SCALE", "scale/0");
+		decimal(out, "M-PRECISION", "precision/0");
+		decimal(out, "UNSCALED", "unscaledValue/0");
+		decimal(out, "SIGNUM", "signum/0");
+		decimal(out, "M-NEGATE", "negate/0", "negate/1");
+		decimal(out, "M-ABS", "abs/0", "abs/1");
+		decimal(out, "M-PLUS", "plus/0", "plus/1");
+		decimal(out, "M-ROUND", "round/1");
+		decimal(out, "SET-SCALE", "setScale/1", "setScale/2");
+		decimal(out, "M-ADD", "add/1", "add/2");
+		decimal(out, "M-SUBTRACT", "subtract/1", "subtract/2");
+		decimal(out, "M-MULTIPLY", "multiply/1", "multiply/2");
+		decimal(out, "M-DIVIDE", "divide/1", "divide/2", "divide/3");
+		decimal(out, "M-REMAINDER", "remainder/1");
+		decimal(out, "M-INTEGRAL", "divideToIntegralValue/1");
+		decimal(out, "M-POW", "pow/1");
+		decimal(out, "M-MAX", "max/1");
+		decimal(out, "M-MIN", "min/1");
+		decimal(out, "MOVE-LEFT", "movePointLeft/1");
+		decimal(out, "MOVE-RIGHT", "movePointRight/1");
+		decimal(out, "SCALE-BY-TEN", "scaleByPowerOfTen/1");
+		decimal(out, "M-COMPARE", "compareTo/1");
+		decimal(out, "STRIP", "stripTrailingZeros/0");
+		decimal(out, "PLAIN-STRING", "toPlainString/0");
+		decimal(out, "ENGINEERING-STRING", "toEngineeringString/0");
+		decimal(out, "ULP", "ulp/0");
+		decimal(out, "DOUBLE", "doubleValue/0", "floatValue/0");
+		decimal(out, "TO-INTEGER", "toBigInteger/0");
+		out.put("equals/1", new Method(PREFIX + "JAVA-EQUAL", false, true, List.of()));
+		Map<String, Integer> widths = Map.of("long", 64, "int", 32, "short", 16, "byte", 8);
+		for (Map.Entry<String, Integer> width : widths.entrySet()) {
+			LispInteger bits = new LispInteger(width.getValue());
+			out.put(width.getKey() + "Value/0", new Method(PREFIX + "INTEGER-VALUE", false, false, List.of(bits)));
+			out.put(width.getKey() + "ValueExact/0", new Method(PREFIX + "EXACT-INTEGER", false, false, List.of(bits)));
+		}
+		out.put("toBigIntegerExact/0",
+				new Method(PREFIX + "EXACT-INTEGER", false, false, List.of(ClojureLowering.NIL_CONST)));
+		for (String[] row : new String[][] { { "GET-PRECISION", "getPrecision/0" },
+				{ "GET-ROUNDING-MODE", "getRoundingMode/0" }, { "MODE-NAME", "name/0" },
+				{ "MODE-ORDINAL", "ordinal/0" } }) {
+			out.put(row[1], new Method(PREFIX + row[0], true, false, List.of()));
+		}
+		return Map.copyOf(out);
+	}
+
+	private static void decimal(Map<String, Method> out, String kernel, String... keys) {
+		for (String key : keys) {
+			out.put(key, new Method(PREFIX + kernel, false, false, List.of()));
+		}
+	}
+
+	/**
+	 * The arm of an instance call for a value of the family ahead of {@code otherwise},
+	 * whose test is a family test, so a program making none folds back to
+	 * {@code otherwise}: a mapped method calls its kernel on every backend; any other
+	 * method {@code BigDecimal} has calls it, where the host is, on the
+	 * {@code BigDecimal} the decimal crosses as (a {@code BigDecimal} it answers coming
+	 * back as a decimal), and is refused by name where it is not (wasm), since the class
+	 * has it. {@code Object}'s methods keep {@code otherwise}, which answers them for
+	 * every value.
+	 * @param ctx the hub
+	 * @param method the method name
+	 * @param designator the method as {@code java:call} names it
+	 * @param recv the bound receiver
+	 * @param args the lowered arguments
+	 * @param otherwise the form for any other receiver
+	 * @return the arm around {@code otherwise}, or {@code otherwise} itself
+	 */
+	static LispVal methodArm(ClojureLowering ctx, String method, String designator, LispSymbol recv, List<LispVal> args,
+			LispVal otherwise) {
+		int n = args.size();
+		Method mapped = METHODS.get(method + "/" + n);
+		LispVal answer;
+		String test = DECIMAL_P;
+		if (mapped != null) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(new LispSymbol(mapped.kernel()));
+			call.add(recv);
+			call.addAll(args);
+			call.addAll(mapped.extra());
+			answer = ClojureLowerUtil.list(call);
+			if (mapped.bool()) {
+				answer = ctx.booleanAnswer(answer);
+			}
+			if (mapped.anyValue()) {
+				test = VALUE_P;
+			}
+		}
+		else if (ClojureValueMethodLowering.declares(List.of("java.lang.Object"), method, n)
+				|| !ClojureValueMethodLowering.declares(List.of(HOST), method, n)) {
+			return otherwise;
+		}
+		else if (ctx.hostTarget) {
+			List<LispVal> parts = new ArrayList<>();
+			parts.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-MEMBER"), recv));
+			parts.add(LispString.literal(designator));
+			parts.addAll(args);
+			LispVal call = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2,
+					ClojureInteropLowering.answersBytes(HOST, designator, n, false));
+			answer = ClojureLowerUtil.list(new LispSymbol(FROM_HOST), call);
+		}
+		else {
+			answer = ClojureValueMethodLowering.refusal(recv, method, false, args);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(test), recv),
+				answer, otherwise);
+	}
+
+	/**
+	 * A construction of a decimal or a math context over already-lowered arguments, on
+	 * every backend: {@code BigDecimal} of a literal string or integer the quoted decimal
+	 * (a string {@code BigDecimal} refuses keeps the run-time read, which refuses it), of
+	 * anything else the kernel of its count; {@code MathContext} of a precision (and a
+	 * rounding mode). Null for any other class or count. Param tags are not read: the
+	 * kernels tell the overloads apart by the arguments, like the oracle's reflection.
+	 * @param cls the resolved class name
+	 * @param args the lowered arguments
+	 * @return the construction, or null
+	 */
+	static @Nullable LispVal construction(String cls, List<LispVal> args) {
+		if (cls.equals(HOST)) {
+			if (args.size() == 1) {
+				LispVal literal = literalOf(args.get(0));
+				return literal != null ? literal : ClojureLowerUtil.list(new LispSymbol(NEW), args.get(0));
+			}
+			String kernel = args.size() == 2 ? NEW_2 : args.size() == 3 ? NEW_3 : null;
+			return kernel == null ? null : ClojureLowerUtil.cons(new LispSymbol(kernel), args);
+		}
+		if (cls.equals("java.math.MathContext")) {
+			return switch (args.size()) {
+				case 1 ->
+					ClojureLowerUtil.list(new LispSymbol(MATH_CONTEXT), args.get(0), LispString.literal("HALF_UP"));
+				case 2 -> ClojureLowerUtil.list(new LispSymbol(NEW_MATH_CONTEXT), args.get(0), args.get(1));
+				default -> null;
+			};
+		}
+		return null;
+	}
+
+	/** The quoted decimal a literal string or integer constructs, or null. */
+	private static @Nullable LispVal literalOf(LispVal arg) {
+		BigDecimal value;
+		try {
+			value = switch (arg) {
+				case LispString string -> new BigDecimal(string.value());
+				case LispInteger small -> BigDecimal.valueOf(small.value());
+				case LispBigInteger big -> new BigDecimal(big.value());
+				default -> null;
+			};
+		}
+		catch (NumberFormatException _) {
+			return null;
+		}
+		return value == null ? null : quoted(value);
+	}
+
+	private static LispVal quoted(BigDecimal value) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(new LispSymbol(TAG),
+				integer(value.unscaledValue()), new LispInteger(value.scale())));
+	}
+
+	/**
+	 * A static call of the family's classes over already-lowered arguments, on every
+	 * backend: {@code BigDecimal/valueOf} of one or two arguments,
+	 * {@code RoundingMode/valueOf}. Null for any other member or count.
+	 * @param cls the resolved class name
+	 * @param member the static member
+	 * @param args the lowered arguments
+	 * @return the call, or null
+	 */
+	static @Nullable LispVal staticCall(String cls, String member, List<LispVal> args) {
+		if (!member.equals("valueOf")) {
+			return null;
+		}
+		if (cls.equals(HOST) && (args.size() == 1 || args.size() == 2)) {
+			return ClojureLowerUtil.cons(new LispSymbol(args.size() == 1 ? VALUE_OF : VALUE_OF_SCALED), args);
+		}
+		if (cls.equals("java.math.RoundingMode") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(ROUNDING_MODE_OF), args.get(0));
+		}
+		return null;
+	}
+
+	/** The legacy {@code BigDecimal.ROUND_} constants, each its mode's ordinal. */
+	private static final List<String> ROUND_CONSTANTS = List.of("UP", "DOWN", "CEILING", "FLOOR", "HALF_UP",
+			"HALF_DOWN", "HALF_EVEN", "UNNECESSARY");
+
+	/**
+	 * A static field of the family's classes as the value it is, on every backend:
+	 * {@code BigDecimal}'s {@code ZERO}, {@code ONE}, {@code TWO} and {@code TEN} and its
+	 * legacy {@code ROUND_} ints, a {@code RoundingMode} constant, {@code MathContext}'s
+	 * {@code DECIMAL32}, {@code DECIMAL64}, {@code DECIMAL128} and {@code UNLIMITED}.
+	 * Null for any other.
+	 * @param cls the resolved class name
+	 * @param member the field
+	 * @return the value, or null
+	 */
+	static @Nullable LispVal field(String cls, String member) {
+		switch (cls) {
+			case HOST:
+				switch (member) {
+					case "ZERO":
+						return quoted(BigDecimal.ZERO);
+					case "ONE":
+						return quoted(BigDecimal.ONE);
+					case "TWO":
+						return quoted(BigDecimal.TWO);
+					case "TEN":
+						return quoted(BigDecimal.TEN);
+					default:
+						int ordinal = member.startsWith("ROUND_") ? ROUND_CONSTANTS.indexOf(member.substring(6)) : -1;
+						return ordinal < 0 ? null : new LispInteger(ordinal);
+				}
+			case "java.math.RoundingMode":
+				return ROUNDING_MODES.contains(member) ? ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+						ClojureLowerUtil.list(new LispSymbol(ROUNDING_TAG), LispString.literal(member))) : null;
+			case "java.math.MathContext":
+				return switch (member) {
+					case "DECIMAL32" -> context(7, "HALF_EVEN");
+					case "DECIMAL64" -> context(16, "HALF_EVEN");
+					case "DECIMAL128" -> context(34, "HALF_EVEN");
+					case "UNLIMITED" -> context(0, "HALF_UP");
+					default -> null;
+				};
+			default:
+				return null;
+		}
+	}
+
+	private static LispVal context(int precision, String mode) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(new LispSymbol(CONTEXT_TAG),
+				new LispInteger(precision), LispString.literal(mode)));
+	}
+
+	/**
+	 * A {@code java:} member's answer as the program reads it where the host is: a member
+	 * declaring a {@code BigDecimal} answers a decimal ({@link #OF_HOST}, which makes the
+	 * program a decimal one), a member whose declared type a {@code BigDecimal} may be
+	 * ({@code Object}, {@code Number}, {@code Comparable}, {@code Serializable}), or one
+	 * the lowering cannot see, answers through the family's view ({@link #HOST_VIEW}),
+	 * which a program making no decimal folds back to the call; any other is the call
+	 * itself.
+	 * @param ctx the hub
+	 * @param call the lowered call
+	 * @param className the class, or null when the receiver's class is unknown
+	 * @param designator the member, perhaps tagged ({@code m(T1,T2)})
+	 * @param arity the argument count
+	 * @param statics whether the call is a static one
+	 * @return the answer
+	 */
+	static LispVal hostAnswer(ClojureLowering ctx, LispVal call, @Nullable String className, String designator,
+			int arity, boolean statics) {
+		if (!ctx.hostTarget) {
+			return call;
+		}
+		String wrapper = HOST_VIEW;
+		ClojureJavaClasses.JavaClass found = className == null ? null : ClojureHostClasses.find(className);
+		if (found != null) {
+			int tagged = designator.indexOf('(');
+			String member = tagged < 0 ? designator : designator.substring(0, tagged);
+			try {
+				boolean seen = false;
+				boolean maybe = false;
+				boolean certain = false;
+				for (ClojureJavaClasses.Member candidate : found.methods()) {
+					if (!candidate.name().equals(member) || statics && !candidate.isStatic()) {
+						continue;
+					}
+					int count = candidate.parameterCount();
+					if (count != arity && !(candidate.isVarArgs() && count - 1 <= arity)) {
+						continue;
+					}
+					seen = true;
+					certain |= candidate.returnType().equals(HOST);
+					maybe |= SUPERTYPES.contains(candidate.returnType());
+				}
+				if (certain) {
+					wrapper = OF_HOST;
+				}
+				else if (seen && !maybe) {
+					return call;
+				}
+			}
+			catch (LinkageError | SecurityException _) {
+				// an unloadable class may answer anything
+			}
+		}
+		return ClojureLowerUtil.list(new LispSymbol(wrapper), call);
 	}
 
 }

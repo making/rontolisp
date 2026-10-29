@@ -1127,8 +1127,9 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
 - Made by an `M` literal (the reader's `(%decimal u s)` marker, `ClojureDecimalLowering`,
   lowered to a quoted wrapper whose tag `:C%DECIMAL` is the producer, so quoted data and a
   macro's answer -- decoded back to the marker -- count), `bigdec` and its value,
-  `with-precision`'s `%clojure-bd-math-context`, and every run-time read (`Reads`: the
-  reader's `M` branch builds one). Family `DECIMAL` (`ClojureArms`, ahead of `HOST`): tests
+  `with-precision`'s `%clojure-bd-math-context`, every run-time read (`Reads`: the
+  reader's `M` branch builds one) and the `java.math` members below
+  (`ClojureDecimalLowering.PRODUCERS`). Family `DECIMAL` (`ClojureArms`, ahead of `HOST`): tests
   `%clojure-bd-p`, `-in-p`, `-value-p`; aliases -- each numeric operator's helper to its
   operator (`%clojure-bd-+` ... `-quot` to `truncate`, `-numberp`, `-rationalp`),
   `-is-decimal` to `progn`, `-number-instance-p` to `%clojure-host-number-p` (which `HOST`
@@ -1177,9 +1178,56 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
   (`demo`, `collections`, `macros`, `state`, `text`) differ only in the two printer changes
   above; a program reading at run time (`bundled-namespaces`, edn) builds the family.
   data.json 2.5.2 writes and reads decimals as the oracle does (`1.50`, `:bigdec true`).
-- Not made: a decimal answers none of `BigDecimal`'s methods (`.setScale`, `.scale` ...), the
-  statics and constructors stay the host's (a host object where a host is), and a
-  `BigDecimal` Java answers stays a host object (`.todo/h06`). An index or count consumer
+- **`BigDecimal`'s members are the values made here** (h06, 2026-10-30;
+  `ClojureDecimalLowering` `methodArm`/`construction`/`staticCall`/`field`/`hostAnswer`,
+  `clojure.lisp` ";;;; Decimal methods"). A rounding mode is `(:C%ROUNDING-MODE "NAME")`, in
+  `%clojure-bd-value-p` beside the math context (printed `#object[java.math.RoundingMode ...]`,
+  `str` its name, `class` `:java.math.RoundingMode`). An instance call is `(if (%clojure-bd-p
+  recv) (KERNEL recv args...) otherwise)` after the value arms (`VALUE_P` for the
+  MathContext/RoundingMode four), so a program making no decimal folds it: `setScale` (a
+  RoundingMode or a legacy `ROUND_` int, UNNECESSARY without one), `scale` `precision`
+  `unscaledValue` `signum` `negate` `abs` `plus` `round`, `add` `subtract` `multiply` (with a
+  MathContext), `divide` (exact, MathContext, mode at its scale, scale and mode),
+  `remainder` `divideToIntegralValue` `pow` `max` `min` `movePointLeft/Right`
+  `scaleByPowerOfTen` `compareTo` `equals` `stripTrailingZeros` `toPlainString`
+  `toEngineeringString` `ulp` and the conversions (`longValue` ... wrapping, the `Exact`
+  ones' `Rounding necessary`/`Overflow`); `toString`/`hashCode` were already the value's. A
+  wrong argument is the oracle's reflector's refusal: `Cannot cast X to java.math.BigDecimal`
+  (a CCE) where the method has one overload of the count, `No matching method` where it has
+  several, an int parameter the reflector's `intValue`. Any other method `BigDecimal` has
+  (`sqrt`, `divideAndRemainder`) runs on the host's object where the host is
+  (`%clojure-bd-from-host` over a `BigDecimal` answer) and is refused by name on wasm.
+  Constructions (`BigDecimal.` of a literal string or integer the quoted decimal, else
+  `%clojure-bd-new`/`-new-2`/`-new-3`: string, integer, double's exact binary value,
+  `(BigInteger, scale)`, any of those under a MathContext; `MathContext.` of 1 or 2),
+  `BigDecimal/valueOf` (a double through its shortest spelling), `RoundingMode/valueOf` and
+  the constants (`ZERO` `ONE` `TWO` `TEN`, the `ROUND_` ints, the RoundingMode names,
+  `DECIMAL32/64/128` `UNLIMITED`) are producers on every backend. A receiver known to be one
+  of the three classes is treated as unknown. A math context or rounding mode crosses into
+  Java as the `java.math` object (`%clojure-bd-host`). The member scans read
+  `java.math.BigDecimal` through `ClojureHostClasses`, so it is a registered image type
+  ("Host classes", `ClojureHostImageTypesTest`).
+- **A `BigDecimal` a member answers is a decimal, but only in a program making decimals**
+  (decided 2026-10-30). Where the host is, a call whose member declares `BigDecimal`
+  (`Scanner.nextBigDecimal`, `ResultSet.getBigDecimal`) is `(%clojure-bd-of-host call)`, a
+  producer; one declaring a supertype (`Object`, `Number`, `Comparable`, `Serializable`) or one
+  the lowering cannot see (an untyped receiver) is `(%clojure-bd-host-view call)`, the family's
+  view, which a program making no decimal folds to the call: such a program's `java:` calls pay
+  nothing, and its `getObject` of a NUMERIC column stays a host object (user doc deviation).
+  The conversion is Lisp-level (`unscaledValue` and `scale` through `java:call`), never in
+  `JavaInterop.unmarshal` or the bridge: `java:` learns no Clojure shape and a Common Lisp
+  program keeps its host object. A `BigDecimal` Java hands a fn (a `Comparator`) and one
+  inside an array stay host objects.
+- Measured first (2026-10-30, every Clojure source in the local `~/.m2` jars): the
+  probes reach constructions above all -- `(BigDecimal. String)` (tools.reader's `M` reader,
+  malli's string->decimal), `(BigDecimal. (.toBigInteger (bigint)) n)` (data.generators'
+  `bigdec`, which needed `.toBigInteger` of an integer: the integer itself), `BigDecimal/valueOf`
+  (spec.alpha's `decimal?` generator), `.unscaledValue`/`.scale` and `(BigDecimal. BigInteger
+  int)` (nippy); next.jdbc names no `BigDecimal` (its NUMERIC column is `getObject`'s `Object`).
+  tools.reader's `read-string "1.5M"` and data.generators' `bigdec` print the oracle's lines on
+  the interpreter and the JVM; on wasm tools.reader refuses before reading any number (`.todo/h07`) and
+  `bigdec` loops (`.todo/h08`).
+- An index or count consumer
   (`nth`, `take`, `drop`, `repeat`, `subvec`, `char`, `dotimes`) refuses a decimal, where the
   oracle intCasts it: the same consumer-arm blast radius as the BigInt flag, for a use money
   code does not make; before g91 `1M` was the integer `1` and passed. `subs`'s bound
@@ -1189,8 +1237,10 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
 - Pins: clojure-spec `decimals-compute-print-and-compare-at-the-oracles-scales`,
   `with-precision-binds-math-context-around-an-exact-body`,
   `radix-integers-and-exact-decimals`, `checked-arithmetic-is-plain-arithmetic-that-never-overflows`
+  `decimal-methods-constructions-and-statics-answer-as-the-oracles-bigdecimal`
   (all four backends, the oracle's lines), `decimal-literals-are-decimals-and-small-bigint-literals-plain-integers`
-  (the in-range deviation); `ClojureLoweringTest#aProgramMakingNoDecimalCarriesNoneOfItsArms`,
+  (the in-range deviation); `ClojureLoweringTest#aProgramMakingNoDecimalCarriesNoneOfItsArms`
+  (the method arms and the view fold too), `ClojureInteropTest#aDecimalCrossesTheJavaBoundaryBothWays`,
   `#charactersRadixAndDecimalsLowerAsTheirValues`, `ClojureReaderTest#decimalsReadAsTheirUnscaledValueAndScale`.
 
 ## Arity refusals
@@ -1631,7 +1681,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | math.combinatorics 0.3.2 | = | = | = | = | no transitive deps; the subsets walk prints a bare empty list, which is `nil` here (the pinned empty-list deviation), so the probe prints counts there |
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
-| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called |
+| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called; h06: `bigdec` prints the oracle's decimals on the interpreter and the JVM (on wasm its `BigInteger.` refusal is caught as a `NumberFormatException` and retried forever, `.todo/h08`) |
 | test.check 1.1.3 | = | = | = | = | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). g31: `Math/abs`, `Long/bitCount` and `Long/numberOfLeadingZeros` of one argument answer portably ("Portable number statics"), `Double/MAX_VALUE` and its siblings load ("Boxed-integer limits ..."), and the seedless `next-rng`'s `proxy` of `ThreadLocal` is the portable single-threaded cell ("Portable ThreadLocal"), so the namespace loads and the 12-call probe -- three seeded `quick-check`s with `:seed` and `:max-size 10`, nine seeded small-valued `gen/generate`s -- prints the oracle's lines on both wasm backends too. The `JAVA:STATIC`+`JAVA:NEW` warnings on both wasm backends come from the double/uuid generators' bodies, off the probe's path. g33 (2026-10-21): the supported boundary is the probe's small-valued set -- `choose` ranges within about 0..25 and seeded `quick-check`s with `:seed` and `:max-size 10` answer on all four backends -- because `int-rose-tree` builds the whole shrink tree eagerly here (`(core/map int-rose-tree (shrink-int value))` over `shrink-long`'s long array, strict under the lazy-or-strict rule; the oracle's `map` is lazy, so only the consumed spine exists there). Measured node counts: 20 for 5, 254 for 10, 37,954 for 20 (pinned by clojure-spec `eager-shrink-trees-answer-only-at-small-magnitudes`), 631,314 for 26 (about 110 s on the interpreter, 2.5 s on the JVM, about a minute on both wasm backends), 3,337,928 for 30 (minutes on the interpreter and wasm, 3.4 s on the JVM), 2.6e9 for 42 and 7.5e26 for 126. So e.g. `(gen/generate (gen/choose 0 100) 5 99)` (drawn 26) crawls past a minute everywhere but the JVM; no laziness story: changing it would change global `map` strictness (the lazy-or-strict pins and their performance basis stand). g32: `clojure.test.check.clojure-test` loads on all four (`do-report`/`report` over the test runtime, `*testing-vars*`, the lower-time `assert-expr` method, `instance?` of `clojure.lang.MultiFn` answering false), and a passing and a failing `defspec` under `run-tests` count and report like the oracle's on the interpreter and the JVM (one stderr line, `report is not a multimethod`, where the oracle prints the trial/shrinking/complete/shrunk progress; the `:file`/`:line` names host frames, not the test file). On wasm the failing one reports as an error, still counted: test.check's file-and-line reads the host thread's stack (`Thread/currentThread`, a call-time error where no host is) |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s); g32: the `properties` macros (`defprop-roundtrip`, `defprop-idempotent`) expand and their test.check `defspec`s pass on the interpreter and the JVM (one stderr line from the check integration, as above). The JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |

@@ -20,7 +20,7 @@ throwable クラス（`Exception`、`IllegalArgumentException`、`clojure.lang.E
 バックエンドでもそのクラスと上位型で検査するので、`(instance? java.io.File (java.io.File. "x"))`
 と `(instance? java.io.Closeable (clojure.java.io/input-stream f))` は `true` です。インタプリタと
 JVM ではホストのオブジェクトをホストのクラスで検査するので、
-`(instance? Number (java.math.BigDecimal. "1"))` は `true` です。ここではどの値もインスタンスに
+`(instance? java.util.RandomAccess (java.util.ArrayList.))` は `true` です。ここではどの値もインスタンスに
 ならないクラス（`Integer`）は `false`、どのクラスでもない名前は `unknown name` になります。
 
 ローカルや var に入れたクラスや計算したクラス（`(def t (type (->R)))`、`(instance? (class x) y)`）

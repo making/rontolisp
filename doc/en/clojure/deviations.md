@@ -102,12 +102,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's toString); a `biginteger` past it prints the `N` too, where the oracle's
   `BigInteger` prints none. An integer answers `BigInteger`'s `.negate` and `.bitLength`, a
   `Long` too (the oracle's refuses them).
-- A decimal (`1.50M`, `bigdec`, a read of one) is the oracle's `BigDecimal` in its scale,
-  spelling, arithmetic, comparisons, hash and `with-precision` rounding, and Java takes it as
-  a `java.math.BigDecimal`, but it answers none of its Java methods (`.setScale`, `.scale`,
-  `.toPlainString` ...), a `BigDecimal` Java answers stays a host object, and
-  `(BigDecimal. "1.5")` and `BigDecimal/valueOf` make a host object where a host is, no
-  decimal. Where an index or a count is read (`nth`, `take`, `drop`, `repeat`, `subvec`,
+- A decimal (`1.50M`, `bigdec`, a read of one, `(BigDecimal. "1.5")`, `BigDecimal/valueOf`)
+  is the oracle's `BigDecimal` in its scale, spelling, arithmetic, comparisons, hash,
+  `with-precision` rounding and Java methods, and Java takes it as a `java.math.BigDecimal`.
+  A `BigDecimal` method beyond the common ones (`.sqrt`, `.divideAndRemainder`) runs only
+  where a host is. A `BigDecimal` Java answers is a decimal where the member declares
+  `BigDecimal`; where it declares `Object` or `Number` (JDBC's `getObject`) it is one only in
+  a program that makes a decimal itself, and stays a host object otherwise. A wrong argument
+  to a method on a literal receiver (`(.add 1.5M 2)`) is the reflector's refusal, where the
+  oracle's compiler casts it. A `MathContext` or `RoundingMode` prints without its identity
+  hash. Where an index or a count is read (`nth`, `take`, `drop`, `repeat`, `subvec`,
   `char`, `dotimes`) a decimal refuses, where the oracle casts it to an int; `subs` and
   `range` take it.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the

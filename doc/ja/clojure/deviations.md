@@ -99,11 +99,15 @@
  （`str` はオラクルの toString と同じく付けません）。範囲を超える `biginteger` も `N` 付きで
  印字されます（オラクルの `BigInteger` は付けません）。整数は `BigInteger` の `.negate` と
  `.bitLength` に答えます。`Long` でも答えます（オラクルは拒否します）。
-- 10 進数（`1.50M`、`bigdec`、その読み取り）は、スケール・綴り・演算・比較・ハッシュ・
- `with-precision` の丸めがオラクルの `BigDecimal` と同じで、Java には `java.math.BigDecimal`
- として渡ります。ただし Java のメソッド（`.setScale`・`.scale`・`.toPlainString` など）には
- 答えず、Java が返す `BigDecimal` はホストオブジェクトのままで、`(BigDecimal. "1.5")` と
- `BigDecimal/valueOf` はホストのある所ではホストオブジェクトを作り、10 進数にはなりません。
+- 10 進数（`1.50M`、`bigdec`、その読み取り、`(BigDecimal. "1.5")`、`BigDecimal/valueOf`）は、
+ スケール・綴り・演算・比較・ハッシュ・`with-precision` の丸め・Java のメソッドがオラクルの
+ `BigDecimal` と同じで、Java には `java.math.BigDecimal` として渡ります。よく使うもの以外の
+ `BigDecimal` のメソッド（`.sqrt`・`.divideAndRemainder`）はホストのある所でだけ動きます。
+ Java が返す `BigDecimal` は、メンバーの宣言が `BigDecimal` なら 10 進数になります。宣言が
+ `Object` や `Number`（JDBC の `getObject`）なら、プログラム自身が 10 進数を作る場合だけ
+ 10 進数になり、それ以外ではホストオブジェクトのままです。リテラルを受け手とするメソッドに
+ 誤った引数を渡すと（`(.add 1.5M 2)`）リフレクタの拒否になります（オラクルはコンパイラが
+ キャストします）。`MathContext` と `RoundingMode` は識別ハッシュなしで印字されます。
  添字や個数を読む所（`nth`・`take`・`drop`・`repeat`・`subvec`・`char`・`dotimes`）では 10 進数を
  拒否します（オラクルは int に変換します）。`subs` と `range` は受け付けます。
 
