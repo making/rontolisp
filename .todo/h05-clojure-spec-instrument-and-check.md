@@ -19,8 +19,8 @@ program runs) reaches test.check from a project's `deps.edn`, so `(gen/sample (s
    `int-rose-tree` builds the whole shrink tree eagerly here (`.kb/clojure-frontend.md`,
    "Library probes", test.check, g33).
 3. `stest/check` runs both, plus `quick-check` over the fspec's generator.
-4. A compiled program refuses the run-time `require`/`resolve` (`.todo/h00` is the JVM's
-   half; wasm keeps the refusal).
+4. A wasm module refuses the run-time `require`/`resolve`; a JVM class lowers them as it
+   runs (`.kb/jvm-run-time-lowering.md`).
 
 Done when the probe's `instrument`/`unstrument` lines and a seeded `check` of a small
-`fdef` print the oracle's lines on the interpreter (and the JVM once `h00` lands).
+`fdef` print the oracle's lines on the interpreter and the JVM.

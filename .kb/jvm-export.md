@@ -84,6 +84,7 @@ lists (`JvmRuntimeClassFilesTest` names them all):
 | `JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES` | an `open` that can ask for `:direction :io` / `:if-exists :overwrite` (`LispMacroExpander.opensBidirectionally`, `.kb/read-load-streams.md`) | `RontoIoFileStream` -- the interpreter runs the same class |
 | `JvmJavaImplementations.RUNTIME_CLASS_FILES` | `java:handle` or `java:view` (`JvmLispCompiler.needsJavaValueRuntime`, `.kb/java-interop.md` "Handles and views") | `RontoJavaValue`, `RontoJavaCalls`, `RontoJavaHandle`, `RontoJavaNumberHandle` -- the interpreter makes the same classes |
 | `JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES` | `java:view` (`needsJavaViewRuntime`) | the four `RontoJava*View` classes |
+| `cli/RunTimeCompilerFiles` (added by `JvmSourceCompiler`, not the backend) | a Clojure program that lowers as it runs (a host, `.kb/jvm-run-time-lowering.md`) | every class and resource of the build that compiled it -- the compiler the class hands its lowering verbs to; none from a native image, which warns |
 
 Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `RontoLispCli`
 (beside `-o X.class`, INSIDE `-o X.jar`) and `LispSourceSet` (plugin, `target/classes`);

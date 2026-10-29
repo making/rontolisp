@@ -776,15 +776,14 @@ class ClojureProjectNamespacesTest {
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Could not locate app/nope.clj or app/nope.cljc on the source path: ");
 		// a computed path loads when the call runs on the interpreter, which keeps the
-		// program's lowering; a compiled program refuses it there (a lower-time refusal
-		// until 2026-10-29)
+		// program's lowering, and in a JVM class, which lowers it again (a lower-time
+		// refusal until 2026-10-29, the class's run-time refusal until 2026-10-30)
 		Path computed = entry("ld2.clj", """
 				(ns app.ld2)
 				(println (try (load (str "ld/" "part3")) (catch UnsupportedOperationException e (ex-message e))))
 				""");
 		assertThat(interpret(computed)).isEqualTo("loading part3 app.ld2\nnil\n");
-		assertThat(runOnJvm(computed, "LoadComputed")).isEqualTo(
-				"load of a computed path is not supported at run time: only literal paths load, where the call stands\n");
+		assertThat(runOnJvm(computed, "LoadComputed")).isEqualTo("loading part3 app.ld2\nnil\n");
 	}
 
 	/**

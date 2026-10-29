@@ -1094,6 +1094,7 @@ public final class RontoLispCli {
 			.build());
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
+		String runTimeImage = frontend.runTimeImage();
 		boolean serve = frontend.serve();
 		boolean witWorld = frontend.witWorld();
 		byte[] bytes;
@@ -1208,7 +1209,7 @@ public final class RontoLispCli {
 				.javaClasspath(javaClassPath.entries())
 				.warnJavaReflection(javaResolution.warnReflection())
 				.javaStatic(javaResolution.javaStatic())
-				.compileProgram(program, features);
+				.compileProgram(program, features, runTimeImage);
 			jvmClassName = compiled.internalClassName();
 			bytes = compiled.classBytes();
 			jvmRuntimeClasses = compiled.runtimeClasses();

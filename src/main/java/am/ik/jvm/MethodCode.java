@@ -1080,6 +1080,23 @@ public final class MethodCode {
 		return this.emit(Opcode.GETSTATIC, 0, field);
 	}
 
+	/**
+	 * Points every {@code putstatic} the body writes at the field the function answers,
+	 * where it answers one: a write stays the same instruction, so no position moves.
+	 * @param retarget a written field to the field the write goes to instead, or null to
+	 * keep it
+	 */
+	public void retargetFieldWrites(java.util.function.Function<FieldRefEntry, @Nullable FieldRefEntry> retarget) {
+		for (int i = 0; i < this.count; i++) {
+			if ((this.ops[i] & 0xFF) == Opcode.PUTSTATIC.bytecode() && this.refs[i] instanceof FieldRefEntry field) {
+				FieldRefEntry target = retarget.apply(field);
+				if (target != null) {
+					this.refs[i] = target;
+				}
+			}
+		}
+	}
+
 	public MethodCode putstatic(FieldRefEntry field) {
 		return this.emit(Opcode.PUTSTATIC, 0, field);
 	}

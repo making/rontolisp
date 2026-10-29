@@ -532,6 +532,12 @@ final class JvmExprCompiler {
 					JvmVersionCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (JvmRunTimeLinkCompiler.handles(qn.member())) {
+					// A Clojure lowering verb at run time, and the forms compiled for it
+					// (JvmLinkage).
+					JvmRunTimeLinkCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
 				if (LispNames.FETCH.equals(qn.member())) {
 					JvmFetchCompiler.compile(cons, ctx, className);
 					return;
