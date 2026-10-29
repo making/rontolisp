@@ -342,7 +342,11 @@
                  (if (and (consp x)
                           (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
                      (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
-                     nil))
+                     nil)
+                 (if (rontolisp::%clojure-lisp-value-p x)
+                     nil
+                     (rontolisp::%clojure-host-print-method x
+                      rontolisp::%clojure-print-methods)))
              nil)))
     (if method
         (progn
@@ -350,6 +354,38 @@
             (funcall method x stream))
           t)
         nil)))
+
+(defun rontolisp::%clojure-host-print-method (x table)
+  "The method TABLE (the print-method or the print-dup methods) holds for the
+   class of the host object X, or for the nearest of its supers it holds one
+   for -- the superclasses first, then their interfaces breadth first -- under
+   the binary name; NIL without one. The oracle's own methods for the instant
+   and UUID classes end the walk at their class: a program's Date method leaves
+   a Timestamp to the oracle's Timestamp method, which is the printer's own
+   here. A host arm like %clojure-host-class: a program with no java:
+   operator, where no host object exists, gets a body answering NIL."
+  (handler-case (let ((found nil) (own nil) (interfaces nil))
+                  (do ((c
+                        (java:call x "getClass")
+                        (java:call c "getSuperclass")))
+                      ((or found own (null c)))
+                    (let ((name (java:call c "getName")))
+                      (setq found (gethash name table))
+                      (setq own
+                            (member name
+                                    '("java.util.Date" "java.sql.Timestamp"
+                                      "java.util.Calendar" "java.util.UUID")
+                                    :test #'equal)))
+                    (setq interfaces
+                          (append interfaces (java:call c "getInterfaces"))))
+                  (if own (setq interfaces nil))
+                  (do ()
+                      ((or found (null interfaces)) found)
+                    (let ((i (car interfaces)))
+                      (setq interfaces
+                       (append (cdr interfaces) (java:call i "getInterfaces")))
+                      (setq found (gethash (java:call i "getName") table)))))
+    (error () nil)))
 
 (defun rontolisp::%clojure-print-method (x writer)
   "print-method called: X written to WRITER through its type's print-method, or
@@ -823,8 +859,12 @@
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
         ;; an integer, string, character, float and keyword carry no metadata, are
-        ;; no collection and have no label: they skip every kind test below
-        ((integerp x) (princ x stream))
+        ;; no collection and have no label: they skip every kind test below. An
+        ;; integer no long holds is the oracle's BigInt, whose print-method writes
+        ;; an N after it under print and pr alike
+        ((integerp x)
+         (princ x stream)
+         (if (not (typep x '(signed-byte 64))) (write-char #\N stream)))
         ((stringp x)
          (if readable
              (rontolisp::%clojure-write-readable-string x stream)
@@ -845,6 +885,10 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ;; a decimal carries no metadata either and writes its M under print and
+        ;; pr alike, a math context its #object: an arm of the decimal family
+        ((rontolisp::%clojure-bd-value-p x)
+         (rontolisp::%clojure-bd-write x readable stream))
         ;; a record or deftype a program defined a print-method for writes through
         ;; it, ahead of its metadata and the flags, like the oracle's dispatch: an
         ;; arm a program defining none folds
@@ -1062,6 +1106,13 @@
          (cond ((null x) nil-replacement)
                ((stringp x) x)
                ((characterp x) (string x))
+               ;; an integer's digits, a BigInt's too: the N is its print-method's
+               ;; alone, never its toString's
+               ((integerp x) (princ-to-string x))
+               ;; a decimal's toString (the M is print's alone), a math context's:
+               ;; an arm of the decimal family
+               ((rontolisp::%clojure-bd-value-p x)
+                (rontolisp::%clojure-bd-to-string x))
                ;; a symbol carrying metadata: its name, the oracle's toString,
                ;; with no metadata under *print-meta*: an arm of the symbol-meta
                ;; family
@@ -1321,10 +1372,40 @@
   "When true, the printer skips a program print-method: print-dup's side.")
 
 (defun rontolisp::%clojure-print-dup-to (x w)
-  "(print-dup x w): X printed as pr prints it, on W -- except an array map
-   (eight or fewer entries) and the sorted collections, which print as the
-   oracle's readable #= constructions; answers nil. A program print-method
-   never applies: the oracle's print-dup is its own multimethod."
+  "(print-dup x w): X written through the print-dup method a program defined
+   for its record, deftype or host class, else printed as pr prints it, on W --
+   except an array map (eight or fewer entries) and the sorted collections,
+   which print as the oracle's readable #= constructions; answers nil. A
+   program print-method never applies: the oracle's print-dup is its own
+   multimethod."
+  (let ((method (rontolisp::%clojure-print-dup-method x)))
+    (if method
+        (funcall method x w)
+        (rontolisp::%clojure-print-dup-default x w)))
+  nil)
+
+;; The print-dup methods a program defines, by the tag print-method stores under
+;; (a record's or deftype's tag, a host class's binary name), written when the
+;; defmethod runs. The oracle's print-dup dispatches on the class alone, so a
+;; :type keyword's row is never read.
+(defvar rontolisp::%clojure-print-dups (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-print-dup-row (tag method)
+  "Store METHOD as the print-dup of the type whose tag is TAG; answers nil."
+  (setf (gethash tag rontolisp::%clojure-print-dups) method)
+  nil)
+
+(defun rontolisp::%clojure-print-dup-method (x)
+  "The print-dup method a program defined for X's record or deftype, or for
+   the host class of the host object X or its nearest super; NIL without one."
+  (cond ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
+         (gethash (car (cdr x)) rontolisp::%clojure-print-dups))
+        ((rontolisp::%clojure-lisp-value-p x) nil)
+        (t (rontolisp::%clojure-host-print-method x
+            rontolisp::%clojure-print-dups))))
+
+(defun rontolisp::%clojure-print-dup-default (x w)
+  "print-dup's own writing of X on W, no program method applying."
   (cond ((and (hash-table-p x) (<= (hash-table-count x) 8))
          (write-string "#=(" w)
          (write-string (rontolisp::%clojure-class-name-of x) w)
@@ -1860,13 +1941,15 @@
    to its edge, which the verb then refuses as outside the string); anything
    else, an integer included, is left to the verb."
   (cond ((integerp x) x)
-        ((floatp x)
-         (cond ((/= x x) 0)
-               ((>= x 2147483647.0) 2147483647)
-               ((<= x -2147483648.0) -2147483648)
-               (t (truncate x))))
-        ((rationalp x) (truncate x))
-        (t x)))
+   ((floatp x)
+    (cond ((/= x x) 0)
+          ((>= x 2147483647.0) 2147483647)
+          ((<= x -2147483648.0) -2147483648)
+          (t (truncate x))))
+   ((rationalp x) (truncate x))
+   ;; a decimal truncated toward zero too: an arm of the decimal family
+   ((rontolisp::%clojure-bd-p x) (truncate (rontolisp::%clojure-bd-rational x)))
+   (t x)))
 
 (defun rontolisp::%clojure-string-bound-number (x reflective)
   "X when it is a number, the bound of subs, .substring and .charAt; any other
@@ -2267,44 +2350,44 @@
 ;; map; a function the oracle's base class, its own being a compiler-made name.
 (defun rontolisp::%clojure-class-name-of (x)
   (cond ((stringp x) "java.lang.String")
-        ((characterp x) "java.lang.Character")
-        ((integerp x)
-         (if (typep x '(signed-byte 64))
-             "java.lang.Long"
-             "clojure.lang.BigInt"))
-        ((floatp x) "java.lang.Double")
-        ((or (eq x t) (eq x rontolisp::%clojure-false)) "java.lang.Boolean")
-        ((functionp x) "clojure.lang.AFunction")
-        ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-class-name x))
-        ((rontolisp::%clojure-stream-p x) (rontolisp::%clojure-stream-class x))
-        ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
-        ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
-        ((rontolisp::%clojure-sorted-map-p x) "clojure.lang.PersistentTreeMap")
-        ((rontolisp::%clojure-sorted-set-p x) "clojure.lang.PersistentTreeSet")
-        ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
-        ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
-              (stringp (nth 4 x)))
-         (nth 4 x))
-        ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
-        ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
-        ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
-        ((rontolisp::%clojure-instant-p x)
-         (rontolisp::%clojure-instant-class-name x))
-        ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
-        ((rontolisp::%clojure-bytes-p x) "[B")
-        ((rontolisp::%clojure-transient-p x)
-         (rontolisp::%clojure-transient-class-name x))
-        ((rontolisp::%clojure-seq-iterator-p x) "clojure.lang.SeqIterator")
-        ((rontolisp::%clojure-meta-symbol-p x) "clojure.lang.Symbol")
-        ((and (consp x) (keywordp (car x))) "java.lang.Object")
-        ((consp x) "clojure.lang.PersistentList")
-        ((hash-table-p x)
-         (if (> (hash-table-count x) 8)
-             "clojure.lang.PersistentHashMap"
-             "clojure.lang.PersistentArrayMap"))
-        ((vectorp x) "clojure.lang.PersistentVector")
-        ((rationalp x) "clojure.lang.Ratio")
-        (t "clojure.lang.Symbol")))
+   ((characterp x) "java.lang.Character")
+   ((integerp x)
+    (if (typep x '(signed-byte 64)) "java.lang.Long" "clojure.lang.BigInt"))
+   ((floatp x) "java.lang.Double")
+   ((or (eq x t) (eq x rontolisp::%clojure-false)) "java.lang.Boolean")
+   ((functionp x) "clojure.lang.AFunction")
+   ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-class-name x))
+   ((rontolisp::%clojure-stream-p x) (rontolisp::%clojure-stream-class x))
+   ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
+   ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
+   ((rontolisp::%clojure-sorted-map-p x) "clojure.lang.PersistentTreeMap")
+   ((rontolisp::%clojure-sorted-set-p x) "clojure.lang.PersistentTreeSet")
+   ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
+   ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+         (stringp (nth 4 x)))
+    (nth 4 x))
+   ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
+   ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
+   ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+   ((rontolisp::%clojure-instant-p x)
+    (rontolisp::%clojure-instant-class-name x))
+   ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
+   ((rontolisp::%clojure-bytes-p x) "[B")
+   ((rontolisp::%clojure-transient-p x)
+    (rontolisp::%clojure-transient-class-name x))
+   ((rontolisp::%clojure-seq-iterator-p x) "clojure.lang.SeqIterator")
+   ((rontolisp::%clojure-meta-symbol-p x) "clojure.lang.Symbol")
+   ;; a decimal or a math context: an arm of the decimal family
+   ((rontolisp::%clojure-bd-value-p x) (rontolisp::%clojure-bd-class-name x))
+   ((and (consp x) (keywordp (car x))) "java.lang.Object")
+   ((consp x) "clojure.lang.PersistentList")
+   ((hash-table-p x)
+    (if (> (hash-table-count x) 8)
+        "clojure.lang.PersistentHashMap"
+        "clojure.lang.PersistentArrayMap"))
+   ((vectorp x) "clojure.lang.PersistentVector")
+   ((rationalp x) "clojure.lang.Ratio")
+   (t "clojure.lang.Symbol")))
 
 ;; clojure.datafy's :clojure.datafy/class of X: the oracle's class name, an
 ;; exception's (or a host throwable's) too, which a datafy of one reaches only
@@ -2856,6 +2939,9 @@
    ((and (floatp a) (floatp b))
     ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
     (= a b))
+   ;; a decimal is = to a decimal of its value whatever either's scale, and to
+   ;; no other number: an arm of the decimal family
+   ((rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-equal a b))
    ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
     (rontolisp::%clojure-sorted-equal a b))
    ((rontolisp::%clojure-reader-value-p a)
@@ -2889,6 +2975,9 @@
              (rontolisp::%clojure-truthy
               (funcall (rontolisp::%clojure-interface-entry a "equals") a b))))
         ((rontolisp::%clojure-typed-opaque-p a) (eq a b))
+        ;; a decimal equals a decimal of its value and scale, BigDecimal.equals:
+        ;; an arm of the decimal family
+        ((rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-java-equal a b))
         ((and (rontolisp::%clojure-is-map a) (rontolisp::%clojure-is-map b))
          (rontolisp::%clojure-map-java-equal a b))
         ((and (rontolisp::%clojure-sequential-p a)
@@ -3502,6 +3591,11 @@
    ;; themselves on the interpreter, a copy written back after the call compiled;
    ;; an arm a program making no byte array folds
    ((rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes))
+   ;; a decimal: the java.math.BigDecimal of its value and scale, a Number to
+   ;; every member taking one, like the oracle's; an arm a program making no
+   ;; decimal folds
+   ((rontolisp::%clojure-bd-p x)
+    (java:new "java.math.BigDecimal" (rontolisp::%clojure-bd-string x)))
    ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
    ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
    ((consp x) (rontolisp::%clojure-host-seq-view x))
@@ -3778,7 +3872,10 @@
                   (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)
                       (rontolisp::%clojure-sorted-p k)
                       (rontolisp::%clojure-reader-value-p k)
-                      (rontolisp::%clojure-typed-key-p k)))
+                      (rontolisp::%clojure-typed-key-p k)
+                      ;; a decimal finds a decimal of its value, whatever
+                      ;; either's scale: an arm of the decimal family
+                      (rontolisp::%clojure-bd-p k)))
                  (t t))))
         ((vectorp k) (not (stringp k)))
         (t (hash-table-p k))))
@@ -3929,6 +4026,10 @@
           ;; is =: an arm of the symbol-meta family
           ((rontolisp::%clojure-meta-symbol-p x)
            (rontolisp::%clojure-hash (car (cdr x))))
+          ;; a decimal by its value without trailing zeros, so = decimals of
+          ;; different scales hash alike: an arm of the decimal family
+          ((rontolisp::%clojure-bd-p x)
+           (logand (rontolisp::%clojure-bd-hasheq x) 1048575))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -3956,6 +4057,10 @@
   (cond ((vectorp k) 0)
         ((rontolisp::%clojure-lazy-p k) 1)
         ((rontolisp::%clojure-typed-key-p k) (rontolisp::%clojure-typed-kind k))
+        ;; a decimal's scale, a double no other kind is: the = decimals of a class
+        ;; differ only by it, so a key keeps its own spelling (1.50M stays 1.50M
+        ;; beside a stored 1.5M), like the oracle's: an arm of the decimal family
+        ((rontolisp::%clojure-bd-p k) (float (car (cdr (cdr k)))))
         ((consp k)
          (if (keywordp (car k)) (if (rontolisp::%clojure-sorted-p k) 4 3) 2))
         (t 3)))
@@ -4651,6 +4756,12 @@
    ;; family
    ((rontolisp::%clojure-meta-symbol-p x)
     (rontolisp::%clojure-atom-hash (car (cdr x)) eq))
+   ;; a decimal's hasheq is its value's without trailing zeros, its hashCode
+   ;; its unscaled value's and scale's: an arm of the decimal family
+   ((rontolisp::%clojure-bd-p x)
+    (if eq
+        (rontolisp::%clojure-bd-hasheq x)
+        (rontolisp::%clojure-bd-hash-code (car (cdr x)) (car (cdr (cdr x))))))
    (t (%identity-hash x))))
 
 (defun rontolisp::%clojure-atom-hash (x eq)
@@ -9949,7 +10060,11 @@
       (let ((v x) (kv (funcall k x)))
         (dolist (w more v)
           (let ((kw (funcall k w)))
-            (if (if greatest (>= kw kv) (<= kw kv))
+            ;; the comparisons' decimal-aware helpers, the plain ones in a program
+            ;; making no decimal (the decimal family's aliases)
+            (if (if greatest
+                    (rontolisp::%clojure-bd->= kw kv)
+                    (rontolisp::%clojure-bd-<= kw kv))
                 (progn
                   (setq v w)
                   (setq kv kw))))))))
@@ -10281,22 +10396,35 @@
 ;; calls do), so a captured old function introspects what it calls, like the
 ;; oracle's old multimethod object answering its own tables. The Object slot
 ;; is rebound (never edited), so the record carries only a clearer closure
-;; over it.
+;; over it. The record also answers clojure.lang.MultiFn's dispatchFn (a getter
+;; over the dispatch function) and getMethod (a finder of one run-time dispatch
+;; value's method, the dispatcher's own search: spec.alpha's multi-spec).
 
 (defvar rontolisp::%clojure-multimethods
   (make-hash-table :test 'eq)
-  "A dispatch function to its (methods-getter prefers-getter clearer), made
-   by every defmulti beside its tables.")
+  "A dispatch function to its (methods-getter prefers-getter clearer
+   dispatch-getter finder), made by every defmulti beside its tables.")
 
 (defun rontolisp::%clojure-register-multimethod
-    (name fn methods prefers clearer)
+    (name fn methods prefers clearer dispatch finder)
   "Register FN's table getters, answering NAME (what defun answers, so a
-   defmulti answers what it answered before the registry existed). METHODS and
-   PREFERS are zero-argument closures over the method and prefers globals,
-   CLEARER one zeroing the Object slot."
+   defmulti answers what it answered before the registry existed). METHODS,
+   PREFERS and DISPATCH are zero-argument closures over the method and prefers
+   globals and the dispatch function, CLEARER one zeroing the Object slot,
+   FINDER one of a run-time dispatch value answering its method or nil."
   (setf (gethash fn rontolisp::%clojure-multimethods)
-        (list methods prefers clearer))
+        (list methods prefers clearer dispatch finder))
   name)
+
+(defun rontolisp::%clojure-multifn-dispatch-fn (fn)
+  "MultiFn.dispatchFn of the multimethod FN's dispatch function: the dispatch
+   function as the defmulti wrote it. FN is registered."
+  (funcall (nth 3 (gethash fn rontolisp::%clojure-multimethods))))
+
+(defun rontolisp::%clojure-multifn-get-method (fn dv)
+  "MultiFn.getMethod of the multimethod FN's dispatch function: the method
+   the run-time dispatch value DV reaches, or nil. FN is registered."
+  (funcall (nth 4 (gethash fn rontolisp::%clojure-multimethods)) dv))
 
 ;; Simple class names to the kind keyword spelling a class spelling stores
 ;; under (clojure/ClojureDispatchLowering, DISPATCH_CLASS_KEYWORDS): a
@@ -11040,18 +11168,26 @@
 (defun rontolisp::%clojure-is-infinite (x)
   "infinite?: a double past either end of the range; any other number is
    finite, anything else signals, like the oracle's cast."
-  (if (numberp x)
-      (and (floatp x)
-       (or (> x most-positive-double-float) (< x most-negative-double-float)))
-      (rontolisp::%clojure-class-cast-exception-of "infinite? needs a number"
-                                                   x)))
+  ;; a decimal is finite: an arm of the decimal family
+  (if (rontolisp::%clojure-bd-p x)
+      nil
+      (if (numberp x)
+          (and (floatp x)
+               (or (> x most-positive-double-float)
+                   (< x most-negative-double-float)))
+          (rontolisp::%clojure-class-cast-exception-of
+           "infinite? needs a number" x))))
 
 (defun rontolisp::%clojure-is-nan (x)
   "NaN?: a double that is not = to itself; anything else that is no number
    signals, like the oracle's cast."
-  (if (numberp x)
-      (and (floatp x) (/= x x))
-      (rontolisp::%clojure-class-cast-exception-of "NaN? needs a number" x)))
+  ;; a decimal is a number: an arm of the decimal family
+  (if (rontolisp::%clojure-bd-p x)
+      nil
+      (if (numberp x)
+          (and (floatp x) (/= x x))
+          (rontolisp::%clojure-class-cast-exception-of "NaN? needs a number"
+                                                       x))))
 
 (defun rontolisp::%clojure-is-ident (x)
   "ident?: a keyword or a symbol, one carrying metadata too."
@@ -11739,6 +11875,10 @@
    ((null a) -1)
    ((null b) 1)
    ((and (numberp a) (numberp b)) (cond ((< a b) -1) ((< b a) 1) (t 0)))
+   ;; a decimal orders against any number by value, the oracle's
+   ;; Numbers.compare: an arm of the decimal family
+   ((or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+    (rontolisp::%clojure-bd-compare a b))
    ((and (stringp a) (stringp b)) (rontolisp::%clojure-compare-strings a b))
    ((and (characterp a) (characterp b)) (- (char-code a) (char-code b)))
    ((and (or (eq a t) (eq a rontolisp::%clojure-false))
@@ -11789,8 +11929,8 @@
    Comparable."
   (or (symbolp x) (numberp x) (stringp x) (characterp x)
       (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))
-      (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)
-      (rontolisp::%clojure-icomparable-p x)
+      (rontolisp::%clojure-bd-p x) (rontolisp::%clojure-instant-p x)
+      (rontolisp::%clojure-uuid-p x) (rontolisp::%clojure-icomparable-p x)
       (rontolisp::%clojure-host-object-p x "java.lang.Comparable")))
 
 (defun rontolisp::%clojure-comparator-p (x)
@@ -12509,6 +12649,9 @@
          (cond ((characterp x) (char-code x))
           ((integerp x) x)
           ((floatp x) (if (or (/= x x) (< x lo) (> x hi)) nil (truncate x)))
+          ;; a decimal through the oracle's longCast of a Number: an arm of the
+          ;; decimal family
+          ((rontolisp::%clojure-bd-p x) (rontolisp::%clojure-long-cast x))
           ((numberp x) (truncate x))
           (t (rontolisp::%clojure-class-cast-exception-of
               (concatenate 'string kind " needs a number or a character") x)))))
@@ -12528,9 +12671,13 @@
 
 (defun rontolisp::%clojure-double (x)
   "(double x): a number widened to a double; anything else signals."
-  (if (numberp x)
-      (float x)
-      (rontolisp::%clojure-class-cast-exception-of "double needs a number" x)))
+  ;; a decimal its nearest double: an arm of the decimal family
+  (if (rontolisp::%clojure-bd-p x)
+      (rontolisp::%clojure-bd-double x)
+      (if (numberp x)
+          (float x)
+          (rontolisp::%clojure-class-cast-exception-of "double needs a number"
+                                                       x))))
 
 (defun rontolisp::%clojure-float (x)
   "(float x): a number widened to a double (doubles only here) that must lie in
@@ -12545,7 +12692,7 @@
 
 (defun rontolisp::%clojure-num (x)
   "(num x): a number itself, nil as nil; anything else signals."
-  (if (or (numberp x) (null x))
+  (if (or (numberp x) (null x) (rontolisp::%clojure-bd-p x))
       x
       (rontolisp::%clojure-class-cast-exception "num needs a number")))
 
@@ -12582,6 +12729,11 @@
                                                        (t (truncate x)))))
                                         bits))
         ((rationalp x) (rontolisp::%clojure-wrap-bits (truncate x) bits))
+        ;; a decimal truncated and wrapped, its longValue: an arm of the decimal
+        ;; family
+        ((rontolisp::%clojure-bd-p x)
+         (rontolisp::%clojure-wrap-bits
+          (truncate (rontolisp::%clojure-bd-rational x)) bits))
         (t (rontolisp::%clojure-class-cast-exception-of
             (concatenate 'string "unchecked-" kind " needs a number") x))))
 
@@ -12614,19 +12766,25 @@
 
 (defun rontolisp::%clojure-unchecked-double (x)
   "(unchecked-double x): a number widened to a double."
-  (if (numberp x)
-      (float x)
-      (rontolisp::%clojure-class-cast-exception-of
-       "unchecked-double needs a number" x)))
+  ;; a decimal its nearest double: an arm of the decimal family
+  (if (rontolisp::%clojure-bd-p x)
+      (rontolisp::%clojure-bd-double x)
+      (if (numberp x)
+          (float x)
+          (rontolisp::%clojure-class-cast-exception-of
+           "unchecked-double needs a number" x))))
 
 (defun rontolisp::%clojure-unchecked-float (x)
   "(unchecked-float x): a number widened to a double (doubles only here); past
    the float range it is the infinity of its sign, like the oracle's cast."
   (let ((d
-         (if (numberp x)
-             (float x)
-             (rontolisp::%clojure-class-cast-exception-of
-              "unchecked-float needs a number" x))))
+         ;; a decimal its nearest double: an arm of the decimal family
+         (if (rontolisp::%clojure-bd-p x)
+             (rontolisp::%clojure-bd-double x)
+             (if (numberp x)
+                 (float x)
+                 (rontolisp::%clojure-class-cast-exception-of
+                  "unchecked-float needs a number" x)))))
     (cond ((> d 3.4028234663852886e38) (* most-positive-double-float 2.0d0))
           ((< d -3.4028234663852886e38) (* most-negative-double-float 2.0d0))
           (t d))))
@@ -12919,6 +13077,19 @@
    prints as, rounded half up."
   (let ((upper (char/= conv (char-downcase conv))))
     (cond ((null x) (rontolisp::%clojure-format-null conv flags width))
+          ;; a decimal from its own digits, rounded half up like the oracle's
+          ;; Formatter of a BigDecimal: an arm of the decimal family
+          ((rontolisp::%clojure-bd-p x)
+           (let* ((u (car (cdr x)))
+                  (close (if (and (< u 0) (find #\( flags)) ")" ""))
+                  (magnitude
+                   (rontolisp::%clojure-format-magnitude (abs u)
+                                                         (- (car (cdr (cdr x))))
+                                                         conv flags precision
+                                                         close)))
+             (rontolisp::%clojure-format-number
+              (rontolisp::%clojure-format-sign (< u 0) flags) (car magnitude)
+              (cdr magnitude) flags width)))
           ((not (floatp x)) (rontolisp::%clojure-format-mismatch conv x))
           ((/= x x)
            (rontolisp::%clojure-format-justify (if upper "NAN" "NaN") flags
@@ -13222,6 +13393,9 @@
   (cond ((null x) nil)
         ((rationalp x) x)
         ((floatp x) (rontolisp::%clojure-decimal-of-float x))
+        ;; a decimal its exact rational, like the oracle's: an arm of the
+        ;; decimal family
+        ((rontolisp::%clojure-bd-p x) (rontolisp::%clojure-bd-rational x))
         (t (rontolisp::%clojure-class-cast-exception-of
             "rationalize needs a number" x))))
 
@@ -13229,50 +13403,770 @@
   "(bigint x): a number truncated to an integer, a decimal string parsed;
    NaN, an infinity or anything else signals."
   (cond ((integerp x) x)
-        ((rationalp x) (truncate x))
-        ((floatp x)
-         (if (rontolisp::%clojure-symbolic-float-p x)
-             (rontolisp::%clojure-number-format-exception "Infinite or NaN")
-             (truncate x)))
-        ((stringp x)
-         ;; parse-integer skips surrounding whitespace, BigInteger refuses it: the
-         ;; string must start on a sign or a digit and end on a digit
-         (let ((n (length x)))
-           (when (or (= n 0)
-                     (not
-                      (or (digit-char-p (char x 0)) (char= (char x 0) #\+)
-                          (char= (char x 0) #\-)))
-                     (not (digit-char-p (char x (- n 1)))))
-             (rontolisp::%clojure-number-format-exception
-              (concatenate 'string "Invalid integer: " x)))
-           (parse-integer x)))
-        (t (rontolisp::%clojure-illegal-argument-exception-of
-            "bigint needs a number or a string" x))))
+   ((rationalp x) (truncate x))
+   ;; a decimal truncated, the oracle's toBigInteger: an arm of the decimal
+   ;; family
+   ((rontolisp::%clojure-bd-p x) (truncate (rontolisp::%clojure-bd-rational x)))
+   ((floatp x)
+    (if (rontolisp::%clojure-symbolic-float-p x)
+        (rontolisp::%clojure-number-format-exception "Infinite or NaN")
+        (truncate x)))
+   ((stringp x)
+    ;; parse-integer skips surrounding whitespace, BigInteger refuses it: the
+    ;; string must start on a sign or a digit and end on a digit
+    (let ((n (length x)))
+      (when (or (= n 0)
+                (not
+                 (or (digit-char-p (char x 0)) (char= (char x 0) #\+)
+                     (char= (char x 0) #\-)))
+                (not (digit-char-p (char x (- n 1)))))
+        (rontolisp::%clojure-number-format-exception
+         (concatenate 'string "Invalid integer: " x)))
+      (parse-integer x)))
+   (t (rontolisp::%clojure-illegal-argument-exception-of
+       "bigint needs a number or a string" x))))
 
 (defun rontolisp::%clojure-biginteger (x)
   "(biginteger x): the same integer as bigint."
   (rontolisp::%clojure-bigint x))
 
 (defun rontolisp::%clojure-bigdec (x)
-  "(bigdec x): an integer itself, a double as the rational of its shortest
-   decimal, a ratio only when it has a finite decimal expansion, a decimal
-   string parsed; anything else signals."
-  (cond ((integerp x) x)
+  "(bigdec x): a decimal itself, an integer at scale 0, a double as
+   BigDecimal.valueOf reads the shortest decimal it prints as, a ratio its
+   numerator divided by its denominator (under *math-context*; a
+   non-terminating one refused without a context), a string as new BigDecimal
+   reads it; anything else signals."
+  (cond ((rontolisp::%clojure-bd-p x) x)
+        ((integerp x) (rontolisp::%clojure-bd-make x 0))
         ((rationalp x)
-         (let ((d (denominator x)))
-           (do ((go t))
-               ((not go))
-             (cond ((= (mod d 2) 0) (setq d (/ d 2)))
-                   ((= (mod d 5) 0) (setq d (/ d 5)))
-                   (t (setq go nil))))
-           (if (= d 1)
-               x
-               (rontolisp::%clojure-arithmetic-exception
-                "Non-terminating decimal expansion; no exact representable decimal result."))))
-        ((floatp x) (rontolisp::%clojure-decimal-of-float x))
-        ((stringp x) (rontolisp::%clojure-parse-decimal x))
+         (rontolisp::%clojure-bd-of x (rontolisp::%clojure-bd-context)))
+        ((floatp x)
+         (if (rontolisp::%clojure-symbolic-float-p x)
+             (rontolisp::%clojure-number-format-exception "Infinite or NaN")
+             (rontolisp::%clojure-bd-parse (princ-to-string x))))
+        ((stringp x) (rontolisp::%clojure-bd-parse x))
         (t (rontolisp::%clojure-illegal-argument-exception-of
             "bigdec needs a number or a string" x))))
+
+;;;; Decimals: the oracle's java.math.BigDecimal.
+;;
+;; A decimal is (:C%DECIMAL unscaled scale), the value unscaled x 10^-scale: what an
+;; M literal, bigdec and a read of one make, so 1.50M keeps its two places. Every
+;; verb reading one is an arm of the decimal family (clojure/ClojureArms DECIMAL):
+;; its tests (%clojure-bd-p, %clojure-bd-in-p, %clojure-bd-value-p), the kind-aware
+;; helpers the lowering names in place of the plain numeric operators (each an
+;; alias of its operator) and the definitions below, every one named %clojure-bd-
+;; so a program making no decimal drops them with the arms and compiles as before
+;; decimals existed. The arithmetic is the oracle's Numbers: each pair of operands
+;; combines like its Ops -- a double beside a decimal is the doubles' arithmetic,
+;; a decimal beside an integer or a ratio the decimals' (the ratio made one by a
+;; division, exact or under *math-context*), two of neither the plain operator's
+;; -- and the decimal operations are BigDecimal's: add and subtract keep the larger
+;; scale, multiply sums the scales, divide answers the exact quotient at its
+;; preferred scale or refuses a non-terminating one, and a math context (what
+;; with-precision binds) rounds each answer to its precision under its mode.
+
+(defvar rontolisp::%clojure-math-context
+  nil
+  "*math-context*: the math context with-precision binds, a (:C%MATH-CONTEXT
+   precision mode) the decimal operations round their answers under, or NIL.")
+
+(defun rontolisp::%clojure-bd-p (x)
+  "Whether X is a decimal."
+  (and (consp x) (eq (car x) :C%DECIMAL)))
+
+(defun rontolisp::%clojure-bd-in-p (xs)
+  "Whether one of the values XS is a decimal."
+  (let ((found nil))
+    (dolist (x xs found) (if (rontolisp::%clojure-bd-p x) (setq found t)))))
+
+(defun rontolisp::%clojure-bd-value-p (x)
+  "Whether X is a decimal or a math context."
+  (and (consp x) (or (eq (car x) :C%DECIMAL) (eq (car x) :C%MATH-CONTEXT))))
+
+(defun rontolisp::%clojure-bd-make (u s)
+  "The decimal U x 10^-S."
+  (list :C%DECIMAL u s))
+
+(defun rontolisp::%clojure-bd-rational (d)
+  "The exact rational the decimal D stands for."
+  (let ((u (car (cdr d))) (s (car (cdr (cdr d)))))
+    (if (>= s 0) (/ u (expt 10 s)) (* u (expt 10 (- s))))))
+
+(defun rontolisp::%clojure-bd-precision (u)
+  "The count of decimal digits of the integer U's magnitude, 1 for zero: a
+   decimal's precision."
+  (length (princ-to-string (abs u))))
+
+(defun rontolisp::%clojure-bd-string (d)
+  "The decimal D's BigDecimal.toString: plain when its scale is not negative
+   and its adjusted exponent is -6 or more (zeros ahead of the digits as
+   needed), else scientific -- a point after the first digit, then E and the
+   signed adjusted exponent."
+  (let* ((u (car (cdr d)))
+         (s (car (cdr (cdr d))))
+         (digits (princ-to-string (abs u)))
+         (n (length digits))
+         (adjusted (+ (- s) (- n 1)))
+         (sign (if (< u 0) "-" "")))
+    (cond ((= s 0) (concatenate 'string sign digits))
+          ((and (> s 0) (>= adjusted -6))
+           (if (> n s)
+               (concatenate 'string sign (subseq digits 0 (- n s)) "."
+                            (subseq digits (- n s)))
+               (concatenate 'string sign "0."
+                            (make-string (- s n) :initial-element #\0) digits)))
+          (t (concatenate 'string sign (subseq digits 0 1)
+              (if (> n 1) (concatenate 'string "." (subseq digits 1)) "") "E"
+              (if (>= adjusted 0) "+" "") (princ-to-string adjusted))))))
+
+(defun rontolisp::%clojure-bd-to-string (x)
+  "The toString of the decimal or math context X: a decimal's spelling, a
+   context's precision and rounding mode."
+  (if (eq (car x) :C%DECIMAL)
+      (rontolisp::%clojure-bd-string x)
+      (concatenate 'string "precision=" (princ-to-string (car (cdr x)))
+                   " roundingMode=" (car (cdr (cdr x))))))
+
+(defun rontolisp::%clojure-bd-write (x readable stream)
+  "Write the decimal or math context X as the oracle prints it: a decimal its
+   spelling and M, under print and pr alike; a context the #object of its
+   class, its toString quoted under pr (the identity hash left out, like every
+   #object here)."
+  (if (eq (car x) :C%DECIMAL)
+      (progn
+        (write-string (rontolisp::%clojure-bd-string x) stream)
+        (write-char #\M stream))
+      (progn
+        (write-string "#object[java.math.MathContext " stream)
+        (if readable
+            (rontolisp::%clojure-write-readable-string
+             (rontolisp::%clojure-bd-to-string x) stream)
+            (write-string (rontolisp::%clojure-bd-to-string x) stream))
+        (write-char #\] stream))))
+
+(defun rontolisp::%clojure-bd-class-name (x)
+  "The oracle's class name of the decimal or math context X."
+  (if (eq (car x) :C%DECIMAL) "java.math.BigDecimal" "java.math.MathContext"))
+
+(defun rontolisp::%clojure-bd-math-context (precision mode)
+  "The math context with-precision binds: PRECISION digits rounded under the
+   RoundingMode named MODE, the oracle's (MathContext. precision mode). A
+   negative precision is the oracle's refusal, a precision that is no integer
+   its missing constructor."
+  (cond ((not (integerp precision))
+         (rontolisp::%clojure-illegal-argument-exception
+          "No matching ctor found for class java.math.MathContext"))
+        ((< precision 0)
+         (rontolisp::%clojure-illegal-argument-exception "Digits < 0"))
+        (t (list :C%MATH-CONTEXT precision mode))))
+
+(defun rontolisp::%clojure-bd-context ()
+  "The math context *math-context* holds, or NIL for none: a precision of 0 is
+   none, BigDecimal's unlimited context."
+  (let ((mc rontolisp::%clojure-math-context))
+    (if (and (consp mc) (eq (car mc) :C%MATH-CONTEXT) (> (car (cdr mc)) 0))
+        mc
+        nil)))
+
+(defun rontolisp::%clojure-bd-round-quotient (n d mode)
+  "The integer N / D (D not zero) rounded under the RoundingMode named MODE:
+   UP, DOWN, CEILING, FLOOR, HALF_UP, HALF_DOWN, HALF_EVEN, or UNNECESSARY,
+   which refuses an inexact quotient like the oracle."
+  (let* ((q (truncate n d)) (r (- n (* q d))))
+    (if (= r 0)
+        q
+        (let* ((negative (if (< n 0) (> d 0) (< d 0)))
+               (away (if negative (- q 1) (+ q 1)))
+               (twice (* 2 (abs r)))
+               (whole (abs d)))
+          (cond ((equal mode "DOWN") q)
+                ((equal mode "UP") away)
+                ((equal mode "CEILING") (if negative q away))
+                ((equal mode "FLOOR") (if negative away q))
+                ((equal mode "UNNECESSARY")
+                 (rontolisp::%clojure-arithmetic-exception
+                  "Rounding necessary"))
+                ((> twice whole) away)
+                ((< twice whole) q)
+                ((equal mode "HALF_UP") away)
+                ((equal mode "HALF_DOWN") q)
+                ((evenp q) q)
+                (t away))))))
+
+(defun rontolisp::%clojure-bd-round (u s mc)
+  "The decimal U x 10^-S rounded to the math context MC (BigDecimal.doRound):
+   itself when MC is NIL or its digits fit the precision, else its digits past
+   the precision dropped under MC's mode -- one more when the rounding carried
+   into a new digit (9.99 to 10.0 at two)."
+  (if (null mc)
+      (rontolisp::%clojure-bd-make u s)
+      (let* ((p (car (cdr mc)))
+             (mode (car (cdr (cdr mc))))
+             (drop (- (rontolisp::%clojure-bd-precision u) p)))
+        (if (<= drop 0)
+            (rontolisp::%clojure-bd-make u s)
+            (let ((v
+                   (rontolisp::%clojure-bd-round-quotient u (expt 10 drop)
+                                                          mode)))
+              (if (> (rontolisp::%clojure-bd-precision v) p)
+                  (rontolisp::%clojure-bd-make
+                   (rontolisp::%clojure-bd-round-quotient v 10 mode)
+                   (- s drop 1))
+                  (rontolisp::%clojure-bd-make v (- s drop))))))))
+
+(defun rontolisp::%clojure-bd-strip-to (u s preferred)
+  "The decimal U x 10^-S with U's trailing zeros dropped while its scale stays
+   above PREFERRED (BigDecimal's stripZerosToMatchScale)."
+  (do ()
+      ((or (<= s preferred) (= u 0) (/= (rem u 10) 0))
+       (rontolisp::%clojure-bd-make u s))
+    (setq u (truncate u 10))
+    (setq s (- s 1))))
+
+(defun rontolisp::%clojure-bd-rescale (u s scale)
+  "The decimal U x 10^-S at the scale SCALE, not below S: U times ten to the
+   difference."
+  (rontolisp::%clojure-bd-make (* u (expt 10 (- scale s))) scale))
+
+(defun rontolisp::%clojure-bd-add (a b mc)
+  "The decimals A + B (BigDecimal.add): exact at the larger scale, rounded
+   under the math context MC -- where an operand is zero, the other rounded
+   and its scale moved toward the larger as far as the precision lets (add's
+   zero rule)."
+  (let* ((ua (car (cdr a)))
+         (sa (car (cdr (cdr a))))
+         (ub (car (cdr b)))
+         (sb (car (cdr (cdr b))))
+         (scale (max sa sb)))
+    (if (and mc (or (= ua 0) (= ub 0)))
+        (if (and (= ua 0) (= ub 0))
+            (rontolisp::%clojure-bd-make 0 scale)
+            (let* ((r
+                    (if (= ua 0)
+                        (rontolisp::%clojure-bd-round ub sb mc)
+                        (rontolisp::%clojure-bd-round ua sa mc)))
+                   (ru (car (cdr r)))
+                   (rs (car (cdr (cdr r)))))
+              (cond ((= rs scale) r)
+                    ((> rs scale) (rontolisp::%clojure-bd-strip-to ru rs scale))
+                    (t (rontolisp::%clojure-bd-rescale ru rs
+                        (min scale
+                             (+ rs
+                                (- (car (cdr mc))
+                                   (rontolisp::%clojure-bd-precision ru)))))))))
+        (rontolisp::%clojure-bd-round
+         (+ (* ua (expt 10 (- scale sa))) (* ub (expt 10 (- scale sb)))) scale
+         mc))))
+
+(defun rontolisp::%clojure-bd-negate (d mc)
+  "The decimal D negated, rounded under the math context MC."
+  (rontolisp::%clojure-bd-round (- (car (cdr d))) (car (cdr (cdr d))) mc))
+
+(defun rontolisp::%clojure-bd-multiply (a b mc)
+  "The decimals A x B (BigDecimal.multiply): the product of the unscaled
+   values at the sum of the scales, rounded under the math context MC."
+  (rontolisp::%clojure-bd-round (* (car (cdr a)) (car (cdr b)))
+                                (+ (car (cdr (cdr a))) (car (cdr (cdr b)))) mc))
+
+(defun rontolisp::%clojure-bd-exponent (q)
+  "floor(log10 |Q|) of the rational Q, not zero: the power of ten its first
+   digit stands at."
+  (let* ((num (abs (numerator q)))
+         (den (denominator q))
+         (k
+          (- (rontolisp::%clojure-bd-precision num)
+             (rontolisp::%clojure-bd-precision den))))
+    (if (if (>= k 0)
+            (>= num (* den (expt 10 k)))
+            (>= (* num (expt 10 (- k))) den))
+        k
+        (- k 1))))
+
+(defun rontolisp::%clojure-bd-divide (a b mc)
+  "The decimals A / B, B not zero (BigDecimal.divide). Without a math context
+   the exact quotient at its preferred scale (A's less B's) or the fewest
+   places above it that hold it, a non-terminating one the oracle's refusal;
+   under MC the quotient rounded to its precision, its trailing zeros dropped
+   toward the preferred scale when that rounding was exact."
+  (let* ((ua (car (cdr a)))
+         (preferred (- (car (cdr (cdr a))) (car (cdr (cdr b)))))
+         (q
+          (/ (rontolisp::%clojure-bd-rational a)
+             (rontolisp::%clojure-bd-rational b))))
+    (cond ((= ua 0) (rontolisp::%clojure-bd-make 0 preferred))
+          ((null mc)
+           (let ((den (denominator q)) (twos 0) (fives 0))
+             (do ()
+                 ((/= (rem den 2) 0))
+               (setq den (truncate den 2))
+               (setq twos (+ twos 1)))
+             (do ()
+                 ((/= (rem den 5) 0))
+               (setq den (truncate den 5))
+               (setq fives (+ fives 1)))
+             (if (/= den 1)
+                 (rontolisp::%clojure-arithmetic-exception
+                  "Non-terminating decimal expansion; no exact representable decimal result."))
+             (let ((fewest (max twos fives)))
+               (if (= fewest 0)
+                   ;; an integer: its trailing zeros are places below zero
+                   (let ((m (numerator q)))
+                     (do ()
+                         ((/= (rem m 10) 0))
+                       (setq m (truncate m 10))
+                       (setq fewest (- fewest 1)))))
+               (let ((scale (max preferred fewest)))
+                 (rontolisp::%clojure-bd-make (if (>= scale 0)
+                                                  (* q (expt 10 scale))
+                                                  (/ q (expt 10 (- scale))))
+                                              scale)))))
+          (t
+           (let* ((scale
+                   (- (car (cdr mc)) 1 (rontolisp::%clojure-bd-exponent q)))
+                  (n
+                   (if (>= scale 0)
+                       (* q (expt 10 scale))
+                       (/ q (expt 10 (- scale)))))
+                  (v
+                   (rontolisp::%clojure-bd-round-quotient (numerator n)
+                    (denominator n) (car (cdr (cdr mc))))))
+             (if (integerp n)
+                 (let ((stripped
+                        (rontolisp::%clojure-bd-strip-to v scale preferred)))
+                   (rontolisp::%clojure-bd-round (car (cdr stripped))
+                                                 (car (cdr (cdr stripped))) mc))
+                 (rontolisp::%clojure-bd-round v scale mc)))))))
+
+(defun rontolisp::%clojure-bd-integral (a b mc)
+  "The integer part of the decimals A / B, B not zero
+   (BigDecimal.divideToIntegralValue): at the preferred scale (A's less B's),
+   its trailing zeros dropped toward a negative one; under the math context
+   MC one that needs more digits than its precision is the oracle's
+   refusal."
+  (let* ((preferred (- (car (cdr (cdr a))) (car (cdr (cdr b)))))
+         (x (rontolisp::%clojure-bd-rational a))
+         (y (rontolisp::%clojure-bd-rational b)))
+    (cond ((or (< (abs x) (abs y)) (= x 0))
+           (rontolisp::%clojure-bd-make 0 preferred))
+          ((null mc)
+           (let ((whole (truncate x y)))
+             (if (>= preferred 0)
+                 (rontolisp::%clojure-bd-make (* whole (expt 10 preferred))
+                                              preferred)
+                 (rontolisp::%clojure-bd-strip-to whole 0 preferred))))
+          (t (let* ((p (car (cdr mc)))
+                    (r
+                     (rontolisp::%clojure-bd-divide a b
+                      (list :C%MATH-CONTEXT p "DOWN")))
+                    (ru (car (cdr r)))
+                    (rs (car (cdr (cdr r)))))
+               (cond
+                ((< rs 0)
+                 (if (>= (abs (- x (* (rontolisp::%clojure-bd-rational r) y)))
+                         (abs y))
+                     (rontolisp::%clojure-arithmetic-exception
+                      "Division impossible")))
+                ((> rs 0)
+                 (setq ru (truncate ru (expt 10 rs)))
+                 (setq rs 0)))
+               (let ((room (- p (rontolisp::%clojure-bd-precision ru))))
+                 (if (and (> preferred rs) (> room 0))
+                     (rontolisp::%clojure-bd-rescale ru rs
+                      (+ rs (min room (- preferred rs))))
+                     (rontolisp::%clojure-bd-strip-to ru rs preferred))))))))
+
+(defun rontolisp::%clojure-bd-of (x mc)
+  "The integer, ratio or decimal X as the oracle's toBigDecimal makes it a
+   decimal: a decimal itself, an integer at scale 0, a ratio its numerator
+   divided by its denominator under the math context MC."
+  (cond ((rontolisp::%clojure-bd-p x) x)
+        ((integerp x) (rontolisp::%clojure-bd-make x 0))
+        (t (rontolisp::%clojure-bd-divide
+            (rontolisp::%clojure-bd-make (numerator x) 0)
+            (rontolisp::%clojure-bd-make (denominator x) 0) mc))))
+
+(defun rontolisp::%clojure-bd-double (x)
+  "The number X as a double: a decimal's nearest, any other number widened."
+  (if (rontolisp::%clojure-bd-p x)
+      (float (rontolisp::%clojure-bd-rational x))
+      (float x)))
+
+(defun rontolisp::%clojure-bd-parse (s)
+  "The decimal the string S spells, as new BigDecimal reads it: an optional
+   sign, digits with an optional fraction (a digit at least), an optional
+   exponent after e or E; its scale the fraction's digits less the exponent.
+   Anything else is the oracle's NumberFormatException."
+  (let ((n (length s)) (i 0) (neg nil) (mant 0) (scale 0) (digits 0) (ex 0))
+    (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+      (setq neg (char= (char s i) #\-))
+      (setq i (+ i 1)))
+    (do ()
+        ((not (and (< i n) (digit-char-p (char s i)))))
+      (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+      (setq digits (+ digits 1))
+      (setq i (+ i 1)))
+    (when (and (< i n) (char= (char s i) #\.))
+      (setq i (+ i 1))
+      (do ()
+          ((not (and (< i n) (digit-char-p (char s i)))))
+        (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+        (setq digits (+ digits 1))
+        (setq scale (+ scale 1))
+        (setq i (+ i 1))))
+    (when (and (> digits 0) (< i n)
+               (or (char= (char s i) #\e) (char= (char s i) #\E)))
+      (let ((eneg nil) (edigits 0))
+        (setq i (+ i 1))
+        (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+          (setq eneg (char= (char s i) #\-))
+          (setq i (+ i 1)))
+        (do ()
+            ((not (and (< i n) (digit-char-p (char s i)))))
+          (setq ex (+ (* ex 10) (digit-char-p (char s i))))
+          (setq edigits (+ edigits 1))
+          (setq i (+ i 1)))
+        (when (= edigits 0) (setq digits 0))
+        (when eneg (setq ex (- ex)))))
+    (if (or (= digits 0) (< i n))
+        (rontolisp::%clojure-number-format-exception
+         (concatenate 'string "Invalid decimal number: " s))
+        (rontolisp::%clojure-bd-make (if neg (- mant) mant) (- scale ex)))))
+
+(defun rontolisp::%clojure-bd-number-refusal (x)
+  "The oracle's refusal of X, no number, where a number is cast: its
+   NullPointerException for nil, else its ClassCastException."
+  (rontolisp::%clojure-class-cast-exception-of
+   (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                " cannot be cast to class java.lang.Number") x))
+
+(defun rontolisp::%clojure-bd-number-p (x)
+  "Whether X is a number: a real or a decimal."
+  (or (realp x) (rontolisp::%clojure-bd-p x)))
+
+(defun rontolisp::%clojure-bd-zero-p (x)
+  "Whether the number X is zero, a decimal of any scale included."
+  (if (rontolisp::%clojure-bd-p x) (= (car (cdr x)) 0) (zerop x)))
+
+(defun rontolisp::%clojure-bd-binary (op a b)
+  "The oracle's OP (:add, :subtract, :multiply or :divide) of the numbers A
+   and B: the doubles' beside a double (a decimal its nearest, so a double zero
+   divisor is the plain double division's), the decimals' under *math-context*
+   beside a decimal (an integer or a ratio made one; a divisor of zero the
+   oracle's refusal), else the plain operator's. A value that is no number is
+   its cast's refusal."
+  (cond ((not (rontolisp::%clojure-bd-number-p a))
+         (rontolisp::%clojure-bd-number-refusal a))
+        ((not (rontolisp::%clojure-bd-number-p b))
+         (rontolisp::%clojure-bd-number-refusal b))
+        ((or (floatp a) (floatp b))
+         (let ((x (rontolisp::%clojure-bd-double a))
+               (y (rontolisp::%clojure-bd-double b)))
+           (cond ((eq op :add) (+ x y))
+                 ((eq op :subtract) (- x y))
+                 ((eq op :multiply) (* x y))
+                 (t (/ x y)))))
+        ((and (eq op :divide) (rontolisp::%clojure-bd-p a)
+              (rontolisp::%clojure-bd-zero-p b))
+         (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+        ((and (eq op :divide) (rontolisp::%clojure-bd-p b)
+              (rontolisp::%clojure-bd-zero-p b))
+         (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+        ((or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+         (let* ((mc (rontolisp::%clojure-bd-context))
+                (x (rontolisp::%clojure-bd-of a mc))
+                (y (rontolisp::%clojure-bd-of b mc)))
+           (cond ((eq op :add) (rontolisp::%clojure-bd-add x y mc))
+                 ((eq op :subtract)
+                  (rontolisp::%clojure-bd-add x
+                                              (rontolisp::%clojure-bd-make
+                                               (- (car (cdr y)))
+                                               (car (cdr (cdr y)))) mc))
+                 ((eq op :multiply) (rontolisp::%clojure-bd-multiply x y mc))
+                 (t (rontolisp::%clojure-bd-divide x y mc)))))
+        ((eq op :add) (+ a b))
+        ((eq op :subtract) (- a b))
+        ((eq op :multiply) (* a b))
+        (t (/ a b))))
+
+(defun rontolisp::%clojure-bd-fold (op xs)
+  "The oracle's OP over the operands XS, a decimal among them: the first
+   combined with each next in turn; of one operand that operand itself, or
+   for :subtract its negation and :divide its reciprocal."
+  (let ((acc (car xs)))
+    (cond ((cdr xs)
+           (dolist (x (cdr xs) acc)
+             (setq acc (rontolisp::%clojure-bd-binary op acc x))))
+          ((eq op :subtract)
+           (rontolisp::%clojure-bd-negate acc (rontolisp::%clojure-bd-context)))
+          ((eq op :divide) (rontolisp::%clojure-bd-binary :divide 1 acc))
+          (t acc))))
+
+(defun rontolisp::%clojure-bd-test (op a b)
+  "Whether the numbers A and B stand in the relation OP (:lt, :gt, :le, :ge
+   or :eq) as the oracle's Numbers compares them: as doubles beside a double,
+   as decimals beside a decimal (a ratio made one under *math-context*), else
+   as the plain comparison does; a value that is no number refuses."
+  (cond ((not (rontolisp::%clojure-bd-number-p a))
+         (rontolisp::%clojure-bd-number-refusal a))
+        ((not (rontolisp::%clojure-bd-number-p b))
+         (rontolisp::%clojure-bd-number-refusal b))
+        (t
+         (let ((x a) (y b))
+           (cond ((or (floatp a) (floatp b))
+                  (setq x (rontolisp::%clojure-bd-double a))
+                  (setq y (rontolisp::%clojure-bd-double b)))
+                 ((or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+                  (let ((mc (rontolisp::%clojure-bd-context)))
+                    (setq x
+                          (rontolisp::%clojure-bd-rational
+                           (rontolisp::%clojure-bd-of a mc)))
+                    (setq y
+                          (rontolisp::%clojure-bd-rational
+                           (rontolisp::%clojure-bd-of b mc))))))
+           (cond ((eq op :lt) (< x y))
+                 ((eq op :gt) (> x y))
+                 ((eq op :le) (<= x y))
+                 ((eq op :ge) (>= x y))
+                 (t (= x y)))))))
+
+(defun rontolisp::%clojure-bd-chain (op xs)
+  "Whether every neighbouring pair of the numbers XS stands in the relation
+   OP (%clojure-bd-test); one number does, after the oracle's cast of it."
+  (if (null (cdr xs))
+      (progn
+        (if (not (rontolisp::%clojure-bd-number-p (car xs)))
+            (rontolisp::%clojure-bd-number-refusal (car xs)))
+        t)
+      (let ((ok t) (prev (car xs)))
+        (dolist (x (cdr xs) ok)
+          (if (and ok (not (rontolisp::%clojure-bd-test op prev x)))
+              (setq ok nil))
+          (setq prev x)))))
+
+(defun rontolisp::%clojure-bd-equal (a b)
+  "= of the decimal A and the value B: a decimal of the same value, whatever
+   either's scale (BigDecimal.compareTo), the oracle's Numbers.equal; no
+   other number, which is of another category."
+  (and (rontolisp::%clojure-bd-p b)
+   (= (rontolisp::%clojure-bd-rational a) (rontolisp::%clojure-bd-rational b))))
+
+(defun rontolisp::%clojure-bd-hash-code (u s)
+  "BigDecimal.hashCode of U x 10^-S: 31 times its unscaled value's
+   BigInteger.hashCode plus its scale."
+  (%mask-signed-field 32 (+ (* 31 (rontolisp::%clojure-big-hash-code u)) s)))
+
+(defun rontolisp::%clojure-bd-hasheq (d)
+  "The oracle's hash of the decimal D: zero's 0, else the hashCode of D with
+   its trailing zeros stripped, so = decimals hash alike."
+  (let ((u (car (cdr d))) (s (car (cdr (cdr d)))))
+    (if (= u 0)
+        0
+        (progn
+          (do ()
+              ((/= (rem u 10) 0))
+            (setq u (truncate u 10))
+            (setq s (- s 1)))
+          (rontolisp::%clojure-bd-hash-code u s)))))
+
+(defun rontolisp::%clojure-bd-java-equal (a b)
+  "(.equals A B) of the decimal A: a decimal of the same value AND scale,
+   BigDecimal.equals."
+  (and (rontolisp::%clojure-bd-p b) (equal a b)))
+
+(defun rontolisp::%clojure-bd-compare (a b)
+  "compare of the decimal A and the value B: -1, 0 or 1 by value, the
+   oracle's Numbers.compare (a ratio made a decimal under *math-context*); a
+   value that is no number refuses."
+  (cond ((rontolisp::%clojure-bd-test :lt a b) -1)
+        ((rontolisp::%clojure-bd-test :lt b a) 1)
+        (t 0)))
+
+;; The kind-aware helpers the lowering names in place of the plain numeric
+;; operators, each an alias of its operator (ClojureArms DECIMAL): a call or a
+;; value of one runs the oracle's operation beside a decimal and the plain
+;; operator otherwise.
+
+(defun rontolisp::%clojure-bd-+ (&rest xs)
+  "+ (checked or not) beside a decimal: the oracle's sum; else the plain sum."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :add xs)
+      (apply #'+ xs)))
+
+(defun rontolisp::%clojure-bd-- (&rest xs)
+  "- beside a decimal: the oracle's difference or negation; else the plain
+   one."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :subtract xs)
+      (apply #'- xs)))
+
+(defun rontolisp::%clojure-bd-* (&rest xs)
+  "* beside a decimal: the oracle's product; else the plain product."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :multiply xs)
+      (apply #'* xs)))
+
+(defun rontolisp::%clojure-bd-/ (&rest xs)
+  "/ beside a decimal: the oracle's quotient or reciprocal; else the plain
+   one."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :divide xs)
+      (apply #'/ xs)))
+
+(defun rontolisp::%clojure-bd-< (&rest xs)
+  "< beside a decimal: the oracle's order; else the plain test."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-chain :lt xs)
+      (apply #'< xs)))
+
+(defun rontolisp::%clojure-bd-> (&rest xs)
+  "> beside a decimal: the oracle's order; else the plain test."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-chain :gt xs)
+      (apply #'> xs)))
+
+(defun rontolisp::%clojure-bd-<= (&rest xs)
+  "<= beside a decimal: the oracle's order; else the plain test."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-chain :le xs)
+      (apply #'<= xs)))
+
+(defun rontolisp::%clojure-bd->= (&rest xs)
+  ">= beside a decimal: the oracle's order; else the plain test."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-chain :ge xs)
+      (apply #'>= xs)))
+
+(defun rontolisp::%clojure-bd-= (&rest xs)
+  "== beside a decimal: the oracle's numeric equality; else the plain test."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-chain :eq xs)
+      (apply #'= xs)))
+
+(defun rontolisp::%clojure-bd-zerop (x)
+  "zero? of a decimal: whether it is zero, whatever its scale; else zerop."
+  (if (rontolisp::%clojure-bd-p x) (= (car (cdr x)) 0) (zerop x)))
+
+(defun rontolisp::%clojure-bd-plusp (x)
+  "pos? of a decimal: whether it is above zero; else plusp."
+  (if (rontolisp::%clojure-bd-p x) (> (car (cdr x)) 0) (plusp x)))
+
+(defun rontolisp::%clojure-bd-minusp (x)
+  "neg? of a decimal: whether it is below zero; else minusp."
+  (if (rontolisp::%clojure-bd-p x) (< (car (cdr x)) 0) (minusp x)))
+
+(defun rontolisp::%clojure-bd-abs (x)
+  "abs of a decimal: its magnitude under *math-context*; else abs."
+  (if (rontolisp::%clojure-bd-p x)
+      (rontolisp::%clojure-bd-round (abs (car (cdr x))) (car (cdr (cdr x)))
+                                    (rontolisp::%clojure-bd-context))
+      (abs x)))
+
+(defun rontolisp::%clojure-bd-max (&rest xs)
+  "max beside a decimal: the oracle's, each operand kept over the larger so
+   far only when it is greater; else the plain max."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (let ((m (car xs)))
+        (if (null (cdr xs)) (rontolisp::%clojure-bd-chain :eq xs))
+        (dolist (x (cdr xs) m)
+          (setq m (if (rontolisp::%clojure-bd-test :gt m x) m x))))
+      (apply #'max xs)))
+
+(defun rontolisp::%clojure-bd-min (&rest xs)
+  "min beside a decimal: the oracle's, each operand kept over the smaller so
+   far only when it is less; else the plain min."
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (let ((m (car xs)))
+        (if (null (cdr xs)) (rontolisp::%clojure-bd-chain :eq xs))
+        (dolist (x (cdr xs) m)
+          (setq m (if (rontolisp::%clojure-bd-test :lt m x) m x))))
+      (apply #'min xs)))
+
+(defun rontolisp::%clojure-bd-two-p (a b)
+  "Whether the operands A and B of a quot, rem or mod reach the decimals: one
+   is a decimal and neither a double."
+  (and (or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+       (not (floatp a)) (not (floatp b))))
+
+(defun rontolisp::%clojure-bd-checked-divisor (a b)
+  "B's decimal for a quot or rem of A by B beside a decimal, A cast too: a
+   value that is no number refuses, and so does a divisor of zero."
+  (cond ((not (rontolisp::%clojure-bd-number-p a))
+         (rontolisp::%clojure-bd-number-refusal a))
+        ((not (rontolisp::%clojure-bd-number-p b))
+         (rontolisp::%clojure-bd-number-refusal b))
+        ((rontolisp::%clojure-bd-zero-p b)
+         (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+        (t (rontolisp::%clojure-bd-of b (rontolisp::%clojure-bd-context)))))
+
+(defun rontolisp::%clojure-bd-quot (a b)
+  "quot beside a decimal: BigDecimal.divideToIntegralValue under
+   *math-context*; a double operand the oracle's double quotient (the
+   truncation as a double); else truncate."
+  (cond ((rontolisp::%clojure-bd-two-p a b)
+         (let ((y (rontolisp::%clojure-bd-checked-divisor a b))
+               (mc (rontolisp::%clojure-bd-context)))
+           (rontolisp::%clojure-bd-integral (rontolisp::%clojure-bd-of a mc) y
+                                            mc)))
+        ((or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+         (if (rontolisp::%clojure-bd-zero-p b)
+             (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+         (float
+          (truncate (rontolisp::%clojure-bd-double a)
+                    (rontolisp::%clojure-bd-double b))))
+        (t (truncate a b))))
+
+(defun rontolisp::%clojure-bd-rem (a b)
+  "rem beside a decimal: BigDecimal.remainder under *math-context*, A less
+   B times the integral quotient; a double operand the doubles' remainder;
+   else rem."
+  (cond ((rontolisp::%clojure-bd-two-p a b)
+         (let* ((y (rontolisp::%clojure-bd-checked-divisor a b))
+                (mc (rontolisp::%clojure-bd-context))
+                (x (rontolisp::%clojure-bd-of a mc))
+                (whole (rontolisp::%clojure-bd-integral x y mc))
+                (product (rontolisp::%clojure-bd-multiply whole y nil)))
+           (rontolisp::%clojure-bd-add x
+                                       (rontolisp::%clojure-bd-make
+                                        (- (car (cdr product)))
+                                        (car (cdr (cdr product)))) nil)))
+        ((or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+         (if (rontolisp::%clojure-bd-zero-p b)
+             (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+         (rem (rontolisp::%clojure-bd-double a)
+              (rontolisp::%clojure-bd-double b)))
+        (t (rem a b))))
+
+(defun rontolisp::%clojure-bd-mod (a b)
+  "mod beside a decimal: the oracle's, its rem when that is zero or A and B
+   share a sign, else the rem plus B; else mod."
+  (if (or (rontolisp::%clojure-bd-p a) (rontolisp::%clojure-bd-p b))
+      (let ((m (rontolisp::%clojure-bd-rem a b)))
+        (if (or (rontolisp::%clojure-bd-zero-p m)
+                (eq (rontolisp::%clojure-bd-plusp a)
+                    (rontolisp::%clojure-bd-plusp b)))
+            m
+            (rontolisp::%clojure-bd-binary :add m b)))
+      (mod a b)))
+
+(defun rontolisp::%clojure-bd-numberp (x)
+  "number? beside the decimals: a number or a decimal."
+  (or (numberp x) (rontolisp::%clojure-bd-p x)))
+
+(defun rontolisp::%clojure-bd-rationalp (x)
+  "rational? beside the decimals: an integer, a ratio or a decimal."
+  (or (rationalp x) (rontolisp::%clojure-bd-p x)))
+
+(defun rontolisp::%clojure-bd-is-decimal (x no)
+  "decimal?: T for a decimal, NO (the false object) for anything else. A
+   program making no decimal calls progn in its place (the decimal family's
+   alias)."
+  (if (rontolisp::%clojure-bd-p x) t no))
+
+(defun rontolisp::%clojure-bd-number-instance-p (x)
+  "instance? of java.lang.Number beside the decimals: a decimal or what the
+   host test answers."
+  (or (rontolisp::%clojure-bd-p x) (rontolisp::%clojure-host-number-p x)))
 
 (defun rontolisp::%clojure-numerator (x)
   "(numerator x): the numerator of a ratio; anything else signals."
@@ -13342,10 +14236,14 @@
    compiled call) throws, and calling after a top-level set! wraps a function
    defined before it. No boxed-math warning is ever emitted: :warn-on-boxed
    wraps exactly like true (a documented difference)."
-  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
-           (every #'rontolisp::%clojure-long-p xs))
-      (%mask-signed-field 64 (apply #'+ xs))
-      (apply #'+ xs)))
+  ;; a decimal among the operands is the oracle's decimal sum: an arm of the
+  ;; decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :add xs)
+      (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+               (every #'rontolisp::%clojure-long-p xs))
+          (%mask-signed-field 64 (apply #'+ xs))
+          (apply #'+ xs))))
 
 (defun rontolisp::%clojure-- (&rest xs)
   "(- xs): the difference (of one operand, its negation). While
@@ -13353,10 +14251,14 @@
    answer wraps mod 2^64, like the oracle's unchecked subtract; anything else
    -- and the flag down -- is the plain difference. Read at run time, like
    %clojure-+, and never warning."
-  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
-           (every #'rontolisp::%clojure-long-p xs))
-      (%mask-signed-field 64 (apply #'- xs))
-      (apply #'- xs)))
+  ;; a decimal among the operands is the oracle's decimal difference: an arm of
+  ;; the decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :subtract xs)
+      (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+               (every #'rontolisp::%clojure-long-p xs))
+          (%mask-signed-field 64 (apply #'- xs))
+          (apply #'- xs))))
 
 (defun rontolisp::%clojure-* (&rest xs)
   "(* xs): the product. While *unchecked-math* is truthy (true or
@@ -13365,10 +14267,14 @@
    port's mix functions depend on it; anything else -- and the flag down --
    is the plain product. Read at run time, like %clojure-+, and never
    warning."
-  (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
-           (every #'rontolisp::%clojure-long-p xs))
-      (%mask-signed-field 64 (apply #'* xs))
-      (apply #'* xs)))
+  ;; a decimal among the operands is the oracle's decimal product: an arm of the
+  ;; decimal family
+  (if (rontolisp::%clojure-bd-in-p xs)
+      (rontolisp::%clojure-bd-fold :multiply xs)
+      (if (and (rontolisp::%clojure-truthy rontolisp::%clojure-unchecked-math)
+               (every #'rontolisp::%clojure-long-p xs))
+          (%mask-signed-field 64 (apply #'* xs))
+          (apply #'* xs))))
 
 (defun rontolisp::%clojure-int-arg (x)
   "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
@@ -13848,6 +14754,11 @@
                       ((= x 9.223372036854775807e18) 9223372036854775807)
                       ((= x -9.223372036854775808e18) -9223372036854775808)
                       (t nil)))
+               ;; a decimal through its double, the oracle's longCast of a
+               ;; Number: an arm of the decimal family
+               ((rontolisp::%clojure-bd-p x)
+                (rontolisp::%clojure-long-cast
+                 (rontolisp::%clojure-bd-double x)))
                ((numberp x) (truncate x))
                (t (rontolisp::%clojure-class-cast-exception-of
                    "long needs a number or a character" x)))))
@@ -14014,13 +14925,6 @@
   "X's bare symbol when X is a symbol carrying metadata, else X: what a case
    dispatches on (the family's view, X itself in a program making none)."
   (if (rontolisp::%clojure-meta-symbol-p x) (car (cdr x)) x))
-
-(defun rontolisp::%clojure-auto-gensym (prefix)
-  "The fresh symbol a syntax-quote's PREFIX# names, spelled PREFIX__N__auto__
-   like the oracle's."
-  (make-symbol
-   (concatenate 'string (symbol-name (gensym (concatenate 'string prefix "__")))
-                "__auto__")))
 
 ;; A deftype implementing IObj answers its own withMeta, and one implementing
 ;; IMeta its own meta: arms of the meta-interface family ("Host interfaces").
@@ -14247,28 +15151,43 @@
       (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
 
 ;; A function's class name, what (.getClass f) names: the oracle compiles every
-;; fn to a class of its own, ns$name for a defn or a core var's root and
-;; ns$enclosing$fn__N for an anonymous one, which demunging readers (spec.alpha's
-;; fn-sym, a stack trace printer) read back as the var. A core function shared
-;; through the table above knows its name, so it answers clojure.core$NAME; no
-;; other function here carries one, so it answers the spelling of an anonymous
-;; fn under clojure.lang.AFunction, the class type answers for every function.
+;; fn to a class of its own, ns$name for a defn, a def'd fn literal or a core
+;; var's root and ns$enclosing$fn__N for an anonymous one, which demunging
+;; readers (spec.alpha's fn-sym, a stack trace printer) read back as the var. A
+;; definition registers its function under its class name beside it (a
+;; statement only a program reading a fn's class keeps); a core function shared
+;; through the table above knows its name, so it answers clojure.core$NAME; any
+;; other function answers the spelling of an anonymous fn under
+;; clojure.lang.AFunction, the class type answers for every function.
+
+(defvar rontolisp::%clojure-fn-classes (make-hash-table :test 'eq))
+
+(defun rontolisp::%clojure-note-fn-class (f name)
+  "A statement: the function F registered under the class name NAME (the
+   oracle's ns$name of the var it defines); answers F."
+  (setf (gethash f rontolisp::%clojure-fn-classes) name)
+  f)
 
 (defun rontolisp::%clojure-fn-class-name (f)
-  "The oracle's class name of the function F: clojure.core$NAME munged for a
-   core function the shared-value table holds, else an anonymous fn's."
-  (let ((found nil))
-    (maphash (lambda (key value)
-               (if (and (null found) (eq value f))
-                   (let ((cut
-                          (position-if
-                           (lambda (c) (or (char= c #\Space) (char= c #\#)))
-                           key)))
-                     (setq found (if cut (subseq key 0 cut) key)))))
-             rontolisp::%clojure-shared-values)
+  "The oracle's class name of the function F: the one its definition
+   registered, clojure.core$NAME munged for a core function the shared-value
+   table holds, else an anonymous fn's."
+  (let ((found (gethash f rontolisp::%clojure-fn-classes)))
     (if found
-        (concatenate 'string "clojure.core$" (rontolisp::%clojure-munge found))
-        "clojure.lang.AFunction$fn")))
+        found
+        (progn
+          (maphash (lambda (key value)
+                     (if (and (null found) (eq value f))
+                         (let ((cut
+                                (position-if (lambda (c)
+                                               (or (char= c #\Space)
+                                                   (char= c #\#))) key)))
+                           (setq found (if cut (subseq key 0 cut) key)))))
+                   rontolisp::%clojure-shared-values)
+          (if found
+              (concatenate 'string "clojure.core$"
+                           (rontolisp::%clojure-munge found))
+              "clojure.lang.AFunction$fn")))))
 
 ;; clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts
 ;; sets and its assert reads: false until a program sets it (the oracle starts
@@ -14287,6 +15206,24 @@
         (t (rontolisp::%clojure-class-cast-exception
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of v)
                          " cannot be cast to class java.lang.Boolean")))))
+
+;; clojure.lang.RT/nextID: the next of a program-wide count, which tools.reader's
+;; syntax-quote spells into its gensyms (x__1__auto__) and the oracle's gensym
+;; draws from too. Only uniqueness is promised: the oracle's numbers depend on
+;; everything its runtime compiled before.
+(defvar rontolisp::%clojure-next-id 0)
+
+(defun rontolisp::%clojure-rt-next-id ()
+  "RT/nextID: the next id, one above the last."
+  (setq rontolisp::%clojure-next-id (+ rontolisp::%clojure-next-id 1)))
+
+(defun rontolisp::%clojure-auto-gensym (prefix)
+  "The fresh symbol a syntax-quote's PREFIX# names, spelled PREFIX__N__auto__
+   like the oracle's, N drawn from RT/nextID's count, so it never spells a name
+   tools.reader's syntax-quote spelled."
+  (make-symbol (concatenate 'string prefix "__"
+                            (princ-to-string (rontolisp::%clojure-rt-next-id))
+                            "__auto__")))
 
 ;;;; Atoms across request threads.
 ;;
@@ -19983,8 +20920,8 @@
 (defun rontolisp::%clojure-rd-number (token)
   "The number the number-shaped TOKEN spells, or NIL (the source reader's
    parseNumber): a ratio, a 0x hex or Nr radix integer, a leading-zero
-   octal, an M decimal as its exact ratio, a double, or an integer; the
-   integer forms take an N suffix."
+   octal, an M decimal, a double, or an integer; the integer forms take an N
+   suffix."
   (let* ((n (length token))
          (neg (char= (char token 0) #\-))
          (u (if (or neg (char= (char token 0) #\+)) 1 0))
@@ -20017,10 +20954,9 @@
           ((char= last #\M)
            (let ((decimal (rontolisp::%clojure-rd-decimal token (- n 1))))
              (if decimal
-                 (let ((exact
-                        (* (car (cdr decimal))
-                           (expt 10 (car (cdr (cdr decimal)))))))
-                   (if (car decimal) (- exact) exact))
+                 (rontolisp::%clojure-bd-make
+                  (if (car decimal) (- (car (cdr decimal))) (car (cdr decimal)))
+                  (- (car (cdr (cdr decimal)))))
                  nil)))
           ((or (search "." token) (search "e" token) (search "E" token))
            (let ((decimal
@@ -25036,7 +25972,12 @@
    (as many as the digits take without D), scaled by 10^K, signed when
    negative or AT, right-justified in W columns, or W OVERFLOW characters
    when it does not fit."
-  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
+  ;; of the decimal family
+  (if (not (numberp x))
+      (if (rontolisp::%clojure-bd-p x)
+          (setq x (rontolisp::%clojure-bd-rational x))
+          (rontolisp::%clojure-pp-not-a-number x)))
   (let* ((neg (< x 0))
          (parts
           (rontolisp::%clojure-pp-float-parts
@@ -25092,7 +26033,12 @@
    before the point and D after it, then the exponent MARK (E), its sign and
    at least E digits; signed when negative or AT, right-justified in W
    columns, or W OVERFLOW characters when it does not fit."
-  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
+  ;; of the decimal family
+  (if (not (numberp x))
+      (if (rontolisp::%clojure-bd-p x)
+          (setq x (rontolisp::%clojure-bd-rational x))
+          (rontolisp::%clojure-pp-not-a-number x)))
   (let* ((x (rontolisp::%clojure-pp-convert-ratio x))
          (neg (< x 0))
          (parts (rontolisp::%clojure-pp-float-parts (if neg (- x) x)))
@@ -25159,7 +26105,12 @@
   "cl-format's ~G of X: ~F, then four (or E + 2) blanks, when the number's
    magnitude leaves its D significant digits room on both sides of the
    point; else ~E."
-  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
+  ;; of the decimal family
+  (if (not (numberp x))
+      (if (rontolisp::%clojure-bd-p x)
+          (setq x (rontolisp::%clojure-bd-rational x))
+          (rontolisp::%clojure-pp-not-a-number x)))
   (let* ((c (rontolisp::%clojure-pp-convert-ratio x))
          (parts (rontolisp::%clojure-pp-float-parts (if (< c 0) (- c) c)))
          (n (if (and (floatp c) (= c 0)) 0 (+ (cdr parts) 1)))
@@ -25182,6 +26133,8 @@
    ((null x)
     (rontolisp::%clojure-null-pointer-exception
      "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"))
+   ;; a decimal as its double, like a ratio: an arm of the decimal family
+   ((rontolisp::%clojure-bd-p x) (setq x (rontolisp::%clojure-bd-double x)))
    ((not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
    ((and (integerp x) (typep x '(signed-byte 64))))
    ((integerp x) (setq x (float x 1d0)))
@@ -26616,7 +27569,8 @@
   (if (null x)
       (rontolisp::%clojure-null-pointer-exception
        "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null")
-      (if (numberp x)
+      ;; a decimal is a number to intCast: an arm of the decimal family
+      (if (or (numberp x) (rontolisp::%clojure-bd-p x))
           (let ((n (rontolisp::%clojure-int-cast x)))
             (rontolisp::%clojure-int-hex (if (< n 0) (+ n 4294967296) n)))
           (rontolisp::%clojure-class-cast-exception
@@ -26641,14 +27595,19 @@
   "X as a java.lang.Math double argument takes it: a number widened to a
    double; nil is the oracle's doubleValue NullPointerException, anything
    else its ClassCastException to Number (the reflector casts the argument)."
-  (if (numberp x)
-      (float x)
-      (if (null x)
-          (rontolisp::%clojure-null-pointer-exception
-           "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
-          (rontolisp::%clojure-class-cast-exception
-           (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
-                        " cannot be cast to class java.lang.Number")))))
+  ;; a decimal its nearest double, BigDecimal.doubleValue: an arm of the decimal
+  ;; family
+  (if (rontolisp::%clojure-bd-p x)
+      (rontolisp::%clojure-bd-double x)
+      (if (numberp x)
+          (float x)
+          (if (null x)
+              (rontolisp::%clojure-null-pointer-exception
+               "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
+              (rontolisp::%clojure-class-cast-exception
+               (concatenate 'string "class "
+                            (rontolisp::%clojure-class-name-of x)
+                            " cannot be cast to class java.lang.Number"))))))
 
 (defun rontolisp::%clojure-math-floor (x)
   "(Math/floor x) of one argument: the double below X, exact like the
@@ -26691,7 +27650,8 @@
    (ratios truncated, out-of-range the oracle's long refusal); nil is the
    oracle's doubleValue NullPointerException, anything else no number its
    ClassCastException to Number (the reflector casts the argument)."
-  (if (numberp x)
+  ;; a decimal is a number to longCast: an arm of the decimal family
+  (if (or (numberp x) (rontolisp::%clojure-bd-p x))
       (rontolisp::%clojure-long-cast x)
       (if (null x)
           (rontolisp::%clojure-null-pointer-exception

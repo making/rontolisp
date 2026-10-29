@@ -2509,9 +2509,10 @@ public final class ClojureLowering {
 				&& (head.name().equals("def") || head.name().equals("defn") || head.name().equals("defn-")
 						|| head.name().equals("defonce"))
 				&& ClojureLowerUtil.nameIsDynamic(items.get(1))
-				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name
-				&& varSym(varKey(this.currentNs, name.name())).equals(ClojureLowerUtil.idSym(name.name()))) {
-			this.shadowedSpecials.add(name.name());
+				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol nameSym
+				&& ownDefName(nameSym.name()) instanceof String name
+				&& varSym(varKey(this.currentNs, name)).equals(ClojureLowerUtil.idSym(name))) {
+			this.shadowedSpecials.add(name);
 		}
 		for (LispVal item : items) {
 			scanDynamicDefinitions(item);
@@ -2540,7 +2541,7 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			String key = preDeclareUnlessCoreShadow(items.get(1), "def", Kind.VARIABLE, false);
+			String key = preDeclareDef(items.get(1), "def");
 			if (key != null && items.size() == 2) {
 				this.unboundCapable.add(key);
 			}
@@ -2559,7 +2560,7 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
-			preDeclareUnlessCoreShadow(items.get(1), "defonce", Kind.VARIABLE, false);
+			preDeclareDef(items.get(1), "defonce");
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defstruct")) {
 			preDeclareUnlessCoreShadow(items.get(1), "defstruct", Kind.VARIABLE, false);
@@ -2602,8 +2603,11 @@ public final class ClojureLowering {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
 			for (int i = 1; i < items.size(); i++) {
-				String key = internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
-						ClojureLowerUtil.nameIsPrivate(items.get(i)));
+				String name = ownDefName(ClojureLowerUtil.plainName(items.get(i), "declare"));
+				if (name == null) {
+					continue; // another namespace's: the lowering refuses it
+				}
+				String key = internDeclared(name, ClojureLowerUtil.nameIsPrivate(items.get(i)));
 				this.globals.putIfAbsent(key, Kind.DECLARED);
 				this.unboundCapable.add(key);
 			}
@@ -2630,7 +2634,10 @@ public final class ClojureLowering {
 	 * its kind, so a form above the definition (or a later buffer) resolves it.
 	 */
 	private String preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
-		String name = ClojureLowerUtil.plainName(nameDatum, what);
+		return preDeclareName(nameDatum, ClojureLowerUtil.plainName(nameDatum, what), kind, privateHead);
+	}
+
+	private String preDeclareName(LispVal nameDatum, String name, Kind kind, boolean privateHead) {
 		String key = internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum));
 		this.globals.put(key, kind);
 		return key;
@@ -2647,10 +2654,66 @@ public final class ClojureLowering {
 	 */
 	private @Nullable String preDeclareUnlessCoreShadow(LispVal nameDatum, String what, Kind kind,
 			boolean privateHead) {
-		if (ClojureCoreNames.contains(ClojureLowerUtil.plainName(nameDatum, what))) {
+		String name = ClojureLowerUtil.plainName(nameDatum, what);
+		if (ClojureCoreNames.contains(name) && this.globals.get(varKey(this.currentNs, name)) != Kind.DECLARED) {
 			return null;
 		}
+		// a declare above already made the name the program's there, so the uses
+		// between it and the definition reach the definition, like any other name's
+		// (tools.reader.edn's (declare read) over its excluded clojure.core/read)
 		return preDeclare(nameDatum, what, kind, privateHead);
+	}
+
+	/**
+	 * {@link #preDeclareUnlessCoreShadow} of a {@code def}/{@code defonce} name, read as
+	 * {@link #defName} reads it. Null as well for another namespace's name, which the
+	 * lowering refuses at its position.
+	 */
+	private @Nullable String preDeclareDef(LispVal nameDatum, String what) {
+		String name = ownDefName(ClojureLowerUtil.plainName(nameDatum, what));
+		if (name == null || ClojureCoreNames.contains(name)) {
+			return null;
+		}
+		return preDeclareName(nameDatum, name, Kind.VARIABLE, false);
+	}
+
+	/**
+	 * The name a {@code def}, {@code defonce} or {@code declare} interns: a symbol
+	 * qualified with the current namespace (or an alias of it) names its bare var, as the
+	 * oracle's {@code def} takes it -- so the def a syntax-quote template spells defines
+	 * the var a later bare use reaches. Any other qualifier is refused with the oracle's
+	 * message: an existing var of another namespace, else one that does not exist.
+	 * @param nameDatum the name datum
+	 * @param what the defining form, for the refusal
+	 * @return the bare name
+	 */
+	String defName(LispVal nameDatum, String what) {
+		String written = ClojureLowerUtil.plainName(nameDatum, what);
+		String name = ownDefName(written);
+		if (name != null) {
+			return name;
+		}
+		int slash = qualifierSlash(written);
+		String head = written.substring(0, slash);
+		boolean core = ClojureCoreNames.NAMESPACE.equals(head)
+				|| ClojureCoreNames.NAMESPACE.equals(ns().aliases.get(head));
+		boolean exists = core ? ClojureCoreNames.contains(written.substring(slash + 1)) : lookupVar(written) != null;
+		throw new LispReadException(
+				exists ? "Can't create defs outside of current ns" : "Can't refer to qualified var that doesn't exist");
+	}
+
+	/**
+	 * A plain name with the current namespace's qualifier dropped: itself unqualified,
+	 * null when another namespace qualifies it.
+	 */
+	@Nullable String ownDefName(String name) {
+		int slash = qualifierSlash(name);
+		if (slash < 0) {
+			return name;
+		}
+		String head = name.substring(0, slash);
+		return head.equals(this.currentNs) || this.currentNs.equals(ns().aliases.get(head)) ? name.substring(slash + 1)
+				: null;
 	}
 
 	/**
@@ -3628,10 +3691,10 @@ public final class ClojureLowering {
 		int chars = 0;
 		boolean statementInChunk = false;
 		for (LispVal statement : statements) {
-			// a switch weighs nothing and joins the chunk at hand, and the rest weigh
-			// what they print without theirs: a program that sheds them cuts its init
-			// where it did before they existed
-			if (ClojureArms.isSwitch(statement)) {
+			// a switch or a fn-class registration weighs nothing and joins the chunk
+			// at hand, and the rest weigh what they print without them: a program
+			// that sheds them cuts its init where it did before they existed
+			if (ClojureArms.weighsNothing(statement)) {
 				chunk.add(statement);
 				continue;
 			}
@@ -3841,7 +3904,8 @@ public final class ClojureLowering {
 		String ns = this.currentNs;
 		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
 		try {
-			String last = ClojureLowerUtil.plainName(items.get(declare ? items.size() - 1 : 1), head.name());
+			String last = declare ? defName(items.get(items.size() - 1), "declare")
+					: ClojureLowerUtil.plainName(items.get(1), head.name());
 			if (declare) {
 				forms.add(ClojureVarLowering.definedVar(this, last));
 			}
@@ -3856,7 +3920,7 @@ public final class ClojureLowering {
 		return forms;
 	}
 
-	private static @Nullable String definedVarName(List<LispVal> items) {
+	private @Nullable String definedVarName(List<LispVal> items) {
 		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
 			return null;
 		}
@@ -3865,8 +3929,11 @@ public final class ClojureLowering {
 				|| op.equals("defmulti") || op.equals("defonce") || op.equals("defstruct"))) {
 			return null;
 		}
-		return ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name && !name.name().startsWith(":")
-				&& !name.name().equals("&") ? name.name() : null;
+		if (!(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) || name.name().startsWith(":")
+				|| name.name().equals("&")) {
+			return null;
+		}
+		return op.equals("def") || op.equals("defonce") ? ownDefName(name.name()) : name.name();
 	}
 
 	private List<LispVal> topLevelsOf(LispVal form) {
@@ -4389,7 +4456,7 @@ public final class ClojureLowering {
 			return ClojureStateLowering.pvaluesOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-precision")) {
-			return ClojureStateLowering.withPrecisionOf(this, items);
+			return ClojureDecimalLowering.withPrecisionOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-open")) {
 			return ClojureStateLowering.withOpenOf(this, items);
@@ -4535,6 +4602,9 @@ public final class ClojureLowering {
 		}
 		if (ClojureDefaultReaders.isMarker(head)) {
 			return ClojureDefaultReaders.construction(items);
+		}
+		if (ClojureDecimalLowering.isMarker(head)) {
+			return ClojureDecimalLowering.literal(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "if")) {
 			ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
@@ -4907,7 +4977,11 @@ public final class ClojureLowering {
 				// negation; of no operand the oracle's arity refusal.
 				ClojureCoreLowering.arity("-", n, 1, -1);
 				return uncheckedMath(name, lowers(items, 1));
-			case "/", "max", "min", "rem", "mod", "abs", "list", "expt":
+			case "/", "max", "min", "rem", "mod", "abs":
+				// the decimal-aware helper, the plain operator once the decimal family
+				// folds (ClojureDecimalLowering)
+				return ClojureDecimalLowering.call(name, lowers(items, 1));
+			case "list", "expt":
 				return plain(name, items);
 			case "EMPTY-NODE":
 				// g26: the oracle's persistent-vector node is the empty vector
@@ -4925,8 +4999,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "quot":
 				ClojureLowerUtil.isTrue(n == 2, "quot takes two arguments");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), lower(items.get(1)),
-						lower(items.get(2)));
+				return ClojureDecimalLowering.call("truncate", List.of(lower(items.get(1)), lower(items.get(2))));
 			case "nth":
 				return ClojureSeqLowering.nthOf(this, items);
 			case "and":
@@ -4939,11 +5012,11 @@ public final class ClojureLowering {
 				return booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 						ClojureCollectionLowering.equalityRaw(this, items)));
 			case "<", ">", "<=", ">=":
-				return booleanAnswer(plain(name, items));
+				return booleanAnswer(ClojureDecimalLowering.call(name, lowers(items, 1)));
 			case "==":
 				// numeric equality across categories: CL = (1 = 1.0, 0.0 = -0.0)
 				ClojureLowerUtil.isTrue(n >= 1, "== takes at least one argument");
-				return booleanAnswer(plain("=", items));
+				return booleanAnswer(ClojureDecimalLowering.call("=", lowers(items, 1)));
 			case "inc":
 				ClojureLowerUtil.isTrue(n == 1, "inc takes one argument");
 				return uncheckedMath("+", List.of(lower(items.get(1)), new LispInteger(1)));
@@ -4951,7 +5024,7 @@ public final class ClojureLowering {
 				// checked inc: integers are bignums here, so this is inc, with
 				// the oracle's arity wording
 				ClojureCoreLowering.arity("inc'", n, 1, 1);
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
+				return ClojureDecimalLowering.call("+", List.of(lower(items.get(1)), new LispInteger(1)));
 			case "dec":
 				ClojureLowerUtil.isTrue(n == 1, "dec takes one argument");
 				return uncheckedMath("-", List.of(lower(items.get(1)), new LispInteger(1)));
@@ -4959,18 +5032,18 @@ public final class ClojureLowering {
 				// checked dec: integers are bignums here, so this is dec, with
 				// the oracle's arity wording
 				ClojureCoreLowering.arity("dec'", n, 1, 1);
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), lower(items.get(1)), new LispInteger(1));
+				return ClojureDecimalLowering.call("-", List.of(lower(items.get(1)), new LispInteger(1)));
 			case "+'":
 				// checked +: integers are bignums here, so this is +
-				return plain("+", items);
+				return ClojureDecimalLowering.call("+", lowers(items, 1));
 			case "-'":
 				// checked -: integers are bignums here, so this is -, of one or
 				// more arguments
 				ClojureCoreLowering.arity("-'", n, 1, -1);
-				return plain("-", items);
+				return ClojureDecimalLowering.call("-", lowers(items, 1));
 			case "*'":
 				// checked *: integers are bignums here, so this is *
-				return plain("*", items);
+				return ClojureDecimalLowering.call("*", lowers(items, 1));
 			case "not":
 				ClojureLowerUtil.isTrue(n == 1, "not takes one argument");
 				LispSymbol notTemp = freshTemp();
@@ -5036,11 +5109,11 @@ public final class ClojureLowering {
 			case "odd?":
 				return booleanAnswer(plain("oddp", items));
 			case "zero?":
-				return booleanAnswer(plain("zerop", items));
+				return booleanAnswer(ClojureDecimalLowering.call("zerop", lowers(items, 1)));
 			case "pos?":
-				return booleanAnswer(plain("plusp", items));
+				return booleanAnswer(ClojureDecimalLowering.call("plusp", lowers(items, 1)));
 			case "neg?":
-				return booleanAnswer(plain("minusp", items));
+				return booleanAnswer(ClojureDecimalLowering.call("minusp", lowers(items, 1)));
 			case "false?":
 				ClojureLowerUtil.isTrue(n == 1, "false? takes one argument");
 				return booleanAnswer(
@@ -5664,11 +5737,11 @@ public final class ClojureLowering {
 			case "even?" -> sharedValue("even?",
 					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("evenp"), x)));
 			case "zero?" -> sharedValue("zero?",
-					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), x)));
+					ClojureFnLowering.predValue(this, x -> ClojureDecimalLowering.call("zerop", List.of(x))));
 			case "pos?" -> sharedValue("pos?",
-					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), x)));
+					ClojureFnLowering.predValue(this, x -> ClojureDecimalLowering.call("plusp", List.of(x))));
 			case "neg?" -> sharedValue("neg?",
-					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("minusp"), x)));
+					ClojureFnLowering.predValue(this, x -> ClojureDecimalLowering.call("minusp", List.of(x))));
 			case "nil?" -> sharedValue("nil?",
 					ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
 			case "some?" -> sharedValue("some?", ClojureFnLowering.predValue(this, x -> ClojureLowerUtil
@@ -6026,20 +6099,23 @@ public final class ClojureLowering {
 		LispSymbol values = new LispSymbol(mangle(clName + "-values"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(AMPERSAND_REST, values),
 				booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(clName)),
-						values)));
+						ClojureDecimalLowering.function(clName), values)));
 	}
 
-	/** The Common Lisp function a core name names as a value, or null. */
+	/**
+	 * The Common Lisp function a core name names as a value, or null: a numeric
+	 * operator's decimal-aware helper, the operator itself once the decimal family folds
+	 * ({@link ClojureDecimalLowering}).
+	 */
 	static @Nullable String builtinValue(String name) {
 		return switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "length",
-					"car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector", "vectorp",
-					"identity" ->
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs" -> ClojureDecimalLowering.helper(name).name();
+			case "cons", "list", "expt", "apply", "=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop",
+					"plusp", "minusp", "vector", "vectorp", "identity" ->
 				name;
-			case "+'" -> "+";
-			case "-'" -> "-";
-			case "*'" -> "*";
+			case "+'" -> ClojureDecimalLowering.helper("+").name();
+			case "-'" -> ClojureDecimalLowering.helper("-").name();
+			case "*'" -> ClojureDecimalLowering.helper("*").name();
 			case "gensym" -> "gensym";
 			case "count" -> "length";
 			case "first" -> "car";
@@ -6128,6 +6204,10 @@ public final class ClojureLowering {
 			if (!items.isEmpty() && ClojureDefaultReaders.isMarker(items.get(0))) {
 				// an #inst or #uuid literal is already a value: built in place
 				return ClojureDefaultReaders.construction(items);
+			}
+			if (!items.isEmpty() && ClojureDecimalLowering.isMarker(items.get(0))) {
+				// so is a decimal literal, a constant a quoted list holds as is
+				return ClojureDecimalLowering.literal(this, items);
 			}
 			// one constant when every element is one; a nested vector, map, set or
 			// regex literal is built at run time, so the list is too (its element

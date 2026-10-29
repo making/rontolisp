@@ -884,9 +884,15 @@ final class ClojureNamespaceLowering {
 		List<LispVal> calls = new ArrayList<>();
 		for (int i = 0; i < pairs.size(); i += 120) {
 			LispSymbol chunk = ctx.freshTemp();
-			ctx.hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), chunk, ClojureLowerUtil.list(),
+			LispVal defun = ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), chunk, ClojureLowerUtil.list(),
 					ClojureCollectionLowering
-						.mapBuild(new ArrayList<>(pairs.subList(i, Math.min(i + 120, pairs.size()))))));
+						.mapBuild(new ArrayList<>(pairs.subList(i, Math.min(i + 120, pairs.size())))));
+			ctx.hoisted.add(defun);
+			if (ctx.macroEvaluator != null) {
+				// a macro body reading the mapping calls the chunk while it expands
+				// (tools.reader's resolve-symbol under its syntax-quote macro)
+				ctx.macroEvaluator.define(defun);
+			}
 			calls.add(ClojureLowerUtil.list(chunk));
 		}
 		List<LispVal> merge = new ArrayList<>();

@@ -931,14 +931,14 @@ cases:
 
       nil
   - name: numbers
-    # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
-    # prints as the ratio. The oracle prints 1M and 2N with their suffixes.
+    # 1M is a decimal and prints with its M, like the oracle; 2N inside the long range
+    # is a plain integer here and prints without its N (the oracle: (1M 2N)).
     source: |
       (println (list 42 -17 1/2 1.5 1e3))
       (println (list 1M 2N))
     expected: |
       (42 -17 1/2 1.5 1000.0)
-      (1 2)
+      (1M 2)
   - name: reader-comments-commas-discard-and-string-escapes
     source: |
       ;; a comment line
@@ -1582,13 +1582,22 @@ cases:
       11
       21
   - name: declare-forward-declares
+    # A declared name a namespace excludes from clojure.core is its own above the
+    # definition too (tools.reader.edn's (declare read)), on all four backends.
     source: |
       (declare dcl-f)
       (defn dcl-g [] (dcl-f 1))
       (defn dcl-f [x] (* 2 x))
       (println (dcl-g))
+      (ns dcl-ns (:refer-clojure :exclude [read]))
+      (declare read)
+      (defn- dcl-h [x] (read x))
+      (defn read [x] (if (= x :again) :inner (dcl-h :again)))
+      (println (read :x))
+      (in-ns 'user)
     expected: |
       2
+      :inner
   - name: chars-are-characters
     # Character literals print as their glyphs; equality and str see through.
     # Whitespace characters only ever print inside strings here, so no expected
@@ -1621,9 +1630,10 @@ cases:
       b
       same
   - name: radix-integers-and-exact-decimals
-    # 0x, Nr and leading-0 octal spell integers; M is an exact ratio (0.1M is
-    # 1/10, so (+ 0.1M 0.2M) is 3/10); big N values keep their magnitude. The
-    # oracle prints each with its mark (0xFF, 1M, 2N, ...).
+    # 0x, Nr and leading-0 octal spell integers; M is a decimal at the scale its
+    # digits spell (1e3M is 1E+3M, (+ 0.1M 0.2M) the exact 0.3M); an integer past the
+    # long range is the oracle's BigInt and prints its N. Oracle-identical (clj
+    # 1.12.6) but 2N, a plain integer inside the long range here (the oracle: 2N).
     source: |
       (println (list 0xFF 2r101 8r17 16rFF -0xFF 017 36rzz))
       (println (list 2N 99999999999999999999999N))
@@ -1631,9 +1641,9 @@ cases:
       (println (+ 0.1M 0.2M))
     expected: |
       (255 5 15 255 -255 15 1295)
-      (2 99999999999999999999999)
-      (1 1/10 1000)
-      3/10
+      (2 99999999999999999999999N)
+      (1M 0.1M 1E+3M)
+      0.3M
   - name: ns-require-wires-clojure-string
     # (:require [clojure.string :as s :refer [join]]) wires the alias and the
     # referred var; every verb runs over the core string operations. split takes
@@ -2295,7 +2305,8 @@ cases:
       :cce 2 3
   - name: multimethods-dispatch-over-a-table
     # defmulti is a method table plus a dispatcher defun; defmethod stores,
-    # remove-method drops, get-method reads, and a miss falls back to the
+    # remove-method drops, get-method reads (past a miss, the default's method,
+    # like the oracle's MultiFn.getMethod), and a miss falls back to the
     # default dispatch value (:default without an option) or signals.
     source: |
       (defmulti m05 :shape)
@@ -2314,7 +2325,7 @@ cases:
       (println (m05c {:t :a} 41))
       (println ((get-method m05 :circle) {:shape :circle}))
       (remove-method m05 :circle)
-      (println (get-method m05 :circle))
+      (println (= (get-method m05 :circle) (get-method m05 :default)))
       (println (m05 {:shape :circle}))
     expected: |
       1
@@ -2324,7 +2335,7 @@ cases:
       99
       42
       1
-      nil
+      true
       0
   - name: hierarchies-derive-isa-and-prefer
     # derive/underive rewrite the global hierarchy value; isa?/parents/ancestors/
@@ -8788,7 +8799,8 @@ cases:
     # (tools.reader's), reached qualified, while its backquotes stay the reader's;
     # likewise a macro named like a special form (spec.alpha's s/def and s/&) is
     # reached qualified while the bare def, and the & of a parameter vector, stay
-    # the special forms.
+    # the special forms. A def, defonce or declare a template spells takes the name
+    # it qualifies with the namespace as its bare var, as (def sq/x ...) does.
     # Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
       (ns sq (:require [clojure.string :as s]))
@@ -8803,6 +8815,10 @@ cases:
       (defmacro hinted [n] `(defn ~n [^String s#] (.length s#)))
       (hinted slen)
       (println ((thunk 7)) (slen "abc") (:tag (meta (first (nth (macroexpand-1 '(hinted q)) 2)))))
+      (defmacro defsq [] `(do (def sq-made 1) (defonce sq-once 2) (declare sq-fwd)))
+      (defsq)
+      (def sq/sq-own 3)
+      (println sq-made sq/sq-made sq-once sq-own (bound? #'sq-fwd))
       (defmacro syntax-quote [x] (list 'quote [:mine x]))
       (println (sq/syntax-quote 1) `loose)
       (defmacro def [k v] `(swap! sq-registry assoc ~k '~v))
@@ -8817,6 +8833,7 @@ cases:
       true
       sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       7 3 java.lang.String
+      1 1 2 3 false
       [:mine 1] sq/loose
       {:a (inc 1)} [:amp 3] [1 (2)]
       excl/map clojure.core/filter
@@ -9422,8 +9439,10 @@ cases:
     # A fn is the oracle's AFunction: IFn's invoke and applyTo (for any ifn? value),
     # Callable's call, Runnable's run and Comparator's compare, whose boolean answer
     # is AFunction.compare's (true -1, else 1 when the reversed call is true, else
-    # 0). Answers measured against clj 1.12.6; the last line names the fn's
+    # 0). Answers measured against clj 1.12.6; the sixth line names the fn's
     # class AFunction, where the oracle names its own (user$eval157$fn__158$fn__159).
+    # The 1.12 Class/.m spelling of an interface the value implements takes the same
+    # arms, as a call and as a value.
     source: |
       (defn fnrecv-lt [a b] (< a b))
       (println (.call (fn [] 5)) (.run (fn [] 5)) (.invoke (fn [] 5)) (.invoke + 1 2 3) (.applyTo + '(1 2 3)))
@@ -9432,6 +9451,7 @@ cases:
       (println (try (.compare (fn [a b] nil) 1 2) (catch NullPointerException e :npe)))
       (println (try (.compare {:a 1} 1 2) (catch Exception e (.getMessage e))))
       (println (try (.foo (fn [] 1)) (catch Exception e (.getMessage e))))
+      (println (Runnable/.run (fn [] (println 1))) (java.util.concurrent.Callable/.call (fn [] 3)) (java.util.Comparator/.compare fnrecv-lt 2 1) (map Callable/.call [(constantly :k)]) (clojure.lang.IFn/.invoke + 1 2))
     expected: |
       5 nil 5 6 6
       -1 1 0 1 -3
@@ -9439,6 +9459,8 @@ cases:
       :npe
       No matching method compare found taking 2 args for class clojure.lang.PersistentArrayMap
       No matching field found: foo for class clojure.lang.AFunction
+      1
+      nil 3 1 (:k) 3
   - name: instance-calls-reach-a-record-deftype-or-reify-method-or-field
     # An instance call naming a method a defrecord, deftype or reify body implements
     # calls it, and a zero-argument name that is a declared field reads the field,
@@ -10480,14 +10502,87 @@ cases:
     expected: |
       false false false false false true
       true true true true true false true false
-  - name: decimal-and-bigint-literals-are-plain-rationals
-    # A deviation: 1.5M reads as the exact ratio 3/2 and 1M, 2N as integers, so decimal?
-    # is false and ratio?, integer? and int? answer for the rational (the oracle: true
-    # false false false).
+  - name: decimal-literals-are-decimals-and-small-bigint-literals-plain-integers
+    # 1.5M and 1M read as decimals, so decimal? and rational? are true and ratio? and
+    # integer? false, like the oracle; a deviation: 2N inside the long range reads as a
+    # plain integer, so int? answers true for it (the oracle: true false false false
+    # true).
     source: |
       (prn (decimal? 1.5M) (ratio? 1.5M) (integer? 1M) (int? 2N) (rational? 1.5M))
     expected: |
-      false true true true true
+      true false false true true
+  - name: decimals-compute-print-and-compare-at-the-oracles-scales
+    # A decimal is the oracle's BigDecimal: an M literal, bigdec or a read keeps its
+    # scale and prints with its M (str without it, the scientific spelling where the
+    # oracle's toString uses one). Arithmetic combines each pair of operands like the
+    # oracle's Numbers -- a double beside a decimal is double arithmetic, an integer or a
+    # ratio beside one is decimal arithmetic (a non-terminating ratio refused), sums keep
+    # the larger scale, products sum the scales, a quotient is exact at its preferred
+    # scale or refused. = holds between decimals of one value whatever their scales and
+    # never against another kind of number (== does), hash, map and set keys follow =,
+    # and compare, sort, max/min, quot/rem/mod, the casts, format, range, protocols,
+    # multimethods and the number statics (a host one through the java.math.BigDecimal a
+    # decimal crosses as) take them. Oracle-identical (clj 1.12.6, 2026-10-29) but where a
+    # str stands for a bigint inside the long range, a plain integer here.
+    source: |
+      (defn dc-safe [f] (try (f) (catch Exception e "ERR")))
+      (prn (+ 0.1M 0.2M) (* 1.10M 3) (- 5M 1.5M) (/ 1.5M 0.5M) (/ 1M 8) (/ 3 1.5M) (/ 30 1.5M) (/ 2M) (/ 1M 0.5M))
+      (prn (+ 1.5M 1 0.5) (+ 0.5 1 1.5M) (+ 1/2 1/2 1.5M) (* 1/2 1/2 1M) (+ 1 2 0.10M) (- 1.5M 1 2) (* 2 1.5M 2))
+      (prn (- 0.0M) (- 1E+3M) (+ 1E+3M 1) (* 1E+3M 1E+3M) (/ 1E+3M 1E+1M) (- 1.5M 1.5M) (* 0.00M 5) 1.0E-7M 0.000001M 123.456E2M)
+      (prn (< 1M 2 3.5M) (< 1M 3 2) (<= 1.5M 1.50M) (>= 2.5M 2.5) (> 3 2.5M 1/2) (== 1.5M 3/2 1.50M) (== 1.5M 1.5) (== 0.0M 0))
+      (prn (= 1.5M 1.50M) (= 1.5M 1.5) (= 1M 1) (= [1.5M] [1.50M]) (= {:a 1.5M} {:a 1.50M}) (not= 1.5M 1.50M) (= 1.5M 3/2))
+      (prn (compare 1.5M 2) (compare 2 1.5M) (compare 1.5M 1.5) (compare 1.50M 1.5M) (sort [2.5M 1 3/2 0.5 1.25M]) (sort > [2.5M 1 3/2]))
+      (prn (hash 1.5M) (hash 1.50M) (hash 0.0M) (hash 100M) (hash 1E+2M) (hash -2.5M) (.hashCode 1.50M) (.hashCode 1.5M))
+      (prn (get {1.5M :a} 1.50M) (contains? #{1.5M} 1.50M) (count (distinct [1.5M 1.50M 1.500M])) (frequencies [1.5M 1.50M 2M]) (keys {1.50M 1}) (get {1.5M :a} 3/2))
+      (prn (max 1.5M 1.50M) (min 1.5M 1.50M) (max 1 2.5M 2) (min 3 2.5M 2.5) (max 1.5M) (abs -1.50M) (abs 1.5M) (:p (max-key :p {:p 1.5M} {:p 2M} {:p 0.5M})) (:p (min-key :p {:p 1.5M} {:p 1.50M})))
+      (prn (quot -7.5M 2) (rem -7.5M 2) (mod -7.5M 2) (mod 7.5M -2) (mod 7.5M 2) (quot 7.5M 2.5) (rem 7.5M 2.5) (mod -1.5M 0.5M) (quot 1E+3M 7))
+      (prn (dc-safe #(with-precision 3 :rounding UNNECESSARY (/ 1M 3))) (dc-safe #(/ 1M 0)) (/ 1.5M 0.0) (dc-safe #(quot 1.5M 0M)) (dc-safe #(+ 1.5M :a)) (dc-safe #(< 1.5M 1/3)) (dc-safe #(+ 1.5M 1/3)))
+      (prn (double 1.5M) (double 0.1M) (long 1.99M) (long -1.99M) (int 2.7M) (short 3.9M) (byte -1.5M) (float 1.5M) (str (bigint 2.7M)) (biginteger -2.7M) (num 1.5M) (unchecked-long 2.9M) (unchecked-int -2.9M))
+      (prn (bigdec "1.50") (bigdec "-1e3") (bigdec "1.5E-3") (bigdec ".5") (bigdec 100.0) (bigdec 1/8) (bigdec 1.5M) (bigdec -0.0) (rationalize 1.50M) (str (rationalize 1E+2M)))
+      (prn (dc-safe #(bigdec "abc")) (dc-safe #(bigdec " 1")) (dc-safe #(numerator 1.5M)) (dc-safe #(long 1e20M)))
+      (prn (decimal? 1.5) (decimal? 3/2) (number? 1.5M) (float? 1.5M) (zero? 0.00M) (pos? 0.1M) (neg? -0.1M) (NaN? 1.5M) (infinite? 1.5M) (int? 1M))
+      (prn (format "%s|%.2f|%e|%g|%10.3f|%,.2f|%.0f|%f" 1.5M 1.555M 12345.678M 0.0001234M 3.14159M 1234567.891M 2.5M 1.5M))
+      (prn (dc-safe #(format "%d" 1.5M)) (format "%S" 1.5M) (format "%.3e" 1E+3M) (format "%g" 123456789M))
+      (prn (read-string "1.5M") (read-string "[1.50M -2M 1e3M]") (pr-str 1.5M) (read-string (pr-str [1.5M 2.50M])) (decimal? (read-string "1.5M")) (= 1.5M (read-string "1.50M")))
+      (prn (range 0 1 0.25M) (range 1M 3) (range 0.5M 2 0.5) (reduce + [1.5M 2.5M 1]) (apply + [0.1M 0.2M]) (map inc [1.5M 2.5M]) (map dec [1.5M]) (reduce * [1.5M 2]) (apply max [1M 2.5M 2]))
+      (prn (instance? Number 1.5M) (instance? java.math.BigDecimal 1.5M) (instance? java.math.BigDecimal 1.5) (instance? Comparable 1.5M) (Math/floor 1.5M) (Math/log 1M) (Integer/toHexString 255M))
+      (defprotocol DcP (dc-describe [x]))
+      (extend-protocol DcP java.math.BigDecimal (dc-describe [x] (str "dec " x)) Number (dc-describe [x] (str "num " x)))
+      (defmulti dc-kind class)
+      (defmethod dc-kind java.math.BigDecimal [x] :decimal)
+      (defmethod dc-kind Number [x] :number)
+      (defmethod dc-kind :default [x] :other)
+      (prn (dc-describe 1.5M) (dc-describe 1) (dc-describe 1.5) (dc-kind 1.5M) (dc-kind 1) (dc-kind :a))
+      (prn '(1.5M 2) (quote [1.50M {:a 2M}]) (first '(1.5M)) (str "x" 1.5M "y") (print-str 1.5M [2.50M]) (println-str 1.5M) [1.5M] {:a 1.5M} #{1.5M})
+      (defmacro dc-twice [x] `(* 2 ~x))
+      (defmacro dc-const [] 2.50M)
+      (prn (dc-twice 1.5M) (dc-const) (let [x 1.25M] (dc-twice x)))
+      (println 1.5M (bigdec "2.50") [1.5M] (*' 99999999999 99999999999) [(*' 9223372036854775807 2)] (str (*' 9223372036854775807 2)))
+    expected: |
+      0.3M 3.30M 3.5M 3M 0.125M 2M 2E+1M 0.5M 2M
+      3.0 3.0 2.5M 0.25M 3.10M -1.5M 6.0M
+      0.0M -1E+3M 1001M 1E+6M 1E+2M 0.0M 0.00M 1.0E-7M 0.000001M 12345.6M
+      true false true true true true true true
+      true false false true true false false
+      -1 1 0 0 (0.5 1 1.25M 3/2 2.5M) (2.5M 3/2 1)
+      466 466 0 29 29 -774 4652 466
+      :a true 1 {1.5M 2, 2M 1} (1.50M) nil
+      1.50M 1.50M 2.5M 2.5 1.5M 1.50M 1.5M 2M 1.50M
+      -3.0M -1.5M 0.5M -0.5M 1.5M 3.0 0.0 0.0M 142M
+      "ERR" "ERR" ##Inf "ERR" "ERR" "ERR" "ERR"
+      1.5 0.1 1 -1 2 3 -1 1.5 "2" -2 1.5M 2 -2
+      1.50M -1E+3M 0.0015M 0.5M 100.0M 0.125M 1.5M 0.0M 3/2 "100"
+      "ERR" "ERR" "ERR" "ERR"
+      false false true false true true true false false false
+      "1.5|1.56|1.234568e+04|0.000123400|     3.142|1,234,567.89|3|1.500000"
+      "ERR" "1.5" "1.000e+03" "1.23457e+08"
+      1.5M [1.50M -2M 1E+3M] "1.5M" [1.5M 2.50M] true true
+      (0 0.25M 0.50M 0.75M) (1M 2M) (0.5M 1.0 1.5) 5.0M 0.3M (2.5M 3.5M) (0.5M) 3.0M 2.5M
+      true true false true 1.0 0.0 "ff"
+      "dec 1.5" "num 1" "num 1.5" :decimal :number :other
+      (1.5M 2) [1.50M {:a 2M}] 1.5M "x1.5y" "1.5M [2.50M]" "1.5M\n" [1.5M] {:a 1.5M} #{1.5M}
+      3.0M 2.50M 2.50M
+      1.5M 2.50M [1.5M] 9999999999800000000001N [18446744073709551614N] 18446744073709551614
   - name: identical-compares-numbers-and-symbols-by-value
     # A deviation: identical? is eql here, so two numbers or two symbols of one value are
     # identical (the oracle: false for boxed 1000, 1.5 and two read symbols), while two
@@ -10783,15 +10878,16 @@ cases:
       1 1
       :t true
       (:refused :refused :refused :refused :refused :refused :refused)
-    # Oracle-identical (clj 1.12.6) in the values; the representation deviates (see
-    # decimal-and-bigint-literals-are-plain-rationals), so a bigint prints through str and a
-    # bigdec through double, and the refusal texts are ours (only that it signals is pinned).
-    # bigdec of a double and rationalize read the shortest decimal the double prints as
-    # (0.1 is 1/10, not the nearest ratio of its bits).
+    # Oracle-identical (clj 1.12.6) in the values; a bigint inside the long range is a
+    # plain integer here (see decimal-literals-are-decimals-and-small-bigint-literals-plain-integers),
+    # so it prints through str, and the refusal texts are ours (only that it signals is
+    # pinned). bigdec answers the oracle's decimal at its scale, of a double the shortest
+    # decimal the double prints as (BigDecimal.valueOf), and so does rationalize (0.1 is
+    # 1/10, not the nearest ratio of its bits).
     source: |
       (defn nc-refused [f] (try (f) :no (catch Exception e :refused)))
       (prn (map #(str (bigint %)) [1 1.5 -1.5 1/2 7/2 -7/2 1e20 "123" "-45" 1N 1.5M -0.9]) (map #(str (biginteger %)) [1 1.5 7/2 "12"]) (str (apply bigint [3])))
-      (prn (map #(double (bigdec %)) [1 1.5 1/2 0.1 "1.5" "0.25" "1e3" "-.5" 2N 1e20 1e-5 123.456 -7/8 3/20]) (apply double [(bigdec 1)]))
+      (prn (map bigdec [1 1.5 1/2 0.1 "1.5" "0.25" "1e3" "-.5" 2N 1e20 1e-5 123.456 -7/8 3/20]) (apply bigdec [1]))
       (prn (rationalize 0.5) (rationalize 1) (rationalize 1/2) (rationalize 0.1) (rationalize 1.5) (rationalize nil) (str (rationalize 3.0)) (rationalize 1e-5) (rationalize 0.3333333333333333) (rationalize -0.25) (rationalize 123.456) (str (rationalize 1e20)) (rationalize 1.5M) (map rationalize [0.5 2]))
       (prn (numerator 1/2) (denominator 1/2) (numerator 6/4) (denominator -3/6) (numerator -3/6) (map numerator [1/2 3/4]) (map denominator [1/2 3/4]) (apply numerator [5/3]))
       (prn (unchecked-int 1) (unchecked-int 2.7) (unchecked-int -2.7) (unchecked-int 3000000000) (unchecked-int -3000000000) (unchecked-int 2147483648) (unchecked-int 1/2) (unchecked-int \a) (unchecked-int 1e20) (unchecked-int -1e20) (unchecked-int ##NaN) (unchecked-int ##Inf) (unchecked-int 100000000000000000000) (map unchecked-int [4294967297 5]))
@@ -10804,7 +10900,7 @@ cases:
       (prn (map nc-refused [#(unchecked-int nil) #(unchecked-int "a") #(unchecked-long \a) #(unchecked-long nil) #(unchecked-short \a) #(unchecked-byte \a) #(unchecked-byte nil) #(unchecked-double \a) #(unchecked-double nil) #(unchecked-float \a) #(unchecked-char nil) #(unchecked-char "a")]))
     expected: |
       ("1" "1" "-1" "0" "3" "-3" "100000000000000000000" "123" "-45" "1" "1" "0") ("1" "1" "3" "12") "3"
-      (1.0 1.5 0.5 0.1 1.5 0.25 1000.0 -0.5 2.0 1.0E20 1.0E-5 123.456 -0.875 0.15) 1.0
+      (1M 1.5M 0.5M 0.1M 1.5M 0.25M 1E+3M -0.5M 2M 1.0E+20M 0.000010M 123.456M -0.875M 0.15M) 1M
       1/2 1 1/2 1/10 3/2 nil "3" 1/100000 3333333333333333/10000000000000000 -1/4 15432/125 "100000000000000000000" 3/2 (1/2 2)
       1 2 3 2 -1 (1 3) (2 4) 5
       1 2 -2 -1294967296 1294967296 -2147483648 0 97 2147483647 -2147483648 0 2147483647 1661992960 (1 5)
@@ -14743,9 +14839,26 @@ cases:
     # PersistentArrayMap/createWithCheck builds the map of a flat object array's
     # alternating keys and values: a repeated key is the oracle's Duplicate key
     # (even a dangling last one, which itself is dropped), nil the oracle's
-    # NullPointerException. Runs on every backend. Oracle-identical (clj 1.12.6,
-    # 2026-10-13).
+    # NullPointerException. RT/map is the same build, PersistentHashSet/
+    # createWithCheck the set's, PersistentList/create a list of a List's
+    # members; RT/nextID counts up; BigInt/fromBigInteger and
+    # Numbers/reduceBigInt keep the integer, and an integer answers BigInteger's
+    # negate and bitLength (tools.reader's readers). A clojure.lang class of the
+    # oracle's jar is a dispatch value no value here answers. Runs on every
+    # backend. Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29).
     source: |
+      (println (pr-str (clojure.lang.RT/map (object-array [:a 1 :b 2]))))
+      (println (pr-str (try (clojure.lang.RT/map (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
+      (println (pr-str (clojure.lang.PersistentHashSet/createWithCheck [1 2])))
+      (println (pr-str (try (clojure.lang.PersistentHashSet/createWithCheck [1 1]) (catch IllegalArgumentException e (ex-message e)))))
+      (println (pr-str (clojure.lang.PersistentList/create [1 2 3])))
+      (println (pr-str (let [a (clojure.lang.RT/nextID) b (clojure.lang.RT/nextID)] (< a b))))
+      (println (pr-str [(= 5 (clojure.lang.BigInt/fromBigInteger (biginteger 5))) (= 7 (clojure.lang.Numbers/reduceBigInt (bigint 7)))]))
+      (println (pr-str [(.negate (biginteger 5)) (.bitLength (biginteger 255)) (.bitLength (biginteger -256))]))
+      (defmulti treader-cm class)
+      (defmethod treader-cm clojure.lang.PersistentVector$ChunkedSeq [_] :chunked)
+      (defmethod treader-cm :default [_] :other)
+      (println (pr-str [(treader-cm [1]) (treader-cm "s")]))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2]))))
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array []))))
@@ -14756,6 +14869,15 @@ cases:
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck nil) (catch NullPointerException e :nil))))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2 :c 3]))))
     expected: |
+      {:a 1, :b 2}
+      :dup
+      #{1 2}
+      "Duplicate key: 1"
+      (1 2 3)
+      true
+      [true true]
+      [-5 8 8]
+      [:other :other]
       {:a 1, :b 2}
       :dup
       {}
@@ -15665,19 +15787,36 @@ cases:
     # dashes, over the str of the value. clojure.lang.Compiler/demunge spells a
     # class name back, $ as /. A fn's .getClass names the class the oracle
     # compiles it to: a core function's clojure.core$name (spec.alpha's fn-sym
-    # demunges it to name a bare predicate), any other fn an anonymous one's
-    # (the oracle's ns$enclosing$fn__N, here no fn carries its own name).
-    # Oracle-identical (clj 1.12.6, 2026-10-13; the last two lines 2026-10-29).
+    # demunges it to name a bare predicate), a defn's ns$name munged (dynamic,
+    # redefinable, redefined and several arities alike) and a def'd fn literal's
+    # (fn or #()), whichever var holds it after, any other fn an anonymous one's
+    # (the oracle's ns$enclosing$fn__N; here clojure.lang.AFunction$fn).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the fourth line 2026-10-29, the
+    # last two 2026-10-30).
     source: |
       (prn (munge "foo-bar") (munge "+") (munge "a,b") (munge 1))
       (prn (namespace-munge "a.b-c") (namespace-munge "a/b"))
       (prn (munge "a'b\"c[d]") (clojure.lang.Compiler/demunge "clojure.core$int_QMARK_") (clojure.lang.Compiler/demunge "a_SINGLEQUOTE_b_LBRACK_c$d"))
       (prn (.getName (.getClass int?)) (.. inc getClass getName) (boolean (re-matches #".*\$fn(__\d+)?" (.getName (.getClass (fn [x] x))))))
+      (ns fn-class.my-ns)
+      (defn my-pred? [x] (int? x))
+      (defn ^:dynamic dyn-f ([] 1) ([x] x))
+      (defn twice [] 1)
+      (defn twice [] 2)
+      (defn ^:redef rf [x] x)
+      (def g (fn [x] x))
+      (def h #(inc %))
+      (def k g)
+      (prn (.getName (.getClass my-pred?)) (.. dyn-f getClass getName) (.. twice getClass getName) (clojure.lang.Compiler/demunge (.getName (.getClass my-pred?))))
+      (prn (.. g getClass getName) (.. h getClass getName) (.. k getClass getName) (.. rf getClass getName))
+      (in-ns 'user)
     expected: |
       "foo_bar" "_PLUS_" "a,b" "1"
       "a.b_c" "a/b"
       "a_SINGLEQUOTE_b_DOUBLEQUOTE_c_LBRACK_d_RBRACK_" "clojure.core/int?" "a'b[c/d"
       "clojure.core$int_QMARK_" "clojure.core$inc" true
+      "fn_class.my_ns$my_pred_QMARK_" "fn_class.my_ns$dyn_f" "fn_class.my_ns$twice" "fn-class.my-ns/my-pred?"
+      "fn_class.my_ns$g" "fn_class.my_ns$h" "fn_class.my_ns$g" "fn_class.my_ns$rf"
   - name: rt-check-spec-asserts-is-a-boolean-static-a-program-sets
     # clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts sets
     # and its assert reads, by Class/field and by (. Class field): false at the start, a
@@ -15762,15 +15901,20 @@ cases:
       nil
   - name: ns-map-answers-interns-refers-and-core-vars
     # ns-map holds the interns, the refers and the referred core vars, each
-    # as its var. Oracle-identical (clj 1.12.6, 2026-10-13).
+    # as its var -- read by a macro body too, while it expands (tools.reader's
+    # resolve-symbol under its syntax-quote macro). Oracle-identical (clj
+    # 1.12.6, 2026-10-13; the macro, 2026-10-29).
     source: |
       (println (get (ns-map 'user) 'f67-pub-x))
       (println (get (ns-map 'user) 'map))
       (println (get (ns-map 'user) 'f67-no-such-var))
+      (defmacro treader-mapped? [s] (contains? (ns-map *ns*) s))
+      (println (treader-mapped? map) (treader-mapped? treader-no-such-var))
     expected: |
       #'user/f67-pub-x
       #'clojure.core/map
       nil
+      true false
   - name: alias-refer-ns-unmap-and-ns-unalias-wire-namespaces
     # alias wires an alias and refer refers vars for the forms below; ns-unmap
     # and ns-unalias forget them again. Oracle-identical (clj 1.12.6,
@@ -15825,9 +15969,8 @@ cases:
       40
   - name: checked-arithmetic-is-plain-arithmetic-that-never-overflows
     # inc', dec', +', -' and *' are the plain verbs: integers are bignums here,
-    # so nothing overflows. Oracle-checked (clj 1.12.6, 2026-10-13) up to the
-    # big-integer mark: the oracle prints one past the long range with an N,
-    # which no value prints here (see decimal? in deviations.md).
+    # so nothing overflows, and one past the long range is the oracle's BigInt,
+    # printed with its N. Oracle-identical (clj 1.12.6, 2026-10-29).
     source: |
       (println (+' 1 2 3) (-' 10 1 2) (*' 2 3 4) (inc' 5) (dec' 5) (+') (*') (-' 5) (+' 5) (*' 5))
       (println (+' 9223372036854775807 1) (*' 9223372036854775807 2) (inc' 9223372036854775807) (dec' -9223372036854775808))
@@ -15835,7 +15978,7 @@ cases:
       (println (+' 1.5 2) (-' 1/2 1) (*' 1.5 1/2) (inc' 1.5) (dec' 1/2))
     expected: |
       6 7 24 6 4 0 1 -5 5 5
-      9223372036854775808 18446744073709551614 9223372036854775808 -9223372036854775809
+      9223372036854775808N 18446744073709551614N 9223372036854775808N -9223372036854775809N
       (4 6) (2 3) 6 6 24 4
       3.5 -1/2 0.75 2.5 -1/2
   - name: checked-arithmetic-refuses-non-numbers-with-the-oracles-classes
@@ -16004,7 +16147,11 @@ cases:
     # both directions (a value removal and a head call sees it, a head prefers
     # a value reads it). A call over a computed multimethod -- a local, a var's
     # deref (spec.alpha's (methods @mmvar)) -- reads the same registry
-    # (2026-10-29). Oracle-identical (clj 1.12.6, 2026-10-26) except the
+    # (2026-10-29). get-method and a multimethod's MultiFn members
+    # .getMethod and .dispatchFn (spec.alpha's multi-spec reads them through a
+    # hinted var deref) answer MultiFn.getMethod: the exact row, the hierarchy
+    # search, the Object slot (never for nil), the default, else nil
+    # (2026-10-30). Oracle-identical (clj 1.12.6, 2026-10-26) except the
     # two wordings the head already customizes: a value applied to the wrong
     # count reports the head call's words (like g39's isa?/aget), and a
     # non-multimethod reports the value's refusal where the oracle throws
@@ -16065,6 +16212,23 @@ cases:
       (println (try (g40-m {:tag :b}) (catch IllegalArgumentException e :no-method)))
       (println (try ((fn [f m] (f m)) g40-gm g40-m) (catch clojure.lang.ArityException e (.getMessage e))))
       (println (try ((fn [f] (f 42 :a)) g40-gm) (catch UnsupportedOperationException e (.getMessage e))))
+      (defmulti mfn-d :tag)
+      (defmethod mfn-d :a [_] :A!)
+      (defmethod mfn-d ::g40-parent [_] :P!)
+      (defmethod mfn-d :default [_] :D!)
+      (def mfn-v #'mfn-d)
+      (let [^clojure.lang.MultiFn mm @mfn-v
+            f (fn [x] (when (.getMethod mm ((.dispatchFn mm) x)) (mm x)))]
+        (println (map f [{:tag :a} {:tag ::g40-child} {:tag :zz}])))
+      (println ((.dispatchFn ^clojure.lang.MultiFn @mfn-v) {:tag :q}) (.dispatchFn g40-h))
+      (println (= (get-method mfn-d ::g40-child) (g40-gm mfn-d ::g40-parent) (.getMethod mfn-d ::g40-child))
+               (= (get-method mfn-d :zz) (.getMethod mfn-d nil) (get-method mfn-d :default))
+               (.getMethod g40-h :zz) (g40-gm g40-h nil))
+      (defmethod g40-c Object [_] :O!)
+      (println (= (get-method g40-c Long) (g40-gm g40-c Object)) (get-method g40-c nil)
+               (try (g40-c nil) (catch IllegalArgumentException e :no-method)))
+      (println (try (.dispatchFn (fn [x] x)) (catch IllegalArgumentException e :not-a-multifn))
+               (try (.getMethod inc 1) (catch IllegalArgumentException e :not-a-multifn)))
     expected: |
       (:y :y)
       :A!
@@ -16099,6 +16263,11 @@ cases:
       :no-method
       get-method takes a multimethod and a dispatch value
       get-method of a computed multimethod is not supported at run time: only a literal multimethod name reads, where the call stands
+      (:A! :P! :D!)
+      :q :tag
+      true true nil nil
+      true nil :no-method
+      :not-a-multifn :not-a-multifn
   - name: protocol-value-arms-run-where-calls-run
     # g42: satisfies?, extends? and extend run as values what the calls
     # run -- over the run-time registry the defprotocol populates beside
@@ -16753,34 +16922,35 @@ cases:
       11
       Wrong number of args (1) passed to: g25-definline/di-add
   - name: with-precision-binds-math-context-around-an-exact-body
-    # (with-precision precision body...) binds *math-context* to the evaluated
-    # precision around its body and answers the last value (nil for an empty body);
-    # nesting rebinds and leaving restores the root. Division stays exact here --
-    # a ratio, never the oracle's BigDecimal -- so each exact answer maps onto the
-    # oracle's rounded one: 1/3 is the oracle's 0.3333333333M at precision 10, 1/2
-    # its 0.5M. Every line is the oracle's shape with the exact value (clj 1.12.6),
-    # on all four backends.
+    # (with-precision precision [:rounding mode] body...) binds *math-context* to
+    # the math context of the evaluated precision and mode (HALF_UP unless given)
+    # around its body and answers the last value (nil for an empty body); nesting
+    # rebinds and leaving restores the root. Only decimal arithmetic reads it: each
+    # decimal answer is rounded to the precision (a division's exact trailing zeros
+    # dropped toward the preferred scale), a ratio stays exact. Oracle-identical
+    # (clj 1.12.6, 2026-10-29) but the context's #object, which leaves out the
+    # identity hash like every #object here.
     source: |
       (ns g25-precision)
       (println *math-context*)
       (println (with-precision 10 *math-context*))
       (println *math-context*)
-      (println (with-precision 10 (/ 1 3)))
-      (println (with-precision 10 (/ 1 2)))
+      (println (with-precision 10 (/ 1 3)) (with-precision 10 (/ 1M 3)) (with-precision 10 (/ 1M 4)))
+      (println (with-precision 3 :rounding FLOOR (/ 2M 3)) (with-precision 3 :rounding HALF_EVEN (* 1.255M 1)) (with-precision 2 (+ 1.55M 1)) (with-precision 5 (+ 0.000M 1.5M)))
       (println (with-precision (+ 5 5) *math-context*))
-      (println (with-precision 10 (with-precision 2 *math-context*)))
-      (println (with-precision 10 (+ 1 2)))
+      (prn (with-precision 10 (with-precision 2 :rounding java.math.RoundingMode/DOWN *math-context*)))
+      (println (with-precision 10 (+ 1 2)) (with-precision 2 (/ 1000M 1)) (with-precision 0 (/ 1M 8)))
       (println (with-precision 10))
       (in-ns 'user)
     expected: |
       nil
-      10
+      #object[java.math.MathContext precision=10 roundingMode=HALF_UP]
       nil
-      1/3
-      1/2
-      10
-      2
-      3
+      1/3 0.3333333333M 0.25M
+      0.666M 1.26M 2.6M 1.500M
+      #object[java.math.MathContext precision=10 roundingMode=HALF_UP]
+      #object[java.math.MathContext "precision=2 roundingMode=DOWN"]
+      3 1.0E+3M 0.125M
       nil
   - name: bound-fn-captures-the-creation-bindings
     # bound-fn is bound-fn* over fn: the fdecl travels untouched (multi-arity,
@@ -16789,10 +16959,15 @@ cases:
     # lexically enclosing with-local-vars cells, and pushes them over the
     # caller's own bindings when the function runs -- so a var bound nowhere at
     # creation stays out of the map, and a call on another extent sees the
-    # captured values. Every line is the oracle's (clj 1.12.6) but the arity
-    # message, which names the anonymous fn the house way, on all four backends.
+    # captured values. A program var shadowing a core special's name (the
+    # namespace excludes it) is captured as itself, beside the special. Every
+    # line is the oracle's (clj 1.12.6) but the arity message, which names the
+    # anonymous fn the house way, on all four backends.
     source: |
-      (ns g24-bound-fn)
+      (ns g24-bound-fn (:refer-clojure :exclude [*suppress-read*]))
+      (def ^:dynamic *suppress-read* :own)
+      (binding [*suppress-read* :bound *print-length* 3]
+        (println ((bound-fn [] [*suppress-read* *print-length*]))))
       (def ^:dynamic *bf-x* 1)
       (def ^:dynamic *bf-y* 10)
       (binding [*bf-x* 2]
@@ -16818,6 +16993,7 @@ cases:
       (println (try ((bound-fn [x y] x) 1) (catch Exception e (ex-message e))))
       (in-ns 'user)
     expected: |
+      [:bound 3]
       2
       false
       [true 2]
@@ -16975,8 +17151,9 @@ cases:
     # draws replicate the port's mix-64/mix-gamma/split over fixed seeds
     # (longify expanded, the population count portable); the printed numbers
     # are the oracle's for the same code. The default line pins the other
-    # half: the flag down the verbs promote (the oracle throws, a pinned
-    # deviation of the default arithmetic, unchanged by g28).
+    # half: the flag down the verbs promote to an integer past the long range,
+    # which prints as the oracle's BigInt (the oracle throws, a pinned deviation
+    # of the default arithmetic, unchanged by g28).
     source: |
       (prn :default (+ 9223372036854775807 1) (* 9223372036854775807 2) (- -9223372036854775808 1) (inc 9223372036854775807) (dec -9223372036854775808))
       (set! *unchecked-math* :warn-on-boxed)
@@ -17019,9 +17196,9 @@ cases:
       (set! *unchecked-math* false)
       (prn :restored (+ 1 2))
     expected: |
-      :default 9223372036854775808 18446744073709551614 -9223372036854775809 9223372036854775808 -9223372036854775809
+      :default 9223372036854775808N 18446744073709551614N -9223372036854775809N 9223372036854775808N -9223372036854775809N
       :wrapped -9223372036854775808 -2 9223372036854775807 -9223372036854775808 9223372036854775807
-      :pass 3.5 3/2 9223372036854775809 -9223372036709301616 -9223372036854775808
+      :pass 3.5 3/2 9223372036854775809N -9223372036709301616 -9223372036854775808
       :bits -9223372036854775807 9223372036854775807 -1
       :draw1 -4767286540954276203
       :draw2 7191089600892374487

@@ -62,7 +62,7 @@
 | `num` | `(num 1/2)` | `1/2` |
 | `bigint` | `(bigint 7/2)` | `3` |
 | `biginteger` | `(biginteger 7/2)` | `3` |
-| `bigdec` | `(bigdec 0.5)` | `1/2` |
+| `bigdec` | `(bigdec 0.5)` | `0.5M` |
 | `rationalize` | `(rationalize 0.1)` | `1/10` |
 | `numerator` | `(numerator 6/4)` | `3` |
 | `denominator` | `(denominator 6/4)` | `2` |

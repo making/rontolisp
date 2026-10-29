@@ -58,7 +58,7 @@ final class ClojureBindingLowering {
 			@Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
-		String name = ClojureLowerUtil.plainName(nameDatum, "def");
+		String name = ctx.defName(nameDatum, "def");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		int at = 2;
 		LispString doc = null;
@@ -121,6 +121,7 @@ final class ClojureBindingLowering {
 			// unbound one holds the unbound root
 			return valuelessDefForms(ctx, key, dynamic, metaStore, hoisted);
 		}
+		List<LispVal> forms;
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
 			// and proclaims it, so binding rebinds it with dynamic extent; the
@@ -137,19 +138,38 @@ final class ClojureBindingLowering {
 						ClojureLowering.boundDepthSym(key)));
 				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
-				return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key),
-						metaStore);
+				forms = new ArrayList<>(withMetaStore(
+						ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
 			}
-			List<LispVal> forms = new ArrayList<>(List.of(
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
-							ClojureStateLowering.validatedInit(value, key)),
-					ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
-							new LispInteger(0))));
-			forms.addAll(0, metaStore);
-			return forms;
+			else {
+				forms = new ArrayList<>(List.of(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
+								ClojureStateLowering.validatedInit(value, key)),
+						ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+								new LispInteger(0))));
+				forms.addAll(0, metaStore);
+			}
 		}
-		return withMetaStore(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore);
+		else {
+			forms = new ArrayList<>(withMetaStore(
+					ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
+		}
+		if (isFnLiteral(items.get(at))) {
+			// the class the oracle compiles a def'd fn literal to, which .getClass names
+			forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowering.varSym(key), key));
+		}
+		return forms;
+	}
+
+	/**
+	 * Whether a {@code def}'s value datum is a fn literal ({@code fn}, {@code fn*}, a
+	 * {@code #(...)}), whose function the oracle compiles to the var's own class.
+	 */
+	private static boolean isFnLiteral(LispVal valueDatum) {
+		List<LispVal> parts = ClojureLowerUtil.items(valueDatum);
+		return parts != null && !parts.isEmpty() && (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn")
+				|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn*"));
 	}
 
 	/**
@@ -195,7 +215,7 @@ final class ClojureBindingLowering {
 		List<LispVal> forms = defForms(ctx, form, items, null);
 		if (ctx.nestedDefAnswersVar) {
 			forms = new ArrayList<>(forms);
-			forms.add(ClojureVarLowering.definedVar(ctx, ClojureLowerUtil.plainName(items.get(1), "def")));
+			forms.add(ClojureVarLowering.definedVar(ctx, ctx.defName(items.get(1), "def")));
 		}
 		if (forms.size() == 1) {
 			return forms.get(0);
@@ -460,6 +480,9 @@ final class ClojureBindingLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key))));
 		}
+		// the class the oracle compiles the function to, which .getClass names
+		forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+				key));
 		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
 		return forms;
 	}

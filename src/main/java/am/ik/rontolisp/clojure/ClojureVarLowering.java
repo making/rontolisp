@@ -998,7 +998,7 @@ final class ClojureVarLowering {
 				new LispSymbol("true"));
 		for (int i = 1; i < items.size(); i++) {
 			LispVal nameDatum = items.get(i);
-			String key = ctx.internDeclared(ClojureLowerUtil.plainName(nameDatum, "declare"),
+			String key = ctx.internDeclared(ctx.defName(nameDatum, "declare"),
 					ClojureLowerUtil.nameIsPrivate(nameDatum));
 			ctx.globals.putIfAbsent(key, ClojureLowering.Kind.DECLARED);
 			ctx.declaredAbove.add(key);

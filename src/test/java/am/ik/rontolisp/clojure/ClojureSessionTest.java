@@ -40,7 +40,8 @@ class ClojureSessionTest {
 			.first()
 			.asString()
 			.startsWith(INPUT + "(DEFUN |c%twice| (|c%x|) " + ClojureLoweringTest.arity("user/twice")
-					+ " (RONTOLISP::%CLOJURE-* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
+					+ " (RONTOLISP::%CLOJURE-* 2 |c%x|)) " + ClojureLoweringTest.noteFnClass("twice", "user$twice")
+					+ " (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
 		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly(input("(|c%twice| 21)"));
 	}

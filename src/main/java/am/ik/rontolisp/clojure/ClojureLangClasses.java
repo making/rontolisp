@@ -17,7 +17,7 @@ import org.jspecify.annotations.Nullable;
  * static field the program reads is a var of the namespace ({@link #staticValue}). A
  * static field of a {@code clojure.lang} class no namespace defines may instead be held
  * by the run-time library ({@link #runtimeStatic}), read and {@code set!} with no
- * namespace loaded.
+ * namespace loaded, and a static method answered by it ({@link #staticCall}).
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -36,26 +36,6 @@ final class ClojureLangClasses {
 	 * the map of an array's keys and values ({@link #staticCall}), with no namespace.
 	 */
 	static final String PERSISTENT_ARRAY_MAP = "clojure.lang.PersistentArrayMap";
-
-	/**
-	 * A static method of a {@code clojure.lang} class this front end answers in place:
-	 * {@code PersistentArrayMap/createAsIfByAssoc} of an array of keys and values, the
-	 * map a {@code hash-map} of them makes (a later key replaces an earlier one, an odd
-	 * count is refused with the oracle's words).
-	 * @param ctx the hub
-	 * @param cls the class's binary name
-	 * @param member the method
-	 * @param args the lowered arguments
-	 * @return the lowered call, or null for any other method
-	 */
-	static @Nullable LispVal staticCall(ClojureLowering ctx, String cls, String member, List<LispVal> args) {
-		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("createAsIfByAssoc") && args.size() == 1) {
-			return ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
-					new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
-					ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
-		}
-		return null;
-	}
 
 	/**
 	 * Each class's static fields, by name, with the var of {@link #NAMESPACE} holding it.
@@ -107,6 +87,63 @@ final class ClojureLangClasses {
 			return null;
 		}
 		return runtimeStatic(ClojureNamespaceLowering.resolveClass(ctx, cls.name()), field.name());
+	}
+
+	/**
+	 * A static method of a {@code clojure.lang} class no namespace defines, answered on
+	 * every backend by the run-time library: no {@code clojure.lang} class loads here.
+	 * @param ctx the hub
+	 * @param cls the class's binary name
+	 * @param member the method
+	 * @param args the lowered arguments
+	 * @return the form, or null when the library answers no such method
+	 */
+	static @Nullable LispVal staticCall(ClojureLowering ctx, String cls, String member, List<LispVal> args) {
+		if (!cls.startsWith("clojure.lang.")) {
+			return null;
+		}
+		String call = cls.substring(cls.lastIndexOf('.') + 1) + "/" + member + "/" + args.size();
+		return switch (call) {
+			// the applyTo an IFn body delegates to: the function called on the members
+			// of the argument seq by their count
+			case "AFn/applyToHelper/2" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
+					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
+			// a map entry is the two-member vector here
+			case "MapEntry/create/2" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+			// an owned array is already the vector here (object-array answers one), so
+			// taking ownership is vec, like the oracle's :bb branch (malli's -vmap)
+			case "LazilyPersistentVector/createOwning/1" -> ClojureCollectionLowering.vecForm(ctx, args.get(0));
+			// the duplicate-checking map build (malli's -eager-entry-parser); RT/map
+			// is the same build over its array (tools.reader's map reader)
+			case "PersistentArrayMap/createWithCheck/1", "RT/map/1" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CREATE-WITH-CHECK"), args.get(0));
+			// the map an array's keys and values make as if by assoc, a later key
+			// replacing an earlier one: map destructuring's coercion of a seq
+			case "PersistentArrayMap/createAsIfByAssoc/1" ->
+				ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
+						new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
+						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
+			// the duplicate-checking set build over a List's members (tools.reader's
+			// set reader)
+			case "PersistentHashSet/createWithCheck/1" -> ClojureLowerUtil.list(
+					new LispSymbol("RONTOLISP::%CLOJURE-SET-LITERAL"), ClojureSeqLowering.seqAllForm(ctx, args.get(0)));
+			// a List's members as a list, the empty list nil (tools.reader's list
+			// reader)
+			case "PersistentList/create/1" -> ClojureSeqLowering.seqAllForm(ctx, args.get(0));
+			// an Iterable's own iterator, else the iterator over the seq
+			case "RT/iter/1" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
+			// the next of the ids the oracle's gensym and auto-gensym draw from
+			// (tools.reader's syntax-quote)
+			case "RT/nextID/0" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RT-NEXT-ID"));
+			// a class name spelled back as the var it was munged from, $ as / (spec's
+			// fn-sym)
+			case "Compiler/demunge/1" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEMUNGE"), args.get(0));
+			// a BigInteger is an integer here, as a BigInt is, and a BigInt the long
+			// it reduces to is the same integer (tools.reader's number reader)
+			case "BigInt/fromBigInteger/1", "Numbers/reduceBigInt/1" -> args.get(0);
+			default -> null;
+		};
 	}
 
 	/**

@@ -18,7 +18,7 @@ a library probe like the others: it is the JVM Clojure compiler's analyzer, writ
 the oracle's runtime model. Plan, in order:
 
 1. `clojure.reflect`: shipped (2026-10-29); `jvm.utils`'s `type-reflect` now stops at `(RT/baseLoader)`.
-2. tools.reader loads verbatim (`.todo/g97`).
+2. tools.reader loads verbatim (done 2026-10-29: `.kb/clojure-frontend.md`, "Library probes").
 3. Done 2026-10-29: the core macros a `go` body meets expand to the oracle's special forms
    as data, a macro's var root is its function of `(&form &env & args)`, and
    `let*`/`loop*`/`letfn*`/`case*` lower (`.kb/clojure-frontend.md`, "Macros", the core

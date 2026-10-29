@@ -1920,23 +1920,6 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (with-precision precision body...)}: the body with {@code *math-context*}
-	 * bound to the evaluated precision, answering its last value (nil for an empty body).
-	 * Division stays exact here -- a ratio, never the oracle's {@code BigDecimal} -- so
-	 * the binding scopes the dynamic extent (nesting rebinds, leaving restores the root)
-	 * without rounding anything. The body lowers behind the {@code try} barrier like a
-	 * {@code binding} body, which the oracle wraps in a {@code try} too.
-	 */
-	static LispVal withPrecisionOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() >= 2, "with-precision takes a precision and a body");
-		LispVal precision = ctx.lower(items.get(1));
-		List<LispVal> pairs = new ArrayList<>();
-		pairs.add(ClojureLowerUtil.list(ctx.specialValue(ClojureCoreSpecials.required("*math-context*")), precision));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
-				barrierBody(ctx, items, 2));
-	}
-
-	/**
 	 * {@code bound-fn*} as the run-time library calls it: the function and its bindings.
 	 */
 	private static final LispSymbol BOUND_FN_STAR = new LispSymbol("RONTOLISP::%CLOJURE-BOUND-FN*");
@@ -2018,9 +2001,9 @@ final class ClojureStateLowering {
 	/**
 	 * The map of the bindings in effect where a {@code bound-fn*} call stands: every
 	 * program dynamic var and core special, each read only when thread-bound, plus the
-	 * lexically enclosing {@code with-local-vars} cells. A program definition shadowing a
-	 * special without being dynamic is skipped (it is not bindable); the unbound root a
-	 * cell holds outside its extent is skipped the same way.
+	 * lexically enclosing {@code with-local-vars} cells. A program var shadowing a
+	 * special's name is a var of its own beside the special; the unbound root a cell
+	 * holds outside its extent is skipped.
 	 */
 	private static LispVal captureForm(ClojureLowering ctx) {
 		List<LispVal> unconditional = new ArrayList<>();
@@ -2040,14 +2023,13 @@ final class ClojureStateLowering {
 					ClojureLowering.NIL_CONST));
 		}
 		for (String name : ClojureCoreSpecials.names()) {
-			String key = ctx.lookupVar(name);
+			// the special itself, spelled absolutely: a program var shadowing its name
+			// here (a namespace excluding it) is another var, captured above when
+			// dynamic, while code elsewhere may still bind the special
 			ClojureCoreSpecials.Special special = ClojureCoreSpecials.required(name);
-			if (key != null && !ctx.dynamicVars.contains(key)) {
-				continue;
-			}
 			LispVal var = ClojureVarLowering.varOf(ctx,
-					List.of(new LispSymbol("var"), new LispSymbol(key != null ? key : name)));
-			LispVal value = key != null ? ClojureLowering.varSym(key) : ctx.specialValue(special);
+					List.of(new LispSymbol("var"), new LispSymbol(ClojureCoreNames.NAMESPACE + "/" + name)));
+			LispVal value = ctx.specialValue(special);
 			if (special.counter() == null) {
 				unconditional.add(var);
 				unconditional.add(value);
@@ -2233,7 +2215,7 @@ final class ClojureStateLowering {
 			@Nullable Supplier<LispVal> echo) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
-		String name = ClojureLowerUtil.plainName(nameDatum, "defonce");
+		String name = ctx.defName(nameDatum, "defonce");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		// Like def: the value lowers against the OLD binding first.
 		LispVal value = items.size() == 3 ? ctx.lower(items.get(2)) : ClojureLowering.NIL_CONST;

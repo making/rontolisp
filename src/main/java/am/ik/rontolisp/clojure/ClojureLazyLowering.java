@@ -364,11 +364,12 @@ final class ClojureLazyLowering {
 		LispSymbol by = ctx.freshTemp();
 		LispSymbol at = ctx.freshTemp();
 		LispSymbol grown = ctx.freshTemp();
+		// the numeric operators' decimal-aware helpers, the plain ones once the decimal
+		// family folds (a decimal step is the oracle's (range 0 1 0.25M))
 		LispVal pastEnd = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), by),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), at, to),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("<="), at, to));
-		LispVal advance = ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), at, by),
+				ClojureDecimalLowering.call("plusp", List.of(by)), ClojureDecimalLowering.call(">=", List.of(at, to)),
+				ClojureDecimalLowering.call("<=", List.of(at, to)));
+		LispVal advance = ClojureLowerUtil.list(self, ClojureDecimalLowering.call("+", List.of(at, by)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), at, grown));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), pastEnd,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), grown), advance);
@@ -377,8 +378,7 @@ final class ClojureLazyLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(from, start), ClojureLowerUtil.list(to, end),
 						ClojureLowerUtil.list(by, step))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), by),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureDecimalLowering.call("zerop", List.of(by)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 								LispString.literal("range step cannot be zero")),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),

@@ -36,8 +36,10 @@
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
  サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
  [print-method](reference/print-method.md) はプログラム自身の record・deftype・`:type`
- キーワードだけが対象です。クラスのメソッドは名前で拒否し、その `methods` と
- `prefer-method` も同様です。メソッドのない型の `get-method` は `print-method` 自身を
+ キーワードと、インスタントか UUID 以外のコアの値が属さないホストクラスが対象です。ホストクラスの
+ メソッドはホストオブジェクトだけを書きます（ここで作ったインスタントや UUID は `#inst`/`#uuid`
+ のままです）。ほかのクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
+ 同様です。メソッドのない型の `get-method` は `print-method` 自身を
  返します（オラクルは既定のメソッドを返します）。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
@@ -67,8 +69,8 @@
  `.hashCode` は本家と同じ数を返します。ただし同一性でハッシュする値（関数、atom、var、例外、
  `hasheq` も `hashCode` も実装しない deftype や reify）の数は本家と異なり、バックエンドや実行
  ごとにも変わります（本家でも実行ごとに変わります）。ここで `nil` である `()` と空の `rest` は
- `0` になります（本家は空の seq としてハッシュします）。小数（`1.5M`）はここでは比として、
- `Calendar` はそのミリ秒の `Date` としてハッシュします。`hash-ordered-coll` はマップ・セット・
+ `0` になります（本家は空の seq としてハッシュします）。`Calendar` はそのミリ秒の `Date` として
+ ハッシュします。`hash-ordered-coll` はマップ・セット・
  レコードの要素をこの実装の順で辿ります（順序によらないハッシュは一致します）。拒否の
  `ClassCastException` のメッセージには本家のモジュールとローダの説明が付きません。
 - `seq` とその上の操作、`count`、`empty?`、`get`、`contains?`、`keys`、`vals` は本家と同じく
@@ -87,11 +89,23 @@
  `counted?` は `()` に `false` を返します。strict な入力に対して操作が返す seq はリストなので、
  `list?`・`counted?`・`realized?` はそれに `true` を返します（本家の lazy seq や chunked seq は
  `false`）。チャンク化された seq はなく（`chunked-seq?` は常に `false`）、`iterate`/`cycle` の seq は
- 一度強制されてから `realized?` になります。decimal と `N` のリテラルは通常の有理数なので、
- `decimal?` は常に `false` で、`ratio?`・`integer?`・`int?` はその有理数に対して答えます
- （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。同じ理由で、`1` と `1M` を含むマップ・セットリテラルは
- 重複として拒否されます。`identical?` は数値・文字・シンボルを値で比較し
+ 一度強制されてから `realized?` になります。`identical?` は数値・文字・シンボルを値で比較し
  （`(identical? 1000 1000)` は `true`）、綴りが同じ2つのキーワードを同じオブジェクトとして扱います。
+- long の範囲内の整数は、何が作ったものでも通常の整数です。`N` リテラル（`2N`）、`bigint`、
+ `biginteger`、`BigInt` の和や積（`(+ 1N 2)`）、整数になる比の演算結果（`(* 1/2 2)`、
+ `(rationalize 1.0)`）はオラクルの `N` なしで印字され（`3N` ではなく `3`）、`int?` は `true`、
+ `class` は `:java.lang.Long` を返し、オラクルが `BigInt` を拒否するビット演算も受け付けます。
+ long の範囲を超える整数はオラクルの `BigInt` で、`pr` と `print` では `N` 付きで印字されます
+ （`str` はオラクルの toString と同じく付けません）。範囲を超える `biginteger` も `N` 付きで
+ 印字されます（オラクルの `BigInteger` は付けません）。整数は `BigInteger` の `.negate` と
+ `.bitLength` に答えます。`Long` でも答えます（オラクルは拒否します）。
+- 10 進数（`1.50M`、`bigdec`、その読み取り）は、スケール・綴り・演算・比較・ハッシュ・
+ `with-precision` の丸めがオラクルの `BigDecimal` と同じで、Java には `java.math.BigDecimal`
+ として渡ります。ただし Java のメソッド（`.setScale`・`.scale`・`.toPlainString` など）には
+ 答えず、Java が返す `BigDecimal` はホストオブジェクトのままで、`(BigDecimal. "1.5")` と
+ `BigDecimal/valueOf` はホストのある所ではホストオブジェクトを作り、10 進数にはなりません。
+ 添字や個数を読む所（`nth`・`take`・`drop`・`repeat`・`subvec`・`char`・`dotimes`）では 10 進数を
+ 拒否します（オラクルは int に変換します）。`subs` と `range` は受け付けます。
 
 - プログラム自身がトップレベルで定義したコア名（`(defn peek ...)`）は、定義より上の呼び出しも
  含めてファイル全体でコアの関数を隠します（オラクルでは定義より上の呼び出しはコアに届きます）。
@@ -198,7 +212,7 @@
   null 判定でそこでもマーカーへ写ります。素のものでも他の関数で包んだものでも、記録した定義から再降低される名前付き `defn`・`def` 済み関数経由でも、インラインなディスパッチ datum の中でそれらを呼び出す場合（呼び出し位置で同じ降低をインライン化）でも同様です）。
  `Object` メソッドは検索の後・デフォルトの先に捕まえます。throwable、ストリーム、数値のクラスは
  その名前のキーワード（`class` が答えるもの。`:java.lang.Long`・`:java.lang.Double`・
- `:clojure.lang.Ratio`・`:clojure.lang.BigInt`・`:java.lang.Number`）の下に格納され、検索はオラクルの継承と同じく
+ `:clojure.lang.Ratio`・`:clojure.lang.BigInt`・`:java.math.BigDecimal`・`:java.lang.Number`）の下に格納され、検索はオラクルの継承と同じく
  Java のスーパータイプをたどります。インタフェース（`java.io.Serializable`、
  `java.io.Closeable`）と `Object` も含みます。`isa?`・`derive`・`underive`・`parents`・
  `ancestors`・`descendants` はクラス名を同じキーワードとして読むので
@@ -207,7 +221,9 @@
  スーパータイプを加えます。関数は `clojure.lang.IFn` に `isa?` で、その `ancestors` は
  それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。値の位置の
  クラス名はそのキーワードとして読みます（`(= clojure.lang.IFn (class (fn [])))` は
- `false` のままです）。数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
+ `false` のままです）。オラクルの `clojure.lang` のほかのクラスも同じで、どの値も答えない
+ キーワードになります（`clojure.lang.PersistentVector$ChunkedSeq` の `defmethod` は一致しません）。
+ 数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
  `:java.lang.Long` と印字します。record や deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
  `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。ここではキーワードがクラス
@@ -233,8 +249,10 @@
   共に登録する実行時レジストリを読み、呼び出しと等価に動作します。
   `get-method`・`remove-method` は呼び出しと同じキーの読み取りを行い、`Object` クラスの
   `remove-method` と `remove-all-methods` はスロットをクリアして呼び出し同様
-  multimethod を返します。登録されていない関数値は従来どおり拒否され、階層や
-  既定値のフォールバックを読まない `get-method` の振る舞いは呼び出し位置と共通です。
+  multimethod を返します。登録されていない関数値は従来どおり拒否されます。
+  `get-method` と multimethod の `.getMethod`・`.dispatchFn` はオラクルの `MultiFn` と同じ
+  答えを返しますが、multimethod の `Object` メソッドはキーワードのディスパッチ値にも答えます
+  （ここでの `class` は値のクラスをキーワードで答えます）。
 - `satisfies?` はプロトコル名と値を、`extends?` はプロトコル名と型名を、`extend` は型名
   の後にプロトコルとメソッドマップを任意の回数取ります。プロトコルや型を束縛した
   ローカルは降低時に拒否されます。値としてはオラクルと同じ文言で引数の個数を
@@ -381,13 +399,12 @@
   同じく先に宣言するため、同じ形が定義したものをもう名乗れます（oracle は後の形が必要です）。
   lazy-or-strict 動詞が strict に実現した seq の `bounded-count` は全部数えます（oracle は lazy のまま
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は
-  `toString`）。ビット演算は範囲内の `N` サフィックス付きリテラルをふつうの整数として取ります
-  （oracle は `BigInt` として拒否します）。
+  `toString`）。
 - `class` は種類名のキーワードで答えます（`:string`・`:keyword`・`:map` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。数値はそのクラス名の
   キーワードで答えます（`:java.lang.Long`・`:java.lang.Double`・`:clojure.lang.Ratio`、long を
-  超える整数は `:clojure.lang.BigInt`）。`1N` と小数はふつうの数として読むため、ここでは
-  それぞれ `Long` と `Ratio` です。record/deftype は
+  超える整数は `:clojure.lang.BigInt`、10 進数は `:java.math.BigDecimal`）。`1N` はふつうの整数として
+  読むため、ここでは `Long` です。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
 - [バイト配列](reference/byte-array.md)は、オラクルの `#object["[B" ...]` から識別ハッシュを
   除いた形で印字し、`str` は `[B` を返します（オラクルは `[B@1b6d3586`）。`aset` は -128 から
@@ -441,8 +458,10 @@
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
   オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
-  それ以外の fn なら無名 fn の `clojure.lang.AFunction$fn` です。オラクルは `defn` を var の名前で
-  呼びます）。オラクルの
+  `defn` と fn リテラルを値とする `def` なら `ns$name`、それ以外の fn なら無名 fn の
+  `clojure.lang.AFunction$fn` です。オラクルはこの最後の名前に外側の関数と名前付き `fn` の名前を
+  含めます。別のフォームの中の `defn` もここでは `ns$name` で、オラクルは
+  `ns$eval123$name__124` です）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで
   `Method m taking N args is not supported for class C` として拒否し、オラクルのクラスが
   持ちうるがここでは答えないメソッド（`.reduce`・`.meta`・atom の `.compareAndSet`）は
@@ -604,11 +623,8 @@
   `:warn-on-boxed` は `true` とまったく同じく折り返します。値としての動詞（`+`・
   `(apply + ...)`・`(map inc ...)` など）はフラグによらず通常の桁あふれする動作のままです
   （オラクルの関数値は桁あふれで例外を投げます）。
-- `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
-  `3/2` と表示され、オラクルは `1.5M`）。`N`・`M` リテラルと同じです。10進展開が無限になる比の
-  `bigdec` はオラクル同様シグナルします。
 - `format` は `java.util.Formatter` と同じ描画・拒否をします（計算した書式文字列は呼び出し時に
-  解析します）。違いは次のとおりです。`%h`・`%a`・`%t` は拒否されます。long の範囲を超える整数は
+  解析します）。違いは次のとおりです。`%h`・`%a`・`%t` は（呼び出し時に）拒否されます。long の範囲を超える整数は
   `BigInteger` として描画します（オラクルは `BigInt` を `%d`・`%x`・`%o` で拒否し、`biginteger` の
   値は描画します）。
   `int` も long なので `(format "%x" (int -1))` は 64 ビット分の `f` になり（オラクルは 32 ビット）、
@@ -714,9 +730,9 @@
   非 dynamic エラー同様に拒否）。`^:dynamic` な `defn` も再束縛できます（定義は
   直接のまま、呼び出しは var 経由になります）。それ以外の名前やローカルについた
   リーダーメタデータは解析して捨てられ、ディスパッチに影響しません。`with-precision` は
-  本体の周囲で `*math-context*` を評価された精度に束縛します（根は `nil`、oracle は既定の
-  コンテキストを束縛します）。除算は正確なまま -- oracle の `BigDecimal` ではなく有理数 --
-  なので、この束縛は丸めを何もせず範囲を区切るだけです。`bound-fn` は `fn` に対する
+  本体の周囲で `*math-context*` を評価された精度と丸めモードの math context に束縛し、10 進数の
+  演算はオラクルと同じくそれに従って丸めます。この context は識別ハッシュを除いたオラクルの
+  `#object` として印字されます。`bound-fn` は `fn` に対する
   `bound-fn*` です。取り込んだ生成時の束縛は呼び出し元の束縛の上に積まれるため、
   別スレッドでの呼び出しも取り込んだ値を見ます。生成時にどこにも束縛されていない
   var はマップに入らず、動的に入った `with-local-vars` の範囲下で作られた
@@ -903,10 +919,10 @@
   `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
-- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
-  述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
-  spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
-  （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
+- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` は素の述語が名前付き `fn`
+  （`(fn pos [x] ...)`）か、値が fn に展開されるマクロ呼び出しである `def` のとき
+  `:clojure.spec.alpha/unknown` と呼びます。オラクルはこれにも名前を付けます（`defn`、fn リテラルを
+  値とする `def`、core 関数、spec のマクロが受け取る述語は名前を保ちます）。`clojure.spec.test.alpha` の `instrument`
   （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
   resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
   `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を

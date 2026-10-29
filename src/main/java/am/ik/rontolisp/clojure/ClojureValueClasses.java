@@ -116,6 +116,9 @@ final class ClojureValueClasses {
 		/** {@code clojure.lang.Ratio}. */
 		RATIO(List.of("clojure.lang.Ratio", SERIALIZABLE, COMPARABLE, NUMBER)),
 
+		/** A decimal: {@code java.math.BigDecimal}. */
+		DECIMAL(List.of("java.math.BigDecimal", SERIALIZABLE, COMPARABLE, NUMBER)),
+
 		/** {@code clojure.lang.Keyword}. */
 		KEYWORD(List.of("clojure.lang.Keyword", "clojure.lang.IFn", "clojure.lang.IHashEq", "clojure.lang.Named",
 				SERIALIZABLE, COMPARABLE, RUNNABLE, CALLABLE)),
@@ -330,6 +333,7 @@ final class ClojureValueClasses {
 			case BIGINT -> "clojure.lang.BigInt";
 			case DOUBLE -> "java.lang.Double";
 			case RATIO -> "clojure.lang.Ratio";
+			case DECIMAL -> "java.math.BigDecimal";
 			case KEYWORD -> "keyword";
 			case SYMBOL -> "symbol";
 			case VECTOR, MAP_ENTRY -> "vector";
@@ -406,7 +410,8 @@ final class ClojureValueClasses {
 	 * A class name in value position to the keyword {@code class} answers for its values,
 	 * or null when it names none here: a {@code clojure.lang} class the host does not
 	 * load but a kind's values implement ({@code clojure.lang.IFn}, spelled dotted or
-	 * imported). A typo keeps the unknown-name refusal, like a class no kind names.
+	 * imported), or any other class of the oracle's jar ({@link ClojureLangJar}), whose
+	 * keyword no value answers. A typo keeps the unknown-name refusal.
 	 * {@code (= clojure.lang.IFn (class (fn []))} stays false: the spelling is the
 	 * interface's keyword, never the function's kind.
 	 * @param ctx the lowering
@@ -418,7 +423,8 @@ final class ClojureValueClasses {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
-		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn) || kindsOf(fqn).isEmpty()) {
+		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn)
+				|| kindsOf(fqn).isEmpty() && !ClojureLangJar.holds(fqn)) {
 			return null;
 		}
 		return ClojureCollectionLowering.keywordForm(fqn);
@@ -472,6 +478,17 @@ final class ClojureValueClasses {
 		}
 		highest.sort(null);
 		return highest;
+	}
+
+	/**
+	 * Whether a Clojure value may be an instance of the class: {@code Object}, an
+	 * interface (a reify, deftype or record may implement one) or a class some kind's
+	 * values have.
+	 * @param className the class's binary name
+	 * @return {@code true} when a value receiver is possible
+	 */
+	static boolean mayHoldValue(String className) {
+		return className.equals(ClojureClassBases.OBJECT) || isInterface(className) || !kindsOf(className).isEmpty();
 	}
 
 	/**

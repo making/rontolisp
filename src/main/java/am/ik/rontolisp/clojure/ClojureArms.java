@@ -44,10 +44,10 @@ import org.jspecify.annotations.Nullable;
  * ({@link Family#stores}) is the ninth: its call, over a getter and a setter closure,
  * folds to the {@code setq} (or {@code defparameter}) of the cell with the init, so an
  * init with an effect is written once and still stored once. A statement
- * ({@link Family#statements}) is the tenth: a top-level or {@code progn}-member call of
- * one goes with the arms. A family whose value is made only beside another's
- * ({@link Family#requires}) is made when the program names one of its producers and makes
- * that family's value too.
+ * ({@link Family#statements}) is the tenth: a top-level, {@code progn}-member or
+ * lambda-body call of one goes with the arms. A family whose value is made only beside
+ * another's ({@link Family#requires}) is made when the program names one of its producers
+ * and makes that family's value too.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -574,6 +574,28 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A decimal, the oracle's {@code java.math.BigDecimal}, and the math context
+		 * {@code with-precision} binds, which arithmetic, the comparisons, the numeric
+		 * predicates and casts, {@code range}, the printer, {@code str}, {@code format},
+		 * {@code =}, {@code compare}, the hashes, the structural keys, {@code class}, a
+		 * protocol's dispatch and {@code instance?} read: only an {@code M} literal
+		 * (whose quoted wrapper names the tag {@link ClojureDecimalLowering#TAG}),
+		 * {@code bigdec}, {@code with-precision} and a read, whose reader takes an
+		 * {@code M} literal, make one. The aliases are the decimal-aware helpers the
+		 * lowering names in place of the plain numeric operators, each to its operator
+		 * ({@link ClojureDecimalLowering#ALIASES}), and every definition named
+		 * {@code %clojure-bd-} is the family's own. Ahead of {@link #HOST}:
+		 * {@code instance?} of {@code Number}'s helper is an alias of the host test,
+		 * which that family folds in turn.
+		 */
+		DECIMAL("decimal", Set
+			.of(ClojureDecimalLowering.DECIMAL_P, ClojureDecimalLowering.DECIMAL_IN_P, ClojureDecimalLowering.VALUE_P),
+				Set.of(), ClojureDecimalLowering.ALIASES,
+				Reads.with(ClojureDecimalLowering.TAG, ClojureDecimalLowering.BIGDEC, ClojureDecimalLowering.BIGDEC_V,
+						ClojureDecimalLowering.MATH_CONTEXT),
+				Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(), ClojureDecimalLowering.PREFIX, null),
+
+		/**
 		 * The unbound root of a declared-never-defined name or a value-less {@code def}:
 		 * only the store a file starts with (or a session's declare) makes one.
 		 */
@@ -1004,6 +1026,17 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A fn's class name, the oracle's {@code ns$name} for a var's function: only
+		 * {@code .getClass} of a fn reads it
+		 * ({@link ClojureValueMethodLowering#FN_CLASS_NAME}). The statements register a
+		 * {@code defn}'s function, and a {@code def}'s whose value is a fn literal,
+		 * beside the definition; a program reading no fn's class sheds them.
+		 */
+		FN_CLASS("fn-class", Set.of(), Set.of(), Map.of(), Set.of(ClojureValueMethodLowering.FN_CLASS_NAME), Set.of(),
+				false, Set.of(), Set.of(), Set.of(), Map.of(), Map.of(),
+				Set.of(ClojureValueMethodLowering.NOTE_FN_CLASS), null, null, Set.of()),
+
+		/**
 		 * A byte array, which the printer, {@code str}, {@code class}, the seq view,
 		 * {@code count}, {@code empty?}, {@code nth}, {@code get}, {@code contains?},
 		 * {@code aget}, {@code aset}, {@code alength}, a {@code java:} member's argument,
@@ -1228,9 +1261,9 @@ public final class ClojureArms {
 		final Map<String, String> stores;
 
 		/**
-		 * The validate-and-notify statements: a top-level or {@code progn}-member call of
-		 * one goes with the arms. A statement anywhere else signals, since leaving it
-		 * would run the kind's code after all.
+		 * The statements (validate-and-notify, registrations): a top-level,
+		 * {@code progn}-member or lambda-body call of one goes with the arms. A statement
+		 * anywhere else signals, since leaving it would run the kind's code after all.
 		 */
 		final Set<String> statements;
 
@@ -1684,15 +1717,19 @@ public final class ClojureArms {
 		}
 
 		/**
-		 * {@code (lambda params statement...)}: a switch among the body's statements
-		 * goes, a last one too (only a namespace's init, whose value nobody reads, ends
-		 * in one) unless it is the whole body.
+		 * {@code (lambda params statement...)}: a switch or a statement arm among the
+		 * body's statements goes, a last one too (only a namespace's init, whose value
+		 * nobody reads, ends in one) unless it is the whole body.
 		 */
 		private LispVal walkLambda(LispCons form) {
 			if (!(form.cdr() instanceof LispCons params)) {
 				return form;
 			}
 			LispVal body = withoutSwitches(params.cdr(), false);
+			LispVal withoutArms = withoutStatementArms(body);
+			if (!(withoutArms instanceof LispNil)) {
+				body = withoutArms;
+			}
 			if (body == params.cdr()) {
 				return LispCons.rebuilt(form, form.car(), walkElements(form.cdr()));
 			}
@@ -1952,15 +1989,27 @@ public final class ClojureArms {
 	}
 
 	/**
-	 * A statement as a program reading none of the switched specials compiles it: every
-	 * switch in it folded away ({@link Family#switches}).
+	 * Whether the statement weighs nothing in a namespace's init: a switch
+	 * ({@link #isSwitch}) or a fn-class registration ({@link Family#FN_CLASS}), each of
+	 * which a program may shed.
+	 * @param statement a lowered statement
+	 * @return {@code true} for a statement that joins the chunk at hand
+	 */
+	static boolean weighsNothing(LispVal statement) {
+		return isSwitch(statement) || isStatementArm(statement, Family.FN_CLASS);
+	}
+
+	/**
+	 * A statement as a program reading none of the switched specials and no fn's class
+	 * compiles it: every switch ({@link Family#switches}) and every fn-class registration
+	 * ({@link Family#FN_CLASS}) in it folded away, what it weighs in a namespace's init.
 	 * @param statement a lowered statement, itself no switch
-	 * @return the statement without its switches
+	 * @return the statement without its switches and registrations
 	 */
 	static LispVal withoutSwitches(LispVal statement) {
 		LispVal out = statement;
 		for (Family family : Family.values()) {
-			if (!family.switches.isEmpty()) {
+			if (!family.switches.isEmpty() || family == Family.FN_CLASS) {
 				out = new Stripper(family).walkCode(out);
 			}
 		}

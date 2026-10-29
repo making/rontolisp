@@ -617,7 +617,7 @@ final class ClojureReader {
 			return items.subList(1, items.size());
 		}
 		if (head == HASH_MAP || head == HASH_SET || head == REGEX || head == RECORD || head == TAGGED
-				|| ClojureDefaultReaders.isMarker(head)) {
+				|| ClojureDefaultReaders.isMarker(head) || ClojureDecimalLowering.isMarker(head)) {
 			return null;
 		}
 		if (head == PENDING_TAG || head == READ_EVAL) {
@@ -1152,6 +1152,12 @@ final class ClojureReader {
 			return equivKey(items.get(1));
 		}
 		LispVal head = items.isEmpty() ? null : items.get(0);
+		java.math.BigDecimal decimal = ClojureDecimalLowering.valueOf(items);
+		if (decimal != null) {
+			// a decimal is = to a decimal of its value whatever either's scale, and to
+			// no other number
+			return "M" + (decimal.signum() == 0 ? "0" : decimal.stripTrailingZeros().toString());
+		}
 		if (head == REGEX || head == PENDING_TAG) {
 			// a pending tag's value is the second read's to compare
 			return "unique#" + this.unique++;
@@ -1569,11 +1575,11 @@ final class ClojureReader {
 
 	/**
 	 * The number the shaped token spells: a ratio, a radix integer ({@code 0x},
-	 * {@code Nr}, a leading {@code 0} for octal), an exact ratio for the {@code M}
-	 * suffix, a double, or a long (a {@link LispBigInteger} past the {@code long} range,
-	 * with or without the {@code N} suffix). The {@code M} suffix lowers to an exact
-	 * ratio -- {@code 0.1M} is {@code 1/10}, so decimal arithmetic stays exact instead of
-	 * the double's precision loss; it prints as the ratio, not {@code 0.1M}.
+	 * {@code Nr}, a leading {@code 0} for octal), the decimal literal's marker for the
+	 * {@code M} suffix ({@link ClojureDecimalLowering#marker(String)}: its unscaled value
+	 * and scale, as {@code new BigDecimal} reads the digits), a double, or a long (a
+	 * {@link LispBigInteger} past the {@code long} range, with or without the {@code N}
+	 * suffix).
 	 */
 	private static LispVal parseNumber(String token) {
 		String unsigned = token.startsWith("+") || token.startsWith("-") ? token.substring(1) : token;
@@ -1600,14 +1606,7 @@ final class ClojureReader {
 			return signedOf(new java.math.BigInteger(unsigned, 8), token);
 		}
 		if (token.endsWith("M")) {
-			java.math.BigDecimal decimal = new java.math.BigDecimal(token.substring(0, token.length() - 1));
-			java.math.BigInteger numerator = decimal.unscaledValue();
-			int scale = decimal.scale();
-			if (scale >= 0) {
-				return LispRatio.valueOf(numerator, java.math.BigInteger.TEN.pow(scale));
-			}
-			return LispRatio.valueOf(numerator.multiply(java.math.BigInteger.TEN.pow(-scale)),
-					java.math.BigInteger.ONE);
+			return ClojureDecimalLowering.marker(token.substring(0, token.length() - 1));
 		}
 		if (token.indexOf('.') >= 0 || token.indexOf('e') >= 0 || token.indexOf('E') >= 0) {
 			if (token.endsWith("N")) {

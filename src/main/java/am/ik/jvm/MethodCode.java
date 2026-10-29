@@ -634,6 +634,21 @@ public final class MethodCode {
 		throw new IllegalArgumentException("not a short: " + value + "; load it with ldc");
 	}
 
+	/**
+	 * Pushes any int: {@link #loadConstant(int)} in the short range, else an {@link #ldc}
+	 * of the pool's Integer entry (a function id past 32767 in a large program's dispatch
+	 * tree).
+	 * @param cp the pool the entry goes into
+	 * @param value the constant
+	 * @return this
+	 */
+	public MethodCode loadConstant(ConstantPool cp, int value) {
+		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			return this.loadConstant(value);
+		}
+		return this.ldc(cp.entries().intEntry(value));
+	}
+
 	public MethodCode iconst_m1() {
 		return this.emit(Opcode.ICONST_M1);
 	}

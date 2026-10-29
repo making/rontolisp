@@ -54,6 +54,37 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * The class name of a fn, what {@code .getClass} of one names ({@code clojure.lisp}):
+	 * the producer of {@link ClojureArms.Family#FN_CLASS}, whose registrations only a
+	 * program reading it keeps.
+	 */
+	static final String FN_CLASS_NAME = "RONTOLISP::%CLOJURE-FN-CLASS-NAME";
+
+	/**
+	 * The statement registering a var's function under the class the oracle compiles it
+	 * to ({@code clojure.lisp}).
+	 */
+	static final String NOTE_FN_CLASS = "RONTOLISP::%CLOJURE-NOTE-FN-CLASS";
+
+	/**
+	 * The statement behind a definition registering its function under the oracle's class
+	 * name for it, {@code ns$name} munged (a dot in the name {@code _DOT_}): a
+	 * {@code defn}'s, and a {@code def}'s whose value is a fn literal. A statement arm of
+	 * {@link ClojureArms.Family#FN_CLASS}, so only a program reading a fn's class keeps
+	 * it.
+	 * @param fn the pure read of the function (its {@code function} designator, or the
+	 * value cell once stored)
+	 * @param key the var key ({@code ns/name})
+	 * @return the statement
+	 */
+	static LispVal noteFnClass(LispVal fn, String key) {
+		int slash = key.indexOf('/');
+		String className = ClojureLowerUtil.munge(key.substring(0, slash)) + "$"
+				+ ClojureLowerUtil.munge(key.substring(slash + 1)).replace(".", "_DOT_");
+		return ClojureLowerUtil.list(new LispSymbol(NOTE_FN_CLASS), fn, LispString.literal(className));
+	}
+
+	/**
 	 * The receiver's local name inside an arm: the {@code %} suffix keeps it generated.
 	 */
 	private static final String RECV = "recv%";
@@ -348,6 +379,28 @@ final class ClojureValueMethodLowering {
 		row("run", 0, arm(List.of("ifn?"),
 				ClojureLowerUtil.list(new LispSymbol("do"), ClojureLowerUtil.list(R), new LispSymbol("nil"))));
 		row("compare", 2, new Arm(List.of(FUNCTION), ClojureValueMethodLowering::fnCompare));
+		// a multimethod is its dispatcher function here: a registered one answers
+		// clojure.lang.MultiFn's dispatchFn and getMethod (spec.alpha's multi-spec)
+		row("dispatchFn", 0, new Arm(List.of(FUNCTION), ctx -> multiFnMember(ctx, "dispatchFn")));
+		row("getMethod", 1, new Arm(List.of(FUNCTION), ctx -> multiFnMember(ctx, "getMethod")));
+	}
+
+	/**
+	 * A {@code clojure.lang.MultiFn} member of a fn: through the multimethod registry
+	 * ({@code clojure.lisp}) when the fn is a multimethod's dispatcher -- the dispatch
+	 * function's getter called, or {@code MultiFn.getMethod} of the argument -- else the
+	 * refusal in the oracle's words, as for any other {@code AFunction}.
+	 */
+	private static LispVal multiFnMember(ClojureLowering ctx, String method) {
+		LispSymbol recv = ctx.localSym(RECV);
+		boolean getMethod = method.equals("getMethod");
+		List<LispVal> args = getMethod ? List.of(ctx.localSym(argName(0))) : List.of();
+		LispVal registered = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), recv,
+				new LispSymbol(ClojureDispatchLowering.MULTI_REGISTRY));
+		LispVal answer = getMethod
+				? ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.MULTI_GET_METHOD), recv, args.get(0))
+				: ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.MULTI_DISPATCH_FN), recv);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), registered, answer, refusal(recv, method, true, args));
 	}
 
 	private static void updateRows() {
@@ -406,12 +459,10 @@ final class ClojureValueMethodLowering {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
 		// a fn's own class, the designator of the class the oracle compiles it to (a
-		// core function's clojure.core$name, else an anonymous fn's), where class
-		// answers the one fn kind; any other value's class
-		row("getClass", 0,
-				new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
-						new LispSymbol(":C%CLASS"), part(ctx, "RONTOLISP::%CLOJURE-FN-CLASS-NAME"))),
-				arm(List.of(), core("class", R)));
+		// core function's clojure.core$name, a defn's ns$name, else an anonymous fn's),
+		// where class answers the one fn kind; any other value's class
+		row("getClass", 0, new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
+				new LispSymbol(":C%CLASS"), part(ctx, FN_CLASS_NAME))), arm(List.of(), core("class", R)));
 		// .isArray of a class keyword: only a byte array's class ([B) is an array
 		// class here (a char[] is a vector of characters, a host array unmarshals
 		// to a list), so its name decides, like the oracle's Class#isArray
@@ -553,8 +604,30 @@ final class ClojureValueMethodLowering {
 			arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-PATTERN-P"), recv), patternCall, arm);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+		LispVal bigIntegerCall = bigIntegerMethod(method, recv, args);
+		if (bigIntegerCall != null) {
+			// an integer answers java.math.BigInteger's own method: a BigInteger is an
+			// integer here (converted at the java: boundary), and no Long method of
+			// the name exists for the host call to take
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv), bigIntegerCall, dispatch);
+		}
+		return dispatch;
+	}
+
+	/**
+	 * The call of a {@code java.math.BigInteger} method {@code java.lang.Long} lacks, on
+	 * an integer (tools.reader's number reader): {@code negate} and {@code bitLength},
+	 * the length past the sign bit; null for any other method.
+	 */
+	private static @Nullable LispVal bigIntegerMethod(String method, LispSymbol recv, List<LispVal> args) {
+		return switch (method + "/" + args.size()) {
+			case "negate/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), recv);
+			case "bitLength/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integer-length"), recv);
+			default -> null;
+		};
 	}
 
 	/**

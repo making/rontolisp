@@ -44,7 +44,7 @@ class ClojureReaderTest {
 
 	@Test
 	void numbers() {
-		assertThat(printed("42 -17 +5 1/2 1.5 1e3 1M 2N")).isEqualTo("[42, -17, 5, 1/2, 1.5, 1000.0, 1, 2]");
+		assertThat(printed("42 -17 +5 1/2 1.5 1e3 2N")).isEqualTo("[42, -17, 5, 1/2, 1.5, 1000.0, 2]");
 	}
 
 	@Test
@@ -55,8 +55,9 @@ class ClojureReaderTest {
 	}
 
 	@Test
-	void bigDecimalsAreExactRatios() {
-		assertThat(printed("1M 0.1M 1e3M")).isEqualTo("[1, 1/10, 1000]");
+	void decimalsReadAsTheirUnscaledValueAndScale() {
+		assertThat(printed("1M 0.10M 1e3M -1.5E-2M"))
+			.isEqualTo("[(|%decimal| 1 0), (|%decimal| 10 2), (|%decimal| 1 -3), (|%decimal| -15 3)]");
 	}
 
 	@Test

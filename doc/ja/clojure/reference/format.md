@@ -13,7 +13,8 @@ long の 8 進・16 進は 2 の補数）、`%e`・`%E`・`%f`・`%g`・`%G` は
 同じ例外（`MissingFormatWidthException`、`IllegalFormatConversionException` など）を同じ
 メッセージで、引数を評価した後に送出します。リテラルの書式文字列はプログラムの読み込み時に、
 計算した書式文字列は呼び出し時に、同じ描画と拒否で解析します。このため `format` は値としても
-動きます（`(apply format fmt cols)`）。`%h`・`%a`・日時の `%t` は拒否されます。
+動きます（`(apply format fmt cols)`）。`%h`・`%a`・日時の `%t` は呼び出し時に拒否されるため、
+これらを書いた関数も定義できます。
 
 ```clojure
 (println (format "%s=%d" :a 5)) ; :a=5

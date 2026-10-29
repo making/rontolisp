@@ -498,9 +498,10 @@ class ClojureInteropTest {
 				+ " (defmethod f :default [x] :default)"
 				+ " (println (f (java.io.File. \"x\")) (f (java.util.ArrayList.)) (f (java.util.ArrayDeque.))"
 				+ " (f (java.util.LinkedList.)) (f 1))"
-				+ " (println (some? (get-method f java.io.File)) (some? (get-method f java.util.HashMap)))"
+				+ " (println (some? (get-method f java.io.File)) (= (get-method f java.util.HashMap) (get-method f :default))"
+				+ " (= (get-method f java.util.ArrayList) (get-method f java.util.AbstractList)))"
 				+ " (remove-method f java.io.File) (println (f (java.io.File. \"x\")))",
-				":file :alist :acoll :alist :default\ntrue false\n:default\n");
+				":file :alist :acoll :alist :default\ntrue true true\n:default\n");
 		// a class value dispatched on itself, a dispatch vector, and prefer-method
 		assertBothEqual("(defmulti g identity) (defmethod g java.util.AbstractMap [x] :amap)"
 				+ " (defmethod g :default [x] :default)"
@@ -1352,6 +1353,21 @@ class ClojureInteropTest {
 						+ " (map str (sort [(java.time.Instant/ofEpochMilli 3) (java.time.Instant/ofEpochMilli 1)])))",
 				"-1 1 0 -1 1 (1 5 9) (5 9) -1000000 (\"1970-01-01T00:00:00.001Z\" \"1970-01-01T00:00:00.003Z\")\n");
 		assertBothEqual(host + " (prn hd (pr-str [hu]))", "#<java java.util.Date> \"[#<java java.util.UUID>]\"\n");
+		// a program's print-method or print-dup of a host class writes a host object
+		// of it or of a subclass (tools.reader's #inst reader answers a host Date),
+		// up to the class of an oracle's own method (a Timestamp is not a Date
+		// here); oracle-identical but the host Timestamp and UUID, which the
+		// oracle's own methods print, and the Date made here, which keeps its own
+		// printing where the oracle takes the program's method
+		assertBothEqual(
+				host + " (defmethod print-method java.util.Date [d ^java.io.Writer w]"
+						+ " (.write w (str \"#d \" (.getTime d))))"
+						+ " (defmethod print-dup java.util.Date [d ^java.io.Writer w] (.write w \"#dup\"))"
+						+ " (defmethod print-method java.util.Calendar [c ^java.io.Writer w] (.write w \"#cal\"))"
+						+ " (prn hd [(java.sql.Timestamp/from (java.time.Instant/ofEpochMilli 7))]"
+						+ " (java.util.Calendar/getInstance) hu) (print-dup hd *out*) (prn (java.util.Date. 5))",
+				"#d 5 [#<java java.sql.Timestamp>] #cal #<java java.util.UUID>\n#dup"
+						+ "#inst \"1970-01-01T00:00:00.005-00:00\"\n");
 	}
 
 	@Test
