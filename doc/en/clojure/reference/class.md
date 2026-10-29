@@ -3,8 +3,11 @@
 `(class x)`
 
 Answers the value's kind as a keyword: `:map`, `:vector`, `:set`, `:list`,
-`:string`, `:number`, `:keyword`, `:symbol`, `:char`, `:boolean`, `:nil`,
-`:function` or `:atom` (a sorted map is `:map`, a sorted set `:set`); a byte array answers
+`:string`, `:keyword`, `:symbol`, `:char`, `:boolean`, `:nil`,
+`:function` or `:atom` (a sorted map is `:map`, a sorted set `:set`). A number answers its
+class's name as a keyword: `:java.lang.Long`, `:java.lang.Double`, `:clojure.lang.Ratio`, or
+`:clojure.lang.BigInt` past a long (`1N` is a `Long` and a decimal a `Ratio` here); `Long` and
+`Double` in value position read as the same keyword, so `(= Long (class 1))` is `true`. A byte array answers
 `:[B`, `byte[]`'s binary name. The oracle answers
 host classes, which no wasm backend has -- the keyword names the kind instead, on every
 backend alike. A record or deftype answers its tag keyword. An exception or a runtime error
@@ -18,7 +21,7 @@ object answers its host class on the interpreter and the JVM, so a `class` dispa
 one-argument lambda.
 
 ```clojure
-(println (class "a") (class 1)) ; :string :number
+(println (class "a") (class 1) (class 1.5)) ; :string :java.lang.Long :java.lang.Double
 (println (class *out*) (class (java.io.StringWriter.))) ; :java.io.OutputStreamWriter :java.io.StringWriter
 (println (class (ex-info "m" {})) (try (+ 1 "a") (catch Exception e (class e)))) ; :clojure.lang.ExceptionInfo :java.lang.ClassCastException
 ```

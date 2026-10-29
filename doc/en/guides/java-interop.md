@@ -420,7 +420,9 @@ A function costs less for a functional interface (one abstract method) than for
 `java.lang.Object`, and less for `Object` than for any other interface, so
 `TreeSet(Comparator)` wins over `TreeSet(Collection)`, as a Java lambda's target does, and
 `StringBuilder.append(Object)` over `append(CharSequence)`, as Clojure's fn is an `Object` and
-no `CharSequence`:
+no `CharSequence`. It costs least for `java.util.concurrent.Callable`, which keeps the
+function's answer, so `ExecutorService.submit` takes `submit(Callable)` over
+`submit(Runnable)`:
 
 ```lisp
 (let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))
@@ -561,6 +563,16 @@ type and leaves that parameter to the cost rule; a type without a package means 
 
 ```lisp
 (java:call (java:new "java.lang.StringBuilder(int)" 64) "capacity")   ; => 64
+```
+
+A tag whose entries are `^C` or `_` hints the arguments' classes instead, as Clojure's `:tag`
+does: a call resolved before it runs keeps the overloads whose parameter each hinted class is
+assignable to (a primitive parameter is never dropped), all of them when that keeps none; a
+call resolved when it runs reads no hint. `C` is a binary class name:
+
+```lisp
+(let ((e (java:static "java.util.concurrent.Executors" "newFixedThreadPool" 1)))
+  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => NIL
 ```
 
 ### Reflection warnings

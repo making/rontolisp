@@ -2548,11 +2548,14 @@ cases:
       0
       0
   - name: class-dispatch-maps-host-spellings-to-kind-keywords
-    # A defmethod over class names stores under the keyword class answers
-    # (Long/Double merge into :number, like every numeric spelling); dotted and
-    # clojure.lang names resolve first. nil answers both the :nil keyword and the
-    # identity nil; Object catches past the search but ahead of the default; the
-    # pi.clj run-simulation shape dispatches [Map Number] pairs element-wise.
+    # A defmethod over class names stores under the keyword class answers; dotted
+    # and clojure.lang names resolve first. A number's class is its own (Long,
+    # Double, Ratio, BigInt), walking to Number, and Long in value position is
+    # what class answers; a protocol extended to Long, Double and Number takes
+    # each. nil answers both the :nil keyword and the identity nil; Object
+    # catches past the search but ahead of the default; the pi.clj
+    # run-simulation shape dispatches [Map Number] pairs element-wise.
+    # Oracle-identical (clj 1.12.6, 2026-10-29).
     source: |
       (defmulti print-mm class)
       (defmethod print-mm String [s] (str "str:" s))
@@ -2594,6 +2597,19 @@ cases:
       (println (sim {:a 1}))
       (println (sim {:a 1} 2))
       (println (try (sim [1] 2) (catch Exception e "miss")))
+      (defmulti by-num class)
+      (defmethod by-num Long [_] :l)
+      (defmethod by-num Double [_] :d)
+      (defmethod by-num :default [_] :other)
+      (println (by-num 1) (by-num 1.5) (by-num 1/2) (by-num 99999999999999999999))
+      (println (= Long (class 1)) (= Double (class 1.5)) (= Long (class 1.5))
+               (= clojure.lang.Ratio (class 1/2)) (= clojure.lang.BigInt (class 99999999999999999999)))
+      (println (isa? Long Number) (isa? (class 1/2) Number) (isa? (class 1.5) Long)
+               (instance? Long 99999999999999999999) (instance? clojure.lang.BigInt 99999999999999999999))
+      (defprotocol ByNum (by-num-p [x]))
+      (extend-protocol ByNum Long (by-num-p [_] :pl) Double (by-num-p [_] :pd) Number (by-num-p [_] :pn))
+      (println (by-num-p 1) (by-num-p 1.5) (by-num-p 1/2) (satisfies? ByNum 1/2))
+      (println (cast Long 1) (try (cast Long 1.5) (catch ClassCastException _ :cce)))
     expected: |
       str:a
       num:1
@@ -2615,6 +2631,11 @@ cases:
       m
       mn
       miss
+      :l :d :other :other
+      true true false true true
+      true true false false true
+      :pl :pd :pn true
+      1 :cce
   - name: nil-method-stays-distinct-from-nil-keyword
     # A nil method answers a true nil dispatch value only: identity dispatch on
     # a literal :nil keyword falls past it to the :nil method or the default,
@@ -2764,7 +2785,7 @@ cases:
       (:C%CLASS clojure.lang.AFunction) (:C%CLASS clojure.lang.AFunction) true
       (:C%CLASS java.lang.String) (:C%CLASS clojure.lang.Keyword) (:C%CLASS clojure.lang.Symbol) (:C%CLASS java.lang.Boolean) nil
       :foo
-      (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentTreeMap) (:C%CLASS clojure.lang.PersistentHashSet) :vector :number
+      (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentTreeMap) (:C%CLASS clojure.lang.PersistentHashSet) :vector :java.lang.Long
       :function :string :nil
       false true
   - name: a-type-designator-dispatches-and-instances-as-its-kind
@@ -4835,10 +4856,10 @@ cases:
       (true true false false)
       (true false true false)
       (true true false)
-      (:string :number :nil :keyword)
+      (:string :java.lang.Long :nil :keyword)
       (2 -2 7)
       (true false)
-      (:string :number)
+      (:string :java.lang.Long)
   - name: conditional-binding-forms
     source: |
       (println (when-let [x 1] (+ x 10)))
@@ -9783,7 +9804,7 @@ cases:
       :clojure.lang.LineNumberingPushbackReader
       :clojure.lang.LineNumberingPushbackReader
       true false true
-      (:java.io.OutputStreamWriter :java.io.StringWriter :number :string)
+      (:java.io.OutputStreamWriter :java.io.StringWriter :java.lang.Long :string)
       :writer :stdout :other :other
   - name: a-multimethod-dispatches-on-a-stream-class-by-inheritance
     # A stream's host class as a dispatch value is the keyword class answers for it, and
@@ -10134,6 +10155,56 @@ cases:
       :cancelled
       true
       [boom {:k 1}]
+  - name: taps-receive-every-tapped-value
+    # Oracle-identical (clj 1.12.6): add-tap and remove-tap answer nil, a second
+    # add-tap of one function adds nothing, tap> answers true and hands its value
+    # (nil too) to every tap, a tap's failure reaches no other tap, and a removed
+    # tap receives nothing more; the three verbs work as values. The interpreter
+    # and the JVM deliver on the tap thread, the WASM legs at the tap> call, so
+    # each read waits under locking until the value arrived.
+    source: |
+      (def tp-seen (atom []))
+      (defn tp-record [x] (swap! tp-seen conj x))
+      (defn tp-boom [x] (throw (ex-info "tap-boom" {})))
+      (defn tp-wait [a n] (loop [] (when (< (count (locking a @a)) n) (recur))))
+      (println [(add-tap tp-record) (add-tap tp-record) (add-tap tp-boom)])
+      (println [(tap> 1) (tap> nil) (tap> :k)])
+      (tp-wait tp-seen 3)
+      (println @tp-seen)
+      (println [(remove-tap tp-record) (remove-tap tp-boom)])
+      (let [t tap> a add-tap r remove-tap seen (atom []) f #(swap! seen conj %)]
+        (println [(a f) (t :v)])
+        (tp-wait seen 1)
+        (println [@seen @tp-seen (r f)]))
+    expected: |
+      [nil nil nil]
+      [true true true]
+      [1 nil :k]
+      [nil nil]
+      [nil true]
+      [[:v] [1 nil :k] nil]
+  - name: a-full-tap-queue-answers-false
+    # Oracle-identical (clj 1.12.6): the tap queue holds 1024 values; while a tap
+    # blocks on the value it took, the 1025th tap> answers false. The WASM legs
+    # deliver at the tap> call, so no queue fills there.
+    skip:
+      wasm: taps are called at the tap> call where no thread exists
+      wasm_component: taps are called at the tap> call where no thread exists
+    source: |
+      (def tq-started (promise))
+      (def tq-gate (promise))
+      (def tq-count (atom 0))
+      (defn tq-tap [x] (deliver tq-started true) @tq-gate (locking tq-count (swap! tq-count inc)))
+      (add-tap tq-tap)
+      (tap> :first)
+      @tq-started
+      (println (frequencies (map (fn [_] (tap> :x)) (range 1030))))
+      (deliver tq-gate :go)
+      (loop [] (when (< (locking tq-count @tq-count) 1025) (recur)))
+      (println (remove-tap tq-tap))
+    expected: |
+      {true 1024, false 6}
+      nil
   - name: special-symbol-names-the-special-forms
     # Oracle-identical (clj 1.12.6).
     source: |
@@ -10482,7 +10553,7 @@ cases:
     # Byte/Short/Integer. Every value-level behavior is the oracle's -- printing,
     # =, hash, compare, sort, case, map and set keys, arithmetic (which answers
     # plain integers there too), conversions, truthiness, and what a byte array
-    # reads -- so only the box-typed axes differ: class answers :number (no wasm
+    # reads -- so only the box-typed axes differ: class answers :java.lang.Long (no wasm
     # backend has a host class), identical? compares numbers by value (as pinned
     # by identical-compares-numbers-and-symbols-by-value), and a member taking
     # byte needs a Byte (pinned in ClojureInteropTest's ByteBuffer cases). Only
@@ -10511,7 +10582,7 @@ cases:
       :b true
       7 7 7 7 \A
       7 7 "7"
-      :number :number :number
+      :java.lang.Long :java.lang.Long :java.lang.Long
       1 1
       :t true
       (:refused :refused :refused :refused :refused :refused :refused)

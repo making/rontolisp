@@ -751,6 +751,7 @@ final class ClojureBindingLowering {
 			if (datum instanceof LispSymbol) {
 				String param = ClojureLowerUtil.plainName(datum, "a parameter vector");
 				scope.put(param, ClojureLowering.Kind.VARIABLE);
+				ctx.noteLocalHint(scope, param, names.get(i), null);
 				params.add(ctx.localSym(param));
 				continue;
 			}
@@ -981,6 +982,8 @@ final class ClojureBindingLowering {
 					String name = ClojureLowerUtil.plainName(pattern, "let");
 					LispVal init = ctx.lower(bindings.get(i + 1));
 					pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
+					// the init's hint is read before the name shadows an outer one
+					ctx.noteLocalHint(scope, name, bindings.get(i), bindings.get(i + 1));
 					scope.put(name, ClojureLowering.Kind.VARIABLE);
 					if (ClojureLowerUtil.yieldsFun(init)) {
 						ctx.markDirect(name);
@@ -1000,6 +1003,7 @@ final class ClojureBindingLowering {
 		finally {
 			ctx.scopes.remove(ctx.scopes.size() - 1);
 			ctx.directScopes.remove(ctx.directScopes.size() - 1);
+			ctx.localHints.remove(scope);
 			forgetDeepHosts(ctx);
 		}
 		return form;

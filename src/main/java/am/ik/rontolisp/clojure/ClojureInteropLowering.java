@@ -631,7 +631,9 @@ final class ClojureInteropLowering {
 			String method = member.substring(1);
 			checkTagCount(types, argDatums.size() - 1, "method " + method, cls, name);
 			return instanceCallLoweredWithClass(ctx, ctx.lower(argDatums.get(0)), cls, method,
-					designator(method, types), ctx.lowers(items, 2));
+					types != null ? designator(method, types)
+							: hintedDesignator(ctx, method, argDatums.subList(1, argDatums.size())),
+					ctx.lowers(items, 2));
 		}
 		checkTagCount(types, argDatums.size(), "method " + member, cls, name);
 		if (argDatums.isEmpty() && types == null) {
@@ -640,7 +642,9 @@ final class ClojureInteropLowering {
 			// error names an unknown member or class, like before)
 			return staticNoArg(ctx, cls, member);
 		}
-		return staticCall(ctx, cls, member, designator(member, types), ctx.lowers(items, 1));
+		return staticCall(ctx, cls, member,
+				types != null ? designator(member, types) : hintedDesignator(ctx, member, argDatums),
+				ctx.lowers(items, 1));
 	}
 
 	/**
@@ -678,6 +682,86 @@ final class ClojureInteropLowering {
 	 */
 	static String designator(String member, @Nullable List<String> types) {
 		return types == null ? member : member + "(" + String.join(",", types) + ")";
+	}
+
+	/**
+	 * The {@code java:} designator of an untagged member over its argument datums' type
+	 * hints: the bare name when no argument carries a class hint ({@link #classHint}),
+	 * else {@code name(^C1,_)} -- the hint spelling {@code java:call},
+	 * {@code java:static} and {@code java:new} narrow the candidates by where the site's
+	 * class is known before it runs (the oracle's compiler choosing by its arguments'
+	 * {@code :tag}s; a site left to run time calls by reflection, which reads no hint, as
+	 * the oracle's reflector reads none). Where no host is, the bare name: no member runs
+	 * there.
+	 */
+	static String hintedDesignator(ClojureLowering ctx, String member, List<LispVal> argDatums) {
+		if (!ctx.hostTarget) {
+			return member;
+		}
+		List<String> hints = new ArrayList<>(argDatums.size());
+		boolean hinted = false;
+		for (LispVal datum : argDatums) {
+			String hint = classHint(ctx, datum);
+			hinted |= hint != null;
+			hints.add(hint == null ? "_" : "^" + hint);
+		}
+		return hinted ? member + "(" + String.join(",", hints) + ")" : member;
+	}
+
+	/**
+	 * The host class an argument datum's {@code :tag} names (the outermost reader
+	 * metadata layer carrying one), else the hint of the local a bare name refers to
+	 * ({@link ClojureLowering#localHint}): an imported, {@code java.lang} or dotted class
+	 * name the program's classes hold. Null for none, a primitive or array tag
+	 * ({@code ^long}, {@code ^bytes}, {@code ^"[B"}), a record or deftype, or a name no
+	 * class answers.
+	 */
+	static @Nullable String classHint(ClojureLowering ctx, LispVal datum) {
+		return datum instanceof LispSymbol local ? ctx.localHint(local.name()) : tagHint(ctx, datum);
+	}
+
+	/**
+	 * The host class a datum's own {@code :tag} names ({@link #classHint}, reading no
+	 * local), or null.
+	 */
+	static @Nullable String tagHint(ClojureLowering ctx, LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			LispVal tag = metaTag(parts.get(2));
+			if (tag != null) {
+				if (!(tag instanceof LispSymbol named) || named.name().startsWith(":") || named.name().indexOf('/') >= 0
+						|| PRIMITIVE_TAGS.contains(named.name()) || ctx.typeKeyOf(named.name()) != null) {
+					return null;
+				}
+				String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
+				return ClojureHostClasses.exists(cls) ? cls : null;
+			}
+			parts = ClojureLowerUtil.items(parts.get(1));
+		}
+		return null;
+	}
+
+	/** The tags naming a primitive or a primitive or {@code Object} array. */
+	private static final Set<String> PRIMITIVE_TAGS = Set.of("boolean", "byte", "char", "short", "int", "long", "float",
+			"double", "void", "booleans", "bytes", "chars", "shorts", "ints", "longs", "floats", "doubles", "objects");
+
+	// The :tag of one reader metadata layer: a bare symbol or string, or a map's :tag
+	// entry; null when the layer carries none.
+	private static @Nullable LispVal metaTag(LispVal meta) {
+		if (meta instanceof LispSymbol named && !named.name().startsWith(":") || meta instanceof LispString) {
+			return meta;
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(meta);
+		if (parts == null || parts.isEmpty() || !ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")) {
+			return null;
+		}
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (ClojureLowerUtil.isSymbolNamed(parts.get(i), ":tag")) {
+				return parts.get(i + 1);
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -842,7 +926,7 @@ final class ClojureInteropLowering {
 			}
 		}
 		List<LispVal> args = new ArrayList<>();
-		args.add(LispString.literal(designator(cls, types)));
+		args.add(LispString.literal(types != null ? designator(cls, types) : hintedDesignator(ctx, cls, argDatums)));
 		args.addAll(lowered);
 		return newCall(ctx, cls, types, args);
 	}
@@ -1602,8 +1686,10 @@ final class ClojureInteropLowering {
 	/**
 	 * A bare class name in value position ({@code String}, an imported class, a dotted
 	 * name): the class object, the same {@code Class.forName} answer the oracle's class
-	 * literal prints and compares by. Null when the name is no loadable class (a typo
-	 * keeps the unknown-name refusal at compile time) or names a record or deftype.
+	 * literal prints and compares by; a number's class ({@code Long}, {@code Double}) the
+	 * keyword {@code class} answers for its values. Null when the name is no loadable
+	 * class (a typo keeps the unknown-name refusal at compile time) or names a record or
+	 * deftype.
 	 */
 	static @Nullable LispVal classValue(ClojureLowering ctx, String name) {
 		if (name.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, name) || ctx.typeKeyOf(name) != null) {
@@ -1612,6 +1698,11 @@ final class ClojureInteropLowering {
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
 		if (!ClojureHostClasses.exists(cls)) {
 			return null;
+		}
+		if (ClojureClassBases.NUMBER_SUPERS.containsKey(cls)) {
+			// a number's class is the keyword class answers for its values, on every
+			// backend, so (= Long (class 1)) holds like the oracle's
+			return ClojureCollectionLowering.keywordForm(cls);
 		}
 		if (!ctx.hostTarget) {
 			// where no host is, a class literal is its (:C%CLASS name)
@@ -2444,7 +2535,8 @@ final class ClojureInteropLowering {
 		for (LispVal arg : argDatums) {
 			args.add(ctx.lower(arg));
 		}
-		return instanceCallLowered(ctx, receiver, method, args);
+		return instanceCallLoweredWithClass(ctx, receiver, null, method, hintedDesignator(ctx, method, argDatums),
+				args);
 	}
 
 	/**

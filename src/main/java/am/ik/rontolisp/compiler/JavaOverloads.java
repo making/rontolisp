@@ -40,6 +40,15 @@ public final class JavaOverloads {
 	/** A boxed, {@code Object}, {@code Number} or other supertype target. */
 	public static final int COST_BOXED = 6;
 
+	/**
+	 * A Lisp callable where {@code java.util.concurrent.Callable} is expected: before
+	 * every other interface, as a function answers a value and {@code Callable} is the
+	 * interface that keeps it -- so {@code ExecutorService.submit} of a function takes
+	 * {@code submit(Callable)}, which the oracle's reflector picks for every executor but
+	 * {@code ScheduledThreadPoolExecutor} (its {@code getMethods()} order).
+	 */
+	public static final int COST_FUNCTION_CALLABLE = 7;
+
 	/** A Lisp callable adapted to a functional interface (one abstract method). */
 	public static final int COST_PROXY = 8;
 
@@ -437,8 +446,14 @@ public final class JavaOverloads {
 	 */
 	public static final String OBJECT = "java.lang.Object";
 
+	/** The interface a function prefers ({@link #COST_FUNCTION_CALLABLE}). */
+	public static final String CALLABLE = "java.util.concurrent.Callable";
+
 	/** A tag type that matches any parameter type. */
 	public static final String WILDCARD = "_";
+
+	/** The prefix of a designator entry that hints an argument's class. */
+	public static final String HINT = "^";
 
 	/**
 	 * What the oracle's reflector refuses a call with (clj 1.12.6, measured 2026-10-13):
@@ -499,20 +514,43 @@ public final class JavaOverloads {
 	}
 
 	/**
-	 * A member designator: the name, and the parameter types a tag fixes.
+	 * A member designator: the name, and the parameter types a tag fixes or the classes
+	 * hints give the arguments.
 	 *
 	 * @param name the method name, or for {@code java:new} the class name
 	 * @param tag the tag's types in {@link Class#getName()} spelling ({@link #WILDCARD}
 	 * for {@code _}), or {@code null} for an untagged designator
+	 * @param hints the argument classes the hints name ({@link #WILDCARD} for an argument
+	 * with none), or {@code null} for a designator with no hint ({@link #filterByHints})
 	 */
-	public record Member(String name, @Nullable List<String> tag) {
+	public record Member(String name, @Nullable List<String> tag, @Nullable List<String> hints) {
+
+		/**
+		 * A designator with no hint.
+		 * @param name the method name, or for {@code java:new} the class name
+		 * @param tag the tag's types, or {@code null} for an untagged designator
+		 */
+		public Member(String name, @Nullable List<String> tag) {
+			this(name, tag, null);
+		}
 
 		/**
 		 * @return the designator in the spelling {@link #parseMember} reads back
 		 */
 		public String designator() {
 			List<String> types = this.tag;
-			return types == null ? this.name : this.name + "(" + String.join(",", types) + ")";
+			if (types != null) {
+				return this.name + "(" + String.join(",", types) + ")";
+			}
+			List<String> classes = this.hints;
+			if (classes == null) {
+				return this.name;
+			}
+			List<String> spelled = new ArrayList<>();
+			for (String hint : classes) {
+				spelled.add(WILDCARD.equals(hint) ? hint : HINT + hint);
+			}
+			return this.name + "(" + String.join(",", spelled) + ")";
 		}
 
 	}
@@ -856,8 +894,10 @@ public final class JavaOverloads {
 			// proxy -- a functional interface first, as a Java lambda; where an Object is
 			// expected it is the object a function is
 			// (JavaImplementations.functionObject).
-			return OBJECT.equals(name) ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
-					: JavaInterfaceMethods.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
+			return OBJECT.equals(name) ? COST_FUNCTION_OBJECT
+					: CALLABLE.equals(name) ? COST_FUNCTION_CALLABLE
+							: !target.isInterface() ? NO_MATCH : JavaInterfaceMethods.isFunctionalInterface(target)
+									? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 		}
 		KindRule r = rule(lisp);
 		if (name.equals(r.exact())) {
@@ -1281,9 +1321,12 @@ public final class JavaOverloads {
 	 * name ({@code java.util.Map$Entry}), a name without a package, which means
 	 * {@code java.lang} ({@code String}), any of those followed by {@code []} per array
 	 * dimension or by {@code ...}, a {@link Class#getName()} array spelling ({@code [I}),
-	 * or {@code _}, which matches any type.
+	 * or {@code _}, which matches any type. A tag whose entries are {@code ^C} (and
+	 * {@code _}) is no tag but the argument hints ({@code "submit(^java.lang.Runnable)"},
+	 * {@link #filterByHints}): each {@code C} a binary class name.
 	 * @param designator the designator as written
-	 * @return the name and the tag, its types in {@link Class#getName()} spelling
+	 * @return the name and the tag, its types in {@link Class#getName()} spelling, or the
+	 * hints
 	 * @throws IllegalArgumentException when the tag is malformed
 	 */
 	public static Member parseMember(String designator) {
@@ -1301,16 +1344,36 @@ public final class JavaOverloads {
 		String name = designator.substring(0, open).strip();
 		String inside = designator.substring(open + 1, designator.length() - 1).strip();
 		List<String> types = new ArrayList<>();
+		List<String> hints = new ArrayList<>();
+		boolean tagged = false;
 		if (!inside.isEmpty()) {
 			for (String part : inside.split(",", -1)) {
 				String type = part.strip();
 				if (type.isEmpty()) {
 					throw new IllegalArgumentException("malformed parameter tag in \"" + designator + "\"");
 				}
-				types.add(tagTypeName(type));
+				if (type.startsWith(HINT)) {
+					String hint = type.substring(HINT.length()).strip();
+					if (hint.isEmpty() || WILDCARD.equals(hint)) {
+						throw new IllegalArgumentException("malformed parameter tag in \"" + designator + "\"");
+					}
+					hints.add(hint);
+					continue;
+				}
+				String tagType = tagTypeName(type);
+				tagged |= !WILDCARD.equals(tagType);
+				types.add(tagType);
+				hints.add(WILDCARD);
 			}
 		}
-		return new Member(name, List.copyOf(types));
+		if (types.size() == hints.size()) {
+			return new Member(name, List.copyOf(types));
+		}
+		if (tagged) {
+			// a hint designator mixes no tag type in: each entry a hint or `_`
+			throw new IllegalArgumentException("malformed parameter tag in \"" + designator + "\"");
+		}
+		return new Member(name, null, List.copyOf(hints));
 	}
 
 	/**
@@ -1409,6 +1472,51 @@ public final class JavaOverloads {
 			}
 		}
 		return matching;
+	}
+
+	/**
+	 * The candidates the argument hints leave -- the oracle's compiler choosing a member
+	 * by the classes its arguments' {@code :tag}s name: a candidate taking one parameter
+	 * per hint, each hinted reference parameter one the hint's class is assignable to. A
+	 * primitive parameter is never dropped (the oracle's {@code paramArgTypeMatch} takes
+	 * a box's hint there; the argument's kind decides the rest), and a class the lookup
+	 * does not find hints nothing. When no candidate is left, every candidate: the oracle
+	 * then calls by reflection, which reads no hint.
+	 * @param candidates the methods or constructors
+	 * @param hints the hinted classes ({@link #WILDCARD} for an argument with none), or
+	 * {@code null}
+	 * @param lookup the lookup the hinted classes are found in
+	 * @return the candidates that match, or all of them when none does
+	 */
+	public static <E extends JavaExecutable> List<E> filterByHints(List<E> candidates, @Nullable List<String> hints,
+			JavaClassLookup lookup) {
+		if (hints == null) {
+			return candidates;
+		}
+		List<@Nullable JavaType> classes = new ArrayList<>();
+		for (String hint : hints) {
+			classes.add(WILDCARD.equals(hint) ? null : lookup.find(hint));
+		}
+		List<E> matching = new ArrayList<>();
+		for (E candidate : candidates) {
+			List<? extends JavaType> params = candidate.parameterTypes();
+			if (params.size() != classes.size()) {
+				continue;
+			}
+			boolean all = true;
+			for (int i = 0; i < params.size(); i++) {
+				JavaType hint = classes.get(i);
+				JavaType param = params.get(i);
+				if (hint != null && !param.isPrimitive() && !param.isAssignableFrom(hint)) {
+					all = false;
+					break;
+				}
+			}
+			if (all) {
+				matching.add(candidate);
+			}
+		}
+		return matching.isEmpty() ? candidates : matching;
 	}
 
 	/**

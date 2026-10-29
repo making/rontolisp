@@ -11,9 +11,10 @@
 ディスパッチします。throwable のクラス（`IllegalArgumentException`、
 `clojure.lang.ExceptionInfo`）、ストリームのクラス（`java.io.StringWriter`、
 `java.io.Writer`、`java.io.Reader`）、[clojure.java.io](clojure-java-io.md) の値のクラス
-（`java.io.File`、`java.io.InputStream`）は、`class` が例外、ストリーム、それらの値に答える
-クラス名のキーワードの下に格納され、検索はオラクルの Java の継承と同じくスーパークラスの連鎖を
-たどります。`NumberFormatException` は `Exception` のメソッドより先に
+（`java.io.File`、`java.io.InputStream`）、数値のクラス（`Long`、`Double`、
+`clojure.lang.Ratio`、`clojure.lang.BigInt`、`Number`）は、`class` が例外、ストリーム、数値、
+それらの値に答えるクラス名のキーワードの下に格納され、検索はオラクルの Java の継承と同じく
+スーパークラスの連鎖をたどります（`Long` は `Number` のメソッドへ届きます）。`NumberFormatException` は `Exception` のメソッドより先に
 `IllegalArgumentException` のメソッドへ届きます。それ以外のホストクラス
 （`java.util.AbstractList`）は、`class` がホストオブジェクトに答える
 クラスオブジェクトの下に格納され（インタプリタと JVM）、検索は同じく Java の
@@ -23,9 +24,6 @@ wasm ではその `defmethod` が実行時に失敗します。真の nil は `(
 nil をキーにしません）。リテラルの `:nil` ディスパッチ値は `:nil` メソッドにだけ答えます
 （オラクル通り）。`Object` は検索の
 後・デフォルトの先ですべての値に一致します。
-
-仕様との差異: すべての数値クラス綴りは `:number` にまとまります（オラクルは `Long` と
-`Double` を区別します）。
 
 ```clojure
 (defmulti m :shape)

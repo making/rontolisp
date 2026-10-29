@@ -1665,6 +1665,24 @@ class ClojureInteropTest {
 						+ " (.sort l (java.util.Comparator/comparing (fn [x] (- x)))) (println (vec l)))",
 				"[1 2 3]\n[3 2 1]\n");
 		assertBothEqual("(println (.get (.map (java.util.Optional/of 4) (fn [x] (* 2 x)))))", "8\n");
+		// A fn takes ExecutorService.submit(Callable), whose future keeps its answer, as
+		// the oracle's reflector picks; an argument's :tag -- its own, a hinted local's
+		// or
+		// parameter's, a local's init's -- picks the overload where the receiver's class
+		// is known, as the oracle's compiler does (a tag no overload takes picks none),
+		// and a reflective call reads none (clj 1.12.6, 2026-10-29). Before, both were
+		// submit(Runnable): nil.
+		assertBothEqual("""
+				(def pool (java.util.concurrent.Executors/newFixedThreadPool 1))
+				(println @(.submit pool (fn [] 1)) @(.submit pool ^Runnable (fn [] 2)))
+				(let [e (java.util.concurrent.Executors/newFixedThreadPool 1)]
+				  (println @(.submit e ^java.util.concurrent.Callable (fn [] 3)) @(.submit e ^Runnable (fn [] 4))
+				           @(.submit e ^String (fn [] 5)))
+				  (let [^Runnable r (fn [] 6) r2 r] (println @(.submit e r) @(.submit e r2)))
+				  (println ((fn [^Runnable r] @(.submit e r)) (fn [] 7)))
+				  (.shutdown e))
+				(.shutdown pool)
+				""", "1 2\n3 nil 5\nnil nil\nnil\n");
 		// a fn of the wrong arity is called with the method's arguments, and refuses them
 		// in
 		// the oracle's words

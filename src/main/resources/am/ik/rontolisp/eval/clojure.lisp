@@ -10213,15 +10213,12 @@
 ;; is not in the map (the lowering special-cases it to :object) and is tested
 ;; by its full name below.
 (defvar rontolisp::%clojure-dispatch-class-names
-  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
-    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
-    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
-    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
-    ("Character" . "char") ("Char" . "char") ("Map" . "map")
-    ("IPersistentMap" . "map") ("Vector" . "vector")
-    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
-    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
-    ("Collection" . "list") ("IPersistentList" . "list")
+  '(("String" . "string") ("CharSequence" . "string") ("Boolean" . "boolean")
+    ("Keyword" . "keyword") ("Symbol" . "symbol") ("Character" . "char")
+    ("Char" . "char") ("Map" . "map") ("IPersistentMap" . "map")
+    ("Vector" . "vector") ("IPersistentVector" . "vector") ("Set" . "set")
+    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
+    ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
     ("Function" . "function") ("Atom" . "atom"))
   "Simple class names to the kind keyword spelling dispatch stores.")
@@ -10341,15 +10338,12 @@
 ;; not in the map (the lowering special-cases it to the default) and is
 ;; tested by its full name below.
 (defvar rontolisp::%clojure-extends-kind-names
-  '(("String" . "string") ("CharSequence" . "string") ("Number" . "number")
-    ("Long" . "number") ("Double" . "number") ("Integer" . "number")
-    ("Float" . "number") ("Short" . "number") ("Byte" . "number")
-    ("Boolean" . "boolean") ("Keyword" . "keyword") ("Symbol" . "symbol")
-    ("Character" . "char") ("Char" . "char") ("Map" . "map")
-    ("IPersistentMap" . "map") ("Vector" . "vector")
-    ("IPersistentVector" . "vector") ("Set" . "set") ("IPersistentSet" . "set")
-    ("List" . "list") ("Seq" . "list") ("Sequential" . "list")
-    ("Collection" . "list") ("IPersistentList" . "list")
+  '(("String" . "string") ("CharSequence" . "string") ("Boolean" . "boolean")
+    ("Keyword" . "keyword") ("Symbol" . "symbol") ("Character" . "char")
+    ("Char" . "char") ("Map" . "map") ("IPersistentMap" . "map")
+    ("Vector" . "vector") ("IPersistentVector" . "vector") ("Set" . "set")
+    ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
+    ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
     ("Function" . "function") ("Atom" . "atom"))
   "Simple class names to the kind keyword spelling an extend target
@@ -10448,9 +10442,9 @@
   (cond ((equal spelling "object") :default)
         ((or (gethash x rontolisp::%clojure-protocol-type-tags)
           (member spelling
-                  '("string" "number" "boolean" "keyword" "symbol" "char" "map"
-                    "vector" "set" "list" "function" "atom" "nil" "reify"
-                    "pattern" "matcher")
+                  '("string" "boolean" "keyword" "symbol" "char" "map" "vector"
+                    "set" "list" "function" "atom" "nil" "reify" "pattern"
+                    "matcher")
                   :test #'equal)
           (assoc spelling rontolisp::%clojure-extends-time-names :test #'equal)
           (member spelling rontolisp::%clojure-extends-io-names :test #'equal))
@@ -10480,8 +10474,7 @@
                             :test #'equal))
                     (cdr
                      (assoc name rontolisp::%clojure-extends-time-names
-                            :test #'equal))
-                    (if (equal name "clojure.lang.BigInt") "number"))))
+                            :test #'equal)))))
            (if (and kind
                     (not
                      (member (rontolisp::%clojure-extends-walked name)
@@ -10709,8 +10702,9 @@
 ;; cast of a class the lowering names is the instance test inline; of a
 ;; computed one this worker, like instance? of a class value: a class keyword
 ;; casts by the protocol tag (what class answers for every value but a host
-;; object), a host class object by the kind its name has here (numbers by
-;; numberp, like the oracle's Long) else by asking the host, nil is the
+;; object), a host class object by the kind its name has here (a number's
+;; class by its keyword, any other numeric class by numberp: an int is a Long
+;; here) else by asking the host, nil is the
 ;; oracle's NullPointerException and anything else its ClassCastException. nil
 ;; casts to nil past a class.
 
@@ -10723,14 +10717,15 @@
           ((or (equal name "java.lang.String")
                (equal name "java.lang.CharSequence"))
            "string")
-          ((or (equal name "java.lang.Long") (equal name "java.lang.Integer")
-               (equal name "java.lang.Short") (equal name "java.lang.Byte")
-               (equal name "java.lang.Double") (equal name "java.lang.Float")
+          ((or (equal name "java.lang.Long") (equal name "java.lang.Double")
+               (equal name "clojure.lang.BigInt")
+               (equal name "clojure.lang.Ratio"))
+           name)
+          ((or (equal name "java.lang.Integer") (equal name "java.lang.Short")
+               (equal name "java.lang.Byte") (equal name "java.lang.Float")
                (equal name "java.lang.Number")
                (equal name "java.math.BigInteger")
-               (equal name "java.math.BigDecimal")
-               (equal name "clojure.lang.BigInt")
-               (equal name "clojure.lang.Ratio") (equal name "long")
+               (equal name "java.math.BigDecimal") (equal name "long")
                (equal name "int") (equal name "short") (equal name "byte")
                (equal name "double") (equal name "float"))
            "number")
@@ -10781,9 +10776,10 @@
                 nil
                 (let ((kind (rontolisp::%clojure-cast-kind name)))
                   (if (or (equal name "java.lang.Object")
-                          (and kind (equal (c%protocol-tag x) kind))
-                          (and (null kind)
-                               (rontolisp::%clojure-host-class-instance-p c x)))
+                       (and kind (equal (c%protocol-tag x) kind))
+                       (and kind (equal (car (cdr kind)) "number") (numberp x))
+                       (and (null kind)
+                            (rontolisp::%clojure-host-class-instance-p c x)))
                       x
                       (rontolisp::%clojure-class-cast-exception
                        (concatenate 'string "Cannot cast "
@@ -10917,6 +10913,21 @@
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
   (and (integerp x) (<= -9223372036854775808 x 9223372036854775807)))
+
+(defun rontolisp::%clojure-is-bigint (x)
+  "instance? clojure.lang.BigInt: an integer past a long (the integer 1N
+   reads as is a Long here)."
+  (and (integerp x) (not (rontolisp::%clojure-is-int x))))
+
+(defun rontolisp::%clojure-number-class (x)
+  "class of the number X: the keyword of the oracle's class -- a Long, a
+   BigInt past a long, a Double, else a Ratio."
+  (cond ((integerp x)
+         (if (rontolisp::%clojure-is-int x)
+             '(:c%keyword "java.lang.Long")
+             '(:c%keyword "clojure.lang.BigInt")))
+        ((floatp x) '(:c%keyword "java.lang.Double"))
+        (t '(:c%keyword "clojure.lang.Ratio"))))
 
 (defun rontolisp::%clojure-is-nat-int (x)
   "nat-int?: an int? that is not negative."
@@ -16553,6 +16564,127 @@
           (sleep 0.001)))
       (rontolisp::%clojure-class-cast-exception-of
        "deref needs a number as its timeout" ms)))
+
+;;;; Taps: tap>, add-tap and remove-tap.
+;;
+;; The taps are (key . fn) entries, oldest first, under %clojure-tap-guard: KEY
+;; the value add-tap was handed (remove-tap finds it by identical?, a second
+;; add-tap of it adds nothing, like the oracle's set), FN a real function over
+;; it. On a host target tap> offers its value to a bounded queue -- 1024, the
+;; oracle's ArrayBlockingQueue, so a full one answers false -- which one thread
+;; at a time drains, calling every tap present at each take and ignoring a
+;; tap's failure. The thread ends with the queue empty and the next tap> starts
+;; another, so nothing polls while no value waits, and where a spawn runs its
+;; body at once (the browser playground's interpreter) tap> delivers before it
+;; returns. Where no thread exists (wasm) %clojure-tap-send is replaced by the
+;; synchronous delivery (eval/ClojureLibrary, the host-arms stand-ins), so the
+;; queue and its thread never reach a module.
+
+(defvar rontolisp::%clojure-taps
+  nil
+  "The taps: (key . fn) entries, oldest first, replaced whole under the guard.")
+
+(defvar rontolisp::%clojure-tap-guard (rontolisp:make-mutex))
+
+(defvar rontolisp::%clojure-tap-queue
+  (vector nil nil 0 nil)
+  "The tap queue: #(head tail count draining), DRAINING true while a thread
+   drains it.")
+
+(defun rontolisp::%clojure-tap-entry (key)
+  "The tap entry of KEY, nil when none; the caller holds the guard."
+  (dolist (entry rontolisp::%clojure-taps nil)
+    (if (rontolisp::%clojure-is-identical (car entry) key) (return entry))))
+
+(defun rontolisp::%clojure-tap-add (key fn)
+  "add-tap: the tap KEY, called through the real function FN, unless it is one
+   already; answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+    (unless (rontolisp::%clojure-tap-entry key)
+      (setq rontolisp::%clojure-taps
+            (append rontolisp::%clojure-taps (list (cons key fn))))))
+  nil)
+
+(defun rontolisp::%clojure-tap-remove (key)
+  "remove-tap: the tap KEY removed, when it is one; answers nil."
+  (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+    (let ((entry (rontolisp::%clojure-tap-entry key)))
+      (if entry
+          (setq rontolisp::%clojure-taps
+                (remove entry rontolisp::%clojure-taps)))))
+  nil)
+
+(defun rontolisp::%clojure-tap-deliver (x taps)
+  "X handed to each of the TAPS entries in turn, a tap's failure ignored."
+  (dolist (tap taps) (handler-case (funcall (cdr tap) x) (error () nil))))
+
+(defun rontolisp::%clojure-tap-send (x)
+  "tap>: X offered to the tap queue, starting a thread to drain it unless one
+   does; true when it was queued, false when the queue was full."
+  (let ((queue rontolisp::%clojure-tap-queue) (queued nil) (start nil))
+    (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+      (if (< (aref queue 2) 1024)
+          (let ((cell (list x)))
+            (if (aref queue 1)
+                (setf (cdr (aref queue 1)) cell)
+                (setf (aref queue 0) cell))
+            (setf (aref queue 1) cell)
+            (setf (aref queue 2) (+ (aref queue 2) 1))
+            (setq queued t)
+            (if (null (aref queue 3))
+                (progn
+                  (setf (aref queue 3) t)
+                  (setq start t))))))
+    (if start
+        (rontolisp:make-thread
+         (lambda () (rontolisp::%clojure-tap-drain queue))))
+    (if queued t rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-tap-drain (queue)
+  "A tap thread's run over QUEUE: take the oldest value and hand it to the
+   taps present at the take, until the queue is empty. The empty take clears
+   the draining flag, the unwind an abnormal exit, so the next tap> starts
+   another thread."
+  (let ((done nil))
+    (unwind-protect (loop
+                      (let ((taken nil) (x nil) (taps nil))
+                        (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+                          (if (aref queue 0)
+                              (progn
+                                (setq taken t)
+                                (setq x (car (aref queue 0)))
+                                (setq taps rontolisp::%clojure-taps)
+                                (setf (aref queue 0) (cdr (aref queue 0)))
+                                (if (null (aref queue 0))
+                                    (setf (aref queue 1) nil))
+                                (setf (aref queue 2) (- (aref queue 2) 1)))
+                              (progn
+                                (setf (aref queue 3) nil)
+                                (setq done t))))
+                        (if taken
+                            (rontolisp::%clojure-tap-deliver x taps)
+                            (return nil))))
+      (if done
+          nil
+          (rontolisp:with-mutex (rontolisp::%clojure-tap-guard)
+            (setf (aref queue 3) nil))))))
+
+(defun rontolisp::%clojure-tap-send-v (&rest args)
+  "tap> as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "tap>")
+  (rontolisp::%clojure-tap-send (car args)))
+
+(defun rontolisp::%clojure-tap-add-v (&rest args)
+  "add-tap as a value: its argument called through the IFn dispatcher unless
+   it is a real function."
+  (rontolisp::%clojure-check-arity args 1 1 "add-tap")
+  (rontolisp::%clojure-tap-add (car args)
+                               (rontolisp::%clojure-as-fn (car args))))
+
+(defun rontolisp::%clojure-tap-remove-v (&rest args)
+  "remove-tap as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "remove-tap")
+  (rontolisp::%clojure-tap-remove (car args)))
 
 ;;;; Parallel map: one future per element, dereferenced in order with the
 ;;;; oracle's lookahead.

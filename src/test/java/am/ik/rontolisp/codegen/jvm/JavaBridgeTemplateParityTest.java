@@ -185,12 +185,15 @@ class JavaBridgeTemplateParityTest {
 
 	// A function costs less for a functional interface than for another one, in both
 	// copies of the cost table: TreeSet(Comparator) over TreeSet(Collection), as a Java
-	// lambda and the oracle's fn choose.
+	// lambda and the oracle's fn choose; and least for Callable, which keeps its answer:
+	// ExecutorService.submit(Callable) over submit(Runnable), as the oracle's reflector
+	// chooses.
 	@Test
 	void aFunctionCostsLessForAFunctionalInterface() throws Exception {
-		for (Class<?> target : List.of(java.util.Comparator.class, Runnable.class, java.util.function.Function.class,
-				Iterable.class, java.util.Collection.class, java.util.SortedSet.class,
-				java.awt.event.MouseListener.class, java.io.Serializable.class, Object.class)) {
+		for (Class<?> target : List.of(java.util.Comparator.class, Runnable.class, java.util.concurrent.Callable.class,
+				java.util.function.Function.class, Iterable.class, java.util.Collection.class,
+				java.util.SortedSet.class, java.awt.event.MouseListener.class, java.io.Serializable.class,
+				Object.class)) {
 			int shared = JavaOverloads.kindCost(JavaKind.Lisp.FUNCTION, ReflectiveJavaClasses.of(target),
 					ReflectiveJavaClasses.instance());
 			assertThat(invoke("kindCost", new Class<?>[] { Object.class, Class.class }, "function", target))
@@ -217,6 +220,20 @@ class JavaBridgeTemplateParityTest {
 		JavaOverloads.Overload shared = sharedChoice(StringBuilder.class, "append", List.of(function()));
 		assertThat(Objects.requireNonNull(shared).executable().parameterTypes().get(0).name())
 			.isEqualTo("java.lang.Object");
+		assertThat(JavaOverloads.COST_FUNCTION_CALLABLE).isLessThan(JavaOverloads.COST_PROXY);
+		assertThat(constant("COST_FUNCTION_CALLABLE")).isEqualTo(JavaOverloads.COST_FUNCTION_CALLABLE);
+		Class<?> executor = java.util.concurrent.ExecutorService.class;
+		assertThat(((Method) Objects.requireNonNull(templateChoice(executor, "submit", List.of(function())))[0])
+			.getParameterTypes()).containsExactly(java.util.concurrent.Callable.class);
+		assertThat(Objects.requireNonNull(sharedChoice(executor, "submit", List.of(function())))
+			.executable()
+			.parameterTypes()
+			.get(0)
+			.name()).isEqualTo("java.util.concurrent.Callable");
+		// a hint designator is no tag where the bridge calls by reflection
+		assertThat(((Method) Objects
+			.requireNonNull(templateChoice(executor, "submit(^java.lang.Runnable)", List.of(function())))[0])
+			.getParameterTypes()).containsExactly(java.util.concurrent.Callable.class);
 	}
 
 	// A non-public receiver class whose method is declared on a non-public superclass

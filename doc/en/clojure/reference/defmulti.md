@@ -19,9 +19,9 @@ A `defmulti` of a name that already holds a multimethod changes nothing, like th
 methods, the dispatch function and the default stay. Another definition of the name in between
 (`defn`, `def`, ...) lets the next `defmulti` define again.
 
-A `class` dispatch runs over the kind keywords `class` answers (`:string`, `:number`,
-`:map`, ...), so host spellings name the same rows: `String`, `Number` (every numeric
-spelling merges into `:number`, where the oracle tells `Long` from `Double`), dotted
+A `class` dispatch runs over the keywords `class` answers (`:string`, `:map`,
+`:java.lang.Long`, ...), so host spellings name the same rows: `String`, `Long`, `Double`,
+`Number` (which a `Long` or a `Double` reaches through the hierarchy search), dotted
 names like `java.util.Map`, `clojure.lang.IPersistentVector`, and `nil`. An `Object`
 method catches what the hierarchy search misses, ahead of the default.
 

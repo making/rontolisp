@@ -75,6 +75,18 @@ final class ClojureClassBases {
 	static final Map<String, String> TIME_VALUE_SUPERS = Map.of("java.sql.Timestamp", "java.util.Date",
 			"java.util.GregorianCalendar", "java.util.Calendar");
 
+	/**
+	 * The superclass of each class a number's {@code class} answers
+	 * ({@code clojure.lisp}, {@code %clojure-number-class}): the number half of the class
+	 * chains, read off clj 1.12.6 on JDK 25 (2026-10-29). {@code Number}'s own is
+	 * {@code Object}.
+	 */
+	static final Map<String, String> NUMBER_SUPERS = Map.of("java.lang.Long", "java.lang.Number", "java.lang.Double",
+			"java.lang.Number", "clojure.lang.Ratio", "java.lang.Number", "clojure.lang.BigInt", "java.lang.Number");
+
+	/** The root of the number half. */
+	static final String NUMBER = "java.lang.Number";
+
 	/** The classes of the instants and the UUID whose superclass is {@code Object}. */
 	private static final Set<String> TIME_VALUE_ROOTS = Set.of("java.util.Date", "java.util.Calendar",
 			"java.util.UUID");
@@ -109,12 +121,20 @@ final class ClojureClassBases {
 			Map.entry("java.util.Date", List.of("java.io.Serializable", "java.lang.Cloneable", "java.lang.Comparable")),
 			Map.entry("java.util.Calendar",
 					List.of("java.io.Serializable", "java.lang.Cloneable", "java.lang.Comparable")),
-			Map.entry("java.util.UUID", List.of("java.io.Serializable", "java.lang.Comparable")));
+			Map.entry("java.util.UUID", List.of("java.io.Serializable", "java.lang.Comparable")),
+			Map.entry(NUMBER, List.of("java.io.Serializable")),
+			Map.entry("java.lang.Long",
+					List.of("java.lang.Comparable", "java.lang.constant.Constable", "java.lang.constant.ConstantDesc")),
+			Map.entry("java.lang.Double",
+					List.of("java.lang.Comparable", "java.lang.constant.Constable", "java.lang.constant.ConstantDesc")),
+			Map.entry("clojure.lang.Ratio", List.of("java.lang.Comparable")),
+			Map.entry("clojure.lang.BigInt", List.of("clojure.lang.IHashEq")));
 
 	/** The interfaces among the tabled classes' supers. */
 	static final Set<String> TABLED_INTERFACES = Set.of("java.io.Serializable", "clojure.lang.IExceptionInfo",
 			"java.lang.Appendable", "java.io.Closeable", "java.io.Flushable", "java.lang.Readable",
-			"java.lang.AutoCloseable", "java.lang.Cloneable", "java.lang.Comparable");
+			"java.lang.AutoCloseable", "java.lang.Cloneable", "java.lang.Comparable", "java.lang.constant.Constable",
+			"java.lang.constant.ConstantDesc", "clojure.lang.IHashEq");
 
 	/**
 	 * The classes a runtime error's or an {@code ex-info}'s class may be
@@ -130,13 +150,14 @@ final class ClojureClassBases {
 	/**
 	 * The keywords {@code class} answers for a core kind (the
 	 * {@code ClojureDispatchLowering
-	 * classForm} arms but nil's, exceptions' and streams'): each stands for host classes
-	 * that are no one value here -- {@code :number} is {@code Long}, {@code Double},
-	 * {@code Ratio}... -- so its row names no bases and its supers are {@code Object}
-	 * alone. A record's or a deftype's tag is such a class too.
+	 * classForm} arms but nil's, exceptions', streams' and numbers'): each stands for
+	 * host classes that are no one value here -- {@code :map} is
+	 * {@code PersistentArrayMap}, {@code PersistentHashMap}... -- so its row names no
+	 * bases and its supers are {@code Object} alone. A record's or a deftype's tag is
+	 * such a class too.
 	 */
-	static final List<String> KINDS = List.of("boolean", "keyword", "symbol", "char", "string", "number", "set", "map",
-			"vector", "pattern", "matcher", "list", "function", "atom", "reify", "clojure.lang.Namespace");
+	static final List<String> KINDS = List.of("boolean", "keyword", "symbol", "char", "string", "set", "map", "vector",
+			"pattern", "matcher", "list", "function", "atom", "reify", "clojure.lang.Namespace");
 
 	private ClojureClassBases() {
 	}
@@ -166,8 +187,11 @@ final class ClojureClassBases {
 		if (superclass == null) {
 			superclass = TIME_VALUE_SUPERS.get(name);
 		}
+		if (superclass == null) {
+			superclass = NUMBER_SUPERS.get(name);
+		}
 		if (superclass == null && (name.equals(ClojureThrowables.THROWABLE) || STREAM_ROOTS.contains(name)
-				|| TIME_VALUE_ROOTS.contains(name))) {
+				|| TIME_VALUE_ROOTS.contains(name) || name.equals(NUMBER))) {
 			superclass = OBJECT;
 		}
 		if (superclass != null) {
@@ -205,8 +229,8 @@ final class ClojureClassBases {
 
 	/**
 	 * Whether a spelling of this class lowers to its class keyword: a throwable, a stream
-	 * class, a class of the instants or the UUID, an interface among their supers, or
-	 * {@code Object}.
+	 * class, a class of the instants, the UUID or the numbers, an interface among their
+	 * supers, or {@code Object}.
 	 */
 	static boolean isChained(String name) {
 		return basesOf(name) != null;
@@ -260,10 +284,12 @@ final class ClojureClassBases {
 
 	/**
 	 * The classes a value's {@code class} may answer without the program naming them: the
-	 * runtime errors', the streams' and the other {@code clojure.java.io} values'.
+	 * runtime errors', the streams', the other {@code clojure.java.io} values' and the
+	 * numbers'.
 	 */
 	static List<String> implicitClasses() {
 		List<String> classes = new ArrayList<>(RUNTIME_THROWABLES);
+		classes.addAll(NUMBER_SUPERS.keySet().stream().sorted().toList());
 		classes.addAll(STREAM_SUPERS.keySet().stream().sorted().toList());
 		classes.addAll(List.of("java.io.BufferedInputStream", "java.io.BufferedOutputStream", "java.io.File",
 				"java.net.URI", "java.net.URL", ClojureIoLowering.RING_INPUT));

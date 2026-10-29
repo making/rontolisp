@@ -263,7 +263,7 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 ; => "error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map"
 ```
 
-関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。
+関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。関数の答えを保持する `java.util.concurrent.Callable` に対するコストが最も低いため、`ExecutorService.submit` は `submit(Runnable)` より `submit(Callable)` を選びます。
 
 ```lisp
 (let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))
@@ -361,6 +361,13 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 
 ```lisp
 (java:call (java:new "java.lang.StringBuilder(int)" 64) "capacity")   ; => 64
+```
+
+要素が `^C` または `_` のタグは、Clojure の `:tag` と同じく引数のクラスのヒントです。実行前に解決される呼び出しは、ヒントの各クラスを代入できるパラメータを持つオーバーロードだけを残します (プリミティブのパラメータは除外しません)。1 つも残らないときはすべてを残します。実行時に解決される呼び出しはヒントを読みません。`C` はバイナリクラス名です。
+
+```lisp
+(let ((e (java:static "java.util.concurrent.Executors" "newFixedThreadPool" 1)))
+  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => NIL
 ```
 
 ### リフレクション警告

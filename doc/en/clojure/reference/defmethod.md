@@ -15,9 +15,10 @@ may name a host class (`String`, `Number`, `java.util.Map`,
 so `class` multis dispatch to it. A throwable class (`IllegalArgumentException`,
 `clojure.lang.ExceptionInfo`), a stream class (`java.io.StringWriter`, `java.io.Writer`,
 `java.io.Reader`) or the class of a [clojure.java.io](clojure-java-io.md) value
-(`java.io.File`, `java.io.InputStream`) stores under its name as a keyword, the one `class`
-answers for an exception, a stream or such a value, and the search follows the superclass
-chain like the oracle's Java inheritance:
+(`java.io.File`, `java.io.InputStream`) or a number class (`Long`, `Double`,
+`clojure.lang.Ratio`, `clojure.lang.BigInt`, `Number`) stores under its name as a keyword, the
+one `class` answers for an exception, a stream, a number or such a value, and the search follows
+the superclass chain like the oracle's Java inheritance (a `Long` reaches a `Number` method):
 a `NumberFormatException` reaches an `IllegalArgumentException` method ahead of an
 `Exception` one. Any other host class (`java.util.AbstractList`) stores under
 its class object, the one `class` answers for a host object (interpreter and JVM), and the
@@ -27,9 +28,6 @@ method ahead of a `java.util.List` one. Such a dispatch value is host interop, s
 (no table ever keys on nil), so a literal `:nil` dispatch value answers only a `:nil`
 method, like the oracle, and
 `Object` matches every value past the search but ahead of the default.
-
-Deviation: every numeric class spelling merges into `:number`, where the oracle tells `Long`
-from `Double`.
 
 ```clojure
 (defmulti m :shape)
