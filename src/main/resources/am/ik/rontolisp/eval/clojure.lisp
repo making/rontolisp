@@ -5908,6 +5908,20 @@
                                                                     depth))))
                          (setq done t))))))))))
 
+(defun rontolisp::%clojure-map-strict (f colls)
+  "The strict list of F over the members of the COLLS list in lockstep, ending
+   with the shortest -- the oracle's map of several collections realized: no
+   member past the end of the shortest realizes, so an infinite collection
+   beside a finite one ends."
+  (if (null (cdr colls))
+      (mapcar f (rontolisp::%clojure-realize-all (car colls)))
+      (let ((seqs (mapcar #'rontolisp::%clojure-seq colls)) (acc nil))
+        (do ()
+            ((member nil seqs) (reverse acc))
+          (setq acc (cons (apply f (mapcar #'car seqs)) acc))
+          (setq seqs
+           (mapcar (lambda (s) (rontolisp::%clojure-seq (cdr s))) seqs))))))
+
 ;; One collection reducing through its own CollReduce row maps through that
 ;; reduction, as the oracle's mapv of one collection reduces it (several
 ;; collections go through map, a seq, like the oracle's): an arm of the
@@ -5917,17 +5931,13 @@
    the empty vector)."
   (if (rontolisp::%clojure-coll-reducible-p (car colls))
       (rontolisp::%clojure-mapv-reduced f colls)
-      (coerce
-       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
-       'vector)))
+      (coerce (rontolisp::%clojure-map-strict f colls) 'vector)))
 
 (defun rontolisp::%clojure-mapv-reduced (f colls)
   "mapv over the COLLS list whose first member reduces through its own
    CollReduce row: alone, the vector of F over what that reduction steps."
   (if (cdr colls)
-      (coerce
-       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
-       'vector)
+      (coerce (rontolisp::%clojure-map-strict f colls) 'vector)
       (coerce (reverse
                (rontolisp::%clojure-coll-reduce-3 (car colls)
                 (lambda (acc x) (cons (funcall f x) acc)) nil)) 'vector)))
@@ -5952,7 +5962,7 @@
    views, strictly (nil-safe: a nil result contributes nothing, like concat)."
   (apply #'append
          (mapcar #'rontolisp::%clojure-realize-all
-          (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls)))))
+                 (rontolisp::%clojure-map-strict f colls))))
 
 (defun rontolisp::%clojure-shuffle (items)
   "Fisher-Yates over the strict ITEMS list, answering a fresh vector (never the
@@ -17173,6 +17183,18 @@
   "The root of the var V."
   (funcall (car (cdr (cdr v)))))
 
+(defun rontolisp::%clojure-var-dynamic-p (v)
+  "Var.isDynamic: whether the var V's site carries a binding depth, which only
+   a dynamic var's (a ^:dynamic def, a core special) does."
+  (not (null (cdr (cdr (cdr v))))))
+
+(defun rontolisp::%clojure-var-ns (v)
+  "The var V's namespace (its public ns field): the part of its name before
+   the first slash."
+  (let* ((name (car (cdr v))) (n (length name)) (at n))
+    (dotimes (i n) (if (and (= at n) (char= (char name i) #\/)) (setq at i)))
+    (rontolisp::%clojure-ns-object (subseq name 0 at))))
+
 (defun rontolisp::%clojure-var-root (v)
   "var-get: the root of V, which must be a var (deref also reads an atom or a
    reduced value, var-get does not)."
@@ -17672,9 +17694,22 @@
    else made with VAL (unbound without one) over a cell of its own. The cell
    answers var-get, deref, alter-var-root and with-redefs-fn; a def or defn
    of the name keeps its own cell, so a direct call never sees the interned
-   root, like the oracle's static link."
+   root, like the oracle's static link. A NAME carrying metadata interns its
+   bare symbol, the var's metadata becoming that map with :name and :ns, like
+   the oracle's setMeta (tools.analyzer's create-var)."
   (if (rontolisp::%clojure-ns-object-p ns)
       (setq ns (rontolisp::%clojure-symbol-1 (car (cdr ns)))))
+  (if (rontolisp::%clojure-meta-symbol-p name)
+      (let ((bare (car (cdr name))))
+        (rontolisp::%clojure-replace-meta
+         (rontolisp::%clojure-intern-bare ns bare val val-p)
+         (rontolisp::%clojure-plist-table (car (cdr (cdr name)))
+          (list (list :C%KEYWORD "name") bare (list :C%KEYWORD "ns") ns))))
+      (rontolisp::%clojure-intern-bare ns name val val-p)))
+
+(defun rontolisp::%clojure-intern-bare (ns name val val-p)
+  "%clojure-intern of the namespace symbol or namespace NS and the NAME
+   symbol, carrying no metadata."
   (if (not (rontolisp::%clojure-real-symbol-p ns))
       (rontolisp::%clojure-class-cast-exception-of
        (concatenate 'string "class " (rontolisp::%clojure-class-name-of ns)

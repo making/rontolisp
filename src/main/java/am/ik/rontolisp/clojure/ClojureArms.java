@@ -1018,14 +1018,14 @@ public final class ClojureArms {
 
 		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
-		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns} and
-		 * {@code find-ns} hand one to the program.
+		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns},
+		 * {@code find-ns} and a var's {@code .ns} hand one to the program.
 		 */
 		NAMESPACE("namespace", Set.of("RONTOLISP::%CLOJURE-NS-OBJECT-P"), Set.of(), Map.of(),
 				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS",
 						"RONTOLISP::%CLOJURE-ALL-NS", "RONTOLISP::%CLOJURE-CREATE-NS", "RONTOLISP::%CLOJURE-REMOVE-NS",
 						"RONTOLISP::%CLOJURE-LOADED-LIBS", "RONTOLISP::%CLOJURE-INTERN", "RONTOLISP::%CLOJURE-VAR-SET",
-						"RONTOLISP::%CLOJURE-WITH-REDEFS-FN"),
+						"RONTOLISP::%CLOJURE-WITH-REDEFS-FN", "RONTOLISP::%CLOJURE-VAR-NS"),
 				Set.of()),
 
 		/**

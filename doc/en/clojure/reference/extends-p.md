@@ -2,7 +2,7 @@
 
 `(extends? protocol type)`
 
-`clojure.core/extends?`: `true` when `type` implements `protocol` inline (`defrecord`/`deftype`) or through `extend`, `extend-type` or `extend-protocol`. An `Object` extension counts for `Object` alone, like the oracle. Both are literal names, like `satisfies?`'s protocol, and `type` takes the names `extend-type` takes; numeric classes share one row (`Long` and `Double` alike). As a value (`(def e? extends?)` applied, or higher-order) the run-time protocol and type values read the same rows.
+`clojure.core/extends?`: `true` when `type` implements `protocol` inline (`defrecord`/`deftype`) or through `extend`, `extend-type` or `extend-protocol`. An `Object` extension counts for `Object` alone, like the oracle. Two names read the tables while the program lowers, and `type` takes the names `extend-type` takes; a computed protocol or type (a form such as `(class x)`, or a local) reads the run-time protocol and type values, and so does `extends?` as a value (`(def e? extends?)` applied, or higher-order).
 
 ```clojure
 (defprotocol ExP (ex-m [x]))

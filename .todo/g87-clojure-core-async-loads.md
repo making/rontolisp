@@ -9,32 +9,30 @@ Scope: interpreter and JVM first; on WASM, `go` blocks over a single-threaded sc
 separate decision. Every blocker is infrastructure, never special-cased.
 
 Measured 2026-10-29 (`.kb/clojure-frontend.md`, "core.async and tools.analyzer.jvm"): the
-channel half (`impl.*`: channels, buffers, dispatch pool, timers) now loads verbatim and
-matches the oracle on the interpreter and the JVM. The probe stops where `clojure.core.async`
-requires `impl.ioc-macros`: `go` runs tools.analyzer.jvm's `analyze` at macro time on every
-body, the namespace's own ~20 `go`/`go-loop` bodies included, so nothing of core.async loads
-until the analyzer runs. The premise "probe the next blockers" holds, but the analyzer is not
-a library probe like the others: it is the JVM Clojure compiler's analyzer, written against
-the oracle's runtime model. Plan, in order:
+channel half loads verbatim; `go` runs tools.analyzer.jvm's `analyze` at macro time on every
+body. The earlier plan assumed the analyzer reads only namespace and var plumbing of the
+runtime; the second measurement overturns that: its passes tag every constant with `(class x)`
+and validate each tag through `maybe-class`, so with this front end's kind keywords every body
+holding a string, keyword, collection or fn refuses (`Class not found: :string`), and imports,
+`Class/member`, `new`, `instance?` and `catch` need classes too. `build-ns-map` also costs
+7-10 s per call at the analyzer's ~45 namespaces. Done so far: computed `extends?` (the load's
+first stop), `mapv`/`mapcat` lockstep, threading into a hinted step, `intern` of a symbol
+carrying metadata, the `Var` members. Plan, in order:
 
-1. `clojure.reflect`: shipped (2026-10-29); `jvm.utils`'s `type-reflect` now stops at `(RT/baseLoader)`.
-2. tools.reader loads verbatim (done 2026-10-29: `.kb/clojure-frontend.md`, "Library probes").
-3. Done 2026-10-29: the core macros a `go` body meets expand to the oracle's special forms
-   as data, a macro's var root is its function of `(&form &env & args)`, and
-   `let*`/`loop*`/`letfn*`/`case*` lower (`.kb/clojure-frontend.md`, "Macros", the core
-   macros). The macro-time evaluator holds the expanders from its start, so `analyze` at
-   macro time reaches them through the var objects step 4's `ns-map` answers.
-4. Here: what `analyze` reads of the runtime, at macro time only -- `all-ns`, `ns-map`,
-   `ns-aliases`, `ns-name`, `the-ns`, `intern` over computed namespaces through the lowering
-   callback (`ns-resolve`'s shape), the Var objects `=` across calls (`ns-safe-macro` is a set
-   of vars); `clojure.lang.Compiler/LOADER`, `RT/baseLoader` and `RT/makeClassLoader` as statics of the shipped
-   `clojure.lang` namespace (the `PersistentQueue` precedent); `&env` values answering
+1. `.todo/h09`: class values are `java.lang.Class` objects on the interpreter and the JVM. Then
+   re-run the kb's tools.analyzer.jvm measurement: every form of its list must analyze.
+2. Namespace maps at macro time: `all-ns`/`find-ns`/`the-ns` answering the lowering's current
+   namespaces in the macro-time evaluator (their KNOWN list is the call site's, which predates
+   `clojure.core.async`), `ns-map`/`ns-aliases` of a computed namespace through the lowering
+   callback (`ClojureMacroEvaluator.Lowering`, `nsResolveForm`'s shape, or the run-time
+   lowering's `%clojure-lower-at-run-time` installed there), cached per namespace state.
+3. `clojure.lang.Compiler/LOADER` (a dynamic var), `RT/baseLoader`, `RT/makeClassLoader` and
+   `RT/classForName` as `clojure.lang` statics (`ClojureLangClasses`); `&env` values answering
    `Compiler$LocalBinding`'s `.hasJavaClass`/`.getJavaClass`.
-5. What the go machine emits at run time: `clojure.lang.Var/getThreadBindingFrame` /
-   `resetThreadBindingFrame` (the `bound-fn*` frame), `AtomicReferenceArray`, the `.`
-   special form over the analyzer's static and instance calls.
-6. Cost: `build-ns-map` runs over every namespace after each non-`ns-safe-macro` expansion,
-   and every `go` body runs the full pass schedule in the macro-time interpreter; measure the
-   load of `clojure.core.async` before deciding whether anything needs caching.
+4. What the go machine emits: `Var/getThreadBindingFrame`/`resetThreadBindingFrame` (the
+   `bound-fn*` frame), `AtomicReferenceArray`, the `.` special form over the analyzer's static
+   and instance calls, the `Class` objects it embeds in `.`/`new`/`instance?`/catch forms.
+5. Cost: measure the load of `clojure.core.async` (every go body runs the analyzer in the
+   macro-time interpreter) before deciding what else needs caching.
 
 Done when the probe prints `1` on the interpreter and the JVM, with a "Library probes" row.

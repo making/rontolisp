@@ -10,7 +10,9 @@ where the call stands, like `(do (def name val) (var name))` -- `(declare name)`
 `val` is the root a `def`'s reads see. Any other is made at run time over a cell of its own,
 which answers `var-get`, `deref`, `alter-var-root` and `with-redefs-fn`; a `def` or `defn` of
 the name keeps its own cell, so a direct call never sees that root, like the oracle's static
-link. A non-symbol name or namespace is refused. As a value two or three arguments.
+link. A name carrying metadata (`(with-meta 'x {:a 1})`) gives the var that metadata with
+`:name` and `:ns`, like the oracle's `setMeta`. A non-symbol name or namespace is refused. As
+a value two or three arguments.
 
 ```clojure
 (println (intern 'user 'doc-eg-v 7)) ; #'user/doc-eg-v
