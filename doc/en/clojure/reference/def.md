@@ -6,7 +6,9 @@ Defines a top-level variable, lowering to a `setq` of the mangled name. Without 
 the var is unbound until a definition binds it, like the oracle's (see
 [declare](declare.md) for the unbound root), and a bound root is left alone. Inside a body, `def` still sets the GLOBAL when the body runs --
 it is not a local binding, which is what a `let` is for. The name is a `VARIABLE`, so
-a head-position call to it is a `funcall` of the value cell.
+a head-position call to it is a `funcall` of the value cell. A name qualified with the current namespace
+(`(def user/x 1)`, or the `def` a syntax-quote template spells) names its bare var; another
+namespace's is an error, as on the oracle.
 
 The value evaluates against the OLD binding, so `(def p (memoize p))` after a
 `(defn p ...)` captures the function cell. Top-level calls then hit the cache;

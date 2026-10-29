@@ -110,11 +110,18 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void defLoneStringIsTheValueNotADocstring() {
+	void defReadsItsNameAndALoneStringAsTheOracleDoes() {
 		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING
 				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) \"hello\" \"user/x\")\n|c%x|");
 		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING
 				+ "(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL (IF (BOUNDP '|c%x|) |c%x| (RONTOLISP::%CLOJURE-UNBOUND \"user/x\"))) (LAMBDA (|__clojure_new_root|) (SETQ |c%x| |__clojure_new_root|)) 1 \"user/x\")\n|c%x|");
+		// a name qualified with the current namespace is its bare var; another
+		// namespace's is refused in the oracle's words (clj 1.12.6)
+		assertThat(lowered("(def user/x \"doc\" 1) x")).isEqualTo(lowered("(def x \"doc\" 1) x"));
+		assertThatThrownBy(() -> Clojure.read("(def clojure.core/inc 1)", null))
+			.hasMessageContaining("Can't create defs outside of current ns");
+		assertThatThrownBy(() -> Clojure.read("(defonce clojure.core/nope 1)", null))
+			.hasMessageContaining("Can't refer to qualified var that doesn't exist");
 	}
 
 	@Test
@@ -4416,9 +4423,9 @@ class ClojureLoweringTest {
 
 	@Test
 	void foreignNamespacesStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.reflect");
+			.hasMessageContaining("unknown namespace: clojure.inspector");
 	}
 
 	@Test
