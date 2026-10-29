@@ -23,10 +23,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ClojureInteropLowering.HOST_STATIC_CLASSES} (whose invoked members are
  * registered too, so macro-time evaluation runs them),
  * {@code ClojureValueMethodLowering}'s host kinds, {@code ClojureTimeValueLowering}'s
- * kinds, {@code ClojureIoLowering}'s API types, {@code Object} and {@code Throwable} --
- * is registered as a type in {@code reachability-metadata.json}, so the image answers
- * every member query of it as a JVM does. A class a program names outside them stays
- * partial without a JDK.
+ * kinds, the decimal's {@code BigDecimal}, {@code ClojureIoLowering}'s API types,
+ * {@code Object} and {@code Throwable} -- is registered as a type in
+ * {@code reachability-metadata.json}, so the image answers every member query of it as a
+ * JVM does. A class a program names outside them stays partial without a JDK.
  */
 class ClojureHostImageTypesTest {
 
@@ -84,6 +84,7 @@ class ClojureHostImageTypesTest {
 		expected.addAll(ClojureInteropLowering.HOST_STATIC_CLASSES.keySet());
 		expected.addAll(ClojureValueMethodLowering.hostKindTypes());
 		expected.addAll(ClojureTimeValueLowering.kindHosts());
+		expected.add(ClojureDecimalLowering.HOST);
 		expected.addAll(ClojureIoLowering.hostApiTypes());
 		expected.add("java.lang.Object");
 		expected.add(ClojureThrowables.THROWABLE);

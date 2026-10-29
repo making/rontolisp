@@ -654,19 +654,20 @@ final class ClojureVarLowering {
 
 	/**
 	 * The var of a {@code clojure.core} name: interned as {@code clojure.core/name}, its
-	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root a
-	 * signal like a program macro's, and its metadata {@code :name}/{@code :ns} plus a
-	 * macro's {@code :macro} (the oracle's {@code :arglists}, {@code :doc} and position
-	 * are not carried). A special ({@link ClojureCoreSpecials}) carries the binding-depth
-	 * reader {@code thread-bound?} asks: its counter, or one for a flag
-	 * {@code clojure.main} binds. A core var with no value here is refused.
+	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root
+	 * its function of {@code (&form &env & args)} ({@link ClojureCoreMacros#root}), and
+	 * its metadata {@code :name}/{@code :ns} plus a macro's {@code :macro} (the oracle's
+	 * {@code :arglists}, {@code :doc} and position are not carried). A special
+	 * ({@link ClojureCoreSpecials}) carries the binding-depth reader
+	 * {@code thread-bound?} asks: its counter, or one for a flag {@code clojure.main}
+	 * binds. A core var with no value here is refused.
 	 */
 	private static LispVal coreVarOf(ClojureLowering ctx, String name) {
 		String key = ClojureCoreNames.PREFIX + name;
 		boolean macro = ClojureCoreNames.isMacro(name);
-		// a macro's root is its expander as a value (g16): deref/@ of the var hands
-		// back the fn, like a program macro's table entry handed out; every other
-		// core name's root is its core value (what clojure.core/name reads)
+		// a macro's root is its function of (&form &env & args), the oracle's: deref
+		// of the var hands back the expander; every other core name's root is its
+		// core value (what clojure.core/name reads)
 		LispVal root = ctx.coreValueOrNull(name);
 		if (root == null) {
 			throw new LispReadException("var of a clojure.core var is not supported yet: #'" + key);
@@ -948,7 +949,8 @@ final class ClojureVarLowering {
 	 * What a program var's root reads as, where the site stands: a function's current
 	 * definition, a value cell (through a top-level reader where a local of a
 	 * {@code user} var's name shadows the cell), a session's declared name through both,
-	 * a macro's the oracle's refusal to take its value.
+	 * a macro's its expander over {@code (&form &env & args)}, the oracle's macro
+	 * function.
 	 * @param ctx the hub
 	 * @param key the var key, one of {@link ClojureLowering#globals}
 	 * @return the lowered root
@@ -956,8 +958,7 @@ final class ClojureVarLowering {
 	static LispVal rootOfKey(ClojureLowering ctx, String key) {
 		ClojureLowering.Kind kind = ctx.globals.get(key);
 		if (kind == ClojureLowering.Kind.MACRO) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("Can't take value of a macro: #'" + key));
+			return ClojureMacroLowering.programMacroRoot(ctx, key);
 		}
 		if (kind == ClojureLowering.Kind.FUNCTION) {
 			LispSymbol fn = ctx.defnCounts.getOrDefault(key, 0) > 1 ? ctx.currentDefnSym(key)

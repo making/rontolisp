@@ -198,6 +198,7 @@
     { "type": "java.lang.UnsupportedOperationException" },
     { "type": "java.lang.VerifyError" },
     { "type": "java.lang.VirtualMachineError" },
+    { "type": "java.math.BigDecimal" },
     { "type": "java.net.MalformedURLException" },
     { "type": "java.net.ProtocolException" },
     { "type": "java.net.URI" },

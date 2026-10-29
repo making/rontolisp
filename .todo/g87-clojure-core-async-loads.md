@@ -19,8 +19,11 @@ the oracle's runtime model. Plan, in order:
 
 1. `clojure.reflect`: shipped (2026-10-29); `jvm.utils`'s `type-reflect` now stops at `(RT/baseLoader)`.
 2. tools.reader loads verbatim (done 2026-10-29: `.kb/clojure-frontend.md`, "Library probes").
-3. Core macros expand to the oracle's special forms as data, macro vars callable with
-   `&form`/`&env`, and `let*`/`loop*`/`letfn*`/`case*` lowered (`.todo/g98`).
+3. Done 2026-10-29: the core macros a `go` body meets expand to the oracle's special forms
+   as data, a macro's var root is its function of `(&form &env & args)`, and
+   `let*`/`loop*`/`letfn*`/`case*` lower (`.kb/clojure-frontend.md`, "Macros", the core
+   macros). The macro-time evaluator holds the expanders from its start, so `analyze` at
+   macro time reaches them through the var objects step 4's `ns-map` answers.
 4. Here: what `analyze` reads of the runtime, at macro time only -- `all-ns`, `ns-map`,
    `ns-aliases`, `ns-name`, `the-ns`, `intern` over computed namespaces through the lowering
    callback (`ns-resolve`'s shape), the Var objects `=` across calls (`ns-safe-macro` is a set

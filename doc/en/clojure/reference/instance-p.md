@@ -19,7 +19,7 @@ A [clojure.java.io](clojure-java-io.md) value answers by its class and supers on
 backend, so `(instance? java.io.File (java.io.File. "x"))` and
 `(instance? java.io.Closeable (clojure.java.io/input-stream f))` are `true`. On the
 interpreter and the JVM a host object answers by its host class, so
-`(instance? Number (java.math.BigDecimal. "1"))` is `true`; a class no value here has
+`(instance? java.util.RandomAccess (java.util.ArrayList.))` is `true`; a class no value here has
 (`Integer`) answers `false`, and a name no class has is `unknown name`.
 
 A class held in a local or a var, or computed (`(def t (type (->R)))`, `(instance? (class x) y)`),

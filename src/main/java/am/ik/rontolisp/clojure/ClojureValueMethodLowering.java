@@ -620,12 +620,15 @@ final class ClojureValueMethodLowering {
 	/**
 	 * The call of a {@code java.math.BigInteger} method {@code java.lang.Long} lacks, on
 	 * an integer (tools.reader's number reader): {@code negate} and {@code bitLength},
-	 * the length past the sign bit; null for any other method.
+	 * the length past the sign bit, and {@code clojure.lang.BigInt}'s
+	 * {@code toBigInteger}, the integer itself (data.generators' {@code bigdec}); null
+	 * for any other method.
 	 */
 	private static @Nullable LispVal bigIntegerMethod(String method, LispSymbol recv, List<LispVal> args) {
 		return switch (method + "/" + args.size()) {
 			case "negate/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), recv);
 			case "bitLength/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integer-length"), recv);
+			case "toBigInteger/0" -> recv;
 			default -> null;
 		};
 	}

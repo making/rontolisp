@@ -25,11 +25,29 @@ class ClojureMacroRuntimeTableTest {
 
 	@Test
 	void aProgramExpandingNothingAtRunTimeKeepsNoExpander() {
-		assertThat(compiled(HELPER + MACRO + "(prn 1)")).doesNotContain("C%MACRO-EXPANDER")
+		// nor the core macros' expanders, whose namespace loads only for a run-time
+		// expansion or a core macro's var root
+		String core = "rontolisp.internal.core-macros/";
+		assertThat(compiled(HELPER + MACRO + "(prn 1 (when true 2) (let [[a] [3]] a))"))
+			.doesNotContain("C%MACRO-EXPANDER")
 			.doesNotContain("C%MACROEXPAND")
-			.doesNotContain("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)");
+			.doesNotContain("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)")
+			.doesNotContain(core);
 		assertThat(compiled(HELPER + MACRO + "(prn (macroexpand-1 '(m 1)))")).contains("(DEFUN C%MACRO-EXPANDER ")
-			.contains("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)");
+			.contains("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)")
+			.contains("|c%" + core + "expand-let|");
+		assertThat(compiled("(prn (#'when '(when a b) nil 'a 'b))")).contains("#'|c%" + core + "expand-when|")
+			.doesNotContain("C%MACROEXPAND");
+		// a program macro's var root reads its expander through the table alone
+		assertThat(compiled(HELPER + MACRO + "(prn (#'m '(m 1) nil 1))")).contains("(DEFUN C%MACRO-EXPANDER ")
+			.contains("(DEFUN C%MACRO-ROOT-OF ")
+			.doesNotContain("C%MACROEXPAND")
+			.doesNotContain(core);
+		// a macro body expanding while the program lowers runs the macro-time
+		// evaluator's expanders: the program loads none
+		assertThat(compiled("(defmacro ex [form] (list 'quote (macroexpand form))) (prn (ex (when a b)))"))
+			.contains("(|c%if| |c%a| (|c%do| |c%b|))")
+			.doesNotContain(core);
 	}
 
 	@Test
@@ -58,12 +76,14 @@ class ClojureMacroRuntimeTableTest {
 	void requiringPprintKeepsNoFormatExecutorForARunTimeExpansion() {
 		// formatter and formatter-out name their executors in a plain template; the
 		// expanders a run-time expansion keeps hold neither (2026-10-09: 373,358 ->
-		// 893,999 B while a template spelled them; now 373,358 -> 415,713 B, the
-		// run-time expansion and the kept expanders)
+		// 893,999 B while a template spelled them, the executors about 520 KB; then
+		// 373,358 -> 415,713 B, the run-time expansion and the kept expanders;
+		// 2026-10-29: 1,361,631 -> 1,672,481 B, the run-time expansion carrying the
+		// core macros' expanders, 1,442,255 B before them)
 		String macro = "(defmacro m [x] `(inc ~x)) ";
 		int without = wasm("(ns x (:require [clojure.pprint])) " + macro + "(prn 1)").length;
 		int with = wasm("(ns x (:require [clojure.pprint])) " + macro + "(prn (macroexpand-1 '(m 1)))").length;
-		assertThat(with - without).isLessThan(100_000);
+		assertThat(with - without).isLessThan(450_000);
 	}
 
 	@Test

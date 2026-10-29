@@ -1127,8 +1127,9 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
 - Made by an `M` literal (the reader's `(%decimal u s)` marker, `ClojureDecimalLowering`,
   lowered to a quoted wrapper whose tag `:C%DECIMAL` is the producer, so quoted data and a
   macro's answer -- decoded back to the marker -- count), `bigdec` and its value,
-  `with-precision`'s `%clojure-bd-math-context`, and every run-time read (`Reads`: the
-  reader's `M` branch builds one). Family `DECIMAL` (`ClojureArms`, ahead of `HOST`): tests
+  `with-precision`'s `%clojure-bd-math-context`, every run-time read (`Reads`: the
+  reader's `M` branch builds one) and the `java.math` members below
+  (`ClojureDecimalLowering.PRODUCERS`). Family `DECIMAL` (`ClojureArms`, ahead of `HOST`): tests
   `%clojure-bd-p`, `-in-p`, `-value-p`; aliases -- each numeric operator's helper to its
   operator (`%clojure-bd-+` ... `-quot` to `truncate`, `-numberp`, `-rationalp`),
   `-is-decimal` to `progn`, `-number-instance-p` to `%clojure-host-number-p` (which `HOST`
@@ -1177,9 +1178,56 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
   (`demo`, `collections`, `macros`, `state`, `text`) differ only in the two printer changes
   above; a program reading at run time (`bundled-namespaces`, edn) builds the family.
   data.json 2.5.2 writes and reads decimals as the oracle does (`1.50`, `:bigdec true`).
-- Not made: a decimal answers none of `BigDecimal`'s methods (`.setScale`, `.scale` ...), the
-  statics and constructors stay the host's (a host object where a host is), and a
-  `BigDecimal` Java answers stays a host object (`.todo/h06`). An index or count consumer
+- **`BigDecimal`'s members are the values made here** (h06, 2026-10-30;
+  `ClojureDecimalLowering` `methodArm`/`construction`/`staticCall`/`field`/`hostAnswer`,
+  `clojure.lisp` ";;;; Decimal methods"). A rounding mode is `(:C%ROUNDING-MODE "NAME")`, in
+  `%clojure-bd-value-p` beside the math context (printed `#object[java.math.RoundingMode ...]`,
+  `str` its name, `class` `:java.math.RoundingMode`). An instance call is `(if (%clojure-bd-p
+  recv) (KERNEL recv args...) otherwise)` after the value arms (`VALUE_P` for the
+  MathContext/RoundingMode four), so a program making no decimal folds it: `setScale` (a
+  RoundingMode or a legacy `ROUND_` int, UNNECESSARY without one), `scale` `precision`
+  `unscaledValue` `signum` `negate` `abs` `plus` `round`, `add` `subtract` `multiply` (with a
+  MathContext), `divide` (exact, MathContext, mode at its scale, scale and mode),
+  `remainder` `divideToIntegralValue` `pow` `max` `min` `movePointLeft/Right`
+  `scaleByPowerOfTen` `compareTo` `equals` `stripTrailingZeros` `toPlainString`
+  `toEngineeringString` `ulp` and the conversions (`longValue` ... wrapping, the `Exact`
+  ones' `Rounding necessary`/`Overflow`); `toString`/`hashCode` were already the value's. A
+  wrong argument is the oracle's reflector's refusal: `Cannot cast X to java.math.BigDecimal`
+  (a CCE) where the method has one overload of the count, `No matching method` where it has
+  several, an int parameter the reflector's `intValue`. Any other method `BigDecimal` has
+  (`sqrt`, `divideAndRemainder`) runs on the host's object where the host is
+  (`%clojure-bd-from-host` over a `BigDecimal` answer) and is refused by name on wasm.
+  Constructions (`BigDecimal.` of a literal string or integer the quoted decimal, else
+  `%clojure-bd-new`/`-new-2`/`-new-3`: string, integer, double's exact binary value,
+  `(BigInteger, scale)`, any of those under a MathContext; `MathContext.` of 1 or 2),
+  `BigDecimal/valueOf` (a double through its shortest spelling), `RoundingMode/valueOf` and
+  the constants (`ZERO` `ONE` `TWO` `TEN`, the `ROUND_` ints, the RoundingMode names,
+  `DECIMAL32/64/128` `UNLIMITED`) are producers on every backend. A receiver known to be one
+  of the three classes is treated as unknown. A math context or rounding mode crosses into
+  Java as the `java.math` object (`%clojure-bd-host`). The member scans read
+  `java.math.BigDecimal` through `ClojureHostClasses`, so it is a registered image type
+  ("Host classes", `ClojureHostImageTypesTest`).
+- **A `BigDecimal` a member answers is a decimal, but only in a program making decimals**
+  (decided 2026-10-30). Where the host is, a call whose member declares `BigDecimal`
+  (`Scanner.nextBigDecimal`, `ResultSet.getBigDecimal`) is `(%clojure-bd-of-host call)`, a
+  producer; one declaring a supertype (`Object`, `Number`, `Comparable`, `Serializable`) or one
+  the lowering cannot see (an untyped receiver) is `(%clojure-bd-host-view call)`, the family's
+  view, which a program making no decimal folds to the call: such a program's `java:` calls pay
+  nothing, and its `getObject` of a NUMERIC column stays a host object (user doc deviation).
+  The conversion is Lisp-level (`unscaledValue` and `scale` through `java:call`), never in
+  `JavaInterop.unmarshal` or the bridge: `java:` learns no Clojure shape and a Common Lisp
+  program keeps its host object. A `BigDecimal` Java hands a fn (a `Comparator`) and one
+  inside an array stay host objects.
+- Measured first (2026-10-30, every Clojure source in the local `~/.m2` jars): the
+  probes reach constructions above all -- `(BigDecimal. String)` (tools.reader's `M` reader,
+  malli's string->decimal), `(BigDecimal. (.toBigInteger (bigint)) n)` (data.generators'
+  `bigdec`, which needed `.toBigInteger` of an integer: the integer itself), `BigDecimal/valueOf`
+  (spec.alpha's `decimal?` generator), `.unscaledValue`/`.scale` and `(BigDecimal. BigInteger
+  int)` (nippy); next.jdbc names no `BigDecimal` (its NUMERIC column is `getObject`'s `Object`).
+  tools.reader's `read-string "1.5M"` and data.generators' `bigdec` print the oracle's lines on
+  the interpreter and the JVM; on wasm tools.reader refuses before reading any number (`.todo/h07`) and
+  `bigdec` loops (`.todo/h08`).
+- An index or count consumer
   (`nth`, `take`, `drop`, `repeat`, `subvec`, `char`, `dotimes`) refuses a decimal, where the
   oracle intCasts it: the same consumer-arm blast radius as the BigInt flag, for a use money
   code does not make; before g91 `1M` was the integer `1` and passed. `subs`'s bound
@@ -1189,8 +1237,10 @@ unscaled x 10^-scale (`clojure.lisp` ";;;; Decimals"); a math context
 - Pins: clojure-spec `decimals-compute-print-and-compare-at-the-oracles-scales`,
   `with-precision-binds-math-context-around-an-exact-body`,
   `radix-integers-and-exact-decimals`, `checked-arithmetic-is-plain-arithmetic-that-never-overflows`
+  `decimal-methods-constructions-and-statics-answer-as-the-oracles-bigdecimal`
   (all four backends, the oracle's lines), `decimal-literals-are-decimals-and-small-bigint-literals-plain-integers`
-  (the in-range deviation); `ClojureLoweringTest#aProgramMakingNoDecimalCarriesNoneOfItsArms`,
+  (the in-range deviation); `ClojureLoweringTest#aProgramMakingNoDecimalCarriesNoneOfItsArms`
+  (the method arms and the view fold too), `ClojureInteropTest#aDecimalCrossesTheJavaBoundaryBothWays`,
   `#charactersRadixAndDecimalsLowerAsTheirValues`, `ClojureReaderTest#decimalsReadAsTheirUnscaledValueAndScale`.
 
 ## Arity refusals
@@ -1631,7 +1681,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | math.combinatorics 0.3.2 | = | = | = | = | no transitive deps; the subsets walk prints a bare empty list, which is `nil` here (the pinned empty-list deviation), so the probe prints counts there |
 | data.priority-map 1.2.1 | = | = | = | = | no transitive deps; tied priorities walk the priority's item set, whose order is insertion here vs the oracle's hash order (the pinned set-order deviation), so the probe sorts those two lines |
 | flatland.ordered 1.15.12 | = | = | = | = | no transitive deps (its pom declares none); g20: `{:tag OrderedSet}` on a def keeps the quoted symbol ("Vars and metadata"), `.meta`/`.withMeta`/`.key`/`.val`/`.getKey`/`.getValue` read values ("Java interop"), a syntax-quoted inline method name strips to the name ("Dispatch") |
-| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called |
+| data.generators 1.1.1 | = | = | = | = | no transitive deps; g27: `(java.util.Random. seed)` is the portable 48-bit LCG generator where no host is (bit-identical draws), `Math/floor`/`ceil`/`log` the portable statics (uniform/geometric); the off-path `BigInteger.`/`UUID.`/`Date.` constructions warn `JAVA:NEW` and refuse if called; h06: `bigdec` prints the oracle's decimals on the interpreter and the JVM (on wasm its `BigInteger.` refusal is caught as a `NumberFormatException` and retried forever, `.todo/h08`) |
 | test.check 1.1.3 | = | = | = | = | no transitive deps; g28: `*`/`+` wrap mod 2^64 while `*unchecked-math*` is truthy on all four backends, so the SplittableRandom port's seeded draws and seeded `quick-check`s print the oracle's lines on the interpreter and the JVM (pinned by clojure-spec `unchecked-math-wraps-star-and-plus-for-splittable-random`). g31: `Math/abs`, `Long/bitCount` and `Long/numberOfLeadingZeros` of one argument answer portably ("Portable number statics"), `Double/MAX_VALUE` and its siblings load ("Boxed-integer limits ..."), and the seedless `next-rng`'s `proxy` of `ThreadLocal` is the portable single-threaded cell ("Portable ThreadLocal"), so the namespace loads and the 12-call probe -- three seeded `quick-check`s with `:seed` and `:max-size 10`, nine seeded small-valued `gen/generate`s -- prints the oracle's lines on both wasm backends too. The `JAVA:STATIC`+`JAVA:NEW` warnings on both wasm backends come from the double/uuid generators' bodies, off the probe's path. g33 (2026-10-21): the supported boundary is the probe's small-valued set -- `choose` ranges within about 0..25 and seeded `quick-check`s with `:seed` and `:max-size 10` answer on all four backends -- because `int-rose-tree` builds the whole shrink tree eagerly here (`(core/map int-rose-tree (shrink-int value))` over `shrink-long`'s long array, strict under the lazy-or-strict rule; the oracle's `map` is lazy, so only the consumed spine exists there). Measured node counts: 20 for 5, 254 for 10, 37,954 for 20 (pinned by clojure-spec `eager-shrink-trees-answer-only-at-small-magnitudes`), 631,314 for 26 (about 110 s on the interpreter, 2.5 s on the JVM, about a minute on both wasm backends), 3,337,928 for 30 (minutes on the interpreter and wasm, 3.4 s on the JVM), 2.6e9 for 42 and 7.5e26 for 126. So e.g. `(gen/generate (gen/choose 0 100) 5 99)` (drawn 26) crawls past a minute everywhere but the JVM; no laziness story: changing it would change global `map` strictness (the lazy-or-strict pins and their performance basis stand). g32: `clojure.test.check.clojure-test` loads on all four (`do-report`/`report` over the test runtime, `*testing-vars*`, the lower-time `assert-expr` method, `instance?` of `clojure.lang.MultiFn` answering false), and a passing and a failing `defspec` under `run-tests` count and report like the oracle's on the interpreter and the JVM (one stderr line, `report is not a multimethod`, where the oracle prints the trial/shrinking/complete/shrunk progress; the `:file`/`:line` names host frames, not the test file). On wasm the failing one reports as an error, still counted: test.check's file-and-line reads the host thread's stack (`Thread/currentThread`, a call-time error where no host is) |
 | hive-test 0.5.1 | = | = | = | = | the pure `tcheck.*` and `stateful` namespaces only (their own LCG, `clojure.test`-based `defspec`s); g32: the `properties` macros (`defprop-roundtrip`, `defprop-idempotent`) expand and their test.check `defspec`s pass on the interpreter and the JVM (one stderr line from the check integration, as above). The JVM-only namespaces (threads, nREPL, sandbox classloaders) unprobed |
 | core.cache 1.2.999 | = | = | = | = | transitive data.priority-map 1.2.1; `soft-cache-factory` builds on host `SoftReference`s, a call-time error on wasm (off the probe's path) |
@@ -1690,11 +1740,9 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   (refused for a computed namespace; re-run after every expansion of a macro outside
   `ns-safe-macro`).
 - Read off the code, not yet reached: (5) `macroexpand-1` calls a macro's var as `(apply v
-  form (:locals env) (rest form))`, while a program macro's var root is a signal and a core
-  macro's the one-argument run-time delegate (g16); a core macro must answer the oracle's
-  expansion into the special forms, which the go machine's raw code re-emits, so the
-  lowering must take `let*`, `loop*`, `letfn*` and `case*` (`unknown name: let*` today);
-  (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
+  form (:locals env) (rest form))` -- since g98 (2026-10-29) a macro's var root is that
+  function, a core macro's answering the oracle's expansion into the special forms, which
+  the lowering takes (`let*`, `loop*`, `letfn*`, `case*`; "Macros", the core macros); (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
   local mapping to itself here; (7) the passes tag nodes with `class` -- kind keywords here,
   which `maybe-class` answers nil through its `:default`, so most paths degrade, while
   `analyze-host-expr` and `validate` reflect on tag classes through `clojure.reflect`; (8)
@@ -2444,9 +2492,10 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `into` here starts a derived value without metadata ("Deviations") where the oracle's
   keeps `empty`'s; only when there is metadata, so a walk never copies a node to record
   nil. A strict seq is a list, so `walk` keeps it a list (the oracle realizes a
-  `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
-  program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
-  where the oracle answers `(if x (do y))`.
+  `LongRange` as a seq: printed alike). `macroexpand-all` expands the program's macros
+  and the core macros expanded as data ("Macros", the core macros), so `(when x y)` is the
+  oracle's `(if x (do y))`; any other core macro stays as written (until 2026-10-29 every
+  core form did).
 - `clojure.template`: `do-template` calls `apply-template`, which calls
   `clojure.walk/postwalk-replace`, at expansion time ("Macros": a body sees the
   definitions above it, a required namespace's too).
@@ -3695,12 +3744,12 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   same lambda expands call sites datum-to-datum at lower time (through
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
   time. Docstring and attr map skipped, `&` rest works. A call
-  above the definition names the missing expander; a program macro has no function
-  value (a core macro's name answers its expander as a value instead: the run-time
-  once-expansion over the quoted form, `ClojureMacroLowering.coreMacroValue`, shared
-  per name like every other site-independent value -- g16; the oracle refuses a bare
-  macro name in value position at compile time and hands back the fn through deref
-  of the var, while here both positions answer the delegate); a
+  above the definition names the missing expander; a program macro's bare name has no
+  value (`is a macro, not a function`, the oracle's compile-time refusal), while its var's
+  root is the oracle's macro function over `(&form &env & args)`
+  (`ClojureMacroLowering.programMacroRoot`, "The core macros expand as data" below); a
+  core macro's bare name answers its var's root (`ClojureCoreMacros.root`), where the
+  oracle refuses it at compile time and hands the fn out only through deref of the var; a
   later `def`/`defn` wins the call sites back. A redefined `defmacro` (or a first one
   over a macro, function, valued or declared root) validates and notifies like the
   oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
@@ -3728,16 +3777,19 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   expansion binds them (`ClojureMacroLowering.expandMacro`): `&form` the quoted call,
   `&env` nil without a local in reach (`visibleLocals`; the oracle's nil, inside a `fn` too)
   else a map of each local's symbol to itself (the oracle's values are `LocalBinding`s;
-  generated destructuring locals are not in it). A run-time expansion binds `&form` in
-  `C%MACROEXPAND-1`/`WALK` only where some macro body read it (`readsMacroForm`, so other
-  programs keep their bytes; a session decides when its runtime is first emitted) and leaves
-  `&env` nil, the oracle's. As parameter names both are refused. Pins: clojure-spec
+  generated destructuring locals are not in it). A run-time expansion calls the macro's
+  root (`C%MACRO-ROOT-OF`), which binds `&form` to the call and `&env` to the environment
+  argument -- nil from `macroexpand`, the oracle's -- whatever the body reads (until
+  2026-10-29 only where some body read `&form`, `readsMacroForm`). As parameter names both
+  are refused. Pins: clojure-spec
   `macro-env-and-form-ns-resolve-and-a-require-that-runs-later` (four backends,
   oracle-identical), `ClojureLoweringTest#aMacroBodyReadsItsCallAndTheCallsLocalsThroughFormAndEnv`.
 - **The run-time table of a whole program holds an index, not the expander**:
   `(setq |c%ns/m%macro| 3)`, and every expander sits in one `C%MACRO-EXPANDER`
   (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
-  `C%MACROEXPAND(-1)` call. A program lowering no `macroexpand`/`macroexpand-1` call or
+  `C%MACROEXPAND(-1)` call -- and `C%MACRO-ROOT-OF`, a macro's var root: a whole program
+  reading a program macro's root (`#'m`) and expanding nothing at run time carries those two
+  alone (`takesMacroRoots`, `macroRootRuntime`). A program lowering no `macroexpand`/`macroexpand-1` call or
   value carries none of them (`ClojureLowering.expandsAtRunTime`; until 2026-10-09 every
   `defmacro` spliced them and the pruner took them out), and
   `ClojureLowering.programMacroRuntimeForms` keys them in `LibraryDefunPruner`, so one
@@ -3879,8 +3931,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   even unresolved -- a visible core name as `clojure.core/name`, else the defining
   namespace, an alias head with its namespace, a class head with its full name
   (`System/nanoTime` -> `java.lang.System/nanoTime`). `~` lowers as code, `~@` splices
-  into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
-  expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
+  into lists, vectors, maps and sets; `x#` is one fresh `x__N__auto__`
+  (`%clojure-auto-gensym`, the oracle's spelling) per syntax-quote node per expansion
+  (fresher than the oracle's read-time symbol, which every expansion of the template
+  shares), and `(gensym)` is `G__N` like the oracle's (both since 2026-10-29: `xN` and `GN`
+  before, so expansions did not print the oracle's shapes). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
   Reader metadata on a template form (`(%with-meta form meta)`) travels with it, the
   oracle's `(with-meta form meta)` over the syntax-quoted map (`^String` ->
@@ -3924,7 +3979,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   a `read-string` program carries the run-time `#()` reader.
 - `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=` against a quoted form
   holds and the printer (demangling `c%`) spells the oracle's lowercase; a non-macro head
-  answers the form. **The head resolves in `*ns*` when the expansion runs**, like the
+  answers the form, and `macroexpand` stops where an expansion answers its form itself
+  (`eq`, the oracle's `identical?`: a core macro not expanded as data). **The head resolves in `*ns*` when the expansion runs**, like the
   oracle (2026-10-09; until then through the call site's namespace, so
   `clojure.walk/macroexpand-all` called from `(ns mac5)` expanded none of mac5's bare
   names): `C%MACRO-FN` reads the name out of `%clojure-ns` and asks
@@ -3942,6 +3998,67 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   oracle-identical), `ClojureLoweringTest#aRunTimeExpansionResolvesItsHeadThroughTheScopeOfTheNamespaceItRunsIn`,
   `ClojureSessionTest#aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo`.
   `gensym` is the ordinary uninterned symbol.
+- **The core macros expand as data** (g98, 2026-10-29). `macroexpand-1`, `macroexpand`,
+  `clojure.walk/macroexpand-all` and a core macro's var root answer the oracle's expansion
+  of `let`, `loop`, `fn`, `letfn`, `when`, `when-not`, `if-not`, `cond`, `condp`, `and`,
+  `or`, `case`, `if-let`, `when-let`, `if-some`, `when-some`, `when-first`, `->`, `->>`,
+  `as->`, `cond->`, `cond->>`, `some->`, `some->>`, `doto`, `..`, `dotimes`, `doseq`, `for`,
+  `while`, `comment`, `declare`, `defn`, `defn-`, `binding`, `assert`, `locking`,
+  `with-open` and `future` (`ClojureCoreMacros.EXPANDERS`), while a program's own call
+  sites keep their lowering rows. The expanders are Clojure source,
+  `lib/rontolisp/internal/core_macros.clj` (`rontolisp.internal.core-macros`: shipped, never
+  shadowed by a project file, refused to a program's `require` --
+  `ClojureBuiltinNamespaces.INTERNAL`), written from the documented behaviour and diffed
+  against clj 1.12.6 with gensyms renumbered in order of appearance: every shape matches,
+  `destructure` (clojure.core's own function, refused until then) and `case`'s hashed `case*`
+  map included (`.hashCode` is the oracle's, the shift/mask search the documented one). The
+  read-time auto-gensyms the oracle shares across a `doseq`'s or `for`'s levels (`c#`,
+  `iterys#`, ...) are made once per expansion and handed down. Each expander takes
+  `(&form &env & args)`; a core macro outside the list answers its call (its root is
+  `(fn [form env & _] form)`), so a walker stops there as at a function call.
+  - Run time: `C%MACRO-FN` answers a macro function -- the scope first (`C%MACRO-SCOPE` also
+    lists, per namespace, the core macros a definition, refer, `:exclude` or `:rename` hides,
+    as nil, and a rename's spelling and an alias of `clojure.core`, as the core name), then
+    the program's table (`C%MACRO-ROOT-OF`), then `C%CORE-MACRO` for a bare or
+    `clojure.core/` name. `C%MACROEXPAND-1` is `(apply f form nil args)`.
+  - Loading (`ClojureCoreMacros.need`): code the program runs -- a `macroexpand` call or
+    value, a core macro's var root or value, `destructure` -- loads the namespace; a whole
+    program's macro body only notes it (`coreMacrosInBodies`): the macro-time evaluator holds
+    the expanders from its start (`ClojureCoreMacros.macroTimeForms`, lowered once per
+    process through `Clojure.read`), and the program loads them after its datums only where
+    a program macro's root (`takesMacroRoots`) reaches the bodies as it runs. An open
+    lowering (a session, a run-time target) loads at once.
+  - The library pruner keys every definition of the namespace by its prefix
+    (`ClojureLowering.isCoreMacroDefinition`, `LibraryDefunPruner.isBundledName`), like the
+    macro runtime: `#'when` keeps `expand-when` and what it calls, a run-time expansion all.
+  - Cost, measured 2026-10-29 (wasm P1, default level): a program that never expands at run
+    time is byte-identical, its macro bodies' expansions included (`(defmacro ex [f] (list
+    'quote (macroexpand f)))` 275,776 B before and after); one calling `macroexpand-1` carries
+    the expanders: `(prn (macroexpand-1 '(m 1)))` 421,290 -> 772,631 B, under `clojure.pprint`
+    1,442,255 -> 1,672,481 B (`ClojureMacroRuntimeTableTest`). Funnelling every vector `conj`
+    through one `push` (`(vec (concat v xs))`) took that from 972,318 B: a `conj` of n items
+    lowers its every collection arm n times at its site (11.7 KB of IR for four items).
+  - The special forms the expansions spell lower (`lowerRow`): `let*`/`loop*` through the
+    `let`/`loop` rows over names only, with the oracle's refusals (`Bad binding form,
+    expected symbol, got: [a]`, `... expected vector`, `... expected matched symbol expression
+    pairs`, `Can't let qualified name`); `letfn*` as the `letfn` entries of its fn forms,
+    named like their bindings or not at all (another name is refused); `case*` as the `case`
+    of its map's `[test then]` entries, each test one constant compared by equality -- the
+    hashes only steer the oracle's jump table -- a skipped hash's then, the case macro's
+    `(condp = e 'test then ... default)`, contributing its tests (any other then is refused).
+    Map destructuring's `PersistentArrayMap/createAsIfByAssoc` and `/EMPTY` lower in place
+    (`ClojureLangClasses`).
+  - Deviations: a malformed call's refusal propagates as the expander throws it (the oracle's
+    `Syntax error macroexpanding` wraps it); a `case` whose tests collide in two or more
+    buckets lists the skipped hashes in insertion order; a BigDecimal test hashes as its
+    ratio; the macros outside the list answer their call. Pins: clojure-spec
+    `core-macros-expand-to-the-oracles-forms-as-data`,
+    `a-macros-var-root-is-its-function-of-form-env-and-args`,
+    `let-star-loop-star-letfn-star-and-case-star-are-special-forms` (oracle-identical but the
+    noted lines), `ClojureMacroRuntimeTableTest#aProgramExpandingNothingAtRunTimeKeepsNoExpander`,
+    `ClojureCoreNamesTest` (the table against the file's expanders),
+    `ClojureLoweringTest#letIsSequentialAndLoopIsALabelsSelfCall`,
+    `#letfnLowersToLabelsWithEveryNamePreScanned`.
 
 ## Lowering at run time
 

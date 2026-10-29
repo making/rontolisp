@@ -51,7 +51,8 @@ token that parses to nothing is an `Invalid number` refusal.
 
 `1.50M` is a decimal, the oracle's `BigDecimal`: it keeps the scale its digits spell and
 prints with its mark (`1.50M`, `1E+3M` for `1e3M`), and its arithmetic, comparisons and
-rounding follow the oracle's (`(+ 0.1M 0.2M)` is `0.3M`, `with-precision` rounds). An
+rounding follow the oracle's (`(+ 0.1M 0.2M)` is `0.3M`, `with-precision` rounds), and it
+answers `BigDecimal`'s methods (`(.setScale 1.555M 2 java.math.RoundingMode/HALF_UP)` is `1.56M`). An
 integer past the `long` range is the oracle's `BigInt` and prints with its `N`; a `2N`
 inside the range reads as a plain integer and prints without it. Ratios read as `1/2`.
 

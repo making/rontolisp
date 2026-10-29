@@ -169,7 +169,7 @@ final class ClojureSourcePath {
 		}
 		readDeferred(ns);
 		String base = scriptBaseOf(ns);
-		boolean startup = ClojureBuiltinNamespaces.isStartup(ns);
+		boolean startup = ClojureBuiltinNamespaces.isStartup(ns) || ClojureBuiltinNamespaces.isInternal(ns);
 		for (String extension : startup ? List.<String>of() : List.of(".clj", ".cljc")) {
 			Found project = findFile(base + extension);
 			if (project != null) {
