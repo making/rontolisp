@@ -11782,7 +11782,8 @@ cases:
     # values #inst and #uuid read -- = to a literal, sorted beside one, the same key -- in
     # every spelling (new, Class/new, a tagged one, a member value, the dot forms),
     # refusing an argument no constructor takes as the oracle does; a Date's getTime,
-    # setTime (in place), before, after, compareTo and a Timestamp's getNanos answer, a
+    # setTime (in place), before, after, compareTo and a Timestamp's getNanos and
+    # setNanos (in place; tools.reader's read-instant-timestamp) answer, a
     # member the class lacks is the oracle's refusal. Every line is the oracle's (clj
     # 1.12.6), on all four backends.
     source: |
@@ -11797,7 +11798,7 @@ cases:
       (let [r (java.util.UUID/randomUUID) r2 (. java.util.UUID randomUUID)] (prn (uuid? r) (.version r) (.variant r) (= r (parse-uuid (str r))) (not= r r2) (count (repeatedly 3 java.util.UUID/randomUUID)) (.. java.util.UUID randomUUID toString length)))
       (prn (tvc-err #(java.util.UUID/fromString "x")) (tvc-err #(java.util.Date. (identity 1.5))) (tvc-err #(java.util.UUID. (identity 18446744073709551615N) 2)))
       (prn (map first [(tvc-err #(java.util.UUID/fromString (identity 1))) (tvc-err #(java.util.UUID/fromString nil)) (tvc-err #(java.util.UUID. (identity :k) 2)) (tvc-err #(java.sql.Timestamp. nil))]))
-      (let [d (java.util.Date. 5) t (java.sql.Timestamp. 5)] (prn (.setTime d 10) d (.getTime d) (.setTime t 1234) t (.getNanos t)))
+      (let [d (java.util.Date. 5) t (java.sql.Timestamp. 5)] (prn (.setTime d 10) d (.getTime d) (.setTime t 1234) t (.getNanos t) (.setNanos t 5000000) (.getTime t) (tvc-err #(.setNanos t -1))))
       (prn (.before (java.util.Date. 1) (java.util.Date. 2)) (.after (java.util.Date. 1) (java.util.Date. 2)) (.compareTo (java.util.Date. 1) (java.util.Date. 2)) (.equals (java.util.Date. 1) #inst "1970-01-01T00:00:00.001Z") (.getMostSignificantBits (java.util.UUID. 1 2)) (.compareTo (java.util.UUID. 1 2) (java.util.UUID. 1 3)))
       (prn (tvc-err #(.foo (java.util.Date. 1))) (tvc-err #(.foo (java.util.UUID. 1 2) 3)) (tvc-err #(.getTime (java.util.UUID. 1 2))))
       (prn (sort [(java.util.Date. 3) #inst "1970-01-01T00:00:00.002Z" (java.util.Date. 1)]) (sorted-set (java.util.UUID. 2 2) (java.util.UUID. 1 1)) (get {#inst "1970-01-01T00:00:00.007Z" :hit} (java.util.Date. 7)) (contains? #{(java.util.UUID. 1 2)} #uuid "00000000-0000-0001-0000-000000000002") (hash-set (java.util.Date. 1) (java.util.Date. 1)))
@@ -11811,10 +11812,83 @@ cases:
       true 4 2 true true 3 36
       ["java.lang.IllegalArgumentException" "Invalid UUID string: x"] ["java.lang.IllegalArgumentException" "No matching ctor found for class java.util.Date"] ["java.lang.IllegalArgumentException" "Value out of range for long: 18446744073709551615"]
       ("java.lang.ClassCastException" "java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.NullPointerException")
-      nil #inst "1970-01-01T00:00:00.010-00:00" 10 nil #inst "1970-01-01T00:00:01.234000000-00:00" 234000000
+      nil #inst "1970-01-01T00:00:00.010-00:00" 10 nil #inst "1970-01-01T00:00:01.005000000-00:00" 234000000 nil 1005 ["java.lang.IllegalArgumentException" "nanos > 999999999 or < 0"]
       true false -1 true 1 -1
       ["java.lang.IllegalArgumentException" "No matching field found: foo for class java.util.Date"] ["java.lang.IllegalArgumentException" "No matching method foo found taking 1 args for class java.util.UUID"] ["java.lang.IllegalArgumentException" "No matching field found: getTime for class java.util.UUID"]
       (#inst "1970-01-01T00:00:00.001-00:00" #inst "1970-01-01T00:00:00.002-00:00" #inst "1970-01-01T00:00:00.003-00:00") #{#uuid "00000000-0000-0001-0000-000000000001" #uuid "00000000-0000-0002-0000-000000000002"} :hit true #{#inst "1970-01-01T00:00:00.001-00:00"}
+  - name: a-gregorian-calendar-is-the-oracles-lenient-lazy-calendar
+    # (GregorianCalendar. y m d ...) where no host is is a Calendar made here,
+    # Calendar/X its integer and TimeZone/getTimeZone of a fixed offset a zone
+    # value (tools.reader's #inst reader); the interpreter and the JVM run the
+    # host classes. Fields set and not yet computed are read in the zone current
+    # when the time is computed; a zone set after a computation keeps the
+    # instant, the next set reading the old zone's fields; out-of-range fields
+    # carry, Julian before the 1582 cutover. A clojure.instant Calendar takes the
+    # same methods on all four. No line reads the default zone (UTC on the
+    # oracle's measured JVM and where no host is, the machine's on the host
+    # legs). Every line is the oracle's (clj 1.12.6, 2026-10-30).
+    source: |
+      (defn gcal-err [f] (try (f) (catch Exception e [(.getName (class e)) (ex-message e)])))
+      (defn gcal-zone [id] (java.util.TimeZone/getTimeZone id))
+      (defn gcal-ms [c] (inst-ms (.getTime c)))
+      (let [c (java.util.GregorianCalendar. 2020 0 2 3 4 5)]
+        (prn (.set c java.util.Calendar/MILLISECOND 678) (.setTimeZone c (gcal-zone "GMT+05:30")) (gcal-ms c) (.getTimeInMillis c) (instance? java.util.Calendar c)))
+      (let [c (doto (java.util.GregorianCalendar. 2020 0 2) (.setTimeZone (gcal-zone "GMT-08:00"))) t (.getTimeInMillis c)]
+        (.setTimeZone c (gcal-zone "GMT"))
+        (prn t (.getTimeInMillis c) (.get c java.util.Calendar/HOUR_OF_DAY) (.get c java.util.Calendar/DAY_OF_MONTH)))
+      (let [c (doto (java.util.GregorianCalendar. 2020 0 2) (.setTimeZone (gcal-zone "GMT-08:00")))]
+        (.getTime c)
+        (.setTimeZone c (gcal-zone "GMT"))
+        (.set c java.util.Calendar/HOUR_OF_DAY 1)
+        (prn (gcal-ms c)))
+      (let [c (doto (java.util.GregorianCalendar. 2020 0 32 25 61 61) (.setTimeZone (gcal-zone "GMT")))
+            d (doto (java.util.GregorianCalendar. 2020 0 31) (.setTimeZone (gcal-zone "GMT")))
+            e (doto (java.util.GregorianCalendar. 2020 0 32) (.setTimeZone (gcal-zone "GMT")))]
+        (prn (gcal-ms c) (mapv #(.get c %) [0 1 2 5 7 9 10 11 12 13 14 15 16]))
+        (.set d java.util.Calendar/MONTH 1)
+        (.set e java.util.Calendar/MONTH 1)
+        (prn (gcal-ms d) (gcal-ms e))
+        (.set d java.util.Calendar/MONTH 13)
+        (.set d java.util.Calendar/DAY_OF_MONTH 0)
+        (prn (gcal-ms d)))
+      (let [c (doto (java.util.GregorianCalendar. 1582 9 10) (.setTimeZone (gcal-zone "GMT")))]
+        (prn (gcal-ms c) (.get c java.util.Calendar/DAY_OF_MONTH))
+        (.set c 1 1000)
+        (prn (gcal-ms c))
+        (.set c java.util.Calendar/ERA java.util.GregorianCalendar/BC)
+        (prn (.getTimeInMillis c) (.get c java.util.Calendar/YEAR) (.get c 0)))
+      (let [c (doto (java.util.GregorianCalendar. 2020 5 15 12 0 0) (.setTimeZone (gcal-zone "GMT")))]
+        (prn (.set c 2021 1 3) (gcal-ms c) (.set c 2022 2 4 5 6) (gcal-ms c) (.set c 2023 3 5 6 7 8) (gcal-ms c)))
+      (prn java.util.Calendar/MILLISECOND java.util.Calendar/HOUR_OF_DAY java.util.GregorianCalendar/AD java.util.Calendar/DECEMBER)
+      (let [c (clojure.instant/read-instant-calendar "2020-01-02T03:04:05.250+05:30")]
+        (prn (.getTime c) (.getTimeInMillis c) (.get c java.util.Calendar/HOUR_OF_DAY))
+        (.setTimeZone c (gcal-zone "GMT-01:00"))
+        (prn c (.getTimeInMillis c))
+        (.set c java.util.Calendar/YEAR 2021)
+        (prn c (= c (clojure.instant/read-instant-calendar "2021-01-02T03:04:05.250-01:00"))))
+      (prn (for [[id spelled] [["GMT+5" "+05:00"] ["GMT-0530" "-05:30"] ["GMT+123" "+01:23"] ["GMT-00:00" "-00:00"] ["GMT+0" "+00:00"]]]
+             (let [c (clojure.instant/read-instant-calendar "2020-01-01T00:00:00Z")]
+               (.setTimeZone c (gcal-zone id))
+               (.set c java.util.Calendar/MINUTE 0)
+               (= c (clojure.instant/read-instant-calendar (str "2020-01-01T00:00:00" spelled))))))
+      (prn (gcal-err #(.set (java.util.GregorianCalendar. 2020 0 1) 17 1)))
+    expected: |
+      nil nil 1577914445678 1577914445678 true
+      1577952000000 1577952000000 8 2
+      1577926800000
+      1580608921000 [1 2020 1 2 1 0 2 2 2 1 0 0 0]
+      1583107200000 1583193600000
+      1612051200000
+      -12218860800000 20
+      -30584476800000
+      -93668140800000 1000 0
+      nil 1612353600000 nil 1646370360000 nil 1680674828000
+      14 11 1 11
+      #inst "2020-01-01T21:34:05.250-00:00" 1577914445250 3
+      #inst "2020-01-01T20:34:05.250-01:00" 1577914445250
+      #inst "2021-01-02T03:04:05.250-01:00" true
+      (true true true true true)
+      ["java.lang.ArrayIndexOutOfBoundsException" "Index 17 out of bounds for length 17"]
   - name: iso-instant-is-a-portable-value-where-no-host-is
     # DateTimeFormatter/ISO_INSTANT where no host is is the portable value: it
     # reads where the host's field would refuse the load (data.json's defaults)

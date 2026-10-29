@@ -1701,7 +1701,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | integrant 1.0.1 + weavejester/dependency 1.0.0 | = | = | = | = | no transitive deps beyond dependency 1.0.0; g30: refused verbs refuse at call time, so `resources`/`load-hierarchy` define but never refuse the load (the 16-line probe -- init with refs, halt!, expand, refset, find-derived, resolve-key, read-string, ref?/refset?/derived-from?, :default init-key, valid-config-key?, partial init -- prints the oracle's lines); calling `load-hierarchy`/`resources` refuses at call time like any host access (`No such class: clojure.lang.RT` on the interpreter and JVM, the host-call refusal on wasm: no class loader exists here); `assoc` keeps the source's metadata, so the system map keeps `::origin` through `build`'s assocs |
 | cc.qbits/ex 0.1.3 | = | = | = | = | no transitive deps; g20: `derive`/`underive` as values ("Dispatch") |
 | spec.alpha 0.5.238 + core.specs.alpha 0.4.74 | = | = | = | = | no `deps.edn` needed: the built-in clojure's own dependencies, fetched at the first require; g90 ("clojure.spec.alpha (g90)" below: the 35-line probe, and the gaps it leaves) |
-| tools.reader 1.3.6 | = | = | 11/12 | 11/12 | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stops at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker (`.todo/h10`) |
+| tools.reader 1.3.6 | = | = | = | = | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stopped at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker until h10 (2026-10-30, "Portable GregorianCalendar"): the 12-line probe is `=` on all four. Past the probe, on wasm: `read-instant-calendar` prints the oracle's line, and so does `read-instant-timestamp` (a Timestamp's `.setNanos`, "Instants and UUIDs"); on the interpreter and the JVM the host Calendar's `print-calendar` stops at `format`'s `%t` |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -3263,6 +3263,51 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `lib/rontolisp/internal/` (so `core_macros.clj` was absent from the binary too);
   the pattern takes subdirectories now and `NativeImageResourceConfigTest` lists the
   directory.
+
+## Portable GregorianCalendar
+
+- **The chain** (2026-10-30, h10; `ClojurePortableCalendarLowering`, `clojure.lisp`
+  "Portable GregorianCalendar"; tools.reader's `construct-calendar`/`construct-date`):
+  where the host is not (wasm) an untagged `(GregorianCalendar. y m d [h mi [s]])` is
+  `(%clojure-calendar-new ...)`, the existing Calendar kind `(:C%CALENDAR ms offset zone)`
+  in UTC (the oracle's measured JVM zone), each argument `%clojure-int-cast`; of no
+  argument the current instant. `Calendar/X` and `GregorianCalendar/X` (`BC`, `AD`)
+  constants are their integers (both field sites, like the numeric limits);
+  `TimeZone/getTimeZone` of one argument is `(:C%TIME-ZONE id offset)`: `GMT`, `UTC` and
+  the JDK's custom ids (`GMT` sign `h`/`hh`/`hmm`/`hhmm`/`h:mm`/`hh:mm`, normalized
+  `GMT+05:00`, a zero offset keeping its sign), anything else refused by name
+  (`UnsupportedOperationException`; the JDK answers `GMT` for an unknown id, but no tzdb
+  exists here to tell unknown from named). Where the host is all three stay the host's.
+- **The methods, every backend** (`ClojureTimeValueLowering.methodArm`, a `CALENDAR_P`
+  arm ahead of the by-name refusal, so a `clojure.instant` Calendar takes them on the
+  interpreter and the JVM too): `getTime` (a Date), `getTimeInMillis`, `get`, `set` of 2,
+  3, 5 or 6 arguments, `setTimeZone` (an own zone, or a host `TimeZone` through its
+  `getID`). A receiver known to be `Calendar`/`GregorianCalendar` is treated as unknown
+  (`instanceCallLoweredWithClass`), since tools.reader's `^GregorianCalendar` return hint
+  would otherwise compile `java:call`. `set` takes `ERA YEAR MONTH DAY_OF_MONTH HOUR_OF_DAY
+  MINUTE SECOND MILLISECOND`, `get` also `DAY_OF_WEEK AM_PM HOUR ZONE_OFFSET DST_OFFSET`;
+  another field is refused by name, one past 16 the oracle's
+  `ArrayIndexOutOfBoundsException`.
+- **Laziness, the JDK's**: a fifth element `(TIME-SET . FIELDS)` holds the fields while
+  they are not the instant's own in the current zone -- pending (`TIME-SET` NIL: after a
+  construction or `set`; `setTimeZone` re-reads them in the new zone) or stale (T: a
+  `setTimeZone` after a computation keeps the instant; the next `set` edits the old zone's
+  fields, as the JDK's `areFieldsSet` false skips `computeFields`). `getTime*` computes
+  pending fields (clean), `get` any (clean). MS is kept eagerly at what `getMillisOf`
+  answers, so the printer, `compare` and hash read it; `%clojure-inst-equal` compares a
+  Calendar's three slots, not the tail. The arithmetic is `%clojure-calendar-millis`
+  (month normalized, Gregorian when the year is 1582+ and the Gregorian day is on or after
+  the cutover, else Julian -- the JDK's `calculateFixedDate` without the `calsys` overlap
+  case, which no field values reach), which `%clojure-instant-millis` now calls.
+- Producers: `%clojure-calendar-new`/`-now` join the instant family, so a program making
+  no Calendar sheds the arms.
+- Deviations (user doc, instants): the default zone is UTC where no host is; a zone with
+  rules refused; the zone value prints as a list; printing a pending Calendar leaves it
+  pending (the oracle's printer `get`s, completing it).
+- **Pins**: clojure-spec `a-gregorian-calendar-is-the-oracles-lenient-lazy-calendar` (all
+  four, oracle-identical; no line reads the default zone, which is the machine's on the
+  host legs), `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`
+  (UTC default and the two refusals, both wasm backends).
 
 ## Boxed-integer limits, class designators, number classes and date builder chains
 
@@ -7023,7 +7068,9 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   protocol-tag branches (`ClojureDispatchLowering.timeValueClassBranches`), `instance?`'s
   kinds (`ClojureValueClasses` DATE/TIMESTAMP/CALENDAR/UUID) and the instance-call rows
   (`getTime`, `before`/`after` by milliseconds, `setTime` in place, a Timestamp's
-  `getNanos`, `compareTo`, the UUID halves, `version`, `variant`). `uuid?` lowers to
+  `getNanos` and `setNanos` in place -- tools.reader's `read-instant-timestamp`, h10 --
+  `compareTo`, the UUID halves, `version`, `variant`); a Calendar's methods are the
+  `CALENDAR_P` arm of "Portable GregorianCalendar". `uuid?` lowers to
   `(%clojure-is-uuid x "java.util.UUID")`, an alias of the host test. Producers: the two
   constructors, every read entry (`Reads.ENTRIES`), the `clojure.instant` kernels,
   `random-uuid`/`parse-uuid`, and the host members below (`%clojure-new-date`,
@@ -7080,7 +7127,7 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   answers the instant itself instead (f89, 2026-10-13): the portable ISO_INSTANT
   formatter ("The ISO_INSTANT formatter") then spells it, like the host `Instant` --
   data.json 2.5.2's `write-date` to `write-instant`, which refused every such write on
-  wasm before. Where the host is the call stays the host's. A Calendar never crosses (no host object; its methods refused by name).
+  wasm before. Where the host is the call stays the host's. A Calendar never crosses (no host object; its methods but "Portable GregorianCalendar"'s refused by name).
   Host to own is not converted: a host Date/Timestamp/UUID a member answers stays host, `=`
   to the own one by the first's `equals` (`%clojure-host-equal-p`'s clauses, the instant
   clause of `%clojure-equal` falling through to it), ordered by `compareTo`

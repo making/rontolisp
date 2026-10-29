@@ -18,8 +18,11 @@ interop の書き方も、すべてのバックエンドで同じ値を作りま
 `(java.util.UUID. msb lsb)` は 2 つの半分からなる UUID です。`UUID/randomUUID` と
 `UUID/fromString` は [random-uuid](random-uuid.md) と `#uuid` と同じ値を返し、
 `System/currentTimeMillis` はエポックからのミリ秒を返します。Date の `getTime`、`setTime`
-（その場で書き換えます）、`before`、`after`、`compareTo`、Timestamp の `getNanos`、UUID の
-2 つの半分と `version`、`variant` はどこでも答えます。インタプリタと JVM では、こうした値は
+（その場で書き換えます）、`before`、`after`、`compareTo`、Timestamp の `getNanos` と
+`setNanos`（その場で書き換えます）、UUID の 2 つの半分と `version`、`variant` はどこでも
+答えます。Calendar の `set`（1 つのフィールド、または年・月・日と省略可能な時刻）、
+`setTimeZone`、`get`、`getTime`（Date を返します）、`getTimeInMillis` もどこでも答え、
+Calendar をその場で書き換えます。インタプリタと JVM では、こうした値は
 Java のメンバーにホストオブジェクトとして渡り（`(.format sdf (java.util.Date.))`）、
 そのクラスのほかのメソッドはホストオブジェクトが答えます（`(.toInstant d)`）。メンバーが
 返したホストの Date や UUID は、こうした値と `=` になり、並べて比較できます。wasm
@@ -28,6 +31,14 @@ Java のメンバーにホストオブジェクトとして渡り（`(.format sd
 （`(.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 0)))`
 は `"1970-01-01T00:00:00Z"` です）。ホストだけが答えるそれ以外のメソッドは、wasm では
 名前を挙げて拒否します。
+
+wasm バックエンドでは、`(java.util.GregorianCalendar. year month day)`（引数 5 つや 6 つ、
+または引数なしで現在のインスタント）はこの種類の Calendar、`java.util.Calendar` の定数
+（`Calendar/MILLISECOND` など）はその整数、`GMT`・`UTC`・`GMT+hh:mm` のオフセットに対する
+`(java.util.TimeZone/getTimeZone id)` は Calendar が受け取るゾーンになるため、tools.reader の
+`#inst` リーダーがそこで動きます。暦はオラクルの寛容な暦です。範囲外のフィールドは繰り上がり、
+1582-10-15 より前の日付はユリウス暦で、設定してまだ計算していないフィールドは最後に設定した
+ゾーンで読みます。インタプリタと JVM では、これらはホストのクラスのままです。
 
 wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
 （ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
@@ -75,8 +86,18 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
   ホストのコンストラクタに届きます）。Date の `setTime` 以外の変更メソッド（`setYear` など）は
   名前を挙げて拒否します。オラクルの Date はこれらで書き換わります。
 - [clojure.instant](clojure-instant.md) の Calendar にはホストオブジェクトがありません。Java の
-  メンバーには渡らず、そのクラスのメソッドは名前を挙げて拒否します。wasm では、Date や UUID の
-  メソッドのうちホストだけが答えるその他のもの（たとえば `getYear` や `hashCode`）も同じく拒否します。
+  メンバーには渡らず、そのクラスのメソッドは上に挙げたもの以外を名前を挙げて拒否します。wasm
+  では、Date や UUID のメソッドのうちホストだけが答えるその他のもの（たとえば `getYear` や
+  `hashCode`）も同じく拒否します。
+- wasm バックエンドでは、`GregorianCalendar` の構築はゾーンを設定するまで UTC です（オラクルは
+  JVM の既定のゾーンです）。規則を持つゾーン（`(TimeZone/getTimeZone "America/New_York")`）は
+  名前を挙げて拒否します。オラクルは知らない ID に `GMT` を返します。`set` は `ERA`、`YEAR`、
+  `MONTH`、`DAY_OF_MONTH`、`HOUR_OF_DAY`、`MINUTE`、`SECOND`、`MILLISECOND` を、`get` はさらに
+  `DAY_OF_WEEK`、`AM_PM`、`HOUR`、`ZONE_OFFSET`、`DST_OFFSET` を受け取り、それ以外のフィールドは
+  名前を挙げて拒否します。ゾーンはリストとして印字され、`java.util.TimeZone` ではありません。
+  フィールドをまだ計算していない Calendar を印字しても計算は保留されたままなので、後の
+  `setTimeZone` はそれを新しいゾーンで読みます。オラクルの印字はフィールドを計算するため、
+  その後のゾーン設定はインスタントを保ちます。
 - wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT` は持ち運べる値です
   （ホストに `java.time` がないため）。`.format` は Date や Timestamp を ISO-8601 で答えるので、
   `(.format java.time.format.DateTimeFormatter/ISO_INSTANT (java.util.Date. 0))` は

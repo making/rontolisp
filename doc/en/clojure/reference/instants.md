@@ -17,14 +17,24 @@ current instant, `(java.util.Date. ms)` and `(java.sql.Timestamp. ms)` the insta
 milliseconds, `(java.util.UUID. msb lsb)` the UUID of the two halves, `UUID/randomUUID` and
 `UUID/fromString` those of [random-uuid](random-uuid.md) and `#uuid`, and
 `System/currentTimeMillis` answers the milliseconds since the epoch. A Date's `getTime`,
-`setTime` (in place), `before`, `after` and `compareTo`, a Timestamp's `getNanos` and a UUID's
-halves, `version` and `variant` answer everywhere. On the interpreter and the JVM such a value
+`setTime` (in place), `before`, `after` and `compareTo`, a Timestamp's `getNanos` and
+`setNanos` (in place) and a UUID's halves, `version` and `variant` answer everywhere. A
+Calendar's `set` (a field, or the year, month and day with an optional time), `setTimeZone`,
+`get`, `getTime` (a Date) and `getTimeInMillis` answer everywhere too, changing it in place. On the interpreter and the JVM such a value
 crosses into a Java member as the host object (`(.format sdf (java.util.Date.))`), any other
 method of its class is the host object's (`(.toInstant d)`), and a host Date or UUID a member
 answers is `=` to it and compares beside it. On the wasm backends `.toInstant` of a Date or a
 Timestamp answers the instant itself, which the portable `ISO_INSTANT` formatter below
 spells (`(.format java.time.format.DateTimeFormatter/ISO_INSTANT (.toInstant (java.util.Date. 0)))`
 is `"1970-01-01T00:00:00Z"`); any other method only the host answers is refused by name there.
+
+On the wasm backends, `(java.util.GregorianCalendar. year month day)` (and of five or six
+arguments, or none: the current instant) is a Calendar of this kind, `java.util.Calendar`'s
+constants (`Calendar/MILLISECOND`, ...) their integers, and `(java.util.TimeZone/getTimeZone
+id)` of `GMT`, `UTC` or a `GMT+hh:mm` offset a zone a Calendar takes, so tools.reader's
+`#inst` reader runs there. The calendar is the oracle's lenient one: out-of-range fields
+carry, dates before 1582-10-15 are Julian, and fields set but not yet computed are read in
+the zone set last. On the interpreter and the JVM these stay the host's classes.
 
 On the wasm backends, `java.time.format.DateTimeFormatter/ISO_INSTANT` is a portable
 value (the host has no `java.time` there): `.format` of it answers a Date or a Timestamp
@@ -72,8 +82,18 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
   the interpreter and the JVM). A Date's mutators but `setTime` (`setYear`, ...) are refused
   by name, where the oracle's Date changes.
 - A [clojure.instant](clojure-instant.md) Calendar has no host object: it never crosses into
-  a Java member, and its class's methods are refused by name. On wasm, so is any other
-  method of a Date or UUID only the host answers (a `getYear`, say, or `hashCode`).
+  a Java member, and its class's methods but those above are refused by name. On wasm, so
+  is any other method of a Date or UUID only the host answers (a `getYear`, say, or
+  `hashCode`).
+- On the wasm backends a `GregorianCalendar` construction is in UTC until a zone is set
+  (the oracle's in its JVM's default zone), and a zone with rules
+  (`(TimeZone/getTimeZone "America/New_York")`) is refused by name, where the oracle answers
+  `GMT` for an id it does not know. `set` takes `ERA`, `YEAR`, `MONTH`, `DAY_OF_MONTH`,
+  `HOUR_OF_DAY`, `MINUTE`, `SECOND` and `MILLISECOND`, and `get` also `DAY_OF_WEEK`,
+  `AM_PM`, `HOUR`, `ZONE_OFFSET` and `DST_OFFSET`; any other field is refused by name. The
+  zone prints as a list and is no `java.util.TimeZone`. Printing a Calendar whose fields
+  are not yet computed leaves them pending, so a later `setTimeZone` reads them in the new
+  zone, where the oracle's printer computes them and the zone then keeps the instant.
 - On the wasm backends, `java.time.format.DateTimeFormatter/ISO_INSTANT` is the portable
   value above: it prints as `(:C%DATE-FORMATTER)`, `class` answers `:list`, and `.format`
   of it answers an instant of this front end's own where the oracle refuses (its `Date`
