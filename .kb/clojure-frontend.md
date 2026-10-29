@@ -1754,8 +1754,7 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A
   compiled program refuses each of these by name (`.todo/h00` for the JVM).
 - **Gaps**, each refused where it runs: a bare predicate a program defined explains as
-  `:clojure.spec.alpha/unknown`, no fn carrying its var's name (`.todo/h03`); `multi-spec`
-  conforms through `.dispatchFn`/`.getMethod`, which no multimethod answers (`.todo/h02`);
+  `:clojure.spec.alpha/unknown`, no fn carrying its var's name (`.todo/h03`);
   `instrument` changes the root of a `defn` whose calls are direct, and `check` runs over
   it and over test.check's eager shrink trees (`.todo/h05`). `clojure.main/ex-str` of spec
   problems and `clojure.repl/doc` of a keyword stay refused: those namespaces load at
@@ -4086,7 +4085,7 @@ constructor and consumer, and a regex `replace` with a function replacement.
   multimethod`, while a computed multimethod -- a local, a var's deref, any form -- reads
   the run-time registry below, the value arm called on the arguments
   (`ClojureDispatchLowering.computedCall`, all six verbs; g90, 2026-10-29, spec.alpha's
-  `(methods @mmvar)`; before, a lower-time refusal). `prefers` (2026-10-13, `.todo/f75`) reads the `%prefers` table grouped by the stored keys (each to its set through `%clojure-set-of`), answering `{}` where nothing is preferred; `remove-all-methods` clears the `%methods` and `%prefers` tables and zeroes the `%object` slot, answering the multimethod itself (of `print-method`, whose rows live in `%clojure-print-methods`, it clears that table and answers `print-method` itself). Both take the name the same way. As values the six (`methods`, `get-method`, `remove-method`, `prefer-method`, `prefers`, `remove-all-methods`) check the count in the call's words, then read the run-time registry the `defmulti` populates beside the dispatch function (`%clojure-multimethods`, an `eq` table from the function to getters over its tables, so a re-executed `defmulti` reads the new tables like the calls do): `get-method`/`remove-method` read under the same key the call's shape reads (nil to the marker, a class object or designator to the keyword a class spelling stores, through `%clojure-dispatch-key`), `remove-method` of the `Object` class and `remove-all-methods` clear the slot through the registry's clearer, answering the multimethod like the calls; a function the registry holds no tables for refuses with the old wording (g40, `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`). Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `prefers-and-remove-all-methods` and `ClojureLoweringTest#multimethodIntrospectionTakesTheMultimethodName`, the value arms by clojure-spec `multimethod-value-arms-run-where-calls-run` (2026-10-26, all four backends; the hierarchy/default fallback `get-method` skips stays shared with the head call, and a wrong count or a non-multimethod reports the head's words).
+  `(methods @mmvar)`; before, a lower-time refusal). `prefers` (2026-10-13, `.todo/f75`) reads the `%prefers` table grouped by the stored keys (each to its set through `%clojure-set-of`), answering `{}` where nothing is preferred; `remove-all-methods` clears the `%methods` and `%prefers` tables and zeroes the `%object` slot, answering the multimethod itself (of `print-method`, whose rows live in `%clojure-print-methods`, it clears that table and answers `print-method` itself). Both take the name the same way. As values the six (`methods`, `get-method`, `remove-method`, `prefer-method`, `prefers`, `remove-all-methods`) check the count in the call's words, then read the run-time registry the `defmulti` populates beside the dispatch function (`%clojure-multimethods`, an `eq` table from the function to getters over its tables, so a re-executed `defmulti` reads the new tables like the calls do): `get-method`/`remove-method` read under the same key the call's shape reads (nil to the marker, a class object or designator to the keyword a class spelling stores, through `%clojure-dispatch-key`), `remove-method` of the `Object` class and `remove-all-methods` clear the slot through the registry's clearer, answering the multimethod like the calls; a function the registry holds no tables for refuses with the old wording (g40, `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`). Pinned oracle-identical (clj 1.12.6, 2026-10-13) by clojure-spec `prefers-and-remove-all-methods` and `ClojureLoweringTest#multimethodIntrospectionTakesTheMultimethodName`, the value arms by clojure-spec `multimethod-value-arms-run-where-calls-run` (2026-10-26, all four backends; a wrong count or a non-multimethod reports the head's words).
   A host class row keeps the keyword `class` answers (the oracle: the `Class`), so
   `(get (methods f) (class x))` works while `(contains? (methods f) String)` is false.
   Programs naming no `defmulti` and none of the six verbs compile
@@ -4193,8 +4192,27 @@ constructor and consumer, and a regex `replace` with a function replacement.
   read the host object on the oracle).
 - Lookup: exact hit, else `C%H-DISPATCH` over the hierarchy (strictly most specific wins,
   `prefer-method` breaks ties, an unbroken tie is `Multiple methods ...`), then the
-  `Object` slot (ahead of the default, like the oracle), then the default, else
-  `No method in ...`.
+  `Object` slot (ahead of the default, like the oracle; never for the nil marker, which
+  isa? no class), then the default, else `No method in ...`. The search past the exact
+  miss is `C%H-FIND` (method or nil), shared with `MultiFn.getMethod`
+  (2026-10-30): the `defmulti` registry record is `(methods prefers clearer
+  dispatch-getter finder)`, the finder `C%H-GET-METHOD` over a run-time dispatch value
+  (the row the dispatcher reads for it, else the row its class spelling stores --
+  `%clojure-dispatch-value`, which alone turned a no-kind host class object into a
+  keyword no row holds -- else `C%H-FIND`). `get-method` (head, value, computed) and
+  the fn value-method rows `.getMethod`/`.dispatchFn` (`ClojureValueMethodLowering`,
+  spec.alpha's `multi-spec` through `^clojure.lang.MultiFn @mmvar`) read it; a fn the
+  registry lacks keeps the `No matching ... for class clojure.lang.AFunction` refusal.
+  Until then `get-method` read the exact row only (no hierarchy, no default), the
+  `Object` slot caught nil, and a `defmethod ... Object` stored two closures (row and
+  slot), so the two `get-method` paths answered unequal fns. Left: the `Object` slot
+  still catches a keyword dispatch value (`class` answers kind keywords, which a user
+  keyword cannot be told from; user doc deviation). Probe (clj 1.12.6, spec.alpha
+  0.5.238, 2026-10-30, all four backends): `multi-spec`'s `valid?`, `conform`,
+  `unform`, `explain-str` of a missing method and of a failing key, `form`, oracle-identical.
+  Pins: clojure-spec `multimethod-value-arms-run-where-calls-run`,
+  `multimethods-dispatch-over-a-table`,
+  `ClojureInteropTest#aMultimethodDispatchesOnAHostClassOfNoKind`.
 - A hierarchy is a map of `:parents`/`:ancestors`/`:descendants` tables to wrapped sets;
   the global one is `C%H-GLOBAL`, rebound by two-argument `derive`/`underive`.
   `derive`/`underive` as values are rest-arg lambdas over the same runtime calls

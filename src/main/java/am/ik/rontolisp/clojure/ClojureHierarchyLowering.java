@@ -49,6 +49,15 @@ final class ClojureHierarchyLowering {
 
 	static final String HIERARCHY_DISPATCH = "C%H-DISPATCH";
 
+	/** The method a dispatch value reaches past an exact miss, or nil. */
+	static final String HIERARCHY_FIND = "C%H-FIND";
+
+	/** {@code MultiFn.getMethod} of a run-time dispatch value, or nil. */
+	static final String HIERARCHY_GET_METHOD = "C%H-GET-METHOD";
+
+	/** The stored key {@code =} to a lookup key ({@code clojure.lisp}). */
+	private static final String TABLE_KEY = "RONTOLISP::%CLOJURE-TABLE-KEY";
+
 	/** The global hierarchy value as a form. */
 	static LispVal hierarchyGlobal() {
 		return new LispSymbol(HIERARCHY_GLOBAL);
@@ -167,6 +176,7 @@ final class ClojureHierarchyLowering {
 		LispSymbol meth = new LispSymbol("meth");
 		LispSymbol surv = new LispSymbol("surv");
 		LispSymbol pick = new LispSymbol("pick");
+		LispSymbol object = new LispSymbol("object");
 		LispSymbol ss = new LispSymbol("ss");
 		LispSymbol s = new LispSymbol("s");
 		// (defun c%h-copy-table (table) ...)
@@ -339,18 +349,50 @@ final class ClojureHierarchyLowering {
 						LispString.literal("' match dispatch value: "),
 						hfn("RONTOLISP::%CLOJURE-STR-OF", dv, LispString.literal("nil"), ClojureLowering.NIL_CONST),
 						LispString.literal(", and neither is preferred")));
-		runtime.add(hdefun(HIERARCHY_DISPATCH, List.of(name, methods, prefers, hier, def, dv, args), hlet(
+		// (defun c%h-find (name methods prefers hier default object dv) ...): the method
+		// past an exact miss, MultiFn.getMethod's search -- the Object slot where no
+		// row's key is an ancestor (never for nil, which isa? no class), the strictly
+		// most specific candidate, a preferred one among ties (an unbroken tie
+		// refused), else the default's row, else nil. The dispatcher and every
+		// get-method read share it.
+		LispVal nilMarker = hfn("AND", hfn("CONSP", dv), hfn("EQ", hfn("CAR", dv), ClojureCollectionLowering.NIL_TAG));
+		runtime.add(hdefun(HIERARCHY_FIND, List.of(name, methods, prefers, hier, def, object, dv), hlet(
 				List.of(ClojureLowerUtil.list(cands, hfn("C%H-CANDIDATES", methods, hier, dv))),
 				hfn("IF", hfn("NULL", cands),
-						hlet(List.of(hmiss(miss), ClojureLowerUtil.list(meth, hfn("GETHASH", def, methods, miss))),
-								hfn("IF", hfn("EQ", meth, miss), noMethod, hfn("APPLY", meth, args))),
-						hfn("IF", hfn("NULL", hfn("CDR", cands)),
-								hfn("APPLY", hfn("GETHASH", hfn("CAR", cands), methods), args),
-								hlet(List.of(ClojureLowerUtil.list(surv, hfn("C%H-SURVIVORS", cands, hier, prefers))),
-										hfn("IF", hfn("NULL", surv), ambiguous, hlet(
-												List.of(ClojureLowerUtil.list(pick, hfn("C%H-PICK", surv, prefers))),
-												hfn("IF", hfn("NULL", pick), ambiguous,
-														hfn("APPLY", hfn("GETHASH", pick, methods), args))))))))));
+						hfn("IF", hfn("AND", object, hfn("NOT", nilMarker)), object, hfn("GETHASH", def, methods)),
+						hfn("IF", hfn("NULL", hfn("CDR", cands)), hfn("GETHASH", hfn("CAR", cands), methods), hlet(
+								List.of(ClojureLowerUtil.list(surv, hfn("C%H-SURVIVORS", cands, hier, prefers))),
+								hfn("IF", hfn("NULL", surv), ambiguous, hlet(
+										List.of(ClojureLowerUtil.list(pick, hfn("C%H-PICK", surv, prefers))),
+										hfn("IF", hfn("NULL", pick), ambiguous, hfn("GETHASH", pick, methods))))))))));
+		// (defun c%h-dispatch (name methods prefers hier default object dv args) ...)
+		runtime.add(hdefun(HIERARCHY_DISPATCH, List.of(name, methods, prefers, hier, def, object, dv, args),
+				hlet(List.of(ClojureLowerUtil.list(meth,
+						hfn(HIERARCHY_FIND, name, methods, prefers, hier, def, object, dv))),
+						hfn("IF", meth, hfn("APPLY", meth, args), noMethod))));
+		// (defun c%h-get-method (name methods prefers hier default object raw) ...):
+		// MultiFn.getMethod of a run-time dispatch value -- the row the dispatcher
+		// reads for it, else the row a class spelling of it stores (a class object
+		// or designator to its kind or name keyword), else the dispatcher's search
+		LispSymbol raw = new LispSymbol("raw");
+		LispSymbol spelled = new LispSymbol("spelled");
+		LispVal canon = hfn("IF", hfn("NULL", raw), ClojureCollectionLowering.nilMarkerForm(),
+				hfn("OR", hfn(ClojureDispatchLowering.DESIGNATOR_KIND, raw), raw));
+		runtime.add(
+				hdefun(HIERARCHY_GET_METHOD, List.of(name, methods, prefers, hier, def, object, raw),
+						hlet(List.of(hmiss(miss), ClojureLowerUtil.list(dv, canon),
+								ClojureLowerUtil.list(found,
+										hfn("GETHASH", hfn(TABLE_KEY, dv, methods), methods, miss))),
+								hfn("IF", hfn("EQ", found, miss), hlet(
+										List.of(ClojureLowerUtil.list(spelled,
+												hfn("GETHASH",
+														hfn(TABLE_KEY, hfn(ClojureDispatchLowering.DISPATCH_VALUE, raw),
+																methods),
+														methods, miss))),
+										hfn("IF", hfn("EQ", spelled, miss),
+												hfn(HIERARCHY_FIND, name, methods, prefers, hier, def, object, dv),
+												spelled)),
+										found))));
 		// the global hierarchy value, bound after its builders
 		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), hierarchyGlobal(), hfn("C%H-EMPTY")));
 		return runtime;

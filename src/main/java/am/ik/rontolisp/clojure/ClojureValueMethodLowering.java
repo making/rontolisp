@@ -348,6 +348,28 @@ final class ClojureValueMethodLowering {
 		row("run", 0, arm(List.of("ifn?"),
 				ClojureLowerUtil.list(new LispSymbol("do"), ClojureLowerUtil.list(R), new LispSymbol("nil"))));
 		row("compare", 2, new Arm(List.of(FUNCTION), ClojureValueMethodLowering::fnCompare));
+		// a multimethod is its dispatcher function here: a registered one answers
+		// clojure.lang.MultiFn's dispatchFn and getMethod (spec.alpha's multi-spec)
+		row("dispatchFn", 0, new Arm(List.of(FUNCTION), ctx -> multiFnMember(ctx, "dispatchFn")));
+		row("getMethod", 1, new Arm(List.of(FUNCTION), ctx -> multiFnMember(ctx, "getMethod")));
+	}
+
+	/**
+	 * A {@code clojure.lang.MultiFn} member of a fn: through the multimethod registry
+	 * ({@code clojure.lisp}) when the fn is a multimethod's dispatcher -- the dispatch
+	 * function's getter called, or {@code MultiFn.getMethod} of the argument -- else the
+	 * refusal in the oracle's words, as for any other {@code AFunction}.
+	 */
+	private static LispVal multiFnMember(ClojureLowering ctx, String method) {
+		LispSymbol recv = ctx.localSym(RECV);
+		boolean getMethod = method.equals("getMethod");
+		List<LispVal> args = getMethod ? List.of(ctx.localSym(argName(0))) : List.of();
+		LispVal registered = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), recv,
+				new LispSymbol(ClojureDispatchLowering.MULTI_REGISTRY));
+		LispVal answer = getMethod
+				? ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.MULTI_GET_METHOD), recv, args.get(0))
+				: ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.MULTI_DISPATCH_FN), recv);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), registered, answer, refusal(recv, method, true, args));
 	}
 
 	private static void updateRows() {

@@ -249,8 +249,10 @@
   共に登録する実行時レジストリを読み、呼び出しと等価に動作します。
   `get-method`・`remove-method` は呼び出しと同じキーの読み取りを行い、`Object` クラスの
   `remove-method` と `remove-all-methods` はスロットをクリアして呼び出し同様
-  multimethod を返します。登録されていない関数値は従来どおり拒否され、階層や
-  既定値のフォールバックを読まない `get-method` の振る舞いは呼び出し位置と共通です。
+  multimethod を返します。登録されていない関数値は従来どおり拒否されます。
+  `get-method` と multimethod の `.getMethod`・`.dispatchFn` はオラクルの `MultiFn` と同じ
+  答えを返しますが、multimethod の `Object` メソッドはキーワードのディスパッチ値にも答えます
+  （ここでの `class` は値のクラスをキーワードで答えます）。
 - `satisfies?` はプロトコル名と値を、`extends?` はプロトコル名と型名を、`extend` は型名
   の後にプロトコルとメソッドマップを任意の回数取ります。プロトコルや型を束縛した
   ローカルは降低時に拒否されます。値としてはオラクルと同じ文言で引数の個数を
@@ -909,8 +911,7 @@
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
 - `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
   述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
-  spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
-  （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
+  spec のマクロが受け取る述語は名前を保ちます）。`clojure.spec.test.alpha` の `instrument`
   （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
   resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
   `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を
