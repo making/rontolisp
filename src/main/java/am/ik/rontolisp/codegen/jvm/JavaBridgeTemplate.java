@@ -70,6 +70,10 @@ final class JavaBridgeTemplate {
 
 	private static final int COST_BOXED = 6;
 
+	// A function where java.util.concurrent.Callable is expected: before every other
+	// interface (mirrors compiler/JavaOverloads.COST_FUNCTION_CALLABLE).
+	private static final int COST_FUNCTION_CALLABLE = 7;
+
 	private static final int COST_PROXY = 8;
 
 	// A function where java.lang.Object is expected: after every interface it implements,
@@ -1552,7 +1556,9 @@ final class JavaBridgeTemplate {
 	}
 
 	// "max", "max(long,long)", "max(long,_)", "java.lang.StringBuilder(int)": the name
-	// and the tag's types in Class.getName() spelling ("_" matches any type). Mirrors
+	// and the tag's types in Class.getName() spelling ("_" matches any type). A tag of
+	// "^C" hints ("submit(^java.lang.Runnable,_)") is no tag: the bridge calls by
+	// reflection, which reads no hint, as the oracle's reflector reads none. Mirrors
 	// compiler/JavaOverloads.parseMember.
 	private static Object[] parseMember(String designator) {
 		int open = designator.indexOf('(');
@@ -1569,16 +1575,34 @@ final class JavaBridgeTemplate {
 		String name = designator.substring(0, open).strip();
 		String inside = designator.substring(open + 1, designator.length() - 1).strip();
 		List<String> types = new ArrayList<>();
+		int hints = 0;
+		boolean tagged = false;
 		if (!inside.isEmpty()) {
 			for (String part : inside.split(",", -1)) {
 				String type = part.strip();
 				if (type.isEmpty()) {
 					throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
 				}
-				types.add(tagTypeName(type));
+				if (type.startsWith("^")) {
+					String hint = type.substring(1).strip();
+					if (hint.isEmpty() || "_".equals(hint)) {
+						throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
+					}
+					hints++;
+					continue;
+				}
+				String tagType = tagTypeName(type);
+				tagged |= !"_".equals(tagType);
+				types.add(tagType);
 			}
 		}
-		return new Object[] { name, types.toArray(new String[0]) };
+		if (hints == 0) {
+			return new Object[] { name, types.toArray(new String[0]) };
+		}
+		if (tagged) {
+			throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
+		}
+		return new Object[] { name, null };
 	}
 
 	// A tag type in Class.getName() spelling (int, java.lang.String, [I): "String"
@@ -2356,8 +2380,9 @@ final class JavaBridgeTemplate {
 			return target.isPrimitive() ? NO_MATCH : COST_BOXED;
 		}
 		if (KIND_FUNCTION.equals(token)) {
-			return target == Object.class ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
-					: isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
+			return target == Object.class ? COST_FUNCTION_OBJECT
+					: target == java.util.concurrent.Callable.class ? COST_FUNCTION_CALLABLE : !target.isInterface()
+							? NO_MATCH : isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 		}
 		String[] rule = KIND_RULES.get(token);
 		if (rule == null) {

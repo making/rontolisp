@@ -836,6 +836,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
+- An argument's `:tag` -- its own, or a hinted `let` local's or parameter's -- picks the
+  overload where the call's class is known before it runs, as the oracle's compiler does; a
+  receiver's hint is dropped, so `(defn f [^ExecutorService e ^Runnable r] (.submit e r))`
+  calls by reflection, which reads no hint. A fn passed where `Callable` and another
+  interface both take it is a `Callable`: `(.submit e (fn [] 1))` answers a future of `1`
+  where the oracle refuses an unhinted call on a typed receiver (`More than one matching
+  method found: submit`), and reflectively on a `ScheduledThreadPoolExecutor` picks
+  `submit(Runnable)` (its `getMethods()` order; a future of `nil`).
 - `(.thenComparing c (fn [a b] ...))` takes the fn argument as a `Comparator` and compares by
   it, where the oracle refuses a fn literal or local there at compile time (`More than one
   matching method found: thenComparing`: the `Function` overload takes it too).
