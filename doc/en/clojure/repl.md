@@ -4,7 +4,9 @@ With no file, `--source-language clojure` starts a Clojure REPL (`clojure> ` pro
 A form may span lines; completeness is decided by bracket counting over `()[]{}` outside
 strings and comments. Definitions typed at separate prompts see each other, as they
 would in one file: every buffer declares its top-level `def`/`defn` names before it runs,
-so a later buffer may call what an earlier one defined. An `(ns name)` or `(in-ns 'name)`
+so a later buffer may call what an earlier one defined, and a redefined `defn` reaches the
+functions an earlier buffer defined that call it, as in Clojure's REPL (in a file they keep
+the definition above them). An `(ns name)` or `(in-ns 'name)`
 buffer switches the `*ns*` the `::`-keywords below it resolve against, like a file's own
 `ns` form. The value echo renders in Clojure
 notation, readably; a top-level `def`, `defn`, `defn-`, `defmacro`, `defmulti` or
@@ -44,3 +46,5 @@ Error: Division by zero
 clojure> (ex-message *e)
 "Divide by zero"
 ```
+
+[nREPL](nrepl.md) serves this REPL to an editor.

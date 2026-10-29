@@ -427,8 +427,9 @@ final class JvmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
-			if (!bound && ctx.bindsRuntimeFunctionNames) {
-				// No definition, but the run time can bind the name: the probe answers.
+			if (!bound && (ctx.bindsRuntimeFunctionNames || ctx.linked)) {
+				// No definition, but the run time can bind the name (or a fragment
+				// defined later, whose name _lookup's miss finds): the probe answers.
 				compileComputedFboundp(parts.get(1), ctx, className);
 				return;
 			}

@@ -1420,8 +1420,10 @@ final class ClojureCoreLowering {
 	 * {@code (load-string text)} of a literal string: its datums lowered where the call
 	 * stands, in the current namespace -- definitions declare ahead like a file's, macros
 	 * hand over for the rest of the string -- answering the last datum's value, nil of an
-	 * empty string. A namespace the text switches to is restored for the lowering after
-	 * the call (its switch still runs).
+	 * empty string. A namespace the text switches to is the text's own, like the oracle's
+	 * {@code Compiler/load}, which binds {@code *ns*} around the load: restored for the
+	 * lowering after the call, and {@code *ns*} bound around the forms where the text
+	 * switches.
 	 * @param ctx the hub
 	 * @param text the string
 	 * @return the lowered call
@@ -1433,6 +1435,7 @@ final class ClojureCoreLowering {
 		String outerNs = ctx.currentNs;
 		boolean top = ctx.atTopLevel();
 		List<LispVal> forms = new ArrayList<>();
+		boolean switched;
 		try {
 			for (LispVal datum : datums) {
 				LispVal read = ClojureReadEval.resolve(ctx, datum);
@@ -1449,19 +1452,43 @@ final class ClojureCoreLowering {
 			}
 		}
 		finally {
+			switched = !ctx.currentNs.equals(outerNs) || switches(datums);
 			ctx.currentNs = outerNs;
 		}
 		if (forms.isEmpty()) {
 			return ClojureLowering.NIL_CONST;
 		}
+		LispVal loaded;
 		if (forms.size() == 1) {
-			return forms.get(0);
+			loaded = forms.get(0);
 		}
-		List<LispVal> progn = new ArrayList<>();
-		progn.add(ClojureLowerUtil.sym("progn"));
-		progn.addAll(forms);
-		return ClojureLowerUtil.list(progn);
+		else {
+			List<LispVal> progn = new ArrayList<>();
+			progn.add(ClojureLowerUtil.sym("progn"));
+			progn.addAll(forms);
+			loaded = ClojureLowerUtil.list(progn);
+		}
+		if (!switched) {
+			return loaded;
+		}
+		ctx.usedSpecials.add("*ns*");
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.NS)), loaded);
+	}
 
+	/**
+	 * Whether a datum of a text is an {@code ns} or an {@code in-ns}, which switches
+	 * {@code *ns*} as it runs.
+	 */
+	private static boolean switches(List<LispVal> datums) {
+		for (LispVal datum : datums) {
+			List<LispVal> items = ClojureLowerUtil.items(datum);
+			if (ClojureLowerUtil.isNsForm(datum)
+					|| items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "in-ns")) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

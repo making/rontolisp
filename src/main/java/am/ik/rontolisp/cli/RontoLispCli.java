@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,6 +34,7 @@ import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.eval.ClojureCommandLine;
+import am.ik.rontolisp.eval.ClojureNrepl;
 import am.ik.rontolisp.eval.ClojureDepsRepositories;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LinalgBlas;
@@ -71,6 +73,12 @@ public final class RontoLispCli {
 	private boolean quitRequested;
 
 	private @Nullable Boolean assumedTerminal;
+
+	/**
+	 * The stack of the thread the command line runs on ({@code --stack}), which each
+	 * session of an nREPL server's thread takes too.
+	 */
+	private long stackBytes = SizedThread.WORKER_STACK_BYTES;
 
 	private @Nullable Function<List<RemoteRepository>, MavenResolver> javaDependencyResolver;
 
@@ -260,6 +268,25 @@ public final class RontoLispCli {
 					programArguments = repl.arguments();
 				}
 			}
+		}
+		if (options.contains("--nrepl")) {
+			// --nrepl[=PORT]: a REPL served to editors, so it takes no program
+			if (test || inline != null || positional != null || generated != null || options.contains("-o")) {
+				throw new IllegalArgumentException("--nrepl serves a Clojure REPL over nREPL: it takes no program to"
+						+ " run or compile (no input file, -e, -o or test)");
+			}
+			if (sourceLanguage != null && SourceLanguage.parse(sourceLanguage) != SourceLanguage.CLOJURE) {
+				throw new IllegalArgumentException(
+						"--nrepl serves Clojure: --source-language " + sourceLanguage + " cannot be served over nREPL");
+			}
+			refuseCompileOnlyJavaOptions(javaResolution);
+			nrepl(nreplPort(Objects.requireNonNull(options.get("--nrepl"))),
+					interactive(this.out, InputStream.nullInputStream(), systemPath, dists, features,
+							options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+							options.contains("--parallel"), commandLine(null, programArguments), standards,
+							javaResolution.warnReflection(), javaClassPath(javaResolution)),
+					standards);
+			return;
 		}
 		if (!test && inline == null && positional == null && generated == null) {
 			refuseCompileOnlyJavaOptions(javaResolution);
@@ -574,7 +601,49 @@ public final class RontoLispCli {
 	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
 			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage,
 			SourceStandards standards, boolean warnJavaReflection, JavaClassPath javaClassPath) {
-		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
+		Interactive interactive = interactive(this.out, this.in, systemPath, dists, declaredFeatures, simd, blas, gpu,
+				parallel, commandLine, standards, warnJavaReflection, javaClassPath);
+		LispEvaluator evaluator = interactive.evaluator();
+		// The REPL has no file to pick a language from: the override, else the default.
+		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards,
+				interactive.files());
+		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
+		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
+		ReplBuffer repl = new ReplBuffer(session, evaluator, new ReplBuffer.Channels(this.out, System.err, terminal));
+		try {
+			if (systemTerminal && isJLineAvailable()) {
+				JLineRepl.run(repl);
+			}
+			else {
+				replWithBufferedReader(repl, evaluator);
+			}
+		}
+		finally {
+			// The session's end is the program's end, as interpret's is.
+			evaluator.flushOpenStreams();
+		}
+		// A piped session is a script runner: a form that failed makes the whole run
+		// fail, as a file's uncaught error does.
+		if (repl.failedOnAPipe()) {
+			this.exitCode = 1;
+		}
+	}
+
+	/**
+	 * An evaluator for an interactive session -- the REPL's, an nREPL server's -- and the
+	 * files its inputs read.
+	 *
+	 * @param evaluator the evaluator
+	 * @param files where a {@code load}, a {@code require} or a {@code load-file} reads
+	 */
+	private record Interactive(LispEvaluator evaluator, SourceLoader files) {
+	}
+
+	private Interactive interactive(PrintStream out, InputStream in, List<String> systemPath, DistClient dists,
+			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
+			List<String> commandLine, SourceStandards standards, boolean warnJavaReflection,
+			JavaClassPath javaClassPath) {
+		LispEvaluator evaluator = new LispEvaluator(out, in);
 		evaluator.setWarnOnJavaReflection(warnJavaReflection);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDeclaredFeatures(declaredFeatures);
@@ -596,28 +665,60 @@ public final class RontoLispCli {
 		if (parallel) {
 			evaluator.setParallel(true);
 		}
-		// The REPL has no file to pick a language from: the override, else the default.
-		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards, files);
 		evaluator.setSourceStandards(standards);
-		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
-		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
-		ReplBuffer repl = new ReplBuffer(session, evaluator, new ReplBuffer.Channels(this.out, System.err, terminal));
+		return new Interactive(evaluator, files);
+	}
+
+	/**
+	 * The port {@code --nrepl} names: any free one when it names none.
+	 * @param option the option's value, empty for the bare flag
+	 * @return the port
+	 */
+	static int nreplPort(String option) {
+		if (option.isEmpty()) {
+			return 0;
+		}
 		try {
-			if (systemTerminal && isJLineAvailable()) {
-				JLineRepl.run(repl);
+			int port = Integer.parseInt(option);
+			if (port >= 0 && port <= 65535) {
+				return port;
 			}
-			else {
-				replWithBufferedReader(repl, evaluator);
-			}
+		}
+		catch (NumberFormatException ex) {
+			// refused below
+		}
+		throw new IllegalArgumentException("--nrepl=PORT expects a port between 0 and 65535, not '" + option + "'");
+	}
+
+	/**
+	 * Serves a Clojure REPL over nREPL on the loopback interface until the process ends:
+	 * prints the line the oracle prints, which editors parse for the port, and writes the
+	 * port to {@code .nrepl-port} in the working directory, where editors look for it,
+	 * deleted when the process ends.
+	 */
+	private void nrepl(int port, Interactive interactive, SourceStandards standards) {
+		LispEvaluator evaluator = interactive.evaluator();
+		ClojureNrepl clojure = new ClojureNrepl(evaluator, standards, interactive.files());
+		Path portFile = Path.of(".nrepl-port");
+		try (NreplServer server = new NreplServer(clojure, evaluator, InetAddress.getLoopbackAddress(), port,
+				this.stackBytes)) {
+			this.out.println(server.startedMessage());
+			this.out.flush();
+			Files.writeString(portFile, Integer.toString(server.port()));
+			portFile.toFile().deleteOnExit();
+			server.serve();
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
 		}
 		finally {
-			// The session's end is the program's end, as interpret's is.
+			try {
+				Files.deleteIfExists(portFile);
+			}
+			catch (IOException ex) {
+				// deleteOnExit tries again
+			}
 			evaluator.flushOpenStreams();
-		}
-		// A piped session is a script runner: a form that failed makes the whole run
-		// fail, as a file's uncaught error does.
-		if (repl.failedOnAPipe()) {
-			this.exitCode = 1;
 		}
 	}
 
@@ -1803,6 +1904,10 @@ public final class RontoLispCli {
 		this.out.println("  -X[:ALIASES] ARGS  Clojure: call a function with a map, as clj -X does:");
 		this.out.println("                     [fn] [key value]... [map], each read as EDN, over the");
 		this.out.println("                     aliases' :exec-fn and :exec-args");
+		this.out.println("  --nrepl[=PORT]     Clojure: serve the REPL over nREPL on localhost, for an");
+		this.out.println("                     editor (CIDER, Calva, Conjure) or clj -M -m nrepl.cmdline");
+		this.out.println("                     --connect; any free port unless PORT is given, written to");
+		this.out.println("                     .nrepl-port in the working directory");
 	}
 
 	private static String readFile(String path) {
@@ -1845,7 +1950,7 @@ public final class RontoLispCli {
 			Thread worker = new Thread(null, () -> {
 				int code;
 				try {
-					code = launch(rest).code();
+					code = launch(rest, stackBytes).code();
 				}
 				catch (Throwable ex) {
 					ex.printStackTrace();
@@ -1873,7 +1978,7 @@ public final class RontoLispCli {
 	 * exactly as it did when launch ran on thread 0.
 	 */
 	private static Launched joinLaunch(String[] args, long stackBytes) {
-		return SizedThread.call("main", stackBytes, () -> launch(args));
+		return SizedThread.call("main", stackBytes, () -> launch(args, stackBytes));
 	}
 
 	/**
@@ -1957,8 +2062,8 @@ public final class RontoLispCli {
 		}
 	}
 
-	/** The whole command line, answering how it ended. */
-	private static Launched launch(String[] args) {
+	/** The whole command line, on a thread of the given stack, answering how it ended. */
+	private static Launched launch(String[] args, long stackBytes) {
 		// By default stdout stays auto-flushing so each REPL input gets an immediate
 		// response. Opt in to a block-buffered, non-auto-flushing stream with
 		// --buffered-output: flushing on every print/format call interleaves badly when
@@ -1974,6 +2079,7 @@ public final class RontoLispCli {
 		}
 		if (!buffered) {
 			RontoLispCli cli = new RontoLispCli(System.in, System.out);
+			cli.stackBytes = stackBytes;
 			int code = runReporting(cli, args);
 			return new Launched(code, cli.quitRequested);
 		}
@@ -1983,6 +2089,7 @@ public final class RontoLispCli {
 		System.setOut(bufferedOut);
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
 		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
+		cli.stackBytes = stackBytes;
 		try {
 			int code = runReporting(cli, args);
 			return new Launched(code, cli.quitRequested);

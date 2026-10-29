@@ -20,7 +20,7 @@ public class CliOptions {
 			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--native", "--simd", "--blas", "--gpu",
 			"--parallel", "--no-prune", "--no-main", "--emit-wit", "--emit-js-glue", "--emit-pom", "--color",
 			"--no-color", "--disable-colors", "--warn-java-reflection", "--java-static", "--warnings-as-errors",
-			"--dump-ir");
+			"--dump-ir", "--nrepl");
 
 	// A key that may be REPEATED: every occurrence appends to the same value, joined with
 	// a newline, instead of the last one winning. -e is one program written in several

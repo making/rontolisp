@@ -56,6 +56,29 @@ final class ClojureBindingLowering {
 	 */
 	static List<LispVal> defForms(ClojureLowering ctx, LispVal form, List<LispVal> items,
 			@Nullable List<LispVal> hoisted) {
+		Def def = defined(ctx, form, items, hoisted);
+		if (def.repoints().isEmpty()) {
+			return def.forms();
+		}
+		List<LispVal> forms = new ArrayList<>(def.forms());
+		forms.addAll(def.repoints());
+		return forms;
+	}
+
+	/**
+	 * A {@code def} lowered: its forms, the store answering the definition's value last,
+	 * and behind them the stores re-pointing the cells a defn's earlier calls name
+	 * ({@link ClojureLowering#repointsRedefinitions}).
+	 *
+	 * @param forms the definition's forms
+	 * @param repoints the stores re-pointing the earlier calls, run once the root is
+	 * stored
+	 */
+	private record Def(List<LispVal> forms, List<LispVal> repoints) {
+	}
+
+	private static Def defined(ClojureLowering ctx, LispVal form, List<LispVal> items,
+			@Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ctx.defName(nameDatum, "def");
@@ -119,7 +142,7 @@ final class ClojureBindingLowering {
 		if (valueless) {
 			// the oracle's (def x) interns x and leaves a bound root alone; an
 			// unbound one holds the unbound root
-			return valuelessDefForms(ctx, key, dynamic, metaStore, hoisted);
+			return new Def(valuelessDefForms(ctx, key, dynamic, metaStore, hoisted), List.of());
 		}
 		List<LispVal> forms;
 		if (dynamic) {
@@ -159,7 +182,18 @@ final class ClojureBindingLowering {
 			// the class the oracle compiles a def'd fn literal to, which .getClass names
 			forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowering.varSym(key), key));
 		}
-		return forms;
+		List<LispVal> repoints = List.of();
+		if (ctx.repointsRedefinitions() && ctx.defnCounts.containsKey(key)) {
+			// the calls lowered while a defn held the var name its function cells: they
+			// reach the new root through the dispatcher, as the oracle's calls through
+			// the var do ((def f (memoize f)) memoizes a recursive f's own calls)
+			LispSymbol args = new LispSymbol("__clojure_args");
+			repoints = ctx.repointed(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+							ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+							ctx.callableApply(ClojureLowering.varSym(key), args)));
+		}
+		return new Def(forms, repoints);
 	}
 
 	/**
@@ -212,7 +246,17 @@ final class ClojureBindingLowering {
 	}
 
 	static LispVal def(ClojureLowering ctx, LispVal form, List<LispVal> items) {
-		List<LispVal> forms = defForms(ctx, form, items, null);
+		Def def = defined(ctx, form, items, null);
+		List<LispVal> forms = def.forms();
+		if (!def.repoints().isEmpty()) {
+			// the definition still answers its value: the stores run behind it
+			List<LispVal> answered = new ArrayList<>();
+			answered.add(ClojureLowerUtil.sym("prog1"));
+			answered
+				.add(forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
+			answered.addAll(def.repoints());
+			forms = List.of(ClojureLowerUtil.list(answered));
+		}
 		if (ctx.nestedDefAnswersVar) {
 			forms = new ArrayList<>(forms);
 			forms.add(ClojureVarLowering.definedVar(ctx, ctx.defName(items.get(1), "def")));
@@ -378,9 +422,12 @@ final class ClojureBindingLowering {
 		// a redefined defn gets a fresh internal name per definition: the call
 		// sites below it call the newest, and a value position captures the
 		// definition current at that point. The first definition keeps the
-		// bare var symbol, so a single defn lowers exactly as before.
-		int definition = ctx.defnCounts.merge(key, 1, Integer::sum);
-		LispSymbol fn = ClojureLowering.defnSym(key, definition);
+		// bare var symbol, so a single defn lowers exactly as before. Where the
+		// lowering re-points redefinitions, the calls lowered before it reach the
+		// new one too.
+		ClojureLowering.Definition defined = ctx.define(key);
+		int definition = defined.number();
+		LispSymbol fn = defined.fn();
 		String callName = fn.name();
 		List<LispVal> fnParts = new ArrayList<>();
 		fnParts.add(new LispSymbol("fn*")); // a special form: no program macro captures
@@ -479,6 +526,14 @@ final class ClojureBindingLowering {
 			forms.add(ClojureStateLowering.varDefnNotify(key,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key))));
+		}
+		// validated and notified, the definition is what the earlier calls reach: the
+		// cells they name, and the value cell the calls lowered while a def held the
+		// var read
+		forms.addAll(defined.repoints());
+		if (ctx.repointsRedefinitions() && !dynamic && !redef && ctx.valuedAbove.contains(key)) {
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
 		}
 		// the class the oracle compiles the function to, which .getClass names
 		forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),

@@ -309,4 +309,22 @@ final class ClojureCoreSpecials {
 		return SPECIALS.keySet();
 	}
 
+	/**
+	 * The specials a REPL binds on its thread, in table order: {@code *ns*},
+	 * {@code *file*} and {@code *source-path*}, the history ({@code *1}, {@code *2},
+	 * {@code *3}, {@code *e}) and the flags {@code clojure.main} binds
+	 * ({@link Special#mainBound}) -- what each session of an nREPL server owns, like the
+	 * oracle's session bindings.
+	 * @return the names
+	 */
+	static List<String> replThreadBound() {
+		List<String> names = new ArrayList<>();
+		for (Special special : SPECIALS.values()) {
+			if (special.mainBound()) {
+				names.add(special.name());
+			}
+		}
+		return names;
+	}
+
 }

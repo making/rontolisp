@@ -332,9 +332,11 @@ final class ClojureTestLowering {
 		// a redefined test gets a fresh function per definition, like a redefined
 		// defn: the first keeps the bare names, later ones version them, so the
 		// calls below each definition run the newest while the replaced root is
-		// still bound for the validate-and-notify statement behind them
-		int definition = ctx.defnCounts.merge(key, 1, Integer::sum);
-		LispSymbol fn = ClojureLowering.defnSym(key, definition);
+		// still bound for the validate-and-notify statement behind them (and where
+		// the lowering re-points redefinitions, the calls before it run it too)
+		ClojureLowering.Definition defined = ctx.define(key);
+		int definition = defined.number();
+		LispSymbol fn = defined.fn();
 		LispSymbol bodyFn = new LispSymbol(fn.name() + "%body");
 		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(bodyFn.name(), true);
 		String outer = ctx.testLocation;
@@ -359,6 +361,7 @@ final class ClojureTestLowering {
 		if (redefined != null) {
 			forms.add(redefined);
 		}
+		forms.addAll(defined.repoints());
 		return forms;
 	}
 

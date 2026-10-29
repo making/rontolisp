@@ -228,6 +228,8 @@ sections:
         title: Overview
       - file: clojure/repl.md
         title: REPL
+      - file: clojure/nrepl.md
+        title: nREPL
       - file: clojure/syntax.md
         title: Syntax
       - file: clojure/semantics.md

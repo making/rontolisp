@@ -51,6 +51,7 @@ departures from the oracle are [Deviations](deviations.md).
 | Page | Contents |
 |---|---|
 | [REPL](repl.md) | The `clojure>` REPL |
+| [nREPL](nrepl.md) | The REPL served to editors over nREPL |
 | [Syntax](syntax.md) | The reader: literals, characters, radix integers, keywords |
 | [Semantics](semantics.md) | What lowers to what; the refused forms |
 | [Deviations](deviations.md) | Where behavior departs from Clojure |

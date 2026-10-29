@@ -218,6 +218,14 @@ public final class ClojureLowering {
 	final Map<String, Integer> defnCounts = new HashMap<>();
 
 	/**
+	 * How many definitions of each var key a lowering that pins its calls lowered -- the
+	 * whole-program pass of an open program: each version's calls name that version's
+	 * cell, so a redefinition that re-points the callers ({@link #repointsRedefinitions})
+	 * re-points every one of them.
+	 */
+	final Map<String, Integer> pinnedDefnCounts = new HashMap<>();
+
+	/**
 	 * The metadata each var's newest definition recorded, by var key: what a {@code #'}
 	 * site lowered after it answers (see {@link ClojureVarLowering}). A session keeps it
 	 * across buffers, like the globals.
@@ -2173,13 +2181,21 @@ public final class ClojureLowering {
 		}
 	}
 
-	List<ClojureTopLevel> interact(ClojureReader buffer) {
+	/**
+	 * One buffer of a session, lowered after the buffers before it ran: each datum's
+	 * entry runs under the REPL's history ({@code *1}, {@code *e}).
+	 * @param buffer the buffer's reader
+	 * @param everyDatumEchoes whether an {@code ns} datum's entry echoes its nil too, as
+	 * the oracle's nREPL answers a value per form, where the REPL shows nothing
+	 * @return one entry per datum, in order, runtimes ahead
+	 */
+	List<ClojureTopLevel> interact(ClojureReader buffer, boolean everyDatumEchoes) {
 		this.open = true;
 		this.incremental = true;
 		this.repl = true;
 		this.threadBinders = true;
 		this.reader = buffer;
-		return lowerAfterRun(buffer.readAll(), buffer, true);
+		return lowerAfterRun(buffer.readAll(), buffer, true, everyDatumEchoes);
 	}
 
 	/**
@@ -2219,7 +2235,7 @@ public final class ClojureLowering {
 			finally {
 				this.decodingFor = outerHost;
 			}
-			return lowerAfterRun(List.of(datum), null, false);
+			return lowerAfterRun(List.of(datum), null, false, false);
 		}
 		finally {
 			this.reader = outerReader;
@@ -2244,9 +2260,12 @@ public final class ClojureLowering {
 	 * @param source the reader they came out of, or null for datums with none
 	 * @param history whether each datum's value and exception go to the REPL's history
 	 * ({@code *1}, {@code *e}) -- a session's -- or the last form answers it
+	 * @param everyDatumEchoes whether, under the history, an {@code ns} datum's entry
+	 * echoes its nil too
 	 * @return one entry per datum, in order, runtimes ahead
 	 */
-	private List<ClojureTopLevel> lowerAfterRun(List<LispVal> datums, @Nullable ClojureReader source, boolean history) {
+	private List<ClojureTopLevel> lowerAfterRun(List<LispVal> datums, @Nullable ClojureReader source, boolean history,
+			boolean everyDatumEchoes) {
 		resolveProject(datums);
 		// A buffer's pre-scan must not clobber what earlier buffers already
 		// defined: its inits evaluate against the OLD binding (e.g. (def p
@@ -2269,9 +2288,10 @@ public final class ClojureLowering {
 			// an ns form shows nothing, also when its requires loaded namespaces
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
+			SourceLocation at = this.reader == null ? null : this.reader.locate(datum);
 			if (history) {
-				if (!forms.isEmpty() || !ns) {
-					out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
+				if (!forms.isEmpty() || !ns || everyDatumEchoes) {
+					out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns || everyDatumEchoes, at));
 				}
 			}
 			else {
@@ -2280,7 +2300,7 @@ public final class ClojureLowering {
 				if (ns || forms.isEmpty()) {
 					forms.add(NIL_CONST);
 				}
-				out.add(new ClojureTopLevel(forms, true));
+				out.add(new ClojureTopLevel(forms, true, at));
 			}
 		}
 		// the contents of the resources its literal names found are kept before the
@@ -2868,12 +2888,77 @@ public final class ClojureLowering {
 	 * The function cell a {@code defn} name currently names: the latest definition's
 	 * symbol once the name is redefined, the bare var symbol otherwise (a forward
 	 * reference, a single definition, or any non-{@code defn} function, which never
-	 * versions).
+	 * versions). Where redefinitions re-point the callers
+	 * ({@link #repointsRedefinitions}), the cell the calls already name, which every
+	 * redefinition points at its function.
 	 * @param key the var key
 	 * @return the current function-cell symbol
 	 */
 	LispSymbol currentDefnSym(String key) {
-		return defnSym(key, this.defnCounts.getOrDefault(key, 0));
+		return defnSym(key, (repointsRedefinitions() ? this.pinnedDefnCounts : this.defnCounts).getOrDefault(key, 0));
+	}
+
+	/**
+	 * Whether a redefinition re-points the function cells the calls lowered before it
+	 * name, so it reaches every caller, as the oracle's calls through the var do: an
+	 * incremental lowering (a session's buffer, a datum lowered as the program runs)
+	 * whose target resolves a function when the call runs -- the interpreter; a compiled
+	 * class links its calls when it is compiled ({@link #carriesRuntimes}). A call costs
+	 * what it did: the cell it reads is the one the redefinition stores.
+	 * @return {@code true} where a redefinition re-points its callers
+	 */
+	boolean repointsRedefinitions() {
+		return this.incremental && !this.carriesRuntimes;
+	}
+
+	/**
+	 * One definition of a {@code defn}-like var (a {@code defn}, a {@code deftest}).
+	 *
+	 * @param number the 1-based definition number
+	 * @param fn the function cell it defines its function under: the bare var symbol for
+	 * the first, a fresh one per redefinition ({@link #defnSym}), so the replaced
+	 * function is still bound while the definition validates and notifies
+	 * @param repoints what points the cells earlier calls name at the new function, once
+	 * it is defined: none unless the lowering re-points redefinitions
+	 */
+	record Definition(int number, LispSymbol fn, List<LispVal> repoints) {
+	}
+
+	/**
+	 * The next definition of a {@code defn}-like var.
+	 * @param key the var key
+	 * @return the definition
+	 */
+	Definition define(String key) {
+		int number = this.defnCounts.merge(key, 1, Integer::sum);
+		LispSymbol fn = defnSym(key, number);
+		if (!repointsRedefinitions()) {
+			this.pinnedDefnCounts.put(key, number);
+			return new Definition(number, fn, List.of());
+		}
+		return new Definition(number, fn,
+				number > 1 ? repointed(key, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)) : List.of());
+	}
+
+	/**
+	 * The stores pointing every function cell a call of the var may name -- the bare var
+	 * symbol and each version a pinning pass lowered calls of -- at a function, for a
+	 * lowering that re-points redefinitions.
+	 * @param key the var key
+	 * @param function the lowered function
+	 * @return the stores
+	 */
+	List<LispVal> repointed(String key, LispVal function) {
+		List<LispVal> stores = new ArrayList<>();
+		int pinned = Math.max(1, this.pinnedDefnCounts.getOrDefault(key, 0));
+		for (int version = 1; version <= pinned; version++) {
+			stores
+				.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-function"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), defnSym(key, version))),
+						function));
+		}
+		return stores;
 	}
 
 	/** The current namespace's state, made on first use. */

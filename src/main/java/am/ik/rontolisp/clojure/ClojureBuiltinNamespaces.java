@@ -267,6 +267,17 @@ final class ClojureBuiltinNamespaces {
 	}
 
 	/**
+	 * The shipped namespaces a program may require: every one but those the lowering
+	 * loads for itself ({@link #INTERNAL}).
+	 * @return the names
+	 */
+	static Set<String> requirable() {
+		Set<String> names = new java.util.TreeSet<>(SHIPPED.keySet());
+		names.removeAll(INTERNAL);
+		return names;
+	}
+
+	/**
 	 * Whether the namespace is one the lowering loads for itself ({@link #INTERNAL}).
 	 * @param ns the namespace
 	 * @return whether no project file shadows it and no program requires it

@@ -186,17 +186,19 @@ class ClojureSessionTest {
 	}
 
 	@Test
-	void aLaterBufferMemoizesWhatAnEarlierOneDefined() {
-		// (def p (memoize p)) in a later buffer captures the earlier buffer's
-		// function cell, like the same two forms in one file.
-		ClojureSession session = new ClojureSession();
-		session.read("(defn memoized [x] (* x 2))");
-		List<String> redefined = session.read("(def memoized (memoize memoized))")
-			.stream()
-			.flatMap(top -> top.forms().stream())
-			.map(LispVal::print)
-			.toList();
-		assertThat(redefined).anyMatch(form -> form.contains("#'|c%memoized|"));
+	void aLaterBufferRedefinitionReachesTheCallsAnEarlierOneLowered() {
+		// the oracle's calls go through the var, so a redefinition reaches every
+		// caller: a session re-points the function cell the earlier buffers' calls
+		// name (an eval'd redefinition too), a value captured before keeps the
+		// replaced function, (def p (memoize p)) captures p and memoizes its own
+		// recursive calls, and a defn replacing a def reaches the calls reading the
+		// value cell
+		assertThat(runSession("(defn sg [] 1) (defn sf [] (sg))", "(def sh sg)", "(defn sg [] 2)",
+				"(println (sf) (sh))", "(eval '(defn sg [] 3))", "(println (sf))", "(def calls (atom 0))",
+				"(defn sfib [n] (swap! calls inc) (if (< n 2) n (+ (sfib (- n 1)) (sfib (- n 2)))))",
+				"(def sfib (memoize sfib))", "(println (sfib 25) @calls)", "(def sq 5) (defn suq [] (sq))",
+				"(defn sq [] :fn)", "(println (suq))"))
+			.isEqualTo("2 1\n3\n75025 26\n:fn\n");
 	}
 
 	@Test
@@ -394,13 +396,13 @@ class ClojureSessionTest {
 
 	@Test
 	void aLaterBufferTestRedefinitionNotifiesTheWatchesAnEarlierOneAdded() {
-		// and a later buffer's deftest: the calls below it run the newest
-		// definition while the watches see the replaced test function
+		// and a later buffer's deftest: the calls run the newest definition, an
+		// earlier buffer's too, while the watches see the replaced test function
 		assertThat(runSession("(ns stest (:require [clojure.test :refer :all]))",
-				"(deftest st (do (println :old-body) (is (= 1 1))))",
+				"(deftest st (do (println :old-body) (is (= 1 1))))", "(defn run-st [] (st))",
 				"(add-watch #'st :k (fn [k v o n] (println :test (fn? o) (fn? n))))",
-				"(deftest st (do (println :new-body) (is (= 2 2))))", "(st)"))
-			.isEqualTo(":test true true\n:new-body\n");
+				"(deftest st (do (println :new-body) (is (= 2 2))))", "(st)", "(run-st)"))
+			.isEqualTo(":test true true\n:new-body\n:new-body\n");
 	}
 
 	@Test

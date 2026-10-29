@@ -120,6 +120,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP and the `FetchResponseShape` plist; its transports (JDK, `wasi:http`, `--host-fetch`, the `--native` runner) and the cross-backend corpus (with the Clojure client's) with its known divergences
 - [http-server.md](http-server.md) -- the server-side HTTP value model since the Clack cutover
+- [nrepl.md](nrepl.md) -- `rontolisp --nrepl`: the Clojure session over nREPL (bencode over TCP, the ops an editor needs in nREPL 1.3's shapes), one runtime with per-session thread bindings, per-message `*out*`/`*err*`, the cooperative interrupt, completions, the cmdline client's position metadata, a redefinition reaching every caller in an open lowering (the measurement)
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host)
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*`
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`
@@ -147,7 +148,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## JVM backend
 
-- [jvm-run-time-lowering.md](jvm-run-time-lowering.md) -- a Clojure program that lowers as it runs on the JVM: what opens a program (its run-time code reaching a verb, so a macro body's verbs and a namespace mapping's core vars open nothing; a value or a run-time expansion does), the host class carrying its image and the compiler, each verb compiled into a fragment class linked against it (fields shared through `ConstantPool.linkFields`, functions by name and `$PartN`-located, function values routed by id, the transport of a verb's arguments), the runtimes a host carries up front, the limits
+- [jvm-run-time-lowering.md](jvm-run-time-lowering.md) -- a Clojure program that lowers as it runs on the JVM: what opens a program (its run-time code reaching a verb, so a macro body's verbs and a namespace mapping's core vars open nothing; a value or a run-time expansion does), the host class carrying its image and the compiler, each verb compiled into a fragment class linked against it (fields shared through `ConstantPool.linkFields`, functions by name and `$PartN`-located, function values routed by id, the transport of a verb's arguments), a name a fragment defines resolved by the host's forms through `_lookup`'s miss, the native binary's compiler archive, the runtimes a host carries up front, the limits
 - [jvm-export.md](jvm-export.md) -- `rontolisp:jvm-export`, `--no-main`, `-o out.jar`, the `-o` path-to-class-name rule, the Maven plugin
 - [jvm-int-fusion.md](jvm-int-fusion.md) -- integer expression-tree fusion into unboxed arithmetic; the checks between leaves that keep the interpreter's order, and the probe a failed one calls
 - [jvm-double-arithmetic.md](jvm-double-arithmetic.md) -- `hasDoubleLiteral` routing and unboxed IEEE operations; the exact prefix a float site folds before its raw fold (`FloatFold`, the `_addd` / `_rat_add_f64` steps), on every backend; one-operand sites (`(- x)`, `(/ x)`, `abs`, `signum`, `expt`, `random`) unboxed only on a proven float

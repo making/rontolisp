@@ -159,6 +159,13 @@ final class ClojureReader {
 	private final Map<LispVal, Integer> offsets = new IdentityHashMap<>();
 
 	/**
+	 * The place a list's dropped source-position metadata named ({@link #readMeta}): the
+	 * line and column of the text the form was printed from, which a form sent printed
+	 * with {@code *print-meta*} carries, and the oracle's reports name.
+	 */
+	private final Map<LispVal, SourceLocation> printedPositions = new IdentityHashMap<>();
+
+	/**
 	 * The parameters of the {@code #(...)} being read, by argument number ({@code -1} for
 	 * {@code %&}), or null outside one.
 	 */
@@ -297,6 +304,10 @@ final class ClojureReader {
 	 * @return the position
 	 */
 	@Nullable SourceLocation locate(LispVal datum) {
+		SourceLocation printed = this.printedPositions.get(datum);
+		if (printed != null) {
+			return printed;
+		}
 		Integer offset = this.offsets.get(datum);
 		if (offset == null) {
 			return null;
@@ -312,6 +323,14 @@ final class ClojureReader {
 	 */
 	SourceLocation here(String file) {
 		return new SourceLocation(file, this.line, this.column);
+	}
+
+	/**
+	 * Where the read stands now: the offset of the next character it reads.
+	 * @return the offset
+	 */
+	int position() {
+		return this.pos;
 	}
 
 	List<LispVal> readAll() {
@@ -737,7 +756,54 @@ final class ClojureReader {
 	private LispVal readMeta() {
 		next();
 		LispVal meta = readRequired();
-		return list(ClojureLowerUtil.READER_META, readRequired(), meta);
+		LispVal form = readRequired();
+		if (!this.edn && isSourcePosition(meta) && isListForm(form)) {
+			// the place the oracle's reader puts on every list it reads, which a form
+			// printed with *print-meta* spells out (nrepl.cmdline sends each form so):
+			// source information no value carries, like this reader's own lists
+			this.printedPositions.put(form,
+					new SourceLocation(this.file, positionOf(meta, ":line", 1), positionOf(meta, ":column", 1)));
+			return form;
+		}
+		return list(ClojureLowerUtil.READER_META, form, meta);
+	}
+
+	/** The keys of the source position the oracle's reader puts on a list. */
+	private static final Set<String> POSITION_KEYS = Set.of(":line", ":column", ":end-line", ":end-column");
+
+	/** Whether a metadata datum is a map of a source position and nothing else. */
+	private static boolean isSourcePosition(LispVal meta) {
+		List<LispVal> items = ClojureLowerUtil.items(meta);
+		if (items == null || items.size() < 3 || items.get(0) != HASH_MAP || items.size() % 2 == 0) {
+			return false;
+		}
+		for (int i = 1; i < items.size(); i += 2) {
+			if (!(items.get(i) instanceof LispSymbol key) || !POSITION_KEYS.contains(key.name())
+					|| !(items.get(i + 1) instanceof am.ik.rontolisp.LispInteger)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The value of one key of a source-position map, or the fallback. */
+	private static int positionOf(LispVal meta, String key, int fallback) {
+		List<LispVal> items = ClojureLowerUtil.items(meta);
+		for (int i = 1; items != null && i + 1 < items.size(); i += 2) {
+			if (items.get(i) instanceof LispSymbol named && named.name().equals(key)
+					&& items.get(i + 1) instanceof am.ik.rontolisp.LispInteger value) {
+				return (int) value.value();
+			}
+		}
+		return fallback;
+	}
+
+	/**
+	 * Whether a datum is a list -- a call, a special form -- and no collection literal.
+	 */
+	private static boolean isListForm(LispVal form) {
+		return form instanceof am.ik.rontolisp.LispCons cons && cons.car() != VECTOR && cons.car() != HASH_MAP
+				&& cons.car() != HASH_SET;
 	}
 
 	/**
@@ -1726,8 +1792,8 @@ final class ClojureReader {
 	}
 
 	private LispReadException error(String message) {
-		return new LispReadException(
-				this.file == null ? message : this.file + ":" + this.line + ":" + this.column + ": " + message);
+		// the position prefixes the message where the read has a file
+		return new LispReadException(message, new SourceLocation(this.file, this.line, this.column));
 	}
 
 }

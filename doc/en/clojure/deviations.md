@@ -347,22 +347,22 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   running one, so every call loads a class (the output carries the compiler: beside a
   `.class`, inside a `.jar`). A wasm module carries no lowering, so on both wasm backends
   they throw an `UnsupportedOperationException` at run time, where the oracle evaluates and
-  resolves. On the JVM a name the program only declares and such a call defines stays
-  undefined for the program's own compiled forms. Such a call lowers like one REPL input, in
+  resolves. A name the program only declares and such a call defines answers the program's
+  own forms from then on, as the oracle's. Such a call lowers like one REPL input, in
   the namespace `*ns*` holds:
-  what it defines joins the program for the later calls and inputs, but the forms lowered
-  before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
-  after it, and a name only it defines is unknown to the program's own forms (an `intern`
-  of a quoted name is not: it defines the var where it stands). A program that may make
-  such a call as it runs -- the call itself, or the verb taken as a value or as a var --
-  lowers open, like a session, so its protocols dispatch through the class walk and a name
-  it only declares stays open. A call in a macro body, or in a function only macro bodies
-  call, runs while the program lowers and opens it only where the program also expands
-  macros as it runs or takes that macro's var; a verb taken out of a namespace's mapping
-  (`@(get (ns-map 'user) 'eval)`) never opens it, so called over computed arguments in a
-  program nothing else opens, it throws the `UnsupportedOperationException`. A value no
-  literal spells (a function, an atom) stands in an `eval`'d form as itself, where the
-  oracle embeds a function but refuses an
+  what it defines joins the program for the later calls and inputs. On the interpreter a
+  redefined `defn` reaches every caller, as in the REPL; a JVM class's own compiled forms
+  keep calling the definition they were compiled against. A name only such a call defines is
+  unknown to the program's own forms (an `intern` of a quoted name is not: it defines the var
+  where it stands). A program that may make such a call as it runs -- the call itself, or
+  the verb taken as a value or as a var -- lowers open, like a session, so its protocols
+  dispatch through the class walk and a name it only declares stays open. A call in a macro
+  body, or in a function only macro bodies call, runs while the program lowers and opens it
+  only where the program also expands macros as it runs or takes that macro's var; a verb
+  taken out of a namespace's mapping (`@(get (ns-map 'user) 'eval)`) never opens it, so
+  called over computed arguments in a program nothing else opens, it throws the
+  `UnsupportedOperationException`. A value no literal spells (a function, an atom) stands in
+  an `eval`'d form as itself, where the oracle embeds a function but refuses an
   atom (`Can't embed object in code`); a form that does not lower throws a
   `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
   `resolve` of a computed symbol run while the program lowers on every backend, and a

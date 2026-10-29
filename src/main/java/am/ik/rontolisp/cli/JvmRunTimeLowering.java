@@ -7,6 +7,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -115,9 +116,16 @@ public final class JvmRunTimeLowering {
 
 		private final MethodHandle apply;
 
-		private JvmLinkage.Table table;
+		/** What the host and its fragments define, replaced whole as a fragment joins. */
+		private volatile JvmLinkage.Table table;
 
 		private int fragments;
+
+		/**
+		 * The function value of an id whose class has no box of its own for it, one per
+		 * id, so every class answers the same object.
+		 */
+		private final Map<Integer, Object[]> boxes = new ConcurrentHashMap<>();
 
 		/**
 		 * Each class's function ids, and its spread dispatcher, found when first needed:
@@ -145,11 +153,12 @@ public final class JvmRunTimeLowering {
 						() -> ClojureProgramLowering.read(read.source(), Features.JVM, read.entryFile(),
 								read.standards(), read.loader(this.host.getClassLoader())));
 				this.ranges = List.of(new Range(this.host, 0, this.table.funcIdEnd()));
-				MethodHandle router = MethodHandles.lookup()
-					.findVirtual(Session.class, "foreignApply",
-							MethodType.methodType(Object.class, Object.class, Object.class, int.class))
-					.bindTo(this);
-				lookup.findStaticSetter(this.host, JvmLinkage.FOREIGN_FIELD, MethodHandle.class).invoke(router);
+				install(JvmLinkage.FOREIGN_FIELD, "foreignApply",
+						MethodType.methodType(Object.class, Object.class, Object.class, int.class));
+				install(JvmLinkage.FOREIGN_LOOKUP_FIELD, "foreignLookup",
+						MethodType.methodType(Object[].class, Object.class));
+				install(JvmLinkage.FOREIGN_FUNCREF_FIELD, "foreignFuncref",
+						MethodType.methodType(Object.class, int.class));
 			}
 			catch (RuntimeException | Error ex) {
 				throw ex;
@@ -157,6 +166,12 @@ public final class JvmRunTimeLowering {
 			catch (Throwable ex) {
 				throw new IllegalStateException(this.host.getName() + ": cannot start its run-time lowering", ex);
 			}
+		}
+
+		/** Sets a host field to a method of this session. */
+		private void install(String field, String method, MethodType type) throws Throwable {
+			MethodHandle handle = MethodHandles.lookup().findVirtual(Session.class, method, type).bindTo(this);
+			this.lookup.findStaticSetter(this.host, field, MethodHandle.class).invoke(handle);
 		}
 
 		@Nullable Object lower(Object verb, Object args, Object constants, Object refuse, Object namespace) throws Throwable {
@@ -249,22 +264,49 @@ public final class JvmRunTimeLowering {
 		}
 
 		/**
+		 * A name a class's registry does not answer: the row of the function of that name
+		 * the host or a fragment defines -- {@code {Integer id, Integer arity}}, a
+		 * variadic one's arity its negated parameter count, the registry's shape -- or
+		 * null. Every function a table lists is a row of its own class, so the class that
+		 * made the id takes it.
+		 */
+		Object @Nullable [] foreignLookup(Object name) {
+			if (!(name instanceof String symbol)) {
+				return null;
+			}
+			JvmLinkage.Function fn = this.table.functions().get(symbol);
+			if (fn == null) {
+				return null;
+			}
+			return new Object[] { fn.id(), fn.variadic() ? -fn.paramCount() : fn.paramCount() };
+		}
+
+		/**
+		 * The function value of an id a class's own table does not hold: the box of the
+		 * class that made it, else one this session keeps for it.
+		 */
+		Object foreignFuncref(int id) throws Throwable {
+			Range owner = owner(id);
+			Object box = owner.box(this.lookup, id);
+			return box != null ? box : this.boxes.computeIfAbsent(id, key -> new Object[] { key });
+		}
+
+		private Range owner(int id) {
+			for (Range range : this.ranges) {
+				if (id >= range.start && id < range.end) {
+					return range;
+				}
+			}
+			throw new IllegalStateException("no class of " + this.host.getName() + " made function " + id);
+		}
+
+		/**
 		 * A function value of another class applied: routed by its id to the spread
 		 * dispatcher of the class that made it.
 		 */
 		@Nullable Object foreignApply(Object fn, Object args, int depth) throws Throwable {
 			int id = fn instanceof Object[] cell && cell.length > 0 && cell[0] instanceof Integer i ? i : -1;
-			Range owner = null;
-			for (Range range : this.ranges) {
-				if (id >= range.start && id < range.end) {
-					owner = range;
-					break;
-				}
-			}
-			if (owner == null) {
-				throw new IllegalStateException("no class of " + this.host.getName() + " made function " + id);
-			}
-			return owner.dispatcher(this.lookup).invoke(fn, args, depth);
+			return owner(id).dispatcher(this.lookup).invoke(fn, args, depth);
 		}
 
 	}
@@ -309,10 +351,36 @@ public final class JvmRunTimeLowering {
 
 		private volatile @Nullable MethodHandle dispatcher;
 
+		private volatile @Nullable MethodHandle funcref;
+
 		Range(Class<?> owner, int start, int end) {
 			this.owner = owner;
 			this.start = start;
 			this.end = end;
+		}
+
+		/**
+		 * The class's own box of one of its ids ({@code _funcref}), or null where it has
+		 * none: no table at all, or none covering the id.
+		 */
+		@Nullable Object box(MethodHandles.Lookup lookup, int id) throws Throwable {
+			MethodHandle found = this.funcref;
+			if (found == null) {
+				try {
+					found = lookup.findStatic(this.owner, "_funcref", MethodType.methodType(Object.class, int.class));
+				}
+				catch (NoSuchMethodException ex) {
+					found = MethodHandles.constant(Object.class, null);
+					found = MethodHandles.dropArguments(found, 0, int.class);
+				}
+				this.funcref = found;
+			}
+			try {
+				return (Object) found.invokeExact(id);
+			}
+			catch (ArrayIndexOutOfBoundsException ex) {
+				return null;
+			}
 		}
 
 		MethodHandle dispatcher(MethodHandles.Lookup lookup) throws ReflectiveOperationException {

@@ -4485,6 +4485,30 @@ cases:
       :refused
       Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
       thrown here
+  - name: a-declared-name-a-run-time-eval-defines-is-called-where-the-program-names-it
+    # A name the program only declares, defined later by eval or load-string, is
+    # called, applied and taken as a value by the program's own forms from then on;
+    # before that a call is the unbound var's. A JVM host's forms find the definition
+    # in the class compiled for the eval. Oracle-identical (clj 1.12.6, 2026-10-30).
+    host: eval and load-string define declared names
+    skip:
+      wasm: a wasm module carries no lowering, so the verbs refuse at run time
+      wasm_component: a wasm module carries no lowering, so the verbs refuse at run time
+    source: |
+      (ns rtl-late)
+      (declare lb-f lb-h lb-k)
+      (defn lb-g [] (lb-f 2))
+      (defn lb-later [] (lb-k 1 2))
+      (eval '(defn lb-f [x] (* 10 x)))
+      (load-string "(defn lb-h [] :h)")
+      (println (lb-g) (lb-h) (map lb-f [1 2]) (fn? lb-f) (apply lb-f [3]))
+      (println (try (lb-later) (catch IllegalStateException e (ex-message e))))
+      (eval '(defn lb-k [a b] (+ a b)))
+      (println (lb-later))
+    expected: |
+      20 :h (10 20) true 30
+      Attempting to call unbound fn: #'rtl-late/lb-k
+      3
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
@@ -16217,18 +16241,22 @@ cases:
       #'user/f67-im 3 [1 f67-im] #'user/f67-im2 [2 f67-im2]
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
-    # load-string of a literal runs where the call stands.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # load-string of a literal runs where the call stands; a namespace its
+    # text switches to is the load's own, *ns* bound around it like the
+    # oracle's Compiler/load.
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the switch 2026-10-30).
     source: |
       (println (requiring-resolve 'clojure.string/join))
       (println (load-string "(+ 1 2)"))
       (println (load-string "(def f67-ls 40) (+ f67-ls 2)"))
       (println f67-ls)
+      (println (load-string "(ns f67-other) (def f67-ld 1) (str *ns*)") (str *ns*))
     expected: |
       #'clojure.string/join
       3
       42
       40
+      f67-other user
   - name: checked-arithmetic-is-plain-arithmetic-that-never-overflows
     # inc', dec', +', -' and *' are the plain verbs: integers are bignums here,
     # so nothing overflows, and one past the long range is the oracle's BigInt,

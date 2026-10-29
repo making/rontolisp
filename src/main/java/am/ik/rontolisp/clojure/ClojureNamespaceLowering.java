@@ -1120,37 +1120,20 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * The text of the file a literal {@code load-file} path names, resolved like a
-	 * {@code load} path: root-relative with a leading slash, else under the current
-	 * namespace's directory, trying the path itself and its {@code .clj} and
-	 * {@code .cljc} extensions.
+	 * The text of the file a literal {@code load-file} path names: a path of the file
+	 * system, relative to the working directory, as the oracle's
+	 * {@code Compiler/loadFile} opens it -- whatever namespace the call stands in.
 	 * @param ctx the hub
 	 * @param path the path
 	 * @return the file's text
 	 */
 	static String fileTextOf(ClojureLowering ctx, String path) {
-		String relative;
-		if (path.startsWith("/")) {
-			relative = path.substring(1);
+		String text = ctx.files.read(ctx.files.resolve(null, path));
+		if (text == null) {
+			// the oracle's FileInputStream refusal
+			throw new LispReadException(path + " (No such file or directory)");
 		}
-		else {
-			String own = ClojureSourcePath.resourceOf(ctx.currentNs);
-			relative = own.substring(0, own.lastIndexOf('/') + 1) + path;
-		}
-		List<String> candidates = new ArrayList<>();
-		candidates.add(relative);
-		if (!relative.endsWith(".clj") && !relative.endsWith(".cljc")) {
-			candidates.add(relative + ".clj");
-			candidates.add(relative + ".cljc");
-		}
-		for (String candidate : candidates) {
-			ClojureSourcePath.Found found = ctx.sourcePath.findFile(candidate);
-			if (found != null) {
-				return found.text();
-			}
-		}
-		throw new LispReadException("Could not locate " + relative + ".clj or " + relative + ".cljc on the source path"
-				+ ctx.sourcePath.describeRoots());
+		return text;
 	}
 
 	static List<String> referNames(LispVal arg, LispVal spec) {
