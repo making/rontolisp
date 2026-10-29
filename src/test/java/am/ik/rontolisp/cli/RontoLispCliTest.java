@@ -931,12 +931,20 @@ class RontoLispCliTest {
 	}
 
 	@Test
-	void inlineProgramBesideAnInputFileIsAClearError() throws Exception {
+	void aProgramTheModeCannotTakeIsAClearError() throws Exception {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, "(print 1)");
 		assertThatThrownBy(() -> runCli("", file.toString(), "-e", "(print 2)"))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("-e/--eval cannot be combined with the input file");
+		// --nrepl serves a Clojure REPL: refused before anything listens
+		assertThatThrownBy(() -> runCli("", "--nrepl", file.toString())).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--nrepl serves a Clojure REPL over nREPL: it takes no program");
+		assertThatThrownBy(() -> runCli("", "--nrepl", "--source-language", "scheme"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--nrepl serves Clojure: --source-language scheme");
+		assertThatThrownBy(() -> runCli("", "--nrepl=70000")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--nrepl=PORT expects a port between 0 and 65535, not '70000'");
 	}
 
 	@Test

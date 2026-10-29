@@ -351,10 +351,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   resolves. On the JVM a name the program only declares and such a call defines stays
   undefined for the program's own compiled forms. Such a call lowers like one REPL input, in
   the namespace `*ns*` holds:
-  what it defines joins the program for the later calls and inputs, but the forms lowered
-  before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
-  after it, and a name only it defines is unknown to the program's own forms (an `intern`
-  of a quoted name is not: it defines the var where it stands). A program naming such a
+  what it defines joins the program for the later calls and inputs. On the interpreter a
+  redefined `defn` reaches every caller, as in the REPL; a JVM class's own compiled forms
+  keep calling the definition they were compiled against. A name only such a call defines is
+  unknown to the program's own forms (an `intern` of a quoted name is not: it defines the var
+  where it stands). A program naming such a
   call lowers open, like a session, so its protocols dispatch through the class walk and
   a name it only declares stays open. A value no literal spells (a function, an atom)
   stands in an `eval`'d form as itself, where the oracle embeds a function but refuses an

@@ -50,6 +50,7 @@ strict なリストビュー上で動く seq 群、`equal` ハッシュテーブ
 | ページ | 内容 |
 |---|---|
 | [REPL](repl.md) | `clojure>` REPL |
+| [nREPL](nrepl.md) | nREPL でエディタに提供する REPL |
 | [構文](syntax.md) | リーダ:リテラル、文字、基数整数、キーワード |
 | [セマンティクス](semantics.md) | 低下対応表。拒否されるフォーム |
 | [仕様との差異](deviations.md) | Clojure との動作の差異 |

@@ -278,6 +278,19 @@ public final class LispEvaluator {
 	 */
 	private @Nullable ClojureRunTime clojureRunTime;
 
+	/**
+	 * How many threads an interrupt is pending for ({@link #interrupt}), read at every
+	 * function call and loop step: the evaluation a request names stops at its next one,
+	 * and every other pays one volatile read while none is pending.
+	 */
+	private final java.util.concurrent.atomic.AtomicInteger pendingInterrupts = new java.util.concurrent.atomic.AtomicInteger();
+
+	/**
+	 * The threads an interrupt is pending for, looked up without a lock: a thread that
+	 * never takes a step again (blocked where no interrupt wakes it) slows no other.
+	 */
+	private final Set<Thread> interruptedThreads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
 	private boolean usocketLibraryLoaded = false;
 
 	private boolean witLibraryLoaded = false;
@@ -4283,6 +4296,7 @@ public final class LispEvaluator {
 				pc++;
 				continue;
 			}
+			pollInterrupt();
 			try {
 				int jump = evalTagbodyStatement(body.get(pc), env, labels, exitTo);
 				pc = jump == NO_JUMP ? pc + 1 : jump + 1;
@@ -5598,6 +5612,100 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Asks the evaluation running on a thread to stop: at its next function call or loop
+	 * step it throws {@link LispInterruptSignal}, which no handler catches and every
+	 * {@code unwind-protect} cleanup runs for. The thread is interrupted too, so a call
+	 * blocked in a sleep or a wait wakes. What an nREPL {@code interrupt} does.
+	 * @param thread the thread
+	 */
+	public void interrupt(Thread thread) {
+		if (this.interruptedThreads.add(thread)) {
+			this.pendingInterrupts.incrementAndGet();
+		}
+		thread.interrupt();
+	}
+
+	/**
+	 * Drops an interrupt still pending for the calling thread -- one that came after its
+	 * evaluation took its last step -- and the thread's interrupt status with it.
+	 */
+	public void clearInterrupt() {
+		if (this.interruptedThreads.remove(Thread.currentThread())) {
+			this.pendingInterrupts.decrementAndGet();
+		}
+		Thread.interrupted();
+	}
+
+	/**
+	 * Runs the body with each special variable bound on the calling thread, as a
+	 * {@code let} of it binds, and writes back into the map the value each holds when the
+	 * body ends, also when it throws: the bindings a session keeps between the inputs it
+	 * runs on a thread of its own (an nREPL session's {@code *ns*}, {@code *1} ...). Each
+	 * name is proclaimed special, so a reference reads the binding -- a standard
+	 * stream's, {@code *error-output*}, too -- and must have a global value already.
+	 * @param bindings each special's name and value, updated with its value at the end
+	 * @param body the body
+	 */
+	public void withThreadBindings(Map<String, LispVal> bindings, Runnable body) {
+		List<String> names = List.copyOf(bindings.keySet());
+		for (String name : names) {
+			this.specialVars.add(name);
+			this.dynamicBindings.push(name, Objects.requireNonNull(bindings.get(name)));
+		}
+		try {
+			body.run();
+		}
+		finally {
+			for (String name : names) {
+				LispVal value = this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : null;
+				if (value != null) {
+					bindings.put(name, value);
+				}
+				this.dynamicBindings.pop(name);
+			}
+		}
+	}
+
+	/**
+	 * A character stream over a Java sink or source, as a stream value the print and read
+	 * families take: a {@code Writer} is an output stream, a {@code Reader} an input one.
+	 * What an nREPL session binds {@code *out*} and {@code *err*} to.
+	 * @param entry the sink or source
+	 * @return the stream value
+	 */
+	public LispVal openJavaStream(java.io.Closeable entry) {
+		return Environment.streamValue(this.globalEnv.openJavaStream(entry), LispLayout.Kinds.FILE);
+	}
+
+	/**
+	 * Removes a stream {@link #openJavaStream} answered from the stream table, leaving
+	 * its sink or source open.
+	 * @param stream the stream value
+	 */
+	public void closeJavaStream(LispVal stream) {
+		if (stream instanceof LispInstance instance && instance.slot(0) instanceof LispInteger handle) {
+			this.globalEnv.closeJavaStream(handle.value());
+		}
+	}
+
+	/** Stops the calling thread's evaluation where an interrupt is pending for it. */
+	private void pollInterrupt() {
+		if (this.pendingInterrupts.get() != 0) {
+			stopIfInterrupted();
+		}
+	}
+
+	private void stopIfInterrupted() {
+		if (!this.interruptedThreads.remove(Thread.currentThread())) {
+			return;
+		}
+		this.pendingInterrupts.decrementAndGet();
+		// the status only woke a blocked call: the cleanups on the way out may block
+		Thread.interrupted();
+		throw new LispInterruptSignal();
+	}
+
+	/**
 	 * Captures the evaluator's control state -- the stacks every binding form pushes
 	 * before its body and pops in a {@code finally} -- so a caller that survives a
 	 * {@link StackOverflowError} can put it back. The overflow does unwind through those
@@ -5896,8 +6004,12 @@ public final class LispEvaluator {
 		return value;
 	}
 
-	/** The name of the namespace the Clojure {@code *ns*} holds, {@code user} unbound. */
-	private String currentClojureNamespace() {
+	/**
+	 * The name of the namespace the Clojure {@code *ns*} holds on the calling thread,
+	 * {@code user} where it holds none.
+	 * @return the namespace's name
+	 */
+	public String currentClojureNamespace() {
 		LispVal ns = currentSpecialValue(CLOJURE_NS);
 		if (ns instanceof LispCons cons && cons.cdr() instanceof LispCons rest
 				&& rest.car() instanceof LispString name) {
@@ -7532,6 +7644,9 @@ public final class LispEvaluator {
 							break frame;
 						}
 						if (function instanceof LispLambda lambda) {
+							// every call of a closure, a tail call or a loop's recur
+							// included, is where an interrupted evaluation stops
+							pollInterrupt();
 							Environment lambdaEnv = lexicalLambdaScope(lambda, args);
 							if (lambdaEnv != null) {
 								frameLambda = lambda;
@@ -12154,6 +12269,7 @@ public final class LispEvaluator {
 		Environment exitTo = owner != null ? owner : deferTo;
 		LispVal test = parts.get(1);
 		while (isTruthy(eval(test, env))) {
+			pollInterrupt();
 			for (int i = 2; i < parts.size(); i++) {
 				evalStatement(parts.get(i), env, exitTo);
 			}

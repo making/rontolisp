@@ -112,6 +112,14 @@ public final class SourceSession {
 	}
 
 	/**
+	 * The Clojure session behind a Clojure seam, null for another language.
+	 * @return the session
+	 */
+	@Nullable ClojureSession clojureSession() {
+		return this.clojure;
+	}
+
+	/**
 	 * Whether the accumulated input can be read now, or the next line continues it.
 	 * @param buffer the text typed so far
 	 * @return {@code false} when a form is still open

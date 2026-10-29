@@ -269,6 +269,14 @@ class ClojureReaderTest {
 		assertThat(printed("#_skip-me y")).isEqualTo("[|y|]");
 		assertThat(printed("@x ^:k v #'x #_skip-me y"))
 			.isEqualTo("[(|deref| |x|), (|%with-meta| |v| :|k|), (|var| |x|), |y|]");
+		// the source position the oracle's reader puts on a list, which a form printed
+		// with *print-meta* spells (nrepl.cmdline sends each form so), is no metadata
+		// here, as on the lists this reader reads itself; a collection keeps it, and so
+		// does a list with any other key
+		assertThat(printed("^{:line 2, :column 1} (defn f [] ^{:line 2, :column 12} (g))"))
+			.isEqualTo(printed("(defn f [] (g))"));
+		assertThat(printed("^{:line 1} [x]")).isEqualTo("[(|%with-meta| (|%vector| |x|) (|%hash-map| :|line| 1))]");
+		assertThat(printed("^{:line 1 :k 2} (g)")).startsWith("[(|%with-meta| (|g|)");
 	}
 
 	@Test

@@ -16092,18 +16092,22 @@ cases:
       7 5 #'user/f67-rd 2
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
-    # load-string of a literal runs where the call stands.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # load-string of a literal runs where the call stands; a namespace its
+    # text switches to is the load's own, *ns* bound around it like the
+    # oracle's Compiler/load.
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the switch 2026-10-30).
     source: |
       (println (requiring-resolve 'clojure.string/join))
       (println (load-string "(+ 1 2)"))
       (println (load-string "(def f67-ls 40) (+ f67-ls 2)"))
       (println f67-ls)
+      (println (load-string "(ns f67-other) (def f67-ld 1) (str *ns*)") (str *ns*))
     expected: |
       #'clojure.string/join
       3
       42
       40
+      f67-other user
   - name: checked-arithmetic-is-plain-arithmetic-that-never-overflows
     # inc', dec', +', -' and *' are the plain verbs: integers are bignums here,
     # so nothing overflows, and one past the long range is the oracle's BigInt,

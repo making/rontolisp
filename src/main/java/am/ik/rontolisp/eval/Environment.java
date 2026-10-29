@@ -320,6 +320,15 @@ public final class Environment implements Scope {
 	private java.util.function.@Nullable LongConsumer httpBodyStreamCloser;
 
 	/**
+	 * Opens a stream over a Java character sink or source -- a {@code Writer} or a
+	 * {@code Reader} -- in the stream table and answers its handle. Installed by
+	 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; what an nREPL session's
+	 * {@code *out*} and {@code *err*} write through. {@link #httpBodyStreamCloser}
+	 * removes one.
+	 */
+	private java.util.function.@Nullable Function<Closeable, Long> javaStreamOpener;
+
+	/**
 	 * Flushes every buffered output stream still open in the stream table. Installed by
 	 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; see
 	 * {@link #flushOpenStreams}.
@@ -361,6 +370,29 @@ public final class Environment implements Scope {
 		if (closer != null) {
 			closer.accept(handle);
 		}
+	}
+
+	/**
+	 * Opens a stream over a Java {@code Writer} or {@code Reader} and answers its
+	 * stream-table handle.
+	 * @param entry the sink or source
+	 * @return the stream handle
+	 */
+	long openJavaStream(Closeable entry) {
+		java.util.function.Function<Closeable, Long> opener = this.javaStreamOpener;
+		if (opener == null) {
+			throw new LispEvalException("this environment has no stream table");
+		}
+		return opener.apply(entry);
+	}
+
+	/**
+	 * Removes a stream {@link #openJavaStream} opened from the stream table, quietly
+	 * (absent is fine -- the program may have closed it).
+	 * @param handle the stream handle
+	 */
+	void closeJavaStream(long handle) {
+		closeHttpBodyStream(handle);
 	}
 
 	/**
@@ -5495,6 +5527,11 @@ public final class Environment implements Scope {
 			return handle;
 		};
 		env.httpBodyStreamCloser = streams::remove;
+		env.javaStreamOpener = entry -> {
+			long handle = nextStreamHandle.getAndIncrement();
+			streams.put(handle, entry);
+			return handle;
+		};
 		env.openStreamFlusher = () -> {
 			for (Closeable entry : streams.values()) {
 				if (entry instanceof java.io.Flushable flushable) {

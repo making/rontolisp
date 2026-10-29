@@ -93,8 +93,9 @@ leg (2026-10-30; the whole spec program is a host, every JVM case green), and as
 
 - The host's compiled forms see no name a fragment defines: a name the program only
   declares and a later call defines stays undefined at the host's call sites (the
-  interpreter resolves it when the call runs), and a native binary's host carries no
-  compiler (`.todo/h11`).
+  interpreter resolves it when the call runs), a fragment's redefinition of a host `defn`
+  reaches only the fragments after it (the interpreter re-points the host's cells,
+  `.kb/nrepl.md`), and a native binary's host carries no compiler (`.todo/h11`).
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
   lowering again.
 - The image keeps the files the lowering read, not a `deps.edn` dependency's jars or
