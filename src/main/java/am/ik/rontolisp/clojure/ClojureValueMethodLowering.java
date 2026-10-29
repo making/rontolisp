@@ -81,6 +81,18 @@ final class ClojureValueMethodLowering {
 	/** A fn's kind, which no one-argument predicate here names. */
 	private static final String FUNCTION = "fn";
 
+	/**
+	 * The kind of a {@code (:C%CLASS name)} class designator ({@code .getClass} of a fn,
+	 * a class literal where no host is), which no one-argument predicate names.
+	 */
+	private static final String CLASS_DESIGNATOR = "class-designator";
+
+	/**
+	 * A namespace's kind ({@code *ns*}, {@code the-ns}), tested through the namespace
+	 * family's own test, an arm a program making no namespace sheds.
+	 */
+	private static final String NAMESPACE = "namespace";
+
 	/** The most arguments {@code IFn.invoke} takes before its variadic overload. */
 	private static final int MAX_INVOKE_ARITY = 20;
 
@@ -185,7 +197,7 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final Map<String, String> FAMILY_KINDS = Map.of(INSTANT, ClojurePredicateLowering.INSTANT_P, DATE,
 			ClojurePredicateLowering.INST_P, TIMESTAMP, ClojurePredicateLowering.TIMESTAMP_P, UUID,
-			ClojurePredicateLowering.UUID_P);
+			ClojurePredicateLowering.UUID_P, NAMESPACE, "RONTOLISP::%CLOJURE-NS-OBJECT-P");
 
 	/**
 	 * The values a time kind's arm answers, by the tests {@link ClojureTimeValueLowering}
@@ -377,7 +389,12 @@ final class ClojureValueMethodLowering {
 	}
 
 	private static void nameAndNumberRows() {
-		row("getName", 0, arm(List.of("ident?"), core("name", R)));
+		// a class designator's name is the class's, like Class#getName; a namespace's
+		// its name symbol, like Namespace#getName and its public name field
+		row("getName", 0, arm(List.of("ident?"), core("name", R)),
+				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "CADR")),
+				arm(List.of(NAMESPACE), core("ns-name", R)));
+		row("name", 0, arm(List.of(NAMESPACE), core("ns-name", R)));
 		row("getNamespace", 0, arm(List.of("ident?"), core("namespace", R)));
 		row("sym", 0, arm(List.of("keyword?"), core("symbol", R)));
 		row("numerator", 0, arm(List.of("ratio?"), core("numerator", R)));
@@ -388,7 +405,13 @@ final class ClojureValueMethodLowering {
 		for (String truncated : List.of("intValue", "longValue")) {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
-		row("getClass", 0, arm(List.of(), core("class", R)));
+		// a fn's own class, the designator of the class the oracle compiles it to (a
+		// core function's clojure.core$name, else an anonymous fn's), where class
+		// answers the one fn kind; any other value's class
+		row("getClass", 0,
+				new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
+						new LispSymbol(":C%CLASS"), part(ctx, "RONTOLISP::%CLOJURE-FN-CLASS-NAME"))),
+				arm(List.of(), core("class", R)));
 		// .isArray of a class keyword: only a byte array's class ([B) is an array
 		// class here (a char[] is a vector of characters, a host array unmarshals
 		// to a list), so its name decides, like the oracle's Class#isArray
@@ -867,6 +890,10 @@ final class ClojureValueMethodLowering {
 			tests.add(switch (kind) {
 				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
 				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);
+				case CLASS_DESIGNATOR -> ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), self),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), self), new LispSymbol(":C%CLASS")));
 				case SEQ_ITERATOR -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), self);
 				// a vector's methods: a type implementing Indexed answers its own through
 				// the typed clauses ahead of the rows

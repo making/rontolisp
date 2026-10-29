@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispSymbol;
@@ -13,7 +14,10 @@ import org.jspecify.annotations.Nullable;
  * is the oracle's and every core verb reads it through the collection interfaces its body
  * implements. The namespace loads where a top-level datum first names one of its classes
  * ({@link ClojureLowering#loadLangClass}), so a program naming none lowers as before; a
- * static field the program reads is a var of the namespace ({@link #staticValue}).
+ * static field the program reads is a var of the namespace ({@link #staticValue}). A
+ * static field of a {@code clojure.lang} class no namespace defines may instead be held
+ * by the run-time library ({@link #runtimeStatic}), read and {@code set!} with no
+ * namespace loaded.
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -32,7 +36,50 @@ final class ClojureLangClasses {
 	private static final Map<String, Map<String, String>> STATICS = Map.of(PERSISTENT_QUEUE,
 			Map.of("EMPTY", "PersistentQueue-EMPTY"));
 
+	/**
+	 * The static fields of {@code clojure.lang} classes no namespace defines whose value
+	 * the run-time library holds, by class and name, with the global holding it: a
+	 * mutable flag a program reads and {@code set!}s, so no namespace loads for it.
+	 * {@code RT/checkSpecAsserts} is spec.alpha's {@code check-asserts} switch.
+	 */
+	private static final Map<String, Map<String, String>> RUNTIME_STATICS = Map.of("clojure.lang.RT",
+			Map.of("checkSpecAsserts", "RONTOLISP::%CLOJURE-CHECK-SPEC-ASSERTS"));
+
 	private ClojureLangClasses() {
+	}
+
+	/**
+	 * The run-time library's global holding a static field ({@link #RUNTIME_STATICS}).
+	 * @param cls the class's binary name
+	 * @param member the field's name
+	 * @return the global, or null when the library holds no such field
+	 */
+	static @Nullable String runtimeStatic(String cls, String member) {
+		Map<String, String> statics = RUNTIME_STATICS.get(cls);
+		return statics == null ? null : statics.get(member);
+	}
+
+	/**
+	 * The run-time library's global a {@code set!} target names: {@code Class/field} or
+	 * {@code (. Class field)} of a field the library holds ({@link #RUNTIME_STATICS}).
+	 * @param ctx the hub
+	 * @param target the target as written
+	 * @return the global, or null for any other target
+	 */
+	static @Nullable String runtimeStaticTarget(ClojureLowering ctx, LispVal target) {
+		if (target instanceof LispSymbol s) {
+			int slash = ClojureLowering.qualifierSlash(s.name());
+			String head = slash < 0 ? null : s.name().substring(0, slash);
+			return head == null || !ClojureNamespaceLowering.isClasslike(ctx, head) ? null
+					: runtimeStatic(ClojureNamespaceLowering.resolveClass(ctx, head), s.name().substring(slash + 1));
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		if (parts == null || parts.size() != 3 || !ClojureLowerUtil.isSymbolNamed(parts.get(0), ".")
+				|| !(parts.get(1) instanceof LispSymbol cls) || !(parts.get(2) instanceof LispSymbol field)
+				|| !ClojureNamespaceLowering.isClasslike(ctx, cls.name())) {
+			return null;
+		}
+		return runtimeStatic(ClojureNamespaceLowering.resolveClass(ctx, cls.name()), field.name());
 	}
 
 	/**
@@ -71,6 +118,10 @@ final class ClojureLangClasses {
 	 * @return the lowered read, or null when it names no such field
 	 */
 	static @Nullable LispVal staticValue(ClojureLowering ctx, String cls, String member) {
+		String global = runtimeStatic(cls, member);
+		if (global != null) {
+			return new LispSymbol(global);
+		}
 		Map<String, String> statics = STATICS.get(cls);
 		String var = statics == null ? null : statics.get(member);
 		if (var == null) {

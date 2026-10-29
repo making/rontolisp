@@ -1215,8 +1215,8 @@
 
 (defun rontolisp::%clojure-munge-char (code)
   "The munged spelling of the character of code CODE: a dash is an
-   underscore, every other mapped character its _NAME_, anything else the
-   character itself."
+   underscore, every other mapped character its _NAME_ (the oracle's
+   Compiler/CHAR_MAP), anything else the character itself."
   (cond ((= code 45) "_")
         ((= code 43) "_PLUS_")
         ((= code 42) "_STAR_")
@@ -1225,8 +1225,8 @@
         ((= code 60) "_LT_")
         ((= code 62) "_GT_")
         ((= code 61) "_EQ_")
-        ((= code 39) "_SQUOTE_")
-        ((= code 34) "_DQUOTE_")
+        ((= code 39) "_SINGLEQUOTE_")
+        ((= code 34) "_DOUBLEQUOTE_")
         ((= code 47) "_SLASH_")
         ((= code 58) "_COLON_")
         ((= code 126) "_TILDE_")
@@ -1238,8 +1238,45 @@
         ((= code 124) "_BAR_")
         ((= code 123) "_LBRACE_")
         ((= code 125) "_RBRACE_")
+        ((= code 91) "_LBRACK_")
+        ((= code 93) "_RBRACK_")
         ((= code 92) "_BSLASH_")
         (t (string (code-char code)))))
+
+(defvar rontolisp::%clojure-demunge-spellings
+  '(("_DOUBLEQUOTE_" . "\"") ("_SINGLEQUOTE_" . "'") ("_AMPERSAND_" . "&")
+    ("_PERCENT_" . "%") ("_LBRACE_" . "{") ("_RBRACE_" . "}") ("_LBRACK_" . "[")
+    ("_RBRACK_" . "]") ("_BSLASH_" . "\\") ("_COLON_" . ":") ("_TILDE_" . "~")
+    ("_CIRCA_" . "@") ("_SHARP_" . "#") ("_CARET_" . "^") ("_SLASH_" . "/")
+    ("_QMARK_" . "?") ("_PLUS_" . "+") ("_BANG_" . "!") ("_STAR_" . "*")
+    ("_BAR_" . "|") ("_GT_" . ">") ("_LT_" . "<") ("_EQ_" . "=") ("_" . "-")
+    ("$" . "/"))
+  "Each munged spelling with the text it stands for, the longest first, so
+   that one never takes the head of another: the oracle's DEMUNGE_MAP, $ as /.")
+
+(defun rontolisp::%clojure-demunge (s)
+  "clojure.lang.Compiler/demunge of the string S: each munged spelling (the
+   longest at a place) spelled back, $ as /, like the oracle's; nil its
+   NullPointerException."
+  (if (null s)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"java.lang.CharSequence.length()\" because \"this.text\" is null"))
+  (let ((n (length s)) (i 0) (acc nil))
+    (do ()
+        ((>= i n) (apply #'concatenate 'string (reverse acc)))
+      (let ((hit nil))
+        (dolist (entry rontolisp::%clojure-demunge-spellings)
+          (let ((spelling (car entry)))
+            (if (and (null hit) (<= (+ i (length spelling)) n)
+                     (string= spelling (subseq s i (+ i (length spelling)))))
+                (setq hit entry))))
+        (if hit
+            (progn
+              (setq acc (cons (cdr hit) acc))
+              (setq i (+ i (length (car hit)))))
+            (progn
+              (setq acc (cons (string (char s i)) acc))
+              (setq i (+ i 1))))))))
 
 (defun rontolisp::%clojure-munge (x)
   "(munge x): the str of X with every character munged, like the oracle's."
@@ -5916,7 +5953,8 @@
 
 (defun rontolisp::%clojure-symbol-1 (x)
   "The symbol for X: itself for a symbol (one carrying metadata too), the
-   spelled one for a keyword or a string; anything else signals."
+   spelled one for a keyword or a string, a var's qualified name (the oracle's
+   Var.toSymbol); anything else signals in the oracle's words."
   (cond ((rontolisp::%clojure-real-symbol-p x) x)
         ((rontolisp::%clojure-meta-symbol-p x) x)
         ((rontolisp::%clojure-keyword-p x)
@@ -5926,8 +5964,12 @@
         ((stringp x)
          (intern
           (concatenate 'string "c%" (rontolisp::%clojure-escape-part x))))
+        ((rontolisp::%clojure-var-p x)
+         (intern
+          (concatenate 'string "c%"
+                       (rontolisp::%clojure-escape-part (car (cdr x))))))
         (t (rontolisp::%clojure-illegal-argument-exception
-            "symbol needs a string, keyword or symbol"))))
+            "no conversion to symbol"))))
 
 (defun rontolisp::%clojure-keyword-2 (ns nm)
   "The keyword for namespace NS and name NM (a NIL namespace drops, like the
@@ -14196,6 +14238,48 @@
    MAKE) on first use, the stored object after."
   (or (gethash name rontolisp::%clojure-shared-values)
       (setf (gethash name rontolisp::%clojure-shared-values) (funcall make))))
+
+;; A function's class name, what (.getClass f) names: the oracle compiles every
+;; fn to a class of its own, ns$name for a defn or a core var's root and
+;; ns$enclosing$fn__N for an anonymous one, which demunging readers (spec.alpha's
+;; fn-sym, a stack trace printer) read back as the var. A core function shared
+;; through the table above knows its name, so it answers clojure.core$NAME; no
+;; other function here carries one, so it answers the spelling of an anonymous
+;; fn under clojure.lang.AFunction, the class type answers for every function.
+
+(defun rontolisp::%clojure-fn-class-name (f)
+  "The oracle's class name of the function F: clojure.core$NAME munged for a
+   core function the shared-value table holds, else an anonymous fn's."
+  (let ((found nil))
+    (maphash (lambda (key value)
+               (if (and (null found) (eq value f))
+                   (let ((cut
+                          (position-if
+                           (lambda (c) (or (char= c #\Space) (char= c #\#)))
+                           key)))
+                     (setq found (if cut (subseq key 0 cut) key)))))
+             rontolisp::%clojure-shared-values)
+    (if found
+        (concatenate 'string "clojure.core$" (rontolisp::%clojure-munge found))
+        "clojure.lang.AFunction$fn")))
+
+;; clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts
+;; sets and its assert reads: false until a program sets it (the oracle starts
+;; it from the clojure.spec.check-asserts system property, which this runtime
+;; does not read).
+(defvar rontolisp::%clojure-check-spec-asserts '|false|)
+
+(defun rontolisp::%clojure-boolean-field-value (v)
+  "V as a store into a boolean static field takes it: a boolean itself, nil
+   the oracle's NullPointerException of the unboxing, anything else its
+   ClassCastException to Boolean."
+  (cond ((or (eq v t) (eq v rontolisp::%clojure-false)) v)
+        ((null v)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Boolean.booleanValue()\" because the value is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of v)
+                         " cannot be cast to class java.lang.Boolean")))))
 
 ;;;; Atoms across request threads.
 ;;

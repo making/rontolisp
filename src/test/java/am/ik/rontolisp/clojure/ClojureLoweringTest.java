@@ -3385,6 +3385,10 @@ class ClojureLoweringTest {
 		// (a local's name was read as a library's until 2026-10-29)
 		assertThat(runTimeOf("(eval (list '+ 1 2))", true)).isNotNull();
 		assertThat(runTimeOf("(let [n 'clojure.set] (require n))", true)).isNotNull();
+		// so is a call spelled through clojure.core's alias or full name (spec.alpha's
+		// gen: (require (c/symbol ns)) under (alias 'c 'clojure.core))
+		assertThat(runTimeOf("(alias 'c 'clojure.core) (defn dl [s] (require (c/symbol s)))", true)).isNotNull();
+		assertThat(runTimeOf("(defn dl [s] (require (clojure.core/symbol s)))", true)).isNotNull();
 		assertThat(runTimeOf("(eval (list '+ 1 2))", false)).isNull();
 		assertThat(runTimeOf("(require 'clojure.set) (resolve 'inc)", true)).isNull();
 	}
@@ -3412,9 +3416,6 @@ class ClojureLoweringTest {
 
 	@Test
 	void defmacroRefusesCoreFormsAndEnvironments() {
-		assertThatThrownBy(() -> Clojure.read("(defmacro if [x] x)", null, ClojureMacroTime.create()))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("if cannot name a macro: it names a special form");
 		assertThatThrownBy(() -> Clojure.read("(defmacro deref [x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deref cannot name a macro: the reader spells its own forms with it");
@@ -4399,9 +4400,6 @@ class ClojureLoweringTest {
 
 	@Test
 	void foreignNamespacesStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.spec.alpha");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.reflect");

@@ -48,5 +48,6 @@ Each of these is refused by name when the program is lowered:
   `doc` prints its name alone.
 - `doc` of a name that is no var, a namespace's included, is the lowering's
   `Unable to resolve var`, where Clojure prints the namespace's docstring or nothing; `doc` of
-  a keyword (a spec) is refused.
+  a keyword (a spec) is refused: it reads `clojure.spec.alpha`, a library this `clojure.repl`
+  does not load.
 - A throwable carries no stack frames here, so `pst` prints none.

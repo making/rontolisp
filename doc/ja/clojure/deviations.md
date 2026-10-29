@@ -221,9 +221,10 @@
  クラスだけを試し、それから `Object` 既定です。1つの値が実装する2つの `clojure.lang` インタフェースは
  それぞれが受ける値の種類で順序づけます（`IRef` が `IDeref` より先）。`clojure.lang` は
  このクラスパスにないためです。
-- `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
-  名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
-  ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
+- `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は multimethod の名前
+  （`defmulti` の var。alias や refer 経由も可）を降低時に読むため、`defmulti` が作っていない
+  名前はそこで拒否します。それ以外の引数（ローカル、var の deref）は値と同じく下の実行時
+  レジストリを読みます。`methods` が返すマップはホストクラスの行を `class` が
   答えるキーワードで引き、オラクルは `Class` 自身で引きます。`prefers` は各ディスパッチ値と
   優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
   multimethod を返します。どちらも名前の取り方は同じです。値としては（`methods`・
@@ -430,7 +431,10 @@
   失敗した delay の `:val` は例外のレポートで、オラクルはその `#error` マップを印字します。`str` は
   `clojure.lang.Delay` を返します（オラクルは `clojure.lang.Delay@hash`）。
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
-  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。オラクルの
+  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
+  オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
+  それ以外の fn なら無名 fn の `clojure.lang.AFunction$fn` です。オラクルは `defn` を var の名前で
+  呼びます）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで
   `Method m taking N args is not supported for class C` として拒否し、オラクルのクラスが
   持ちうるがここでは答えないメソッド（`.reduce`・`.meta`・atom の `.compareAndSet`）は
@@ -891,3 +895,13 @@
   `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
+- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
+  述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
+  spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
+  （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
+  （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
+  resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
+  `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を
+  使います）は、インタプリタでは動き、コンパイルしたプログラムでは拒否します。`check-asserts` が設定する
+  `clojure.lang.RT/checkSpecAsserts` は false で始まり、システムプロパティ
+  `clojure.spec.check-asserts` は読みません。

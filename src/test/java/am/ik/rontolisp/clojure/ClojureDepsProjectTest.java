@@ -141,6 +141,13 @@ class ClojureDepsProjectTest {
 			.hasMessage(
 					missing + ":1:1: Could not locate nowhere/at_all.clj or nowhere/at_all.cljc on the source path: "
 							+ roots + notSearched);
+		// the built-in clojure's own dependencies (depth 2, after the top-level ones)
+		// are named only where a lookup asks for a namespace one of them holds
+		Path spec = write("unfetched/spec.clj", "(require '[clojure.spec.alpha :as s])\n");
+		assertThatThrownBy(() -> read(spec, SourceStandards.DEFAULT)).isInstanceOf(LispReadException.class)
+			.hasMessage(spec + ":1:1: Could not locate clojure/spec/alpha.clj or clojure/spec/alpha.cljc on the "
+					+ "source path: " + roots + notSearched
+					+ ", org.clojure/spec.alpha 0.5.238 (a Maven coordinate, not fetched)");
 		// what the jar holds still loads
 		Path found = write("unfetched/found.clj", "(require 'withpom.core) (println :ok)\n");
 		assertThat(interpret(found, SourceStandards.DEFAULT)).isEqualTo(":ok\n");

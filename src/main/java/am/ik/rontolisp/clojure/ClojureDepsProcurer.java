@@ -46,7 +46,9 @@ import org.jspecify.annotations.Nullable;
  * as a source root, and the dependencies its own {@code pom.xml} declares.</li>
  * <li>{@code :mvn/version}: the dependencies its POM declares (compile and runtime ones,
  * not optional) and its jar, through the repositories; a built-in library
- * ({@link ClojureBuiltinLibs}) is answered by this front end and fetches nothing.</li>
+ * ({@link ClojureBuiltinLibs}) is answered by this front end and fetches nothing, and the
+ * built-in clojure's own dependencies are read only when a lookup first asks for one of
+ * their namespaces ({@link ClojureDepsGraph.Deferred}).</li>
  * <li>{@code :git/url}: the commit checked out, its tag and abbreviated sha checked and
  * resolved against the repository, its {@code deps.edn} read like a local root's; of two
  * commits the descendant is the newer.</li>
@@ -319,8 +321,12 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	public List<Dep> children(Lib lib, Coord useCoord) {
 		String type = useCoord.type();
 		if (type.equals("mvn")) {
+			if (ClojureBuiltinLibs.isBuiltin(lib)) {
+				// known without a fetch: the built-in clojure's own dependencies
+				return ClojureBuiltinLibs.children(lib);
+			}
 			ClojureRepositories fetcher = this.repositories;
-			return fetcher == null || ClojureBuiltinLibs.isBuiltin(lib) ? List.of()
+			return fetcher == null || ClojureBuiltinLibs.deferredNamespaces(lib, useCoord) != null ? List.of()
 					: mavenChildren(fetcher, lib, useCoord);
 		}
 		if (type.equals("git") && this.repositories == null) {
@@ -497,12 +503,23 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/**
 	 * A Maven coordinate's jar ({@code coord-paths :mvn}: nothing for another extension),
-	 * built in or unfetched as the host decides.
+	 * built in or unfetched as the host decides; a dependency of the built-in clojure
+	 * read when a lookup first asks for one of its namespaces.
 	 */
 	private Contribution mavenContribution(Lib lib, Coord useCoord) {
 		if (ClojureBuiltinLibs.isBuiltin(lib)) {
 			return new Contribution(List.of(), true, null);
 		}
+		Set<String> deferred = ClojureBuiltinLibs.deferredNamespaces(lib, useCoord);
+		if (deferred != null) {
+			return new Contribution(List.of(), false, null, null,
+					new ClojureDepsGraph.Deferred(deferred, () -> fetchedMavenContribution(lib, useCoord)));
+		}
+		return fetchedMavenContribution(lib, useCoord);
+	}
+
+	/** A Maven coordinate's jar, fetched where the host fetches, else named. */
+	private Contribution fetchedMavenContribution(Lib lib, Coord useCoord) {
 		ClojureRepositories fetcher = this.repositories;
 		if (fetcher == null) {
 			return new Contribution(List.of(), false,
