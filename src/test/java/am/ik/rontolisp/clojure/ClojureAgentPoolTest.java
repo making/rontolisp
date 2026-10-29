@@ -70,7 +70,12 @@ class ClojureAgentPoolTest {
 			(println @g38-c)
 			""";
 
-	/** The error modes over the pool: fail, restart, continue and the handler. */
+	/**
+	 * The error modes over the pool: fail, restart, continue and the handler. The
+	 * handler's send goes straight to the queue (the oracle's too), possibly behind the
+	 * first await's marker; that marker runs only after the handler returned, so the
+	 * second await waits for the handler's action whichever thread won.
+	 */
 	private static final String ERRORS = """
 			(defn g38-wait [a] (loop [] (when-not (agent-error a) (try (await-for 10 a) (catch RuntimeException e nil)) (recur))))
 			(def g38-fa (agent 1 :validator pos?))
@@ -85,6 +90,7 @@ class ClojureAgentPoolTest {
 			(def g38-fc (agent 0 :error-mode :continue :error-handler (fn [ag e] (send ag + 100))))
 			(send g38-fc (fn [_] (throw (Exception. "boom"))))
 			(send g38-fc inc)
+			(await g38-fc)
 			(await g38-fc)
 			(println [@g38-fc (agent-error g38-fc)])
 			""";
