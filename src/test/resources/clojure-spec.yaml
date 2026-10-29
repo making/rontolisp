@@ -3188,12 +3188,21 @@ cases:
     # Oracle-identical (clj 1.12.6, 2026-10-04): a refusal of the Clojure runtime
     # carries the class the oracle throws there, so an IllegalArgumentException
     # passes an ArithmeticException catch and an AssertionError an Exception one.
+    # A condition naming no class -- a refusal by name (pcalls, the oracle's ()),
+    # a java: call where no host is (the wasm pair; the oracle's
+    # IllegalArgumentException elsewhere) -- is a RuntimeException: no catch of a
+    # subclass or an Error takes it (until 2026-10-30 every catch but
+    # ExceptionInfo's did, and data.generators' NumberFormatException retry looped).
     source: |
       (println (try (try (first 5) (catch ArithmeticException e :taken)) (catch IllegalArgumentException e :oracle)))
       (println (try (assert false) (catch Exception e :taken) (catch Error e :oracle)))
+      (println (try (try (java.util.ArrayList. -1) (catch NumberFormatException e :taken)) (catch RuntimeException e :rte)))
+      (println (try (try (pcalls) (catch IllegalArgumentException e :taken) (catch Error e :taken)) (catch RuntimeException e :rte)))
     expected: |
       :oracle
       :oracle
+      :rte
+      :rte
   - name: refusals-of-the-runtime-carry-the-oracles-classes
     # Oracle-identical (clj 1.12.6, 2026-10-04): each refusal passes a catch of a
     # class no refusal is and is taken by one of the class the oracle throws for

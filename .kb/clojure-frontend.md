@@ -324,8 +324,8 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- An error naming no class (a refusal of a construct the oracle accepts) is
-  taken by any catch but `ExceptionInfo`'s ("Catching"); a misuse a lower verb refuses first
+- An error naming no class (a refusal by name, a `java:` call on wasm) is a
+  `RuntimeException`: no catch of a subclass takes it ("Catching"); a misuse a lower verb refuses first
   carries that verb's class ("Refusals"). Exceptions: see "Exceptions" and "Host exceptions".
 - Dispatch: class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
@@ -453,10 +453,18 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   type (the JVM pad's type-error synthesized from a raw host failure: a compiled `char` past
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
-  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
-  of a construct the oracle accepts) matches every catch but
-  `ExceptionInfo`'s, so a program that caught one keeps working. A host exception goes by the
-  host's class ("Host exceptions").
+  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A host failure of a class it cannot
+  tell -- a type error naming no type, the message-less `simple-error` the JVM pad builds of any
+  other raw throwable (a `StackOverflowError`, slot 0 read in place) -- matches every catch but
+  `ExceptionInfo`'s, so the JVM still runs `(thrown? StackOverflowError ...)`. Any other condition naming no
+  class -- a refusal by name, an undefined function (a `java:` call on wasm, "Host arms where
+  the host is not") -- is the `RuntimeException` that `class`/`instance?` answer for it: taken
+  by a catch of `RuntimeException`, `Exception` or `Throwable` only. Until 2026-10-30 it
+  matched every catch but `ExceptionInfo`'s, so `(catch NumberFormatException e ...)` took a
+  wasm `java:` call's undefined-function error and data.generators' `bigint` retry looped
+  forever on both wasm backends. Pinned by clojure-spec
+  `a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws`. A host exception goes
+  by the host's class ("Host exceptions").
 - A program that catches by class but builds no exception carries `C%E-PARTS` answering NIL
   (`catchRuntime`'s reader) instead of the exception runtime. A session emits the reader while no buffer built an
   exception; the exception runtime's own `C%E-PARTS` replaces it once one does.

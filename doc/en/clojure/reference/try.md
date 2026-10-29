@@ -17,7 +17,7 @@ for `nil`, an `IndexOutOfBoundsException` for an index past its bound, an
 error an `ArithmeticException`, a wrong argument count a `clojure.lang.ArityException`, a failed
 open a `java.io.FileNotFoundException`. A refusal of the runtime is taken by the class the
 oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed `assert`
-an `AssertionError`); an error naming no class by any catch but `clojure.lang.ExceptionInfo`'s
+an `AssertionError`); an error naming no class is a `RuntimeException`, which no catch of a subclass takes
 ([Deviations](../deviations.md)). On the interpreter and the JVM, an exception a Java member
 throws is the host's own, as in the oracle: a catch takes it by its class and binds that
 object. The caught

@@ -2462,9 +2462,14 @@
 ;; chain, so no test needs a class hierarchy at run time: a catch takes an
 ;; exception whose own chain holds the class it names. A runtime error carries
 ;; no class, so it takes the one the oracle throws where the runtime signals
-;; its condition type (%clojure-error-chain); a condition whose type tells none
-;; (the simple-error of a Clojure refusal, a failed host call) is taken by
-;; every catch but ExceptionInfo's, which the oracle's runtime never throws.
+;; its condition type (%clojure-error-chain). A host failure of a class it
+;; cannot tell -- a type error naming no type, the message-less simple error
+;; the JVM pad builds of any other raw throwable (a StackOverflowError) -- is
+;; taken by every catch but ExceptionInfo's, which the oracle's runtime never
+;; throws; any other condition naming no class (a refusal by name, a call to
+;; an undefined function -- a java: call where no host is) is the
+;; RuntimeException class answers for it, so a catch of a subclass never takes
+;; it.
 
 (defun rontolisp::%clojure-type-error-class (c)
   "The class the oracle throws where the runtime signals the type error C: a
@@ -2535,20 +2540,28 @@
    an exception or a refusal when its class is that class or a subclass of it;
    a runtime error when the class the oracle throws for it is that class, a
    superclass or a subclass of it (the operation may throw a subclass: aget's
-   ArrayIndexOutOfBoundsException), or, when its type tells no class, unless
-   the catch names ExceptionInfo."
+   ArrayIndexOutOfBoundsException); a host failure of a class it cannot tell
+   (a type error naming no type, a simple error with no format control: the
+   JVM pad's raw throwable) unless the catch names ExceptionInfo; any other
+   condition when the class is RuntimeException or a superclass of it. The
+   simple error's control is its first slot, read in place."
   (if (rontolisp::%clojure-host-failure-p c)
       (rontolisp::%clojure-host-is-a (%obj-ref c 2) (car chain))
       (let ((exact (rontolisp::%clojure-exact-chain c)))
         (if exact
             (rontolisp::%clojure-chain-has exact (car chain))
             (let ((class (rontolisp::%clojure-error-chain c)))
-              (if class
-                  (or (rontolisp::%clojure-chain-has class (car chain))
-                      (rontolisp::%clojure-chain-has chain (car class)))
-                  (not
-                   (rontolisp::%clojure-chain-has chain
-                    "clojure.lang.ExceptionInfo"))))))))
+              (cond (class (or (rontolisp::%clojure-chain-has class (car chain))
+                            (rontolisp::%clojure-chain-has chain (car class))))
+                    ((or (typep c 'type-error)
+                         (and (%obj-is c '|%class-SIMPLE-ERROR|)
+                              (null (%obj-ref c 0))))
+                     (not
+                      (rontolisp::%clojure-chain-has chain
+                       "clojure.lang.ExceptionInfo")))
+                    (t (rontolisp::%clojure-chain-has
+                        '("java.lang.RuntimeException" "java.lang.Exception"
+                          "java.lang.Throwable") (car chain)))))))))
 
 ;;;; The class of an exception: class, instance? and the stack-trace methods.
 ;;
