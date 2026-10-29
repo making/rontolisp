@@ -4416,9 +4416,9 @@ class ClojureLoweringTest {
 
 	@Test
 	void foreignNamespacesStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.reflect");
+			.hasMessageContaining("unknown namespace: clojure.inspector");
 	}
 
 	@Test
