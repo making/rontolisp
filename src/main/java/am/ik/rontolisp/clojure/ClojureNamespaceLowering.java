@@ -170,11 +170,11 @@ final class ClojureNamespaceLowering {
 			"index-of", "last-index-of", "replace", "replace-first", "escape", "re-quote-replacement", "reverse");
 
 	/**
-	 * The {@code java.lang} classes a simple name resolves to without an import: the
-	 * oracle's fixed default-import list (not every {@code java.lang} class -- {@code
-	 * AutoCloseable}, {@code Record} and {@code Module} are unresolved there too).
+	 * The {@code java.lang} half of the oracle's fixed default-import list (not every
+	 * {@code java.lang} class -- {@code AutoCloseable}, {@code Record} and {@code Module}
+	 * are unresolved there too).
 	 */
-	static final Set<String> JAVA_LANG = Set.of("AbstractMethodError", "Appendable", "ArithmeticException",
+	private static final Set<String> JAVA_LANG = Set.of("AbstractMethodError", "Appendable", "ArithmeticException",
 			"ArrayIndexOutOfBoundsException", "ArrayStoreException", "AssertionError", "Boolean", "Byte", "Character",
 			"CharSequence", "Class", "ClassCastException", "ClassCircularityError", "ClassFormatError", "ClassLoader",
 			"ClassNotFoundException", "CloneNotSupportedException", "Cloneable", "Comparable", "Deprecated", "Double",
@@ -192,6 +192,25 @@ final class ClojureNamespaceLowering {
 			"ThreadLocal", "Throwable", "TypeNotPresentException", "UnknownError", "UnsatisfiedLinkError",
 			"UnsupportedClassVersionError", "UnsupportedOperationException", "VerifyError", "VirtualMachineError",
 			"Void");
+
+	/**
+	 * The classes a simple name resolves to without an import, simple name to FQN: the
+	 * oracle's {@code (ns-imports 'user)} (clj 1.12.6) -- {@link #JAVA_LANG} plus
+	 * {@code Callable}, {@code BigInteger} and {@code BigDecimal}; its
+	 * {@code clojure.lang.Compiler} is no class here.
+	 */
+	static final Map<String, String> DEFAULT_IMPORTS = defaultImports();
+
+	private static Map<String, String> defaultImports() {
+		Map<String, String> imports = new java.util.HashMap<>();
+		for (String name : JAVA_LANG) {
+			imports.put(name, "java.lang." + name);
+		}
+		imports.put("Callable", "java.util.concurrent.Callable");
+		imports.put("BigInteger", "java.math.BigInteger");
+		imports.put("BigDecimal", "java.math.BigDecimal");
+		return Map.copyOf(imports);
+	}
 
 	/**
 	 * Whether a core name is visible: everything outside a
@@ -943,13 +962,10 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The imported classes of TARGET in PAIRS, each a symbol of its FQN: the explicit
-	 * imports over the default {@code java.lang} ones they shadow.
+	 * imports over the default ones they shadow.
 	 */
 	private static void importPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
-		Map<String, String> imports = new java.util.TreeMap<>();
-		for (String name : JAVA_LANG) {
-			imports.put(name, "java.lang." + name);
-		}
+		Map<String, String> imports = new java.util.TreeMap<>(DEFAULT_IMPORTS);
 		ClojureNsState state = ctx.namespaces.get(target);
 		if (state != null) {
 			imports.putAll(state.classNames);
@@ -1420,7 +1436,7 @@ final class ClojureNamespaceLowering {
 				|| ctx.requiredLibraries.contains(head);
 	}
 
-	/** A class name resolved: dotted as written, imported, or {@code java.lang}. */
+	/** A class name resolved: dotted as written, imported, or a default import. */
 	static String resolveClass(ClojureLowering ctx, String name) {
 		if (name.indexOf('.') >= 0) {
 			return name;
@@ -1429,18 +1445,15 @@ final class ClojureNamespaceLowering {
 		if (imported != null) {
 			return imported;
 		}
-		if (JAVA_LANG.contains(name)) {
-			return "java.lang." + name;
-		}
-		return name;
+		return DEFAULT_IMPORTS.getOrDefault(name, name);
 	}
 
 	/**
-	 * Whether the slash form's head names a class: imported, java.lang, dotted or
+	 * Whether the slash form's head names a class: imported, a default import, dotted or
 	 * capitalized.
 	 */
 	static boolean isClasslike(ClojureLowering ctx, String head) {
-		return ctx.ns().classNames.containsKey(head) || JAVA_LANG.contains(head) || head.indexOf('.') >= 0
+		return ctx.ns().classNames.containsKey(head) || DEFAULT_IMPORTS.containsKey(head) || head.indexOf('.') >= 0
 				|| (!head.isEmpty() && Character.isUpperCase(head.charAt(0)));
 	}
 

@@ -5505,8 +5505,14 @@ host alone answers ("Host arms where the host is not").
   preference, oracle-identical on interpreter and JVM (clj 1.12.6): `@(.submit pool (fn [] 1))`
   1 on an untyped receiver, `^Runnable` nil and `^Callable` 42 on a typed one, `^String`
   (no overload) 5, a hinted local/parameter nil. Before, every row was `submit(Runnable)`: nil.
-  Default import `Callable` is not resolved here (the oracle imports it, with `BigInteger` and
-  `BigDecimal`), so `^Callable` hints nothing -- harmless, `Callable` is the default. Pin:
+  Default imports (2026-10-29): `ClojureNamespaceLowering.DEFAULT_IMPORTS` maps each simple
+  name of the oracle's `(ns-imports 'user)` to its FQN -- the `java.lang` list plus `Callable`,
+  `BigInteger`, `BigDecimal` (its `clojure.lang.Compiler` is no class here) -- read by
+  `resolveClass`, `isClasslike`, `ns-imports` and syntax quote, so `^Callable` hints `Callable`.
+  The two number classes resolve as their FQNs already did: `(instance? BigInteger 1N)` false
+  like the oracle, `(instance? BigDecimal 1M)` false where the oracle's is true (the `N`/`M`
+  literal rule). Pins: clojure-spec
+  `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
   `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`.
 - Host collections under the seq verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.seq`
   takes an `Iterable`, a `Map` (its `entrySet`) and a `CharSequence`; `RT.count` a
@@ -7342,9 +7348,13 @@ resolve var`.
   an action) waits in that box, released on success, dropped on failure. `%clojure-agent-drain`
   appends under `%clojure-atom-guard` and, when no thread runs the agent, elects its thread
   the runner: the runner hands the agent to the shared pool (`clojure.lisp` "The shared
-  agent pool", 2026-10-22, g38), which pumps the queue on one of its four worker threads
+  agent pool", 2026-10-22, g38), which pumps the queue on one of up to four worker threads
   (actions outside every lock, so no deadlock between agents and a slow action never blocks
-  its sender). A failing action
+  its sender). A worker ends at the empty take and a submit starts one when fewer than four
+  run (2026-10-29, the taps' shape): the earlier crew of four polling `(sleep 0.001)` forever
+  never returned from a spawn that runs its body at once (the browser playground), so a
+  `send` hung the page. Pinned by `ClojureAgentPoolTest` (`synchronousSpawn...`: a CL
+  prelude redefines `rontolisp:make-thread` to run its body at once). A failing action
   never signals (2026-10-11; before, it signalled on the draining thread and the agent stayed
   usable): `%clojure-agent-act` catches it, drops its held sends, calls the error handler
   (held unbound, so its sends dispatch; its own failure ignored) and, unless the mode is

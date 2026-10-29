@@ -713,8 +713,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   waits for another thread's transaction never finishes, and a read outside a
   transaction may see a running one's write, where the oracle's sees only
   committed values.
-- Agents run their actions on a shared pool of four worker threads on the
-  interpreter and the JVM: a send only queues the action and answers the agent at
+- Agents run their actions on a shared pool of up to four worker threads on the
+  interpreter and the JVM, a worker ending once no agent waits: a send only queues the action and answers the agent at
   once, and one agent's actions run one at a time in send order. `send-off` shares
   the pool (the oracle gives it an unbounded pool of its own), and no creation-time
   bindings reach the new thread (only `bound-fn*` conveys any). On the WASM legs, by
