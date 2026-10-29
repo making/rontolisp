@@ -1264,8 +1264,9 @@ final class ClojureMacroLowering {
 			if (imported != null) {
 				return imported;
 			}
-			if (ClojureNamespaceLowering.JAVA_LANG.contains(name)) {
-				return "java.lang." + name;
+			String defaulted = ClojureNamespaceLowering.DEFAULT_IMPORTS.get(name);
+			if (defaulted != null) {
+				return defaulted;
 			}
 			if (name.indexOf('.') >= 0) {
 				return name;
@@ -1285,8 +1286,9 @@ final class ClojureMacroLowering {
 		if (imported != null) {
 			return imported + "/" + tail;
 		}
-		if (ClojureNamespaceLowering.JAVA_LANG.contains(head)) {
-			return "java.lang." + name;
+		String defaulted = ClojureNamespaceLowering.DEFAULT_IMPORTS.get(head);
+		if (defaulted != null) {
+			return defaulted + "/" + tail;
 		}
 		return name;
 	}

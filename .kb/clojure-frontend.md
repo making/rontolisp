@@ -5408,8 +5408,14 @@ host alone answers ("Host arms where the host is not").
   preference, oracle-identical on interpreter and JVM (clj 1.12.6): `@(.submit pool (fn [] 1))`
   1 on an untyped receiver, `^Runnable` nil and `^Callable` 42 on a typed one, `^String`
   (no overload) 5, a hinted local/parameter nil. Before, every row was `submit(Runnable)`: nil.
-  Default import `Callable` is not resolved here (the oracle imports it, with `BigInteger` and
-  `BigDecimal`), so `^Callable` hints nothing -- harmless, `Callable` is the default. Pin:
+  Default imports (2026-10-29): `ClojureNamespaceLowering.DEFAULT_IMPORTS` maps each simple
+  name of the oracle's `(ns-imports 'user)` to its FQN -- the `java.lang` list plus `Callable`,
+  `BigInteger`, `BigDecimal` (its `clojure.lang.Compiler` is no class here) -- read by
+  `resolveClass`, `isClasslike`, `ns-imports` and syntax quote, so `^Callable` hints `Callable`.
+  The two number classes resolve as their FQNs already did: `(instance? BigInteger 1N)` false
+  like the oracle, `(instance? BigDecimal 1M)` false where the oracle's is true (the `N`/`M`
+  literal rule). Pins: clojure-spec
+  `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
   `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`.
 - Host collections under the seq verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.seq`
   takes an `Iterable`, a `Map` (its `entrySet`) and a `CharSequence`; `RT.count` a

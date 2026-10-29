@@ -3407,7 +3407,8 @@ cases:
     # instance? of any class answers what the oracle's isInstance does for every kind
     # of value: an interface the kind's host class implements (java.util.List of a
     # vector), a class no value here has (java.io.File) false. Measured against clj
-    # 1.12.6, identical.
+    # 1.12.6, identical. Callable, BigInteger and BigDecimal are default imports there
+    # beside java.lang (2026-10-29; before, "unknown name: Callable").
     source: |
       (defprotocol IokP (iok-m [x]))
       (defrecord IokR [a])
@@ -3454,6 +3455,9 @@ cases:
       (iok-row Integer)
       (iok-row java.io.File)
       (iok-row java.util.AbstractList)
+      (iok-row Callable)
+      (iok-row BigInteger)
+      (iok-row BigDecimal)
       (println (instance? java.util.Map {1 2}) (instance? clojure.lang.Sorted 1/2) (instance? Comparable 1.5) (instance? java.io.Writer *out*) (instance? clojure.lang.Named :k) (instance? clojure.lang.IDeref (atom 1)) (instance? Integer 1))
     expected: |
       java.util.List fffffffftttfffffffffffffff
@@ -3494,6 +3498,9 @@ cases:
       Integer ffffffffffffffffffffffffff
       java.io.File ffffffffffffffffffffffffff
       java.util.AbstractList ffffffffffffffffffffffffff
+      Callable fffffftttfftttttfftfffffff
+      BigInteger ffffffffffffffffffffffffff
+      BigDecimal ffffffffffffffffffffffffff
       true false true true true true false
   - name: instance-of-a-protocol-interface-tests-the-body-implementations
     # A protocol defines the interface ns.P (munged): a record, deftype or reify naming

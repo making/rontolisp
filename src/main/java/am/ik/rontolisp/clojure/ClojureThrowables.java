@@ -28,14 +28,14 @@ final class ClojureThrowables {
 
 	/**
 	 * The superclass of each throwable a program names without an import -- the oracle's
-	 * {@code java.lang} default imports ({@link ClojureNamespaceLowering#JAVA_LANG}) and
-	 * the classes between them and {@code Throwable} -- of the public
-	 * {@code clojure.lang} throwables, read off clj 1.12.6 on JDK 25 (2026-10-03), and of
-	 * the three the HTTP client throws ({@code rontolisp.http-client}: a transport's
-	 * {@code IOException}, a failed future's {@code ExecutionException} under
-	 * {@code deref}, the {@code CompletionException} {@code :async-catch} is handed) and
-	 * of the three {@code clojure.java.io} refuses a file, a charset and a URL with, and
-	 * of the two a compressed reply the client cannot read throws ({@code ZipException},
+	 * default imports ({@link ClojureNamespaceLowering#DEFAULT_IMPORTS}) and the classes
+	 * between them and {@code Throwable} -- of the public {@code clojure.lang}
+	 * throwables, read off clj 1.12.6 on JDK 25 (2026-10-03), and of the three the HTTP
+	 * client throws ({@code rontolisp.http-client}: a transport's {@code IOException}, a
+	 * failed future's {@code ExecutionException} under {@code deref}, the
+	 * {@code CompletionException} {@code :async-catch} is handed) and of the three
+	 * {@code clojure.java.io} refuses a file, a charset and a URL with, and of the two a
+	 * compressed reply the client cannot read throws ({@code ZipException},
 	 * {@code EOFException}). A table, not reflection, so a host that reflects only what
 	 * its image holds (a native image, the browser) resolves these alike;
 	 * {@code ClojureThrowablesTest} pins the {@code java} rows to reflection. The
