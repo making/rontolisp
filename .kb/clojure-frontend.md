@@ -3843,7 +3843,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `ClojureLoweringTest#hierarchyVerbsNameValues`).
 - `defprotocol`: an `equal`-table global plus one dispatcher `defun` per method over
   `C%PROTOCOL-TAG`; exact tag, then (a walking protocol, below) the walked classes, then the
-  method's `Object` row, else a signal. The
+  method's `Object` row, else a signal. A protocol of no methods (a marker; core.async's
+  `UnblockingBuffer`) is the table and registry alone, refused until 2026-10-29 (pin:
+  clojure-spec `extends-reads-the-protocol-table`, oracle-identical). The
   multimethod shape over runtimes all four backends already run, not a per-backend value
   model (`.todo/artefacts/b13-protocols/spike.md`).
 - **A method declares one parameter vector per arity** (`(m [x] [x y] "doc")`;

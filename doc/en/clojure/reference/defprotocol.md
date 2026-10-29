@@ -1,6 +1,6 @@
 # defprotocol
 
-`(defprotocol Name docstring? (method [target & args]+ docstring?) ...)`
+`(defprotocol Name docstring? (method [target & args]+ docstring?)*)`
 
 Declares a protocol: a method-table global plus one dispatcher per method over the
 target's tag (the multimethod shape without the hierarchy search). The name answers
@@ -15,6 +15,10 @@ one an arity the protocol declares; [extend-protocol](extend-protocol.md),
 [extend-type](extend-type.md) and [extend](extend.md) spell the arities as the clauses
 of a `fn`. A count the implementation does not take signals an `ArityException` (the
 oracle throws an `AbstractMethodError` for an arity an inline body leaves out).
+
+A protocol may declare no methods (a marker protocol): `extend-type`, `extend-protocol`,
+`extend`, `defrecord`, `deftype` and `reify` name it with no implementations, and
+`satisfies?`/`extends?` answer as for any other protocol.
 
 With `:extend-via-metadata true` a value also implements a method through its
 metadata ([with-meta](with-meta.md)), keyed by the namespace-qualified method symbol
