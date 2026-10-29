@@ -428,9 +428,9 @@ binds `*standard-output*` to a string stream (never a literal
 `with-open` binds and closes in
 reverse order through `unwind-protect`, calling the `close` method (Java
 closeables need the JVM, like all interop); `with-precision` binds `*math-context*` to
-the evaluated precision around its body and answers the last value -- division stays
-exact (a ratio, never the oracle's `BigDecimal`), so the binding only scopes the
-extent; `(. stream write x)` prints through
+the math context of the evaluated precision (and `:rounding` mode) around its body and
+answers the last value, its decimal arithmetic rounded to the precision like the
+oracle's; `(. stream write x)` prints through
 `princ` on every backend, `(.readLine stream)` reads through `read-line`
 (`nil` past the end, like the oracle) and `(.read stream)` answers the next
 character's code (`-1` past the end).

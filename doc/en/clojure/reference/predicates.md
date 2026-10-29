@@ -3,8 +3,8 @@
 The predicates over a value's kind. Each answers `true` or `false`, and every one but
 `extends?` is also a function value of the same arguments. The answers follow the representation
 ([Deviations](../deviations.md)): `nil` is the empty list, a seq a verb answers over a strict
-input is a list, and decimal and `N` literals read as plain rationals. A predicate over a
-kind no value here has (`decimal?`, `chunked-seq?`, ...) answers `false`. A sorted map
+input is a list, and an `N` literal inside the long range reads as a plain integer. A
+predicate over a kind no value here has (`chunked-seq?`) answers `false`. A sorted map
 or set is a map or set to every predicate, and `sorted?` and `reversible?` hold for it.
 `coll?` and the other predicates are on [Numbers and predicates](numbers.md).
 
@@ -29,7 +29,7 @@ or set is a map or set to every predicate, and `sorted?` and `reversible?` hold 
 | `int?` | `(int? 1)` | `true` |
 | `double?` | `(double? 1.5)` | `true` |
 | `float?` | `(float? 1.5)` | `true` |
-| `decimal?` | `(decimal? 1.5)` | `false` |
+| `decimal?` | `(decimal? 1.5M)` | `true` |
 | `ratio?` | `(ratio? 1/2)` | `true` |
 | `rational?` | `(rational? 0.5)` | `false` |
 | `nat-int?` | `(nat-int? 0)` | `true` |

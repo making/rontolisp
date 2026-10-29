@@ -574,6 +574,28 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A decimal, the oracle's {@code java.math.BigDecimal}, and the math context
+		 * {@code with-precision} binds, which arithmetic, the comparisons, the numeric
+		 * predicates and casts, {@code range}, the printer, {@code str}, {@code format},
+		 * {@code =}, {@code compare}, the hashes, the structural keys, {@code class}, a
+		 * protocol's dispatch and {@code instance?} read: only an {@code M} literal
+		 * (whose quoted wrapper names the tag {@link ClojureDecimalLowering#TAG}),
+		 * {@code bigdec}, {@code with-precision} and a read, whose reader takes an
+		 * {@code M} literal, make one. The aliases are the decimal-aware helpers the
+		 * lowering names in place of the plain numeric operators, each to its operator
+		 * ({@link ClojureDecimalLowering#ALIASES}), and every definition named
+		 * {@code %clojure-bd-} is the family's own. Ahead of {@link #HOST}:
+		 * {@code instance?} of {@code Number}'s helper is an alias of the host test,
+		 * which that family folds in turn.
+		 */
+		DECIMAL("decimal", Set
+			.of(ClojureDecimalLowering.DECIMAL_P, ClojureDecimalLowering.DECIMAL_IN_P, ClojureDecimalLowering.VALUE_P),
+				Set.of(), ClojureDecimalLowering.ALIASES,
+				Reads.with(ClojureDecimalLowering.TAG, ClojureDecimalLowering.BIGDEC, ClojureDecimalLowering.BIGDEC_V,
+						ClojureDecimalLowering.MATH_CONTEXT),
+				Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(), ClojureDecimalLowering.PREFIX, null),
+
+		/**
 		 * The unbound root of a declared-never-defined name or a value-less {@code def}:
 		 * only the store a file starts with (or a session's declare) makes one.
 		 */
