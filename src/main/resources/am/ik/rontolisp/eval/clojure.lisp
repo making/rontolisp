@@ -2046,11 +2046,14 @@
 
 (defun rontolisp::%clojure-ex-message (x)
   "ex-message and .getMessage: an exception's message (nil when it has none),
-   a runtime error's report, NIL for anything that is no exception."
+   a runtime error's report (a division by zero's the oracle's ArithmeticException
+   message), NIL for anything that is no exception."
   (let ((e (rontolisp::%clojure-exception-of x)))
     (if e
         (let ((parts (c%e-parts e)))
-          (if parts (car (cdr parts)) (format nil "~a" e))))))
+          (cond (parts (car (cdr parts)))
+                ((typep e 'division-by-zero) "Divide by zero")
+                (t (format nil "~a" e)))))))
 
 (defun rontolisp::%clojure-ex-data (x)
   "ex-data: an exception's data (ex-info's map), NIL for anything else."
@@ -13322,7 +13325,7 @@
    32 bits (only -2147483648 / -1 wraps); a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
-        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
         (%mask-signed-field 32 (truncate x y)))))
 
 (defun rontolisp::%clojure-unchecked-remainder-int (a b)
@@ -13330,7 +13333,7 @@
    dividend; a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
-        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
         (rem x y))))
 
 (defun rontolisp::%clojure-unchecked-inc-v (&rest args)

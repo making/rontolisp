@@ -38,5 +38,5 @@ clojure> [*1 *2]
 clojure> (/ 1 0)
 Error: Division by zero
 clojure> (ex-message *e)
-"Division by zero"
+"Divide by zero"
 ```
