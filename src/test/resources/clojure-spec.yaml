@@ -13727,6 +13727,73 @@ cases:
       "Already seen doctype."
       "The processing instruction must begin with the name of the target."
       [:encoding "bogus"]
+  - name: clojure-reflect-describes-a-host-class-like-the-oracle
+    # The built-in clojure.reflect reflects through the host: bases, class flags, the
+    # declared constructors, methods (bridges and natives flagged) and fields as records,
+    # array types spelled with <>, :ancestors, a class, a symbol, a value (Long a class
+    # here too), the oracle's ClassNotFoundException for a symbol forName misses. Sets
+    # print sorted: a set's walk order is the backend's. Oracle-identical (clj 1.12.6,
+    # 2026-10-29); the WASM legs refuse the reflection (the next case).
+    skip:
+      wasm: no host class to reflect on; the next case pins the refusal
+      wasm_component: no host class to reflect on; the next case pins the refusal
+    source: |
+      (require '[clojure.reflect :as reflect])
+      (defn rh-norm [x]
+        (cond (set? x) (vec (sort-by pr-str (map rh-norm x)))
+              (map? x) (into (sorted-map) (map (fn [[k v]] [k (rh-norm v)])) x)
+              (vector? x) (mapv rh-norm x)
+              :else x))
+      (defn rh [f] (try (rh-norm (f)) (catch Exception e [(.getName (class e)) (ex-message e)])))
+      (defn rh-named [n m] (set (filter #(= n (:name %)) (:members m))))
+      (prn (rh #(reflect/type-reflect Runnable :reflector (reflect/->JavaReflector nil))))
+      (prn (rh #(dissoc (reflect/reflect "") :members)) (rh #(dissoc (reflect/reflect Long) :members)))
+      (prn (rh #(rh-named 'wait (reflect/type-reflect Object))))
+      (prn (rh #(rh-named 'compareTo (reflect/type-reflect String))))
+      (prn (rh #(set (filter (fn [m] (instance? clojure.reflect.Constructor m)) (:members (reflect/type-reflect java.util.ArrayList))))))
+      (prn (rh #(dissoc (reflect/type-reflect java.util.ArrayList :ancestors true) :members)))
+      (prn (rh #(:ancestors (reflect/type-reflect Object :ancestors true))))
+      (prn (rh #(reflect/type-reflect (Class/forName "[I"))) (rh #(reflect/type-reflect Integer/TYPE)))
+      (prn (rh #(reflect/type-reflect 'int<>)) (rh #(reflect/type-reflect 'no.Such)))
+      (prn (reflect/typename String) (reflect/typename 'int<>) (reflect/typename (Class/forName "[[Ljava.lang.String;")))
+      (prn (rh #(set (map (juxt :name :type :flags) (rh-named 'MAX_VALUE (reflect/type-reflect Integer))))))
+      (prn (rh #(:flags (reflect/type-reflect java.lang.annotation.Retention))) (rh #(:flags (reflect/type-reflect java.lang.Thread$State))))
+      (prn (rh #(dissoc (reflect/reflect (java.util.ArrayList.)) :members)))
+      (prn (some? (reflect/resolve-class (.getContextClassLoader (Thread/currentThread)) 'java.lang.String)))
+      (prn (rh-norm (reflect/->Method 'a 'int 'x [] [] #{})) (record? (reflect/->Field 'f 'int 'x #{})) (count reflect/flag-descriptors))
+    expected: |
+      {:bases nil, :flags [:abstract :interface :public], :members [{:declaring-class java.lang.Runnable, :exception-types [], :flags [:abstract :public], :name run, :parameter-types [], :return-type void}]}
+      {:bases [java.io.Serializable java.lang.CharSequence java.lang.Comparable java.lang.Object java.lang.constant.Constable java.lang.constant.ConstantDesc], :flags [:final :public]} {:bases [java.lang.Comparable java.lang.Number java.lang.constant.Constable java.lang.constant.ConstantDesc], :flags [:final :public]}
+      [{:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [], :return-type void} {:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [long int], :return-type void} {:declaring-class java.lang.Object, :exception-types [java.lang.InterruptedException], :flags [:final :public], :name wait, :parameter-types [long], :return-type void}]
+      [{:declaring-class java.lang.String, :exception-types [], :flags [:bridge :public :synthetic], :name compareTo, :parameter-types [java.lang.Object], :return-type int} {:declaring-class java.lang.String, :exception-types [], :flags [:public], :name compareTo, :parameter-types [java.lang.String], :return-type int}]
+      [{:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types []} {:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types [int]} {:declaring-class java.util.ArrayList, :exception-types [], :flags [:public], :name java.util.ArrayList, :parameter-types [java.util.Collection]}]
+      {:ancestors [java.io.Serializable java.lang.Cloneable java.lang.Iterable java.lang.Object java.util.AbstractCollection java.util.AbstractList java.util.Collection java.util.List java.util.RandomAccess java.util.SequencedCollection], :bases [java.io.Serializable java.lang.Cloneable java.util.AbstractList java.util.List java.util.RandomAccess], :flags [:public]}
+      []
+      {:bases [java.io.Serializable java.lang.Cloneable java.lang.Object], :flags [:abstract :final :public], :members []} {:bases nil, :flags [:abstract :final :public], :members []}
+      ["java.lang.ClassNotFoundException" "int[]"] ["java.lang.ClassNotFoundException" "no.Such"]
+      "java.lang.String" "int[]" "java.lang.String[][]"
+      [[MAX_VALUE int [:final :public :static]]]
+      [:abstract :annotation :interface :public] [:enum :final :public]
+      {:bases [java.io.Serializable java.lang.Cloneable java.util.AbstractList java.util.List java.util.RandomAccess], :flags [:public]}
+      true
+      {:declaring-class x, :exception-types [], :flags [], :name a, :parameter-types [], :return-type int} true 17
+  - name: clojure-reflect-refuses-to-reflect-where-the-host-is-not
+    # On WASM the namespace loads (its records, flag-descriptors and the symbol
+    # typename work) and a reflection throws UnsupportedOperationException when called.
+    skip:
+      interpreter: the host reflects (the case above)
+      jvm: the host reflects (the case above)
+    source: |
+      (require '[clojure.reflect :as reflect])
+      (prn (reflect/typename 'int<>) (reflect/typename 'java.lang.String<><>))
+      (prn (reflect/->Method 'a 'int 'x [] [] #{}) (record? (reflect/map->Field {:name 'f})) (count reflect/flag-descriptors))
+      (prn (try (reflect/reflect "") (catch UnsupportedOperationException e (ex-message e))))
+      (prn (try (reflect/type-reflect 'java.lang.Object :ancestors true) (catch UnsupportedOperationException e (ex-message e))))
+    expected: |
+      "int[]" "java.lang.String[][]"
+      #clojure.reflect.Method{:name a, :return-type int, :declaring-class x, :parameter-types [], :exception-types [], :flags #{}} true 17
+      "clojure.reflect/do-reflect reflects on a host class, which this target has not"
+      "clojure.reflect/do-reflect reflects on a host class, which this target has not"
   - name: hash-is-the-oracles-hasheq-of-every-kind
     # clojure.core/hash is Util.hasheq: Murmur3 over a long, a string's
     # String.hashCode (its UTF-16 units), a keyword's or symbol's name and
