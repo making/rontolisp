@@ -1,6 +1,6 @@
 # defprotocol
 
-`(defprotocol Name docstring? (method [target & args]+ docstring?) ...)`
+`(defprotocol Name docstring? (method [target & args]+ docstring?)*)`
 
 プロトコルを宣言します。メソッドごとにターゲットのタグ上のディスパッチャ（階層
 探索なしの multimethod 形）を持ちます。名前はメソッド表を答えます。呼び出しは
@@ -15,6 +15,10 @@ extend したもの（throwable、`IRef` など。[extend-protocol](extend-proto
 [extend-type](extend-type.md)、[extend](extend.md) はアリティを `fn` の節として書きます。
 実装が受け取らない引数の数の呼び出しは `ArityException` をシグナルします（インライン本体が
 実装していないアリティについて、オラクルは `AbstractMethodError` を投げます）。
+
+メソッドを1つも宣言しないプロトコル（マーカープロトコル）も書けます。`extend-type`・
+`extend-protocol`・`extend`・`defrecord`・`deftype`・`reify` は実装なしでそれを名指しでき、
+`satisfies?`/`extends?` は他のプロトコルと同じように答えます。
 
 `:extend-via-metadata true` のプロトコルでは、値がメタデータ（[with-meta](with-meta.md)）
 でもメソッドを実装できます。キーは名前空間で修飾したメソッドのシンボル（`` `area `` または

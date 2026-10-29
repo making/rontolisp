@@ -10122,7 +10122,7 @@ cases:
       (false false false false false false false false) false false false true
   - name: extends-reads-the-protocol-table
     # Oracle-identical (clj 1.12.6): an inline implementation or an extension counts; an
-    # Object extension counts for Object alone.
+    # Object extension counts for Object alone. A marker protocol (no methods) too.
     source: |
       (defprotocol TpP (tp-m [x]))
       (defprotocol TpQ (tp-q [x]))
@@ -10134,8 +10134,19 @@ cases:
       (extend-protocol TpQ Object (tp-q [x] 3))
       (extend TpPS TpQ {:tp-q (fn [x] 4)})
       (prn (extends? TpP TpPR) (extends? TpP TpPS) (extends? TpP TpPT) (extends? TpP TpPU) (extends? TpP String) (extends? TpP Long) (extends? TpQ Object) (extends? TpQ TpPS) (extends? TpP Object) (extends? TpQ TpPR))
+      (defprotocol TpM)
+      (defprotocol TpN "a marker protocol: no methods")
+      (defrecord TpMR [a] TpM)
+      (deftype TpMT [a] TpM)
+      (extend-type String TpM)
+      (extend-protocol TpN Long nil)
+      (extend Boolean TpM {})
+      (prn (satisfies? TpM "a") (satisfies? TpM 1) (satisfies? TpN 1) (satisfies? TpN nil) (satisfies? TpM (->TpMR 1)) (satisfies? TpM (TpMT. 1)) (satisfies? TpM (reify TpM)) (satisfies? TpM true) (satisfies? TpN "a"))
+      (prn (extends? TpM String) (extends? TpM TpMR) (extends? TpM TpMT) (extends? TpN Long) (extends? TpM Long) (extends? TpM Boolean))
     expected: |
       true false false true true false true true false false
+      true false true true true true true true false
+      true true true true false true
   - name: extend-takes-a-package-qualified-class-spelling
     # Oracle-identical (clj 1.12.6): extend-protocol, extend-type, extend and extends? take
     # java.lang./clojure.lang./java.util. spellings the way defmethod does; java.lang.Object
