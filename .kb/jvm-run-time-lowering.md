@@ -8,9 +8,16 @@ reads and lowers the program again from the image -- the same decisions, so the 
 package through the host's own lookup, linked against the host and the fragments before
 it: functions by name, globals and run-time state through the host's fields, function
 values routed by id.** clojure-spec `the-interpreter-lowers-at-run-time` runs on the JVM
-leg (2026-10-30; the whole spec program is a host, every JVM case green), and as
-`-o App.class` / `-o app.jar` with nothing else on the class path. Wasm refuses by name
-(`.kb/clojure-frontend.md`, "Lowering at run time").
+leg as `-o App.class` / `-o app.jar` with nothing else on the class path (2026-10-30).
+Wasm refuses by name (`.kb/clojure-frontend.md`, "Lowering at run time").
+
+Trap: one such case makes a whole concatenated corpus a host, which then checks only
+host-mode output (no arm stripping, raw globals, non-threads specials or tree shaking).
+Measured 2026-10-30: five clojure-spec cases did -- the run-time lowering case, and four
+whose macro bodies or helpers name a verb over a computed argument (`eval` / `resolve` in
+`defmacro` bodies and a `defn`, `(ns-map *ns*)` in a macro body, `ns-map` as a value).
+Such a case is marked `host:`; the JVM leg runs the marked cases as one host program of
+their own and refuses a corpus class that has `_rtImage`.
 
 ## Compile time: the host
 
@@ -107,6 +114,6 @@ leg (2026-10-30; the whole spec program is a host, every JVM case green), and as
 
 ## Tests
 
-clojure-spec `the-interpreter-lowers-at-run-time` (the JVM leg),
-`ClojureSpecE2eTest#aClassThatLowersAtRunTimeRunsAloneAsAClassAndAsAJar` (the case compiled
-by the command line, each output run as its own process).
+clojure-spec `the-interpreter-lowers-at-run-time` and the other `host:` cases
+(`ClojureSpecE2eTest`'s JVM leg, `HOST_CLASS` / `HOST_JAR`: compiled by the command line,
+each output run as its own process).
