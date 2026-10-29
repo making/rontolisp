@@ -44,6 +44,32 @@ final class ClojureLowerUtil {
 	private ClojureLowerUtil() {
 	}
 
+	/** The oracle's {@code munge}: each special character to its word. */
+	static String munge(String name) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < name.length(); i++) {
+			char c = name.charAt(i);
+			String word = MUNGED.get(c);
+			if (word != null) {
+				out.append(word);
+			}
+			else {
+				out.append(c);
+			}
+		}
+		return out.toString();
+	}
+
+	/** The oracle's {@code Compiler.CHAR_MAP}. */
+	private static final Map<Character, String> MUNGED = Map.ofEntries(Map.entry('-', "_"), Map.entry(':', "_COLON_"),
+			Map.entry('+', "_PLUS_"), Map.entry('>', "_GT_"), Map.entry('<', "_LT_"), Map.entry('=', "_EQ_"),
+			Map.entry('~', "_TILDE_"), Map.entry('!', "_BANG_"), Map.entry('@', "_CIRCA_"), Map.entry('#', "_SHARP_"),
+			Map.entry('\'', "_SINGLEQUOTE_"), Map.entry('"', "_DOUBLEQUOTE_"), Map.entry('%', "_PERCENT_"),
+			Map.entry('^', "_CARET_"), Map.entry('&', "_AMPERSAND_"), Map.entry('*', "_STAR_"), Map.entry('|', "_BAR_"),
+			Map.entry('{', "_LBRACE_"), Map.entry('}', "_RBRACE_"), Map.entry('[', "_LBRACK_"),
+			Map.entry(']', "_RBRACK_"), Map.entry('/', "_SLASH_"), Map.entry('\\', "_BSLASH_"),
+			Map.entry('?', "_QMARK_"));
+
 	/**
 	 * Whether the function form is already a real function: a {@code function} designator
 	 * or a lambda. Anything else (a variable, a call result) may hold a collection at run

@@ -3668,10 +3668,10 @@ public final class ClojureLowering {
 		int chars = 0;
 		boolean statementInChunk = false;
 		for (LispVal statement : statements) {
-			// a switch weighs nothing and joins the chunk at hand, and the rest weigh
-			// what they print without theirs: a program that sheds them cuts its init
-			// where it did before they existed
-			if (ClojureArms.isSwitch(statement)) {
+			// a switch or a fn-class registration weighs nothing and joins the chunk
+			// at hand, and the rest weigh what they print without them: a program
+			// that sheds them cuts its init where it did before they existed
+			if (ClojureArms.weighsNothing(statement)) {
 				chunk.add(statement);
 				continue;
 			}

@@ -15699,19 +15699,36 @@ cases:
     # dashes, over the str of the value. clojure.lang.Compiler/demunge spells a
     # class name back, $ as /. A fn's .getClass names the class the oracle
     # compiles it to: a core function's clojure.core$name (spec.alpha's fn-sym
-    # demunges it to name a bare predicate), any other fn an anonymous one's
-    # (the oracle's ns$enclosing$fn__N, here no fn carries its own name).
-    # Oracle-identical (clj 1.12.6, 2026-10-13; the last two lines 2026-10-29).
+    # demunges it to name a bare predicate), a defn's ns$name munged (dynamic,
+    # redefinable, redefined and several arities alike) and a def'd fn literal's
+    # (fn or #()), whichever var holds it after, any other fn an anonymous one's
+    # (the oracle's ns$enclosing$fn__N; here clojure.lang.AFunction$fn).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the fourth line 2026-10-29, the
+    # last two 2026-10-30).
     source: |
       (prn (munge "foo-bar") (munge "+") (munge "a,b") (munge 1))
       (prn (namespace-munge "a.b-c") (namespace-munge "a/b"))
       (prn (munge "a'b\"c[d]") (clojure.lang.Compiler/demunge "clojure.core$int_QMARK_") (clojure.lang.Compiler/demunge "a_SINGLEQUOTE_b_LBRACK_c$d"))
       (prn (.getName (.getClass int?)) (.. inc getClass getName) (boolean (re-matches #".*\$fn(__\d+)?" (.getName (.getClass (fn [x] x))))))
+      (ns fn-class.my-ns)
+      (defn my-pred? [x] (int? x))
+      (defn ^:dynamic dyn-f ([] 1) ([x] x))
+      (defn twice [] 1)
+      (defn twice [] 2)
+      (defn ^:redef rf [x] x)
+      (def g (fn [x] x))
+      (def h #(inc %))
+      (def k g)
+      (prn (.getName (.getClass my-pred?)) (.. dyn-f getClass getName) (.. twice getClass getName) (clojure.lang.Compiler/demunge (.getName (.getClass my-pred?))))
+      (prn (.. g getClass getName) (.. h getClass getName) (.. k getClass getName) (.. rf getClass getName))
+      (in-ns 'user)
     expected: |
       "foo_bar" "_PLUS_" "a,b" "1"
       "a.b_c" "a/b"
       "a_SINGLEQUOTE_b_DOUBLEQUOTE_c_LBRACK_d_RBRACK_" "clojure.core/int?" "a'b[c/d"
       "clojure.core$int_QMARK_" "clojure.core$inc" true
+      "fn_class.my_ns$my_pred_QMARK_" "fn_class.my_ns$dyn_f" "fn_class.my_ns$twice" "fn-class.my-ns/my-pred?"
+      "fn_class.my_ns$g" "fn_class.my_ns$h" "fn_class.my_ns$g" "fn_class.my_ns$rf"
   - name: rt-check-spec-asserts-is-a-boolean-static-a-program-sets
     # clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts sets
     # and its assert reads, by Class/field and by (. Class field): false at the start, a

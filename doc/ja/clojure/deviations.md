@@ -448,8 +448,10 @@
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
   オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
-  それ以外の fn なら無名 fn の `clojure.lang.AFunction$fn` です。オラクルは `defn` を var の名前で
-  呼びます）。オラクルの
+  `defn` と fn リテラルを値とする `def` なら `ns$name`、それ以外の fn なら無名 fn の
+  `clojure.lang.AFunction$fn` です。オラクルはこの最後の名前に外側の関数と名前付き `fn` の名前を
+  含めます。別のフォームの中の `defn` もここでは `ns$name` で、オラクルは
+  `ns$eval123$name__124` です）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで
   `Method m taking N args is not supported for class C` として拒否し、オラクルのクラスが
   持ちうるがここでは答えないメソッド（`.reduce`・`.meta`・atom の `.compareAndSet`）は
@@ -907,9 +909,10 @@
   `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
-- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
-  述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
-  spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
+- `clojure.spec.alpha` は自身の jar からロードしますが、`explain` は素の述語が名前付き `fn`
+  （`(fn pos [x] ...)`）か、値が fn に展開されるマクロ呼び出しである `def` のとき
+  `:clojure.spec.alpha/unknown` と呼びます。オラクルはこれにも名前を付けます（`defn`、fn リテラルを
+  値とする `def`、core 関数、spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
   （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
   （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
   resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の

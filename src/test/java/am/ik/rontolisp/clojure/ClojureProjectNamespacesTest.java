@@ -244,6 +244,9 @@ class ClojureProjectNamespacesTest {
 					(defmacro shout [k s] (tagged k s))
 					(defmacro spaced [a b] (binding [*sep* " "] (join-name (name a) (name b))))
 					(def own (named x y))
+					(def lam (fn [x] x))
+					(defmacro defpred [n] `(defn ~n [x#] (int? x#)))
+					(defpred pred?)
 					"""), Map.entry("src/app/loud.clj", """
 					(ns app.loud)
 					(println "loading app.loud")
@@ -342,16 +345,20 @@ class ClojureProjectNamespacesTest {
 	/**
 	 * A required namespace's macros call its own functions -- a private one, one reading
 	 * a private table, one under a {@code binding} of its dynamic var -- at the requiring
-	 * file's expansions and at its own.
+	 * file's expansions and at its own. Its functions name the oracle's classes: a
+	 * {@code defn}'s, a {@code def}'s fn literal's (registered in the namespace's init)
+	 * and a macro's {@code defn}'s (defined there too).
 	 */
 	private static final String MACRO_LIB = """
 			(ns app.mlib-test (:require [app.mlib :as m :refer [shout]]))
 			(println (m/named foo bar) (shout :bang "hi") (m/shout :q "ok") (m/spaced a b) m/own)
+			(prn (.. m/tagged getClass getName) (.. m/lam getClass getName) (.. m/pred? getClass getName) (m/pred? 1))
 			""";
 
 	private static final String MACRO_LIB_OUT = """
 			loading app.mlib
 			foo-bar hi! ok? a b x-y
+			"app.mlib$tagged" "app.mlib$lam" "app.mlib$pred_QMARK_" true
 			""";
 
 	@Test

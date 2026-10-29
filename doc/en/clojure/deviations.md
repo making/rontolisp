@@ -479,9 +479,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does, but of a fn: the
-  class the oracle compiles it to, whose `.getName` is a core function's `clojure.core$name`
-  and any other fn's that of an anonymous fn, `clojure.lang.AFunction$fn`, where the oracle
-  names a `defn` by its var). A method of a
+  class the oracle compiles it to, whose `.getName` is a core function's `clojure.core$name`, a
+  `defn`'s or a `def`'d fn literal's `ns$name`, and any other fn's that of an anonymous fn,
+  `clojure.lang.AFunction$fn`, where the oracle spells the enclosing function and a named
+  `fn`'s name in it; a `defn` inside another form is `ns$name` too, the oracle's
+  `ns$eval123$name__124`). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as
   `Method m taking N args is not supported for class C`, and so is, on every backend, a method
   the oracle's class may have that nothing here answers (`.reduce`, `.meta`, an atom's
@@ -944,9 +946,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `class`, protocol dispatch and `=` read.
 - A name referred from two namespaces keeps the later refer (the oracle refuses it), and
   a definition replaces a refer of its name without the oracle's warning.
-- `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate
-  function a program defined `:clojure.spec.alpha/unknown` (a fn carries no name here; a
-  core function and every predicate a spec macro takes keep theirs). `multi-spec` is
+- `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate that is
+  a named `fn` (`(fn pos [x] ...)`) or a `def` whose value is a macro call expanding to a fn
+  `:clojure.spec.alpha/unknown`, where the oracle names it (a `defn`, a `def` of a fn
+  literal, a core function and every predicate a spec macro takes keep their names). `multi-spec` is
   refused when it conforms (no multimethod answers `.dispatchFn`), and so are
   `clojure.spec.test.alpha`'s `instrument` (a `defn`'s calls do not go through its var) and
   `check`. What resolves a symbol or requires a namespace computed as the program runs --

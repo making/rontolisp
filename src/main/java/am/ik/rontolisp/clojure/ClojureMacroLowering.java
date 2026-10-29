@@ -380,8 +380,10 @@ final class ClojureMacroLowering {
 				}
 			}
 			case "RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED", "RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY",
-					"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER" -> {
-				// a watch/validator arm behind a definition: nothing to hand over
+					"RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER", ClojureValueMethodLowering.NOTE_FN_CLASS -> {
+				// a watch/validator arm or a fn-class registration behind a
+				// definition: nothing to hand over (a registration would force a
+				// def's lazy init)
 			}
 			default -> {
 				if (definitions) {

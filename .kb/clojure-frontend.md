@@ -1753,8 +1753,9 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   `(c/symbol ns)` computes its spec since g90 (`ClojureNamespaceLowering.computesSpecs`: a
   qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A
   compiled program refuses each of these by name (`.todo/h00` for the JVM).
-- **Gaps**, each refused where it runs: a bare predicate a program defined explains as
-  `:clojure.spec.alpha/unknown`, no fn carrying its var's name (`.todo/h03`); `multi-spec`
+- **Gaps**, each refused where it runs: a bare predicate explains by its var's name only
+  where it is a `defn` or a `def`'d fn literal ("Java interop", `.getClass` of a fn; a named
+  local `fn` explains as `:clojure.spec.alpha/unknown`); `multi-spec`
   conforms through `.dispatchFn`/`.getMethod`, which no multimethod answers (`.todo/h02`);
   `instrument` changes the root of a `defn` whose calls are direct, and `check` runs over
   it and over test.check's eager shrink trees (`.todo/h05`). `clojure.main/ex-str` of spec
@@ -5610,14 +5611,40 @@ host alone answers ("Host arms where the host is not").
   `ClojureWasmInteropRefusalTest#aMethodOfAValuesJavaObjectIsUnsupportedOnBothBackends`.
 - `.getClass` of a fn (g90, 2026-10-29; spec.alpha's `fn-sym` demunges `(.. f getClass
   getName)` to name a bare predicate) is the `(:C%CLASS name)` designator of the class the
-  oracle compiles it to, `%clojure-fn-class-name`: a core function the shared-value table
-  holds answers `clojure.core$<munged name>` (found by `eq` in that table, its key cut at a
-  snapshot's `#` or the dispatch cell's space), any other fn the anonymous shape
-  `clojure.lang.AFunction$fn` (the oracle's `ns$enclosing$fn__N`; a `defn`'s `ns$name` waits
-  on `.todo/h03`). `.getName` of a designator is its name (a `CLASS_DESIGNATOR` arm), so the
-  pair runs on every backend; `class` still answers the one `:function` kind (as a string's
-  `.getClass` is the host class where `class` is `:string`). A core value lowered to a
-  `(function worker)` rather than through the table (`hash` ...) answers the anonymous name.
+  oracle compiles it to, `%clojure-fn-class-name`: a function a definition registered answers
+  that name, a core function the shared-value table holds `clojure.core$<munged name>` (found
+  by `eq` in that table, its key cut at a snapshot's `#` or the dispatch cell's space), any
+  other fn the anonymous shape `clojure.lang.AFunction$fn` (the oracle's
+  `ns$enclosing$fn__N`, a named `fn`'s `ns$enclosing$name__N`). `.getName` of a designator is
+  its name (a `CLASS_DESIGNATOR` arm), so the pair runs on every backend. A core value
+  lowered to a `(function worker)` rather than through the table (`hash` ...) answers the
+  anonymous name.
+  - **Registration** (h03, 2026-10-30): every `defn` (`ClojureBindingLowering.defuns`: dynamic,
+    `^:redef`, redefined, several arities, in a body) ends in `(%clojure-note-fn-class
+    (function f) "ns$name")`, and a `def` whose value datum is a `fn`/`fn*`/`#()` literal in
+    the same statement over the value cell (`defForms`, `isFnLiteral`), into an `eq` table:
+    the name munged at lowering time (`ClojureValueMethodLowering.noteFnClass`,
+    `ClojureLowerUtil.munge`, a dot in the name `_DOT_`). Family `FN_CLASS`: the producer
+    is `%clojure-fn-class-name`, the statement the note, so a program reading no fn's class
+    lowers as before. A namespace's macro-made `defn` and its `def` statements sit in the
+    init's lambda body, so the strip drops a statement arm there too (`walkLambda`, not
+    when it is the whole body), and a note weighs nothing when the init is cut into chunks
+    (`ClojureArms.weighsNothing`). The macro-time hand-over skips the note (it would force a
+    `def`'s lazy init). Deviation: a `defn` inside another form is `ns$name` (the oracle's
+    `ns$eval123$name__124`; spec's `fn-sym` reads the same name from both). Oracle
+    (clj 1.12.6): `(s/explain-str my-pred? :a)` `":a - failed: my-pred?\n"`, a `def`'d
+    fn literal `g` `"nil - failed: g\n"`; measured identical on the interpreter, the JVM
+    and wasm P1 (2026-10-30). Pins: clojure-spec `munge-and-namespace-munge`,
+    `ClojureProjectNamespacesTest#aRequiredNamespacesMacrosCallItsFunctions`,
+    `ClojureArmsTest#theFnClassFamilyIsMadeByAFnsClassAndDropsTheRegistrationsOfAProgramReadingNone`.
+  - **`class` keeps the one `:function` kind** (as a string's `.getClass` is the host class
+    where `class` is `:string`), decided 2026-10-30 on a corpus count: of the 1377 `.clj`/
+    `.cljc` files in the 148 Clojure jars of the local Maven repository, the only
+    multimethod method on a fn class is clojure's own `print-dup` on `clojure.lang.Fn`; the
+    other fn-class sites (reitit 3, tick 4, exoscale 1) extend a protocol to
+    `clojure.lang.Fn`, which reads the kind, not `class`; the only reader of a fn's class
+    name is spec's `fn-sym`. A per-function `class` would move dispatch and the class rows
+    off the one kind for every program calling `class` on a fn, for no corpus program.
   `.name` and `.getName` of a namespace are its name symbol (the NAMESPACE family's test;
   spec's `ns-qualify` reads `(.name *ns*)` while `s/def` expands). Pins: clojure-spec
   `munge-and-namespace-munge`, `ns-is-the-current-namespace-and-the-load-specials-have-their-values`.
@@ -7820,8 +7847,8 @@ nested `def` is read almost never, so the size cost on every file is not worth t
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`,
   `ClojureJavaIoTest` (clojure.java.io's directories and resources, four backends).
-- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible, interface and
-  refusal strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible, interface,
+  refusal and fn-class strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
   `ClojureHttpClientTest`, `ClojureHttpClientHostFetchE2eTest` and
   `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),

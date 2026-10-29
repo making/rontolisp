@@ -35,6 +35,11 @@ class ClojureLoweringTest {
 
 	private static final String FALSE_BINDING = "(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)\n";
 
+	/** The registration of a defn's function under its class name, printed. */
+	static String noteFnClass(String name, String className) {
+		return "(RONTOLISP::%CLOJURE-NOTE-FN-CLASS #'|c%" + name + "| \"" + className + "\")";
+	}
+
 	/**
 	 * The definition a program naming {@code +}, {@code -}, {@code *}, {@code inc} or
 	 * {@code dec} carries for the flag their worker reads (g28): the plain false object,
@@ -126,10 +131,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void defnIsADefunCalledDirectly() {
-		assertThat(lowered("(defn f [x] x) (f 1)"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n(|c%f| 1)");
-		assertThat(lowered("(defn f [x] x) f"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n#'|c%f|");
+		// behind it the registration of its class name, which a program reading no fn's
+		// class sheds (ClojureArms.Family.FN_CLASS)
+		String defun = FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n"
+				+ noteFnClass("f", "user$f");
+		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo(defun + "\n(|c%f| 1)");
+		assertThat(lowered("(defn f [x] x) f")).isEqualTo(defun + "\n#'|c%f|");
 	}
 
 	@Test
@@ -261,8 +268,8 @@ class ClojureLoweringTest {
 			.contains("(DEFUN |c%vr%*| (|c%a| |c%r|) (|c%vr%*| |c%a| |c%r|))")
 			.contains("(DEFUN |c%vr| (|c%a| &REST |c%r|) " + arity("user/vr") + " (|c%vr%*| |c%a| |c%r|))");
 		// an unused variadic keeps its single shape
-		assertThat(lowered("(defn vu [a & r] a)"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) " + arity("user/vu") + " |c%a|)");
+		assertThat(lowered("(defn vu [a & r] a)")).isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) "
+				+ arity("user/vu") + " |c%a|)\n" + noteFnClass("vu", "user$vu"));
 		// a named fn splits into a worker plus its &rest head inside labels
 		assertThat(lowered("(fn f [a & r] (recur a r))")).contains("(|c%f%*| (|c%a| |c%r|) (|c%f%*| |c%a| |c%r|))")
 			.contains("(|c%f| (|c%a| &REST |c%r|) " + arity("user/f") + " (|c%f%*| |c%a| |c%r|))");
@@ -3517,7 +3524,8 @@ class ClojureLoweringTest {
 	@Test
 	void clojureCoreSpellingsNameTheCoreVar() {
 		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)")).contains("(RONTOLISP::%CLOJURE-+ 1 1)");
-		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])")).doesNotContain("#'|c%inc|");
+		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])"))
+			.doesNotContain("(RONTOLISP::%CLOJURE-MAP #'|c%inc|");
 		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("(RONTOLISP::%CLOJURE-OUT)");
 		assertThatThrownBy(() -> Clojure.read("(clojure.core/nope 1)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
