@@ -545,6 +545,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
   itself, where the oracle builds an empty mutable map. Where the host is (the
   interpreter and the JVM) the construction stays that mutable object.
+- A zero-argument `(java.util.LinkedList.)` is a mutable list of this front end's own on
+  the wasm backends, where no host object exists: `class`, `instance?` of
+  `java.util.LinkedList` and `print` read it as that list (`print` writes its members
+  like `pr`, where the oracle writes the host object), and `.remove` of an integer is
+  always the removal at that index (the overload the oracle's reflector picks for a
+  long). Where the host is (the interpreter and the JVM) the construction stays the
+  host's `LinkedList`.
 - A zero-argument `(Object.)` is a fresh uninterned symbol on the wasm backends, so a
   load-time lock builds; two constructions are never `=` or `identical?`, like two host
   objects, but one prints as a gensym where the oracle prints the object's identity.

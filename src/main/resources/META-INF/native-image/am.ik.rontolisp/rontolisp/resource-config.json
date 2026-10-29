@@ -317,7 +317,7 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
         },
-        "pattern": "am/ik/rontolisp/clojure/lib/rontolisp/[a-z_]+\\.clj"
+        "pattern": "am/ik/rontolisp/clojure/lib/rontolisp/([a-z_]+/)*[a-z_]+\\.clj"
       },
       {
         "condition": {

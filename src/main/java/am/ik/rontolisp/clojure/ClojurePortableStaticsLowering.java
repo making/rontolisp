@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispInteger;
@@ -17,12 +18,16 @@ import org.jspecify.annotations.Nullable;
  * (data.generators' {@code uniform} and {@code geometric}), {@code Math/abs} of one
  * argument (test.check's {@code shrink-long} and generators), {@code Long/bitCount} of
  * one argument (test.check's {@code mix-gamma}, every split) and
- * {@code Long/numberOfLeadingZeros} of one argument (test.check's {@code shrink-long}).
- * Where the host is not (wasm) each lowers to its portable worker in {@code clojure.lisp}
- * -- never a {@code java:static}, which wasm refuses; where the host is each stays the
- * host's call. Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s and
- * {@code Long/parseLong}'s grammar being {@code parse-long}'s and
- * {@code Double/valueOf}'s {@code parse-double}'s.
+ * {@code Long/numberOfLeadingZeros} of one argument (test.check's {@code shrink-long}),
+ * and what tools.reader's read path calls: {@code Integer/parseInt} of one argument (any
+ * literal int radix beside it), {@code Double/parseDouble},
+ * {@code Character/isWhitespace}, {@code isDigit}, {@code digit} and {@code valueOf}, and
+ * a {@code BigInteger} construction of a string, a byte array or either with its radix or
+ * signum ({@link #construction}). Where the host is not (wasm) each lowers to its
+ * portable worker in {@code clojure.lisp} -- never a {@code java:static}, which wasm
+ * refuses; where the host is each stays the host's call. Each worker is measured against
+ * clj 1.12.6, {@code Long/valueOf}'s and {@code Long/parseLong}'s grammar being
+ * {@code parse-long}'s and {@code Double/valueOf}'s {@code parse-double}'s.
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -38,8 +43,29 @@ final class ClojurePortableStaticsLowering {
 	/** {@code (Double/valueOf s)}. */
 	static final String DOUBLE_VALUE_OF = "RONTOLISP::%CLOJURE-DOUBLE-VALUE-OF";
 
-	/** {@code (Integer/parseInt s 16)}. */
-	static final String PARSE_INT_16 = "RONTOLISP::%CLOJURE-PARSE-INT-16";
+	/** {@code (Integer/parseInt s)} and {@code (Integer/parseInt s radix)}. */
+	static final String PARSE_INT = "RONTOLISP::%CLOJURE-PARSE-INT";
+
+	/** {@code (Double/parseDouble s)}. */
+	static final String PARSE_DOUBLE = "RONTOLISP::%CLOJURE-PARSE-DOUBLE-STATIC";
+
+	/** {@code (Character/isWhitespace x)}. */
+	static final String IS_WHITESPACE = "RONTOLISP::%CLOJURE-CHARACTER-IS-WHITESPACE";
+
+	/** {@code (Character/isDigit x)}. */
+	static final String IS_DIGIT = "RONTOLISP::%CLOJURE-CHARACTER-IS-DIGIT";
+
+	/** {@code (Character/digit x radix)}. */
+	static final String DIGIT = "RONTOLISP::%CLOJURE-CHARACTER-DIGIT";
+
+	/** {@code (Character/valueOf x)}. */
+	static final String CHARACTER_VALUE_OF = "RONTOLISP::%CLOJURE-CHARACTER-VALUE-OF";
+
+	/** {@code (BigInteger. s-or-bytes)}. */
+	static final String BIG_INTEGER_NEW_1 = "RONTOLISP::%CLOJURE-BIG-INTEGER-NEW-1";
+
+	/** {@code (BigInteger. s radix)} and {@code (BigInteger. signum bytes)}. */
+	static final String BIG_INTEGER_NEW = "RONTOLISP::%CLOJURE-BIG-INTEGER-NEW";
 
 	/** {@code (Integer/toHexString x)}. */
 	static final String TO_HEX_STRING = "RONTOLISP::%CLOJURE-INTEGER-TO-HEX-STRING";
@@ -77,8 +103,8 @@ final class ClojurePortableStaticsLowering {
 	/**
 	 * A static call as its portable worker, where the host is not: the caller checks the
 	 * target. Null for any other class, member or count -- and for
-	 * {@code Integer/parseInt} of any radix but a literal 16, which stays the host's
-	 * call.
+	 * {@code Integer/parseInt} of a computed radix or a literal past the int range, which
+	 * stays the host's call.
 	 * @param cls the resolved class name
 	 * @param member the static member
 	 * @param args the lowered arguments
@@ -94,9 +120,30 @@ final class ClojurePortableStaticsLowering {
 		if (cls.equals("java.lang.Double") && member.equals("valueOf") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(DOUBLE_VALUE_OF), args.get(0));
 		}
+		if (cls.equals("java.lang.Integer") && member.equals("parseInt") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(PARSE_INT), args.get(0), new LispInteger(10));
+		}
 		if (cls.equals("java.lang.Integer") && member.equals("parseInt") && args.size() == 2
-				&& args.get(1) instanceof LispInteger radix && radix.value() == 16) {
-			return ClojureLowerUtil.list(new LispSymbol(PARSE_INT_16), args.get(0));
+				&& args.get(1) instanceof LispInteger radix && radix.value() == (int) radix.value()) {
+			return ClojureLowerUtil.list(new LispSymbol(PARSE_INT), args.get(0), radix);
+		}
+		if (cls.equals("java.lang.Double") && member.equals("parseDouble") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(PARSE_DOUBLE), args.get(0));
+		}
+		if (cls.equals("java.lang.Character")) {
+			String worker = switch (member + "/" + args.size()) {
+				case "isWhitespace/1" -> IS_WHITESPACE;
+				case "isDigit/1" -> IS_DIGIT;
+				case "digit/2" -> DIGIT;
+				case "valueOf/1" -> CHARACTER_VALUE_OF;
+				default -> null;
+			};
+			if (worker != null) {
+				List<LispVal> call = new ArrayList<>();
+				call.add(new LispSymbol(worker));
+				call.addAll(args);
+				return ClojureLowerUtil.list(call);
+			}
 		}
 		if (cls.equals("java.lang.Integer") && member.equals("toHexString") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(TO_HEX_STRING), args.get(0));
@@ -123,6 +170,23 @@ final class ClojurePortableStaticsLowering {
 			return ClojureLowerUtil.list(new LispSymbol(LONG_NLZ), args.get(0));
 		}
 		return null;
+	}
+
+	/**
+	 * An untagged {@code java.math.BigInteger} construction of one or two arguments (a
+	 * string, a string and a radix, a byte array, a signum and a byte array) as its
+	 * portable reader, where the host is not: the caller checks the target. Null for any
+	 * other class or count.
+	 * @param cls the resolved class name
+	 * @param args the lowered arguments
+	 * @return the call, or null
+	 */
+	static @Nullable LispVal construction(String cls, List<LispVal> args) {
+		if (!cls.equals("java.math.BigInteger") || args.isEmpty() || args.size() > 2) {
+			return null;
+		}
+		return args.size() == 1 ? ClojureLowerUtil.list(new LispSymbol(BIG_INTEGER_NEW_1), args.get(0))
+				: ClojureLowerUtil.list(new LispSymbol(BIG_INTEGER_NEW), args.get(0), args.get(1));
 	}
 
 	/**

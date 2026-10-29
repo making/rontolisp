@@ -3083,7 +3083,8 @@ public final class ClojureLowering {
 	 * own, an imported or dotted class name matching one's host class name (a
 	 * {@code clojure.lang} class of the shipped namespace loaded first,
 	 * {@link #loadLangClass}), or -- the flat lowering's leniency, kept -- the only one
-	 * of that simple name anywhere. Null when it names none.
+	 * of that simple name anywhere outside the internal namespaces. Null when it names
+	 * none.
 	 */
 	@Nullable String typeKeyOf(String name) {
 		if (name.indexOf('/') >= 0) {
@@ -3108,7 +3109,10 @@ public final class ClojureLowering {
 		}
 		String only = null;
 		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
-			if (type.getValue().tagSpelling().equals(name)) {
+			// an internal namespace's deftype (the portable LinkedList) is no program's
+			// class: only its own namespace names it
+			if (type.getValue().tagSpelling().equals(name) && !ClojureBuiltinNamespaces
+				.isInternal(type.getKey().substring(0, type.getKey().lastIndexOf('/')))) {
 				if (only != null) {
 					return null;
 				}

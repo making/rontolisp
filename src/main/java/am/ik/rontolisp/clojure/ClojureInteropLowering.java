@@ -878,6 +878,10 @@ final class ClojureInteropLowering {
 				if (random != null) {
 					return random;
 				}
+				LispVal linkedList = ClojurePortableLinkedListLowering.construction(ctx, cls);
+				if (linkedList != null) {
+					return linkedList;
+				}
 			}
 			LispVal object = objectToken(cls, argDatums.size());
 			if (object != null) {
@@ -917,6 +921,14 @@ final class ClojureInteropLowering {
 			}
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
+		if (!ctx.hostTarget && types == null) {
+			// where no host is, a BigInteger of a string is the integer it spells
+			// (tools.reader's number reader); the host's object elsewhere
+			LispVal bigInteger = ClojurePortableStaticsLowering.construction(cls, lowered);
+			if (bigInteger != null) {
+				return bigInteger;
+			}
+		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
 		if (timeValue != null) {
 			return timeValue;
@@ -928,7 +940,8 @@ final class ClojureInteropLowering {
 			return decimal;
 		}
 		if (types == null) {
-			LispVal exception = throwableConstruction(ctx, cls, lowered);
+			LispVal exception = throwableConstruction(ctx, cls, lowered,
+					argDatums.size() == 1 && STRING.equals(classHint(ctx, argDatums.get(0))));
 			if (exception != null) {
 				return exception;
 			}
@@ -999,8 +1012,10 @@ final class ClojureInteropLowering {
 	 * and a cause, each only where the class has that public constructor -- a call the
 	 * class has no constructor for keeps {@code java:new} and its host refusal. Null when
 	 * the class is no plain throwable or the arity has no such constructor.
+	 * {@code stringArg} says the one argument's datum is hinted {@code String}.
 	 */
-	static @Nullable LispVal throwableConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
+	static @Nullable LispVal throwableConstruction(ClojureLowering ctx, String cls, List<LispVal> args,
+			boolean stringArg) {
 		ClojureJavaClasses.JavaClass type = plainThrowable(cls);
 		if (type == null) {
 			// a throwable host object becomes an exception of its class once thrown
@@ -1015,7 +1030,7 @@ final class ClojureInteropLowering {
 		LispVal call = switch (args.size()) {
 			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
 					chain, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
-			case 1 -> messageOrCauseConstruction(type, chain, args.get(0));
+			case 1 -> messageOrCauseConstruction(type, chain, args.get(0), stringArg);
 			case 2 -> onlyConstructorsAtArity(type, 2, List.of(STRING, ClojureThrowables.THROWABLE)) ? ClojureLowerUtil
 				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, args.get(0), args.get(1)) : null;
 			default -> null;
@@ -1031,17 +1046,19 @@ final class ClojureInteropLowering {
 	 * {@code (Class. x)}: a run-time choice between the message and the cause when the
 	 * class's one-argument constructors are exactly {@code (String)} and
 	 * {@code (Throwable)}, the message alone when {@code (String)} is the only one, and a
-	 * literal string the message wherever a one-argument constructor takes a string (the
-	 * oracle resolves a literal at compile time: {@code (AssertionError. "m")} is its
-	 * {@code (Object)} constructor). Anything else is null.
+	 * literal string -- or an argument hinted {@code String} ({@code stringArg}) -- the
+	 * message wherever a one-argument constructor takes a string (the oracle resolves
+	 * either at compile time: {@code (AssertionError. "m")} is its {@code (Object)}
+	 * constructor, {@code (IndexOutOfBoundsException. ^String m)} its {@code (String)}
+	 * one). Anything else is null.
 	 */
 	private static @Nullable LispVal messageOrCauseConstruction(ClojureJavaClasses.JavaClass type, LispVal chain,
-			LispVal arg) {
+			LispVal arg, boolean stringArg) {
 		if (onlyConstructorsAtArity(type, 1, List.of(STRING, ClojureThrowables.THROWABLE))) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), chain, arg);
 		}
-		boolean literal = arg instanceof LispString;
-		if (onlyConstructorsAtArity(type, 1, List.of(STRING)) || (literal && takesAString(type))) {
+		boolean knownString = arg instanceof LispString || stringArg;
+		if (onlyConstructorsAtArity(type, 1, List.of(STRING)) || (knownString && takesAString(type))) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, arg,
 					ClojureLowering.NIL_CONST);
 		}
@@ -1656,6 +1673,10 @@ final class ClojureInteropLowering {
 				if (random != null) {
 					return random;
 				}
+				LispVal linkedList = ClojurePortableLinkedListLowering.construction(ctx, cls);
+				if (linkedList != null) {
+					return linkedList;
+				}
 			}
 		}
 		if (args.size() == 1 && types == null) {
@@ -1679,6 +1700,12 @@ final class ClojureInteropLowering {
 				}
 			}
 		}
+		if (!ctx.hostTarget && types == null) {
+			LispVal bigInteger = ClojurePortableStaticsLowering.construction(cls, args);
+			if (bigInteger != null) {
+				return bigInteger;
+			}
+		}
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
 		if (timeValue != null) {
 			return timeValue;
@@ -1690,7 +1717,7 @@ final class ClojureInteropLowering {
 			return decimal;
 		}
 		if (types == null) {
-			LispVal exception = throwableConstruction(ctx, cls, args);
+			LispVal exception = throwableConstruction(ctx, cls, args, false);
 			if (exception != null) {
 				return exception;
 			}

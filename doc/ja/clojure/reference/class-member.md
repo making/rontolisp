@@ -16,9 +16,11 @@
 ホストの呼び出しのまま残ります。`Long/MAX_VALUE`（および `MIN_VALUE`、`Integer`/`Short`/`Byte`
 の組）は wasm バックエンドではその値自身になります（ホストのフィールドは存在しないため）。
 それ以外のメンバーはホストのフィールドのまま残ります。1 引数の `Long/valueOf`・`Double/valueOf`・
-`Long/parseLong`、文字列とリテラルな基数 16 からの `Integer/parseInt`、1 引数の
-`Integer/toHexString`、2 引数の `Math/min` は wasm バックエンドでも移植性のある読み取りとして
-評価され、オラクルの文法と拒否に従います。その他のアリティはホストの呼び出しのまま残ります。
+`Double/parseDouble`・`Long/parseLong`、文字列だけまたは文字列とリテラルな基数からの
+`Integer/parseInt`、1 引数の `Integer/toHexString`、2 引数の `Math/min`、
+`Character/isWhitespace`・`isDigit`・`digit`・`valueOf` は wasm バックエンドでも移植性のある
+読み取りとして評価され、オラクルの文法と拒否に従います。その他のアリティと計算された基数は
+ホストの呼び出しのまま残ります。
 クラスはドット付き・インポート済み・`java.lang` のいずれでも解決されます。
 ロード可能なクラス名単体（`String`）はクラスオブジェクトで、
 `(Class/forName "java.lang.String")` と等しく、文字列への `.getClass` も同じものを答えます。
