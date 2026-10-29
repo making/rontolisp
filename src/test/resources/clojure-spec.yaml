@@ -4264,7 +4264,7 @@ cases:
     # answers the var or nil, of a quoted symbol while the program lowers, of a computed
     # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
     # compile-if. clj 1.12.6, oracle-identical.
-    host: evm-true? and the macro bodies eval and resolve computed forms
+    host: the corpus's run-time expansions reach these macro bodies' eval and resolve
     source: |
       (in-ns 'lit)
       (defmacro evm-compile-if [test then else] (if (eval test) then else))
@@ -15831,7 +15831,7 @@ cases:
     # #' and resolve of a clojure.string var (a lowering, no var of its own): a var
     # whose root is the function value, at run time and while a macro expands
     # (camel-snake-kebab's defconversion). Oracle-identical (clj 1.12.6, 2026-10-12).
-    host: lv-mac's body resolves a computed symbol
+    host: the corpus's run-time expansions reach lv-mac's resolve of a computed symbol
     source: |
       (require '[clojure.string :as lv-str])
       (prn (#'lv-str/capitalize "abc") ((resolve 'clojure.string/upper-case) "x") (var clojure.string/join) (map #'lv-str/trim [" a "]))
@@ -16168,9 +16168,10 @@ cases:
   - name: ns-map-answers-interns-refers-and-core-vars
     # ns-map holds the interns, the refers and the referred core vars, each
     # as its var -- read by a macro body too, while it expands (tools.reader's
-    # resolve-symbol under its syntax-quote macro). Oracle-identical (clj
-    # 1.12.6, 2026-10-13; the macro, 2026-10-29).
-    host: treader-mapped?'s body reads the map of a computed namespace
+    # resolve-symbol under its syntax-quote macro). The core vars are the
+    # lowering's own, so the verbs' among them (eval, require ...) make no JVM
+    # class a host. Oracle-identical (clj 1.12.6, 2026-10-13; the macro,
+    # 2026-10-29).
     source: |
       (in-ns 'user)
       (def nsm-pub-x 1)

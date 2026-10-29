@@ -3312,6 +3312,10 @@ class ClojureLoweringTest {
 		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
 			.contains("(%UNSPELLED-QUOTE |c%clojure.core/dec|)")
 			.doesNotContain("inc");
+		// short of a run-time expansion, only the macros whose var the program takes
+		// have their roots read: mu-b's expander alone
+		assertThat(loweredWithMacros(macros + "\n(meta #'mu-b)"))
+			.contains("(DEFUN C%MACRO-EXPANDER (|id|) (CASE |id| (1 (LAMBDA ");
 	}
 
 	@Test
@@ -3434,17 +3438,32 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> loweredWithMacros("(defmacro mu-rs [x] (resolve x)) (mu-rs :k)"))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("resolve takes a symbol");
-		// a program naming a lowering verb over computed arguments keeps its lowering
-		// for the run where its target lowers then, and a computed require spec is one
-		// (a local's name was read as a library's until 2026-10-29)
+		// a program whose run-time code names a lowering verb over computed arguments
+		// keeps its lowering for the run where its target lowers then, and a computed
+		// require spec is one (a local's name was read as a library's until 2026-10-29)
 		assertThat(runTimeOf("(eval (list '+ 1 2))", true)).isNotNull();
 		assertThat(runTimeOf("(let [n 'clojure.set] (require n))", true)).isNotNull();
 		// so is a call spelled through clojure.core's alias or full name (spec.alpha's
 		// gen: (require (c/symbol ns)) under (alias 'c 'clojure.core))
-		assertThat(runTimeOf("(alias 'c 'clojure.core) (defn dl [s] (require (c/symbol s)))", true)).isNotNull();
-		assertThat(runTimeOf("(defn dl [s] (require (clojure.core/symbol s)))", true)).isNotNull();
+		assertThat(runTimeOf("(alias 'c 'clojure.core) (defn dl [s] (require (c/symbol s))) (dl 'a)", true))
+			.isNotNull();
+		assertThat(runTimeOf("(defn dl [s] (require (clojure.core/symbol s))) (dl 'a)", true)).isNotNull();
 		assertThat(runTimeOf("(eval (list '+ 1 2))", false)).isNull();
 		assertThat(runTimeOf("(require 'clojure.set) (resolve 'inc)", true)).isNull();
+		// a verb named only in a macro body, or in a helper only macro bodies call, runs
+		// while the program lowers (compile-if), so it opens nothing -- until the run
+		// time reaches the macro's function: a run-time expansion (of any macro, its head
+		// computed as it runs) or a read of that macro's root, not another macro's
+		String bodies = "(defn ev? [t] (boolean (eval t))) (defmacro ci [t a b] (if (ev? t) a b)) "
+				+ "(defmacro rv [s] (some? (resolve s))) (defmacro tw [x] x) ";
+		assertThat(runTimeOf(bodies + "(prn (ci true 1 2) (rv inc) (meta #'tw))", true)).isNull();
+		assertThat(runTimeOf(bodies + "(prn (macroexpand '(tw 1)))", true)).isNotNull();
+		assertThat(runTimeOf(bodies + "(prn (meta #'ci))", true)).isNotNull();
+		// a namespace's mapping lists every core var, the verbs' too, which the program
+		// names nowhere; a verb it takes as a value, or its var, it reaches
+		assertThat(runTimeOf("(prn (get (ns-map 'user) 'map) (ns-publics 'clojure.core))", true)).isNull();
+		assertThat(runTimeOf("(prn (= ns-map ns-map))", true)).isNotNull();
+		assertThat(runTimeOf("(prn ((resolve 'eval) '(+ 1 2)))", true)).isNotNull();
 	}
 
 	private static @Nullable ClojureRunTime runTimeOf(String source, boolean runTimeTarget) {

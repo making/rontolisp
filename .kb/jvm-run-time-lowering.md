@@ -1,8 +1,9 @@
 # JVM run-time lowering: a host class compiles each lowering verb into a fragment linked against itself
 
-**Invariant: a Clojure program naming a lowering verb over computed arguments
-(`ClojureRunTime.ENTRIES`: `eval`, a computed `resolve` / `require` / `load-string` ...)
-compiles to a HOST class that carries its program's image and the compiler. Its first verb
+**Invariant: a Clojure program whose run-time code reaches a lowering verb over computed
+arguments (`ClojureRunTime.ENTRIES`: `eval`, a computed `resolve` / `require` /
+`load-string` ...; "What opens a program") compiles to a HOST class that carries its
+program's image and the compiler. Its first verb
 reads and lowers the program again from the image -- the same decisions, so the same names
 -- and each verb's lowered forms compile into a FRAGMENT class defined into the host's
 package through the host's own lookup, linked against the host and the fragments before
@@ -13,11 +14,46 @@ Wasm refuses by name (`.kb/clojure-frontend.md`, "Lowering at run time").
 
 Trap: one such case makes a whole concatenated corpus a host, which then checks only
 host-mode output (no arm stripping, raw globals, non-threads specials or tree shaking).
-Measured 2026-10-30: five clojure-spec cases did -- the run-time lowering case, and four
-whose macro bodies or helpers name a verb over a computed argument (`eval` / `resolve` in
-`defmacro` bodies and a `defn`, `(ns-map *ns*)` in a macro body, `ns-map` as a value).
 Such a case is marked `host:`; the JVM leg runs the marked cases as one host program of
-their own and refuses a corpus class that has `_rtImage`.
+their own and refuses a corpus class that has `_rtImage`. Measured 2026-10-30: five
+clojure-spec cases were marked -- the run-time lowering case and four naming a verb in a
+macro body, a helper or a value. Once the decision became reachability (below),
+`ns-map-answers-interns-refers-and-core-vars` turned out a host through its top-level
+`(ns-map 'user)`, not its macro body, and is back in the corpus; the two whose macro
+bodies `eval` / `resolve` each lower alone as ordinary classes but stay marked, because
+the corpus expands at run time and so reaches every macro body; `ns-map` as a value stays
+a host.
+
+## What opens a program
+
+`ClojureLowering.lowerWhole` asks `ClojureRunTime.reachesAny` of each closed pass, for the
+interpreter and the JVM alike: the top-level forms (a `progn`'s members) run, and a `defun`
+runs where a form that runs names it -- the library calls none the lowering defines but the
+ex-info, protocol and hierarchy runtimes', which reach no verb. A macro's expander sits in
+the note behind its `defmacro` and, only for a run-time expansion (`macroRuntime`: every
+expander, a head computed as it runs may name any macro) or a read of the macro's var
+(`macroRootRuntime` over `macroRootsRead`: those macros' alone), in `C%MACRO-EXPANDER`; so
+a verb only a macro body or a helper only macro bodies call names opens nothing otherwise
+(compile-if, defconversion, tools.reader's `resolve-symbol`). No use either: the
+statements handing a root to a table that never calls it (`ROOT_NOTES`: a macro's noted
+expander, a redefinition's validate-and-notify -- a watch meets a root only through the
+var, whose object names it -- and a fn's class name), and a core var a namespace's mapping
+lists (`mappedCoreVars`, by identity). Weighed 2026-10-30:
+
+- A verb the program takes as a value or as a var (`(map eval xs)`, `(= ns-map ns-map)`,
+  `(resolve 'eval)`) opens: the value may be called over arguments only the lowering
+  answers, and refusing would turn programs the JVM runs into refusals.
+- A run-time expansion reaches every macro body, so it opens beside any body naming a
+  verb: a run-time expansion of `compile-if` keeps answering on the interpreter and the
+  JVM, and only a program both expanding at run time (or taking such a macro's var) and
+  defining such a macro pays.
+- A mapping's core vars hold the verbs' values (`eval`, `require`, `ns-map` ...): counted,
+  every `ns-map` the program runs (and `ns-publics` / `ns-interns` of `clojure.core`)
+  carried the compiler, for a path -- a verb taken out of the mapping and called over
+  computed arguments -- that refuses instead (all four backends).
+
+Pins: `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake`, clojure-spec
+`ns-map-answers-interns-refers-and-core-vars` in the JVM leg's corpus.
 
 ## Compile time: the host
 

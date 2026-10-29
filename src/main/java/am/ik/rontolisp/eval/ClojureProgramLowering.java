@@ -23,12 +23,13 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A whole Clojure program read for a compiled target that lowers as the program runs --
- * the JVM: its forms, and the lowering a program naming a lowering verb over computed
- * arguments ({@code eval}, a computed {@code resolve} or {@code require} ...) keeps for
- * its run. The compile path reads the program through here, and so does the compiled
- * class when it first runs such a verb ({@code cli/JvmRunTimeLowering}): the same read of
- * the same text through the same file answers takes the same decisions, so the lowering
- * the class rebuilds names the functions and globals the class holds.
+ * the JVM: its forms, and the lowering a program whose run-time code reaches a lowering
+ * verb over computed arguments ({@code eval}, a computed {@code resolve} or
+ * {@code require} ...) keeps for its run. The compile path reads the program through
+ * here, and so does the compiled class when it first runs such a verb
+ * ({@code cli/JvmRunTimeLowering}): the same read of the same text through the same file
+ * answers takes the same decisions, so the lowering the class rebuilds names the
+ * functions and globals the class holds.
  *
  * <p>
  * A verb's arguments reach here as the plain data the class's run-time library carries
@@ -75,8 +76,8 @@ public final class ClojureProgramLowering {
 	}
 
 	/**
-	 * {@return whether the program lowers as it runs} -- it names a lowering verb over
-	 * computed arguments, and its lowering is kept
+	 * {@return whether the program lowers as it runs} -- its run-time code reaches a
+	 * lowering verb over computed arguments, and its lowering is kept
 	 */
 	public boolean lowersAtRunTime() {
 		return this.runTime != null;

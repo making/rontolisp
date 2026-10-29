@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -1613,6 +1614,13 @@ public final class ClojureLowering {
 	boolean takesMacroRoots;
 
 	/**
+	 * The var keys of the program macros whose var a whole program takes outside every
+	 * macro body ({@link #takesMacroRoots}): short of a run-time expansion, the only
+	 * macros whose expanders its run time reaches.
+	 */
+	final Set<String> macroRootsRead = new HashSet<>();
+
+	/**
 	 * Whether a whole program's macro body expands, takes a core macro's var root or
 	 * destructures ({@link ClojureCoreMacros#need}): the macro-time evaluator holds the
 	 * core macros' expanders, and the program loads them once every datum has lowered
@@ -1625,6 +1633,16 @@ public final class ClojureLowering {
 	 * table global holds its index here ({@link ClojureMacroLowering#macroRuntime}).
 	 */
 	final List<LispVal> macroExpanders = new ArrayList<>();
+
+	/** The var key of each of {@link #macroExpanders}, at its index. */
+	final List<String> macroExpanderKeys = new ArrayList<>();
+
+	/**
+	 * The core var forms a namespace's mapping lists ({@code ns-map}, {@code ns-publics}
+	 * of {@code clojure.core} ...), by identity: the lowering's own values, so a verb's
+	 * among them makes no program lower at run time ({@link ClojureRunTime#reachesAny}).
+	 */
+	final Set<LispVal> mappedCoreVars = Collections.newSetFromMap(new IdentityHashMap<>());
 
 	/** Whether the macro runtime was already spliced in (files splice it inline). */
 	boolean macrosEmitted;
@@ -1729,9 +1747,10 @@ public final class ClojureLowering {
 
 	/**
 	 * {@link #lower(List, ClojureReader, ClojureMacroEvaluator, ClojureFiles, boolean, ClojureBoundary)}
-	 * for a target that may lower at run time. A program naming a lowering verb over
-	 * computed arguments ({@link ClojureRunTime#ENTRIES}: {@code eval}, a computed
-	 * {@code resolve}, {@code require} ...) lowers again, open ({@link #open}): what the
+	 * for a target that may lower at run time. A program whose run-time code reaches a
+	 * lowering verb over computed arguments ({@link ClojureRunTime#ENTRIES}:
+	 * {@code eval}, a computed {@code resolve}, {@code require} ...;
+	 * {@link ClojureRunTime#reachesAny}) lowers again, open ({@link #open}): what the
 	 * program hands the lowering as it runs joins it like a session's later buffer, so
 	 * every decision code not seen yet could miss takes its open shape from the start.
 	 * The program itself still lowers whole, so a miss lowers it again as before.
@@ -1783,7 +1802,7 @@ public final class ClojureLowering {
 			boolean binders = lowering.threadBinderMiss && !threadBinders;
 			threadBinders |= lowering.threadBinderMiss;
 			boolean dynamics = lowering.boundFnUsed && dynamicSeed.addAll(lowering.dynamicVars);
-			boolean opens = runTimeTarget && !open && ClojureRunTime.namesAny(forms);
+			boolean opens = runTimeTarget && !open && ClojureRunTime.reachesAny(forms, lowering.mappedCoreVars);
 			open |= opens;
 			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics && !opens) {
 				return new Whole(forms, open ? lowering : null);
@@ -1849,8 +1868,10 @@ public final class ClojureLowering {
 					ClojureMacroLowering.macroRuntime(lowering, lowering.open ? null : lowering.macroExpanders));
 		}
 		else if (lowering.takesMacroRoots) {
-			// a program macro's var root reads only its expander
-			lowering.forms.addAll(1, ClojureMacroLowering.macroRootRuntime(lowering.macroExpanders));
+			// a program macro's var root reads only its expander, and only the macros
+			// whose var the program takes have their roots read
+			lowering.forms.addAll(1, ClojureMacroLowering.macroRootRuntime(lowering.macroExpanders,
+					id -> lowering.macroRootsRead.contains(lowering.macroExpanderKeys.get(id))));
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);

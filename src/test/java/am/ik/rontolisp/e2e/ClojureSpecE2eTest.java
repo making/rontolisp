@@ -62,13 +62,15 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * legs never see the names it defines.
  *
  * <p>
- * A case with a {@code host:} reason names a lowering verb over computed arguments, which
- * makes the JVM class it is compiled into a host carrying its image and the compiler
- * ({@code .kb/jvm-run-time-lowering.md}): one such case would make the whole corpus a
- * host and leave the ordinary class untested. The JVM leg keeps these cases out of its
- * corpus (which it refuses as a host) and concatenates them into a host program of their
- * own, compiled by the command line to a class and to a jar, each run as a process with
- * nothing but its own output on the class path. A host case must be self-contained.
+ * A case with a {@code host:} reason reaches a lowering verb over computed arguments as
+ * the program runs -- alone, or beside the corpus's run-time expansions, which reach
+ * every macro body -- which makes the JVM class it is compiled into a host carrying its
+ * image and the compiler ({@code .kb/jvm-run-time-lowering.md}): one such case would make
+ * the whole corpus a host and leave the ordinary class untested. The JVM leg keeps these
+ * cases out of its corpus (which it refuses as a host) and concatenates them into a host
+ * program of their own, compiled by the command line to a class and to a jar, each run as
+ * a process with nothing but its own output on the class path. A host case must be
+ * self-contained.
  *
  * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
