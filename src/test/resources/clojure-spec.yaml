@@ -1407,8 +1407,10 @@ cases:
       3
       (1 2)
   - name: threading-threads-first-and-last
+    # A step carrying reader metadata takes the value inside, keeping the hint
+    # (tools.analyzer.jvm's (-> class maybe-class ^Class (box) .getName)).
     source: |
-      (println (-> 5 inc inc))
+      (println (-> 5 inc inc) (-> 5 ^Long (- 1) inc) (->> 5 ^Long (- 1)))
       (println (->> 5 inc inc))
       (println (-> 5))
       (println (-> {:a 1} :a))
@@ -1426,7 +1428,7 @@ cases:
       (println (list* 1 2 [3 4]))
       (println (list* [1 2]))
     expected: |
-      7
+      7 5 -4
       7
       5
       1
@@ -6853,10 +6855,13 @@ cases:
   - name: mapv-answers-vectors
     # mapv maps over one or more collections and answers a vector (never a lazy
     # wrapper, even over lazy inputs); class pins the vector answer. The hangman
-    # letters shape (mapv char over a range) counts 26 from a to z.
+    # letters shape (mapv char over a range) counts 26 from a to z. Several
+    # collections step in lockstep and end with the shortest, so an infinite one
+    # beside a finite one ends (tools.analyzer's params over (range)).
     source: |
       (println (mapv inc [1 2 3]))
       (println (mapv + [1 2 3] [10 20]))
+      (println (mapv vector '(x y) (range)) (mapv vector (range) [:a]))
       (println (mapv inc []))
       (println (mapv inc nil))
       (println (class (mapv inc [1])))
@@ -6867,6 +6872,7 @@ cases:
     expected: |
       [2 3 4]
       [11 22]
+      [[x 0] [y 1]] [[0 :a]]
       []
       []
       :vector
@@ -6901,7 +6907,7 @@ cases:
       (println (mapcat identity [nil [1] nil]))
       (println (mapcat reverse []))
       (println (mapcat reverse nil))
-      (println (mapcat vector [1 2] [3 4]))
+      (println (mapcat vector [1 2] [3 4]) (mapcat vector [1 2] (range)))
       (println (mapcat vals [{:a 1} {:b 2}]))
       (println (map vals [{:a 1} {:b 2}]))
       (println (mapcat vector (concat (lazy-seq [1]) [2])))
@@ -6911,7 +6917,7 @@ cases:
       (1)
       nil
       nil
-      (1 3 2 4)
+      (1 3 2 4) (1 0 2 1)
       (1 2)
       ((1) (2))
       (1 2)
@@ -10043,7 +10049,9 @@ cases:
   - name: var-get-answers-the-root-of-a-var
     # Oracle-identical (clj 1.12.6): var-get is the root of a var, the same as deref of
     # it, a binding included, over a function value and a core var, and a non-var signals
-    # where deref of an atom would answer (a reduced value is no var).
+    # where deref of an atom would answer (a reduced value is no var). A var answers
+    # clojure.lang.Var's isDynamic, ns, sym, toSymbol, isMacro, isPublic and isBound
+    # (tools.analyzer's dynamic? and create-var).
     source: |
       (def vg-x 5)
       (def ^:dynamic *vg-d* 1)
@@ -10052,11 +10060,16 @@ cases:
       (binding [*vg-d* 9] (prn (var-get #'*vg-d*) @#'*vg-d*))
       (prn (map var-get [#'vg-x #'*vg-d*]) (apply var-get [#'vg-x]) ((var-get #'inc) 1))
       (prn (try (var-get 1) (catch Exception e :refused)) (try (var-get (atom 1)) (catch Exception e :refused)) (try (var-get (reduced 1)) (catch Exception e :refused)))
+      (def ^:private vg-q 3)
+      (defmacro vg-m [] 1)
+      (declare vg-u)
+      (prn (.isDynamic #'*vg-d*) (.isDynamic #'vg-x) (.isDynamic #'*out*) (ns-name (.ns #'vg-x)) (.sym #'vg-x) (.toSymbol #'vg-x) (.isMacro #'vg-m) (.isMacro #'vg-x) (.isPublic #'vg-q) (.isPublic #'vg-x) (.isBound #'vg-x) (.isBound #'vg-u) (ns-name (.ns #'inc)) (.sym #'inc))
     expected: |
       5 1 7 true
       9 9
       (5 1) 5 2
       :refused :refused :refused
+      true false true reading vg-x reading/vg-x true false false true true false clojure.core inc
   - name: print-length-level-and-readably-shape-the-printer
     # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
     # collection or record after that many members with ... (an infinite seq realizes only
@@ -10434,7 +10447,9 @@ cases:
       (false false false false false false false false) false false false true
   - name: extends-reads-the-protocol-table
     # Oracle-identical (clj 1.12.6): an inline implementation or an extension counts; an
-    # Object extension counts for Object alone. A marker protocol (no methods) too.
+    # Object extension counts for Object alone. A marker protocol (no methods) too. A
+    # computed type -- a form (core.async's unblocking-buffer?) or a local -- reads the
+    # run-time registry.
     source: |
       (defprotocol TpP (tp-m [x]))
       (defprotocol TpQ (tp-q [x]))
@@ -10455,10 +10470,12 @@ cases:
       (extend Boolean TpM {})
       (prn (satisfies? TpM "a") (satisfies? TpM 1) (satisfies? TpN 1) (satisfies? TpN nil) (satisfies? TpM (->TpMR 1)) (satisfies? TpM (TpMT. 1)) (satisfies? TpM (reify TpM)) (satisfies? TpM true) (satisfies? TpN "a"))
       (prn (extends? TpM String) (extends? TpM TpMR) (extends? TpM TpMT) (extends? TpN Long) (extends? TpM Long) (extends? TpM Boolean))
+      (prn (extends? TpP (class "a")) (extends? TpP (class 1)) (extends? TpP (class (->TpPR 1))) (extends? TpM (class (TpMT. 1))) (extends? TpN (class 1)) (extends? TpN (class 1.5)) (let [t (class "a") p TpM] (extends? p t)))
     expected: |
       true false false true true false true true false false
       true false true true true true true true false
       true true true true false true
+      true false true true true false true
   - name: extend-takes-a-package-qualified-class-spelling
     # Oracle-identical (clj 1.12.6): extend-protocol, extend-type, extend and extends? take
     # java.lang./clojure.lang./java.util. spellings the way defmethod does; java.lang.Object
@@ -15937,8 +15954,10 @@ cases:
   - name: intern-var-set-and-with-redefs-fn
     # intern makes a var -- of a quoted name in the current namespace the var the
     # forms below name, its root rebound over a def's -- var-set refuses one that is
-    # not thread-locally bound, and with-redefs-fn rebinds roots for its call.
-    # Oracle-identical (clj 1.12.6, 2026-10-13; the forms below, 2026-10-29).
+    # not thread-locally bound, and with-redefs-fn rebinds roots for its call. A
+    # name carrying metadata gives the var that metadata (tools.analyzer's
+    # create-var). Oracle-identical (clj 1.12.6, 2026-10-13; the forms below,
+    # 2026-10-29).
     source: |
       (println (intern 'user 'f67-iv 7))
       (println @(intern 'user 'f67-iv))
@@ -15947,12 +15966,15 @@ cases:
       (println (with-redefs-fn {(var f67-rd) 99} (fn [] f67-rd)) f67-rd)
       (intern *ns* 'f67-in 5)
       (println f67-iv f67-in (intern *ns* 'f67-rd 2) f67-rd)
+      (let [v (intern 'user (with-meta 'f67-im {:a 1}) 3) w (intern *ns* (with-meta 'f67-im2 {:b 2}))]
+        (println v @v ((juxt :a :name) (meta v)) w ((juxt :b :name) (meta w))))
     expected: |
       #'user/f67-iv
       7
       Can't change/establish root binding of: f67-iv with set
       99 1
       7 5 #'user/f67-rd 2
+      #'user/f67-im 3 [1 f67-im] #'user/f67-im2 [2 f67-im2]
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
     # load-string of a literal runs where the call stands.

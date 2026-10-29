@@ -269,9 +269,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `get-method`, and a multimethod's `.getMethod` and `.dispatchFn`, answer what the
   oracle's `MultiFn` does, but a multimethod's `Object` method also answers a keyword
   dispatch value (`class` answers a keyword for a value's class here).
-- `satisfies?` takes the protocol's name and a value, `extends?` the protocol's and
-  the type's names, `extend` the type's name and then a protocol and a method map any
-  number of times: a local bound to a protocol or a type is refused at lowering. As
+- `satisfies?` takes the protocol's name and a value, `extend` the type's name and then
+  a protocol and a method map any number of times: a local bound to a protocol or a type
+  is refused at lowering. `extends?` of two names reads the tables at lowering; of a
+  computed protocol or type (a form such as `(class x)`, or a local) it reads the
+  registry below, as its value does. As
   values they check the argument count in the oracle's words, then read the run-time
   registry the `defprotocol` populates beside the methods table, running what the calls
   run: `satisfies?` the tag's row, the inline table's first, the walk behind the

@@ -252,6 +252,7 @@ final class ClojureValueMethodLowering {
 		updateRows();
 		nameAndNumberRows();
 		timeValueRows();
+		varRows();
 	}
 
 	private static void collectionRows() {
@@ -449,7 +450,9 @@ final class ClojureValueMethodLowering {
 				arm(List.of(NAMESPACE), core("ns-name", R)));
 		row("name", 0, arm(List.of(NAMESPACE), core("ns-name", R)));
 		row("getNamespace", 0, arm(List.of("ident?"), core("namespace", R)));
-		row("sym", 0, arm(List.of("keyword?"), core("symbol", R)));
+		// a keyword's symbol; a var's name symbol, its public sym field
+		row("sym", 0, arm(List.of("keyword?"), core("symbol", R)),
+				arm(List.of("var?"), core("symbol", core("name", core("symbol", R)))));
 		row("numerator", 0, arm(List.of("ratio?"), core("numerator", R)));
 		row("denominator", 0, arm(List.of("ratio?"), core("denominator", R)));
 		for (String widened : List.of("doubleValue", "floatValue")) {
@@ -477,6 +480,24 @@ final class ClojureValueMethodLowering {
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
 		row("reset", 1, arm(List.of(ATOM), core("reset!", R, A)));
 		row("swap", 1, arm(List.of(ATOM), core("swap!", R, A)));
+	}
+
+	/**
+	 * The {@code clojure.lang.Var} members a program reads of a var (tools.analyzer's
+	 * {@code dynamic?}, tools.analyzer.jvm's {@code create-var}): whether it is dynamic
+	 * (its site carries a binding depth), a macro, public or bound, its namespace (the
+	 * public {@code ns} field) and its qualified symbol; the name symbol is the
+	 * {@code sym} row's.
+	 */
+	private static void varRows() {
+		row("isDynamic", 0,
+				new Arm(List.of("var?"), ctx -> ctx.booleanAnswer(part(ctx, "RONTOLISP::%CLOJURE-VAR-DYNAMIC-P"))));
+		row("ns", 0, new Arm(List.of("var?"), ctx -> part(ctx, "RONTOLISP::%CLOJURE-VAR-NS")));
+		row("toSymbol", 0, arm(List.of("var?"), core("symbol", R)));
+		row("isMacro", 0,
+				arm(List.of("var?"), core("boolean", core("get", core("meta", R), new LispSymbol(":macro")))));
+		row("isPublic", 0, arm(List.of("var?"), core("not", core("get", core("meta", R), new LispSymbol(":private")))));
+		row("isBound", 0, arm(List.of("var?"), core("bound?", R)));
 	}
 
 	private static void row(String method, int arity, Arm... arms) {
