@@ -7251,9 +7251,13 @@ resolve var`.
   an action) waits in that box, released on success, dropped on failure. `%clojure-agent-drain`
   appends under `%clojure-atom-guard` and, when no thread runs the agent, elects its thread
   the runner: the runner hands the agent to the shared pool (`clojure.lisp` "The shared
-  agent pool", 2026-10-22, g38), which pumps the queue on one of its four worker threads
+  agent pool", 2026-10-22, g38), which pumps the queue on one of up to four worker threads
   (actions outside every lock, so no deadlock between agents and a slow action never blocks
-  its sender). A failing action
+  its sender). A worker ends at the empty take and a submit starts one when fewer than four
+  run (2026-10-29, the taps' shape): the earlier crew of four polling `(sleep 0.001)` forever
+  never returned from a spawn that runs its body at once (the browser playground), so a
+  `send` hung the page. Pinned by `ClojureAgentPoolTest` (`synchronousSpawn...`: a CL
+  prelude redefines `rontolisp:make-thread` to run its body at once). A failing action
   never signals (2026-10-11; before, it signalled on the draining thread and the agent stayed
   usable): `%clojure-agent-act` catches it, drops its held sends, calls the error handler
   (held unbound, so its sends dispatch; its own failure ignored) and, unless the mode is

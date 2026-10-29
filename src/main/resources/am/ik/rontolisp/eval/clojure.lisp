@@ -14722,66 +14722,70 @@
 ;;
 ;; On a host target (the interpreter and the JVM, where threads exist), an
 ;; elected runner hands its agent to the shared pool instead of running the
-;; queue itself: four worker threads, started on the first send that needs one,
-;; each pumping queued agents between sleeps of a millisecond. The pool is one
-;; for sends
-;; and send-offs alike (the oracle gives send-off its own unbounded pool; here
-;; a blocking action holds a worker like any other). A CPU-bound action
-;; therefore no longer blocks its sender -- or a request thread -- while await
-;; still blocks the caller until the queued actions complete. Where no thread
-;; exists (wasm, single-threaded by construction), this whole section is
-;; pruned: the drain the module splices instead runs the queue on the elected
-;; runner's own thread (eval/ClojureLibrary, the host-arms stand-ins).
+;; queue itself: up to four worker threads, each pumping queued agents until
+;; the pool's queue is empty and then ending, so the next submit starts another
+;; (the taps' shape). Nothing polls while no agent waits, and where a spawn
+;; runs its body at once (the browser playground's interpreter) a send runs its
+;; action before it returns. The pool is one for sends and send-offs alike (the
+;; oracle gives send-off its own unbounded pool; here a blocking action holds a
+;; worker like any other). A CPU-bound action therefore no longer blocks its
+;; sender -- or a request thread -- while await still blocks the caller until
+;; the queued actions complete. Where no thread exists (wasm, single-threaded
+;; by construction), this whole section is pruned: the drain the module splices
+;; instead runs the queue on the elected runner's own thread
+;; (eval/ClojureLibrary, the host-arms stand-ins).
 
 (defvar rontolisp::%clojure-agent-pool
-  nil
-  "The shared pool: #(queue workers) once started, nil before. The queue holds
-   the agents whose queue wants pumping, oldest first; the workers pump one
-   each. Stays nil where no thread exists, where the sender runs each queue
-   itself.")
+  (vector nil 0)
+  "The shared pool: #(queue workers) under %clojure-agent-pool-guard. QUEUE
+   holds the agents whose queue wants pumping, oldest first; WORKERS counts the
+   threads pumping them, at most four, like the oracle's small fixed send
+   pool.")
 
 (defvar rontolisp::%clojure-agent-pool-guard (rontolisp:make-mutex))
 
 (defun rontolisp::%clojure-agent-pool-submit (agent)
-  "Queue AGENT for a pump on the shared pool, starting its crew on the first
-   call: one pump queued per election, like one inline run per election."
-  (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
-    (if (null rontolisp::%clojure-agent-pool)
-        (setf rontolisp::%clojure-agent-pool (vector nil nil)))
-    (let ((pool rontolisp::%clojure-agent-pool))
-      (if (null (aref pool 1))
-          (setf (aref pool 1) (rontolisp::%clojure-agent-pool-start pool)))
-      (setf (aref pool 0) (append (aref pool 0) (list agent))))))
-
-(defun rontolisp::%clojure-agent-pool-start (pool)
-  "Start the shared pool's crew over POOL, answering its worker handles: each
-   loops taking the oldest queued agent and pumping it, sleeping between takes
-   of an empty queue, so a worker never holds a lock while an action runs.
-   Four workers, like the oracle's small fixed send pool."
-  (let ((crew nil))
-    (dotimes (i 4)
-      (setq crew
-            (cons (rontolisp:make-thread
-                   (lambda () (rontolisp::%clojure-agent-pool-work pool)))
-                  crew)))
-    crew))
+  "Queue AGENT for a pump on the shared pool, starting a worker unless four
+   run: one pump queued per election, like one inline run per election. The
+   worker starts outside the guard, so a spawn that runs its body at once
+   takes the guard like any other worker."
+  (let ((pool rontolisp::%clojure-agent-pool) (start nil))
+    (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+      (setf (aref pool 0) (append (aref pool 0) (list agent)))
+      (if (< (aref pool 1) 4)
+          (progn
+            (setf (aref pool 1) (+ (aref pool 1) 1))
+            (setq start t))))
+    (if start
+        (rontolisp:make-thread
+         (lambda () (rontolisp::%clojure-agent-pool-work pool))))))
 
 (defun rontolisp::%clojure-agent-pool-work (pool)
-  "One pool thread's loop over POOL: pump the oldest queued agent, else sleep
-   a millisecond. A pump that signals anyway (an action's own failure stays in
-   the agent, so only a bug can) is dropped and the loop goes on, so the crew
-   never shrinks."
-  (loop
-    (let ((agent
-           (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
-             (if (aref pool 0)
-                 (let ((next (car (aref pool 0))))
-                   (setf (aref pool 0) (cdr (aref pool 0)))
-                   next)
-                 nil))))
-      (if agent
-          (handler-case (rontolisp::%clojure-agent-pump agent) (error () nil))
-          (sleep 0.001)))))
+  "One worker's run over POOL: pump the oldest queued agent, outside every
+   lock, until the queue is empty. The empty take counts the worker out, the
+   unwind an abnormal exit, so the next submit starts another. A pump that
+   signals anyway (an action's own failure stays in the agent, so only a bug
+   can) is dropped and the run goes on."
+  (let ((done nil))
+    (unwind-protect (loop
+                      (let ((agent
+                             (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+                               (if (aref pool 0)
+                                   (let ((next (car (aref pool 0))))
+                                     (setf (aref pool 0) (cdr (aref pool 0)))
+                                     next)
+                                   (progn
+                                     (setf (aref pool 1) (- (aref pool 1) 1))
+                                     (setq done t)
+                                     nil)))))
+                        (if agent
+                            (handler-case (rontolisp::%clojure-agent-pump agent)
+                              (error () nil))
+                            (return nil))))
+      (if done
+          nil
+          (rontolisp:with-mutex (rontolisp::%clojure-agent-pool-guard)
+            (setf (aref pool 1) (- (aref pool 1) 1)))))))
 
 (defun rontolisp::%clojure-agent-pump (agent)
   "Run AGENT's queue until it is empty or an action fails, one action after
