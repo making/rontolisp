@@ -305,14 +305,29 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a bare macro name in value position at compile time. `bound-fn`, `with-local-vars`
   and `pvalues` answer that delegate too; `bound-fn*` answers its function, capturing
   the bindings where the value is called.
-- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
-  macro body and what it calls); at run time they throw an
-  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+- `eval`, `resolve`, `find-var`, `ns-resolve` and `requiring-resolve` of a computed
+  symbol, `require`, `use`, `refer`, `alias`, `in-ns`, `load`, `load-file` and
+  `load-string` of computed arguments, and `load-reader` lower as the program runs only on
+  the interpreter, which keeps the program's lowering for its run (the REPL its session's).
+  A compiled program carries none, so on the JVM and both wasm backends they throw an
+  `UnsupportedOperationException` at run time, where the oracle evaluates and resolves. On
+  the interpreter such a call lowers like one REPL input, in the namespace `*ns*` holds:
+  what it defines joins the program for the later calls and inputs, but the forms lowered
+  before it keep what they lowered against -- a redefined `defn` reaches only forms lowered
+  after it, and a name only it defines is unknown to the program's own forms (an `intern`
+  of a quoted name is not: it defines the var where it stands). A program naming such a
+  call lowers open, like a session, so its protocols dispatch through the class walk and
+  a name it only declares stays open. A value no literal spells (a function, an atom)
+  stands in an `eval`'d form as itself, where the oracle embeds a function but refuses an
+  atom (`Can't embed object in code`); a form that does not lower throws a
+  `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
+  `resolve` of a computed symbol run while the program lowers on every backend, and a
+  definition such an `eval`'d form makes exists only there. `resolve`
   answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
   record or type name (the oracle's class) and for a var of a namespace built into the
   lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
   in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
-  too. A definition an `eval`'d form makes exists only while the program lowers.
+  too.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -361,16 +376,18 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program's `*file*` is the entry file's path when it was compiled. The namespace mappings
   (`ns-publics`, `ns-map`, ...) answer what the lowering knows when the call lowers: a
   `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class,
-  and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
+  and anything computed answers when the call runs on the interpreter and refuses in a
+  compiled program. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while
   the program lowers, so inside a body they still reach the whole file (the oracle's run
   when the body runs); a `load-string` of a literal declares ahead like a file, so the
   same form may already name what it defines (the oracle's needs a later form). The
   standalone `(refer-clojure ...)` wires the same `(:refer-clojure ...)` filter that
   way (`:only`, `:exclude`, `:rename`, answering `nil`). As values (`(apply require
-  nses)`), `require`, `use` and `in-ns` refuse every application at run time with an
-  `UnsupportedOperationException`: libraries load and namespaces switch while the program
+  nses)`), `require`, `use` and `in-ns` load and switch when the call runs on the
+  interpreter; a compiled program refuses every application at run time with an
+  `UnsupportedOperationException`, since its libraries load and namespaces switch while it
   lowers, where the oracle loads and switches (of no spec, `require` and `use` throw its
-  `Nothing specified to load` here too).
+  `Nothing specified to load` everywhere).
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`; a bit operation takes an

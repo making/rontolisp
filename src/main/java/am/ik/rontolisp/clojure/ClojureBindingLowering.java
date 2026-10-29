@@ -1295,7 +1295,7 @@ final class ClojureBindingLowering {
 			if (ctx.isFunction(s.name())) {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.symOf(s.name()));
 			}
-			if (ctx.session && ctx.isDeclaredOnly(s.name())) {
+			if (ctx.open && ctx.isDeclaredOnly(s.name())) {
 				return ClojureVarLowering.sessionDeclaredRoot(ctx.symOf(s.name()));
 			}
 			return ctx.symOf(s.name());

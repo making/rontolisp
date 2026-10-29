@@ -208,7 +208,7 @@ final class ClojureCoreSpecials {
 			case "*ns*" -> namespaceObject("user");
 			case "*file*" -> LispString.literal(ctx.rootFile);
 			case "*source-path*" -> LispString.literal(ctx.rootSourcePath);
-			case "*repl*" -> ctx.session ? ClojureLowering.TRUE_CONST : ctx.lower(new LispSymbol("false"));
+			case "*repl*" -> ctx.repl ? ClojureLowering.TRUE_CONST : ctx.lower(new LispSymbol("false"));
 			default -> special.root() == null ? null : special.lowered() ? special.root() : ctx.lower(special.root());
 		};
 	}
@@ -293,7 +293,7 @@ final class ClojureCoreSpecials {
 			}
 			if (special.counter() != null) {
 				// a session binds *repl* around every input, like the oracle's REPL
-				int depth = ctx.session && special.name().equals("*repl*") ? 1 : 0;
+				int depth = ctx.repl && special.name().equals("*repl*") ? 1 : 0;
 				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), special.counter(),
 						new LispInteger(depth)));
 			}

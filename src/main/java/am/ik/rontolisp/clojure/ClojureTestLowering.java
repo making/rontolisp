@@ -505,7 +505,7 @@ final class ClojureTestLowering {
 				case MACRO, MUTABLE_FIELD -> false; // a field is never global
 				case VARIABLE -> ctx.globalDirectFuns.contains(key);
 				// a session's may be defined by a later buffer; a file's is unbound
-				case DECLARED -> ctx.session;
+				case DECLARED -> ctx.open;
 			};
 		}
 		if (name.indexOf('/') > 0) {

@@ -417,9 +417,14 @@ final class ClojureCoreLowering {
 				arity(name, n, 0, 0);
 				return worker(name, ctx.knownLoadedLibs());
 			case "intern":
-				// over a cell of its own; of a literal namespace, later
-				// lower-time lookups find the namespace too
+				// of a quoted name in the current namespace, a definition of the var
+				// the forms below may name; over a cell of its own otherwise, and of
+				// a literal namespace later lower-time lookups find the namespace too
 				arity(name, n, 2, 3);
+				LispVal defined = internedHere(ctx, items);
+				if (defined != null) {
+					return defined;
+				}
 				noteCreatedNamespace(ctx, items.get(1));
 				return n == 2 ? worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)))
 						: worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)),
@@ -1226,6 +1231,32 @@ final class ClojureCoreLowering {
 	 * @param ctx the hub
 	 * @param designator the namespace designator datum
 	 */
+	/**
+	 * {@code (intern ns 'name [value])} of the current namespace ({@code *ns*} or its
+	 * quoted name) and a quoted simple name: the var defined where the call stands, like
+	 * {@code (do (def name value) (var name))} -- {@code (declare name)} without a value
+	 * -- so the forms below name it, as the oracle's form-by-form compile finds the var
+	 * the call interned (until 2026-10-29 a later {@code name} was an unknown name, and
+	 * an interned root over a {@code def} was a cell the var's own reads never saw). Null
+	 * for any other call, which interns at run time over a cell of its own.
+	 * @param ctx the hub
+	 * @param items the call, head included
+	 * @return the lowered definition, or null
+	 */
+	private static @Nullable LispVal internedHere(ClojureLowering ctx, List<LispVal> items) {
+		String ns = ClojureNamespaceLowering.namespaceDesignator(ctx, items.get(1));
+		String var = ClojureNamespaceLowering.literalSymbol(items.get(2));
+		if (ns == null || !ns.equals(ctx.currentNs) || var == null || ClojureLowering.qualifierSlash(var) >= 0
+				|| ctx.isLocal(var)) {
+			return null;
+		}
+		LispSymbol symbol = new LispSymbol(var);
+		LispVal definition = items.size() == 4 ? ClojureLowerUtil.list(new LispSymbol("def"), symbol, items.get(3))
+				: ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.NAMESPACE + "/declare"), symbol);
+		return ctx.lower(ClojureLowerUtil.list(new LispSymbol("do"), definition,
+				ClojureLowerUtil.list(new LispSymbol("var"), symbol)));
+	}
+
 	static void noteCreatedNamespace(ClojureLowering ctx, LispVal designator) {
 		String ns = ClojureNamespaceLowering.literalSymbol(designator);
 		if (ns != null) {

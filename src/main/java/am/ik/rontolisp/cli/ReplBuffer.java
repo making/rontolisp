@@ -51,6 +51,7 @@ final class ReplBuffer {
 	ReplBuffer(SourceSession session, LispEvaluator evaluator, Channels channels) {
 		this.session = session;
 		this.evaluator = evaluator;
+		session.attach(evaluator);
 		this.out = channels.out();
 		this.errors = channels.terminal() ? channels.out() : channels.errors();
 		this.terminal = channels.terminal();

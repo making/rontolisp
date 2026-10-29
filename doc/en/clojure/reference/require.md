@@ -20,8 +20,10 @@ when the body runs, answering `nil` like any other `require`; there, and inside 
 `when`, a namespace no root holds fails only when the code runs, with the oracle's
 `FileNotFoundException` (`Could not locate a/b__init.class, a/b.clj or a/b.cljc on
 classpath.`), so an optional library's `(try (require 'x) (catch Exception e ...))` works.
-As a value every application refuses at run time, since libraries load while the program
-lowers (of no spec, the oracle's `Nothing specified to load`).
+A computed spec (a local or var naming the library, a call answering it) and every
+application as a value load when the call runs on the interpreter, which keeps the
+program's lowering; a compiled program refuses them at run time, since its libraries load
+while it lowers (of no spec, the oracle's `Nothing specified to load` either way).
 
 ```clojure
 (require '[clojure.string :as s])

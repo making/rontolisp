@@ -487,8 +487,9 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
 コレクション内の文字列をクォートするので、`spit` が書いたものは読み戻せます。
-`load-string` は提供せず、[eval](reference/eval.md) はプログラムの lower 中（マクロ本体の中）
-だけで動きます。実行時にコンパイラが動かないためです。
+[eval](reference/eval.md) はどのバックエンドでもプログラムの lower 中（マクロ本体の中）に
+動き、インタプリタではプログラムの実行中にも動きます。インタプリタはプログラムの lower を
+実行中も保持しますが、コンパイル済みプログラムは持たないため、そこでは実行時に拒否します。
 
 ## ホスト境界
 

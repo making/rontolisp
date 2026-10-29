@@ -828,12 +828,12 @@ public final class RontoLispCli {
 		// are the source-language seam's, in the entry file's language.
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
 		evaluator.setSourceStandards(standards);
-		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards,
-				evaluator.sourceLoader());
-		if (language == SourceLanguage.CLOJURE) {
-			// the whole program: its library without the arms it can never take
-			exprs = evaluator.clojureProgram(exprs);
-		}
+		// a whole Clojure program: its library without the arms it can never take, or,
+		// where it lowers as it runs, every arm and its lowering kept for the run
+		List<LispVal> exprs = language == SourceLanguage.CLOJURE
+				? evaluator.clojureProgram(language.readClojure(source, evaluator.features(), entryFile, standards,
+						evaluator.sourceLoader()))
+				: language.read(source, evaluator.features(), entryFile, standards, evaluator.sourceLoader());
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		// A Common Lisp entry file is the file being loaded: its forms -- and its #.
 		// data, resolved just before each form runs -- see *load-pathname* (the path as

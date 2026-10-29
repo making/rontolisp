@@ -231,6 +231,8 @@ class ClojureProjectNamespacesTest {
 					"""), Map.entry("src/app/ld/part2.clj", """
 					(println "loading part2" (str *ns*))
 					(defn part2-fn [] [:p2 (part1-fn)])
+					"""), Map.entry("src/app/ld/part3.clj", """
+					(println "loading part3" (str *ns*))
 					"""), Map.entry("src/app/mlib.clj", """
 					(ns app.mlib)
 					(println "loading app.mlib")
@@ -762,13 +764,20 @@ class ClojureProjectNamespacesTest {
 	}
 
 	@Test
-	void loadRefusesWhatItCannotReadWhileLowering() throws Exception {
+	void loadRefusesAMissingLiteralPathAndLoadsAComputedOneWhereTheProgramLowersAsItRuns() throws Exception {
 		assertThatThrownBy(() -> read(entry("ld1.clj", "(ns app.ld1) (load \"nope\")")))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Could not locate app/nope.clj or app/nope.cljc on the source path: ");
-		assertThatThrownBy(() -> read(entry("ld2.clj", "(ns app.ld2) (let [p \"ld/part2\"] (load p))")))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("load takes string literal paths");
+		// a computed path loads when the call runs on the interpreter, which keeps the
+		// program's lowering; a compiled program refuses it there (a lower-time refusal
+		// until 2026-10-29)
+		Path computed = entry("ld2.clj", """
+				(ns app.ld2)
+				(println (try (load (str "ld/" "part3")) (catch UnsupportedOperationException e (ex-message e))))
+				""");
+		assertThat(interpret(computed)).isEqualTo("loading part3 app.ld2\nnil\n");
+		assertThat(runOnJvm(computed, "LoadComputed")).isEqualTo(
+				"load of a computed path is not supported at run time: only literal paths load, where the call stands\n");
 	}
 
 	/**
@@ -1000,7 +1009,10 @@ class ClojureProjectNamespacesTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-namespaces", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : evaluator.clojureProgram(read(entry))) {
+			// as the command line runs it: a program lowering as it runs keeps its
+			// lowering
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.readClojure(Files.readString(entry),
+					Features.INTERPRETER, entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
 				evaluator.eval(form);
 			}
 			return null;

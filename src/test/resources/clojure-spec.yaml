@@ -4147,7 +4147,8 @@ cases:
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
     # the same function at run time. The expanders answer the mangled data itself, so
     # expansions print the oracle's lowercase spelling and = against a quoted form
-    # holds.
+    # holds. An answer holding a lazy seq (a concat) realizes into a list, the oracle's
+    # form (it was an unreadable value until 2026-10-29).
     source: |
       (defmacro sp-unless [c t] (list 'if c nil t))
       (println (macroexpand-1 '(sp-unless true 1)))
@@ -4157,6 +4158,8 @@ cases:
       (println (macroexpand-1 '(+ 1 2)))
       (println (= (macroexpand-1 '(sp-unless true 1)) '(if true nil 1)))
       (println (= (macroexpand-1 '(+ 1 2)) '(+ 1 2)))
+      (defmacro sp-sum [& xs] (concat '(+) xs))
+      (println (sp-sum 1 2 3) (macroexpand-1 '(sp-sum 1 2)))
     expected: |
       (if true nil 1)
       (if false nil 42)
@@ -4165,6 +4168,7 @@ cases:
       (+ 1 2)
       true
       true
+      6 (+ 1 2)
   - name: a-macro-may-take-a-trailing-dot-name-without-a-class
     # shcloj4's ?. macro (examples/utils.clj): a trailing-dot name with no class
     # base is no construction at a call site (only X. over a class spelling is),
@@ -4281,7 +4285,10 @@ cases:
     # libraries load and namespaces switch while the program lowers (the oracle
     # loads clojure.set, prints nil twice and the namespace; of no spec it
     # throws "Nothing specified to load" wrapped in a CompilerException, and
-    # names clojure.lang.RT/1 in in-ns's arity error).
+    # names clojure.lang.RT/1 in in-ns's arity error). The interpreter keeps the
+    # program's lowering as it runs and answers them (the next case).
+    skip:
+      interpreter: the interpreter lowers the verbs as the program runs
     source: |
       (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
       (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
@@ -4298,6 +4305,48 @@ cases:
       Nothing specified to load
       in-ns of a computed name is not supported at run time: namespaces switch while the program lowers
       Wrong number of args (0) passed to: clojure.core/in-ns
+  - name: the-interpreter-lowers-at-run-time
+    # The interpreter keeps the program's lowering as it runs: eval, resolve,
+    # find-var, ns-resolve and requiring-resolve of a computed symbol, require of a
+    # computed spec, alias of computed names, load-string and load-reader lower when
+    # they run, in *ns*, and what they define joins the program. A value no literal
+    # spells (a function) stands in an eval'd form as itself; a form that does not
+    # lower throws the oracle's CompilerException, a library no root holds its
+    # FileNotFoundException. Oracle-identical (clj 1.12.6, 2026-10-29). A compiled
+    # program carries no lowering, so there the verbs refuse (the case above).
+    skip:
+      jvm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm: a compiled program carries no lowering, so the verbs refuse at run time
+      wasm_component: a compiled program carries no lowering, so the verbs refuse at run time
+    source: |
+      (defn rtl-twice [x] (* 2 x))
+      (def rtl-base 10)
+      (println (eval (list 'rtl-twice (list 'inc 4))) (eval `(+ ~rtl-base 1)) (eval (concat '(+) [1 2 3])))
+      (println (eval '(defn rtl-added [a] (+ a rtl-base))) (eval '(rtl-added 5)))
+      (println ((eval '(fn [x] (* x x))) 7) (eval (list (fn [x] (str "got " x)) 42)))
+      (println (eval '(do (defmacro rtl-m [x] (list '* 2 x)) (rtl-m 21))) (eval '(rtl-m 4)))
+      (println (let [s (symbol "inc")] ((resolve s) 41)) (load-string (str "(+ 1" " 2)")))
+      (let [n 'clojure.set] (require n) (println ((ns-resolve n 'union) #{1} #{2})))
+      (println @(find-var (symbol (str *ns*) "rtl-base")) (map eval ['(+ 1 1) '(* 2 3)]))
+      (println (eval (read-string "[1 2 #{3}]")) @(future (eval '(+ 40 2))))
+      (alias (symbol "rtl-s") (symbol "clojure.string"))
+      (println (eval '(rtl-s/upper-case "ab")) ((requiring-resolve (symbol "clojure.string" "join")) "-" [1 2]))
+      (println (load-reader (java.io.PushbackReader. (java.io.StringReader. "(+ 2 3) (* 6 7)"))))
+      (println (try (eval '(rtl-no-such 1)) (catch clojure.lang.Compiler$CompilerException e :refused)))
+      (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
+    expected: |
+      10 11 6
+      #'lit/rtl-added 15
+      49 got 42
+      42 8
+      42 3
+      #{1 2}
+      10 (2 6)
+      [1 2 #{3}] 42
+      AB 1-2
+      42
+      :refused
+      Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
@@ -15469,20 +15518,24 @@ cases:
       nil
       nil
   - name: intern-var-set-and-with-redefs-fn
-    # intern makes a var over a cell of its own, var-set refuses one that is
+    # intern makes a var -- of a quoted name in the current namespace the var the
+    # forms below name, its root rebound over a def's -- var-set refuses one that is
     # not thread-locally bound, and with-redefs-fn rebinds roots for its call.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the forms below, 2026-10-29).
     source: |
       (println (intern 'user 'f67-iv 7))
       (println @(intern 'user 'f67-iv))
       (println (try (var-set (intern 'user 'f67-iv) 8) (catch IllegalStateException e (.getMessage e))))
       (def f67-rd 1)
       (println (with-redefs-fn {(var f67-rd) 99} (fn [] f67-rd)) f67-rd)
+      (intern *ns* 'f67-in 5)
+      (println f67-iv f67-in (intern *ns* 'f67-rd 2) f67-rd)
     expected: |
       #'user/f67-iv
       7
       Can't change/establish root binding of: f67-iv with set
       99 1
+      7 5 #'user/f67-rd 2
   - name: requiring-resolve-and-load-string
     # requiring-resolve loads the namespace and answers the var, and
     # load-string of a literal runs where the call stands.

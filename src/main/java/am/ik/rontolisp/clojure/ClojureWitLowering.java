@@ -941,7 +941,7 @@ final class ClojureWitLowering {
 	 * @param ctx the hub
 	 */
 	static void refuseCombined(ClojureLowering ctx) {
-		if (!ctx.session && ctx.wit.implemented && ctx.wasm.exported) {
+		if (!ctx.incremental && ctx.wit.implemented && ctx.wasm.exported) {
 			throw new LispReadException("rontolisp.wasm/export cannot be combined with rontolisp.wit/export: the WIT "
 					+ "world is the program's export list -- declare the export in the world, or drop the world");
 		}

@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -1323,7 +1324,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x prefer-method)")).contains("of a computed multimethod");
 		assertThat(lowered("(def x prefers)")).contains("of a computed multimethod");
 		assertThat(lowered("(def x remove-all-methods)")).contains("of a computed multimethod");
-		assertThat(lowered("(def x load)")).contains("of a computed path");
+		assertThat(lowered("(def x load)")).contains("RONTOLISP::%CLOJURE-LOAD-V");
 		assertThat(lowered("(def x push-thread-bindings)")).contains("what binding expands to");
 		assertThat(lowered("(def x pop-thread-bindings)")).contains("what binding expands to");
 		// g40: the six multimethod arms keep the refusal only for a function the
@@ -3370,6 +3371,20 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> loweredWithMacros("(defmacro mu-rs [x] (resolve x)) (mu-rs :k)"))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("resolve takes a symbol");
+		// a program naming a lowering verb over computed arguments keeps its lowering
+		// for the run where its target lowers then, and a computed require spec is one
+		// (a local's name was read as a library's until 2026-10-29)
+		assertThat(runTimeOf("(eval (list '+ 1 2))", true)).isNotNull();
+		assertThat(runTimeOf("(let [n 'clojure.set] (require n))", true)).isNotNull();
+		assertThat(runTimeOf("(eval (list '+ 1 2))", false)).isNull();
+		assertThat(runTimeOf("(require 'clojure.set) (resolve 'inc)", true)).isNull();
+	}
+
+	private static @Nullable ClojureRunTime runTimeOf(String source, boolean runTimeTarget) {
+		return Clojure
+			.program(source, null, ClojureMacroTime.create(), ClojureFiles.NONE, true, ClojureBoundary.NONE,
+					runTimeTarget)
+			.runTime();
 	}
 
 	@Test
@@ -3588,7 +3603,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(create-ns 'foo)")).contains("(RONTOLISP::%CLOJURE-CREATE-NS ");
 		assertThat(lowered("(remove-ns 'foo)")).contains("(RONTOLISP::%CLOJURE-REMOVE-NS ");
 		assertThat(lowered("(loaded-libs)")).contains("(RONTOLISP::%CLOJURE-LOADED-LIBS ");
-		assertThat(lowered("(intern 'user 'x 1)")).contains("(RONTOLISP::%CLOJURE-INTERN ");
+		assertThat(lowered("(intern 'f67-other 'x 1)")).contains("(RONTOLISP::%CLOJURE-INTERN ");
+		// of a quoted name in the current namespace, the var the forms below name
+		assertThat(lowered("(intern *ns* 'f67-x 1) (inc f67-x)")).doesNotContain("%CLOJURE-INTERN ")
+			.contains("RONTOLISP::%CLOJURE-VAR \"user/f67-x\"");
 		assertThat(lowered("(def f67-vs 1) (var-set (var f67-vs) 2)")).contains("(RONTOLISP::%CLOJURE-VAR-SET ");
 		assertThat(lowered("(with-redefs-fn {} (fn [] 1))")).contains("(RONTOLISP::%CLOJURE-WITH-REDEFS-FN ");
 		assertThat(lowered("(def f67-ns-x 1) (get (ns-publics 'user) 'f67-ns-x)"))

@@ -98,6 +98,20 @@ public final class SourceSession {
 	}
 
 	/**
+	 * Binds the session to the evaluator its inputs run on: a Clojure session's lowering
+	 * answers the lowering verbs its inputs reach as they run ({@code eval}, a computed
+	 * {@code resolve} or {@code require} ...), like one more input in the namespace
+	 * {@code *ns*} holds ({@link LispEvaluator#setClojureRunTime}). Nothing for another
+	 * language.
+	 * @param evaluator the evaluator
+	 */
+	public void attach(LispEvaluator evaluator) {
+		if (this.clojure != null) {
+			evaluator.setClojureRunTime(this.clojure.runTime());
+		}
+	}
+
+	/**
 	 * Whether the accumulated input can be read now, or the next line continues it.
 	 * @param buffer the text typed so far
 	 * @return {@code false} when a form is still open

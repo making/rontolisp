@@ -204,7 +204,7 @@ final class ClojureMacroLowering {
 			}
 		}
 		List<LispVal> forms = new ArrayList<>();
-		if (ctx.session) {
+		if (ctx.open) {
 			forms.add(setq);
 		}
 		else {
@@ -580,9 +580,11 @@ final class ClojureMacroLowering {
 			bindings.add(
 					ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteForMacro(ClojureLowerUtil.list(items))));
 		}
+		// the answer as a form: a lazy seq in it (a concat, a lazy map) realizes, since
+		// no datum spells one (until 2026-10-29 a concat answer was an unreadable value)
 		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted)));
+				ClojureLowerUtil.list(FORM_OF, ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted))));
 		handOverCaughtClasses(ctx, ctx.macroEvaluator);
 		LispVal value;
 		try {
@@ -609,6 +611,12 @@ final class ClojureMacroLowering {
 			ctx.macroDepth--;
 		}
 	}
+
+	/**
+	 * The run-time library's value as a form: every lazy seq in its lists and vectors
+	 * realized, the value itself where none is ({@code %clojure-form-of}).
+	 */
+	static final LispSymbol FORM_OF = new LispSymbol("RONTOLISP::%CLOJURE-FORM-OF");
 
 	static String exMessage(RuntimeException ex) {
 		String message = ex.getMessage();
@@ -654,7 +662,11 @@ final class ClojureMacroLowering {
 	 * without symbols, or when the evaluator cannot answer.
 	 */
 	private static Map<LispSymbol, LispVal> collectMetas(ClojureLowering ctx, LispVal value) {
-		if (ctx.macroEvaluator == null) {
+		// a run-time value's metadata is the running program's, a macro-time value's
+		// the macro-time evaluator's
+		ClojureRunTime.Host host = ctx.decodingFor;
+		ClojureMacroEvaluator macroEvaluator = ctx.macroEvaluator;
+		if (host == null && macroEvaluator == null) {
 			return Map.of();
 		}
 		List<LispSymbol> symbols = new ArrayList<>();
@@ -663,7 +675,8 @@ final class ClojureMacroLowering {
 		if (symbols.isEmpty()) {
 			return Map.of();
 		}
-		List<LispVal> metas = ctx.macroEvaluator.metasOf(new ArrayList<>(symbols));
+		List<LispVal> metas = host != null ? host.metasOf(new ArrayList<>(symbols))
+				: macroEvaluator != null ? macroEvaluator.metasOf(new ArrayList<>(symbols)) : null;
 		if (metas == null || metas.size() != symbols.size()) {
 			return Map.of();
 		}
@@ -728,6 +741,9 @@ final class ClojureMacroLowering {
 			else if (symbol.startsWith(ClojureLowering.PREFIX)) {
 				decoded = new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
 			}
+			else if (ctx.decodingFor != null) {
+				return embedded(ctx, value);
+			}
 			else {
 				throw new LispReadException("an unreadable symbol: " + value.print());
 			}
@@ -763,6 +779,11 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%INST") || tag.name().equals(":C%TIMESTAMP")
 						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
 					return decodeTagged(cons);
+				}
+				if (ctx.decodingFor != null && tag.name().startsWith(":")) {
+					// any other run-time value of a tagged kind -- an atom, a var, a
+					// deftype, a delay ... -- is the object itself where it is evaluated
+					return embedded(ctx, value);
 				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
@@ -814,7 +835,23 @@ final class ClojureMacroLowering {
 				return own;
 			}
 		}
+		if (ctx.decodingFor != null) {
+			return embedded(ctx, value);
+		}
 		throw new LispReadException("an unreadable value: " + value.print());
+	}
+
+	/**
+	 * A run-time value no datum spells -- a function, an atom, a host object -- as the
+	 * object itself, the oracle's compiler's constant: the marker over the core form the
+	 * running program evaluates to the very object ({@link ClojureRunTime#EMBEDDED}).
+	 */
+	private static LispVal embedded(ClojureLowering ctx, LispVal value) {
+		ClojureRunTime.Host host = ctx.decodingFor;
+		if (host == null) {
+			throw new LispReadException("an unreadable value: " + value.print());
+		}
+		return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, host.constant(value));
 	}
 
 	/**

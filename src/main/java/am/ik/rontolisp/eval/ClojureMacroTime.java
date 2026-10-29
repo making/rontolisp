@@ -96,6 +96,9 @@ public final class ClojureMacroTime {
 	 */
 	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
 
+	/** The run-time library's value as a form, every lazy seq in it realized. */
+	private static final LispSymbol FORM_OF = new LispSymbol("RONTOLISP::%CLOJURE-FORM-OF");
+
 	/** The run-time library's {@code meta} of a value. */
 	private static final LispSymbol META = new LispSymbol("RONTOLISP::%CLOJURE-META");
 
@@ -135,11 +138,11 @@ public final class ClojureMacroTime {
 				for (LispVal runtime : ClojureLowering.macroTimeRuntimeForms()) {
 					macroEval.eval(runtime);
 				}
-				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm));
-				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
-				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
-				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm));
-				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm));
+				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm, true));
+				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm, false));
+				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm, false));
 				this.evaluator = macroEval;
 			}
 			for (Pending definition : this.pending) {
@@ -163,11 +166,13 @@ public final class ClojureMacroTime {
 
 		/**
 		 * The definition replacing a run-time library function that refuses at run time
-		 * by one evaluating the form the lowering answers for its argument. A lowering
-		 * error becomes an ordinary error, so the macro body may catch it.
+		 * by one evaluating the form the lowering answers for its argument -- realized as
+		 * a form first when {@code realized} ({@code eval}'s, whose lazy seqs no datum
+		 * spells). A lowering error becomes an ordinary error, so the macro body may
+		 * catch it.
 		 */
-		private LispVal callingBack(LispSymbol name,
-				BiFunction<ClojureMacroEvaluator.Lowering, LispVal, LispVal> form) {
+		private LispVal callingBack(LispSymbol name, BiFunction<ClojureMacroEvaluator.Lowering, LispVal, LispVal> form,
+				boolean realized) {
 			LispFunction body = new LispFunction(name.name(), args -> {
 				ClojureMacroEvaluator.Lowering current = this.lowering;
 				if (current == null) {
@@ -183,8 +188,9 @@ public final class ClojureMacroTime {
 				return evaluate(lowered);
 			});
 			LispSymbol arg = new LispSymbol("FORM");
+			LispVal passed = realized ? list(FORM_OF, arg) : arg;
 			return list(new LispSymbol("DEFUN"), name, list(arg),
-					list(new LispSymbol("FUNCALL"), list(new LispSymbol("QUOTE"), body), arg));
+					list(new LispSymbol("FUNCALL"), list(new LispSymbol("QUOTE"), body), passed));
 		}
 
 		private static LispVal list(LispVal... items) {

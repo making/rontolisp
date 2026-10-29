@@ -15729,12 +15729,59 @@
   (rontolisp::%clojure-check-arity args 2 2 "reset-meta!")
   (rontolisp::%clojure-reset-meta (car args) (car (cdr args))))
 
-;;;; eval, and resolve of a computed symbol: the lowering's own work, so they run
-;;;; only while the program lowers. The macro-time evaluator (eval/ClojureMacroTime)
-;;;; replaces both with calls back into the lowering, so a macro body (and every
-;;;; helper it calls) evaluates a form and resolves a name at expansion time; a
-;;;; compiled program carries no lowering, so here both refuse. resolve of a
-;;;; quoted symbol never comes here: it resolves while the program lowers.
+;;;; The lowering verbs at run time: eval, resolve, find-var, ns-resolve and
+;;;; requiring-resolve of a computed symbol, load-string, load-file, load-reader
+;;;; and load of a computed argument, require, use and in-ns of computed specs
+;;;; or names, alias, refer, ns-unmap and ns-unalias of computed names, and the
+;;;; namespace mappings of a computed namespace. Each is the lowering's own work
+;;;; -- of literal arguments it happens while the program lowers -- so each
+;;;; reaches %clojure-lower-at-run-time with its verb and its arguments. The
+;;;; interpreter keeps the program's lowering as it runs and replaces that
+;;;; function by one lowering the call of the verb over the arguments, quoted, in
+;;;; *ns*, and evaluating what it lowers to (eval/LispEvaluator); a compiled
+;;;; program carries no lowering, so here it refuses. The macro-time evaluator
+;;;; (eval/ClojureMacroTime) answers eval, resolve, find-var and ns-resolve
+;;;; through the lowering instead, so a macro body (and every helper it calls)
+;;;; evaluates a form and resolves a name at expansion time.
+
+(defun rontolisp::%clojure-lower-at-run-time (verb args message)
+  "The lowering verb VERB (a string) over the list ARGS at run time: refused
+   with MESSAGE where no lowering runs as the program runs."
+  (declare (ignore verb args))
+  (rontolisp::%clojure-unsupported-operation-exception message))
+
+(defun rontolisp::%clojure-forms-of (items)
+  "The proper list ITEMS with each member a form (%clojure-form-of), ITEMS
+   itself where no member changed."
+  (let ((acc nil) (changed nil))
+    (dolist (item items)
+      (let ((form (rontolisp::%clojure-form-of item)))
+        (if (not (eq form item)) (setq changed t))
+        (setq acc (cons form acc))))
+    (if changed (nreverse acc) items)))
+
+(defun rontolisp::%clojure-form-of (x)
+  "X as a form: every lazy seq in its lists and vectors realized into a list,
+   X itself where it holds none -- what eval's argument and a macro's answer
+   decode back to a datum from, since a lazy seq has no spelling a form reads.
+   A list whose spine ends in a wrapper (a realized seq's lazy tail) realizes
+   whole; any other tagged value stays as it is."
+  (cond ((rontolisp::%clojure-lazy-p x)
+         (rontolisp::%clojure-forms-of (rontolisp::%clojure-realize-all x)))
+        ((and (consp x) (not (keywordp (car x))))
+         (let ((p x) (tail nil))
+           (do ()
+               ((or tail (not (consp (cdr p)))))
+             (if (keywordp (car (cdr p))) (setq tail t) (setq p (cdr p))))
+           (cond (tail (rontolisp::%clojure-forms-of
+                        (rontolisp::%clojure-realize-all x)))
+                 ((null (cdr p)) (rontolisp::%clojure-forms-of x))
+                 (t x))))
+        ((and (vectorp x) (not (stringp x)))
+         (let* ((items (coerce x 'list))
+                (forms (rontolisp::%clojure-forms-of items)))
+           (if (eq forms items) x (coerce forms 'vector))))
+        (t x)))
 
 ;; A macro body's &env and &form: the call's locals (a map of each local's symbol
 ;; to itself, nil without one) and the call itself, which an expansion while the
@@ -15746,16 +15793,14 @@
 (defvar rontolisp::%clojure-macro-form nil)
 
 (defun rontolisp::%clojure-eval (form)
-  "eval at run time: refused."
-  (declare (ignore form))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "eval is not supported at run time: only a macro body's eval runs, while the program lowers"))
+  "eval at run time: the lowering's (%clojure-lower-at-run-time)."
+  (rontolisp::%clojure-lower-at-run-time "eval" (list form)
+                                         "eval is not supported at run time: only a macro body's eval runs, while the program lowers"))
 
 (defun rontolisp::%clojure-resolve (symbol)
-  "resolve of a computed symbol at run time: refused."
-  (declare (ignore symbol))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "resolve of a computed symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "resolve" (list symbol)
+                                         "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-find-var (symbol)
   "find-var of a computed symbol: an unqualified one is the oracle's refusal, a
@@ -15772,10 +15817,9 @@
         (t (rontolisp::%clojure-find-var-resolve symbol))))
 
 (defun rontolisp::%clojure-find-var-resolve (symbol)
-  "find-var of a computed qualified symbol at run time: refused."
-  (declare (ignore symbol))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "find-var of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "find-var of a computed qualified symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "find-var" (list symbol)
+                                         "find-var of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-find-var-v (&rest args)
   "find-var as a value."
@@ -15784,11 +15828,10 @@
 
 (defun rontolisp::%clojure-ns-resolve-in (pair)
   "ns-resolve of the symbol (second PAIR) in the namespace (first PAIR) at run
-   time: refused, like resolve. The macro-time evaluator resolves it through the
-   lowering instead."
-  (declare (ignore pair))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-resolve of a computed namespace or symbol is not supported at run time: vars exist only while the program lowers"))
+   time: the lowering's, like resolve. The macro-time evaluator resolves it
+   through the lowering instead."
+  (rontolisp::%clojure-lower-at-run-time "ns-resolve" pair
+                                         "ns-resolve of a computed namespace or symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-ns-resolve (ns symbol)
   "ns-resolve of a namespace or symbol computed at run time: a nil namespace is
@@ -16094,19 +16137,17 @@
 
 (defun rontolisp::%clojure-ns-computed-here (what x)
   "(ns-publics ns-interns ns-map ns-refers ns-aliases ns-imports of a
-   computed namespace at run time: refused -- only what the lowering knows
-   maps."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   (concatenate 'string what
-                " of a computed namespace is not supported at run time: only what the lowering knows maps")))
+   computed namespace at run time: the lowering's -- of a literal one, what
+   the lowering knows maps."
+  (rontolisp::%clojure-lower-at-run-time what (list x)
+                                         (concatenate 'string what
+                                                      " of a computed namespace is not supported at run time: only what the lowering knows maps")))
 
 (defun rontolisp::%clojure-load-string-here (x)
-  "(load-string x) of a computed string at run time: refused -- only a
-   literal string loads, where the call stands."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-string of a computed string is not supported at run time: only a literal string loads, where the call stands"))
+  "(load-string x) of a computed string at run time: the lowering's -- a
+   literal string loads where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load-string" (list x)
+                                         "load-string of a computed string is not supported at run time: only a literal string loads, where the call stands"))
 
 (defun rontolisp::%clojure-load-string-v (&rest args)
   "load-string as a value."
@@ -16114,11 +16155,10 @@
   (rontolisp::%clojure-load-string-here (car args)))
 
 (defun rontolisp::%clojure-load-file-here (x)
-  "(load-file x) of a computed path at run time: refused -- only a literal
-   path loads, where the call stands."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-file of a computed path is not supported at run time: only a literal path loads, where the call stands"))
+  "(load-file x) of a computed path at run time: the lowering's -- a literal
+   path loads where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load-file" (list x)
+                                         "load-file of a computed path is not supported at run time: only a literal path loads, where the call stands"))
 
 (defun rontolisp::%clojure-load-file-v (&rest args)
   "load-file as a value."
@@ -16126,22 +16166,29 @@
   (rontolisp::%clojure-load-file-here (car args)))
 
 (defun rontolisp::%clojure-load-reader (x)
-  "(load-reader x): refused -- nothing reads a reader at run time."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "load-reader is not supported at run time: only load-string and load-file of literals load, where the call stands"))
+  "(load-reader x): the lowering's, over the text read from X to its end."
+  (rontolisp::%clojure-lower-at-run-time "load-reader" (list x)
+                                         "load-reader is not supported at run time: only load-string and load-file of literals load, where the call stands"))
 
 (defun rontolisp::%clojure-load-reader-v (&rest args)
   "load-reader as a value."
   (rontolisp::%clojure-check-arity args 1 1 "load-reader")
   (rontolisp::%clojure-load-reader (car args)))
 
+(defun rontolisp::%clojure-load-here (paths)
+  "(load paths...) of computed paths at run time: the lowering's -- literal
+   paths load where the call stands."
+  (rontolisp::%clojure-lower-at-run-time "load" paths
+                                         "load of a computed path is not supported at run time: only literal paths load, where the call stands"))
+
+(defun rontolisp::%clojure-load-v (&rest paths)
+  "load as a value: nil of no path, like the call of none."
+  (if paths (rontolisp::%clojure-load-here paths) nil))
+
 (defun rontolisp::%clojure-requiring-resolve-here (x)
-  "(requiring-resolve x) of a computed symbol at run time: refused -- vars
-   exist only while the program lowers."
-  (declare (ignore x))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "requiring-resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+  "(requiring-resolve x) of a computed symbol at run time: the lowering's."
+  (rontolisp::%clojure-lower-at-run-time "requiring-resolve" (list x)
+                                         "requiring-resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
 
 (defun rontolisp::%clojure-requiring-resolve-v (&rest args)
   "requiring-resolve as a value."
@@ -16149,34 +16196,31 @@
   (rontolisp::%clojure-requiring-resolve-here (car args)))
 
 (defun rontolisp::%clojure-alias-here (x y)
-  "(alias x y) of computed names at run time: refused -- aliases wire while
-   the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "alias of computed names is not supported at run time: aliases wire while the program lowers"))
+  "(alias x y) of computed names at run time: the lowering's -- of literal
+   names, aliases wire while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "alias" (list x y)
+                                         "alias of computed names is not supported at run time: aliases wire while the program lowers"))
 
 (defun rontolisp::%clojure-alias-v (&rest args)
   "alias as a value."
   (rontolisp::%clojure-check-arity args 2 2 "alias")
   (rontolisp::%clojure-alias-here (car args) (car (cdr args))))
 
-(defun rontolisp::%clojure-refer-here (&rest args)
-  "(refer ...) of computed names at run time: refused -- refers wire while
-   the program lowers."
-  (declare (ignore args))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "refer of computed names is not supported at run time: refers wire while the program lowers"))
+(defun rontolisp::%clojure-refer-here (ns filters)
+  "(refer ns filters...) of computed names at run time: the lowering's -- of
+   literal names, refers wire while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "refer" (cons ns filters)
+                                         "refer of computed names is not supported at run time: refers wire while the program lowers"))
 
 (defun rontolisp::%clojure-refer-v (&rest args)
   "refer as a value."
-  (rontolisp::%clojure-refer-here args))
+  (rontolisp::%clojure-refer-here (car args) (cdr args)))
 
 (defun rontolisp::%clojure-ns-unmap-here (x y)
-  "(ns-unmap x y) of computed names at run time: refused -- mappings unmap
-   while the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-unmap of computed names is not supported at run time: mappings unmap while the program lowers"))
+  "(ns-unmap x y) of computed names at run time: the lowering's -- of literal
+   names, mappings unmap while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "ns-unmap" (list x y)
+                                         "ns-unmap of computed names is not supported at run time: mappings unmap while the program lowers"))
 
 (defun rontolisp::%clojure-ns-unmap-v (&rest args)
   "ns-unmap as a value."
@@ -16184,11 +16228,10 @@
   (rontolisp::%clojure-ns-unmap-here (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-ns-unalias-here (x y)
-  "(ns-unalias x y) of computed names at run time: refused -- aliases unalias
-   while the program lowers."
-  (declare (ignore x y))
-  (rontolisp::%clojure-unsupported-operation-exception
-   "ns-unalias of computed names is not supported at run time: aliases unalias while the program lowers"))
+  "(ns-unalias x y) of computed names at run time: the lowering's -- of
+   literal names, aliases unalias while the program lowers."
+  (rontolisp::%clojure-lower-at-run-time "ns-unalias" (list x y)
+                                         "ns-unalias of computed names is not supported at run time: aliases unalias while the program lowers"))
 
 (defun rontolisp::%clojure-ns-unalias-v (&rest args)
   "ns-unalias as a value."
@@ -16196,14 +16239,15 @@
   (rontolisp::%clojure-ns-unalias-here (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-load-libs-v (name args)
-  "require or use (NAME) as a value: libraries load while the program lowers,
-   so any spec refuses at run time; of none, the oracle's own refusal."
+  "require or use (NAME) of computed specs, or as a value: the lowering's --
+   of literal specs, libraries load while the program lowers; of none, the
+   oracle's own refusal."
   (if (null args)
       (rontolisp::%clojure-exception "Nothing specified to load")
-      (rontolisp::%clojure-unsupported-operation-exception
-       (format nil
-               "~A of computed specs is not supported at run time: libraries load while the program lowers"
-               name))))
+      (rontolisp::%clojure-lower-at-run-time name args
+                                             (format nil
+                                                     "~A of computed specs is not supported at run time: libraries load while the program lowers"
+                                                     name))))
 
 (defun rontolisp::%clojure-require-v (&rest args)
   "require as a value."
@@ -16214,10 +16258,24 @@
   (rontolisp::%clojure-load-libs-v "use" args))
 
 (defun rontolisp::%clojure-in-ns-v (&rest args)
-  "in-ns as a value: refused -- namespaces switch while the program lowers."
+  "in-ns of a computed name, or as a value: the lowering's -- of a literal
+   name, namespaces switch while the program lowers."
   (rontolisp::%clojure-check-arity args 1 1 "in-ns")
-  (rontolisp::%clojure-unsupported-operation-exception
-   "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
+  (rontolisp::%clojure-lower-at-run-time "in-ns" args
+                                         "in-ns of a computed name is not supported at run time: namespaces switch while the program lowers"))
+
+(defun rontolisp::%clojure-run-time-arguments (verb args)
+  "The arguments the lowering verb VERB takes at run time out of ARGS, each a
+   form (%clojure-form-of): load-reader's reader read to its end, its text
+   what lowers. The interpreter asks before it lowers (eval/LispEvaluator)."
+  (if (equal verb "load-reader")
+      (if (streamp (car args))
+          (list
+           (rontolisp::%clojure-read-to-end
+            (rontolisp::%clojure-open-reader (car args))))
+          (rontolisp::%clojure-class-cast-exception-of "load-reader needs a reader: a clojure.java.io/reader, a PushbackReader over one, or *in*"
+                                                       (car args)))
+      (rontolisp::%clojure-forms-of args)))
 
 ;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
 ;; %clojure-repl-error and hands its value to %clojure-repl-result

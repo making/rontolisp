@@ -188,7 +188,7 @@ answered `2 5 3` before).
 | `ns-publics` `ns-interns` `ns-map` `ns-refers` `ns-aliases` `ns-imports` | the map the lowering knows, through `ClojureVarLowering.resolved` per entry; anything computed is `(rontolisp::%clojure-ns-computed-here what x)`; as a value a one-argument lambda over the same refusal, one program-wide object through `%clojure-shared-value`, so two references are `=` and `identical?` like the oracle's var roots (g00, 2026-10-13: each closes over nothing but its argument, so no per-snapshot key) | interns (public ones for `ns-publics`), refers, the referred core vars and imports; a core var the subset lacks stays out, an import maps to a symbol of its class ("Namespaces and project files") |
 | `alias` `refer` `refer-clojure` `ns-unmap` `ns-unalias` | lower-time wiring (`ClojureNamespaceLowering.aliasOf`/`referOf`/`unmapOf`/`unaliasOf`, `refer-clojure` through the `(:refer-clojure ...)` options), answering nil; anything computed refuses at run time | `refer` loads and refers like `require` with refer-all (`:only`/`:exclude`/`:rename` narrow, quoted filters evaluate like the oracle's); `alias` serves the forms below; the two `ns-un*` forget ("Namespaces and project files") |
 | `requiring-resolve` | the var `resolve` answers, loading a project namespace first; anything computed is `(rontolisp::%clojure-requiring-resolve-here x)` | only a quoted symbol resolves ("Namespaces and project files") |
-| `load-string` `load-file` | a literal string (or the file a literal path names, resolved like a `load` path) read and lowered where the call stands, answering the last form's value; anything computed is `(rontolisp::%clojure-load-string-here x)` / `-load-file-here` | definitions declare ahead like a file's; a switched namespace is restored for the lowering after the call ("Reading") |
+| `load-string` `load-file` | a literal string (or the file a literal path names, resolved like a `load` path) read and lowered where the call stands, answering the last form's value; anything computed is `(rontolisp::%clojure-load-string-here x)` / `-load-file-here`, lowered as the program runs on the interpreter ("Lowering at run time") | definitions declare ahead like a file's; a switched namespace is restored for the lowering after the call ("Reading") |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). `join`'s separator is its `str` unless a string literal (`\newline`, a keyword; tools.cli; until 2026-10-12 a character signalled in `concatenate`). `split` and `split-lines` answer a vector (`.split` of a String, the oracle's `String[]`, the same vector; clj 1.12.6, 2026-10-11) and an empty input one empty part, literal or pattern (`splitForm` coerces `splitList`); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`); `trim` `triml` `trimr` `blank?` (and `.strip*`) trim the bag `ClojureStringLowering.trimBag` builds from `Character.isWhitespace` (9-13, 28-32, the Unicode space separators but U+00A0/U+2007/U+202F, U+2028/U+2029), the oracle's test -- verified on clj 1.12.6 over the whole BMP 2026-10-09; Java `.trim` is the `<= 32` bag (`javaTrimBag`); `trim-newline` stays `\n`/`\r` only. Pinned by clojure-spec `blank-and-the-trims-take-java-whitespace`. `upper-case` `lower-case` `capitalize` map as Java's `String` does ("Case mapping") |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
@@ -261,7 +261,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and `resolve` of a computed symbol refuse at run time ("Macros"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
+| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and the lowering verbs over computed arguments lower as the program runs on the interpreter and refuse in a compiled program ("Lowering at run time"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
 
 ## Deviations
 
@@ -310,7 +310,7 @@ Each is a real work item unless the reason says otherwise.
   answers `nil` where the oracle throws; a strict input to `for`
   and to the lazy-or-strict verbs realizes at once; no chunking.
 - Bit operations take an `N`-suffixed literal in range as its plain integer, where the oracle refuses its `BigInt`; `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as `pr` prints it, where the oracle prints its `toString`.
-- The namespace mappings answer what the lowering knows when the call lowers: a `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class, and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while the program lowers, so inside a body they still reach the whole file (the oracle's run when the body runs); a `load-string` of a literal declares ahead like a file, so the same form may already name what it defines (the oracle's needs a later form); `intern` over an existing `def` keeps the definition's cell for direct calls (and a later `#'` site reads that cell again).
+- The namespace mappings answer what the lowering knows when the call lowers: a `clojure.core` var the subset lacks stays out, an import maps to a symbol of its class, and anything computed refuses. `alias`, `refer`, `ns-unmap` and `ns-unalias` wire while the program lowers, so inside a body they still reach the whole file (the oracle's run when the body runs); a `load-string` of a literal declares ahead like a file, so the same form may already name what it defines (the oracle's needs a later form); `intern` of a quoted name in the current namespace lowers like `(do (def name val) (var name))` (`declare` without a value, `ClojureCoreLowering.internedHere`, 2026-10-29), so the forms below name the var and its root is the def's cell (`(intern *ns* 'zz 5) zz` was `unknown name: zz`, and a root interned over a `def` a cell its reads never saw); any other `intern` makes its var at run time over a cell of its own, which a `def`'s direct calls never see.
 - Verbs assume the right collection kind; misuse may signal the CL type error instead of
   the oracle's.
 - The whole-file pre-scan makes a definition shadow calls ABOVE it (the oracle's reach the
@@ -1261,10 +1261,10 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   required file under a unit key `load:<ns>:<path>` (`ClojureNamespaceLowering.loadOne`,
   `ClojureLowering.unitFiles` for its `*file*`, a required namespace's file too), once per lowering, and each call site runs
   its init unconditionally (`LoadMode.RELOAD`). The path must be a string literal because
-  the file is read while lowering; a computed path is refused by name. As a value `load`
-  answers nil of no arguments (like the call of none) and otherwise refuses at run
-  time -- only literal paths load, where the call stands (g39,
-  `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`).
+  the file is read while lowering; a computed path is `%clojure-load-here` and `load` as a
+  value `%clojure-load-v` (nil of no arguments, like the call of none), both lowered as the
+  program runs on the interpreter and refused in a compiled program ("Lowering at run
+  time"; a lower-time refusal until 2026-10-29, `ClojureLoweringTest#lowerTimeOnlyVerbsRefuseAtRunTimeAsValues`).
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project
@@ -3576,15 +3576,19 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `compile-if` of data.priority-map 1.2.0 and instaparse 1.5.0, `(if (eval test) then else)`
   over `(resolve 'clojure.core/hash-unordered-coll)`). `eval` lowers to
   `%clojure-eval`, `resolve` of anything but a quoted symbol to `%clojure-resolve`; in
-  `clojure.lisp` both refuse (`UnsupportedOperationException`), and `ClojureMacroTime`
-  redefines both in the macro-time evaluator as calls back into the lowering
+  `clojure.lisp` both hand their verb to `%clojure-lower-at-run-time`, which the
+  interpreter answers and a compiled program refuses ("Lowering at run time"), and
+  `ClojureMacroTime` redefines both in the macro-time evaluator as calls back into the lowering
   (`ClojureMacroEvaluator.Lowering`, handed over by `setMacroEvaluator` at each pass and
   session): the value decodes (`decodeDatum`) and lowers through
   `ClojureLowering.lowerDetached` -- the current namespace, a clean `Cursor` (no local,
   recur target, `try`, syntax-quote, dispatch fn or proxy method of the form being
   expanded; `loadFile` starts from the same) -- then evaluates there, a lowering error
   becoming an ordinary error the body may catch. So a helper `defn` a body calls evals
-  too, and a run-time `eval` compiles and refuses when it runs (it was `unknown name`).
+  too. The value realizes first (`%clojure-form-of`, a lazy seq into a list), and so does
+  every macro's answer in `expandMacro`'s invocation: until 2026-10-29 a macro answering a
+  `concat` was `an unreadable symbol: :C%LAZY` (clojure-spec
+  `defmacro-unless-expands-before-backends`).
   `(resolve env sym)` is `(ns-resolve *ns* env sym)`. `ns-resolve` (2026-10-11,
   `ClojureVarLowering.nsResolveOf`): a quoted symbol in a namespace the lowering designates
   -- a quoted name, `(find-ns 'n)`, `(the-ns 'n)`, `*ns*` -- resolves at lower time like
@@ -3608,10 +3612,9 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   an eval'd form sets stay set for the program; a `def` an eval'd form makes is the
   macro-time environment's only (the program reads the var unbound; the oracle's process
   keeps it). Pins: clojure-spec `a-macro-body-evaluates-a-form-while-it-expands`
-  (oracle-identical), `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (four
-  backends), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
+  (oracle-identical), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
   `#aMacroBodysEvalSeesNoLocalOfTheCallSite`, `#evalAndResolveRefuseWhatTheyCannotTake`,
-  `ClojureSessionTest#aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined`.
+  `ClojureSessionTest#evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns`.
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
@@ -3652,7 +3655,7 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 - **A template's qualified symbol is an unspelled quote** (`ClojureMacroLowering.unspelled`):
   `(%unspelled-quote |c%ns/f|)`, which spells nothing for the dispatch gate
   (`.kb/optimize-dead-code-elimination.md`). It spells the defun name of `ns/f`, and a
-  Clojure symbol is never a function designator by name (run-time `eval`/`resolve` are
+  Clojure symbol is never a function designator by name in a compiled program (run-time `eval`/`resolve` are
   refused, a symbol called as a function looks itself up), so the expanders a run-time
   expansion keeps no longer hold every function their templates name. The special forms
   that stay bare, `x#` gensyms and a plain `'sym` keep `quote`, and pprint's plain
@@ -3692,6 +3695,75 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   oracle-identical), `ClojureLoweringTest#aRunTimeExpansionResolvesItsHeadThroughTheScopeOfTheNamespaceItRunsIn`,
   `ClojureSessionTest#aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo`.
   `gensym` is the ordinary uninterned symbol.
+
+## Lowering at run time
+
+**Invariant: the interpreter keeps a Clojure program's lowering for its run, so a lowering
+verb over computed arguments lowers when it runs; a compiled program carries none and
+refuses by name** (g83, 2026-10-29). Verbs: `eval`; `resolve`, `find-var`, `ns-resolve`,
+`requiring-resolve` of a computed symbol; `require`, `use` (a computed spec, or as a
+value), `refer`, `alias`, `ns-unmap`, `ns-unalias`, `in-ns` of computed names; `load`,
+`load-file`, `load-string` of computed arguments, `load-reader`; the namespace mappings of
+a computed namespace. Each `clojure.lisp` entry hands its verb and arguments to
+`%clojure-lower-at-run-time`, which refuses with the entry's message (the JVM and both wasm
+backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
+
+- **The datum.** `ClojureRunTime.datum`: `eval`'s form decoded, else `(clojure.core/verb
+  'arg ...)` -- core-spelled so no program macro or definition captures the head; a
+  namespace object its name's symbol, a self-evaluating value as itself. `require`/`use`/
+  `refer` sit inside a `(clojure.core/let [] ...)`, below the top of their datum, so a
+  library no root holds is the oracle's run-time `FileNotFoundException`
+  (`defersMissingLibraries`). The arguments are forms first
+  (`%clojure-run-time-arguments`: lazy seqs realized, `load-reader`'s stream read to its
+  end, lowered as `load-string`).
+- **Decoding a run-time value** (`ClojureLowering.decodingFor`, set only around the argument
+  decode, never while the datum lowers -- a macro's answer is a macro-time value): a symbol's
+  metadata is the running program's (`Host.metasOf`); a value no datum spells (a function,
+  an atom, a var, any tagged kind past keyword/set/record/sorted/pattern/instant) is
+  `(ClojureRunTime.EMBEDDED form)` over `Host.constant` -- `(funcall '#<thunk>)`, opaque to
+  every pass a form takes -- which `lowerInner` and `quote` answer as is. The oracle embeds a
+  function but refuses an atom (`Can't embed object in code`); here both stand (deviation).
+- **Lowering it** (`lowerAtRunTime`, `synchronized`; `ClojureSession.read` takes the same
+  lock): `currentNs` set from `*ns*` (`%clojure-ns`), then `lowerAfterRun` -- the session
+  buffer's path, `interact` minus the history: declare keeping what the lowering said,
+  `topLevels(datum, true)` (a `def` answers its var), the runtimes it is the first to need
+  ahead. The entry that echoes is the call's own; its last form's value answers. A
+  `LispReadException` becomes the oracle's `Compiler$CompilerException` with the lowering's
+  words (`%clojure-refuse`).
+- **Open, incremental, repl** (the session flag split, 2026-10-29): `open` -- code not seen
+  may join (protocol walks, ref history, host exceptions, hierarchy readers, the macro table
+  holding expanders, a declared-only name staying open: a call of one is
+  `(%clojure-call (if (fboundp 'f) #'f f) ...)`, its unbound root signalling like the
+  oracle's; a session's call was direct until 2026-10-29, `The function c%f is undefined`);
+  `incremental` -- this datum lowers after code ran (no re-lowering: a miss refuses, unbound
+  roots, caught bindings and Java faces settle at the site); `repl` -- `*repl*`, the REPL
+  refers, `*e`'s class reader. A session is all three; a run-time datum `open` and
+  `incremental`.
+- **A program lowers open when it names an entry** (`ClojureRunTime.ENTRIES`, every library
+  function reaching `%clojure-lower-at-run-time`; `ClojureLibraryTest#everyFunctionReachingTheRunTimeLoweringIsAnEntry`
+  keeps the set equal to the library's): `lowerWhole(..., runTimeTarget)` lowers it again with
+  `open` (and `threadBinders`), only for the interpreter (`SourceLanguage.readClojure`,
+  `features` holding `rontolisp-interpreter`); the misses still re-lower the whole program.
+  `noteRuntimesEmitted` records what the open program carried, so a run-time datum emits only
+  what it first needs (a runtime emitted twice starts its state over). Such a program takes
+  the whole library, unstripped (`LispEvaluator.clojureProgram(Clojure.Program)`).
+- **Where it runs**: the command line's interpreter, `ClojureSpecE2eTest`'s interpreter leg,
+  a REPL and the playground (`SourceSession.attach`). Not a `.clj` a Common Lisp `load`
+  reads (its lowering is dropped), and not the JVM: a compiled class has no lowerer and its
+  values are not the interpreter's, so it would need the forms compiled against the running
+  class (`.todo/h00`). An nREPL server over the interpreter's is `.todo/h01`.
+- **Computed require specs** (`ClojureNamespaceLowering.computesSpecs`): an unquoted symbol
+  naming a local or var, or an unquoted call, is a computed spec, `%clojure-load-libs-v`;
+  until 2026-10-29 `(let [n 'clojure.set] (require n))` looked for namespace `n`. A bare
+  unknown symbol, vector or prefix list stays the leniency's spec.
+- Deviations: forms lowered before the call keep what they lowered against (a redefined
+  `defn` reaches only forms below it, as in a session); a quoted `resolve` answers at lower
+  time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
+  `the-interpreter-lowers-at-run-time` and `intern-var-set-and-with-redefs-fn`.
+- Pins: those two cases, `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (the
+  compiled backends), `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake` (the open
+  decision), `ClojureSessionTest#evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns`,
+  `#aDeclaredNameStaysOpenForALaterBuffer`.
 
 ## The IFn dispatcher stays at the call site
 
@@ -6053,7 +6125,7 @@ the oracle's `MapExpr`/`SetExpr`; checked on `clj` 1.12.6, 2026-10-08):
   forms are empty sequentials), like the oracle.
 - Pinned by clojure-spec `a-literal-refuses-keys-equal-once-evaluated` (oracle-identical)
   and `ClojureLoweringTest.aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered`.
-`load-string` of a literal string (and `load-file` of a literal path) reads and lowers where the call stands (`ClojureCoreLowering.loadStringOf`: datums declared ahead, each through `topLevels` at top level else `lowerDetached`, macros handed over, the namespace restored after) and `eval` refuses at run time ("Macros"): no compiler runs at run time.
+`load-string` of a literal string (and `load-file` of a literal path) reads and lowers where the call stands (`ClojureCoreLowering.loadStringOf`: datums declared ahead, each through `topLevels` at top level else `lowerDetached`, macros handed over, the namespace restored after); of a computed one, and `eval`, lower as the program runs on the interpreter and refuse in a compiled program ("Lowering at run time").
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
 - Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a

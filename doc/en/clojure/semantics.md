@@ -495,8 +495,9 @@ and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file.
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
-back. `load-string` stays absent, and [eval](reference/eval.md) runs only while the program
-lowers (in a macro body): no compiler runs at run time.
+back. [eval](reference/eval.md) runs while the program lowers (in a macro body) on every
+backend, and as the program runs on the interpreter, which keeps the program's lowering for
+its run; a compiled program carries none, so there it refuses at run time.
 
 ## Host boundary
 
