@@ -342,7 +342,11 @@
                  (if (and (consp x)
                           (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
                      (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
-                     nil))
+                     nil)
+                 (if (rontolisp::%clojure-lisp-value-p x)
+                     nil
+                     (rontolisp::%clojure-host-print-method x
+                      rontolisp::%clojure-print-methods)))
              nil)))
     (if method
         (progn
@@ -350,6 +354,38 @@
             (funcall method x stream))
           t)
         nil)))
+
+(defun rontolisp::%clojure-host-print-method (x table)
+  "The method TABLE (the print-method or the print-dup methods) holds for the
+   class of the host object X, or for the nearest of its supers it holds one
+   for -- the superclasses first, then their interfaces breadth first -- under
+   the binary name; NIL without one. The oracle's own methods for the instant
+   and UUID classes end the walk at their class: a program's Date method leaves
+   a Timestamp to the oracle's Timestamp method, which is the printer's own
+   here. A host arm like %clojure-host-class: a program with no java:
+   operator, where no host object exists, gets a body answering NIL."
+  (handler-case (let ((found nil) (own nil) (interfaces nil))
+                  (do ((c
+                        (java:call x "getClass")
+                        (java:call c "getSuperclass")))
+                      ((or found own (null c)))
+                    (let ((name (java:call c "getName")))
+                      (setq found (gethash name table))
+                      (setq own
+                            (member name
+                                    '("java.util.Date" "java.sql.Timestamp"
+                                      "java.util.Calendar" "java.util.UUID")
+                                    :test #'equal)))
+                    (setq interfaces
+                          (append interfaces (java:call c "getInterfaces"))))
+                  (if own (setq interfaces nil))
+                  (do ()
+                      ((or found (null interfaces)) found)
+                    (let ((i (car interfaces)))
+                      (setq interfaces
+                       (append (cdr interfaces) (java:call i "getInterfaces")))
+                      (setq found (gethash (java:call i "getName") table)))))
+    (error () nil)))
 
 (defun rontolisp::%clojure-print-method (x writer)
   "print-method called: X written to WRITER through its type's print-method, or
@@ -1336,10 +1372,40 @@
   "When true, the printer skips a program print-method: print-dup's side.")
 
 (defun rontolisp::%clojure-print-dup-to (x w)
-  "(print-dup x w): X printed as pr prints it, on W -- except an array map
-   (eight or fewer entries) and the sorted collections, which print as the
-   oracle's readable #= constructions; answers nil. A program print-method
-   never applies: the oracle's print-dup is its own multimethod."
+  "(print-dup x w): X written through the print-dup method a program defined
+   for its record, deftype or host class, else printed as pr prints it, on W --
+   except an array map (eight or fewer entries) and the sorted collections,
+   which print as the oracle's readable #= constructions; answers nil. A
+   program print-method never applies: the oracle's print-dup is its own
+   multimethod."
+  (let ((method (rontolisp::%clojure-print-dup-method x)))
+    (if method
+        (funcall method x w)
+        (rontolisp::%clojure-print-dup-default x w)))
+  nil)
+
+;; The print-dup methods a program defines, by the tag print-method stores under
+;; (a record's or deftype's tag, a host class's binary name), written when the
+;; defmethod runs. The oracle's print-dup dispatches on the class alone, so a
+;; :type keyword's row is never read.
+(defvar rontolisp::%clojure-print-dups (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-print-dup-row (tag method)
+  "Store METHOD as the print-dup of the type whose tag is TAG; answers nil."
+  (setf (gethash tag rontolisp::%clojure-print-dups) method)
+  nil)
+
+(defun rontolisp::%clojure-print-dup-method (x)
+  "The print-dup method a program defined for X's record or deftype, or for
+   the host class of the host object X or its nearest super; NIL without one."
+  (cond ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
+         (gethash (car (cdr x)) rontolisp::%clojure-print-dups))
+        ((rontolisp::%clojure-lisp-value-p x) nil)
+        (t (rontolisp::%clojure-host-print-method x
+            rontolisp::%clojure-print-dups))))
+
+(defun rontolisp::%clojure-print-dup-default (x w)
+  "print-dup's own writing of X on W, no program method applying."
   (cond ((and (hash-table-p x) (<= (hash-table-count x) 8))
          (write-string "#=(" w)
          (write-string (rontolisp::%clojure-class-name-of x) w)
@@ -15112,6 +15178,16 @@
         (t (rontolisp::%clojure-class-cast-exception
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of v)
                          " cannot be cast to class java.lang.Boolean")))))
+
+;; clojure.lang.RT/nextID: the next of a program-wide count, which tools.reader's
+;; syntax-quote spells into its gensyms (x__1__auto__) and the oracle's gensym
+;; draws from too. Only uniqueness is promised: the oracle's numbers depend on
+;; everything its runtime compiled before.
+(defvar rontolisp::%clojure-next-id 0)
+
+(defun rontolisp::%clojure-rt-next-id ()
+  "RT/nextID: the next id, one above the last."
+  (setq rontolisp::%clojure-next-id (+ rontolisp::%clojure-next-id 1)))
 
 ;;;; Atoms across request threads.
 ;;

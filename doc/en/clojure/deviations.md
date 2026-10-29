@@ -35,9 +35,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
   a CL surface; `clojure.pprint/cl-format` writes them as Clojure).
   [print-method](reference/print-method.md) takes a program's own records, deftypes and
-  `:type` keywords only: a method for a class is refused by name, `methods` and
-  `prefer-method` of it are too, and `get-method` of a type without one answers
-  `print-method` itself where the oracle's answers its default method.
+  `:type` keywords, and a host class no core value belongs to but an instant or a UUID,
+  whose method writes host objects only (an instant or a UUID made here keeps its
+  `#inst`/`#uuid`): any other class is refused by name, `methods` and `prefer-method` of
+  it are too, and `get-method` of a type without one answers `print-method` itself where
+  the oracle's answers its default method.
 - A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a
   local `fn`'s name is the oracle's class name without its generated parts: the enclosing
   function's name (a `defn`'s `my.app/f`, the namespace outside any), then the `fn`'s own
@@ -98,7 +100,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   takes them where the oracle refuses its `BigInt`. An integer past the long range is the
   oracle's `BigInt` and prints its `N` under `pr` and `print` (`str` leaves it out, like the
   oracle's toString); a `biginteger` past it prints the `N` too, where the oracle's
-  `BigInteger` prints none.
+  `BigInteger` prints none. An integer answers `BigInteger`'s `.negate` and `.bitLength`, a
+  `Long` too (the oracle's refuses them).
 - A decimal (`1.50M`, `bigdec`, a read of one) is the oracle's `BigDecimal` in its scale,
   spelling, arithmetic, comparisons, hash and `with-precision` rounding, and Java takes it as
   a `java.math.BigDecimal`, but it answers none of its Java methods (`.setScale`, `.scale`,
@@ -230,6 +233,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   values it stands for: a function `isa?` `clojure.lang.IFn` and its `ancestors` hold it,
   interfaces and `Object` included, like the oracle's inheritance; a class name in value
   position reads as that keyword (`(= clojure.lang.IFn (class (fn [])))` stays `false`),
+  so does any other class of the oracle's `clojure.lang` (a keyword no value here
+  answers: a `defmethod` on `clojure.lang.PersistentVector$ChunkedSeq` never matches),
   and so does a number's class (`(= Long (class 1))` is `true`; `Long` prints as
   `:java.lang.Long`).
   A record or a deftype stands for host classes that are no one value here: it `isa?`
@@ -640,7 +645,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`+`, `apply +`, `map inc`, ...) the verbs keep the default promoting behavior on
   every flag, where the oracle's function values throw on overflow.
 - `format` renders and refuses as `java.util.Formatter` does (a computed format string parses
-  when the call runs), except: `%h`, `%a` and `%t` are refused; an integer past the long range
+  when the call runs), except: `%h`, `%a` and `%t` are refused (when the call runs); an integer past the long range
   renders as a `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a
   `biginteger`);
   `int` answers a long, so `(format "%x" (int -1))` is 64 bits of `f` (the oracle's 32), and `%c`

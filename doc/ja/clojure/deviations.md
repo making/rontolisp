@@ -36,8 +36,10 @@
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
  サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
  [print-method](reference/print-method.md) はプログラム自身の record・deftype・`:type`
- キーワードだけが対象です。クラスのメソッドは名前で拒否し、その `methods` と
- `prefer-method` も同様です。メソッドのない型の `get-method` は `print-method` 自身を
+ キーワードと、インスタントか UUID 以外のコアの値が属さないホストクラスが対象です。ホストクラスの
+ メソッドはホストオブジェクトだけを書きます（ここで作ったインスタントや UUID は `#inst`/`#uuid`
+ のままです）。ほかのクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
+ 同様です。メソッドのない型の `get-method` は `print-method` 自身を
  返します（オラクルは既定のメソッドを返します）。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
@@ -95,7 +97,8 @@
  `class` は `:java.lang.Long` を返し、オラクルが `BigInt` を拒否するビット演算も受け付けます。
  long の範囲を超える整数はオラクルの `BigInt` で、`pr` と `print` では `N` 付きで印字されます
  （`str` はオラクルの toString と同じく付けません）。範囲を超える `biginteger` も `N` 付きで
- 印字されます（オラクルの `BigInteger` は付けません）。
+ 印字されます（オラクルの `BigInteger` は付けません）。整数は `BigInteger` の `.negate` と
+ `.bitLength` に答えます。`Long` でも答えます（オラクルは拒否します）。
 - 10 進数（`1.50M`、`bigdec`、その読み取り）は、スケール・綴り・演算・比較・ハッシュ・
  `with-precision` の丸めがオラクルの `BigDecimal` と同じで、Java には `java.math.BigDecimal`
  として渡ります。ただし Java のメソッド（`.setScale`・`.scale`・`.toPlainString` など）には
@@ -218,7 +221,9 @@
  スーパータイプを加えます。関数は `clojure.lang.IFn` に `isa?` で、その `ancestors` は
  それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。値の位置の
  クラス名はそのキーワードとして読みます（`(= clojure.lang.IFn (class (fn [])))` は
- `false` のままです）。数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
+ `false` のままです）。オラクルの `clojure.lang` のほかのクラスも同じで、どの値も答えない
+ キーワードになります（`clojure.lang.PersistentVector$ChunkedSeq` の `defmethod` は一致しません）。
+ 数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
  `:java.lang.Long` と印字します。record や deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
  `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。ここではキーワードがクラス
@@ -607,7 +612,7 @@
   `(apply + ...)`・`(map inc ...)` など）はフラグによらず通常の桁あふれする動作のままです
   （オラクルの関数値は桁あふれで例外を投げます）。
 - `format` は `java.util.Formatter` と同じ描画・拒否をします（計算した書式文字列は呼び出し時に
-  解析します）。違いは次のとおりです。`%h`・`%a`・`%t` は拒否されます。long の範囲を超える整数は
+  解析します）。違いは次のとおりです。`%h`・`%a`・`%t` は（呼び出し時に）拒否されます。long の範囲を超える整数は
   `BigInteger` として描画します（オラクルは `BigInt` を `%d`・`%x`・`%o` で拒否し、`biginteger` の
   値は描画します）。
   `int` も long なので `(format "%x" (int -1))` は 64 ビット分の `f` になり（オラクルは 32 ビット）、

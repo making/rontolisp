@@ -1310,12 +1310,11 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("%host-exit"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), args.get(0), new LispInteger(255)));
 		}
-		if (cls.equals("clojure.lang.AFn") && member.equals("applyToHelper") && args.size() == 2) {
-			// the applyTo an IFn body delegates to: the function called on the members of
-			// the argument seq by their count, like the oracle's, on every backend
+		LispVal lang = ClojureLangClasses.staticCall(ctx, cls, member, args);
+		if (lang != null) {
+			// a clojure.lang static the run-time library answers, on every backend
 			// (clojure.lang is no host class here)
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
-					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
+			return lang;
 		}
 		if (!ctx.hostTarget && cls.equals("java.lang.String") && member.equals("valueOf") && args.size() == 1) {
 			// where no host is, the value's toString (camel-snake-kebab's
@@ -1361,29 +1360,6 @@ final class ClojureInteropLowering {
 			// (camel-snake-kebab's (-> p Pattern/quote Pattern/compile))
 			return pattern;
 		}
-		if (cls.equals("clojure.lang.MapEntry") && member.equals("create") && args.size() == 2) {
-			// a map entry is the two-member vector here
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
-		}
-		if (cls.equals("clojure.lang.LazilyPersistentVector") && member.equals("createOwning") && args.size() == 1) {
-			// an owned array is already the vector here (object-array answers one),
-			// so taking ownership is vec, like the oracle's :bb branch (malli's
-			// -vmap and -eager-entry-parser)
-			return ClojureCollectionLowering.vecForm(ctx, args.get(0));
-		}
-		if (cls.equals("clojure.lang.PersistentArrayMap") && member.equals("createWithCheck") && args.size() == 1) {
-			// the duplicate-checking map build here (malli's -eager-entry-parser)
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CREATE-WITH-CHECK"), args.get(0));
-		}
-		if (cls.equals("clojure.lang.RT") && member.equals("iter") && args.size() == 1) {
-			// an Iterable's own iterator, else the iterator over the seq
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
-		}
-		if (cls.equals("clojure.lang.Compiler") && member.equals("demunge") && args.size() == 1) {
-			// a class name spelled back as the var it was munged from, $ as /, on
-			// every backend (spec.alpha's fn-sym reads a function's class this way)
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEMUNGE"), args.get(0));
-		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
@@ -1419,6 +1395,9 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal staticNoArg(ClojureLowering ctx, String cls, String member) {
 		LispVal langStatic = ClojureLangClasses.staticValue(ctx, cls, member);
+		if (langStatic == null) {
+			langStatic = ClojureLangClasses.staticCall(ctx, cls, member, List.of());
+		}
 		if (langStatic != null) {
 			return langStatic;
 		}
@@ -2596,8 +2575,10 @@ final class ClojureInteropLowering {
 			}
 		}
 		LispVal call = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
-		if (cls != null && ClojureTimeValueLowering.CLASSES.contains(cls)) {
-			// a Date, Timestamp or UUID may be a value made here: the value arms take it
+		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls) || cls.equals("java.math.BigInteger"))) {
+			// a Date, Timestamp or UUID may be a value made here, and a BigInteger is
+			// always an integer (converted at the java: boundary): the value arms take
+			// it
 			cls = null;
 		}
 		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {

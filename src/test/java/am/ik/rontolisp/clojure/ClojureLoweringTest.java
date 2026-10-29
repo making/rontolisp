@@ -504,13 +504,19 @@ class ClojureLoweringTest {
 	@Test
 	void printMethodOfATypeKeywordStoresUnderTheKeyword() {
 		// a :type keyword dispatch stores under the keyword itself, where the
-		// printer's :type-first lookup finds it (malli's ::into-schema); any
-		// other non-type dispatch value stays refused by name
+		// printer's :type-first lookup finds it (malli's ::into-schema); a host
+		// class no core value belongs to but an instant stores under its binary
+		// name, which the printer's host walk reads (tools.reader's Date method);
+		// any other dispatch value stays refused by name
 		assertThat(lowered("(defmethod print-method :kw [x w] x)"))
 			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW (LIST :C%KEYWORD \"kw\")");
-		assertThatThrownBy(() -> Clojure.read("(defmethod print-method Object [x w] x)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("print-method of |Object| is not supported yet");
+		assertThat(lowered("(defmethod print-method java.util.Date [x w] x)"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW \"java.util.Date\"");
+		for (String refused : List.of("Object", "String", "java.util.Map")) {
+			assertThatThrownBy(() -> Clojure.read("(defmethod print-method " + refused + " [x w] x)", null))
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("print-method of |" + refused + "| is not supported yet");
+		}
 	}
 
 	@Test
@@ -4307,10 +4313,11 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-IO-SPIT \"f\" 1 NIL \"UTF-8\")");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: reader");
-		assertThatThrownBy(() -> Clojure.read("(format \"%h\" 1.5)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("format directive %h is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(format \"%tY\" 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("format directive %t is not supported yet");
+		// a directive rendered nowhere here refuses when the call runs, after the
+		// arguments, so a namespace defining such a call loads (tools.reader)
+		assertThat(lowered("(format \"%h\" 1.5)")).contains("(ERROR \"format directive %h is not supported yet\")");
+		assertThat(lowered("(format \"%tY\" (inc 1))")).contains("(RONTOLISP::%CLOJURE-+ 1 1)")
+			.contains("(ERROR \"format directive %t is not supported yet\")");
 		// a flag renders through the conversion's helper; a refusal of Formatter's parse
 		// is the run-time refusal of its class, after the arguments
 		assertThat(lowered("(format \"%%x%04x\" 10)")).contains("(RONTOLISP::%CLOJURE-FORMAT-INTEGER 10 #\\x \"0\" 4)");

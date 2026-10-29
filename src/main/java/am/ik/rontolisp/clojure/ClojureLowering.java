@@ -2631,9 +2631,13 @@ public final class ClojureLowering {
 	 */
 	private @Nullable String preDeclareUnlessCoreShadow(LispVal nameDatum, String what, Kind kind,
 			boolean privateHead) {
-		if (ClojureCoreNames.contains(ClojureLowerUtil.plainName(nameDatum, what))) {
+		String name = ClojureLowerUtil.plainName(nameDatum, what);
+		if (ClojureCoreNames.contains(name) && this.globals.get(varKey(this.currentNs, name)) != Kind.DECLARED) {
 			return null;
 		}
+		// a declare above already made the name the program's there, so the uses
+		// between it and the definition reach the definition, like any other name's
+		// (tools.reader.edn's (declare read) over its excluded clojure.core/read)
 		return preDeclare(nameDatum, what, kind, privateHead);
 	}
 

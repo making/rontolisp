@@ -430,17 +430,12 @@ final class JvmEmitHelper {
 	 * {@code sipush} truncates and sign-extends silently, producing a class that verifies
 	 * and computes the wrong number. The reachable case is a CHARACTER above the BMP
 	 * ({@code (string (code-char 128512))}, code point 0x1F600 -&gt; -2560), which the
-	 * literal fold routes through here as a folded {@code #\U+1F600} literal; the
-	 * counting callers (lambda ids, quoted-vector lengths, slot indices) would need a
-	 * program of absurd size to reach it, but they share the same fix.
+	 * literal fold routes through here as a folded {@code #\U+1F600} literal; a counting
+	 * caller reaches it too (a function id: the clojure-spec corpus passed 32767
+	 * functions on 2026-10-29).
 	 */
 	static void emitIntConst(JvmLispCompiler.Ctx ctx, int value) {
-		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			ctx.body.loadConstant(value);
-		}
-		else {
-			ctx.body.ldc(ctx.cp.entries().intEntry(value));
-		}
+		ctx.body.loadConstant(ctx.cp, value);
 	}
 
 	/**

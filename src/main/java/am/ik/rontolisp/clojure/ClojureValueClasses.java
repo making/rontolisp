@@ -410,7 +410,8 @@ final class ClojureValueClasses {
 	 * A class name in value position to the keyword {@code class} answers for its values,
 	 * or null when it names none here: a {@code clojure.lang} class the host does not
 	 * load but a kind's values implement ({@code clojure.lang.IFn}, spelled dotted or
-	 * imported). A typo keeps the unknown-name refusal, like a class no kind names.
+	 * imported), or any other class of the oracle's jar ({@link ClojureLangJar}), whose
+	 * keyword no value answers. A typo keeps the unknown-name refusal.
 	 * {@code (= clojure.lang.IFn (class (fn []))} stays false: the spelling is the
 	 * interface's keyword, never the function's kind.
 	 * @param ctx the lowering
@@ -422,7 +423,8 @@ final class ClojureValueClasses {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
-		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn) || kindsOf(fqn).isEmpty()) {
+		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn)
+				|| kindsOf(fqn).isEmpty() && !ClojureLangJar.holds(fqn)) {
 			return null;
 		}
 		return ClojureCollectionLowering.keywordForm(fqn);

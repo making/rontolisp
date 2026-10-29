@@ -553,8 +553,30 @@ final class ClojureValueMethodLowering {
 			arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-PATTERN-P"), recv), patternCall, arm);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+		LispVal bigIntegerCall = bigIntegerMethod(method, recv, args);
+		if (bigIntegerCall != null) {
+			// an integer answers java.math.BigInteger's own method: a BigInteger is an
+			// integer here (converted at the java: boundary), and no Long method of
+			// the name exists for the host call to take
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv), bigIntegerCall, dispatch);
+		}
+		return dispatch;
+	}
+
+	/**
+	 * The call of a {@code java.math.BigInteger} method {@code java.lang.Long} lacks, on
+	 * an integer (tools.reader's number reader): {@code negate} and {@code bitLength},
+	 * the length past the sign bit; null for any other method.
+	 */
+	private static @Nullable LispVal bigIntegerMethod(String method, LispSymbol recv, List<LispVal> args) {
+		return switch (method + "/" + args.size()) {
+			case "negate/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), recv);
+			case "bitLength/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integer-length"), recv);
+			default -> null;
+		};
 	}
 
 	/**
