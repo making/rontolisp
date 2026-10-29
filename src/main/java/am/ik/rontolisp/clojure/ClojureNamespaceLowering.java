@@ -1310,10 +1310,12 @@ final class ClojureNamespaceLowering {
 	/**
 	 * Whether a {@code require} or {@code use} call computes a spec, as the oracle
 	 * evaluates every argument of the function: an unquoted symbol naming a local or a
-	 * var, or an unquoted list calling a local, a var or a {@code clojure.core} name. A
-	 * bare symbol naming nothing, a bare vector and a bare prefix list stay the specs the
-	 * leniency reads ({@link #unwrapQuote}); until 2026-10-29 a local's name was read as
-	 * a library's ({@code (let [n 'clojure.set] (require n))} looked for {@code n}).
+	 * var, or an unquoted list calling a local, a var, a {@code clojure.core} name or any
+	 * qualified name (no prefix list's head has a namespace: spec.alpha's gen requires
+	 * {@code (c/symbol ns)} through an alias of {@code clojure.core}). A bare symbol
+	 * naming nothing, a bare vector and a bare prefix list stay the specs the leniency
+	 * reads ({@link #unwrapQuote}); until 2026-10-29 a local's name was read as a
+	 * library's ({@code (let [n 'clojure.set] (require n))} looked for {@code n}).
 	 * @param ctx the hub
 	 * @param items the call, head included
 	 * @return {@code true} when the call loads at run time
@@ -1330,7 +1332,8 @@ final class ClojureNamespaceLowering {
 			List<LispVal> parts = ClojureLowerUtil.items(bare);
 			if (parts != null && !parts.isEmpty() && !ClojureBindingLowering.isVectorDatum(bare)
 					&& parts.get(0) instanceof LispSymbol head
-					&& (ctx.known(head.name()) || ClojureCoreNames.contains(head.name()))) {
+					&& (ctx.known(head.name()) || ClojureCoreNames.contains(head.name())
+							|| ClojureLowering.qualifierSlash(head.name()) >= 0)) {
 				return true;
 			}
 		}

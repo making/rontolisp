@@ -898,9 +898,10 @@
 - `clojure.spec.alpha` は自身の jar からロードしますが、`explain` はプログラムが定義した素の
   述語関数を `:clojure.spec.alpha/unknown` と呼びます（ここでの fn は名前を持ちません。core 関数と、
   spec のマクロが受け取る述語は名前を保ちます）。`multi-spec` は conform の時点で拒否し
-  （`.dispatchFn` に答える multimethod はありません）、実行時に計算したシンボルの resolve や
-  名前空間の require を行うものも拒否します。シーケンスでない値に対する正規表現 spec の
-  `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`）、`clojure.spec.test.alpha` の
-  `instrument` と `check` がそれにあたります。`check-asserts` が設定する
+  （`.dispatchFn` に答える multimethod はありません）、`clojure.spec.test.alpha` の `instrument`
+  （`defn` の呼び出しは var を経由しません）と `check` も拒否します。実行時に計算したシンボルの
+  resolve や名前空間の require を行うもの、つまりシーケンスでない値に対する正規表現 spec の
+  `explain`、`nilable` の `form`、ジェネレータ（`gen`、`exercise`。`deps.edn` の test.check を
+  使います）は、インタプリタでは動き、コンパイルしたプログラムでは拒否します。`check-asserts` が設定する
   `clojure.lang.RT/checkSpecAsserts` は false で始まり、システムプロパティ
   `clojure.spec.check-asserts` は読みません。

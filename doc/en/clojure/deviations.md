@@ -933,9 +933,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate
   function a program defined `:clojure.spec.alpha/unknown` (a fn carries no name here; a
   core function and every predicate a spec macro takes keep theirs). `multi-spec` is
-  refused when it conforms (no multimethod answers `.dispatchFn`), and so is everything that
-  resolves a symbol or requires a namespace computed as the program runs: `explain` of a
-  regex spec over a value that is no sequence, `form` of `nilable`, the generators
-  (`gen`, `exercise`) and `clojure.spec.test.alpha`'s `instrument` and `check`.
+  refused when it conforms (no multimethod answers `.dispatchFn`), and so are
+  `clojure.spec.test.alpha`'s `instrument` (a `defn`'s calls do not go through its var) and
+  `check`. What resolves a symbol or requires a namespace computed as the program runs --
+  `explain` of a regex spec over a value that is no sequence, `form` of `nilable`, the
+  generators (`gen`, `exercise`, over test.check from the `deps.edn`) -- runs on the
+  interpreter and is refused in a compiled program.
   `clojure.lang.RT/checkSpecAsserts`, which `check-asserts` sets, starts false: the
   `clojure.spec.check-asserts` system property is not read.

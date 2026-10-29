@@ -3385,6 +3385,10 @@ class ClojureLoweringTest {
 		// (a local's name was read as a library's until 2026-10-29)
 		assertThat(runTimeOf("(eval (list '+ 1 2))", true)).isNotNull();
 		assertThat(runTimeOf("(let [n 'clojure.set] (require n))", true)).isNotNull();
+		// so is a call spelled through clojure.core's alias or full name (spec.alpha's
+		// gen: (require (c/symbol ns)) under (alias 'c 'clojure.core))
+		assertThat(runTimeOf("(alias 'c 'clojure.core) (defn dl [s] (require (c/symbol s)))", true)).isNotNull();
+		assertThat(runTimeOf("(defn dl [s] (require (clojure.core/symbol s)))", true)).isNotNull();
 		assertThat(runTimeOf("(eval (list '+ 1 2))", false)).isNull();
 		assertThat(runTimeOf("(require 'clojure.set) (resolve 'inc)", true)).isNull();
 	}

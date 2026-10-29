@@ -1667,13 +1667,21 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   clojure-spec cases each section names; the jar by
   `ClojureDepsFetchTest#theProjectResolvesBeforeTheProgramLowersAndItsNamespacesLoad` and
   `ClojureDepsProjectTest#aNamespaceNoRootHoldsIsRefusedNamingWhatIsNotSearched`.
+- **What runs where spec computes a name** ("Lowering at run time"): `res` at run time
+  (`explain` of a regex spec over a non-sequence, `form` of `nilable`, the oracle's over
+  `clojure.core.specs.alpha`'s `explain` too) and gen's `dynaload` (`(require (c/symbol
+  ns))` then `resolve`) lower as the program runs on the interpreter, oracle-identical: a
+  `deps.edn` naming test.check makes `(gen/sample (s/gen #{:a :b}) 4)` answer, and without it
+  `s/gen` refuses in the oracle's `Could not locate clojure/test/check/generators...`.
+  `(c/symbol ns)` computes its spec since g90 (`ClojureNamespaceLowering.computesSpecs`: a
+  qualified call head is never a prefix list's; it read `c/symbol/ns__init.class`). A
+  compiled program refuses each of these by name (`.todo/h00` for the JVM).
 - **Gaps**, each refused where it runs: a bare predicate a program defined explains as
   `:clojure.spec.alpha/unknown`, no fn carrying its var's name (`.todo/h03`); `multi-spec`
   conforms through `.dispatchFn`/`.getMethod`, which no multimethod answers (`.todo/h02`);
-  `res` at run time (`explain` of a regex spec over a non-sequence, `form` of `nilable`), gen's
-  `dynaload` (computed `require` + `resolve`: `gen`, `exercise`) and `instrument`/`check`
-  (`resolve` and the root of a computed var) all wait on `.todo/g83`. `clojure.main/ex-str`
-  of spec problems and `clojure.repl/doc` of a keyword stay refused: those namespaces load at
+  `instrument` changes the root of a `defn` whose calls are direct, and `check` runs over
+  it and over test.check's eager shrink trees (`.todo/h05`). `clojure.main/ex-str` of spec
+  problems and `clojure.repl/doc` of a keyword stay refused: those namespaces load at
   startup or with every session, and requiring spec there would fetch and lower it for every
   program that loads them.
 
@@ -3885,8 +3893,11 @@ backends); `LispEvaluator.installClojureRunTime` replaces it on the interpreter.
   class (`.todo/h00`). An nREPL server over the interpreter's is `.todo/h01`.
 - **Computed require specs** (`ClojureNamespaceLowering.computesSpecs`): an unquoted symbol
   naming a local or var, or an unquoted call, is a computed spec, `%clojure-load-libs-v`;
-  until 2026-10-29 `(let [n 'clojure.set] (require n))` looked for namespace `n`. A bare
-  unknown symbol, vector or prefix list stays the leniency's spec.
+  until 2026-10-29 `(let [n 'clojure.set] (require n))` looked for namespace `n`. A call's
+  head is a local, a var, a core name or any qualified name, which no prefix list's head
+  is (g90: spec.alpha's gen requires `(c/symbol ns)` under `(alias 'c 'clojure.core)`; it
+  read the prefix list `c/symbol`). A bare unknown symbol, vector or prefix list stays the
+  leniency's spec.
 - Deviations: forms lowered before the call keep what they lowered against (a redefined
   `defn` reaches only forms below it, as in a session); a quoted `resolve` answers at lower
   time; `in-ns` answers nil. Measured against clj 1.12.6: every line of clojure-spec
