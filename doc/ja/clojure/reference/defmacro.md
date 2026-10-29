@@ -22,7 +22,10 @@ built-in と `clojure.lisp` ライブラリであり、プログラム自身の�
 定義以降でその名前を覆い隠します。定義より上の呼び出し位置は oracle のフォーム単位の
 コンパイルと同じく核の意味を保ち、`clojure.core/name` はプログラムが何を定義していても
 核の var を指します。special form（`if`、`do`、`let*`、`new` など）とリーダーが綴る先頭
-（`deref`、`with-meta`、`syntax-quote`、`ns`、`in-ns`）はマクロの名前にできません。
+（`deref`、`with-meta`、`ns`、`in-ns`）はマクロの名前にできません。syntax-quote の先頭
+（`syntax-quote`、`unquote`、`unquote-splicing`。oracle のリーダーはこれらを綴りません）は
+マクロの名前にでき、限定名で呼びます（tools.reader の `clojure.tools.reader/syntax-quote`）。
+バッククォートはリーダーの形のままです。
 
 ```clojure
 (defmacro doc-unless [c t] (list 'if c nil t))

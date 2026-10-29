@@ -1957,6 +1957,14 @@ class ClojureInteropTest {
 						  (isEmpty [_] (empty? m)))
 						(println (.get (java.util.HashMap. (M. {"a" 1})) "a")
 						         (.getOrDefault (java.util.Collections/unmodifiableMap (M. {"a" 1})) "z" :none))
+						(def made (atom 0))
+						(let [tf (reify java.util.concurrent.ThreadFactory
+						           (newThread [_ r] (swap! made inc) (doto (Thread. r) (.setName "tf-1"))))
+						      ex (java.util.concurrent.Executors/newFixedThreadPool 1 tf)]
+						  (println (.get (.submit ex (reify java.util.concurrent.Callable
+						                               (call [_] (.getName (Thread/currentThread))))))
+						           @made)
+						  (.shutdown ex))
 						""",
 				"""
 						ran
@@ -1975,6 +1983,7 @@ class ClojureInteropTest {
 						[user.Q@ff] [r]
 						5 a-b true true
 						1 :none
+						tf-1 1
 						""");
 	}
 

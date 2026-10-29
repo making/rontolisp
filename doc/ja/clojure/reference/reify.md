@@ -69,9 +69,14 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 インタフェースへの `instance?` と、そのメソッドのインスタンス呼び出し（`(.count x)`）も型に
 届きます。そのインタフェースへ拡張したプロトコルも同様です。本体が書かなかったメソッドを呼ぶと
 オラクルの `AbstractMethodError` になり（`java.util` の default メソッドはインタフェース側の実装の
-ままで、呼ぶと名前を挙げて拒否されます）、それ以外のインタフェース（`IChunkedSeq`、
-`java.util.Deque` など）は名前を挙げて拒否されます。本体が実装した Java のインタフェース
-（`Runnable`、`Comparable`、`java.util.Comparator`、`Iterable`、`java.util` のコレクション）と上書きした `Object` の
+ままで、呼ぶと名前を挙げて拒否されます）、それ以外の `clojure.lang` のインタフェース
+（`IChunkedSeq` など）は名前を挙げて拒否されます。それ以外の public なホストのインタフェース
+（`java.io.Closeable`、`java.util.concurrent.ThreadFactory`、`java.util.concurrent.locks.Lock`
+など）は、`definterface` と同じく型の行にバイナリ名でメソッドを格納します。`instance?` は
+それ（とそのスーパーインタフェース）を判定し、コア関数が答えない `.method` 呼び出しは行の
+メソッドを呼び、`with-open` は `Closeable` を閉じます。本体が書かなかった default メソッドを
+Clojure から呼ぶと拒否されます（オラクルはインタフェース側の実装を実行します）。本体が実装した Java のインタフェース
+（`Runnable`、`Comparable`、`java.util.Comparator`、`Iterable`、`java.util` のコレクション、上記のホストのインタフェース）と上書きした `Object` の
 メソッドは、Java から見た値にも及びます。値は Java のメンバへ、それらを実装したオブジェクト
 として渡ります（[Java interop](interop.md)）。仕様との差異:`toString` を上書きした値は
 `#object[user$reify "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。

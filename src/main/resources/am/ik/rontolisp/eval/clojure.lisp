@@ -4885,6 +4885,19 @@
       (rontolisp::%clojure-realize coll)
       (rontolisp::%clojure-strict-seq coll)))
 
+(defun rontolisp::%clojure-entry-column (coll i)
+  "keys (I 0) or vals (I 1) of COLL, a seq of map entries -- (vals (filter f m)),
+   the oracle's KeySeq/ValSeq over the seq: each entry's key (value), nil for an
+   empty seq; a member that is no entry is the oracle's cast refusal."
+  (let ((out nil))
+    (dolist (e (rontolisp::%clojure-seq-all coll))
+      (if (and (vectorp e) (not (stringp e)) (= (length e) 2))
+          (setq out (cons (aref e i) out))
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of e)
+                        " cannot be cast to class java.util.Map$Entry"))))
+    (nreverse out)))
+
 (defun rontolisp::%clojure-seq-all (coll)
   "The whole-collection view: the seq of COLL with every lazy tail realized.
    The strict view itself when its spine holds no wrapper (no copy), a fresh
@@ -13903,9 +13916,18 @@
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
          (rontolisp::%clojure-check-meta m)
-         (rontolisp::%clojure-put-meta (intern (symbol-name x)) m))
+         (rontolisp::%clojure-put-meta (if (rontolisp::%clojure-uninterned-symbol-p
+                                            x)
+                                           (make-symbol (symbol-name x))
+                                           (intern (symbol-name x))) m))
         (t (rontolisp::%clojure-class-cast-exception-of
             "with-meta takes a collection, a record or a function" x))))
+
+(defun rontolisp::%clojure-uninterned-symbol-p (x)
+  "Whether the symbol X is uninterned (a gensym, a template's x#): its copy
+   stays uninterned, so an expansion decoding it spells the same gensym."
+  (let ((s (prin1-to-string x)))
+    (and (> (length s) 1) (char= (char s 0) #\#) (char= (char s 1) #\:))))
 
 (defun rontolisp::%clojure-with-meta-v (&rest args)
   "with-meta as a value."
@@ -17185,6 +17207,21 @@
    name: instance? tests the name and an instance call dispatches on the
    row's method."
   (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-host-interface-row (tag names methods)
+  "Stores the row of a host interface no core verb reads (ThreadFactory, Lock,
+   Closeable ...), under its binary name: instance? tests the name and an
+   instance call of a method no core verb answers calls the row's method."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-host-interface-method-p (x key)
+  "Whether X's type implements a host interface declaring the method KEY names,
+   \"name/count\" with the target counted (the row's entry the store wrote)."
+  (rontolisp::%clojure-interface-entry x key))
+
+(defun rontolisp::%clojure-host-interface-row-p (x name)
+  "Whether X's type implements the host interface of the binary NAME."
+  (rontolisp::%clojure-interface-entry x name))
 
 ;; The tests: whether X's type implements the interface.
 

@@ -551,8 +551,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --,
   `CharSequence`, the collection interfaces (`IPersistentMap`, `ISeq`, `Sequential`,
   `Iterable`, `java.util.List` ...) and overrides `Object`'s methods
-  ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
-  `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
+  ([reify](reference/reify.md#host-interfaces)); any other `clojure.lang` interface
+  (`IChunkedSeq` ...) is refused by name, and any other host interface (`Closeable`, `Lock` ...)
+  answers `instance?` and its methods' calls, a default method the body leaves out refused when
+  called from Clojure (the oracle runs the interface's). `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
   `str` of a collection type spells its contents, `re-matcher` and `re-find` read a
   `CharSequence` type in prefixes of 16, 32, 64 ... characters (past where the oracle's

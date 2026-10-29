@@ -859,6 +859,17 @@ class ClojureArmsTest {
 			.scan(read("(rontolisp::%clojure-defined-interface-row tag '(\"user.PBR\") (list))"),
 					ClojureArms.Family.DEFINED_INTERFACE)
 			.builds()).isTrue();
+		// a host interface no core verb reads: every unmapped .method call and every
+		// instance? of a host interface carries its arm, which only the store of such a
+		// row keeps
+		String arms = "(if (rontolisp::%clojure-host-interface-method-p r \"lock/1\") (funcall f r) (refuse r))"
+				+ " (or (rontolisp::%clojure-host-interface-row-p x \"java.io.Closeable\") (host-p x))";
+		assertThat(ClojureArms.strip(read(arms), ClojureArms.Family.HOST_INTERFACE).stream().map(LispVal::print))
+			.containsExactly("(REFUSE R)", "(HOST-P X)");
+		assertThat(ClojureArms
+			.scan(read(arms + "(rontolisp::%clojure-host-interface-row tag '(\"java.io.Closeable\")"
+					+ " (list \"close\" f))"), ClojureArms.Family.HOST_INTERFACE)
+			.builds()).isTrue();
 	}
 
 	@Test

@@ -133,7 +133,7 @@ answered `2 5 3` before).
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
-| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`, in the oracle's `seq-binding-form` order -- patterns, an optional `& rest`, an optional `:as name` ending the pattern (`[tag & content :as all]`: hiccup, honeysql; refused until 2026-10-12, as is `:as` not last now); `collectPatternNames` strips a pattern's type hint (`(for [^String s ...])`, tools.cli); map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, verified against clj 1.12.6, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
+| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`, in the oracle's `seq-binding-form` order -- patterns, an optional `& rest`, an optional `:as name` ending the pattern (`[tag & content :as all]`: hiccup, honeysql; refused until 2026-10-12, as is `:as` not last now); `collectPatternNames` strips a pattern's type hint (`(for [^String s ...])`, tools.cli); map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, verified against clj 1.12.6, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`; a hinted entry `{:keys [^String class]}` binds the bare name, tools.analyzer.jvm's `validate.clj`, g87, clojure-spec `map-destructuring-reads-through-get`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur"; each `recur` is a fresh call with fresh parameters, so a closure the body creates captures its own iteration's value like the oracle's (g41, clojure-spec `dotimes-and-loop-closures-capture-the-iteration`) |
 | `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals |
@@ -274,7 +274,10 @@ Each is a real work item unless the reason says otherwise.
   set arms of `%clojure-strict-seq` and `keys`/`vals`' `tableKeysForm` consed each entry onto
   an accumulator and walked newest-first, and every verb reading a map as a plist --
   `merge`, `conj`, `map->R`, a record's `merge` -- went through `rontolisp:hash-table-plist`,
-  newest-first too; now `%clojure-table-plist`). Verified against clj 1.12.6: `seq`,
+  newest-first too; now `%clojure-table-plist`). `keys`/`vals` of anything but a table
+  read a seq of map entries (`%clojure-entry-column`, the oracle's `KeySeq`/`ValSeq`: `(vals
+  (filter ... m))` in tools.analyzer's pass scheduler, a MAPHASH error until g87; clojure-spec
+  `keys-and-vals`). Verified against clj 1.12.6: `seq`,
   `keys`, `vals`, `first`/`rest`/`last`, `for`, `reduce`, `zipmap`, `merge`, `conj`,
   `merge-with`, `map->R`, `clojure.walk`, `pprint` and `print-table` of a map of at most
   eight entries all walk the oracle's order on the interpreter (the JVM class, P1 and the
@@ -1226,7 +1229,10 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   name. Names are referred only by `use` or `:refer` (`:only`/`:exclude` narrow); a
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
-  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.edn`,
+  go through one spec parser, and so does a vector whose second element is no keyword
+  (`[clojure.tools.analyzer [utils :refer [...]] [ast :as ast]]`: the oracle's `libspec?`,
+  g87, 2026-10-29; it was `require takes option/value pairs`; clojure-spec
+  `bare-require-accepts-prefix-lists`). `clojure.string`, `clojure.set`, `clojure.edn`,
   `clojure.test` and `ring.adapter.rontolisp` resolve as lowerings (`clojure.java.io` did,
   `reader` only, until it shipped as a file on 2026-10-08); any other
   namespace clojure.jar defines (`ClojureBuiltinNamespaces.LANGUAGE`) is a built-in file
@@ -1571,6 +1577,52 @@ protocol walk ("Macros"); `tree-seq`/`flatten`; `join`'s separator; a hash insid
 clojure-spec cases named after each (`a-vector-pattern-takes-as-after-its-rest` ...
 `a-clojure-core-alias-spells-core-names`) and
 `ClojureProjectNamespacesTest#aReifyBelowItsProtocolsExtensionsInsideALetfnStoresIntoItsTable`.
+
+### core.async and tools.analyzer.jvm (g87)
+
+Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
+`(let [c (a/chan)] (a/go (a/>! c 1)) (println (a/<!! c)))` (oracle `1`; the newest release,
+1.9.865, has the same `go`). Measured 2026-10-29:
+
+- Fixed on the way, each as infrastructure in its own section: the marker protocol (g86), host
+  interfaces no core verb reads ("Host interfaces"), vector prefix lists ("Namespaces and
+  project files"), a hinted `:keys` entry, syntax-quote metadata and a `syntax-quote` macro
+  ("Macros"), `keys`/`vals` of a seq of map entries. With them the channel half --
+  `impl.protocols`, `.buffers`, `.concurrent`, `.mutex`, `.exec.threadpool`, `.dispatch`,
+  `.channels`, `.timers` -- loads verbatim and prints the oracle's lines on the interpreter
+  and the JVM (a pool thread through the reified `ThreadFactory`, a buffered put and take
+  through a reified `Lock`, a timeout closing through the `DelayQueue` daemon).
+- What stops the probe: `clojure.core.async` requires `impl.ioc-macros`, whose `go` calls
+  tools.analyzer.jvm 1.2.3's `analyze` at macro time on every body -- the namespace's own
+  `go`/`go-loop` bodies (`pipe`, `pipeline*`, `mult`, `mix`, `pub` ...) while it loads.
+- tools.analyzer.jvm, each blocker patched in a `:local/root` copy to see the next: the
+  platform-neutral `clojure.tools.analyzer` (`.ast`, `.env`, `.passes`, `.utils`) loads
+  verbatim. Then (1) `clojure.reflect` is no shipped namespace (`jvm.utils` reflects on
+  `Object` at load); (2) tools.reader 1.3.6: `impl/inspect.clj`'s dispatch values
+  `clojure.lang.PersistentVector$ChunkedSeq` and four more (`unknown name`),
+  `default_data_readers.clj`'s `print-method`/`print-dup` of `java.util.Date`, `Calendar`,
+  `Timestamp` and `UUID` (refused: a print-method of a record, deftype or `:type` keyword
+  only), its `format` of `%1$tF...` (`%t` refused while lowering); patched, the analyzer
+  loads and `(analyze 1)` runs to (3) `Compiler/LOADER` bound to `(RT/makeClassLoader)` (`No
+  such class: clojure.lang.Compiler`), then (4) `build-ns-map`'s `ns-map` over `(all-ns)`
+  (refused for a computed namespace; re-run after every expansion of a macro outside
+  `ns-safe-macro`).
+- Read off the code, not yet reached: (5) `macroexpand-1` calls a macro's var as `(apply v
+  form (:locals env) (rest form))`, while a program macro's var root is a signal and a core
+  macro's the one-argument run-time delegate (g16); a core macro must answer the oracle's
+  expansion into the special forms, which the go machine's raw code re-emits, so the
+  lowering must take `let*`, `loop*`, `letfn*` and `case*` (`unknown name: let*` today);
+  (6) `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each
+  local mapping to itself here; (7) the passes tag nodes with `class` -- kind keywords here,
+  which `maybe-class` answers nil through its `:default`, so most paths degrade, while
+  `analyze-host-expr` and `validate` reflect on tag classes through `clojure.reflect`; (8)
+  the emitted machine calls `clojure.lang.Var/getThreadBindingFrame` and
+  `resetThreadBindingFrame` and builds an `AtomicReferenceArray`; (9) every `go` body runs
+  the analyzer and its passes in the macro-time interpreter, `build-ns-map` over every
+  namespace per macro step.
+- No other Clojure runs tools.analyzer.jvm: cljw stops at `Long/getLong`, ClojureScript and
+  ClojureCLR port the analyzer to their platform, babashka maps `go` to `thread`. The
+  remaining chain is `.todo/g87`'s plan.
 
 ## Classes compiled against `clojure.lang`
 
@@ -3629,6 +3681,24 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
   expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
+  Reader metadata on a template form (`(%with-meta form meta)`) lowers to
+  `(%clojure-with-meta SQ(form) SQ(map))`, the oracle's `(with-meta form meta)` over the
+  syntax-quoted map (`^String` -> `{:tag java.lang.String}`); until g87 (2026-10-29) the
+  marker qualified like any symbol, `No such var: ns/%with-meta`, so core.async's
+  `(^:once fn* [] ...)` and every hinted gensym parameter `[^String s#]` failed. The
+  expansion decodes the copy's metadata back to reader metadata, and `with-meta` of a
+  gensym copies it uninterned (`%clojure-uninterned-symbol-p`; an interned copy decoded as
+  `an unreadable symbol: |s1|`). A head symbol carrying reader metadata
+  (`(^:once fn* ...)`) lowers as the bare symbol (`lowerInner`), `^[types]` member tags
+  aside. Pin: clojure-spec
+  `syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace` (four backends,
+  oracle-identical).
+- **The syntax-quote heads may name a macro** (`SYNTAX_QUOTE_HEADS`: `syntax-quote`,
+  `unquote`, `unquote-splicing`, which the oracle's reader never spells; g87, 2026-10-29,
+  tools.reader's `clojure.tools.reader/syntax-quote`): the definition registers and a
+  qualified call expands it, while the bare head stays the reader's form -- `lowerRow`'s
+  shadowing by a program var skips these names, so a backquote below the definition in
+  its own namespace is still a template. Pin: the same clojure-spec case.
 - **A template's qualified symbol is an unspelled quote** (`ClojureMacroLowering.unspelled`):
   `(%unspelled-quote |c%ns/f|)`, which spells nothing for the dispatch gate
   (`.kb/optimize-dead-code-elimination.md`). It spells the defun name of `ns/f`, and a
@@ -4175,10 +4245,44 @@ checked against clj 1.12.6, 2026-10-08).
   `java.lang.CharSequence` (f27, below), `java.util.Comparator` (f58, 2026-10-13:
   `compare`, in the `Comparable` row's family, read by `sort`, `sort-by` and the
   sorted `-by` constructors), and the collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
-  `IChunkedSeq`, `IRef` ...) or loadable host interface (`java.util.Deque`) is refused by name
+  `IChunkedSeq`, `IRef` ...) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
-  is no default import), a dotted one `Unable to resolve classname`.
+  is no default import), a dotted one `Unable to resolve classname`. Any other public host
+  interface takes the row below ("Host interfaces no core verb reads").
+- **Host interfaces no core verb reads** (g87, 2026-10-29; core.async's `ThreadFactory`,
+  `Lock` and `Delayed`, tools.reader's `Closeable`, each refused by name before):
+  `ClojureInterfaces.reflected` describes a public host interface from the host's classes
+  -- the instance methods it declares itself, abstract and default (`Object`'s three left to
+  the `Object` row), its direct supers (`addClosure` follows reflected supers too, so a
+  `ScheduledFuture` body stores `Delayed` and `Future`, and `Delayed`'s `Comparable` joins
+  its own family) -- in `Family.HOST_INTERFACE`, whose store `%clojure-host-interface-row`
+  writes the row under the binary name like a `definterface`'s. Its two tests are arms at
+  every site, folded by a program storing no such row: `instance?` of a host interface
+  adds the disjunct `(%clojure-host-interface-row-p x "I")`, and EVERY instance call of a
+  method no core verb answers (`valueArm`'s unmapped branch, `boundArm`'s clause before the
+  fallback) asks `(%clojure-host-interface-method-p recv "m/N")` and calls the row's method
+  of that name -- by name and count, so a site needs no knowledge of the type, which a file
+  lowered later may define (channels.clj's `(.lock handler)` reaches core.async.clj's
+  `fn-handler`). The store writes a `"m/N"` key per count a host interface declares abstract
+  and per default count the body defines (`addCallableCounts`), so a wrong count, or a
+  `definterface` method's row entry, keeps the oracle's refusal (`No matching method store
+  found taking 3 args`, which a by-name test turned into the lambda's arity error). A left-out abstract method stores the `AbstractMethodError` refusal; a
+  left-out default called from Clojure is the unmapped refusal (the oracle runs Java's
+  default; deviation, user doc). Java sees the value through its face ("Java faces"), which
+  `javaInterface` already took for any loadable interface: an executor calls a
+  `ThreadFactory` reify's `newThread`, a `DelayQueue` orders `Delayed` deftypes. Measured
+  2026-10-29 against clj 1.12.6: core.async 1.6.681's `impl.dispatch` (a fixed pool over
+  the reified factory), `impl.channels` (a buffered put and take through a reified `Lock` +
+  `Handler`) and `impl.timers` (a 50 ms timeout closing through the `DelayQueue` daemon)
+  print the oracle's lines on the interpreter and the JVM. Pins: clojure-spec
+  `a-definterface-method-on-a-reify-refuses-foreign-receivers` (its host-interface lines,
+  four backends, oracle-identical),
+  `ClojureLoweringTest#aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach`,
+  `ClojureArmsTest#theDefinedInterfaceFamilyIsMadeByTheStoreOfItsRow`,
+  `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`,
+  `ClojureInteropTest#aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces` (the
+  `ThreadFactory` an executor calls).
 - Parse (`ClojureProtocolLowering.typeBody`): the group heads first, then each method matched
   by name and count against its group's protocol, the interfaces with their supers
   (`ClojureInterfaces.closure`: `Indexed` a `Counted`, `IObj` an `IMeta`, `IReduce` an

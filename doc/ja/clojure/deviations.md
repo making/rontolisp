@@ -526,7 +526,10 @@
   `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、`CharSequence`、
   コレクションのインタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
   `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
-  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `clojure.lang` のインタフェース（`IChunkedSeq` など）は名前を挙げて拒否され、それ以外のホストの
+  インタフェース（`Closeable`、`Lock` など）は `instance?` とそのメソッドの呼び出しに答えます。本体が
+  書かなかった default メソッドを Clojure から呼ぶと拒否されます（オラクルはインタフェース側の実装を
+  実行します）。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
   ことがあり、コレクションの型の `str` は中身を綴り、`re-matcher` と `re-find` は `CharSequence`
   の型を先頭の 16、32、64 ... 文字と範囲を広げながら読み（オラクルのマッチャが止まる位置より先まで

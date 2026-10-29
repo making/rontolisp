@@ -477,6 +477,17 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A host interface no core verb reads ({@code ThreadFactory}, {@code Lock},
+		 * {@code Closeable} ...), which a {@code deftype}, {@code reify} or
+		 * {@code defrecord} body implements: {@code instance?} tests the type's row for
+		 * the interface's binary name, and an instance call of a method no core verb
+		 * answers calls the row's method of that name and count ahead of the refusal,
+		 * whatever file defined the type. Only the store of such a row makes one.
+		 */
+		HOST_INTERFACE("host-interface", Set.of(ClojureInterfaces.HOST_METHOD_P, ClojureInterfaces.HOST_ROW_P),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.HOST_ROW), Set.of()),
+
+		/**
 		 * A transient, which {@code persistent!} and the bang verbs edit and
 		 * {@code count}, {@code empty?}, {@code get}, {@code nth}, {@code contains?},
 		 * {@code find}, a call, a keyword's call, {@code counted?}, {@code ifn?},

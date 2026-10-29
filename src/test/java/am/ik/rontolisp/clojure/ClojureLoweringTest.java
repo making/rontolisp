@@ -1656,13 +1656,22 @@ class ClojureLoweringTest {
 		// a group symbol resolves like the oracle's class names
 		assertThat(lowered("(ns u (:import (clojure.lang IFn))) (reify IFn (invoke [_] 1))"))
 			.contains("%CLOJURE-INVOKABLE-ROW");
+		// a host interface no core verb reads stores through the host-interface family
+		// under its binary name, its reflected supers with it (Comparable, which a verb
+		// reads, through its own family)
+		assertThat(lowered("(def r (reify java.util.concurrent.ThreadFactory (newThread [_ x] x)))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("'(\"java.util.concurrent.ThreadFactory\") (LIST \"newThread\" (LAMBDA (");
+		assertThat(lowered("(deftype D [] java.util.concurrent.ScheduledFuture (isDone [_] true))"))
+			.contains("'(\"java.util.concurrent.ScheduledFuture\" \"java.util.concurrent.Delayed\""
+					+ " \"java.util.concurrent.Future\")")
+			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%KEYWORD \"D\") '(\"java.lang.Comparable\")");
 		for (String[] refused : new String[][] {
 				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
 				{ "(reify clojure.lang.IChunkedSeq (first [_] 1))",
 						"clojure.lang.IChunkedSeq is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Foo)", "Unable to resolve classname: clojure.lang.Foo" },
 				{ "(reify java.lang.String)", "only interfaces are supported, had: java.lang.String" },
-				{ "(reify java.util.Deque)", "java.util.Deque is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Counted (cnt [_] 1))", "Can't define method not in interfaces: cnt" },
 				{ "(reify clojure.lang.Counted (count [_ x] 1))", "Can't define method not in interfaces: count" },
 				{ "(reify clojure.lang.Counted (count [_] 1) (count [_] 2))",

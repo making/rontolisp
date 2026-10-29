@@ -532,7 +532,7 @@ Each refusal names the missing design, never `unknown name`:
 |---|---|---|
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no class generation on any backend |
-| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other interfaces (`IChunkedSeq`, `java.util.Deque` ...) have no consulting functions yet |
+| a `reify`/`deftype`/`defrecord` body naming a `clojure.lang` interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other `clojure.lang` interfaces (`IChunkedSeq` ...) have no consulting functions yet |
 | a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
 | an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |

@@ -392,6 +392,13 @@ final class ClojureDispatchLowering {
 			// quoted value is never one
 			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(implemented.test()), v)));
 		}
+		else if (implemented == null && !fqn.startsWith("clojure.lang.") && isHostInterface(fqn)
+				&& (lowered instanceof LispSymbol || !isConstant(lowered))) {
+			// one whose body implements a host interface no core verb reads, its row
+			// holding the binary name (an arm a program storing no such row sheds)
+			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.HOST_ROW_P), v,
+					LispString.literal(fqn))));
+		}
 		boolean loads = ClojureValueClasses.loads(fqn);
 		if (ClojureValueClasses.hostMayHold(fqn, loads)) {
 			arms.add(new Arm(Use.VARIABLE,
@@ -406,6 +413,12 @@ final class ClojureDispatchLowering {
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), lowered, ctx.falseVariable);
 		}
 		return armsAnswer(ctx, arms, lowered, answer);
+	}
+
+	/** Whether the host's classes hold the name as an interface. */
+	private static boolean isHostInterface(String fqn) {
+		ClojureJavaClasses.JavaClass host = ClojureHostClasses.find(fqn);
+		return host != null && host.isInterface();
 	}
 
 	/**

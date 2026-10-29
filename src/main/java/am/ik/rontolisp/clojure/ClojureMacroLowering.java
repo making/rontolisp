@@ -83,6 +83,14 @@ final class ClojureMacroLowering {
 			"in-ns");
 
 	/**
+	 * The reader heads of a syntax-quote, which the oracle's reader never spells (it
+	 * reads a template as the code building it): a program may define a macro of such a
+	 * name -- tools.reader's {@code clojure.tools.reader/syntax-quote} -- reached through
+	 * a qualified spelling, while the bare head stays the reader's form, never a call.
+	 */
+	static final Set<String> SYNTAX_QUOTE_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing");
+
+	/**
 	 * The names a syntax-quote leaves bare: the oracle's special forms, measured on
 	 * {@code clj} 1.12.6.1673. One less than {@link #SPECIAL_FORMS}: {@code import*} is
 	 * no special form there -- the oracle spells {@code ns/import*}.
@@ -130,7 +138,7 @@ final class ClojureMacroLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
 		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
-		ClojureLowerUtil.isTrue(!isReservedHead(name),
+		ClojureLowerUtil.isTrue(!isReservedHead(name) || SYNTAX_QUOTE_HEADS.contains(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
 		ClojureLowerUtil.isTrue(
 				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,
@@ -1042,6 +1050,14 @@ final class ClojureMacroLowering {
 			if (parts == null) {
 				throw new LispReadException("a dotted list is not a Clojure form");
 			}
+			if (parts.size() == 3 && ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+				// reader metadata on a template form travels with it, like the
+				// oracle's (with-meta form meta) over the syntax-quoted metadata map:
+				// (^:once fn* [] ...), [^String s#]
+				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-WITH-META"),
+						syntaxQuoted(ctx, parts.get(1), level, gens),
+						syntaxQuotedMap(ctx, syntaxQuotedMetaEntries(parts.get(2)), level, gens));
+			}
 			if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol head) {
 				if (head.name().equals("syntax-quote")) {
 					ClojureLowerUtil.isTrue(parts.size() == 2, "syntax-quote takes one form");
@@ -1072,6 +1088,26 @@ final class ClojureMacroLowering {
 			return syntaxQuotedSymbol(ctx, s.name(), gens);
 		}
 		return datum; // numbers, strings and characters are self-evaluating
+	}
+
+	/**
+	 * One reader metadata datum of a template as the entry datums of its map, each
+	 * syntax-quoted in turn: a keyword flags itself true, a symbol or string is the
+	 * {@code :tag} (which a class spelling qualifies, like the oracle's), a map its
+	 * entries.
+	 */
+	private static List<LispVal> syntaxQuotedMetaEntries(LispVal meta) {
+		if (meta instanceof LispSymbol s && s.name().startsWith(":")) {
+			return List.of(s, new LispSymbol("true"));
+		}
+		if (meta instanceof LispSymbol || meta instanceof LispString) {
+			return List.of(new LispSymbol(":tag"), meta);
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(meta);
+		if (parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")) {
+			return parts.subList(1, parts.size());
+		}
+		throw new LispReadException("Metadata must be Symbol,Keyword,String or Map");
 	}
 
 	static LispVal syntaxQuotedSymbol(ClojureLowering ctx, String name) {
