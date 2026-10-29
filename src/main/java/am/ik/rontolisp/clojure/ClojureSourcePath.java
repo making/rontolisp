@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
+import am.ik.rontolisp.clojure.ClojureDepsGraph.Contribution;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Selected;
 import am.ik.rontolisp.reader.LispReadException;
@@ -58,6 +59,29 @@ final class ClojureSourcePath {
 
 	/** The selected libraries, known with the roots. */
 	private List<Selected> libs = List.of();
+
+	/**
+	 * The selected libraries read only when a lookup first asks for one of their
+	 * namespaces ({@link ClojureDepsGraph.Deferred}), in source path order, each with the
+	 * index in {@link #roots} where its roots go.
+	 */
+	private final List<Pending> pending = new ArrayList<>();
+
+	/** A deferred library's place on the source path, and what it read once asked. */
+	private static final class Pending {
+
+		final ClojureDepsGraph.Deferred deferred;
+
+		int index;
+
+		@Nullable Contribution read;
+
+		Pending(ClojureDepsGraph.Deferred deferred, int index) {
+			this.deferred = deferred;
+			this.index = index;
+		}
+
+	}
 
 	/** Each jar root's entry names. */
 	private final Map<String, Set<String>> archives = new HashMap<>();
@@ -133,6 +157,8 @@ final class ClojureSourcePath {
 	 * a source directory precedes a dependency jar on the oracle's classpath -- except
 	 * one the oracle loads before the program, which a {@code require} never reads again.
 	 * A namespace a jar holds only compiled ahead of time is refused: only source lowers.
+	 * A deferred library holding the namespace ({@link ClojureDepsGraph.Deferred}) is
+	 * read first, its roots taking their place on the source path.
 	 * @param ns the namespace
 	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
@@ -141,6 +167,7 @@ final class ClojureSourcePath {
 		if (known != null) {
 			return known;
 		}
+		readDeferred(ns);
 		String base = scriptBaseOf(ns);
 		boolean startup = ClojureBuiltinNamespaces.isStartup(ns);
 		for (String extension : startup ? List.<String>of() : List.of(".clj", ".cljc")) {
@@ -165,6 +192,42 @@ final class ClojureSourcePath {
 		Found shipped = new Found(relative, relative, builtin, true);
 		this.found.put(ns, shipped);
 		return shipped;
+	}
+
+	/**
+	 * Reads every deferred library holding the namespace that is not read yet: its jar
+	 * fetched where the host fetches (a failure the fetch's refusal), its roots put at
+	 * its place on the source path. Where nothing fetches its note joins the refusal of
+	 * the namespace. Its jar never joins the Java class path: what classes it holds are
+	 * clojure.jar's own namespaces compiled ahead of time, which this build lowers from
+	 * their source and which link against nothing here.
+	 */
+	private void readDeferred(String ns) {
+		List<Root> known = roots();
+		for (int i = 0; i < this.pending.size(); i++) {
+			Pending entry = this.pending.get(i);
+			if (entry.read != null || !entry.deferred.namespaces().contains(ns)) {
+				continue;
+			}
+			Contribution read = entry.deferred.read().get();
+			entry.read = read;
+			List<Root> added = new ArrayList<>();
+			for (Root root : read.roots()) {
+				if (!known.contains(root) && !added.contains(root)) {
+					added.add(root);
+				}
+			}
+			if (added.isEmpty()) {
+				continue;
+			}
+			List<Root> grown = new ArrayList<>(known);
+			grown.addAll(entry.index, added);
+			known = List.copyOf(grown);
+			for (int j = i + 1; j < this.pending.size(); j++) {
+				this.pending.get(j).index += added.size();
+			}
+		}
+		this.roots = known;
 	}
 
 	/**
@@ -394,12 +457,27 @@ final class ClojureSourcePath {
 		roots();
 		List<String> unread = new ArrayList<>();
 		for (Selected selected : this.libs) {
-			String note = selected.contribution().unread();
+			Contribution contribution = selected.contribution();
+			if (contribution.deferred() != null) {
+				// a deferred library is named once a lookup asked for it
+				contribution = readOf(contribution.deferred());
+			}
+			String note = contribution == null ? null : contribution.unread();
 			if (note != null) {
 				unread.add(note);
 			}
 		}
 		return unread.isEmpty() ? "" : "; not searched: " + String.join(", ", unread);
+	}
+
+	/** What a deferred library read, or null while no lookup asked for it. */
+	private @Nullable Contribution readOf(ClojureDepsGraph.Deferred deferred) {
+		for (Pending entry : this.pending) {
+			if (entry.deferred == deferred) {
+				return entry.read;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -479,6 +557,10 @@ final class ClojureSourcePath {
 		this.libs = basis.libraries();
 		for (Selected selected : this.libs) {
 			out.addAll(selected.contribution().roots());
+			ClojureDepsGraph.Deferred deferred = selected.contribution().deferred();
+			if (deferred != null) {
+				this.pending.add(new Pending(deferred, out.size()));
+			}
 		}
 		for (Selected selected : this.libs) {
 			for (Root root : selected.contribution().roots()) {

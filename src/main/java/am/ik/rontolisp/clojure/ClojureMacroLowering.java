@@ -61,9 +61,9 @@ final class ClojureMacroLowering {
 	static final String MACRO_SCOPE = "C%MACRO-SCOPE";
 
 	/**
-	 * The oracle's special forms ({@code Compiler.specials}): a call site never reaches a
-	 * macro of one of these names, so a {@code defmacro} of one is refused by name (the
-	 * oracle accepts it and ignores it).
+	 * The oracle's special forms ({@code Compiler.specials}): a bare head of one of these
+	 * names never reaches a macro, so a {@code defmacro} of one is reached only through a
+	 * qualified spelling ({@link #namesQualifiedMacro}).
 	 */
 	static final Set<String> SPECIAL_FORMS = Set.of("def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do",
 			"fn*", "quote", "var", "import*", ".", "set!", "deftype*", "reify*", "try", "throw", "monitor-enter",
@@ -109,6 +109,16 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * Whether a reserved head may still name a macro, reached only through a qualified
+	 * spelling while the bare head keeps its own meaning: a special form, which the
+	 * oracle's compiler tests before any var ({@code clojure.spec.alpha/def}, spelled
+	 * {@code s/def}), and a syntax-quote head, which its reader never spells.
+	 */
+	static boolean namesQualifiedMacro(String name) {
+		return SPECIAL_FORMS.contains(name) || SYNTAX_QUOTE_HEADS.contains(name);
+	}
+
+	/**
 	 * {@code (defmacro name doc? attr? ([params] body...)+)}: a compile-time expander
 	 * plus its runtime table entry, so {@code macroexpand-1} sees the same function the
 	 * lower-time expansion runs. One entry per arity is overkill here (unlike
@@ -136,9 +146,10 @@ final class ClojureMacroLowering {
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
-		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
-		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
-		ClojureLowerUtil.isTrue(!isReservedHead(name) || SYNTAX_QUOTE_HEADS.contains(name),
+		// & is a special form too, so a macro of it is reached only qualified (s/&)
+		String name = ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol amp && amp.name().equals("&") ? "&"
+				: ClojureLowerUtil.plainName(items.get(1), "defmacro");
+		ClojureLowerUtil.isTrue(!isReservedHead(name) || namesQualifiedMacro(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
 		ClojureLowerUtil.isTrue(
 				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,

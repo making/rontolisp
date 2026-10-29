@@ -233,9 +233,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   classes the protocol was extended to, then the `Object` default. Two
   `clojure.lang` interfaces one value implements are ordered by the kinds of value each
   holds (`IRef` ahead of `IDeref`), since `clojure.lang` is not on this class path.
-- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
-  name (a `defmulti` var, through an alias or a referred one), not an expression: a local
-  bound to a multimethod is refused at lowering. The map `methods` answers keys a host
+- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` read a multimethod's
+  name (a `defmulti` var, through an alias or a referred one) where the program lowers, so
+  a name no `defmulti` made is refused there; any other argument (a local, a var's deref)
+  reads the run-time registry below, like the values. The map `methods` answers keys a host
   class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
   `prefers` answers each dispatch value with the set preferred over it, and
   `remove-all-methods` clears the methods and the preferences, answering the
@@ -443,7 +444,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   failed one's `:val` the exception's report where the oracle prints its `#error` map, and `str`
   answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
-  functions and shares their deviations (`.getClass` answers what `class` does). A method of a
+  functions and shares their deviations (`.getClass` answers what `class` does, but of a fn: the
+  class the oracle compiles it to, whose `.getName` is a core function's `clojure.core$name`
+  and any other fn's that of an anonymous fn, `clojure.lang.AFunction$fn`, where the oracle
+  names a `defn` by its var). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as
   `Method m taking N args is not supported for class C`, and so is, on every backend, a method
   the oracle's class may have that nothing here answers (`.reduce`, `.meta`, an atom's
@@ -907,3 +911,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `class`, protocol dispatch and `=` read.
 - A name referred from two namespaces keeps the later refer (the oracle refuses it), and
   a definition replaces a refer of its name without the oracle's warning.
+- `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate
+  function a program defined `:clojure.spec.alpha/unknown` (a fn carries no name here; a
+  core function and every predicate a spec macro takes keep theirs). `multi-spec` is
+  refused when it conforms (no multimethod answers `.dispatchFn`), and so is everything that
+  resolves a symbol or requires a namespace computed as the program runs: `explain` of a
+  regex spec over a value that is no sequence, `form` of `nilable`, the generators
+  (`gen`, `exercise`) and `clojure.spec.test.alpha`'s `instrument` and `check`.
+  `clojure.lang.RT/checkSpecAsserts`, which `check-asserts` sets, starts false: the
+  `clojure.spec.check-asserts` system property is not read.

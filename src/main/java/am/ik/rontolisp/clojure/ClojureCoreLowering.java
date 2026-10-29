@@ -1032,10 +1032,13 @@ final class ClojureCoreLowering {
 
 	/**
 	 * {@code (prefers multifn)}: each dispatch value to the set preferred over it, like
-	 * the oracle's map. The multimethod's name, like {@code methods}: a local bound to
-	 * one is refused at lowering.
+	 * the oracle's map. The multimethod's name, like {@code methods}; a computed one
+	 * reads the run-time registry ({@link ClojureDispatchLowering#computedCall}).
 	 */
 	private static LispVal prefersOf(ClojureLowering ctx, List<LispVal> items) {
+		if (ClojureDispatchLowering.isComputedMultimethod(ctx, items.get(1))) {
+			return ClojureDispatchLowering.computedCall(ctx, "prefers", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "prefers");
 		if (ClojureDispatchLowering.isPrintMethod(ctx, name)) {
 			// print-method keeps no prefers table: nothing is preferred
@@ -1050,6 +1053,9 @@ final class ClojureCoreLowering {
 	 * the multimethod, like the oracle's.
 	 */
 	private static LispVal removeAllMethodsOf(ClojureLowering ctx, List<LispVal> items) {
+		if (ClojureDispatchLowering.isComputedMultimethod(ctx, items.get(1))) {
+			return ClojureDispatchLowering.computedCall(ctx, "remove-all-methods", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "remove-all-methods");
 		if (ClojureDispatchLowering.isPrintMethod(ctx, name)) {
 			// every type's print-method gone, answering print-method itself

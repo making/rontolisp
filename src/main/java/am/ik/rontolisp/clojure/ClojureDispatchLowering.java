@@ -1450,8 +1450,47 @@ final class ClojureDispatchLowering {
 		return ClojureCollectionLowering.tablePut(methods, dispatchKeyForm(ctx, keyDatum), lambda);
 	}
 
+	/**
+	 * Whether the multimethod argument of one of the six introspection verbs
+	 * ({@code methods}, {@code get-method}, {@code remove-method}, {@code prefer-method},
+	 * {@code prefers}, {@code remove-all-methods}) is computed: any form but a name, or
+	 * the name of a local. A call over one reads the run-time registry the verb's value
+	 * reads ({@link #computedCall}), since only a spelled name reaches the tables by the
+	 * var key while the program lowers (spec.alpha's {@code (methods @mmvar)}).
+	 * @param ctx the hub
+	 * @param arg the multimethod argument as written
+	 * @return whether the call reads the registry
+	 */
+	static boolean isComputedMultimethod(ClojureLowering ctx, LispVal arg) {
+		return !(ClojureLowerUtil.stripMeta(arg) instanceof LispSymbol s) || ctx.isLocal(s.name());
+	}
+
+	/**
+	 * A call of one of the six introspection verbs over a computed multimethod: the
+	 * verb's value (the core spelling, so no program definition of the name intervenes)
+	 * called with the arguments in order, so it runs what the value runs -- the
+	 * registry's tables of the dispatch function, a function the registry holds none for
+	 * refused at run time in the verb's words.
+	 * @param ctx the hub
+	 * @param verb the verb's name
+	 * @param items the call's items
+	 * @return the lowered call
+	 */
+	static LispVal computedCall(ClojureLowering ctx, String verb, List<LispVal> items) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(ClojureLowerUtil.sym("funcall"));
+		call.add(ctx.lower(new LispSymbol(ClojureCoreNames.NAMESPACE + "/" + verb)));
+		for (LispVal arg : items.subList(1, items.size())) {
+			call.add(ctx.lower(arg));
+		}
+		return ClojureLowerUtil.list(call);
+	}
+
 	static LispVal removeMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "remove-method takes a multimethod and a dispatch value");
+		if (isComputedMultimethod(ctx, items.get(1))) {
+			return computedCall(ctx, "remove-method", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "remove-method");
 		if (isPrintMethod(ctx, name)) {
 			// the type's method gone, the printer's default back
@@ -1477,6 +1516,9 @@ final class ClojureDispatchLowering {
 
 	static LispVal getMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
+		if (isComputedMultimethod(ctx, items.get(1))) {
+			return computedCall(ctx, "get-method", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "get-method");
 		if (isPrintMethod(ctx, name)) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-GET"),
@@ -1493,10 +1535,14 @@ final class ClojureDispatchLowering {
 	 * {@code defmethod} and {@code remove-method} do not reach, with the nil marker row
 	 * keyed by nil ({@code rontolisp::%clojure-methods}). The {@code Object} and the
 	 * default rows are in it like the oracle's, and a host class's row is under the
-	 * keyword {@code class} answers for it.
+	 * keyword {@code class} answers for it. A computed multimethod reads the run-time
+	 * registry ({@link #computedCall}).
 	 */
 	static LispVal methodsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "methods takes a multimethod");
+		if (isComputedMultimethod(ctx, items.get(1))) {
+			return computedCall(ctx, "methods", items);
+		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "methods");
 		String key = multimethodKey(ctx, name);
 		if (!ctx.multimethods.contains(key)) {

@@ -6883,9 +6883,11 @@ cases:
       :a/b
       true
   - name: symbol-builds-mangled-names
-    # symbol answers itself for a symbol and the spelled symbol (mangled behind
-    # the prefix, so it prints and compares whole) for a keyword or a string; a
-    # nil namespace is the one-argument shape; anything else signals.
+    # symbol answers itself for a symbol, the spelled symbol (mangled behind
+    # the prefix, so it prints and compares whole) for a keyword or a string, and a
+    # var's qualified name (spec.alpha's ->sym of what resolve answers); a nil
+    # namespace is the one-argument shape; anything else signals in the oracle's
+    # words. Oracle-identical (clj 1.12.6).
     source: |
       (println (symbol "b"))
       (println (symbol 'a))
@@ -6897,7 +6899,8 @@ cases:
       (println (namespace (symbol "a" "b")))
       (println (map symbol ["x" "y"]))
       (println (apply symbol ["a" "b"]))
-      (println (try (symbol 1) (catch Exception e :refused)))
+      (println (symbol #'clojure.core/str) (symbol (var clojure.core/inc)))
+      (println (try (symbol 1) (catch IllegalArgumentException e (ex-message e))))
     expected: |
       b
       a
@@ -6909,7 +6912,8 @@ cases:
       a
       (x y)
       a/b
-      :refused
+      clojure.core/str clojure.core/inc
+      no conversion to symbol
   - name: assert-answers-nil-and-throws-lazily
     # assert answers nil when the test is truthy and signals otherwise; the
     # message form sits in the else branch, so it never evaluates on success.
@@ -8597,7 +8601,10 @@ cases:
     # metadata on a template form travels as (with-meta form meta) over the
     # syntax-quoted map, a class tag qualified: core.async's (^:once fn* [] ...) and a
     # hinted gensym parameter. A namespace may define a macro named syntax-quote
-    # (tools.reader's), reached qualified, while its backquotes stay the reader's.
+    # (tools.reader's), reached qualified, while its backquotes stay the reader's;
+    # likewise a macro named like a special form (spec.alpha's s/def and s/&) is
+    # reached qualified while the bare def, and the & of a parameter vector, stay
+    # the special forms.
     # Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
       (ns sq (:require [clojure.string :as s]))
@@ -8614,6 +8621,11 @@ cases:
       (println ((thunk 7)) (slen "abc") (:tag (meta (first (nth (macroexpand-1 '(hinted q)) 2)))))
       (defmacro syntax-quote [x] (list 'quote [:mine x]))
       (println (sq/syntax-quote 1) `loose)
+      (defmacro def [k v] `(swap! sq-registry assoc ~k '~v))
+      (defmacro & [x] `[:amp ~x])
+      (def sq-registry (atom {}))
+      (sq/def :a (inc 1))
+      (println @sq-registry (sq/& 3) (let [[x & r] [1 2]] [x r]))
       (ns excl (:refer-clojure :exclude [map]))
       (println `map `filter)
       (println `java.io.StringWriter `String)
@@ -8622,6 +8634,7 @@ cases:
       sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       7 3 java.lang.String
       [:mine 1] sq/loose
+      {:a (inc 1)} [:amp 3] [1 (2)]
       excl/map clojure.core/filter
       java.io.StringWriter java.lang.String
   - name: var-quote-metadata-and-test
@@ -10775,7 +10788,8 @@ cases:
     # namespace ns and in-ns switch to while the file runs, read when a function runs, so
     # nsv-here answers its caller's; binding rebinds it. *file* and *source-path* name the
     # file (a path that differs per leg), *repl* is false and not thread-bound, and the REPL
-    # history vars are nil and thread-bound.
+    # history vars are nil and thread-bound. A namespace's .name and .getName are its name
+    # symbol (spec.alpha's ns-qualify reads (.name *ns*) while s/def expands).
     source: |
       (ns nsv-a)
       (prn *ns* (str *ns*) (ns-name *ns*) (symbol? (ns-name *ns*)))
@@ -10787,6 +10801,7 @@ cases:
       (prn (= *ns* (the-ns 'nsv-a)) (identical? *ns* (find-ns 'nsv-a)) (find-ns 'nsv-none) (str (the-ns *ns*)) (ns-name 'nsv-b))
       (prn (binding [*ns* (the-ns 'nsv-b)] (nsv-here)) (nsv-here) (map ns-name [(the-ns 'nsv-b)]) (some? (find-ns 'clojure.core)))
       (prn (try (the-ns 'nsv-none) (catch Exception e (ex-message e))))
+      (prn (.name *ns*) (.getName (the-ns 'nsv-b)))
       (prn (class *ns*) (thread-bound? #'*ns*) #'*ns* (meta *ns*) (seq? *ns*) (coll? *ns*))
       (prn [(string? *file*) (string? *source-path*) *repl* *1 *2 *3 *e])
       (prn (map thread-bound? [#'*file* #'*source-path* #'*1 #'*2 #'*3 #'*e #'*repl*]))
@@ -10798,6 +10813,7 @@ cases:
       true true nil "nsv-a" nsv-b
       "nsv-b" "nsv-a" (nsv-b) true
       "No namespace: nsv-none found"
+      nsv-a nsv-b
       :clojure.lang.Namespace true #'clojure.core/*ns* nil false false
       [true true false nil nil nil nil]
       (true true true true true true false)
@@ -15074,19 +15090,24 @@ cases:
     # The oracle's seq-binding-form: positional patterns, an optional & rest, then an
     # optional :as name, which ends the pattern (hiccup's [tag & content :as tag-content],
     # honeysql's [x expr & tail :as with]); a type-hinted for/doseq name binds too.
-    # Oracle-identical (clj 1.12.6, 2026-10-12).
+    # A pattern with & reads its positions through the seq view (first after each
+    # next), as the oracle's destructure does, so it takes a map or a set (spec.alpha's
+    # map-spec-impl loops [[k v] & ks] over a map). Oracle-identical (clj 1.12.6,
+    # 2026-10-12; the map and set line 2026-10-29).
     source: |
       (prn (let [[a & r :as all] [1 2 3]] [a r all]) (let [[a & r :as all] '(1 2 3)] [a r all]))
       (prn (let [[a & [b & c :as bc] :as all] [1 2 3 4]] [a b c bc all]) (let [[a & r :as all] nil] [a r all]))
       (prn ((fn [[tag & content :as tc]] [tag content tc]) [:p 1 2]) (let [[a & {:keys [x] :as m} :as all] [1 :x 2]] [a x m all]))
       (prn (for [[k & vs :as row] [[1 2] [3]]] [k vs row]) (loop [[x & xs :as all] [1 2 3] acc []] (if x (recur xs (conj acc (count all))) acc)))
       (prn (for [^String s ["a" "b"]] (str s s)) (doseq [^String s ["c"]] (print s)))
+      (prn (let [[a & r] {:x 1 :y 2}] [a r]) (let [[x & _] #{7}] x) (loop [[[k v] & ks] {:a 1 :b 2} acc []] (if k (recur ks (conj acc [v k])) acc)))
     expected: |
       [1 (2 3) [1 2 3]] [1 (2 3) (1 2 3)]
       [1 2 (3 4) (2 3 4) [1 2 3 4]] [nil nil nil]
       [:p (1 2) [:p 1 2]] [1 2 {:x 2} [1 :x 2]]
       ([1 (2) [1 2]] [3 nil [3]]) [3 2 1]
       c("aa" "bb") nil
+      [[:x 1] ([:y 2])] 7 [[1 :a] [2 :b]]
   - name: partition-takes-a-pad-filling-the-incomplete-tail
     # (partition n step pad coll): an incomplete tail is kept, filled from the pad
     # (which may be endless, tools.cli's (repeat nil)) up to n. Oracle lines (clj
@@ -15387,15 +15408,43 @@ cases:
       "\\n" "\\t" nil
       "newline" "space" nil
   - name: munge-and-namespace-munge
-    # munge spells every special character _NAME_ (a dash is an underscore)
-    # and namespace-munge only the dashes, over the str of the value.
-    # Oracle-identical (clj 1.12.6, 2026-10-13).
+    # munge spells every special character _NAME_ (a dash is an underscore;
+    # the quotes and brackets in the oracle's 1.12 spellings, which were
+    # _SQUOTE_/_DQUOTE_ and none until 2026-10-29) and namespace-munge only the
+    # dashes, over the str of the value. clojure.lang.Compiler/demunge spells a
+    # class name back, $ as /. A fn's .getClass names the class the oracle
+    # compiles it to: a core function's clojure.core$name (spec.alpha's fn-sym
+    # demunges it to name a bare predicate), any other fn an anonymous one's
+    # (the oracle's ns$enclosing$fn__N, here no fn carries its own name).
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the last two lines 2026-10-29).
     source: |
       (prn (munge "foo-bar") (munge "+") (munge "a,b") (munge 1))
       (prn (namespace-munge "a.b-c") (namespace-munge "a/b"))
+      (prn (munge "a'b\"c[d]") (clojure.lang.Compiler/demunge "clojure.core$int_QMARK_") (clojure.lang.Compiler/demunge "a_SINGLEQUOTE_b_LBRACK_c$d"))
+      (prn (.getName (.getClass int?)) (.. inc getClass getName) (boolean (re-matches #".*\$fn(__\d+)?" (.getName (.getClass (fn [x] x))))))
     expected: |
       "foo_bar" "_PLUS_" "a,b" "1"
       "a.b_c" "a/b"
+      "a_SINGLEQUOTE_b_DOUBLEQUOTE_c_LBRACK_d_RBRACK_" "clojure.core/int?" "a'b[c/d"
+      "clojure.core$int_QMARK_" "clojure.core$inc" true
+  - name: rt-check-spec-asserts-is-a-boolean-static-a-program-sets
+    # clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts sets
+    # and its assert reads, by Class/field and by (. Class field): false at the start, a
+    # boolean store answering the value, anything else refused as the oracle's cast to
+    # Boolean (nil its unboxing NullPointerException), the field unchanged.
+    # Oracle-identical (clj 1.12.6, 2026-10-29; no clojure.spec.check-asserts property).
+    source: |
+      (prn clojure.lang.RT/checkSpecAsserts (. clojure.lang.RT checkSpecAsserts))
+      (prn (set! (. clojure.lang.RT checkSpecAsserts) true) clojure.lang.RT/checkSpecAsserts)
+      (prn (set! clojure.lang.RT/checkSpecAsserts false) clojure.lang.RT/checkSpecAsserts)
+      (prn (try (set! clojure.lang.RT/checkSpecAsserts :yes) (catch ClassCastException e :cast))
+           (try (set! clojure.lang.RT/checkSpecAsserts nil) (catch NullPointerException e :npe))
+           clojure.lang.RT/checkSpecAsserts)
+    expected: |
+      false false
+      true true
+      false false
+      :cast :npe false
   - name: print-simple-print-dup-and-print-ctor
     # print-simple writes as print writes, print-dup as pr writes except for
     # the readable #= constructions, and print-ctor wraps a writer's output in
@@ -15698,7 +15747,9 @@ cases:
     # beside the dispatch function. Higher-order and (def x NAME) application,
     # keyword, nil, class-spelling and vector dispatch values, mutations in
     # both directions (a value removal and a head call sees it, a head prefers
-    # a value reads it). Oracle-identical (clj 1.12.6, 2026-10-26) except the
+    # a value reads it). A call over a computed multimethod -- a local, a var's
+    # deref (spec.alpha's (methods @mmvar)) -- reads the same registry
+    # (2026-10-29). Oracle-identical (clj 1.12.6, 2026-10-26) except the
     # two wordings the head already customizes: a value applied to the wrong
     # count reports the head call's words (like g39's isa?/aget), and a
     # non-multimethod reports the value's refusal where the oracle throws
@@ -15737,6 +15788,9 @@ cases:
       (println (= (get-method g40-h ::g40-child) (g40-gm g40-h ::g40-child)))
       (def g40-pf prefers)
       (println (= (g40-pf g40-h) (prefers g40-h)))
+      (let [mm g40-h] (println (count (methods mm)) ((get-method mm ::g40-child) {})))
+      (def g40-hv #'g40-h)
+      (println (= (prefers @g40-hv) {::g40-child #{::g40-parent}}) (count (methods (deref g40-hv))))
       (println (= (g40-pm g40-m :x :y) g40-m))
       (println (= (g40-pf g40-m) {:x #{:y}}))
       (println (= (prefers g40-m) (g40-pf g40-m)))
@@ -15772,6 +15826,8 @@ cases:
       :C!
       true
       true
+      2 :C!
+      true 2
       true
       true
       true

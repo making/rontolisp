@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.SequencedMap;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Coord;
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
@@ -133,8 +134,25 @@ final class ClojureDepsGraph {
 	 * @param mavenCoordinate the Maven coordinates
 	 * ({@code groupId:artifactId[:extension:classifier]:version}) of the jar a Maven
 	 * coordinate fetched, its one root -- or null for any other root
+	 * @param deferred what it contributes once a lookup first asks for one of the
+	 * namespaces it holds, for a library every program selects and few read (the built-in
+	 * clojure's own dependencies, {@link ClojureBuiltinLibs#deferredNamespaces}) -- or
+	 * null when the roots above are all of it
 	 */
-	record Contribution(List<Root> roots, boolean builtin, @Nullable String unread, @Nullable String mavenCoordinate) {
+	record Contribution(List<Root> roots, boolean builtin, @Nullable String unread, @Nullable String mavenCoordinate,
+			@Nullable Deferred deferred) {
+
+		/**
+		 * A contribution read in full where it is selected.
+		 * @param roots its source roots, in order
+		 * @param builtin whether its namespaces are this front end's own
+		 * @param unread what of it this build does not read, or null
+		 * @param mavenCoordinate the Maven coordinates of the jar a Maven coordinate
+		 * fetched, or null
+		 */
+		Contribution(List<Root> roots, boolean builtin, @Nullable String unread, @Nullable String mavenCoordinate) {
+			this(roots, builtin, unread, mavenCoordinate, null);
+		}
 
 		/**
 		 * A contribution no Maven coordinate fetched.
@@ -143,9 +161,19 @@ final class ClojureDepsGraph {
 		 * @param unread what of it this build does not read, or null
 		 */
 		Contribution(List<Root> roots, boolean builtin, @Nullable String unread) {
-			this(roots, builtin, unread, null);
+			this(roots, builtin, unread, null, null);
 		}
 
+	}
+
+	/**
+	 * A contribution read only when a lookup first asks for a namespace it holds.
+	 *
+	 * @param namespaces the namespaces it holds
+	 * @param read what it contributes then: its jar fetched, or the note naming it where
+	 * nothing fetches
+	 */
+	record Deferred(Set<String> namespaces, Supplier<Contribution> read) {
 	}
 
 	/**

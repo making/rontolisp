@@ -114,8 +114,12 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   ルート（oracle のクラスパスと同じく、ツリーの上から）、最後に組み込みの名前空間の順です。
   ルートにある `data_readers.clj` と `data_readers.cljc` がプログラムのデータリーダを与えます
   （[タグ付きリテラル](syntax.md#tagged-literals)）。
-- `org.clojure/clojure`、`org.clojure/spec.alpha`、`org.clojure/core.specs.alpha` は、バージョンに
-  かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
+- `org.clojure/clojure` は、バージョンにかかわらずこのフロントエンド自身です。その 1.12.6 の POM が
+  挙げる依存、`org.clojure/spec.alpha` 0.5.238 と `org.clojure/core.specs.alpha` 0.4.74 は、どの
+  プロジェクトのツリーにも入り、ほかのライブラリと同じく選ばれます。その jar は、プログラムが
+  それらの名前空間（`clojure.spec.alpha`、`clojure.spec.gen.alpha`、`clojure.spec.test.alpha`、
+  `clojure.core.specs.alpha`）を初めて require した時点で取得するため、spec は自身のソースから
+  ロードします。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
   それより新しいバージョンは、Ring 名前空間をロードする時点で拒否します。
 - Clojure 本体に属さない `clojure.*` 名前空間（`org.clojure` の contrib ライブラリなど）は、
@@ -246,8 +250,9 @@ require した名前空間、REPL の前の入力のもの）であり、oracle 
 `defmacro` は、oracle のフォーム単位のコンパイルと同じく、定義以降でその名前を覆い隠します。
 定義より上の呼び出し位置と、定義より上で定義されたマクロの syntax-quote は核の意味を
 保ちます。`clojure.core/name` は、プログラムがその名前で何を定義していても常に核の var
-を指します。special form と、リーダーが綴る先頭（`@x` の `deref`、`with-meta`）は
-マクロの名前にできません。`fn` のマクロは定義でき、`fn` の呼び出し位置だけを捕らえます
+を指します。リーダーが綴る先頭（`@x` の `deref`、`with-meta`）はマクロの名前にできません。
+special form（`def`、`&` など）はマクロの名前にでき、限定名でだけ呼べます
+（`clojure.spec.alpha/def` を `s/def` と書くなど）。素の先頭は special form のままです。`fn` のマクロは定義でき、`fn` の呼び出し位置だけを捕らえます
 （`#(...)` は special form の `fn*` と読まれるので捕らえません）。
 
 `` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。定義側の

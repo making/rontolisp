@@ -47,7 +47,8 @@
 
       (keyword? name)
       (throw (UnsupportedOperationException.
-              (str "clojure.repl/doc of " name " reads a spec: clojure.spec.alpha is not built in")))
+              (str "clojure.repl/doc of " name " reads a spec: clojure.spec.alpha is a library"
+                   " this clojure.repl does not load")))
 
       (= target 'fn)
       `(#'print-doc (assoc (meta (var ~'fn)) :special-form true))

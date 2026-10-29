@@ -3397,9 +3397,6 @@ class ClojureLoweringTest {
 
 	@Test
 	void defmacroRefusesCoreFormsAndEnvironments() {
-		assertThatThrownBy(() -> Clojure.read("(defmacro if [x] x)", null, ClojureMacroTime.create()))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("if cannot name a macro: it names a special form");
 		assertThatThrownBy(() -> Clojure.read("(defmacro deref [x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deref cannot name a macro: the reader spells its own forms with it");
@@ -4379,9 +4376,6 @@ class ClojureLoweringTest {
 
 	@Test
 	void foreignNamespacesStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.spec.alpha");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.reflect");

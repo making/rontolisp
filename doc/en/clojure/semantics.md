@@ -116,8 +116,12 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   library's roots in the oracle's classpath order (the top of the tree first), then the
   built-in namespaces. A root's `data_readers.clj` and `data_readers.cljc` give the
   program's data readers ([Tagged literals](syntax.md#tagged-literals)).
-- `org.clojure/clojure`, `org.clojure/spec.alpha` and `org.clojure/core.specs.alpha` are
-  this front end at any version. `ring/ring-core` and `ring/ring-codec` at a Maven version
+- `org.clojure/clojure` is this front end at any version. Its own dependencies, as its
+  1.12.6 POM names them -- `org.clojure/spec.alpha` 0.5.238 and `org.clojure/core.specs.alpha`
+  0.4.74 -- are in every project's tree and selected like any library's, and their jars are
+  fetched where a program first requires one of their namespaces (`clojure.spec.alpha`,
+  `clojure.spec.gen.alpha`, `clojure.spec.test.alpha`, `clojure.core.specs.alpha`), so
+  spec loads from its own source. `ring/ring-core` and `ring/ring-codec` at a Maven version
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
   namespaces; a newer one is refused when a Ring namespace loads.
 - A `clojure.*` namespace that is not part of Clojure itself (an `org.clojure` contrib
@@ -248,8 +252,10 @@ the same name wins back the call sites. A `defmacro` of a core name (`with-out-s
 `when-not`, `inc`, `declare`, ...) shadows it from its definition on, like the oracle's
 form-by-form compile: a call site above the definition, and a syntax-quote in a macro
 defined above it, keep the core meaning. `clojure.core/name` always names the core var,
-whatever the program defines under that name. A special form, or a head the reader
-spells (`deref` for `@x`, `with-meta`) cannot name a macro. A `fn` macro is allowed: it
+whatever the program defines under that name. A head the reader spells (`deref` for
+`@x`, `with-meta`) cannot name a macro. A special form (`def`, `&`, ...) can, reached only
+through a qualified name (`clojure.spec.alpha/def` as `s/def`); the bare head stays the
+special form. A `fn` macro is allowed: it
 captures `fn` call sites, never `#(...)` (read as the special form `fn*`).
 
 `` `form `` builds a form as data over the mangled namespace: a symbol naming a var the

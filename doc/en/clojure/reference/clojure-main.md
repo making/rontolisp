@@ -40,4 +40,5 @@ program is lowered, and so are the parts of the REPL: `repl-read`, `renumbering-
   line: `err->msg` and `repl-caught` report it at `(REPL:1)`.
 - `:clojure.error/path` is the source path as the data gives it, where Clojure's makes a path
   below the working directory relative.
-- `ex-str` of spec problems is refused: `clojure.spec.alpha` is not built in.
+- `ex-str` of spec problems is refused: Clojure's `clojure.main` explains them through
+  `clojure.spec.alpha`, a library this `clojure.main` does not load.
