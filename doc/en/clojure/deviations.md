@@ -159,8 +159,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
   `assert` an `AssertionError`, which an `Exception` catch does not take). An error naming no
   class -- a refusal of a construct the oracle accepts (a regex `\X`,
-  `(partition 0 coll)`) -- is taken by the first catch of any class but
-  `clojure.lang.ExceptionInfo`. A misuse a lower verb refuses first carries that verb's class:
+  `(partition 0 coll)`), a Java call on WASM, where no host is -- is the
+  `java.lang.RuntimeException` that `class` answers for it: a catch of `RuntimeException`,
+  `Exception` or `Throwable` takes it, a catch of a subclass (`NumberFormatException`) or of an
+  `Error` does not. A misuse a lower verb refuses first carries that verb's class:
   `(shuffle 5)` is the `IllegalArgumentException` of `seq`, where the oracle casts to
   `java.util.Collection`. An index past its bound is an
   `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's

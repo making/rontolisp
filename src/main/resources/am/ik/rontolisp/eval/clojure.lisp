@@ -2462,9 +2462,14 @@
 ;; chain, so no test needs a class hierarchy at run time: a catch takes an
 ;; exception whose own chain holds the class it names. A runtime error carries
 ;; no class, so it takes the one the oracle throws where the runtime signals
-;; its condition type (%clojure-error-chain); a condition whose type tells none
-;; (the simple-error of a Clojure refusal, a failed host call) is taken by
-;; every catch but ExceptionInfo's, which the oracle's runtime never throws.
+;; its condition type (%clojure-error-chain). A host failure of a class it
+;; cannot tell -- a type error naming no type, the message-less simple error
+;; the JVM pad builds of any other raw throwable (a StackOverflowError) -- is
+;; taken by every catch but ExceptionInfo's, which the oracle's runtime never
+;; throws; any other condition naming no class (a refusal by name, a call to
+;; an undefined function -- a java: call where no host is) is the
+;; RuntimeException class answers for it, so a catch of a subclass never takes
+;; it.
 
 (defun rontolisp::%clojure-type-error-class (c)
   "The class the oracle throws where the runtime signals the type error C: a
@@ -2535,20 +2540,28 @@
    an exception or a refusal when its class is that class or a subclass of it;
    a runtime error when the class the oracle throws for it is that class, a
    superclass or a subclass of it (the operation may throw a subclass: aget's
-   ArrayIndexOutOfBoundsException), or, when its type tells no class, unless
-   the catch names ExceptionInfo."
+   ArrayIndexOutOfBoundsException); a host failure of a class it cannot tell
+   (a type error naming no type, a simple error with no format control: the
+   JVM pad's raw throwable) unless the catch names ExceptionInfo; any other
+   condition when the class is RuntimeException or a superclass of it. The
+   simple error's control is its first slot, read in place."
   (if (rontolisp::%clojure-host-failure-p c)
       (rontolisp::%clojure-host-is-a (%obj-ref c 2) (car chain))
       (let ((exact (rontolisp::%clojure-exact-chain c)))
         (if exact
             (rontolisp::%clojure-chain-has exact (car chain))
             (let ((class (rontolisp::%clojure-error-chain c)))
-              (if class
-                  (or (rontolisp::%clojure-chain-has class (car chain))
-                      (rontolisp::%clojure-chain-has chain (car class)))
-                  (not
-                   (rontolisp::%clojure-chain-has chain
-                    "clojure.lang.ExceptionInfo"))))))))
+              (cond (class (or (rontolisp::%clojure-chain-has class (car chain))
+                            (rontolisp::%clojure-chain-has chain (car class))))
+                    ((or (typep c 'type-error)
+                         (and (%obj-is c '|%class-SIMPLE-ERROR|)
+                              (null (%obj-ref c 0))))
+                     (not
+                      (rontolisp::%clojure-chain-has chain
+                       "clojure.lang.ExceptionInfo")))
+                    (t (rontolisp::%clojure-chain-has
+                        '("java.lang.RuntimeException" "java.lang.Exception"
+                          "java.lang.Throwable") (car chain)))))))))
 
 ;;;; The class of an exception: class, instance? and the stack-trace methods.
 ;;
@@ -22516,26 +22529,35 @@
           (mod (floor time 60000) 60) (mod (floor time 1000) 60) (mod time 1000)
           (mod (+ day 4) 7))))
 
+(defun rontolisp::%clojure-calendar-millis
+    (year month day hour minute second millis offset)
+  "The milliseconds of the date and time the lenient fields spell OFFSET
+   minutes east of UTC, as the oracle's GregorianCalendar computes them: YEAR
+   the astronomical year (0 is 1 BC), MONTH from 0, a field past its range
+   carrying into the next; the time of day first (a 60th second carries into
+   the next day), then the day, Gregorian when YEAR is 1582 or later and the
+   Gregorian day falls on or after the cutover 1582-10-15, else Julian, so
+   1582-10-10 is the Julian date of 1582-10-20."
+  (let* ((time (+ (* (+ (* (+ (* hour 60) minute) 60) second) 1000) millis))
+         (carry (floor time 86400000))
+         (y (+ year (floor month 12)))
+         (m (+ (mod month 12) 1))
+         (gregorian
+          (+ (rontolisp::%clojure-days-from-civil y m 1 nil) (- day 1) carry))
+         (days
+          (if (and (>= year 1582) (>= gregorian -141427))
+              gregorian
+              (+ (rontolisp::%clojure-days-from-civil y m 1 t) (- day 1)
+                 carry))))
+    (- (+ (* days 86400000) (- time (* carry 86400000))) (* offset 60000))))
+
 (defun rontolisp::%clojure-instant-millis
     (years months days hours minutes seconds millis sign oh om)
   "The milliseconds of the date and time the fields spell at the offset SIGN
-   OH:OM, as the oracle's lenient GregorianCalendar computes them: the time of
-   day first (a 60th second carries into the next day), then the day, Julian
-   before 1582 and Gregorian after; in 1582 the Gregorian day when it falls on
-   or after the cutover, else the Julian one, so 1582-10-10 is the Julian date
-   of 1582-10-20."
-  (let* ((time (+ (* (+ (* (+ (* hours 60) minutes) 60) seconds) 1000) millis))
-         (carry (floor time 86400000))
-         (gregorian
-          (+ (rontolisp::%clojure-days-from-civil years months days nil) carry))
-         (day
-          (if (or (> years 1582) (and (= years 1582) (>= gregorian -141427)))
-              gregorian
-              (+ (rontolisp::%clojure-days-from-civil years months days t)
-                 carry))))
-    ;; the zone is GMT+ unless SIGN is negative, as the oracle spells it
-    (- (+ (* day 86400000) (- time (* carry 86400000)))
-       (* (if (< sign 0) -1 1) (+ (* oh 60) om) 60000))))
+   OH:OM, MONTHS from 1 (%clojure-calendar-millis); the zone is GMT+ unless
+   SIGN is negative, as the oracle spells it."
+  (rontolisp::%clojure-calendar-millis years (- months 1) days hours minutes
+   seconds millis (* (if (< sign 0) -1 1) (+ (* oh 60) om))))
 
 (defun rontolisp::%clojure-instant-digits (s i n)
   "The value of the N decimal digits of S from I, or NIL when S has not N
@@ -22796,6 +22818,244 @@
   "class of the instant X, as a keyword."
   (list :C%KEYWORD (rontolisp::%clojure-instant-class-name x)))
 
+;;;; Portable GregorianCalendar: (GregorianCalendar. year month day ...) where
+;;;; no host is (wasm) is a Calendar, (:C%CALENDAR ms offset zone), mutated in
+;;;; place like the host object (clojure/ClojurePortableCalendarLowering), and
+;;;; TimeZone/getTimeZone of a fixed offset its (:C%TIME-ZONE id offset). The
+;;;; methods below answer a Calendar on every backend, a clojure.instant one
+;;;; too. The calendar is the oracle's lenient one, and lazy like the JDK's: a
+;;;; field set and not yet computed is read in the zone current when the time is
+;;;; next computed, and a zone set after a computation keeps the instant, the
+;;;; fields staying those of the old zone until something reads one. MS is kept
+;;;; at what the oracle's getMillisOf answers, so the printer, = and compare read
+;;;; it as they read any Calendar; while the fields are not the instant's own in
+;;;; the current zone, a fifth element (TIME-SET . FIELDS) holds them, TIME-SET
+;;;; NIL while they are pending (a construction, a set) and T once the instant
+;;;; is fixed (a zone set after a computation). FIELDS is (era year month day
+;;;; hour minute second millisecond), YEAR of the era and MONTH from 0, like the
+;;;; JDK's fields. Measured against clj 1.12.6 on JDK 25, 2026-10-30.
+
+(defun rontolisp::%clojure-calendar-fields (ms offset)
+  "The calendar fields of the instant MS seen OFFSET minutes east of UTC: (era
+   year month day hour minute second millisecond), ERA 0 before 0001-01-01
+   (Julian, 719164 days before the epoch) and 1 from it."
+  (let ((f (rontolisp::%clojure-instant-fields ms offset)))
+    (list (if (< (floor (+ ms (* offset 60000)) 86400000) -719164) 0 1) (car f)
+          (- (car (cdr f)) 1) (nth 2 f) (nth 3 f) (nth 4 f) (nth 5 f)
+          (nth 6 f))))
+
+(defun rontolisp::%clojure-calendar-era-p (f)
+  "Whether the calendar fields F name an era the oracle computes: BC (0) or
+   AD (1)."
+  (or (eql (car f) 0) (eql (car f) 1)))
+
+(defun rontolisp::%clojure-calendar-time (f offset)
+  "The milliseconds of the calendar fields F seen OFFSET minutes east of UTC:
+   an era other than BC or AD is the oracle's refusal."
+  (if (not (rontolisp::%clojure-calendar-era-p f))
+      (rontolisp::%clojure-illegal-argument-exception "Invalid era"))
+  (rontolisp::%clojure-calendar-millis
+   (if (eql (car f) 0) (- 1 (nth 1 f)) (nth 1 f)) (nth 2 f) (nth 3 f) (nth 4 f)
+   (nth 5 f) (nth 6 f) (nth 7 f) offset))
+
+(defun rontolisp::%clojure-calendar-state (c)
+  "The (TIME-SET . FIELDS) the Calendar C holds, or NIL when its fields are
+   its instant's own."
+  (car (cdr (cdr (cdr (cdr c))))))
+
+(defun rontolisp::%clojure-calendar-mark (c state)
+  "Make STATE the Calendar C's (TIME-SET . FIELDS), NIL dropping it."
+  (rplacd (cdr (cdr (cdr c))) (if state (list state) nil)))
+
+(defun rontolisp::%clojure-calendar-new (year month day hour minute second)
+  "A (GregorianCalendar. year month day ...) construction where no host is
+   (wasm): the fields pending in UTC, the zone of the oracle's measured JVM,
+   each argument the oracle's intCast."
+  (let ((f
+         (list 1 (rontolisp::%clojure-int-cast year)
+               (rontolisp::%clojure-int-cast month)
+               (rontolisp::%clojure-int-cast day)
+               (rontolisp::%clojure-int-cast hour)
+               (rontolisp::%clojure-int-cast minute)
+               (rontolisp::%clojure-int-cast second) 0)))
+    (list :C%CALENDAR (rontolisp::%clojure-calendar-time f 0) 0 "UTC"
+          (cons nil f))))
+
+(defun rontolisp::%clojure-calendar-now ()
+  "A (GregorianCalendar.) construction where no host is (wasm): the current
+   instant in UTC."
+  (list :C%CALENDAR (get-internal-real-time) 0 "UTC"))
+
+(defun rontolisp::%clojure-calendar-complete (c)
+  "Compute the Calendar C's pending fields into its instant, as the JDK's
+   computeTime does (the fields then normalized); answer its milliseconds."
+  (let ((state (rontolisp::%clojure-calendar-state c)))
+    (if (and state (not (car state)))
+        (progn
+          (setf (car (cdr c))
+           (rontolisp::%clojure-calendar-time (cdr state) (car (cdr (cdr c)))))
+          (rontolisp::%clojure-calendar-mark c nil))))
+  (car (cdr c)))
+
+(defun rontolisp::%clojure-calendar-get-time (c)
+  "(.getTime C) of a Calendar: the Date of its instant."
+  (list :C%INST (rontolisp::%clojure-calendar-complete c)))
+
+(defun rontolisp::%clojure-calendar-field-index (c field method settable)
+  "The position in the calendar fields of the Calendar field FIELD (the
+   oracle's intCast), or NIL for a field only get reads: past the 17 fields the
+   oracle's index refusal; a field METHOD does not take here (SETTABLE: set's
+   eight) refused by name."
+  (let* ((n (rontolisp::%clojure-int-cast field))
+         (index
+          (cdr
+           (assoc n
+                  '((0 . 0) (1 . 1) (2 . 2) (5 . 3) (11 . 4) (12 . 5) (13 . 6)
+                    (14 . 7))))))
+    (cond ((or (< n 0) (> n 16))
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (concatenate 'string "Index " (princ-to-string n)
+                         " out of bounds for length 17")))
+          ((or index (and (not settable) (member n '(7 9 10 15 16)))) index)
+          (t (rontolisp::%clojure-unsupported-operation-exception
+              (concatenate 'string "Calendar." method " of field "
+                           (princ-to-string n) " is not supported for class "
+                           (rontolisp::%clojure-instant-class-name c)))))))
+
+(defun rontolisp::%clojure-calendar-get (c field)
+  "(.get C FIELD) of a Calendar: the field of its instant in its zone, after
+   computing what is pending (the JDK's complete): the eight fields set takes,
+   DAY_OF_WEEK, AM_PM, HOUR, ZONE_OFFSET and DST_OFFSET (0, a fixed offset)."
+  (let ((index (rontolisp::%clojure-calendar-field-index c field "get" nil))
+        (n (rontolisp::%clojure-int-cast field))
+        (ms (rontolisp::%clojure-calendar-complete c))
+        (offset (car (cdr (cdr c)))))
+    (rontolisp::%clojure-calendar-mark c nil)
+    (let ((f (rontolisp::%clojure-calendar-fields ms offset)))
+      (cond (index (nth index f))
+       ((= n 7) (+ (nth 7 (rontolisp::%clojure-instant-fields ms offset)) 1))
+       ((= n 9) (if (>= (nth 4 f) 12) 1 0))
+       ((= n 10) (mod (nth 4 f) 12))
+       ((= n 15) (* offset 60000))
+       (t 0)))))
+
+(defun rontolisp::%clojure-calendar-set (c field value)
+  "(.set C FIELD VALUE) of a Calendar, answering nil: the field pending over
+   the fields C holds (its instant's own when it holds none), the instant kept
+   at what they spell in its zone."
+  (let* ((index (rontolisp::%clojure-calendar-field-index c field "set" t))
+         (state (rontolisp::%clojure-calendar-state c))
+         (f
+          (copy-list
+           (if state
+               (cdr state)
+               (rontolisp::%clojure-calendar-fields (car (cdr c))
+                                                    (car (cdr (cdr c))))))))
+    (rplaca (nthcdr index f) (rontolisp::%clojure-int-cast value))
+    (if (rontolisp::%clojure-calendar-era-p f)
+        (setf (car (cdr c))
+              (rontolisp::%clojure-calendar-time f (car (cdr (cdr c))))))
+    (rontolisp::%clojure-calendar-mark c (cons nil f))
+    nil))
+
+(defun rontolisp::%clojure-calendar-set-fields (c values)
+  "(.set C year month day [hour minute [second]]) of a Calendar: each set in
+   turn (YEAR, MONTH, DAY_OF_MONTH, HOUR_OF_DAY, MINUTE, SECOND), answering
+   nil."
+  (let ((fields '(1 2 5 11 12 13)))
+    (dolist (v values)
+      (rontolisp::%clojure-calendar-set c (car fields) v)
+      (setq fields (cdr fields))))
+  nil)
+
+(defun rontolisp::%clojure-time-zone-value (zone)
+  "ZONE as a calendar takes it: a (:C%TIME-ZONE id offset) as is, a host
+   java.util.TimeZone through its id (an arm of the host-object family); nil
+   and anything else the oracle's cast refusal."
+  (cond ((and (consp zone) (eq (car zone) :C%TIME-ZONE)) zone)
+        ((rontolisp::%clojure-host-instance-p zone "java.util.TimeZone")
+         (rontolisp::%clojure-time-zone-of
+          (rontolisp::%clojure-host-method zone "getID")))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "a calendar's zone needs a java.util.TimeZone" zone))))
+
+(defun rontolisp::%clojure-calendar-set-time-zone (c zone)
+  "(.setTimeZone C ZONE) of a Calendar, answering nil: pending fields are read
+   in the new zone, a computed instant is kept (its fields those of the old
+   zone until something reads one)."
+  (let ((z (rontolisp::%clojure-time-zone-value zone))
+        (state (rontolisp::%clojure-calendar-state c)))
+    (cond ((null state)
+           (rontolisp::%clojure-calendar-mark c
+            (cons t
+                  (rontolisp::%clojure-calendar-fields (car (cdr c))
+                                                       (car (cdr (cdr c)))))))
+          ((and (not (car state))
+                (rontolisp::%clojure-calendar-era-p (cdr state)))
+           (setf (car (cdr c))
+                 (rontolisp::%clojure-calendar-time (cdr state)
+                                                    (car (cdr (cdr z)))))))
+    (setf (car (cdr (cdr c))) (car (cdr (cdr z))))
+    (setf (car (cdr (cdr (cdr c)))) (car (cdr z)))
+    nil))
+
+(defun rontolisp::%clojure-time-zone-offset (id)
+  "The minutes east of UTC of the JDK's custom zone id ID -- GMT, a sign, then
+   h, hh, hmm, hhmm, h:mm or hh:mm, at most 23 hours and 59 minutes -- or NIL
+   when ID is no such id."
+  (let ((n (length id)) (sign 0) (digits 0) (value 0) (hours nil) (bad nil))
+    (if (and (>= n 5) (string= (subseq id 0 3) "GMT")
+             (or (char= (char id 3) #\+) (char= (char id 3) #\-)))
+        (progn
+          (setq sign (if (char= (char id 3) #\-) -1 1))
+          (do ((i 4 (+ i 1)))
+              ((or bad (= i n)))
+            (let ((ch (char id i)))
+              (cond ((and (char= ch #\:) (null hours) (<= 1 digits 2))
+                     (setq hours value)
+                     (setq value 0)
+                     (setq digits 0))
+                    ((and (char<= #\0 ch) (char<= ch #\9))
+                     (setq value (+ (* value 10) (- (char-code ch) 48)))
+                     (setq digits (+ digits 1)))
+                    (t (setq bad t)))))
+          (cond ((or bad (= digits 0)) (setq bad t))
+                (hours (if (/= digits 2) (setq bad t)))
+                ((<= digits 2)
+                 (setq hours value)
+                 (setq value 0))
+                (t
+                 (setq hours (floor value 100))
+                 (setq value (mod value 100))))
+          (if (or bad (> hours 23) (> value 59))
+              nil
+              (list sign (+ (* hours 60) value))))
+        nil)))
+
+(defun rontolisp::%clojure-time-zone-of (id)
+  "TimeZone/getTimeZone of ID where no host is (wasm): GMT and UTC, and the
+   JDK's custom ids, spelled as it normalizes them (GMT+5 is GMT+05:00, a zero
+   offset keeps its sign); any other zone is refused by name, since no zone
+   rules exist here. Nil and a non-string are the oracle's refusals."
+  (if (not (stringp id))
+      (rontolisp::%clojure-class-cast-exception-of
+       "TimeZone/getTimeZone needs a string id" id))
+  (if (or (string= id "GMT") (string= id "UTC"))
+      (list :C%TIME-ZONE id 0)
+      (let ((custom (rontolisp::%clojure-time-zone-offset id)))
+        (if (null custom)
+            (rontolisp::%clojure-unsupported-operation-exception
+             (concatenate 'string "TimeZone " id
+              " is not supported: only GMT, UTC and GMT+hh:mm offsets are"))
+            (let ((out (make-string-output-stream))
+                  (minutes (car (cdr custom))))
+              (write-string (if (< (car custom) 0) "GMT-" "GMT+") out)
+              (rontolisp::%clojure-write-padded (floor minutes 60) 2 out)
+              (write-char #\: out)
+              (rontolisp::%clojure-write-padded (mod minutes 60) 2 out)
+              (list :C%TIME-ZONE (get-output-stream-string out)
+                    (* (car custom) minutes)))))))
+
 ;;;; The ISO_INSTANT formatter: DateTimeFormatter/ISO_INSTANT lowers to a
 ;;;; portable value where the host is not (wasm), and .format of it answers an
 ;;;; instant of this front end's own in ISO-8601
@@ -22874,10 +23134,15 @@
              " cannot be cast to class java.time.temporal.TemporalAccessor")))))
 
 (defun rontolisp::%clojure-inst-equal (a b)
-  "= of the instant A and B: equal wrappers, or a Date and a Timestamp of the
-   same milliseconds (the oracle's Date.equals; Timestamp.equals takes no
-   Date)."
-  (or (equal a b)
+  "= of the instant A and B: equal wrappers -- a Calendar's instant and zone,
+   not the fields it holds pending -- or a Date and a Timestamp of the same
+   milliseconds (the oracle's Date.equals; Timestamp.equals takes no Date)."
+  (or (if (eq (car a) :C%CALENDAR)
+          (and (consp b) (eq (car b) :C%CALENDAR)
+               (equal (car (cdr a)) (car (cdr b)))
+               (equal (car (cdr (cdr a))) (car (cdr (cdr b))))
+               (equal (car (cdr (cdr (cdr a)))) (car (cdr (cdr (cdr b))))))
+          (equal a b))
       (and (eq (car a) :C%INST) (consp b) (eq (car b) :C%TIMESTAMP)
            (= (car (cdr a)) (car (cdr b))))))
 
@@ -23172,6 +23437,19 @@
       (rontolisp::%clojure-uuid-of s t)
       (rontolisp::%clojure-class-cast-exception-of
        "UUID/fromString needs a string" s)))
+
+;; (.setNanos X N) of a Timestamp, answering nil: N its nanoseconds (the
+;; oracle's intCast, refused outside 0..999999999 in its words), its milliseconds
+;; the second's plus N's whole milliseconds, like the oracle's getTime.
+(defun rontolisp::%clojure-timestamp-set-nanos (x n)
+  (let ((nanos (rontolisp::%clojure-int-cast n)))
+    (if (or (< nanos 0) (> nanos 999999999))
+        (rontolisp::%clojure-illegal-argument-exception
+         "nanos > 999999999 or < 0"))
+    (setf (car (cdr x))
+          (+ (* (floor (car (cdr x)) 1000) 1000) (floor nanos 1000000)))
+    (setf (car (cdr (cdr x))) nanos)
+    nil))
 
 ;; .setTime of the Date or Timestamp X to the milliseconds MS, in place like the
 ;; oracle's mutable Date: a Timestamp's nanoseconds become those of MS's second.

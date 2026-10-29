@@ -994,7 +994,8 @@ public final class ClojureArms {
 				Reads.with(ClojureDefaultReaders.MAKE_INST, "RONTOLISP::%CLOJURE-INSTANT-READ-DATE",
 						"RONTOLISP::%CLOJURE-INSTANT-READ-TIMESTAMP", "RONTOLISP::%CLOJURE-INSTANT-READ-CALENDAR",
 						"RONTOLISP::%CLOJURE-INSTANT-READ", "RONTOLISP::%CLOJURE-INSTANT-OF",
-						ClojureTimeValueLowering.NEW_DATE, ClojureTimeValueLowering.NEW_TIMESTAMP),
+						ClojureTimeValueLowering.NEW_DATE, ClojureTimeValueLowering.NEW_TIMESTAMP,
+						ClojurePortableCalendarLowering.NEW, ClojurePortableCalendarLowering.NOW),
 				Set.of()),
 
 		/**

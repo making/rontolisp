@@ -421,7 +421,8 @@ final class ClojureValueMethodLowering {
 	 * The methods of the instants and the UUID a program reads: a Date's (or a
 	 * Timestamp's) {@code getTime}, {@code before} and {@code after} (by milliseconds,
 	 * {@code Date}'s) and {@code setTime} (in place, the oracle's Date being mutable), a
-	 * Timestamp's {@code getNanos}, a UUID's halves, version and variant.
+	 * Timestamp's {@code getNanos} and {@code setNanos} (in place), a UUID's halves,
+	 * version and variant.
 	 */
 	private static void timeValueRows() {
 		row("getTime", 0, arm(List.of(DATE), core("inst-ms", R)));
@@ -431,6 +432,10 @@ final class ClojureValueMethodLowering {
 				new LispSymbol("RONTOLISP::%CLOJURE-INST-SET-TIME"), ctx.localSym(RECV),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LONG-CAST"), ctx.localSym(argName(0))))));
 		row("getNanos", 0, new Arm(List.of(TIMESTAMP), ctx -> part(ctx, "CADDR")));
+		row("setNanos", 1,
+				new Arm(List.of(TIMESTAMP),
+						ctx -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TIMESTAMP-SET-NANOS"),
+								ctx.localSym(RECV), ctx.localSym(argName(0)))));
 		row("getMostSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADR")));
 		row("getLeastSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADDR")));
 		row("version", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VERSION")));
