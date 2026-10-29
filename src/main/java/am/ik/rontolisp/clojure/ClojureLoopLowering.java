@@ -693,7 +693,7 @@ final class ClojureLoopLowering {
 			return;
 		}
 		for (LispVal element : elements.subList(1, elements.size())) {
-			if (element instanceof LispSymbol spelled && !spelled.name().equals("&")) {
+			if (ClojureLowerUtil.stripMeta(element) instanceof LispSymbol spelled && !spelled.name().equals("&")) {
 				String local = spelled.name();
 				if (!kind.equals(":strs")) {
 					local = local.substring(local.lastIndexOf('/') + 1);

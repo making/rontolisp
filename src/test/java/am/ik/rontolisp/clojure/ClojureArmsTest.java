@@ -636,7 +636,7 @@ class ClojureArmsTest {
 	}
 
 	@Test
-	void thePrintMetaFamilyFoldsTheMetadataClauseOfAProgramNamingNoFlag() {
+	void thePrintMetaFamilyAndTheSymbolMetaFamilyFoldTheirArmsInAProgramMakingNone() {
 		List<LispVal> forms = read("(cond ((null x) (a)) ((rontolisp::%clojure-print-meta-p x r s l))"
 				+ " ((rontolisp::%clojure-print-deep-p x) (b)) (t (c)))");
 		assertThat(ClojureArms.scan(forms, ClojureArms.Family.PRINT_META).strips()).isTrue();
@@ -645,6 +645,21 @@ class ClojureArmsTest {
 		List<LispVal> flagged = read("(let* ((rontolisp::%clojure-print-meta t)) (f))");
 		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_META).builds()).isTrue();
 		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_FLAGS).builds()).isFalse();
+		// a symbol carrying metadata: symbol?'s disjunct, class's clause and case's view
+		// go from a program making none; a quote, template or macro argument of ^m sym,
+		// with-meta, vary-meta and a read make one
+		List<LispVal> symbols = read("(or (and (symbolp v) (not (null v))) (rontolisp::%clojure-meta-symbol-p v))"
+				+ " (cond ((symbolp c) :s) ((rontolisp::%clojure-meta-symbol-p c) :s) (t c))"
+				+ " (let ((k (rontolisp::%clojure-symbol-bare (f)))) (if (eq k 'x) 1 2))");
+		assertThat(ClojureArms.scan(symbols, ClojureArms.Family.SYMBOL_META).strips()).isTrue();
+		assertThat(ClojureArms.strip(symbols, ClojureArms.Family.SYMBOL_META).stream().map(LispVal::print))
+			.containsExactly("(AND (SYMBOLP V) (NOT (NULL V)))", "(COND ((SYMBOLP C) :S) (T C))",
+					"(LET ((K (F))) (IF (EQ K 'X) 1 2))");
+		for (String producer : List.of("(rontolisp::%clojure-symbol-with-meta 'x m)",
+				"(rontolisp::%clojure-with-meta x m)", "(function rontolisp::%clojure-vary-meta-v)",
+				"(rontolisp::%clojure-read-string s ctx)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.SYMBOL_META).builds()).as(producer).isTrue();
+		}
 	}
 
 	@Test
@@ -858,6 +873,17 @@ class ClojureArmsTest {
 		assertThat(ClojureArms
 			.scan(read("(rontolisp::%clojure-defined-interface-row tag '(\"user.PBR\") (list))"),
 					ClojureArms.Family.DEFINED_INTERFACE)
+			.builds()).isTrue();
+		// a host interface no core verb reads: every unmapped .method call and every
+		// instance? of a host interface carries its arm, which only the store of such a
+		// row keeps
+		String arms = "(if (rontolisp::%clojure-host-interface-method-p r \"lock/1\") (funcall f r) (refuse r))"
+				+ " (or (rontolisp::%clojure-host-interface-row-p x \"java.io.Closeable\") (host-p x))";
+		assertThat(ClojureArms.strip(read(arms), ClojureArms.Family.HOST_INTERFACE).stream().map(LispVal::print))
+			.containsExactly("(REFUSE R)", "(HOST-P X)");
+		assertThat(ClojureArms
+			.scan(read(arms + "(rontolisp::%clojure-host-interface-row tag '(\"java.io.Closeable\")"
+					+ " (list \"close\" f))"), ClojureArms.Family.HOST_INTERFACE)
 			.builds()).isTrue();
 	}
 

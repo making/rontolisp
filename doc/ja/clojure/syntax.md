@@ -13,8 +13,8 @@
 （[var](reference/var.md) 参照）。構文クォート（`` ` ``、`~`、`~@`）は
 [セマンティクス](semantics.md)にあります。正規表現リテラル（`#"..."`）はパターン値に読まれます（[正規表現](reference/regex.md) 参照）。メタデータ（`^`、旧表記の `#^`）も
 読まれます。名前やローカルについたものは解析して捨てられ、ベクター・マップ・セットの
-リテラルについたものは `with-meta` と同様に付きます
-（[セマンティクス](semantics.md#state-and-dynamic-scope)参照）。レコードリテラル
+リテラルについたものは `with-meta` と同様に付き、クォートしたシンボルやコレクションも
+それを持ちます（[セマンティクス](semantics.md#state-and-dynamic-scope)参照）。レコードリテラル
 （`#ns.Name{...}`・`#ns.Name[...]`、名前にドットを含むタグ）は、評価しない本体からなる
 レコードに読まれます（[defrecord](reference/defrecord.md) 参照）。それ以外のタグ（`#inst`、
 `#uuid`、`#my.lib/tag`）は[タグ付きリテラル](#tagged-literals)です。名前空間マップはキーに名前空間を与えます。

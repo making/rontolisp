@@ -83,6 +83,14 @@ final class ClojureMacroLowering {
 			"in-ns");
 
 	/**
+	 * The reader heads of a syntax-quote, which the oracle's reader never spells (it
+	 * reads a template as the code building it): a program may define a macro of such a
+	 * name -- tools.reader's {@code clojure.tools.reader/syntax-quote} -- reached through
+	 * a qualified spelling, while the bare head stays the reader's form, never a call.
+	 */
+	static final Set<String> SYNTAX_QUOTE_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing");
+
+	/**
 	 * The names a syntax-quote leaves bare: the oracle's special forms, measured on
 	 * {@code clj} 1.12.6.1673. One less than {@link #SPECIAL_FORMS}: {@code import*} is
 	 * no special form there -- the oracle spells {@code ns/import*}.
@@ -130,7 +138,7 @@ final class ClojureMacroLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
 		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
-		ClojureLowerUtil.isTrue(!isReservedHead(name),
+		ClojureLowerUtil.isTrue(!isReservedHead(name) || SYNTAX_QUOTE_HEADS.contains(name),
 				name + " cannot name a macro: the reader spells its own forms with it");
 		ClojureLowerUtil.isTrue(
 				!name.startsWith(".") && !ClojureInteropLowering.isConstructionHead(name) && name.indexOf('/') < 0,
@@ -552,8 +560,10 @@ final class ClojureMacroLowering {
 	 * quoted form answers at run time, so the two expanders agree) into one application
 	 * of the expander, the answer decodes back to a datum and lowers like any other form
 	 * -- which expands the macros the expansion calls, one depth deeper. Reader metadata
-	 * travels with the arguments ({@link ClojureLowering#quoteForMacro}), like the
-	 * oracle's forms carry it: a mutable deftype flag below a selecting macro survives.
+	 * travels with the arguments ({@link ClojureLowering#quoteData}) as the metadata of
+	 * the symbol or collection it sits on, like the oracle's forms carry it, so the body
+	 * reads it with {@code meta} and a mutable deftype flag below a selecting macro
+	 * survives.
 	 */
 	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items,
 			boolean bindsEnv) {
@@ -566,7 +576,7 @@ final class ClojureMacroLowering {
 		}
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			quoted.add(ctx.quoteForMacro(items.get(i)));
+			quoted.add(ctx.quoteData(items.get(i)));
 		}
 		// the body reads the load's specials where the call expands, like the oracle's
 		// macroexpansion inside the load, and a body reading &env or &form the call's
@@ -577,8 +587,8 @@ final class ClojureMacroLowering {
 				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))));
 		if (bindsEnv) {
 			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), envValue(ctx)));
-			bindings.add(
-					ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteForMacro(ClojureLowerUtil.list(items))));
+			bindings
+				.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteData(ClojureLowerUtil.list(items))));
 		}
 		// the answer as a form: a lazy seq in it (a concat, a lazy map) realizes, since
 		// no datum spells one (until 2026-10-29 a concat answer was an unreadable value)
@@ -625,15 +635,17 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The name of the namespace a run-time value stands for: a namespace object
-	 * {@code (:C%NS-OBJECT "name")} or a symbol naming one; null for anything else.
+	 * {@code (:C%NS-OBJECT "name")} or a symbol naming one (carrying metadata or not);
+	 * null for anything else.
 	 */
 	static @Nullable String namespaceName(ClojureLowering ctx, LispVal value) {
 		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol tag && tag.name().equals(":C%NS-OBJECT")
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispString name) {
 			return name.value();
 		}
-		if (value instanceof LispSymbol) {
-			LispVal datum = decodeDatum(ctx, value);
+		if (value instanceof LispSymbol
+				|| value instanceof LispCons wrapper && ClojureLowerUtil.isSymbolNamed(wrapper.car(), ":C%SYMBOL")) {
+			LispVal datum = ClojureLowerUtil.stripMeta(decodeDatum(ctx, value));
 			return datum instanceof LispSymbol symbol ? symbol.name() : null;
 		}
 		return null;
@@ -645,10 +657,11 @@ final class ClojureMacroLowering {
 	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
 	 * and tables their literals, a host UUID or instant its literal's marker
 	 * ({@link #decodeHostValue}), and a gensym ({@code #:}-spelled, uninterned) travels
-	 * as itself so the {@code #:} bypass lowers it back to the same symbol. A symbol
-	 * carrying macro-time metadata (a {@code with-meta} of one, which answers a fresh
-	 * copy) decodes with it as reader metadata, so a defn name varied at macro time keeps
-	 * what the expansion attached.
+	 * as itself so the {@code #:} bypass lowers it back to the same symbol. A value
+	 * carrying metadata -- a symbol carrying it, a collection {@code with-meta} or a
+	 * reader layer attached at macro time -- decodes with it as reader metadata, so a
+	 * defn name varied at macro time keeps what the expansion attached and a literal
+	 * keeps the metadata it travelled with.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
 		return decodeWithMetas(ctx, value, collectMetas(ctx, value),
@@ -656,12 +669,13 @@ final class ClojureMacroLowering {
 	}
 
 	/**
-	 * The macro-time metadata of the expansion's symbols, by identity, in one evaluation:
-	 * the values {@code with-meta} attached (test.check's defspec varies its name this
-	 * way), so decoding wraps only the symbols carrying some. Empty without an evaluator,
-	 * without symbols, or when the evaluator cannot answer.
+	 * The macro-time metadata of the expansion's collections, by identity, in one
+	 * evaluation: the maps a {@code with-meta} or an argument's reader layer attached, so
+	 * decoding wraps only the collections carrying some. (A symbol carrying metadata
+	 * carries it itself.) Empty without an evaluator, without collections, or when the
+	 * evaluator cannot answer.
 	 */
-	private static Map<LispSymbol, LispVal> collectMetas(ClojureLowering ctx, LispVal value) {
+	private static Map<LispVal, LispVal> collectMetas(ClojureLowering ctx, LispVal value) {
 		// a run-time value's metadata is the running program's, a macro-time value's
 		// the macro-time evaluator's
 		ClojureRunTime.Host host = ctx.decodingFor;
@@ -669,59 +683,84 @@ final class ClojureMacroLowering {
 		if (host == null && macroEvaluator == null) {
 			return Map.of();
 		}
-		List<LispSymbol> symbols = new ArrayList<>();
-		Map<LispVal, Boolean> seen = new IdentityHashMap<>();
-		collectSymbols(value, symbols, seen);
-		if (symbols.isEmpty()) {
+		List<LispVal> nodes = new ArrayList<>();
+		collectNodes(value, nodes, new IdentityHashMap<>());
+		if (nodes.isEmpty()) {
 			return Map.of();
 		}
-		List<LispVal> metas = host != null ? host.metasOf(new ArrayList<>(symbols))
-				: macroEvaluator != null ? macroEvaluator.metasOf(new ArrayList<>(symbols)) : null;
-		if (metas == null || metas.size() != symbols.size()) {
+		List<LispVal> metas = host != null ? host.metasOf(nodes)
+				: macroEvaluator != null ? macroEvaluator.metasOf(nodes) : null;
+		if (metas == null || metas.size() != nodes.size()) {
 			return Map.of();
 		}
-		Map<LispSymbol, LispVal> out = new IdentityHashMap<>();
-		for (int i = 0; i < symbols.size(); i++) {
+		Map<LispVal, LispVal> out = new IdentityHashMap<>();
+		for (int i = 0; i < nodes.size(); i++) {
 			if (!(metas.get(i) instanceof LispNil)) {
-				out.put(symbols.get(i), metas.get(i));
+				out.put(nodes.get(i), metas.get(i));
 			}
 		}
 		return out;
 	}
 
 	/**
-	 * Every symbol of a macro-time value, once each by identity, over conses, vectors and
-	 * tables.
+	 * Every collection of a macro-time value metadata may sit on -- a list (its head
+	 * cell), a wrapper (a set, a sorted collection), a vector, a table -- once each by
+	 * identity, the members of each walked. A keyword wrapper carries none.
 	 */
-	private static void collectSymbols(LispVal value, List<LispSymbol> symbols, Map<LispVal, Boolean> seen) {
-		if (seen.containsKey(value)) {
+	private static void collectNodes(LispVal value, List<LispVal> nodes, Map<LispVal, Boolean> seen) {
+		boolean vector = value instanceof am.ik.rontolisp.LispArray array && array.dimensions().length == 1;
+		if (!(value instanceof LispCons || vector || value instanceof LispHashTable) || seen.containsKey(value)
+				|| value instanceof LispCons keyword && ClojureLowerUtil.isSymbolNamed(keyword.car(), ":C%KEYWORD")) {
 			return;
 		}
 		seen.put(value, Boolean.TRUE);
-		if (value instanceof LispSymbol s) {
-			symbols.add(s);
+		nodes.add(value);
+		if (value instanceof LispCons) {
+			LispVal run = value;
+			while (run instanceof LispCons cell) {
+				collectNodes(cell.car(), nodes, seen);
+				run = cell.cdr();
+			}
 			return;
 		}
-		if (value instanceof LispCons cons) {
-			collectSymbols(cons.car(), symbols, seen);
-			collectSymbols(cons.cdr(), symbols, seen);
-			return;
-		}
-		if (value instanceof am.ik.rontolisp.LispArray array && array.dimensions().length == 1) {
+		if (value instanceof am.ik.rontolisp.LispArray array) {
 			for (int i = 0; i < array.totalSize(); i++) {
-				collectSymbols(array.readFlat(i), symbols, seen);
+				collectNodes(array.readFlat(i), nodes, seen);
 			}
 			return;
 		}
-		if (value instanceof LispHashTable table) {
-			for (LispHashTable.Entry entry : table.entries()) {
-				collectSymbols(entry.key(), symbols, seen);
-				collectSymbols(entry.value(), symbols, seen);
-			}
+		for (LispHashTable.Entry entry : ((LispHashTable) value).entries()) {
+			collectNodes(entry.key(), nodes, seen);
+			collectNodes(entry.value(), nodes, seen);
 		}
 	}
 
-	private static LispVal decodeWithMetas(ClojureLowering ctx, LispVal value, Map<LispSymbol, LispVal> metas,
+	private static LispVal decodeWithMetas(ClojureLowering ctx, LispVal value, Map<LispVal, LispVal> metas,
+			Set<LispVal> active) {
+		LispVal decoded = decodeValue(ctx, value, metas, active);
+		LispVal meta = metas.get(value);
+		return meta == null ? decoded : readerMeta(ctx, decoded, meta, metas, active);
+	}
+
+	/**
+	 * A decoded datum under the reader metadata {@code (%with-meta datum meta)} of a
+	 * metadata map, decoded in turn (a map holding itself stays out).
+	 */
+	private static LispVal readerMeta(ClojureLowering ctx, LispVal decoded, LispVal meta, Map<LispVal, LispVal> metas,
+			Set<LispVal> active) {
+		if (meta instanceof LispNil || !active.add(meta)) {
+			return decoded;
+		}
+		try {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureLowerUtil.READER_META), decoded,
+					decodeWithMetas(ctx, meta, metas, active));
+		}
+		finally {
+			active.remove(meta);
+		}
+	}
+
+	private static LispVal decodeValue(ClojureLowering ctx, LispVal value, Map<LispVal, LispVal> metas,
 			Set<LispVal> active) {
 		if (value instanceof LispNil) {
 			return new LispSymbol("nil");
@@ -731,38 +770,27 @@ final class ClojureMacroLowering {
 		}
 		if (value instanceof LispSymbol s) {
 			String symbol = s.name();
-			LispVal decoded;
 			if (symbol.equals("false") || symbol.equals("T")) {
-				decoded = new LispSymbol(symbol.equals("T") ? "true" : "false");
+				return new LispSymbol(symbol.equals("T") ? "true" : "false");
 			}
-			else if (symbol.startsWith("#:")) {
-				decoded = new LispSymbol(symbol);
+			if (symbol.startsWith("#:")) {
+				return new LispSymbol(symbol);
 			}
-			else if (symbol.startsWith(ClojureLowering.PREFIX)) {
-				decoded = new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
+			if (symbol.startsWith(ClojureLowering.PREFIX)) {
+				return new LispSymbol(unmangleName(symbol.substring(ClojureLowering.PREFIX.length())));
 			}
-			else if (ctx.decodingFor != null) {
+			if (ctx.decodingFor != null) {
 				return embedded(ctx, value);
 			}
-			else {
-				throw new LispReadException("an unreadable symbol: " + value.print());
-			}
-			LispVal meta = metas.get(s);
-			if (meta != null && !(meta instanceof LispNil) && active.add(meta)) {
-				try {
-					return ClojureLowerUtil.list(new LispSymbol(ClojureLowerUtil.READER_META), decoded,
-							decodeWithMetas(ctx, meta, metas, active));
-				}
-				finally {
-					active.remove(meta);
-				}
-			}
-			return decoded;
+			throw new LispReadException("an unreadable symbol: " + value.print());
 		}
 		if (value instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol tag) {
 				if (tag.name().equals(":C%KEYWORD")) {
 					return decodeKeyword(ctx, cons);
+				}
+				if (tag.name().equals(":C%SYMBOL")) {
+					return decodeMetaSymbol(ctx, cons, metas, active);
 				}
 				if (tag.name().equals(":C%SET")) {
 					return decodeSet(ctx, cons, metas, active);
@@ -875,6 +903,20 @@ final class ClojureMacroLowering {
 		return null;
 	}
 
+	/**
+	 * A symbol carrying metadata back to the symbol under its reader metadata, which the
+	 * lowering reads where it consumes the name ({@code ^:private}, {@code :tag},
+	 * {@code :test} ...) and drops elsewhere.
+	 */
+	private static LispVal decodeMetaSymbol(ClojureLowering ctx, LispCons wrapper, Map<LispVal, LispVal> metas,
+			Set<LispVal> active) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 3 && parts.get(1) instanceof LispSymbol) {
+			return readerMeta(ctx, decodeWithMetas(ctx, parts.get(1), metas, active), parts.get(2), metas, active);
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
 	static LispVal decodeKeyword(ClojureLowering ctx, LispCons wrapper) {
 		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispString spelling
 				&& rest.cdr() instanceof LispNil) {
@@ -887,7 +929,7 @@ final class ClojureMacroLowering {
 	 * A record answer back to its literal: {@code (%record ns.Name {entries})}, which
 	 * lowers through the map constructor like the source spelling.
 	 */
-	static LispVal decodeRecord(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
+	static LispVal decodeRecord(ClojureLowering ctx, LispCons wrapper, Map<LispVal, LispVal> metas,
 			Set<LispVal> active) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 5 && parts.get(3) instanceof LispHashTable table
@@ -903,7 +945,7 @@ final class ClojureMacroLowering {
 	 * or members in order, which builds an unsorted one, like the oracle's compiler (a
 	 * returned collection is a literal of its kind, so {@code sorted?} of it is false).
 	 */
-	static LispVal decodeSorted(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
+	static LispVal decodeSorted(ClojureLowering ctx, LispCons wrapper, Map<LispVal, LispVal> metas,
 			Set<LispVal> active) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 4 && parts.get(3) instanceof LispArray items
@@ -974,8 +1016,7 @@ final class ClojureMacroLowering {
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
 
-	static LispVal decodeSet(ClojureLowering ctx, LispCons wrapper, Map<LispSymbol, LispVal> metas,
-			Set<LispVal> active) {
+	static LispVal decodeSet(ClojureLowering ctx, LispCons wrapper, Map<LispVal, LispVal> metas, Set<LispVal> active) {
 		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispHashTable table
 				&& rest.cdr() instanceof LispNil) {
 			List<LispVal> elements = new ArrayList<>();
@@ -1080,6 +1121,9 @@ final class ClojureMacroLowering {
 				throw new LispReadException("a dotted list is not a Clojure form");
 			}
 			if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol head) {
+				if (head.name().equals(ClojureLowerUtil.READER_META) && parts.size() == 3) {
+					return syntaxQuotedMeta(ctx, datum, level, gens);
+				}
 				if (head.name().equals("syntax-quote")) {
 					ClojureLowerUtil.isTrue(parts.size() == 2, "syntax-quote takes one form");
 					return syntaxQuoteNode(ctx, parts.get(1));
@@ -1109,6 +1153,25 @@ final class ClojureMacroLowering {
 			return syntaxQuotedSymbol(ctx, s.name(), gens);
 		}
 		return datum; // numbers, strings and characters are self-evaluating
+	}
+
+	/**
+	 * A template's form carrying reader metadata ({@code `^String s#},
+	 * {@code `(def ^:private ~n v)}), like the oracle's syntax-quote: the form carries
+	 * its metadata, a map syntax-quoted in turn ({@code String} qualifies as
+	 * {@code java.lang.String}, a {@code ~} inside unquotes), and an unquoted form
+	 * answers its value without it, the oracle dropping the metadata of a {@code ~}.
+	 */
+	static LispVal syntaxQuotedMeta(ClojureLowering ctx, LispVal datum, int level, Map<String, LispSymbol> gens) {
+		LispVal target = ClojureLowerUtil.stripMeta(datum);
+		List<LispVal> single = unquoteOf(target, level);
+		if (single != null) {
+			return unquoted(ctx, single.get(1));
+		}
+		List<LispVal> meta = ClojureLowerUtil
+			.items(ClojureCoreLowering.metaDatum(ClojureCoreLowering.metaLayers(datum)), List.of());
+		return ClojureCoreLowering.carryingMeta(target, syntaxQuoted(ctx, target, level, gens),
+				syntaxQuotedMap(ctx, meta.subList(1, meta.size()), level, gens));
 	}
 
 	static LispVal syntaxQuotedSymbol(ClojureLowering ctx, String name) {
@@ -1274,13 +1337,14 @@ final class ClojureMacroLowering {
 	}
 
 	/**
-	 * The {@code (unquote-splicing X)} parts, or null when the element splices nothing.
+	 * The {@code (unquote-splicing X)} parts, or null when the element splices nothing;
+	 * reader metadata on it drops, like the oracle's splice.
 	 */
 	static @Nullable List<LispVal> splicingOf(LispVal element, int level) {
 		if (level != 1) {
 			return null;
 		}
-		List<LispVal> parts = ClojureLowerUtil.items(element);
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(element));
 		if (parts != null && parts.size() == 2 && ClojureLowerUtil.isSymbolNamed(parts.get(0), "unquote-splicing")) {
 			return parts;
 		}
@@ -1471,7 +1535,7 @@ final class ClojureMacroLowering {
 
 			@Override
 			public LispVal resolveForm(LispVal value) {
-				LispVal datum = decodeDatum(ctx, value);
+				LispVal datum = ClojureLowerUtil.stripMeta(decodeDatum(ctx, value));
 				if (!(datum instanceof LispSymbol symbol) || symbol.name().startsWith(":")) {
 					throw new LispReadException("resolve takes a symbol: " + datum.print());
 				}
@@ -1485,7 +1549,7 @@ final class ClojureMacroLowering {
 					throw new LispReadException("ns-resolve takes a namespace and a symbol");
 				}
 				String namespace = namespaceName(ctx, parts.get(0));
-				LispVal datum = decodeDatum(ctx, parts.get(1));
+				LispVal datum = ClojureLowerUtil.stripMeta(decodeDatum(ctx, parts.get(1)));
 				if (namespace == null || !(datum instanceof LispSymbol symbol) || symbol.name().startsWith(":")) {
 					throw new LispReadException(
 							"ns-resolve takes a namespace and a symbol: " + parts.get(0).print() + " " + datum.print());

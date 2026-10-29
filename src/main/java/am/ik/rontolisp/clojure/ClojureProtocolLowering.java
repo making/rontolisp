@@ -203,6 +203,11 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("keyword")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
 				ClojureCollectionLowering.keywordForm("symbol")));
+		// a symbol carrying metadata (its wrapper is a cons): an arm a program making
+		// none sheds (ClojureArms.Family.SYMBOL_META)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureCoreLowering.META_SYMBOL_P), one),
+					ClojureCollectionLowering.keywordForm("symbol")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), one),
 				ClojureCollectionLowering.keywordForm("char")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),

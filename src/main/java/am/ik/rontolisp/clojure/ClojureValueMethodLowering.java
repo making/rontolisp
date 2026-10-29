@@ -494,6 +494,7 @@ final class ClojureValueMethodLowering {
 				// method, read off its row under the interface's binary name
 				arm = definedArm(method, recv, args, defined, arm);
 			}
+			arm = hostInterfaceArm(method, recv, args, arm);
 		}
 		else {
 			arm = boundArm(ctx, method, designator, recv, args, arms == null ? List.of() : arms, known, typed,
@@ -639,6 +640,38 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * {@code (if host call otherwise)}: the call of a record's, deftype's or reify's own
+	 * method of the name ahead of {@code otherwise}, for a host interface no core verb
+	 * reads ({@code Lock}, {@code ThreadFactory}, {@code Closeable} ...). The test reads
+	 * the receiver's row by the method's name and the call's count, so a site needs no
+	 * knowledge of the type, which another file may define; a program storing no such row
+	 * sheds the arm ({@link ClojureArms.Family#HOST_INTERFACE}).
+	 */
+	private static LispVal hostInterfaceArm(String method, LispVal recv, List<LispVal> args, LispVal otherwise) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), hostInterfaceTest(method, recv, args.size()),
+				hostInterfaceCall(method, recv, args), otherwise);
+	}
+
+	/**
+	 * Whether the receiver's row holds a host interface's method of the name at the
+	 * call's count, the target counted ({@code "lock/1"}): a call of another count keeps
+	 * the refusal it had.
+	 */
+	private static LispVal hostInterfaceTest(String method, LispVal recv, int args) {
+		return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.HOST_METHOD_P), recv,
+				LispString.literal(method + "/" + (args + 1)));
+	}
+
+	private static LispVal hostInterfaceCall(String method, LispVal recv, List<LispVal> args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(ClojureLowerUtil.sym("funcall"));
+		call.add(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), recv, LispString.literal(method)));
+		call.add(recv);
+		call.addAll(args);
+		return ClojureLowerUtil.list(call);
+	}
+
+	/**
 	 * The test of a receiver whose type implements a program-defined interface declaring
 	 * the called method: its row holds the interface's binary name.
 	 */
@@ -746,6 +779,9 @@ final class ClojureValueMethodLowering {
 			for (Arm arm : arms) {
 				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));
 			}
+			// a type implementing a host interface answers its own method of the name
+			clauses.add(ClojureLowerUtil.list(hostInterfaceTest(method, self, locals.size()),
+					hostInterfaceCall(method, self, locals)));
 			if (typed != null && typed.field()) {
 				LispVal key = ClojureCollectionLowering.keywordForm(method);
 				clauses.add(ClojureLowerUtil.list(

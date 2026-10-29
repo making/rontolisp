@@ -13,7 +13,7 @@ a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 `(var x)`, the var of a definition (see [var](reference/var.md)); syntax-quote
 (`` ` ``, `~`, `~@`) is covered in [Semantics](semantics.md). Metadata (`^`, the legacy
 `#^`) reads too: on a name or a local it parses and drops, on a vector, map or set
-literal it attaches like `with-meta` (see
+literal it attaches like `with-meta`, and a quoted symbol or collection carries it (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
 (`#ns.Name{...}` / `#ns.Name[...]`, a tag whose name is dotted) reads to the record over
 its unevaluated body (see [defrecord](reference/defrecord.md)); any other tag (`#inst`,

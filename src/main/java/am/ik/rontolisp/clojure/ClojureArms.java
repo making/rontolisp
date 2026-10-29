@@ -477,6 +477,17 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A host interface no core verb reads ({@code ThreadFactory}, {@code Lock},
+		 * {@code Closeable} ...), which a {@code deftype}, {@code reify} or
+		 * {@code defrecord} body implements: {@code instance?} tests the type's row for
+		 * the interface's binary name, and an instance call of a method no core verb
+		 * answers calls the row's method of that name and count ahead of the refusal,
+		 * whatever file defined the type. Only the store of such a row makes one.
+		 */
+		HOST_INTERFACE("host-interface", Set.of(ClojureInterfaces.HOST_METHOD_P, ClojureInterfaces.HOST_ROW_P),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.HOST_ROW), Set.of()),
+
+		/**
 		 * A transient, which {@code persistent!} and the bang verbs edit and
 		 * {@code count}, {@code empty?}, {@code get}, {@code nth}, {@code contains?},
 		 * {@code find}, a call, a keyword's call, {@code counted?}, {@code ifn?},
@@ -842,6 +853,26 @@ public final class ClojureArms {
 		 */
 		META_INTERFACE("meta-interface", Set.of("RONTOLISP::%CLOJURE-IMETA-P", "RONTOLISP::%CLOJURE-IOBJ-P"), Set.of(),
 				Map.of(), Set.of(ClojureInterfaces.META_ROW), Set.of()),
+
+		/**
+		 * A symbol carrying metadata -- {@code (:C%SYMBOL sym meta)} over the interned
+		 * symbol, which no metadata can sit on -- which {@code meta}, {@code with-meta},
+		 * {@code symbol?} and the ident predicates, {@code name}, {@code namespace},
+		 * {@code symbol}, {@code keyword}, the printer, {@code str}, {@code =},
+		 * {@code compare}, the hashes, the structural keys (a map key or set member is
+		 * the bare symbol), a call, {@code ifn?}, {@code class}, {@code instance?}, a
+		 * protocol's dispatch and a {@code java:} member's argument read as its bare
+		 * symbol; the view is {@code case}'s dispatch value. Only a quote, a syntax-quote
+		 * template or a macro argument of {@code ^m sym}
+		 * ({@link ClojureCoreLowering#SYMBOL_WITH_META}), {@code with-meta} and
+		 * {@code vary-meta} of a symbol, and a read of {@code ^m sym} make one.
+		 */
+		SYMBOL_META("symbol-meta", Set.of(ClojureCoreLowering.META_SYMBOL_P), Set.of(ClojureCoreLowering.SYMBOL_BARE),
+				Map.of(),
+				Reads.with(ClojureCoreLowering.SYMBOL_WITH_META, "RONTOLISP::%CLOJURE-WITH-META",
+						"RONTOLISP::%CLOJURE-WITH-META-V", "RONTOLISP::%CLOJURE-VARY-META",
+						"RONTOLISP::%CLOJURE-VARY-META-V"),
+				Set.of()),
 
 		/**
 		 * A record, deftype or reify whose body overrides {@code Object}'s

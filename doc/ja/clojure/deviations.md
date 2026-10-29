@@ -543,7 +543,10 @@
   `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、`CharSequence`、
   コレクションのインタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
   `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
-  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `clojure.lang` のインタフェース（`IChunkedSeq` など）は名前を挙げて拒否され、それ以外のホストの
+  インタフェース（`Closeable`、`Lock` など）は `instance?` とそのメソッドの呼び出しに答えます。本体が
+  書かなかった default メソッドを Clojure から呼ぶと拒否されます（オラクルはインタフェース側の実装を
+  実行します）。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
   ことがあり、コレクションの型の `str` は中身を綴り、`re-matcher` と `re-find` は `CharSequence`
   の型を先頭の 16、32、64 ... 文字と範囲を広げながら読み（オラクルのマッチャが止まる位置より先まで
@@ -725,8 +728,11 @@
   生成した名前を示します）。
 - `with-meta` はメタデータを持つコピーを返します。`assoc`（およびそれを経由する
   `update` と `assoc-in`）はオラクル同様に由来元のメタデータを引き継ぎますが、
-  それ以外の導いた値（`conj`、`dissoc` など）はメタデータなしで始まり（オラクルは引き継ぎます）、シンボルはメタデータを
-  持ちません（`with-meta` はシンボルを返します）。コレクションリテラルのリーダー
+  それ以外の導いた値（`conj`、`dissoc` など）はメタデータなしで始まり（オラクルは引き継ぎます）、
+  マップのキーやセットの要素になったシンボルはメタデータを持ちません
+  （`(meta (first (keys {(with-meta 'x {:a 1}) 1})))` は `nil`、オラクルは `{:a 1}`）。
+  定義の `:arglists` は引数の型ヒントを含みません（オラクルは各引数のシンボルに保ちます）。
+  コレクションリテラルのリーダー
   メタデータの `:tag` は書いたままのシンボル（`String`）で、オラクルはクラス
   （`java.lang.String`）に解決します。レコードや deftype を名指す `def` の
   `{:tag Type}` も同じ理由（ここでは型はクラスではありません）でクォートされた

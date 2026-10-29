@@ -573,8 +573,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --,
   `CharSequence`, the collection interfaces (`IPersistentMap`, `ISeq`, `Sequential`,
   `Iterable`, `java.util.List` ...) and overrides `Object`'s methods
-  ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
-  `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
+  ([reify](reference/reify.md#host-interfaces)); any other `clojure.lang` interface
+  (`IChunkedSeq` ...) is refused by name, and any other host interface (`Closeable`, `Lock` ...)
+  answers `instance?` and its methods' calls, a default method the body leaves out refused when
+  called from Clojure (the oracle runs the interface's). `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
   `str` of a collection type spells its contents, `re-matcher` and `re-find` read a
   `CharSequence` type in prefixes of 16, 32, 64 ... characters (past where the oracle's
@@ -768,8 +770,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `with-meta` answers a copy carrying the metadata; `assoc` (and `update` and
   `assoc-in` through it) keeps the source's metadata, like the oracle, while any
   other value derived from it (`conj`, `dissoc`, ...) starts without metadata,
-  where the oracle keeps it, and a symbol carries
-  none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
+  where the oracle keeps it, and a symbol keys a map or set without its metadata
+  (`(meta (first (keys {(with-meta 'x {:a 1}) 1})))` is `nil`, the oracle's `{:a 1}`); a
+  definition's `:arglists` leave out its parameters' type hints, which the oracle keeps on
+  each parameter symbol. A `:tag` from reader metadata on a collection
   literal stays the symbol as written (`String`), where the oracle resolves the class
   (`java.lang.String`); a `{:tag Type}` on a `def` naming a record or deftype keeps the
   quoted symbol for the same reason (a type is no class here), where the oracle stores

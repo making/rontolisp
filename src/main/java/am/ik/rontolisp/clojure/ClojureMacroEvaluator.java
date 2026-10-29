@@ -60,9 +60,9 @@ public interface ClojureMacroEvaluator {
 	/**
 	 * The metadata maps of macro-time values, in order, or null when this evaluator
 	 * cannot answer: one {@code meta} of each quoted value. Decoding a macro expansion
-	 * back to a datum consults it, so a symbol {@code with-meta} answered at macro time
-	 * (test.check's defspec varies its name's metadata) decodes with its metadata as
-	 * reader metadata. A value with none contributes nil.
+	 * back to a datum consults it, so a collection carrying metadata at macro time (an
+	 * argument's reader layer, a {@code with-meta}) decodes with it as reader metadata. A
+	 * value with none contributes nil.
 	 * @param values the values, as quoted data answers them
 	 * @return the metadata maps in order, or null
 	 */

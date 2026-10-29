@@ -364,31 +364,20 @@ final class ClojureNamespaceLowering {
 					}
 					continue;
 				}
-				for (int i = 1; i < prefixParts.size(); i++) {
-					LispVal sub = unwrapQuote(prefixParts.get(i));
-					if (sub instanceof LispSymbol sym) {
-						LispVal subCall = requireOne(ctx, prefixName.name(), List.of(sym), referAll, spec, mode);
-						if (subCall != null) {
-							calls.add(subCall);
-						}
-						continue;
-					}
-					List<LispVal> subParts = ClojureLowerUtil.items(sub);
-					if (subParts == null || subParts.isEmpty() || !ClojureBindingLowering.isVectorDatum(sub)
-							|| subParts.size() < 2 || !(subParts.get(1) instanceof LispSymbol)) {
-						throw new LispReadException("require takes library specs, not " + spec.print());
-					}
-					LispVal subCall = requireOne(ctx, prefixName.name(), subParts.subList(1, subParts.size()), referAll,
-							spec, mode);
-					if (subCall != null) {
-						calls.add(subCall);
-					}
-				}
+				prefixMembers(ctx, prefixName.name(), prefixParts.subList(1, prefixParts.size()), referAll, spec, mode,
+						calls);
 				continue;
 			}
 			List<LispVal> parts = ClojureLowerUtil.items(unwrapped);
-			if (parts == null || parts.size() < 2 || !(parts.get(1) instanceof LispSymbol)) {
+			if (parts == null || parts.size() < 2 || !(parts.get(1) instanceof LispSymbol prefixName)) {
 				throw new LispReadException("require takes library specs, not " + spec.print());
+			}
+			if (parts.size() > 2 && !(parts.get(2) instanceof LispSymbol option && option.name().startsWith(":"))) {
+				// the oracle's libspec?: a vector whose second element is a keyword (or
+				// absent) names one library, any other is a prefix list --
+				// [clojure.tools.analyzer [utils :refer [...]] [ast :as ast]]
+				prefixMembers(ctx, prefixName.name(), parts.subList(2, parts.size()), referAll, spec, mode, calls);
+				continue;
 			}
 			LispVal call = requireOne(ctx, null, parts.subList(1, parts.size()), referAll, spec, mode);
 			if (call != null) {
@@ -396,6 +385,33 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		return calls;
+	}
+
+	/**
+	 * The members of a prefix list, each a symbol or a {@code [sub ...]} vector (bare or
+	 * quoted) naming {@code prefix.sub}, loaded and wired in order into CALLS.
+	 */
+	private static void prefixMembers(ClojureLowering ctx, String prefix, List<LispVal> members, boolean referAll,
+			LispVal spec, ClojureLowering.LoadMode mode, List<LispVal> calls) {
+		for (LispVal member : members) {
+			LispVal sub = unwrapQuote(member);
+			if (sub instanceof LispSymbol sym) {
+				LispVal subCall = requireOne(ctx, prefix, List.of(sym), referAll, spec, mode);
+				if (subCall != null) {
+					calls.add(subCall);
+				}
+				continue;
+			}
+			List<LispVal> subParts = ClojureLowerUtil.items(sub);
+			if (subParts == null || subParts.isEmpty() || !ClojureBindingLowering.isVectorDatum(sub)
+					|| subParts.size() < 2 || !(subParts.get(1) instanceof LispSymbol)) {
+				throw new LispReadException("require takes library specs, not " + spec.print());
+			}
+			LispVal subCall = requireOne(ctx, prefix, subParts.subList(1, subParts.size()), referAll, spec, mode);
+			if (subCall != null) {
+				calls.add(subCall);
+			}
+		}
 	}
 
 	/**

@@ -171,10 +171,21 @@ class ClojureLibraryTest {
 		List<LispVal> plain = ClojureLibrary
 			.process(Clojure.read("(defprotocol P (m [x]))" + " (def r (reify P (m [_] 1)))"
 					+ " (println (seq [1]) (map :a [{:a 1}]) (nth [1] 0) (str r) (= r r) @(atom 1) (meta r)"
-					+ " (filter odd? [1]) (nth [1 2] 1) (indexed? []) (m r))", null));
+					+ " (filter odd? [1]) (nth [1 2] 1) (indexed? []) (m r))"
+					+ " (defn lk [x] [(.lock x) (instance? java.io.Closeable x)])", null));
 		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
 		String program = plain.get(plain.size() - 1).print();
 		assertThat(program).doesNotContain("%CLOJURE-NTH-2").doesNotContain("%CLOJURE-IS-INDEXED");
+		// nor the host-interface arms of an instance call and of instance?, which the
+		// store of a host interface's row keeps
+		assertThat(plain.stream().map(LispVal::print).collect(java.util.stream.Collectors.joining()))
+			.doesNotContain("(RONTOLISP::%CLOJURE-HOST-INTERFACE-");
+		List<LispVal> host = ClojureLibrary
+			.process(Clojure.read("(defn lk [x] [(.lock x) (instance? java.io.Closeable x)])"
+					+ " (def c (reify java.io.Closeable (close [_] 1)))", null));
+		assertThat(host.stream().map(LispVal::print).collect(java.util.stream.Collectors.joining()))
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-METHOD-P ")
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW-P ");
 		// a body naming an interface keeps its own family's arms, and no other's
 		List<LispVal> seqable = ClojureLibrary.process(Clojure
 			.read("(println (seq (reify clojure.lang.Seqable (seq [_] (list 1)))) (str 1) (nth [1] 0))", null));
@@ -987,7 +998,7 @@ class ClojureLibraryTest {
 		LispVal rest = code;
 		while (rest instanceof LispCons cell) {
 			if (cell.car() instanceof LispSymbol head
-					&& (isComputedIntern(head, cell.cdr()) || head.name().equals(":C%KEYWORD")
+					&& (head.name().equals("INTERN") || head.name().equals(":C%KEYWORD")
 							&& cell.cdr() instanceof LispCons next && !(next.car() instanceof LispString))) {
 				return true;
 			}
@@ -997,23 +1008,6 @@ class ClojureLibraryTest {
 			rest = cell.cdr();
 		}
 		return false;
-	}
-
-	/**
-	 * Whether the call interns a computed spelling: an {@code INTERN} call whose argument
-	 * is not the same name read back ({@code with-meta} of a symbol answers a fresh copy
-	 * of the name it was handed, introducing no new spelling, so the printer's
-	 * namespace-map arm need not be kept for it).
-	 */
-	private static boolean isComputedIntern(LispSymbol head, LispVal args) {
-		if (!head.name().equals("INTERN")) {
-			return false;
-		}
-		if (args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons call
-				&& call.car() instanceof LispSymbol fn && fn.name().equals("SYMBOL-NAME")) {
-			return false;
-		}
-		return true;
 	}
 
 	private static boolean mentionsAny(LispVal code, Set<String> names) {

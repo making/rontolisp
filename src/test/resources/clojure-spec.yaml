@@ -1105,18 +1105,22 @@ cases:
       (true false true)
       true
   - name: keys-and-vals
+    # keys/vals of a seq of map entries read each entry, the oracle's KeySeq/ValSeq
+    # (tools.analyzer's pass scheduler: (vals (filter ... passes))).
     source: |
       (println (keys {:a 1}))
       (println (vals {:a 1}))
       (println (keys nil))
       (println (count (keys {:a 1 :b 2})))
       (println (count (vals {:a 1 :b 2})))
+      (println (vals (filter (comp odd? val) {:a 1 :b 2 :c 3})) (keys (seq {:a 1})) (keys []))
     expected: |
       (:a)
       (1)
       nil
       2
       2
+      (1 3) (:a) nil
   - name: merge-combines-maps
     source: |
       (println (count (merge {:a 1} {:b 2})))
@@ -1320,6 +1324,7 @@ cases:
       (println (let [{:syms [u]} {'u 5}] u))
       (println (let [{:keys [n/m]} {:n/m 6}] m))
       (println (let [{:keys [a] {:keys [b]} :nested} {:a 1 :nested {:b 2}}] [a b]))
+      (println (let [{:keys [^String a]} {:a "hinted"}] a))
     expected: |
       [1 2]
       [1 1]
@@ -1329,6 +1334,7 @@ cases:
       5
       6
       [1 2]
+      hinted
   - name: fn-and-loop-destructure-their-parameters
     source: |
       (println ((fn [[a b]] (+ a b)) [3 4]))
@@ -5297,7 +5303,8 @@ cases:
     # Reader metadata attaches to the value a vector, map or set literal builds,
     # and to the function or instance a fn or reify form builds (its :type entry
     # is what type and the print-method dispatch read); on a symbol, a call or a
-    # quoted form it parses and drops. Oracle-identical (clj 1.12.6, 2026-10-13).
+    # quote form it parses and drops, while a quoted symbol or collection carries
+    # it. Oracle-identical (clj 1.12.6, 2026-10-13; the quoted shapes 2026-10-29).
     source: |
       (println (pr-str (meta ^:foo [1 2])))
       (println (pr-str (meta ^:foo (fn [x] x))))
@@ -5308,6 +5315,7 @@ cases:
       (println (pr-str (type ^{:type :rm-type} (reify Object (toString [_] "r")))))
       (println (pr-str (meta ^:foo {:a 1})))
       (println (pr-str (meta ^:private (quote foo))))
+      (println (pr-str (meta '^:foo x)) (pr-str (meta '^String y)) (pr-str (meta '^:k [1])) (pr-str (meta (first '(^:e w)))))
     expected: |
       {:foo true}
       {:foo true}
@@ -5318,12 +5326,16 @@ cases:
       :rm-type
       {:foo true}
       nil
+      {:foo true} {:tag String} {:k true} {:e true}
   - name: macro-arguments-keep-their-reader-metadata
     # Argument datums travel to the expander with their reader metadata, like the
     # oracle's forms carry it: a ^:volatile-mutable deftype field below a
     # selecting macro keeps its flag, so set! compiles (dynaload's if-bb), and a
-    # quoted shape decodes back with it. Oracle-identical (clj 1.12.6,
-    # 2026-10-13).
+    # quoted shape decodes back with it. The body reads it with meta on the symbol
+    # or collection it sits on, which stays a symbol or a vector; a template's
+    # reader metadata travels too (its tag qualified, an unquoted form's dropped),
+    # and a literal's evaluates where it lands. Oracle-identical (clj 1.12.6,
+    # 2026-10-13; the reads 2026-10-29).
     source: |
       (defmacro mm-pick [then else]
         (if (System/getProperty "no.such.property") then else))
@@ -5342,11 +5354,46 @@ cases:
       (defmacro mm-idm [x] x)
       (println (pr-str (meta (mm-idm ^:foo [1 2]))))
       (println (pr-str (let [n 3] (mm-idm ^:foo [n]))))
+      (defmacro mm-meta [n] (pr-str [(symbol? n) (name n) (meta n)]))
+      (println (mm-meta ^:foo x) (mm-meta ^{:doc "d" :tag String} y))
+      (defmacro mm-hints [args] (pr-str (vector? args) (meta args) (map meta args)))
+      (println (mm-hints ^long [^long a ^String b c]))
+      (defmacro mm-hinted [x] `(let [^String s# ~x] (.length s#)))
+      (defmacro mm-tag [] `(quote ^String w))
+      (defmacro mm-built [] (with-meta [1] {:a '(+ 1 2)}))
+      (defmacro mm-priv [n] `(def ^:private ~n 1))
+      (mm-priv mm-p)
+      (println (mm-hinted "abc") (pr-str (meta (mm-tag))) (pr-str (meta (mm-built))) (:private (meta #'mm-p)))
     expected: |
       7
       nil
       {:foo true}
       [3]
+      [true "x" {:foo true}] [true "y" {:doc "d", :tag String}]
+      true {:tag long} ({:tag long} {:tag String} nil)
+      3 {:tag java.lang.String} {:a 3} nil
+  - name: a-symbol-carrying-metadata-reads-as-its-bare-symbol
+    # with-meta of a symbol answers a fresh symbol carrying the metadata, the bare
+    # symbol keeping none: = and the hashes ignore it while identical? tells them
+    # apart, and the symbol verbs, a map or set lookup, case, a call, compare and
+    # the printer read it as its symbol, *print-meta* writing it ahead. Oracle-
+    # identical (clj 1.12.6, 2026-10-29). Not pinned: a symbol keying a map or set
+    # keeps no metadata there, and class answers :symbol for every symbol here.
+    source: |
+      (def smb (with-meta 'x {:a 1}))
+      (prn (meta smb) (meta 'x) (identical? 'x smb) (= 'x smb) (= smb (with-meta 'x {:b 2})) (= (hash 'x) (hash smb)))
+      (prn (symbol? smb) (simple-symbol? smb) (qualified-symbol? (with-meta 'a/b {:c 1})) (name smb) (namespace (with-meta 'a/b {:c 1})) (str smb) (pr-str smb) (keyword smb) (identical? smb (symbol smb)))
+      (prn (get {'x 1} smb) (contains? #{'x} smb) ({'x 5} smb) (smb {'x 6}) (get {smb 7} 'x) (count (conj #{'x} smb)))
+      (prn (case smb x :matched :no) (compare (with-meta 'b {:a 1}) 'a) (sort [(with-meta 'c {}) 'a (with-meta 'b {:z 1})]) (instance? clojure.lang.Symbol smb))
+      (prn (meta (vary-meta smb assoc :b 2)) (meta (with-meta smb nil)) (meta (with-meta (with-meta 'q {:a 1}) {:b 2})))
+      (binding [*print-meta* true] (prn smb '[^:k z] (str smb)))
+    expected: |
+      {:a 1} nil false true true true
+      true true true "x" "a" "x" "x" :x true
+      1 true 5 6 7 1
+      :matched 1 (a b c) true
+      {:a 1, :b 2} nil {:b 2}
+      ^{:a 1} x [^{:k true} z] "x"
   - name: defstruct-struct-and-struct-map
     # A defstruct holds its key vector; struct pairs keys with values (missing
     # values are nil, too many signal), struct-map seeds the same keys. Only
@@ -7093,7 +7140,8 @@ cases:
     # Prefix lists wire each member under the prefix on the shared requireSpecs
     # path: '(prefix [sub :as alias]/[sub :refer [vars]]/bare) quoted (the
     # oracle's spelling) or bare (the unquoted-vector leniency extended); use
-    # refers through the same path.
+    # refers through the same path. A vector whose second element is no keyword
+    # is a prefix list too, the oracle's libspec? rule (tools.analyzer.jvm's ns).
     source: |
       (require '(clojure [string :as ps :refer [join]]))
       (println (ps/join "," ["a" "b"]))
@@ -7102,11 +7150,14 @@ cases:
       (println (clojure.string/upper-case "HI"))
       (use '(clojure [string :only [capitalize]]))
       (println (capitalize "hello"))
+      (require '[clojure [set :as pset] walk])
+      (println (pset/union #{1} #{2}) (clojure.walk/keywordize-keys {"k" 1}))
     expected: |
       a,b
       x-y
       HI
       Hello
+      #{1 2} {:k 1}
   - name: use-only-and-exclude-narrow
     # use :only narrows the referred set (winning over the refer-all default)
     # and :exclude subtracts from it -- and from :refer :all -- like the oracle
@@ -8632,8 +8683,12 @@ cases:
     # special form stays bare, and a qualified head naming neither stays as written.
     # A name (:refer-clojure :exclude [map]) hides spells its own namespace instead.
     # The bench-shaped expansion pins the composition with macroexpand (which answers
-    # the mangled data, so = against the quoted oracle spelling holds). Every line
-    # is the oracle's (clj 1.12.6.1673), on all four backends.
+    # the mangled data, so = against the quoted oracle spelling holds). Reader
+    # metadata on a template form travels as (with-meta form meta) over the
+    # syntax-quoted map, a class tag qualified: core.async's (^:once fn* [] ...) and a
+    # hinted gensym parameter. A namespace may define a macro named syntax-quote
+    # (tools.reader's), reached qualified, while its backquotes stay the reader's.
+    # Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
       (ns sq (:require [clojure.string :as s]))
       (defmacro bench [expr]
@@ -8643,12 +8698,20 @@ cases:
                   '(clojure.core/let [sq/start (java.lang.System/nanoTime) sq/result 1]
                      {:result sq/result :elapsed (clojure.core/- (java.lang.System/nanoTime) sq/start)})))
       (println `loose `let `s/join `s/nope `System/nanoTime `foo/bar)
+      (defmacro thunk [& body] `(^:once fn* [] ~@body))
+      (defmacro hinted [n] `(defn ~n [^String s#] (.length s#)))
+      (hinted slen)
+      (println ((thunk 7)) (slen "abc") (:tag (meta (first (nth (macroexpand-1 '(hinted q)) 2)))))
+      (defmacro syntax-quote [x] (list 'quote [:mine x]))
+      (println (sq/syntax-quote 1) `loose)
       (ns excl (:refer-clojure :exclude [map]))
       (println `map `filter)
       (println `java.io.StringWriter `String)
     expected: |
       true
       sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
+      7 3 java.lang.String
+      [:mine 1] sq/loose
       excl/map clojure.core/filter
       java.io.StringWriter java.lang.String
   - name: var-quote-metadata-and-test
@@ -11187,7 +11250,7 @@ cases:
     # backends.
     source: |
       (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
-      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")))
+      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")) (meta (read-string "^:r ^{:s 1} v")))
       (let [m (read-string "#:ns{:a 1 :_/b 2 c 3}")]
         (prn (map m [:ns/a :b 'ns/c]) (read-string "#::{:a 1}") (read-string "#!skipped\n7")))
       (prn (map rs-err ["{1 2 1 3}" "#{\"a\" \"a\"}" "{[1] 1 (1) 2}" "^:k 5" "^1 [1]" "#<x>" "#a" "a:" "a/" "//" ":a/1"]))
@@ -11195,7 +11258,7 @@ cases:
       (prn (read-string "a/9") (read-string "a//b") (read-string ":1") (read-string "a/:b"))
       (prn #:item{:id 1} (:item/id #:item{:id 2}) '#:it{name 1} #::{:local 3})
     expected: |
-      {:k true, :x 2} {:tag String} {:param-tags [int]}
+      {:k true, :x 2} {:tag String} {:param-tags [int]} {:s 1, :r true}
       (1 2 3) #:user{:a 1} 7
       ("Duplicate key: 1" "Duplicate key: a" "Duplicate key: [1]" "Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String,Vector or Map" "Unreadable form" "EOF while reading" "Invalid token: a:" "Invalid token: a/" "Invalid token: //" "Invalid token: :a/1")
       ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
@@ -16314,6 +16377,17 @@ cases:
       (definterface Redef62 (^int q []) (^int w [x]))
       (prn (.w (reify Redef62 (q [_] 1) (w [_ x] x)) 3))
       (in-ns 'user)
+      ;; a host interface no core verb reads takes the same row: with-open closes a
+      ;; Closeable reify, .lock calls a Lock deftype's, a left-out method refuses
+      (ns iface-host (:import (java.io Closeable) (java.util.concurrent.locks Lock)))
+      (def host-closed (atom []))
+      (defn host-res [n] (reify Closeable (close [_] (swap! host-closed conj n))))
+      (with-open [a (host-res :a) b (host-res :b)] (swap! host-closed conj :body))
+      (prn @host-closed (instance? Closeable (host-res :c)) (instance? Closeable 1))
+      (deftype HostLatch [state] Lock (lock [_] (swap! state conj :lock)) (unlock [_] (swap! state conj :unlock)))
+      (let [l (HostLatch. (atom []))] (.lock l) (.unlock l) (prn @(.-state l) (instance? Lock l)))
+      (prn (try (.tryLock (HostLatch. (atom nil))) (catch AbstractMethodError e :abstract)))
+      (in-ns 'user)
     expected: |
       1 [1 2] true
       "No matching field found: fetch for class clojure.lang.PersistentArrayMap"
@@ -16323,6 +16397,9 @@ cases:
       false
       9
       3
+      [:body :b :a] true false
+      [:lock :unlock] true
+      :abstract
   - name: string-getChars-subSequence-and-char-array-strings-read-on-every-backend
     # String.getChars copies into a char array, .subSequence answers the range and
     # String. of a char array (whole or ranged) its characters, on every backend (a

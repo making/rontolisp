@@ -80,9 +80,12 @@ final class ClojureVarLowering {
 			boolean isMacro) {
 		Map<LispVal, LispVal> entries = new LinkedHashMap<>();
 		if (arglists != null) {
+			// the parameters' type hints stay out (the oracle keeps them on each
+			// symbol): no program printing or comparing :arglists makes a symbol
+			// carrying metadata for them
 			List<LispVal> vectors = new ArrayList<>();
 			for (LispVal params : arglists) {
-				vectors.add(ClojureLowerUtil.stripMeta(params));
+				vectors.add(ClojureLowerUtil.stripMetaDeep(params));
 			}
 			entries.put(keyword("arglists"),
 					ClojureLowerUtil.list(new LispSymbol("quote"), ClojureLowerUtil.list(vectors)));
