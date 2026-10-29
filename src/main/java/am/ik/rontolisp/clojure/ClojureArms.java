@@ -580,20 +580,23 @@ public final class ClojureArms {
 		 * {@code =}, {@code compare}, the hashes, the structural keys, {@code class}, a
 		 * protocol's dispatch and {@code instance?} read: only an {@code M} literal
 		 * (whose quoted wrapper names the tag {@link ClojureDecimalLowering#TAG}),
-		 * {@code bigdec}, {@code with-precision} and a read, whose reader takes an
-		 * {@code M} literal, make one. The aliases are the decimal-aware helpers the
-		 * lowering names in place of the plain numeric operators, each to its operator
-		 * ({@link ClojureDecimalLowering#ALIASES}), and every definition named
-		 * {@code %clojure-bd-} is the family's own. Ahead of {@link #HOST}:
-		 * {@code instance?} of {@code Number}'s helper is an alias of the host test,
-		 * which that family folds in turn.
+		 * {@code bigdec}, {@code with-precision}, a read, whose reader takes an {@code M}
+		 * literal, the {@code java.math} constructions, statics and constants, and a
+		 * {@code java:} member declaring a {@code BigDecimal} make one
+		 * ({@link ClojureDecimalLowering#PRODUCERS}); the view is the answer of a member
+		 * that may answer one ({@link ClojureDecimalLowering#HOST_VIEW}). The aliases are
+		 * the decimal-aware helpers the lowering names in place of the plain numeric
+		 * operators, each to its operator ({@link ClojureDecimalLowering#ALIASES}), and
+		 * every definition named {@code %clojure-bd-} is the family's own. Ahead of
+		 * {@link #HOST}: {@code instance?} of {@code Number}'s helper is an alias of the
+		 * host test, which that family folds in turn.
 		 */
-		DECIMAL("decimal", Set
-			.of(ClojureDecimalLowering.DECIMAL_P, ClojureDecimalLowering.DECIMAL_IN_P, ClojureDecimalLowering.VALUE_P),
-				Set.of(), ClojureDecimalLowering.ALIASES,
-				Reads.with(ClojureDecimalLowering.TAG, ClojureDecimalLowering.BIGDEC, ClojureDecimalLowering.BIGDEC_V,
-						ClojureDecimalLowering.MATH_CONTEXT),
-				Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(), ClojureDecimalLowering.PREFIX, null),
+		DECIMAL("decimal",
+				Set.of(ClojureDecimalLowering.DECIMAL_P, ClojureDecimalLowering.DECIMAL_IN_P,
+						ClojureDecimalLowering.VALUE_P),
+				Set.of(ClojureDecimalLowering.HOST_VIEW), ClojureDecimalLowering.ALIASES,
+				Reads.with(ClojureDecimalLowering.PRODUCERS.toArray(String[]::new)), Set.of(), false, Set.of(),
+				Set.of(), Set.of(), Map.of(), ClojureDecimalLowering.PREFIX, null),
 
 		/**
 		 * The unbound root of a declared-never-defined name or a value-less {@code def}:

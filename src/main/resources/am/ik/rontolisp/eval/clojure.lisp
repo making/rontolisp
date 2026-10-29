@@ -3592,10 +3592,9 @@
    ;; an arm a program making no byte array folds
    ((rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes))
    ;; a decimal: the java.math.BigDecimal of its value and scale, a Number to
-   ;; every member taking one, like the oracle's; an arm a program making no
-   ;; decimal folds
-   ((rontolisp::%clojure-bd-p x)
-    (java:new "java.math.BigDecimal" (rontolisp::%clojure-bd-string x)))
+   ;; every member taking one, like the oracle's; a math context or a rounding
+   ;; mode the java.math one; an arm a program making no decimal folds
+   ((rontolisp::%clojure-bd-value-p x) (rontolisp::%clojure-bd-host x))
    ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
    ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
    ((consp x) (rontolisp::%clojure-host-seq-view x))
@@ -13491,8 +13490,10 @@
     (dolist (x xs found) (if (rontolisp::%clojure-bd-p x) (setq found t)))))
 
 (defun rontolisp::%clojure-bd-value-p (x)
-  "Whether X is a decimal or a math context."
-  (and (consp x) (or (eq (car x) :C%DECIMAL) (eq (car x) :C%MATH-CONTEXT))))
+  "Whether X is a decimal, a math context or a rounding mode."
+  (and (consp x)
+       (or (eq (car x) :C%DECIMAL) (eq (car x) :C%MATH-CONTEXT)
+           (eq (car x) :C%ROUNDING-MODE))))
 
 (defun rontolisp::%clojure-bd-make (u s)
   "The decimal U x 10^-S."
@@ -13531,24 +13532,27 @@
               (if (>= adjusted 0) "+" "") (princ-to-string adjusted))))))
 
 (defun rontolisp::%clojure-bd-to-string (x)
-  "The toString of the decimal or math context X: a decimal's spelling, a
-   context's precision and rounding mode."
-  (if (eq (car x) :C%DECIMAL)
-      (rontolisp::%clojure-bd-string x)
-      (concatenate 'string "precision=" (princ-to-string (car (cdr x)))
-                   " roundingMode=" (car (cdr (cdr x))))))
+  "The toString of the decimal, math context or rounding mode X: a decimal's
+   spelling, a context's precision and rounding mode, a mode's name."
+  (cond ((eq (car x) :C%DECIMAL) (rontolisp::%clojure-bd-string x))
+        ((eq (car x) :C%MATH-CONTEXT)
+         (concatenate 'string "precision=" (princ-to-string (car (cdr x)))
+                      " roundingMode=" (car (cdr (cdr x)))))
+        (t (car (cdr x)))))
 
 (defun rontolisp::%clojure-bd-write (x readable stream)
-  "Write the decimal or math context X as the oracle prints it: a decimal its
-   spelling and M, under print and pr alike; a context the #object of its
-   class, its toString quoted under pr (the identity hash left out, like every
-   #object here)."
+  "Write the decimal, math context or rounding mode X as the oracle prints it:
+   a decimal its spelling and M, under print and pr alike; a context or a mode
+   the #object of its class, its toString quoted under pr (the identity hash
+   left out, like every #object here)."
   (if (eq (car x) :C%DECIMAL)
       (progn
         (write-string (rontolisp::%clojure-bd-string x) stream)
         (write-char #\M stream))
       (progn
-        (write-string "#object[java.math.MathContext " stream)
+        (write-string "#object[" stream)
+        (write-string (rontolisp::%clojure-bd-class-name x) stream)
+        (write-char #\Space stream)
         (if readable
             (rontolisp::%clojure-write-readable-string
              (rontolisp::%clojure-bd-to-string x) stream)
@@ -13556,8 +13560,10 @@
         (write-char #\] stream))))
 
 (defun rontolisp::%clojure-bd-class-name (x)
-  "The oracle's class name of the decimal or math context X."
-  (if (eq (car x) :C%DECIMAL) "java.math.BigDecimal" "java.math.MathContext"))
+  "The oracle's class name of the decimal, math context or rounding mode X."
+  (cond ((eq (car x) :C%DECIMAL) "java.math.BigDecimal")
+        ((eq (car x) :C%MATH-CONTEXT) "java.math.MathContext")
+        (t "java.math.RoundingMode")))
 
 (defun rontolisp::%clojure-bd-math-context (precision mode)
   "The math context with-precision binds: PRECISION digits rounded under the
@@ -14177,6 +14183,532 @@
   "instance? of java.lang.Number beside the decimals: a decimal or what the
    host test answers."
   (or (rontolisp::%clojure-bd-p x) (rontolisp::%clojure-host-number-p x)))
+
+;;;; Decimal methods: BigDecimal's instance methods, constructors and statics
+;;
+;; over the decimals above, on every backend (clojure/ClojureDecimalLowering:
+;; methodArm, construction, staticCall, field). A rounding mode is
+;; (:C%ROUNDING-MODE "NAME"), the oracle's java.math.RoundingMode constant;
+;; a legacy ROUND_ int names the mode of its ordinal. An argument of the wrong
+;; kind is the oracle's reflective refusal. Where the host is, a BigDecimal a
+;; java: member answers comes back as a decimal (%clojure-bd-from-host).
+
+(defun rontolisp::%clojure-bd-mode-names ()
+  "The RoundingMode names in ordinal order, the legacy ROUND_ ints' order."
+  '("UP" "DOWN" "CEILING" "FLOOR" "HALF_UP" "HALF_DOWN" "HALF_EVEN"
+    "UNNECESSARY"))
+
+(defun rontolisp::%clojure-bd-refuse (method n)
+  "The oracle's reflective refusal of the BigDecimal METHOD at N arguments
+   that no overload takes."
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string "No matching method " method " found taking "
+                (princ-to-string n) " args for class java.math.BigDecimal")))
+
+(defun rontolisp::%clojure-bd-cast (x class method n single)
+  "The oracle's refusal of X, no CLASS, as an argument of METHOD at N
+   arguments: where SINGLE (the method's one overload of the count) its
+   reflector's cast of the argument, else no overload taking it."
+  (if single
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "Cannot cast " (rontolisp::%clojure-class-name-of x)
+                    " to " class))
+      (rontolisp::%clojure-bd-refuse method n)))
+
+(defun rontolisp::%clojure-bd-arg (x method n single)
+  "X as the BigDecimal argument of METHOD at N arguments: a decimal itself,
+   nil the NullPointerException the method meets, anything else the
+   refusal (%clojure-bd-cast)."
+  (cond ((rontolisp::%clojure-bd-p x) x)
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     (concatenate 'string "BigDecimal." method " of null")))
+   (t (rontolisp::%clojure-bd-cast x "java.math.BigDecimal" method n single))))
+
+(defun rontolisp::%clojure-bd-int-arg (x method n single)
+  "X as an int argument of METHOD at N arguments, as the oracle's reflector
+   converts one: an integer's low 32 bits; where SINGLE (the method's one
+   overload of the count) any number's intValue, anything else the
+   reflector's refusal; else no overload taking it."
+  (cond ((integerp x) (%mask-signed-field 32 x))
+        ((not single) (rontolisp::%clojure-bd-refuse method n))
+        ((realp x) (rontolisp::%clojure-int-value x))
+        (t (rontolisp::%clojure-illegal-argument-exception-of
+            (concatenate 'string "Unexpected param type, expected: int, given: "
+                         (rontolisp::%clojure-class-name-of x)) x))))
+
+(defun rontolisp::%clojure-bd-mode (x method n)
+  "The name of the rounding mode X as an argument of METHOD at N arguments: a
+   RoundingMode's, or a legacy ROUND_ int's from 0 to 7 (any other int the
+   oracle's refusal); anything else the refusal."
+  (cond ((and (consp x) (eq (car x) :C%ROUNDING-MODE)) (car (cdr x)))
+        ((integerp x)
+         (if (and (<= 0 x) (<= x 7))
+             (nth x (rontolisp::%clojure-bd-mode-names))
+             (rontolisp::%clojure-illegal-argument-exception
+              "Invalid rounding mode")))
+        (t (rontolisp::%clojure-bd-refuse method n))))
+
+(defun rontolisp::%clojure-bd-context-arg (x method n)
+  "The math context X as an argument of METHOD at N arguments, the method's
+   one overload of the count, as the decimal operations take one: NIL for
+   precision 0 (unlimited); anything else the refusal (%clojure-bd-cast)."
+  (cond
+   ((and (consp x) (eq (car x) :C%MATH-CONTEXT)) (if (> (car (cdr x)) 0) x nil))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     (concatenate 'string "BigDecimal." method " of a null MathContext")))
+   (t (rontolisp::%clojure-bd-cast x "java.math.MathContext" method n t))))
+
+(defun rontolisp::%clojure-bd-scale (d)
+  "BigDecimal.scale of the decimal D."
+  (car (cdr (cdr d))))
+
+(defun rontolisp::%clojure-bd-unscaled (d)
+  "BigDecimal.unscaledValue of the decimal D: an integer, as a BigInteger is."
+  (car (cdr d)))
+
+(defun rontolisp::%clojure-bd-m-precision (d)
+  "BigDecimal.precision of the decimal D: its unscaled value's digits."
+  (rontolisp::%clojure-bd-precision (car (cdr d))))
+
+(defun rontolisp::%clojure-bd-signum (d)
+  "BigDecimal.signum of the decimal D."
+  (signum (car (cdr d))))
+
+(defun rontolisp::%clojure-bd-m-negate (d &optional (mc nil mcp))
+  "BigDecimal.negate of the decimal D, rounded under the math context MC when
+   one is given."
+  (rontolisp::%clojure-bd-negate d
+   (if mcp (rontolisp::%clojure-bd-context-arg mc "negate" 1) nil)))
+
+(defun rontolisp::%clojure-bd-m-abs (d &optional (mc nil mcp))
+  "BigDecimal.abs of the decimal D, rounded under the math context MC when one
+   is given."
+  (rontolisp::%clojure-bd-round (abs (car (cdr d))) (car (cdr (cdr d)))
+   (if mcp (rontolisp::%clojure-bd-context-arg mc "abs" 1) nil)))
+
+(defun rontolisp::%clojure-bd-m-plus (d &optional (mc nil mcp))
+  "BigDecimal.plus of the decimal D: itself, rounded under the math context MC
+   when one is given."
+  (rontolisp::%clojure-bd-round (car (cdr d)) (car (cdr (cdr d)))
+   (if mcp (rontolisp::%clojure-bd-context-arg mc "plus" 1) nil)))
+
+(defun rontolisp::%clojure-bd-m-round (d mc)
+  "BigDecimal.round of the decimal D under the math context MC."
+  (rontolisp::%clojure-bd-round (car (cdr d)) (car (cdr (cdr d)))
+   (rontolisp::%clojure-bd-context-arg mc "round" 1)))
+
+(defun rontolisp::%clojure-bd-set-scale (d n &optional (mode nil modep))
+  "BigDecimal.setScale of the decimal D to the scale N: exact when N is not
+   below its scale, else its dropped digits rounded under MODE (a RoundingMode
+   or a legacy ROUND_ int; without one UNNECESSARY, which refuses an inexact
+   answer)."
+  (let* ((scale
+          (rontolisp::%clojure-bd-int-arg n "setScale" (if modep 2 1)
+                                          (not modep)))
+         (name
+          (if modep
+              (rontolisp::%clojure-bd-mode mode "setScale" 2)
+              "UNNECESSARY"))
+         (u (car (cdr d)))
+         (s (car (cdr (cdr d)))))
+    (if (>= scale s)
+        (rontolisp::%clojure-bd-make (* u (expt 10 (- scale s))) scale)
+        (rontolisp::%clojure-bd-make
+         (rontolisp::%clojure-bd-round-quotient u (expt 10 (- s scale)) name)
+         scale))))
+
+(defun rontolisp::%clojure-bd-m-add (d b &optional (mc nil mcp))
+  "BigDecimal.add of the decimal D and B, rounded under the math context MC
+   when one is given."
+  (let ((n (if mcp 2 1)))
+    (rontolisp::%clojure-bd-add d (rontolisp::%clojure-bd-arg b "add" n t)
+     (if mcp (rontolisp::%clojure-bd-context-arg mc "add" n) nil))))
+
+(defun rontolisp::%clojure-bd-m-subtract (d b &optional (mc nil mcp))
+  "BigDecimal.subtract of B from the decimal D, rounded under the math context
+   MC when one is given."
+  (let* ((n (if mcp 2 1)) (y (rontolisp::%clojure-bd-arg b "subtract" n t)))
+    (rontolisp::%clojure-bd-add d
+     (rontolisp::%clojure-bd-make (- (car (cdr y))) (car (cdr (cdr y))))
+     (if mcp (rontolisp::%clojure-bd-context-arg mc "subtract" n) nil))))
+
+(defun rontolisp::%clojure-bd-m-multiply (d b &optional (mc nil mcp))
+  "BigDecimal.multiply of the decimal D by B, rounded under the math context
+   MC when one is given."
+  (let ((n (if mcp 2 1)))
+    (rontolisp::%clojure-bd-multiply d
+     (rontolisp::%clojure-bd-arg b "multiply" n t)
+     (if mcp (rontolisp::%clojure-bd-context-arg mc "multiply" n) nil))))
+
+(defun rontolisp::%clojure-bd-checked-divide (d y)
+  "Signal BigDecimal's refusal of the decimal D divided by the decimal Y when
+   Y is zero: Division undefined of a zero D, else Division by zero."
+  (if (= (car (cdr y)) 0)
+      (rontolisp::%clojure-arithmetic-exception
+       (if (= (car (cdr d)) 0) "Division undefined" "Division by zero"))))
+
+(defun rontolisp::%clojure-bd-divide-at (d y scale mode)
+  "The decimal D divided by the decimal Y, not zero, rounded to SCALE places
+   under the RoundingMode named MODE."
+  (let* ((q
+          (/ (rontolisp::%clojure-bd-rational d)
+             (rontolisp::%clojure-bd-rational y)))
+         (n (if (>= scale 0) (* q (expt 10 scale)) (/ q (expt 10 (- scale))))))
+    (rontolisp::%clojure-bd-make
+     (rontolisp::%clojure-bd-round-quotient (numerator n) (denominator n) mode)
+     scale)))
+
+(defun rontolisp::%clojure-bd-m-divide (d b &optional (x nil xp) (z nil zp))
+  "BigDecimal.divide of the decimal D by B: exact (a non-terminating quotient
+   refused); with a math context X its rounded quotient; with a rounding mode
+   X (a RoundingMode or a legacy int) rounded at D's scale; with a scale X and
+   a mode Z rounded at that scale."
+  (let* ((n (cond (zp 3) (xp 2) (t 1)))
+         (y (rontolisp::%clojure-bd-arg b "divide" n (= n 1))))
+    (rontolisp::%clojure-bd-checked-divide d y)
+    (cond (zp (rontolisp::%clojure-bd-divide-at d y
+               (rontolisp::%clojure-bd-int-arg x "divide" 3 nil)
+               (rontolisp::%clojure-bd-mode z "divide" 3)))
+          ((and xp (consp x) (eq (car x) :C%MATH-CONTEXT))
+           (rontolisp::%clojure-bd-divide d y
+            (rontolisp::%clojure-bd-context-arg x "divide" 2)))
+          (xp (rontolisp::%clojure-bd-divide-at d y (car (cdr (cdr d)))
+               (rontolisp::%clojure-bd-mode x "divide" 2)))
+          (t (rontolisp::%clojure-bd-divide d y nil)))))
+
+(defun rontolisp::%clojure-bd-m-integral (d b)
+  "BigDecimal.divideToIntegralValue of the decimal D by B."
+  (let ((y (rontolisp::%clojure-bd-arg b "divideToIntegralValue" 1 t)))
+    (rontolisp::%clojure-bd-checked-divide d y)
+    (rontolisp::%clojure-bd-integral d y nil)))
+
+(defun rontolisp::%clojure-bd-m-remainder (d b)
+  "BigDecimal.remainder of the decimal D by B: D less B times the integral
+   quotient."
+  (let ((y (rontolisp::%clojure-bd-arg b "remainder" 1 t)))
+    (rontolisp::%clojure-bd-checked-divide d y)
+    (let ((product
+           (rontolisp::%clojure-bd-multiply
+            (rontolisp::%clojure-bd-integral d y nil) y nil)))
+      (rontolisp::%clojure-bd-add d
+                                  (rontolisp::%clojure-bd-make
+                                   (- (car (cdr product)))
+                                   (car (cdr (cdr product)))) nil))))
+
+(defun rontolisp::%clojure-bd-m-pow (d n)
+  "BigDecimal.pow of the decimal D to the int N, 0 to 999999999 (any other
+   the oracle's refusal): exact at N times its scale."
+  (let ((k (rontolisp::%clojure-bd-int-arg n "pow" 1 t)))
+    (if (or (< k 0) (> k 999999999))
+        (rontolisp::%clojure-arithmetic-exception "Invalid operation"))
+    (rontolisp::%clojure-bd-make (expt (car (cdr d)) k)
+                                 (* (car (cdr (cdr d))) k))))
+
+(defun rontolisp::%clojure-bd-m-max (d b)
+  "BigDecimal.max of the decimal D and B: D unless B is greater."
+  (let ((y (rontolisp::%clojure-bd-arg b "max" 1 t)))
+    (if (>= (rontolisp::%clojure-bd-rational d)
+            (rontolisp::%clojure-bd-rational y))
+        d
+        y)))
+
+(defun rontolisp::%clojure-bd-m-min (d b)
+  "BigDecimal.min of the decimal D and B: D unless B is less."
+  (let ((y (rontolisp::%clojure-bd-arg b "min" 1 t)))
+    (if (<= (rontolisp::%clojure-bd-rational d)
+            (rontolisp::%clojure-bd-rational y))
+        d
+        y)))
+
+(defun rontolisp::%clojure-bd-moved (d n method sign)
+  "The decimal D with its point moved N places (METHOD's int argument), its
+   scale SIGN times N above its own, a negative scale made 0 like
+   movePointLeft and movePointRight make it."
+  (let* ((k (rontolisp::%clojure-bd-int-arg n method 1 t))
+         (u (car (cdr d)))
+         (s (+ (car (cdr (cdr d))) (* sign k))))
+    (if (< s 0)
+        (rontolisp::%clojure-bd-make (* u (expt 10 (- s))) 0)
+        (rontolisp::%clojure-bd-make u s))))
+
+(defun rontolisp::%clojure-bd-move-left (d n)
+  "BigDecimal.movePointLeft of the decimal D by N places."
+  (rontolisp::%clojure-bd-moved d n "movePointLeft" 1))
+
+(defun rontolisp::%clojure-bd-move-right (d n)
+  "BigDecimal.movePointRight of the decimal D by N places."
+  (rontolisp::%clojure-bd-moved d n "movePointRight" -1))
+
+(defun rontolisp::%clojure-bd-scale-by-ten (d n)
+  "BigDecimal.scaleByPowerOfTen of the decimal D by N: its scale N lower."
+  (rontolisp::%clojure-bd-make (car (cdr d))
+                               (- (car (cdr (cdr d)))
+                                  (rontolisp::%clojure-bd-int-arg n
+                                   "scaleByPowerOfTen" 1 t))))
+
+(defun rontolisp::%clojure-bd-m-compare (d b)
+  "BigDecimal.compareTo of the decimal D and B: -1, 0 or 1 by value."
+  (let ((x (rontolisp::%clojure-bd-rational d))
+        (y
+         (rontolisp::%clojure-bd-rational
+          (rontolisp::%clojure-bd-arg b "compareTo" 1 t))))
+    (cond ((< x y) -1) ((> x y) 1) (t 0))))
+
+(defun rontolisp::%clojure-bd-strip (d)
+  "BigDecimal.stripTrailingZeros of the decimal D: its unscaled value's
+   trailing zeros dropped, zero at scale 0."
+  (let ((u (car (cdr d))) (s (car (cdr (cdr d)))))
+    (if (= u 0)
+        (rontolisp::%clojure-bd-make 0 0)
+        (progn
+          (do ()
+              ((/= (rem u 10) 0))
+            (setq u (truncate u 10))
+            (setq s (- s 1)))
+          (rontolisp::%clojure-bd-make u s)))))
+
+(defun rontolisp::%clojure-bd-plain-string (d)
+  "BigDecimal.toPlainString of the decimal D: its digits with no exponent,
+   zeros after them for a negative scale (a zero's 0)."
+  (let* ((u (car (cdr d)))
+         (s (car (cdr (cdr d))))
+         (digits (princ-to-string (abs u)))
+         (n (length digits))
+         (sign (if (< u 0) "-" "")))
+    (cond ((and (< s 0) (= u 0)) "0")
+          ((<= s 0)
+           (concatenate 'string sign digits
+                        (make-string (- s) :initial-element #\0)))
+          ((> n s)
+           (concatenate 'string sign (subseq digits 0 (- n s)) "."
+                        (subseq digits (- n s))))
+          (t (concatenate 'string sign "0."
+                          (make-string (- s n) :initial-element #\0) digits)))))
+
+(defun rontolisp::%clojure-bd-engineering-string (d)
+  "BigDecimal.toEngineeringString of the decimal D: toString's, but for an
+   exponent a multiple of three, one to three digits ahead of the point."
+  (let* ((u (car (cdr d)))
+         (s (car (cdr (cdr d))))
+         (digits (princ-to-string (abs u)))
+         (n (length digits))
+         (adjusted (+ (- s) (- n 1))))
+    (if (or (= s 0) (and (> s 0) (>= adjusted -6)))
+        (rontolisp::%clojure-bd-string d)
+        (let ((sig (rem adjusted 3)) (body ""))
+          (if (< sig 0) (setq sig (+ sig 3)))
+          (setq adjusted (- adjusted sig))
+          (setq sig (+ sig 1))
+          (cond ((= u 0)
+                 (cond ((= sig 1) (setq body "0"))
+                  ((= sig 2)
+                   (setq body "0.00")
+                   (setq adjusted (+ adjusted 3)))
+                  (t
+                   (setq body "0.0")
+                   (setq adjusted (+ adjusted 3)))))
+                ((>= sig n)
+                 (setq body
+                       (concatenate 'string digits
+                        (make-string (- sig n) :initial-element #\0))))
+                (t (setq body
+                         (concatenate 'string (subseq digits 0 sig) "."
+                                      (subseq digits sig)))))
+          (concatenate 'string (if (< u 0) "-" "") body
+                       (if (/= adjusted 0)
+                           (concatenate 'string "E" (if (> adjusted 0) "+" "")
+                                        (princ-to-string adjusted))
+                           ""))))))
+
+(defun rontolisp::%clojure-bd-ulp (d)
+  "BigDecimal.ulp of the decimal D: one unit of its last place."
+  (rontolisp::%clojure-bd-make 1 (car (cdr (cdr d)))))
+
+(defun rontolisp::%clojure-bd-integer-value (d bits)
+  "longValue, intValue, shortValue or byteValue of the decimal D: its integer
+   part's low BITS bits, signed."
+  (rontolisp::%clojure-wrap-bits (truncate (rontolisp::%clojure-bd-rational d))
+                                 bits))
+
+(defun rontolisp::%clojure-bd-to-integer (d)
+  "BigDecimal.toBigInteger of the decimal D: its integer part."
+  (values (truncate (rontolisp::%clojure-bd-rational d))))
+
+(defun rontolisp::%clojure-bd-exact-integer (d bits)
+  "toBigIntegerExact (BITS NIL), longValueExact, intValueExact,
+   shortValueExact or byteValueExact of the decimal D: its value, which must
+   be an integer (else Rounding necessary) of BITS bits (else Overflow)."
+  (let ((r (rontolisp::%clojure-bd-rational d)))
+    (if (not (integerp r))
+        (rontolisp::%clojure-arithmetic-exception "Rounding necessary"))
+    (if (and bits (or (< r (- (expt 2 (- bits 1)))) (>= r (expt 2 (- bits 1)))))
+        (rontolisp::%clojure-arithmetic-exception "Overflow"))
+    r))
+
+(defun rontolisp::%clojure-bd-get-precision (x)
+  "MathContext.getPrecision of X, a math context; anything else the oracle's
+   missing method."
+  (if (eq (car x) :C%MATH-CONTEXT)
+      (car (cdr x))
+      (rontolisp::%clojure-no-method x
+       "No matching field found: getPrecision for class " "getPrecision")))
+
+(defun rontolisp::%clojure-bd-get-rounding-mode (x)
+  "MathContext.getRoundingMode of X, a math context; anything else the
+   oracle's missing method."
+  (if (eq (car x) :C%MATH-CONTEXT)
+      (list :C%ROUNDING-MODE (car (cdr (cdr x))))
+      (rontolisp::%clojure-no-method x
+       "No matching field found: getRoundingMode for class "
+       "getRoundingMode")))
+
+(defun rontolisp::%clojure-bd-mode-name (x)
+  "RoundingMode.name of X, a rounding mode; anything else the oracle's missing
+   method."
+  (if (eq (car x) :C%ROUNDING-MODE)
+      (car (cdr x))
+      (rontolisp::%clojure-no-method x
+                                     "No matching field found: name for class "
+                                     "name")))
+
+(defun rontolisp::%clojure-bd-mode-ordinal (x)
+  "RoundingMode.ordinal of X, a rounding mode; anything else the oracle's
+   missing method."
+  (if (eq (car x) :C%ROUNDING-MODE)
+      (position (car (cdr x)) (rontolisp::%clojure-bd-mode-names) :test #'equal)
+      (rontolisp::%clojure-no-method x
+       "No matching field found: ordinal for class " "ordinal")))
+
+(defun rontolisp::%clojure-bd-ctor-refusal ()
+  "The oracle's refusal of a BigDecimal construction no constructor takes."
+  (rontolisp::%clojure-illegal-argument-exception
+   "No matching ctor found for class java.math.BigDecimal"))
+
+(defun rontolisp::%clojure-bd-exact-double (x)
+  "The decimal the double X is exactly, new BigDecimal(double): the digits of
+   its binary fraction; NaN and the infinities the oracle's refusal."
+  (if (rontolisp::%clojure-symbolic-float-p x)
+      (rontolisp::%clojure-number-format-exception "Infinite or NaN")
+      (let* ((r (rational x)) (k (- (integer-length (denominator r)) 1)))
+        (rontolisp::%clojure-bd-make (* (numerator r) (expt 5 k)) k))))
+
+(defun rontolisp::%clojure-bd-new (x)
+  "new BigDecimal(x): a string as the oracle reads one, an integer at scale
+   0, a double its exact binary value; nil the oracle's NullPointerException,
+   anything else its missing constructor."
+  (cond ((stringp x) (rontolisp::%clojure-bd-parse x))
+        ((integerp x) (rontolisp::%clojure-bd-make x 0))
+        ((floatp x) (rontolisp::%clojure-bd-exact-double x))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception "new BigDecimal of null"))
+        (t (rontolisp::%clojure-bd-ctor-refusal))))
+
+(defun rontolisp::%clojure-bd-new-2 (x y)
+  "new BigDecimal of two arguments: an integer unscaled value X and an int
+   scale Y, or what X makes rounded under the math context Y."
+  (cond ((and (consp y) (eq (car y) :C%MATH-CONTEXT))
+         (let ((d (rontolisp::%clojure-bd-new x)))
+           (rontolisp::%clojure-bd-round (car (cdr d)) (car (cdr (cdr d)))
+                                         (if (> (car (cdr y)) 0) y nil))))
+        ((and (integerp x) (integerp y) (<= -2147483648 y) (<= y 2147483647))
+         (rontolisp::%clojure-bd-make x y))
+        (t (rontolisp::%clojure-bd-ctor-refusal))))
+
+(defun rontolisp::%clojure-bd-new-3 (x y mc)
+  "new BigDecimal(unscaled, scale, mathContext): the decimal X x 10^-Y
+   rounded under the math context MC."
+  (if (and (integerp x) (integerp y) (consp mc) (eq (car mc) :C%MATH-CONTEXT))
+      (rontolisp::%clojure-bd-round x y (if (> (car (cdr mc)) 0) mc nil))
+      (rontolisp::%clojure-bd-ctor-refusal)))
+
+(defun rontolisp::%clojure-bd-value-of (x)
+  "BigDecimal/valueOf of one argument: an integer at scale 0, a double as its
+   Double.toString spells it; anything else the oracle's missing method."
+  (cond ((integerp x) (rontolisp::%clojure-bd-make x 0))
+        ((floatp x)
+         (if (rontolisp::%clojure-symbolic-float-p x)
+             (rontolisp::%clojure-number-format-exception "Infinite or NaN")
+             (rontolisp::%clojure-bd-parse (princ-to-string x))))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching method valueOf found taking 1 args"))))
+
+(defun rontolisp::%clojure-bd-value-of-scaled (u s)
+  "BigDecimal/valueOf of an unscaled value U and a scale S."
+  (if (and (integerp u) (integerp s) (<= -2147483648 s) (<= s 2147483647))
+      (rontolisp::%clojure-bd-make u s)
+      (rontolisp::%clojure-illegal-argument-exception
+       "No matching method valueOf found taking 2 args")))
+
+(defun rontolisp::%clojure-bd-new-math-context (precision mode)
+  "new MathContext(precision, roundingMode): MODE a rounding mode, nil the
+   oracle's NullPointerException."
+  (cond ((and (consp mode) (eq (car mode) :C%ROUNDING-MODE))
+         (rontolisp::%clojure-bd-math-context precision (car (cdr mode))))
+        ((null mode)
+         (rontolisp::%clojure-null-pointer-exception "null RoundingMode"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching ctor found for class java.math.MathContext"))))
+
+(defun rontolisp::%clojure-bd-rounding-mode-of (x)
+  "RoundingMode/valueOf: the mode a name or a legacy ROUND_ int names, else
+   the oracle's refusal."
+  (cond ((and (stringp x)
+              (member x (rontolisp::%clojure-bd-mode-names) :test #'equal))
+         (list :C%ROUNDING-MODE x))
+        ((stringp x)
+         (rontolisp::%clojure-illegal-argument-exception
+          (concatenate 'string "No enum constant java.math.RoundingMode." x)))
+        ((and (integerp x) (<= 0 x) (<= x 7))
+         (list :C%ROUNDING-MODE (nth x (rontolisp::%clojure-bd-mode-names))))
+        ((integerp x)
+         (rontolisp::%clojure-illegal-argument-exception
+          "argument out of range"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching method valueOf found taking 1 args"))))
+
+(defun rontolisp::%clojure-bd-host (x)
+  "The java.math object the decimal, math context or rounding mode X crosses
+   into a java: member as."
+  (cond ((eq (car x) :C%DECIMAL)
+         (java:new "java.math.BigDecimal" (rontolisp::%clojure-bd-string x)))
+        ((eq (car x) :C%MATH-CONTEXT)
+         (java:new "java.math.MathContext(int,java.math.RoundingMode)"
+                   (car (cdr x))
+                   (java:static "java.math.RoundingMode"
+                                "valueOf(java.lang.String)"
+                                (car (cdr (cdr x))))))
+        (t (java:static "java.math.RoundingMode" "valueOf(java.lang.String)"
+                        (car (cdr x))))))
+
+(defun rontolisp::%clojure-bd-host-p (x)
+  "Whether X is a host java.math.BigDecimal: no Lisp value, of that class."
+  (and (not
+        (or (integerp x) (floatp x) (consp x) (symbolp x) (characterp x)
+            (arrayp x) (functionp x)))
+       (handler-case (equal (java:call (java:call x "getClass") "getName")
+                            "java.math.BigDecimal")
+         (error () nil))))
+
+(defun rontolisp::%clojure-bd-from-host (x)
+  "The decimal a host java.math.BigDecimal X stands for, else X itself."
+  (if (rontolisp::%clojure-bd-host-p x)
+      (rontolisp::%clojure-bd-make
+       (java:call (the (java:object "java.math.BigDecimal") x) "unscaledValue")
+       (java:call (the (java:object "java.math.BigDecimal") x) "scale"))
+      x))
+
+(defun rontolisp::%clojure-bd-of-host (x)
+  "The answer X of a java: member declaring a BigDecimal, as a decimal: a
+   producer of the decimal family."
+  (rontolisp::%clojure-bd-from-host x))
+
+(defun rontolisp::%clojure-bd-host-view (x)
+  "The answer X of a java: member whose declared type a BigDecimal may be, as
+   a decimal when it is one: the decimal family's view, X itself in a program
+   making no decimal."
+  (rontolisp::%clojure-bd-from-host x))
 
 (defun rontolisp::%clojure-numerator (x)
   "(numerator x): the numerator of a ratio; anything else signals."

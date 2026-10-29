@@ -1308,6 +1308,26 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aDecimalCrossesTheJavaBoundaryBothWays() throws Exception {
+		// oracle-identical (clj 1.12.6): a decimal is handed to a member as its
+		// BigDecimal, a BigDecimal method no kernel answers runs on that object, and a
+		// BigDecimal a member answers is a decimal -- where the member declares one
+		// always, where it declares a supertype (DecimalFormat.parse's Number) in a
+		// program making decimals
+		assertBothEqual(
+				"(def x (.parse (doto (java.text.DecimalFormat.) (.setParseBigDecimal true)) \"1.50\"))"
+						+ " (prn x (decimal? x) (+ x 1M) (.scale x) (.max x 3M) (.sqrt 2M (java.math.MathContext. 5))"
+						+ " (.format (java.text.DecimalFormat. \"#,##0.00\") 1234.5M))",
+				"1.50M true 2.50M 2 3M 1.4142M \"1,234.50\"\n");
+		assertBothEqual("(prn (.nextBigDecimal (java.util.Scanner. \"1.50 2\")))", "1.50M\n");
+		// a program making no decimal: the view folds and the host object stays one (the
+		// oracle prints 1.50M; the deviation keeps every java: call of such a program
+		// free of a test)
+		assertBothEqual("(prn (.parse (doto (java.text.DecimalFormat.) (.setParseBigDecimal true)) \"1.50\"))",
+				"#<java java.math.BigDecimal>\n");
+	}
+
+	@Test
 	void aCharsetNamedHereCrossesTheJavaBoundaryAsTheHostCharset() throws Exception {
 		// oracle-identical (clj 1.12.6): a StandardCharsets field or Charset/forName of a
 		// literal is a value of this front end's own (clojure-spec.yaml pins it on every

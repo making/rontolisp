@@ -921,6 +921,12 @@ final class ClojureInteropLowering {
 		if (timeValue != null) {
 			return timeValue;
 		}
+		LispVal decimal = ClojureDecimalLowering.construction(cls, lowered);
+		if (decimal != null) {
+			// a BigDecimal or MathContext: the value of this front end's own, on every
+			// backend
+			return decimal;
+		}
 		if (types == null) {
 			LispVal exception = throwableConstruction(ctx, cls, lowered);
 			if (exception != null) {
@@ -1304,6 +1310,12 @@ final class ClojureInteropLowering {
 			// Charset/forName of a literal: the charset value of this front end's own
 			return charset;
 		}
+		LispVal decimal = ClojureDecimalLowering.staticCall(cls, member, args);
+		if (decimal != null) {
+			// BigDecimal/valueOf, RoundingMode/valueOf: the values of this front end's
+			// own, on every backend
+			return decimal;
+		}
 		if (cls.equals("java.lang.System") && member.equals("exit") && args.size() == 1) {
 			// ends the process on every backend, wasm included, like uiop:quit: the
 			// status the host sees is the low byte, as the oracle's is on a POSIX host
@@ -1364,7 +1376,9 @@ final class ClojureInteropLowering {
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
 		call.addAll(args);
-		return hostCall(ctx, JAVA_STATIC, call, 2, answersBytes(cls, designator, args.size(), true));
+		return ClojureDecimalLowering.hostAnswer(ctx,
+				hostCall(ctx, JAVA_STATIC, call, 2, answersBytes(cls, designator, args.size(), true)), cls, designator,
+				args.size(), true);
 	}
 
 	/**
@@ -1414,6 +1428,12 @@ final class ClojureInteropLowering {
 			// Locale/US (and ROOT, ENGLISH): the value the case-mapping verbs take
 			return locale;
 		}
+		LispVal decimal = ClojureDecimalLowering.field(cls, member);
+		if (decimal != null) {
+			// BigDecimal/ZERO, RoundingMode/HALF_UP, MathContext/DECIMAL64 ...: the
+			// values of this front end's own, on every backend
+			return decimal;
+		}
 		if (!ctx.hostTarget) {
 			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
 			// value data.json's defaults read; the host's own object elsewhere
@@ -1436,8 +1456,10 @@ final class ClojureInteropLowering {
 			}
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
-			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
-					answersBytes(cls, member, 0, true));
+			return ClojureDecimalLowering.hostAnswer(ctx,
+					hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
+							answersBytes(cls, member, 0, true)),
+					cls, member, 0, true);
 		}
 		return fieldCall(ctx, LispString.literal(cls), member, fieldCarriesBytes(cls, member));
 	}
@@ -1503,6 +1525,10 @@ final class ClojureInteropLowering {
 		LispVal locale = ClojureLocaleLowering.field(cls, member);
 		if (locale != null) {
 			return locale;
+		}
+		LispVal decimal = ClojureDecimalLowering.field(cls, member);
+		if (decimal != null) {
+			return decimal;
 		}
 		if (!ctx.hostTarget) {
 			// where no host is, DateTimeFormatter/ISO_INSTANT is the portable
@@ -1656,6 +1682,12 @@ final class ClojureInteropLowering {
 		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
 		if (timeValue != null) {
 			return timeValue;
+		}
+		LispVal decimal = ClojureDecimalLowering.construction(cls, args);
+		if (decimal != null) {
+			// a BigDecimal or MathContext: the value of this front end's own, on every
+			// backend
+			return decimal;
 		}
 		if (types == null) {
 			LispVal exception = throwableConstruction(ctx, cls, args);
@@ -2581,11 +2613,14 @@ final class ClojureInteropLowering {
 		}
 		// a declared class compiles the call against it (the oracle's typed refusals)
 		boolean typed = knownClass != null || cls != null || receiver instanceof LispString;
-		LispVal call = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
-		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls) || cls.equals("java.math.BigInteger"))) {
-			// a Date, Timestamp or UUID may be a value made here, and a BigInteger is
-			// always an integer (converted at the java: boundary): the value arms take
-			// it
+		LispVal call = ClojureDecimalLowering.hostAnswer(ctx,
+				hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false)), cls, designator,
+				args.size(), false);
+		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls)
+				|| ClojureDecimalLowering.CLASSES.contains(cls) || cls.equals("java.math.BigInteger"))) {
+			// a Date, Timestamp, UUID, BigDecimal, MathContext or RoundingMode may be a
+			// value made here, and a BigInteger is always an integer (converted at the
+			// java: boundary): the value arms take it
 			cls = null;
 		}
 		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {
@@ -2630,6 +2665,11 @@ final class ClojureInteropLowering {
 			// a collection, keyword, symbol or ratio has no host object: its common
 			// methods answer through the core verbs, any other is refused by name
 			call = ClojureValueMethodLowering.valueArm(ctx, method, designator, recv, args, call);
+		}
+		if (cls == null) {
+			// a decimal, math context or rounding mode answers its java.math class's
+			// method: an arm a program making none sheds
+			call = ClojureDecimalLowering.methodArm(ctx, method, designator, recv, args, call);
 		}
 		if ((cls == null || RANDOM_CLASS.equals(cls)) && !ctx.hostTarget && RANDOM_METHODS.containsKey(method)
 				&& RANDOM_METHODS.get(method).contains(args.size())) {

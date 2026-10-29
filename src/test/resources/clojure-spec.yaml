@@ -10600,6 +10600,47 @@ cases:
       (1.5M 2) [1.50M {:a 2M}] 1.5M "x1.5y" "1.5M [2.50M]" "1.5M\n" [1.5M] {:a 1.5M} #{1.5M}
       3.0M 2.50M 2.50M
       1.5M 2.50M [1.5M] 9999999999800000000001N [18446744073709551614N] 18446744073709551614
+  - name: decimal-methods-constructions-and-statics-answer-as-the-oracles-bigdecimal
+    # A decimal answers BigDecimal's methods (setScale under a RoundingMode or a legacy
+    # ROUND_ int, scale, precision, the arithmetic with a scale, a mode or a MathContext,
+    # compareTo, equals, the conversions and spellings), the BigDecimal and MathContext
+    # constructions, BigDecimal/valueOf, RoundingMode/valueOf and the constants make the
+    # values read here, on every backend; a wrong argument is the oracle's reflector's
+    # refusal (a cast where the method has one overload of the count, else no matching
+    # method). Oracle-identical (clj 1.12.6, 2026-10-30).
+    source: |
+      (import '(java.math RoundingMode MathContext))
+      (defn dm-safe [f] (try (f) (catch Exception e (.getMessage e))))
+      (defn dm-add [x y] (.add x y))
+      (defn dm-cmp [x y] (.compareTo x y))
+      (defn dm-call [x y z] [(.divide x y z) (.add x y z) (.setScale x y z)])
+      (prn (.setScale 1.555M 2 java.math.RoundingMode/HALF_UP) (.setScale 1.5M 3) (.setScale 2.5M 0 RoundingMode/HALF_EVEN) (.setScale -2.5M 0 RoundingMode/HALF_DOWN) (.setScale 1.25M 1 RoundingMode/FLOOR) (.setScale -1.25M 1 RoundingMode/CEILING) (.setScale 1.21M 1 RoundingMode/UP) (.setScale 1.29M 1 RoundingMode/DOWN) (.setScale 1.555M 2 BigDecimal/ROUND_HALF_UP) (.setScale 1E+3M -2 RoundingMode/HALF_UP))
+      (prn (.scale 1.50M) (.scale 1E+3M) (.precision 123.45M) (.precision 0.00M) (.unscaledValue -1.50M) (.signum -0.5M) (.signum 0.00M) (.negate 1.5M) (.abs -2.50M) (.plus 1.5M) (.stripTrailingZeros 1.500M) (.stripTrailingZeros 0.000M) (.stripTrailingZeros 100M) (.ulp 1.50M))
+      (prn (.add 1.5M 2.25M) (.subtract 1M 0.001M) (.multiply 1.5M 1.5M) (.divide 1M 8M) (.divide 10M 4M) (.divide 1M 3M (MathContext. 5)) (.divide 2M 3M 4 RoundingMode/HALF_UP) (.divide 7.50M 2M RoundingMode/DOWN) (.divide 1M 3M 2 BigDecimal/ROUND_UP) (.add 1.234M 1M (MathContext. 2)) (.multiply 1.5M 1.5M (MathContext. 2 RoundingMode/DOWN)) (.subtract 1M 0.001M MathContext/DECIMAL32))
+      (prn (.remainder 7.5M 2M) (.divideToIntegralValue 7.5M 2M) (.pow 1.5M 3) (.pow 2M 0) (.max 1.5M 1.50M) (.min 2M 1M) (.negate 1.25M (MathContext. 2)) (.abs -1.25M (MathContext. 2)) (.plus 1.25M (MathContext. 2 RoundingMode/UP)) (.round 123.456M (MathContext. 4)) (.movePointLeft 1.5M 2) (.movePointRight 1.5M 3) (.movePointLeft 15M -1) (.scaleByPowerOfTen 1.5M 3))
+      (prn (.compareTo 1.5M 1.50M) (.compareTo 1M 2M) (.compareTo 3M 2M) (.equals 1.5M 1.50M) (.equals 1.5M 1.5M) (.equals 1.5M 1.5) (.hashCode 1.50M) (.toPlainString 1E+3M) (.toPlainString 1.0E-7M) (.toPlainString -12.5M) (.toString 1E+3M))
+      (prn (.toEngineeringString 1E+4M) (.toEngineeringString 1.23E-7M) (.toEngineeringString 0E+4M) (.toEngineeringString 0E-8M) (.toEngineeringString -12345E-10M) (.toEngineeringString 123E+5M) (.toEngineeringString 12E+7M))
+      (prn (.doubleValue 0.1M) (.floatValue 1.5M) (.longValue 12345678901234567890.9M) (.intValue 4294967297.5M) (.longValue -1.9M) (.toBigInteger -2.7M) (.toBigIntegerExact 20M) (.longValueExact 30.0M) (.intValueExact -5M))
+      (prn (BigDecimal. "1.50") (BigDecimal. 10) (BigDecimal. 1.5) (BigDecimal. 0.1) (BigDecimal. 100.0) (BigDecimal. (biginteger 150) 2) (BigDecimal. "1.555" (MathContext. 3)) (BigDecimal. 12345 (MathContext. 2)) (new BigDecimal "2E3") (BigDecimal/valueOf 1.5) (BigDecimal/valueOf 1.0) (BigDecimal/valueOf 1e20) (BigDecimal/valueOf 100) (BigDecimal/valueOf 150 2) BigDecimal/ZERO BigDecimal/ONE BigDecimal/TEN (decimal? (BigDecimal. "1")))
+      (prn (str RoundingMode/HALF_UP) (= RoundingMode/HALF_UP RoundingMode/HALF_UP) (= RoundingMode/UP RoundingMode/DOWN) (str (MathContext. 5)) (str MathContext/DECIMAL64) (str MathContext/UNLIMITED) (.getPrecision (MathContext. 7 RoundingMode/FLOOR)) (str (.getRoundingMode MathContext/DECIMAL32)) (= (MathContext. 5) (MathContext. 5 RoundingMode/HALF_UP)) (.name RoundingMode/CEILING) (.ordinal RoundingMode/CEILING) (str (RoundingMode/valueOf "FLOOR")))
+      (prn (-> 19.99M (.multiply 3M) (.setScale 1 RoundingMode/HALF_EVEN)) (reduce #(.add %1 %2) BigDecimal/ZERO [1.10M 2.20M]) (map #(.setScale % 0 RoundingMode/HALF_UP) [0.5M 1.5M -0.5M]) (with-precision 2 (+ (BigDecimal. "1.234") 1)) (binding [*math-context* (MathContext. 3)] (/ 1M 3)))
+      (prn (dm-safe #(.setScale 1.55M 1)) (dm-safe #(.divide 1M 3M)) (dm-safe #(.divide 1M 0M)) (dm-safe #(.divide 0M 0M)) (dm-safe #(dm-add 1.5M 2)) (dm-safe #(BigDecimal. 1/3)) (dm-safe #(.longValueExact 1.5M)) (dm-safe #(.setScale 1.5M 0 9)))
+      (prn (dm-safe #(BigDecimal/valueOf 1/2)) (dm-safe #(.pow 2M -1)) (dm-safe #(.intValueExact 3000000000M)) (dm-safe #(RoundingMode/valueOf "NOPE")) (dm-safe #(MathContext. -1)))
+      (prn (dm-safe #(dm-cmp 1M 2)) (dm-safe #(dm-call 1M 2 RoundingMode/UP)) (dm-safe #(dm-call 1M 2M 3)) (dm-safe #(dm-call 1M 1.5 RoundingMode/UP)) (.pow 1M 1.5))
+    expected: |
+      1.56M 1.500M 2M -2M 1.2M -1.2M 1.3M 1.2M 1.56M 1.0E+3M
+      2 -3 5 1 -150 -1 0 -1.5M 2.50M 1.5M 1.5M 0M 1E+2M 0.01M
+      3.75M 0.999M 2.25M 0.125M 2.5M 0.33333M 0.6667M 3.75M 0.34M 2.2M 2.2M 0.999M
+      1.5M 3.0M 3.375M 1M 1.5M 1M -1.3M 1.3M 1.3M 123.5M 0.015M 1500M 150M 1.5E+3M
+      0 -1 1 false true false 4652 "1000" "0.00000010" "-12.5" "1E+3"
+      "10E+3" "123E-9" "0.00E+6" "0.00E-6" "-0.0000012345" "12.3E+6" "120E+6"
+      0.1 1.5 -6101065172474983726 1 -1 -2 20 30 -5
+      1.50M 10M 1.5M 0.1000000000000000055511151231257827021181583404541015625M 100M 1.50M 1.56M 1.2E+4M 2E+3M 1.5M 1.0M 1.0E+20M 100M 1.50M 0M 1M 10M true
+      "HALF_UP" true false "precision=5 roundingMode=HALF_UP" "precision=16 roundingMode=HALF_EVEN" "precision=0 roundingMode=HALF_UP" 7 "HALF_EVEN" true "CEILING" 2 "FLOOR"
+      60.0M 3.30M (1M 2M -1M) 2.2M 0.333M
+      "Rounding necessary" "Non-terminating decimal expansion; no exact representable decimal result." "Division by zero" "Division undefined" "Cannot cast java.lang.Long to java.math.BigDecimal" "No matching ctor found for class java.math.BigDecimal" "Rounding necessary" "Invalid rounding mode"
+      "No matching method valueOf found taking 1 args" "Invalid operation" "Overflow" "No enum constant java.math.RoundingMode.NOPE" "Digits < 0"
+      "Cannot cast java.lang.Long to java.math.BigDecimal" "No matching method divide found taking 2 args for class java.math.BigDecimal" "Cannot cast java.lang.Long to java.math.MathContext" "No matching method divide found taking 2 args for class java.math.BigDecimal" 1M
   - name: identical-compares-numbers-and-symbols-by-value
     # A deviation: identical? is eql here, so two numbers or two symbols of one value are
     # identical (the oracle: false for boxed 1000, 1.5 and two read symbols), while two
