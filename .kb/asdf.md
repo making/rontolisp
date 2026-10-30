@@ -1020,13 +1020,15 @@ bundled ones, with `Features.INTERPRETER` and `Features.JVM`:
   later macro-time evaluator would pay anyway), a warm one 3-11 ms plus the asdf runtime
   20-60 ms; per file 0.5 ms parsed vs 1.7 ms loaded (183 vs 586 ms over 339). A compile whose
   systems are all built in or inline creates no build image.
-- **Where the four stop now** (interpreter, `ql:quickload`): cl-csv and function-cache in
-  named-readtables (`DEFMETHOD: unknown specializer READTABLE`, h53); cl-containers in
-  metatilities-base's `defpackage`, whose `:import-from` holds
-  `#-(or allegro ... sbcl) (error "Need to adapt defpackage ...")` (an implementation guard);
-  cl-pdf in `font.lisp`'s load-time `(load-fonts)`: `The function GET-AFM-STRING is undefined`
-  -- a macro names the reader with `read-from-string` at EXPANSION time, which the interpreter
-  homes in the CALLER's package (SBCL and the JVM: in PDF).
+- **Where the four are now** (`ql:quickload`, after h53's readtables): cl-csv and
+  function-cache LOAD on the interpreter -- `read-csv`/`write-csv` and a `defcached` function
+  print byte-identically to SBCL 2.2.9 -- and the compile paths stop in named-readtables (`No
+  such package: EDITOR-HINTS.NAMED-READTABLES`, h57); cl-containers stops in metatilities-base's
+  `defpackage`, whose `:import-from` holds `#-(or allegro ... sbcl) (error "Need to adapt
+  defpackage ...")` (an implementation guard); cl-pdf in `font.lisp`'s load-time `(load-fonts)`:
+  `The function GET-AFM-STRING is undefined` -- a macro names the reader with
+  `read-from-string` at EXPANSION time, which the interpreter homes in the CALLER's package
+  (SBCL and the JVM: in PDF), h62.
 
 ### Earlier: the gate was not what stopped portableaserve
 **Against the `portableaserve-20190813-git` spike, evaluating `.asd` files buys nothing** (still
