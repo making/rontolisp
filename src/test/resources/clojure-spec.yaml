@@ -4446,8 +4446,9 @@ cases:
     # carries its program's image and lowers it again when it first runs a verb,
     # compiling each lowered call into a class linked against itself, whose type
     # tests know the classes before it: an eval'd catch takes an ex-info the
-    # program throws (2026-10-30). A wasm module carries no lowering, so there the
-    # verbs refuse (the case above).
+    # program throws (2026-10-30), and a built-in it takes as a value is the class's
+    # own value of it where the class holds one (2026-10-30). A wasm module carries no
+    # lowering, so there the verbs refuse (the case above).
     host: eval and the other verbs over computed arguments
     skip:
       wasm: a wasm module carries no lowering, so the verbs refuse at run time
@@ -4471,6 +4472,7 @@ cases:
       (println (try (require (symbol "rtl.no.such")) (catch java.io.FileNotFoundException e (ex-message e))))
       (defn rtl-thrower [] (throw (ex-info "thrown here" {})))
       (println ((eval '(fn [f] (try (f) (catch clojure.lang.ExceptionInfo e (ex-message e))))) rtl-thrower))
+      (println (eval '(map list [1 2] [3 4])) (eval '(apply vector [1 2])) (eval '(apply str (map char [104 105]))))
     expected: |
       10 11 6
       #'rtl/rtl-added 15
@@ -4485,6 +4487,7 @@ cases:
       :refused
       Could not locate rtl/no/such__init.class, rtl/no/such.clj or rtl/no/such.cljc on classpath.
       thrown here
+      ((1 3) (2 4)) [1 2] hi
   - name: a-declared-name-a-run-time-eval-defines-is-called-where-the-program-names-it
     # A name the program only declares, defined later by eval or load-string, is
     # called, applied and taken as a value by the program's own forms from then on;

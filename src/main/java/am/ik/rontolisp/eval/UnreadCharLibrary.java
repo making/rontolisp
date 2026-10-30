@@ -92,6 +92,12 @@ public final class UnreadCharLibrary {
 	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
 
 	/**
+	 * The defun a host holds when it carries the pushback: every rewritten read calls it.
+	 */
+	private static final String HOST_PUSHBACK = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+			"%UNREAD-CHAR-TAKE");
+
+	/**
 	 * Returns the parsed pushback definitions. Parsed once and cached.
 	 * @return the library forms
 	 */
@@ -128,7 +134,23 @@ public final class UnreadCharLibrary {
 	 * @return the program with the pushback spliced and call sites rewritten
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		if (!usesUnreadChar(program)) {
+		return process(program, null);
+	}
+
+	/**
+	 * {@link #process(List)} for a FRAGMENT ({@link LinkedDefinitions}) as well: where
+	 * the host carries the pushback, a stream it parked a character on may reach any read
+	 * of the fragment, so every read is rewritten whatever the fragment's own forms name
+	 * (the defuns the host holds are called there, {@code cli/JvmRunTimeLowering} drops
+	 * them).
+	 * @param program the top-level forms (after the Gray-dispatch rewrite)
+	 * @param linked what the classes a fragment links against define, or {@code null} for
+	 * a whole program
+	 * @return the program with the pushback spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program, @Nullable LinkedDefinitions linked) {
+		boolean hostPushback = linked != null && linked.functions().contains(HOST_PUSHBACK);
+		if (!hostPushback && !usesUnreadChar(program)) {
 			return program;
 		}
 		boolean filePosition = namesFilePosition(program) || LispMacroExpander.indexesStringInput(program);

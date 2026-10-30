@@ -1797,17 +1797,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			userDefinedNames.add(defun.name);
 		}
 		// The functions a fragment calls that the classes before it define: a static
-		// method of theirs, called by name.
+		// method of theirs, called by name. Their built-in wrappers apart: the fragment
+		// generates none they hold, takes the value of one it names from them, and a
+		// call of the name stays the built-in's -- the name joins no user definitions.
 		Map<String, JvmLinkage.Function> externalFunctions = new LinkedHashMap<>();
+		Map<String, JvmLinkage.Function> externalWrappers = new LinkedHashMap<>();
+		Set<String> linkedWrappers = new HashSet<>();
 		if (linked != null) {
 			for (Map.Entry<String, JvmLinkage.Function> fn : linked.linked().functions().entrySet()) {
-				if (!userDefinedNames.contains(fn.getKey()) && linkedNames.contains(fn.getKey())) {
-					externalFunctions.put(fn.getKey(), fn.getValue());
+				if (userDefinedNames.contains(fn.getKey())) {
+					continue;
+				}
+				if (fn.getValue().wrapper()) {
+					linkedWrappers.add(fn.getKey());
+				}
+				if (linkedNames.contains(fn.getKey())) {
+					(fn.getValue().wrapper() ? externalWrappers : externalFunctions).put(fn.getKey(), fn.getValue());
 				}
 			}
 		}
-		// What a later fragment links against: the program's own functions, not the
-		// wrappers and runtimes this compile injects beside them.
+		// What a later fragment links against: the program's own functions (the
+		// wrappers this compile injects join them as wrappers, ownLinkTable), not its
+		// runtimes.
 		final Set<String> programDefunNames = Set.copyOf(userDefinedNames);
 		userDefinedNames.addAll(externalFunctions.keySet());
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer:
@@ -2070,6 +2081,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
+		wrapperExcludes.addAll(linkedWrappers);
 		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
 				wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
@@ -2082,8 +2094,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// is compiled like the program, so a parameter of it named like a special binds
 		// it too, and the dynamically-bound collection walks it beside the program.
 		List<LispVal> injectedForms = new ArrayList<>();
+		Set<String> wrapperNames = new LinkedHashSet<>();
 		for (LispVal wrapper : wrappers) {
 			inject(wrapper, defuns, injectedForms, specialVars);
+			wrapperNames.add(defuns.getLast().name);
 		}
 		// The shared merge sort, once per program that sorts -- from its own source or
 		// from the #'sort wrapper just added, which is why this sits here beside the
@@ -2383,7 +2397,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
 					false, methodref, nameUtf8, descUtf8, bounces));
 		}
-		for (Map.Entry<String, JvmLinkage.Function> external : externalFunctions.entrySet()) {
+		Map<String, JvmLinkage.Function> externals = new LinkedHashMap<>(externalFunctions);
+		externals.putAll(externalWrappers);
+		for (Map.Entry<String, JvmLinkage.Function> external : externals.entrySet()) {
 			// the static method of the class that defines it; a value of it is this
 			// class's own function value, whose dispatch case calls that method
 			JvmLinkage.Function fn = external.getValue();
@@ -2954,6 +2970,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.fenvForwarders(Set.copyOf(fenvForwarders))
 			.bindsRuntimeFunctionNames(bindsRuntimeFunctionNames)
 			.linked(linkedClass)
+			.linkedWrappers(Set.copyOf(linkedWrappers))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
@@ -3595,6 +3612,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			// half routes a name another class resolves to the id of its row
 			// (JvmLinkage.FOREIGN_LOOKUP), which this class's dispatchers then take.
 			for (String name : programDefunNames) {
+				FunctionInfo fi = functions.get(name);
+				if (fi != null) {
+					registryFuncIds.add(fi.funcId());
+				}
+			}
+			for (String name : wrapperNames) {
 				FunctionInfo fi = functions.get(name);
 				if (fi != null) {
 					registryFuncIds.add(fi.funcId());
@@ -5510,7 +5533,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			addModeIf(modes, JvmLinkage.Mode.FLOAT_ARRAYS, usesFloatArray);
 			addModeIf(modes, JvmLinkage.Mode.INT_ARRAYS, usesIntArray);
 			addModeIf(modes, JvmLinkage.Mode.COMPLEX, usesComplex);
-			this.linkTable = ownLinkTable(programDefunNames, functions, globals, specialVars,
+			this.linkTable = ownLinkTable(programDefunNames, wrapperNames, functions, globals, specialVars,
 					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition)
 				.merge(new JvmLinkage.Table(Map.of(), Map.of(), Map.of(), 0, linkedClasses(closRegistry), modes));
 		}
@@ -6113,18 +6136,26 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The table of what this class defines for a later fragment to link against: its
-	 * functions (the defuns it compiled), its global variables and how each is stored,
-	 * and the end of its function ids.
+	 * functions (the defuns it compiled, and the built-in wrappers it injected, as
+	 * wrappers), its global variables and how each is stored, and the end of its function
+	 * ids.
 	 */
-	private JvmLinkage.Table ownLinkTable(Set<String> programDefunNames, Map<String, FunctionInfo> functions,
-			Set<String> globals, Set<String> specialVars, Set<String> threadBound, Set<String> checkedGlobals,
-			int funcIdEnd, ClassDefinition.Builder definition) {
+	private JvmLinkage.Table ownLinkTable(Set<String> programDefunNames, Set<String> wrapperNames,
+			Map<String, FunctionInfo> functions, Set<String> globals, Set<String> specialVars, Set<String> threadBound,
+			Set<String> checkedGlobals, int funcIdEnd, ClassDefinition.Builder definition) {
 		Map<String, JvmLinkage.Function> fns = new LinkedHashMap<>();
 		for (String name : programDefunNames) {
 			FunctionInfo fi = functions.get(name);
 			if (fi != null) {
 				fns.put(name, new JvmLinkage.Function(this.className, fi.paramCount(), fi.variadic(), fi.optionals(),
-						fi.bounceVisible(), fi.funcId()));
+						fi.bounceVisible(), fi.funcId(), false));
+			}
+		}
+		for (String name : wrapperNames) {
+			FunctionInfo fi = functions.get(name);
+			if (fi != null && !fns.containsKey(name)) {
+				fns.put(name, new JvmLinkage.Function(this.className, fi.paramCount(), fi.variadic(), fi.optionals(),
+						fi.bounceVisible(), fi.funcId(), true));
 			}
 		}
 		Map<String, String> fields = new LinkedHashMap<>();
@@ -8582,6 +8613,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean linked = false;
 
 		/**
+		 * The built-in wrappers the classes before a fragment hold, which it generates
+		 * none of: a {@code #'name} of one the program did not spell resolves when it
+		 * runs, like a name a fragment defined ({@link JvmLinkage.Function#wrapper()}).
+		 */
+		Set<String> linkedWrappers = Set.of();
+
+		/**
 		 * Whether the program can create, delete or rename packages at run time (a
 		 * {@code make-package} / {@code delete-package} / {@code rename-package}
 		 * reference outside quoted data). When it does, the package lowerings consult the
@@ -8924,6 +8962,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.fenvForwarders = builder.fenvForwarders;
 			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.linked = builder.linked;
+			this.linkedWrappers = builder.linkedWrappers;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
@@ -9495,6 +9534,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean bindsRuntimeFunctionNames = false;
 
 			private boolean linked = false;
+
+			private Set<String> linkedWrappers = Set.of();
 
 			private boolean usesRuntimePackages = false;
 
@@ -10092,6 +10133,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder linked(boolean linked) {
 				this.linked = linked;
+				return this;
+			}
+
+			Builder linkedWrappers(Set<String> linkedWrappers) {
+				this.linkedWrappers = linkedWrappers;
 				return this;
 			}
 

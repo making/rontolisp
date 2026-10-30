@@ -1859,8 +1859,8 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   `ClassCastException` after it; seeded `stest/check`s (`:num-tests 30 :seed 42`) of a
   passing `fdef` and of one failing at 1434 that shrinks to `[(11)]`; `tgen/generate` of
   `(s/gen int?)` at size 100 -- prints the oracle's 10 lines on the interpreter (about 8 s)
-  and the JVM (about 60 s: 41 `resolve`s and 28 `require`s lower as it runs, each a
-  fragment of about 300 KB, `.kb/jvm-run-time-lowering.md`, "Limits"). Fixed on the way,
+  and the JVM (about 10 s, 61 s before h15: 41 `resolve`s and 28 `require`s lower as it
+  runs, 1.48 MB of fragments in all, `.kb/jvm-run-time-lowering.md`, "Limits"). Fixed on the way,
   each as infrastructure in its own section: a function whose qualified name a quote spells
   is redefinable in an open program altering a computed root (`s/fdef`'s registry key;
   "Vars and metadata", with-redefs); a var keys a map by its identity (`instrumented-vars`;

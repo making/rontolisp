@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
@@ -127,6 +128,21 @@ class GrayStreamsLibraryTest {
 					+ "(defun f () (let ((*standard-output* (make-instance 'c))) (princ \"x\") (read-char)))"));
 		String f = processed.get(processed.size() - 1).print();
 		assertThat(f).contains("(RONTOLISP::%GRAY-PRINC-DISPATCH \"x\" NIL)").contains("(READ-CHAR)");
+		// A fragment of a host carrying the protocol and the unread-char pushback binds
+		// neither stream itself, yet a Gray instance or a parked character the host made
+		// may reach any of its calls: both families route, the reads reach the pushback,
+		// and the protocol and the pushback stay the host's (cli/JvmRunTimeLowering).
+		LinkedDefinitions host = new LinkedDefinitions(Set.of("RONTOLISP::%UNREAD-CHAR-TAKE"), Set.of(),
+				Set.of("RONTOLISP:FUNDAMENTAL-STREAM"));
+		List<LispVal> fragment = UnreadCharLibrary.process(GrayStreamsLibrary
+			.process(LispReader.readAllFromString("(defun f () (princ \"x\") (read-char))"), host), host);
+		assertThat(fragment.get(fragment.size() - 1).print()).contains("(RONTOLISP::%GRAY-PRINC-DISPATCH \"x\" NIL)")
+			.contains("(RONTOLISP::%GRAY-READ-CHAR-DISPATCH ")
+			.doesNotContain("(READ-CHAR)");
+		assertThat(fragment.stream().map(LispVal::print))
+			.anyMatch(form -> form.startsWith("(DEFUN RONTOLISP::%GRAY-READ-CHAR-DISPATCH ")
+					&& form.contains("(RONTOLISP::%UNREAD-READ-CHAR "));
+		assertThat(fragment).doesNotContainAnyElementsOf(GrayStreamsLibrary.protocolForms());
 	}
 
 	// The CLI pipeline's two splices, in its order: the server value model first, then

@@ -85,6 +85,10 @@ public final class GrayStreamsLibrary {
 			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
 			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM);
 
+	/** The class a host's registry knows when the host carries the protocol. */
+	private static final String HOST_PROTOCOL_CLASS = am.ik.rontolisp.PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
+			LispNames.GRAY_FUNDAMENTAL_STREAM);
+
 	static final String WRITE_STRING_DISPATCH = "%GRAY-WRITE-STRING-DISPATCH";
 
 	static final String WRITE_STRING_BOUNDS_DISPATCH = "%GRAY-WRITE-STRING-BOUNDS-DISPATCH";
@@ -208,11 +212,28 @@ public final class GrayStreamsLibrary {
 	 * @return the program with the Gray protocol spliced and call sites rewritten
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		if (!usesProtocol(program)) {
+		return process(program, null);
+	}
+
+	/**
+	 * {@link #process(List)} for a FRAGMENT ({@link LinkedDefinitions}) as well: where
+	 * the host carries the protocol -- its registry knows the base classes -- a Gray
+	 * instance it made may reach any call site of the fragment, standard streams bound to
+	 * one included, so every call site is rewritten whatever the fragment's own forms
+	 * name, and the protocol is the host's, not spliced again (a generic defined anew
+	 * would hold only the fragment's methods).
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param linked what the classes a fragment links against define, or {@code null} for
+	 * a whole program
+	 * @return the program with the Gray protocol spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program, @Nullable LinkedDefinitions linked) {
+		boolean hostProtocol = linked != null && linked.classes().contains(HOST_PROTOCOL_CLASS);
+		if (!hostProtocol && !usesProtocol(program)) {
 			return program;
 		}
 		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program),
-				binds(program, STANDARD_OUTPUT), binds(program, STANDARD_INPUT));
+				hostProtocol || binds(program, STANDARD_OUTPUT), hostProtocol || binds(program, STANDARD_INPUT));
 		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			rewritten.add(rewrite(form, ctx));
@@ -221,10 +242,11 @@ public final class GrayStreamsLibrary {
 		java.util.Set<String> usedHelpers = ctx.used();
 		java.util.List<LispVal> out = new java.util.ArrayList<>();
 		java.util.List<LispVal> body = rewritten;
-		if (program.stream().noneMatch(GrayStreamsLibrary::definesProtocol)) {
+		boolean definesProtocol = program.stream().anyMatch(GrayStreamsLibrary::definesProtocol);
+		if (!definesProtocol && !hostProtocol) {
 			out.addAll(protocolForms());
 		}
-		else {
+		else if (definesProtocol) {
 			java.util.Set<Integer> hoisted = protocolFormsToHoist(program);
 			if (!hoisted.isEmpty()) {
 				java.util.List<LispVal> rest = new java.util.ArrayList<>();

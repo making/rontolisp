@@ -31,6 +31,7 @@ import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.SafetensorsLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.LinkedDefinitions;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.MetalLibrary;
 import am.ik.rontolisp.eval.ObjcLibrary;
@@ -398,8 +399,13 @@ final class CompileFrontend {
 	 * @param lowersAtRunTime whether the forms are a Clojure program a JVM class lowers
 	 * again as it runs ({@link RunTimeImage}): it takes the whole run-time library, every
 	 * arm of it, and the class lowers its lowering verbs instead of refusing them
+	 * @param linked for the forms one lowering verb lowered to as such a class runs (a
+	 * FRAGMENT, {@link JvmRunTimeLowering}), what the classes it links against define: it
+	 * takes only the library definitions they lack, and its stream call sites take the
+	 * host's shapes; {@code null} for a whole program
 	 */
-	record Loaded(List<LispVal> forms, Features features, SourceStandards standards, boolean lowersAtRunTime) {
+	record Loaded(List<LispVal> forms, Features features, SourceStandards standards, boolean lowersAtRunTime,
+			@Nullable LinkedDefinitions linked) {
 
 		/**
 		 * Forms read against every language's default standard.
@@ -417,7 +423,7 @@ final class CompileFrontend {
 		 * @param standards what the forms were read against
 		 */
 		Loaded(List<LispVal> forms, Features features, SourceStandards standards) {
-			this(forms, features, standards, false);
+			this(forms, features, standards, false, null);
 		}
 
 	}
@@ -554,7 +560,7 @@ final class CompileFrontend {
 		// other languages have no *load-truename* to answer.
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
 				request.dists(), request.standards(), language == SourceLanguage.COMMON_LISP ? entryFile : null);
-		Result result = expand(new Loaded(loaded, features, request.standards(), image != null), options);
+		Result result = expand(new Loaded(loaded, features, request.standards(), image != null, null), options);
 		return image == null ? result : result.lowersAtRunTime(image.encode());
 	}
 
@@ -816,7 +822,7 @@ final class CompileFrontend {
 		// prelude, which supplies what the decoder is written over.
 		List<LispVal> languages = InflateLibrary.process(
 				ClojureLibrary.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)),
-						features, input.standards()), !wasm, input.lowersAtRunTime()),
+						features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
 				witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
@@ -830,8 +836,10 @@ final class CompileFrontend {
 		// written over.
 		List<LispVal> zoned = LocalTimeLibrary.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)),
 				spliceBackend, noWasi, options.runnerHosted());
-		List<LispVal> program = UnreadCharLibrary.process(WitLibrary
-			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(zoned, features)))));
+		List<LispVal> program = UnreadCharLibrary.process(
+				WitLibrary.process(UsocketLibrary
+					.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(zoned, features), input.linked()))),
+				input.linked());
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

@@ -182,12 +182,14 @@ final class JvmFunctionFormCompiler {
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileFunctionRef(name, ctx, className);
 		}
-		else if (ctx.linked && undefinedFunction(name, ctx)) {
+		else if (ctx.linked && (undefinedFunction(name, ctx) || ctx.linkedWrappers.contains(name))) {
 			// A host's or a fragment's: a fragment defined later may define the name,
 			// so it is resolved in the function namespace when the reference runs --
 			// _lookup's miss asks the run-time half -- the same signal on a miss. A
 			// global of the name is a Clojure var's root, never its function. No
-			// warning: a run that lowers as it goes expects names to arrive.
+			// warning: a run that lowers as it goes expects names to arrive. So is a
+			// built-in whose wrapper a class before a fragment holds, which the
+			// fragment did not generate.
 			JvmExprCompiler.compileExpr(
 					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
 					ctx, className);

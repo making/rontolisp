@@ -4,21 +4,27 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.clojure.ClojureCaseMapping;
+import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -350,13 +356,169 @@ public final class ClojureLibrary {
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program, boolean hostTarget, boolean lowersAtRunTime) {
-		Splice splice = lowersAtRunTime ? new Splice(hostLoweringForms(), program) : splice(program, hostTarget);
+		return process(program, hostTarget, lowersAtRunTime, null);
+	}
+
+	/**
+	 * {@link #process(List, boolean, boolean)} for a FRAGMENT of a class that lowers as
+	 * it runs ({@code cli/JvmRunTimeLowering}): the classes before it hold the library
+	 * the host spliced, so it takes only the definitions its forms reach that none of
+	 * them holds -- transitively through the ones it takes, since one they hold is called
+	 * there with everything it reaches (the host's pruner kept those too). The whole
+	 * library spliced into every fragment was walked by every pass after this one once
+	 * per verb ({@code .kb/jvm-run-time-lowering.md}, "Run time: the fragments").
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param hostTarget whether the target is one where the host is (the JVM)
+	 * @param lowersAtRunTime whether the class lowers the program again as it runs
+	 * @param linked what the classes a fragment links against define, or {@code null} for
+	 * a whole program
+	 * @return the program with the library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, boolean hostTarget, boolean lowersAtRunTime,
+			@Nullable LinkedDefinitions linked) {
+		Splice splice;
+		if (linked != null) {
+			splice = new Splice(HostReferences.get().reached(program, linked), program);
+		}
+		else {
+			splice = lowersAtRunTime ? new Splice(hostLoweringForms(), program) : splice(program, hostTarget);
+		}
 		if (splice.library().isEmpty()) {
 			return splice.program();
 		}
 		List<LispVal> out = new ArrayList<>(splice.library());
 		out.addAll(splice.program());
 		return out;
+	}
+
+	/**
+	 * The library names each definition of {@link #hostLoweringForms()} mentions, read
+	 * once: what {@link LibraryDefunPruner} counts as a reference to a bundled definition
+	 * -- the definition's symbol anywhere (quoted data included), a string containing its
+	 * name, a FORMAT control's {@code ~/name/} directive naming it -- so a fragment takes
+	 * every definition the pruner would keep of the ones it lacks.
+	 */
+	private static final class HostReferences {
+
+		@Nullable private static volatile HostReferences instance;
+
+		private final List<LispVal> forms;
+
+		/** Each name to the forms defining it (a condition by its class name). */
+		private final Map<String, List<Integer>> definitions = new HashMap<>();
+
+		/** The names a string can contain: an upcased string holds no lowercase name. */
+		private final List<String> upcasedNames = new ArrayList<>();
+
+		private final List<Set<String>> mentions = new ArrayList<>();
+
+		private HostReferences(List<LispVal> forms) {
+			this.forms = forms;
+			for (int i = 0; i < forms.size(); i++) {
+				String name = definedName(forms.get(i));
+				if (!name.isEmpty()) {
+					this.definitions.computeIfAbsent(name, key -> new ArrayList<>()).add(i);
+				}
+			}
+			for (String name : this.definitions.keySet()) {
+				if (name.equals(name.toUpperCase(Locale.ROOT))) {
+					// a string holding a name holds the prefix: the one test collect asks
+					// first
+					if (!name.contains(HELPER_PREFIX)) {
+						throw new IllegalStateException("clojure.lisp defines " + name + ", which " + HELPER_PREFIX
+								+ " does not find in a string");
+					}
+					this.upcasedNames.add(name);
+				}
+			}
+			for (LispVal form : forms) {
+				Set<String> names = new HashSet<>();
+				collect(form, names);
+				this.mentions.add(names);
+			}
+		}
+
+		static HostReferences get() {
+			HostReferences built = instance;
+			if (built == null) {
+				synchronized (HostReferences.class) {
+					built = instance;
+					if (built == null) {
+						built = new HostReferences(hostLoweringForms());
+						instance = built;
+					}
+				}
+			}
+			return built;
+		}
+
+		/**
+		 * The definitions the program reaches that the linked classes do not hold, in
+		 * library order.
+		 */
+		List<LispVal> reached(List<LispVal> program, LinkedDefinitions linked) {
+			Set<String> pending = new HashSet<>();
+			for (LispVal form : program) {
+				collect(form, pending);
+			}
+			BitSet taken = new BitSet(this.forms.size());
+			Deque<String> queue = new ArrayDeque<>(pending);
+			Set<String> seen = new HashSet<>(pending);
+			while (!queue.isEmpty()) {
+				List<Integer> indexes = this.definitions.get(queue.pop());
+				if (indexes == null) {
+					continue;
+				}
+				for (int index : indexes) {
+					if (!taken.get(index) && !linked.defines(this.forms.get(index))) {
+						taken.set(index);
+						for (String name : this.mentions.get(index)) {
+							if (seen.add(name)) {
+								queue.push(name);
+							}
+						}
+					}
+				}
+			}
+			List<LispVal> out = new ArrayList<>(taken.cardinality());
+			for (int i = taken.nextSetBit(0); i >= 0; i = taken.nextSetBit(i + 1)) {
+				out.add(this.forms.get(i));
+			}
+			return out;
+		}
+
+		private void collect(LispVal form, Set<String> out) {
+			LispVal rest = form;
+			while (rest instanceof LispCons cons) {
+				collect(cons.car(), out);
+				rest = cons.cdr();
+			}
+			if (rest instanceof LispSymbol symbol) {
+				if (this.definitions.containsKey(symbol.name())) {
+					out.add(symbol.name());
+				}
+			}
+			else if (rest instanceof LispString string) {
+				String value = string.value().toUpperCase(Locale.ROOT);
+				if (value.contains(HELPER_PREFIX)) {
+					for (String name : this.upcasedNames) {
+						if (value.contains(name)) {
+							out.add(name);
+						}
+					}
+				}
+				if (value.indexOf('~') >= 0) {
+					for (String directive : FormatRenderer.functionDesignatorNames(value)) {
+						for (String name : List.of(directive, LispSymbol.memberName(directive))) {
+							if (this.definitions.containsKey(name)) {
+								out.add(name);
+							}
+						}
+					}
+				}
+			}
+		}
+
 	}
 
 	/**

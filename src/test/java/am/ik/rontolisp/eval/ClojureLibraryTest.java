@@ -105,6 +105,33 @@ class ClojureLibraryTest {
 		assertThat(processed.size()).isGreaterThan(program.size());
 		String text = processed.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 		assertThat(text).contains("DEFUN RONTOLISP::%CLOJURE-STR-OF");
+		// A fragment of a class that lowers as it runs takes only what the classes before
+		// it lack: what the helper reaches when they hold nothing, never the whole
+		// library; nothing when they hold the helper; the helper alone when they hold
+		// every definition it reaches, which it calls there.
+		List<LispVal> reached = ClojureLibrary.process(program, true, true,
+				new LinkedDefinitions(Set.of(), Set.of(), Set.of()));
+		List<String> reachedNames = reached.subList(0, reached.size() - 1)
+			.stream()
+			.map(ClojureLibraryTest::nameOf)
+			.toList();
+		assertThat(reachedNames).contains("RONTOLISP::%CLOJURE-STR-OF")
+			.hasSizeLessThan(ClojureLibrary.forms().size() / 4);
+		assertThat(ClojureLibrary.process(program, true, true,
+				new LinkedDefinitions(Set.of("RONTOLISP::%CLOJURE-STR-OF"), Set.of(), Set.of())))
+			.isEqualTo(program);
+		Set<String> theRest = new HashSet<>(reachedNames);
+		theRest.remove("RONTOLISP::%CLOJURE-STR-OF");
+		assertThat(ClojureLibrary.process(program, true, true, new LinkedDefinitions(theRest, theRest, theRest))
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEF")))
+			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+			.startsWith("(DEFUN RONTOLISP::%CLOJURE-STR-OF ");
+	}
+
+	private static String nameOf(LispVal definition) {
+		return ((LispSymbol) ((LispCons) ((LispCons) definition).cdr()).car()).name();
 	}
 
 	@Test

@@ -24,6 +24,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLinkage;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.eval.ClojureProgramLowering;
+import am.ik.rontolisp.eval.LinkedDefinitions;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
@@ -228,12 +229,12 @@ public final class JvmRunTimeLowering {
 				.fragment(link)
 				.runtimeFeatures(Features.JVM.names())
 				.build();
-			JvmLinkage.Table linkedTable = this.table;
+			LinkedDefinitions linked = linkedDefinitions(this.table);
 			byte[] bytes = SizedThread.call("rontolisp-run-time-compile", SizedThread.WORKER_STACK_BYTES, () -> {
 				CompileFrontend.Result frontend = CompileFrontend.expand(
-						new CompileFrontend.Loaded(forms, Features.JVM, SourceStandards.DEFAULT, true),
+						new CompileFrontend.Loaded(forms, Features.JVM, SourceStandards.DEFAULT, true, linked),
 						CompileFrontend.Options.builder().build());
-				return compiler.compile(unlinked(frontend.program(), definedNames(forms), linkedTable));
+				return compiler.compile(unlinked(frontend.program(), definedNames(forms), linked));
 			});
 			String dump = System.getProperty("rontolisp.debug.run-time-classes");
 			if (dump != null) {
@@ -397,29 +398,27 @@ public final class JvmRunTimeLowering {
 
 	/**
 	 * The program without the library definitions a class before it already holds: the
-	 * splice hands a fragment every helper its forms reach, and the ones the host or an
+	 * splices hand a fragment every helper its forms reach, and the ones the host or an
 	 * earlier fragment defines it calls there instead -- a global defined twice would
-	 * start its state over. The forms' own definitions stay, a redefinition a store into
-	 * the class that holds the global.
+	 * start its state over, a class or generic defined twice would hold the fragment's
+	 * methods alone ({@link LinkedDefinitions#defines}). The forms' own definitions stay,
+	 * a redefinition a store into the class that holds the global.
 	 */
-	static List<LispVal> unlinked(List<LispVal> program, java.util.Set<String> own, JvmLinkage.Table table) {
+	static List<LispVal> unlinked(List<LispVal> program, java.util.Set<String> own, LinkedDefinitions linked) {
 		List<LispVal> out = new ArrayList<>(program.size());
 		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
-					&& !own.contains(name.name())) {
-				boolean linked = switch (head.name()) {
-					case LispNames.DEFUN -> table.functions().containsKey(name.name());
-					case "DEFVAR", "DEFPARAMETER", "DEFCONSTANT" -> table.globals().containsKey(name.name());
-					default -> false;
-				};
-				if (linked) {
-					continue;
-				}
+			if (!(form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && own.contains(name.name())) && linked.defines(form)) {
+				continue;
 			}
 			out.add(form);
 		}
 		return out;
+	}
+
+	/** What a table's classes define, as the front end asks it. */
+	static LinkedDefinitions linkedDefinitions(JvmLinkage.Table table) {
+		return new LinkedDefinitions(table.functions().keySet(), table.globals().keySet(), table.classes().keySet());
 	}
 
 	/** The names the forms define at their top level, a {@code progn}'s included. */

@@ -34,8 +34,13 @@ public final class JvmLinkage {
 	 * @param optionals its physical optionals
 	 * @param bounces whether it takes the value-tail depth and may answer a bounce
 	 * @param id the id its function values carry, which its class's dispatchers take
+	 * @param wrapper whether it is a built-in's function value the class injected (a
+	 * wrapper), not a definition of the program: a later fragment takes the value from
+	 * the class and generates no wrapper of its own, while a call of the name stays the
+	 * built-in's
 	 */
-	public record Function(String owner, int paramCount, boolean variadic, int optionals, boolean bounces, int id) {
+	public record Function(String owner, int paramCount, boolean variadic, int optionals, boolean bounces, int id,
+			boolean wrapper) {
 	}
 
 	/**
@@ -199,8 +204,8 @@ public final class JvmLinkage {
 			Map<String, Function> fns = new LinkedHashMap<>();
 			this.functions.forEach((name, fn) -> {
 				String owner = declaring.get(methodName(name) + descriptor(fn));
-				fns.put(name, owner == null ? fn
-						: new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(), fn.bounces(), fn.id()));
+				fns.put(name, owner == null ? fn : new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(),
+						fn.bounces(), fn.id(), fn.wrapper()));
 			});
 			return new Table(fns, this.globals, this.fields, this.funcIdEnd, this.classes, this.modes);
 		}
@@ -220,7 +225,7 @@ public final class JvmLinkage {
 				fields.add(name);
 				fields.add(fn.owner());
 				fields.add(fn.paramCount() + "," + fn.optionals() + "," + (fn.variadic() ? 1 : 0) + ","
-						+ (fn.bounces() ? 1 : 0) + "," + fn.id());
+						+ (fn.bounces() ? 1 : 0) + "," + fn.id() + "," + (fn.wrapper() ? 1 : 0));
 			});
 			fields.add(Integer.toString(this.globals.size()));
 			new TreeMap<>(this.globals).forEach((name, g) -> {
@@ -273,8 +278,10 @@ public final class JvmLinkage {
 				String name = in.next();
 				String owner = in.next();
 				String[] shape = in.next().split(",");
-				functions.put(name, new Function(owner, Integer.parseInt(shape[0]), shape[2].equals("1"),
-						Integer.parseInt(shape[1]), shape[3].equals("1"), Integer.parseInt(shape[4])));
+				functions.put(name,
+						new Function(owner, Integer.parseInt(shape[0]), shape[2].equals("1"),
+								Integer.parseInt(shape[1]), shape[3].equals("1"), Integer.parseInt(shape[4]),
+								shape[5].equals("1")));
 			}
 			Map<String, Global> globals = new LinkedHashMap<>();
 			int globalCount = Integer.parseInt(in.next());
@@ -464,7 +471,7 @@ public final class JvmLinkage {
 	 */
 	public static final String CONSTANTS_FIELD = "_constants";
 
-	private static final String VERSION = "rontolisp-link-3";
+	private static final String VERSION = "rontolisp-link-4";
 
 	private static final class Fields {
 

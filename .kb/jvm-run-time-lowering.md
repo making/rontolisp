@@ -107,11 +107,32 @@ Pins: `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake`, clojure-spec
   value lowering to `(rontolisp::%run-time-constant i)`.
 - **The program.** The entries' forms, the echoing entry's last form wrapped
   `(rontolisp::%run-time-answer f)` (a definer stays top level, its name answered after it),
-  through `CompileFrontend.expand` with `lowersAtRunTime`, then
-  `JvmRunTimeLowering.unlinked`: a library `defun` / `defvar` / `defparameter` /
-  `defconstant` whose name a class before defines is dropped (spliced again it would start
-  its state over); the forms' own definitions stay (a redefinition stores into the linked
-  field).
+  through `CompileFrontend.expand` with `lowersAtRunTime` and what the table defines
+  (`Loaded.linked`, `eval/LinkedDefinitions`), then `JvmRunTimeLowering.unlinked`: a spliced
+  definition a class before holds is dropped -- `defun` / `defgeneric` / `defmethod` of a
+  linked function, `defvar` / `defparameter` / `defconstant` of a linked global (spliced
+  again it would start its state over), `defclass` / `define-condition` of a linked class (a
+  generic defined anew would hold the fragment's methods alone); the forms' own definitions
+  stay (a redefinition stores into the linked field).
+- **What a fragment splices** (h15, 2026-10-30): `ClojureLibrary.process(..., linked)`
+  takes only the library definitions its forms reach that no class before holds,
+  transitively through the ones it takes -- a held one is called there with everything it
+  reaches, which the host's pruner kept too. The references are `LibraryDefunPruner`'s for a
+  bundled name (the symbol anywhere, a string containing the name, a `~/name/` directive),
+  read once over the host-lowering library (`HostReferences`), so the fragment holds every
+  definition the pruner would keep. A pass whose rewrite a value crossing classes needs
+  takes the host's shape from the table: `GrayStreamsLibrary` rewrites where the host's
+  registry knows `rontolisp:fundamental-stream`, both standard streams routed, and splices
+  no protocol; `UnreadCharLibrary` where the host defines `%unread-char-take`. Until h15
+  every fragment spliced the whole library, which every later pass walked once per verb.
+- **Built-in wrappers** (h15): a class's table lists the wrappers it injected
+  (`JvmLinkage.Function.wrapper`, a registry row of the class). A fragment generates none a
+  class before holds; a value of one its program spells is an external function of that
+  class whose name joins no user definitions (a call stays the built-in's), and an unspelled
+  `#'name` resolves when it runs (`Ctx.linkedWrappers`). Measured: the ~260 wrappers were the
+  roots that kept most per-class helpers alive -- a fragment of a `require` of a loaded
+  namespace went from 288 KB (644 methods) to 12.9 KB (33 methods); the probe's host grew
+  14 KB of its 5.93 MB (the rows and their dispatch cases).
 - **The compile** (`Builder.fragment`): `ConstantPool.linkFields` -- every fieldref to a
   linked `name:descriptor` is minted naming the declaring class, and
   `ClassDefinition.Builder.addField` declares none of them; `<clinit>`'s writes of a linked
@@ -180,9 +201,16 @@ clojure-spec `a-declared-name-a-run-time-eval-defines-is-called-where-the-progra
   lowering again. Measured 2026-10-30 on spec's `instrument`/`check` probe
   (`.kb/clojure-frontend.md`, "clojure.spec.alpha"): 69 verbs -- 41 `resolve`s (the
   registry walk, `instrument`, `check`) and 28 `require`s (gen's `dynaload`, once per
-  combinator, most of a namespace already loaded) -- each a fragment of about 300 KB, most
-  of it the per-class runtime helpers; about 60 s where the interpreter takes 8 s
-  (`.todo/h15`).
+  combinator, 26 of a namespace already loaded). Before h15: 22.9 MB of fragments (about
+  300 KB each), 61 s where the interpreter takes 7.7 s; JFR put 78% of the samples in the
+  fragment's front end (the whole library re-spliced, above), 12% in its compile. After:
+  1.48 MB (13-27 KB each; the two that load a namespace, 169 and 203 KB), 10 s. What is left:
+  the first verb's re-read of the program 34% of the samples, the program 27%, the
+  fragments' compile 20%, front end 12%, lowering 5%; per verb (timed) 25-40 ms, mostly the
+  compile pipeline's fixed cost. Weighed and not made: a `require` of a loaded namespace or a
+  `resolve` of a lowered var answered without a compile (the first checks a run-time flag,
+  the second interns a var whose getter reads the class's global) -- at most about 1.7 s of
+  the 10 s for two special cases.
 - The image keeps the files the lowering read, not a `deps.edn` dependency's jars or
   coordinates: those resolve again where the class runs.
 
@@ -193,6 +221,8 @@ clojure-spec `a-declared-name-a-run-time-eval-defines-is-called-where-the-progra
 
 ## Tests
 
-clojure-spec `the-interpreter-lowers-at-run-time` and the other `host:` cases
-(`ClojureSpecE2eTest`'s JVM leg, `HOST_CLASS` / `HOST_JAR`: compiled by the command line,
-each output run as its own process).
+clojure-spec `the-interpreter-lowers-at-run-time` (its built-in values: the host's wrappers
+and one a fragment generates) and the other `host:` cases (`ClojureSpecE2eTest`'s JVM leg,
+`HOST_CLASS` / `HOST_JAR`: compiled by the command line, each output run as its own
+process). What a fragment splices: `ClojureLibraryTest#aProgramReferencingAPrinterHelperGetsTheLibrarySpliced`;
+its stream shapes: `GrayStreamsLibraryTest#bindingAStandardStreamRoutesOnlyItsOwnFamily`.
