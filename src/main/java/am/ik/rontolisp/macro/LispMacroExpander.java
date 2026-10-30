@@ -7685,6 +7685,69 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeIf(streamVar, streamVar, signal)));
 	}
 
+	/** Fixed temporaries of the path-recording {@code open} lowering. */
+	private static final String OPEN_GIVEN_VAR = "__open_given";
+
+	private static final String OPEN_ARG_VAR = "__open_arg";
+
+	private static final String OPEN_VALUE_VAR = "__open_value";
+
+	/**
+	 * Whether a compiled program records the namestring each file stream was opened with
+	 * ({@link #recordingStreamPath}): only where a reader of the record is spliced --
+	 * {@code pathname}, {@code namestring} or {@code %path-ns}, which every path-taking
+	 * prelude operator funnels through -- so a program that cannot ask keeps its bytes.
+	 * @param defined whether the program defines a function of that name
+	 * @return whether every {@code open} records its path
+	 */
+	public static boolean recordsStreamPaths(java.util.function.Predicate<String> defined) {
+		return defined.test(LispNames.PATHNAME) || defined.test(LispNames.NAMESTRING_CL)
+				|| defined.test(LispNames.PATH_NS);
+	}
+
+	/**
+	 * An {@code open} on a compile path that records its namestring on the file stream it
+	 * answers ({@link LispLayout#STREAM_PATH_CELL}), so the stream is a pathname
+	 * designator -- after its close too, where a handle-keyed record would already be
+	 * gone. The filespec may itself be a file stream, which designates the namestring it
+	 * was opened with. Applied ahead of every other open lowering, once per source open,
+	 * so a computed option's leaves and the {@code :probe} close share one record; the
+	 * inner open comes back unrecorded (its filespec is the bound temporary).
+	 *
+	 * <pre>
+	 * (let* ((__open_given p)
+	 *        (__open_arg (if (%obj-is __open_given '%STREAM)
+	 *                        (if (%obj-ref __open_given 4) (%obj-ref __open_given 4) __open_given)
+	 *                        __open_given))
+	 *        (__open_value (open __open_arg opts...)))
+	 *   (if __open_value
+	 *       (%obj-set __open_value 4 (if (%obj-is __open_arg '%PATHNAME) (%obj-ref __open_arg 0) __open_arg)))
+	 *   __open_value)
+	 * </pre>
+	 * @param cons the {@code open} call
+	 * @return the recording form, or null when the call has no filespec or is the inner
+	 * open of a recording form already
+	 */
+	public static @Nullable LispVal recordingStreamPath(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.get(1) instanceof LispSymbol s && OPEN_ARG_VAR.equals(s.name())) {
+			return null;
+		}
+		LispSymbol given = new LispSymbol(OPEN_GIVEN_VAR);
+		LispSymbol arg = new LispSymbol(OPEN_ARG_VAR);
+		LispSymbol value = new LispSymbol(OPEN_VALUE_VAR);
+		LispVal streamPath = objRef(given, LispLayout.STREAM_PATH_CELL);
+		LispVal unwrapped = makeIf(objIs(given, List.of(LispLayout.STREAM_TAG)), makeIf(streamPath, streamPath, given),
+				given);
+		List<LispVal> open = new ArrayList<>(parts);
+		open.set(1, arg);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(given, parts.get(1))),
+				listToCons(List.of(arg, unwrapped)), listToCons(List.of(value, listToCons(open)))));
+		LispVal namestring = makeIf(objIs(arg, List.of(LispLayout.PATHNAME_TAG)), objRef(arg, 0), arg);
+		LispVal record = makeIf(value, objSet(value, LispLayout.STREAM_PATH_CELL, namestring), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, record, value));
+	}
+
 	/** The text every backend reports a {@code load} of a missing file with. */
 	public static final String LOAD_FAILURE_PREFIX = LispNames.LOAD + ": cannot open file ";
 

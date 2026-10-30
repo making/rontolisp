@@ -10,8 +10,9 @@ import java.util.List;
  * pins against the release; its load runs {@code (setf logical-pathname-translations)}
  * for {@code TEMPORARY-FILES}. The program lists, probes, walks, copies and deletes a
  * directory tree, and opens a temporary file through a logical host of its own, which
- * {@code translate-logical-pathname} maps into that tree ({@code .kb/pathnames.md}).
- * Every line is SBCL 2.2.9's answer to the same program.
+ * {@code translate-logical-pathname} maps into that tree ({@code .kb/pathnames.md}) --
+ * through the two macros whose value or cleanup is {@code (pathname stream)} of a file
+ * stream. Every line is SBCL 2.2.9's answer to the same program.
  */
 class ClFadE2eTest extends AsdfLibraryE2eSupport {
 
@@ -48,17 +49,20 @@ class ClFadE2eTest extends AsdfLibraryE2eSupport {
 			             (pathname-match-p "sub/b.lisp" "**/*.lisp")
 			             (pathname-match-p "sub/b.lisp" "*.lisp")
 			             (pathname-match-p "sub/b.lisp" "/**/*.lisp")))
-			(let ((s (cl-fad:open-temporary :template "FAD-WORK:TMP-%.TXT")))
-			  (write-string "t" s)
-			  (close s))
+			(let ((p (cl-fad:with-output-to-temporary-file (s :template "FAD-WORK:TMP-%.TXT")
+			           (write-string "t" s))))
+			  (print (list (length (rel p)) (with-open-file (in p) (read-line in)))))
+			(print (cl-fad:with-open-temporary-file (s :template "FAD-WORK:DEL-%.TXT")
+			         (write-string "d" s)
+			         (length (rel (pathname s)))))
 			(print (sort (mapcar (lambda (p) (length (rel p))) (cl-fad:list-directory *dir*)) #'<))
 			(cl-fad:delete-directory-and-files *dir*)
 			(print (cl-fad:directory-exists-p *dir*))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(#P\"x/y/\" #P\"x/y\" NIL)", "(\"a.txt\" \"sub/\")",
-			"(\"a.txt\" NIL)", "(\"a.txt\" \"sub/b.lisp\")", "\"hello\"", "(\"sub/b.lisp\" NIL T T NIL)", "(4 5 5 16)",
-			"NIL");
+			"(\"a.txt\" NIL)", "(\"a.txt\" \"sub/b.lisp\")", "\"hello\"", "(\"sub/b.lisp\" NIL T T NIL)", "(16 \"t\")",
+			"16", "(4 5 5 16)", "NIL");
 
 	@Override
 	protected String systemDir() {

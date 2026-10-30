@@ -559,8 +559,8 @@ supported" -- the arm rontolisp reads. Four spans, each marker exactly once:
 follow-symlinks)` (SBCL's), `file-exists-p` -> `(probe-file pathspec)` (SBCL's: a directory's
 truename in directory form), and `delete-directory-and-files`' portable walk gets
 `(delete-file file)` for a directory (deletes an empty one here, `.kb/uiop.md`). Tier 4, not a
-shim: the rest of cl-fad is portable CL. Not working yet: `with-output-to-temporary-file` /
-`with-open-temporary-file` need `(pathname stream)` (h67). hunchentoot (2026-10-31, interpreter)
+shim: the rest of cl-fad is portable CL; `with-output-to-temporary-file` /
+`with-open-temporary-file` run on `(pathname stream)` (`.kb/pathnames.md`). hunchentoot (2026-10-31, interpreter)
 now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine

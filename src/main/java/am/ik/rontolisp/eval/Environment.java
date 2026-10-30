@@ -6626,14 +6626,14 @@ public final class Environment implements Scope {
 					// be opened signals here exactly as it does on the compile paths,
 					// whose lowering is literally an open followed by a close.
 					stream.close();
-					return streamValue(handle, LispLayout.Kinds.FILE);
+					return fileStreamValue(handle, path);
 				}
 				streams.put(handle, stream);
 				streamPaths.put(handle, path.value());
 				if (overwrite && !bidirectional) {
 					outputOnlyCursorStreams.add(handle);
 				}
-				return streamValue(handle, LispLayout.Kinds.FILE);
+				return fileStreamValue(handle, path);
 			}
 			catch (IOException ex) {
 				// A file-error carrying the designator as given, with the message every
@@ -10977,6 +10977,19 @@ public final class Environment implements Scope {
 	 */
 	static LispVal streamValue(long handle, String kind) {
 		return StreamDesignators.streamValue(handle, kind);
+	}
+
+	/**
+	 * The FILE stream value {@code open} answers, carrying the namestring it was opened
+	 * with ({@link LispLayout#STREAM_PATH_CELL}): a file stream is a pathname designator.
+	 * @param handle the stream table index
+	 * @param path the namestring the stream was opened with
+	 * @return the stream value
+	 */
+	private static LispVal fileStreamValue(long handle, LispString path) {
+		LispInstance stream = StreamDesignators.streamValue(handle, LispLayout.Kinds.FILE);
+		stream.setSlot(LispLayout.STREAM_PATH_CELL, path);
+		return stream;
 	}
 
 	/**

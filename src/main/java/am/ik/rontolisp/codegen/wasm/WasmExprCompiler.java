@@ -1340,6 +1340,12 @@ final class WasmExprCompiler {
 				// onto literal open LEAVES first, and each leaf comes back through
 				// this case, so that shape is already a stream value and must NOT be
 				// wrapped again (the JVM twin says the same).
+				LispVal recording = recordsStreamPaths(ctx) ? LispMacroExpander.recordingStreamPath(cons) : null;
+				if (recording != null) {
+					// The namestring on the stream value (the JVM twin's rule).
+					WasmExprCompiler.compileExpr(recording, ctx);
+					break;
+				}
 				LispVal lowered = OpenModes.lowerRuntimeOptions(cons);
 				if (lowered != null) {
 					WasmExprCompiler.compileExpr(lowered, ctx);
@@ -2991,6 +2997,13 @@ final class WasmExprCompiler {
 	private static LispVal guardPackedForWideStreams(LispVal expansion, WasmLispCompiler.Ctx ctx) {
 		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
 				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;
+	}
+
+	// Whether every open records its namestring on the stream value it answers -- the
+	// JVM twin's rule (JvmExprCompiler.recordsStreamPaths).
+	private static boolean recordsStreamPaths(WasmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.instanceTypeIndex >= 0
+				&& LispMacroExpander.recordsStreamPaths(ctx.functions::containsKey);
 	}
 
 	private static void wrapStreamValue(WasmLispCompiler.Ctx ctx, String kind) {

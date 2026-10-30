@@ -12729,6 +12729,28 @@ cases:
       NIL
       YES
       (#P"probe.dat" NIL)
+  - name: pathname-of-a-file-stream
+    # A file stream is a pathname designator: pathname, namestring, truename and
+    # the path-taking operators take it, after its close too, a :probe stream
+    # included, and open takes one as its filespec. A string stream is none.
+    # SBCL 2.2.9's answers (its pathname is absolute, so it is printed below the
+    # run directory's truename, as the truenames are).
+    source: |
+      (defun fs-rel (p) (and p (pathname (enough-namestring p (truename "")))))
+      (let ((s (open "fstream.dat" :direction :output :if-exists :supersede)))
+        (write-line "fs" s)
+        (print (list (fs-rel (pathname s)) (fs-rel (namestring s)) (file-namestring s) (fs-rel (truename s))))
+        (close s)
+        (print (list (fs-rel (pathname s)) (fs-rel (probe-file s)) (with-open-file (in s) (read-line in))))
+        (print (fs-rel (pathname (open "fstream.dat" :direction :probe))))
+        (print (handler-case (pathname (make-string-input-stream "x")) (error () :error)))
+        (print (list (delete-file s) (probe-file "fstream.dat"))))
+    expected: |
+      (#P"fstream.dat" #P"fstream.dat" "fstream.dat" #P"fstream.dat")
+      (#P"fstream.dat" #P"fstream.dat" "fs")
+      #P"fstream.dat"
+      :ERROR
+      (T NIL)
   - name: truename-resolves-symbolic-links
     # truename resolves every symbolic link in the path over %read-link (both WASM
     # backends through path_readlink, the component adapter's over readlink-at) and

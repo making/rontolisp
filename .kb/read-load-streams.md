@@ -1472,7 +1472,8 @@ ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: fixed `OPEN.IO.1 .2 .
 `OPEN.ERROR.3 .9 .11 .13 .14`; none regressed. Still failing and NOT this mode's: `OPEN.IO.5
 -.19` except 13 (element types beyond `(unsigned-byte 8)`, and `OPEN.IO.13`'s
 `stream-element-type` answering `CHARACTER` for a binary stream -- `.todo/919`), `.3` (logical
-pathnames), `.21` / `.30` (`:notes`), `OPEN.66` (a stream as the filespec).
+pathnames), `.21` / `.30` (`:notes`); `OPEN.66` (a stream as the filespec) since 2026-10-31
+(`.kb/pathnames.md`).
 
 Pinned by `LispEvaluatorTest#openDirectionIoReadsBackWhatItJustWroteThroughOneCursor` /
 `#openDirectionIoTruncatesByDefaultAndCarriesTheByteHalf`,
@@ -1507,8 +1508,9 @@ answer.
   `OPAQUE` and a stream PRINTS as the plain `#<STREAM>` on every backend — the handle never reaches
   the output (`.kb/emitted-output-determinism.md`, `.kb/instance-syntax.md`). A test that must tell
   two streams apart uses `equal` in-program (see `StreamHandleConcurrencySupport`), not the text.
-- **Two reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark) and
-  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`). The interpreter's
+- **Three reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark),
+  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`) and
+  `STREAM_PATH_CELL` (a file stream's namestring, `.kb/pathnames.md`). The interpreter's
   `StreamDesignators.streamValue` allocates the full capacity like `%obj-new`.
 - **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`, `:STRING-OUTPUT`,
   `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`, `:STANDARD-OUTPUT`, `:STANDARD-INPUT`.
