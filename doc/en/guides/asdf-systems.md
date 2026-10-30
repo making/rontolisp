@@ -6,9 +6,9 @@ Common Lisp build facility: you describe a multi-file project once in a
 and [`asdf:load-system`](../reference/functions/asdf-load-system.md) loads the
 files in dependency order — on every backend. Real ASDF is not ported (it
 depends on CLOS, the condition system and the pathname API, none of which
-exist here); instead, `.asd` files are parsed as plain data and the supported
-`defsystem` subset drives the same machinery as `load`/`require`. A `.asd`
-that stays inside the subset works unchanged.
+exist here); instead, a `.asd` file runs as Lisp with its `defsystem` forms
+parsed as data, and the supported `defsystem` subset drives the same machinery
+as `load`/`require`. A `.asd` that stays inside the subset works unchanged.
 
 | Operator | Purpose |
 |----------|---------|
@@ -149,58 +149,65 @@ library still has to stay inside the supported subset below.
 
 ## What is (and is not) supported
 
-- `.asd` files are parsed as **data**: `defsystem` (bare or
-  `asdf:`-qualified), `in-package`/`defpackage` forms (skipped),
-  `register-system-packages` forms (which record "this package lives in that
-  system" — read when a package-inferred system turns a `defpackage`
-  dependency into a system name, and otherwise inert, since a package is
-  found through its own `defpackage`), and top-level
-  `defparameter`s of pure literal/conditional values (evaluated into a
-  parse-time environment) may appear. `#+`/`#-` feature conditionals work
-  (evaluated against the target backend's features, see
+- A `.asd` file **runs as Lisp**, form at a time, in the `asdf-user` package
+  (which uses `cl`, `asdf` and `uiop`): a conditional `defpackage`, a `warn`, a
+  `find-system` probe (it answers the systems registered so far and the
+  built-in ones; it does not search for a `.asd`), a `defparameter`, a feature
+  computed and pushed, an `asdf:load-system` of another system — which then
+  loads ahead of every system the file defines after the call. On a compile
+  path the file runs at compile time in an interpreter of its own, so what
+  reaches the program is the systems the file describes. An error the file
+  signals — an implementation guard such as `#-(or sbcl ...) (error ...)` —
+  fails the load with its own message. Four forms are taken by their shape
+  instead of being run:
+  - `defsystem` (bare or `asdf:`-qualified): its options are data, below.
+  - `register-system-packages`: records "this package lives in that system" —
+    read when a package-inferred system turns a `defpackage` dependency into a
+    system name.
+  - A `defclass` of a **component class**: every superclass is one of ASDF's
+    (`cl-source-file`, `cl-source-file.cl`, `cl-source-file.lsp`,
+    `static-file`, `doc-file`, `html-file`) or one declared earlier in the same
+    file. The declaration decides whether components of the class contribute a
+    source file (inherited from the superclasses) and which extension their
+    names get (inherited too, and overridable with a `(type :initform "cl")`
+    slot or a `source-file-type` method). So `(defclass txt-file (doc-file) ())`
+    gives an ordering-only `:txt-file`, and
+    `(defclass legacy-acl-source-file (cl-source-file.cl) ())` gives a
+    `:legacy-acl-source-file` whose components load `NAME.cl`. Any other
+    `defclass` runs.
+  - `defmethod`: ignored — the plan a system loads by is fixed, not computed by
+    ASDF's generic functions (a library's `asdf:perform` method in its own
+    sources does run, see below) — except
+    `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
+    class's file extension wherever in the file it sits.
+
+  A `progn`, and an `eval-when` whose situations fire on load, are opened so
+  these rules apply inside them; an `eval-when` whose situations are only
+  `(:compile-toplevel)` is skipped (ASDF loads a `.asd`, it never compiles
+  one), and so is a top-level `#.` (an ASDF version guard).
+- `#+`/`#-` feature conditionals work (evaluated against the target backend's
+  features, see
   [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)),
-  a `#.` read-time-eval form is resolved where its value is **used**: in a
-  clause that decides what gets loaded it is resolved against those
-  `defparameter`s (the `(:file #.*string-file*)` idiom), and an unresolvable
-  one is an error naming the file and the clause; in ignored metadata
-  (`:long-description`, `:version`, `:perform`, …) and at top level (an ASDF
-  version guard) it is dropped unevaluated and unremarked. A `:depends-on`
-  entry may be
-  `(:feature EXPR DEP)`, contributing its dependency only when the feature
-  expression holds, or `(:version NAME "1.2.3")`, resolving to the plain
-  dependency (the version constraint is not checked — the `:version` option is
-  ignored metadata here, so there is nothing to check against). A top-level
-  `defmethod` is tolerated and ignored — the `.asd` is data and never runs
-  (a library's `asdf:perform` method in its own sources does run, see below) —
-  except
-  `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
-  class's file extension wherever in the file it sits. A top-level `defclass`
-  declares a **component class**: every superclass must be one of ASDF's
-  (`cl-source-file`, `cl-source-file.cl`, `cl-source-file.lsp`, `static-file`,
-  `doc-file`, `html-file`) or one declared earlier in the same file, and the
-  declaration decides the only two things a data-only parse can honor —
-  whether components of the class contribute a source file (inherited from the
-  superclasses) and which extension their names get (inherited too, and
-  overridable with a `(type :initform "cl")` slot or a `source-file-type`
-  method). So `(defclass txt-file (doc-file) ())` gives an ordering-only
-  `:txt-file`, and `(defclass legacy-acl-source-file (cl-source-file.cl) ())`
-  gives a `:legacy-acl-source-file` whose components load `NAME.cl`. A
-  `defclass` that is not a component class (an operation, a condition) is an
-  error, and so is any other top-level form, naming the file.
-- A `.asd` may **announce features**: a top-level
-  `(eval-when (:load-toplevel :execute) (pushnew :my-feature *features*))`
-  (or a bare `pushnew`/`push`) before a `defsystem` declares that feature for
-  every system defined after it in the file — the same effect as writing
-  `:rontolisp-features (:my-feature)` on those systems. The declaration reaches
-  the system's own `:if-feature` / `(:feature ...)` clauses and the reading of
-  its component files — carrying the announcement out of the `.asd`, which is
-  the half the reader cannot do for itself. (A `#+`/`#-` in the **same** `.asd`
-  sees the push too, but through the reader's own handling of a source's
-  announcement — see
-  [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features).)
-  It does not reach a dependency, which declares its own. An `eval-when` whose situations are only
-  `(:compile-toplevel)` is inert (ASDF loads a `.asd`, it never compiles one),
-  and any other form inside the `eval-when` is an error naming it.
+  and each form is read after the ones above it ran, so a feature the file
+  pushes decides every `#+`/`#-` below the push. A pushed feature is the
+  file's declaration: it holds for every system the file defines after the
+  push — their `:if-feature` / `(:feature ...)` clauses and the reading of
+  their component files, as if each said `:rontolisp-features (:my-feature)` —
+  and it does not stay in `*features*` (real ASDF's does), so what a `.asd` or
+  a component reads never depends on which systems happened to load first. It
+  does not reach a dependency, which declares its own. A system the file
+  loads with `asdf:load-system` is loaded as from outside the file: in the
+  package current when the file began loading, keeping the features it pushes.
+- A `#.` read-time-eval form in a `defsystem` is resolved where its value is
+  **used**: in a clause that decides what gets loaded it is evaluated in the
+  image the file runs in (the `(:file #.*string-file*)` idiom reads a
+  `defparameter` above it), and one that fails is an error naming the file and
+  the clause; in ignored metadata (`:long-description`, `:version`,
+  `:perform`, …) it is dropped unevaluated and unremarked. A `:depends-on`
+  entry may be `(:feature EXPR DEP)`, contributing its dependency only when the
+  feature expression holds, or `(:version NAME "1.2.3")`, resolving to the
+  plain dependency (the version constraint is not checked — the `:version`
+  option is ignored metadata here, so there is nothing to check against).
 - `defsystem` supports the metadata options (ignored, except that a plain-string
   `:version` is read back by
   [`asdf:component-version`](../reference/functions/asdf-component-version.md)),
@@ -344,7 +351,7 @@ real library) resolve the name to a bundled shim instead of downloading it.
 | `float-features` | `single-float-bits`/`bits-single-float` and the double variants over the IEEE 754 bit primitives (interpreter + JVM; the WASM numeric model cannot carry 64-bit bit patterns) |
 | `bordeaux-threads` (nicknames `bt` and `bt2`) | both API namespaces of the one shim. The locking subset — `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*` — rides [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends; thread creation — `bt2:make-thread` (with `:initial-bindings`), `join-thread`, `threadp`, `thread-alive-p`, `destroy-thread` — rides [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md), a real virtual thread on the interpreter and the JVM. On the single-threaded WASM backends the thread entry points signal at call time and `bt:*supports-threads-p*` is `nil`. `make-lock` returns a reentrant lock (upstream's is not) — so `make-recursive-lock` and `with-recursive-lock-held` are the same object and the same expansion — `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks — and an `:initial-bindings` value form must be a quote form or self-evaluating (anything else would need the new thread's dynamic environment and signals) |
 | `uiop` | ASDF's portability layer, registered as 15 sub-packages and 429 exports. See **[The uiop Package](../reference/uiop.md)** for what is implemented; every other export resolves and signals `uiop:not-implemented-error` naming the operation, so a library that merely names one still loads |
-| `swank` | `swank:create-server` and `swank:stop-server` only. On the interpreter they start and stop the [SWANK server](../getting-started/swank.md#from-a-running-program) `rontolisp --swank` runs, on the program's own image; in a compiled program `create-server` signals and `stop-server` returns `nil`. Real swank is SLIME's server half, whose own `.asd` is a program the defsystem-as-data front-end cannot read -- without the shim, `(ql:quickload "clack")` fetches the SLIME tarball and dies on it |
+| `swank` | `swank:create-server` and `swank:stop-server` only. On the interpreter they start and stop the [SWANK server](../getting-started/swank.md#from-a-running-program) `rontolisp --swank` runs, on the program's own image; in a compiled program `create-server` signals and `stop-server` returns `nil`. Real swank is SLIME's server half, whose `.asd` picks one backend file per implementation and has none for rontolisp -- without the shim, `(ql:quickload "clack")` fetches the SLIME tarball and dies on it |
 | `mgl-pax-bootstrap` | the `mgl-pax` package (nickname `pax`) as a stub, so a library documented with [mgl-pax](https://github.com/melisgl/mgl-pax) can load (trivial-utf-8, a uuid dependency, hard-depends on it; the real system's `.asd` declares `:around-compile`, a compile hook outside the defsystem-as-data subset). `pax:define-package` acts as `defpackage`, `pax:defsection` defines its section name as a `nil` variable **and exports the section's `(symbol locative)` entries** — mgl-pax's documented default, and how such libraries export their public API — and the PAX-World registration helpers are `nil` no-ops. No documentation is generated |
 | `trivial-features` | the platform-feature announcement upstream trivial-features exists to make portable, without the CFFI probing: naming it in `:defsystem-depends-on` (or `:depends-on`) declares **`:unix`** and **`:little-endian`** for the depending system's own clauses and component files, and pushes both onto `*features*` at run time. `:unix` because every backend's file/path/environment surface is POSIX-shaped and none is Windows; `:little-endian` because the only places a program can see machine layout (WASM linear memory, a reactor's `:bytes` boundary) are little-endian by the wasm spec; **`:64-bit`** because every backend has 64-bit fixnums and every pointer-shaped value is 8 bytes wherever pointers exist at all — cffi's `types.lisp` reads exactly this to give `:size` a base type. The CPU name `:x86-64` stays absent — rontolisp has no instruction-set surface to describe — and so does `:32-bit`, which rontolisp is never. Upstream's own `.asd` cannot load here at all: it ends in `(error "Sorry, your Lisp is not supported")` for an implementation it does not recognize |
 | `trivial-garbage` (nickname `tg`) | GC finalizers as honest no-ops: `tg:finalize` registers nothing and returns the object, `tg:cancel-finalization` is a `nil` no-op. `tg:make-weak-hash-table` answers an ORDINARY hash table (`:weakness` and `:weakness-matters` are dropped, every other argument reaches `make-hash-table`) and `tg:hash-table-weakness` answers `nil`: weakness is not observable from within Common Lisp, so the only difference is that the table retains more. No backend exposes GC hooks — and Common Lisp gives finalizers no guarantee of ever running, so a conforming consumer must already work when they never fire. Practical consequence for `dbd-postgres` (its consumer): a leaked prepared statement lives until the connection closes; call `dbi:disconnect` explicitly |

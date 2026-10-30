@@ -995,12 +995,28 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readReadEvalWrappedInMarkerInTolerantMode() {
-		// A readable #. datum is wrapped in a (%read-eval datum) marker for the .asd
-		// consumer (AsdfSystems) to resolve against the file's defparameter bindings.
-		List<LispVal> result = LispReader.readAllSkippingReadEval("#.*string-file* 42", Features.INTERPRETER);
-		assertThat(result).containsExactly(LispReader.readFromString("(%read-eval *string-file*)"),
-				new LispInteger(42));
+	void readNextFormReadsOneTopLevelDatumAtATimeInTolerantMode() {
+		// The .asd read (AsdfSystems.loadAsd): one datum per step, each step with the
+		// features the caller has by then, so a feature an earlier form pushed decides a
+		// later guard. A readable #. datum is wrapped in a (%read-eval datum) marker for
+		// the consumer to resolve; one that does not parse (an unquote outside a
+		// backquote) becomes (%read-eval-unreadable "RAW TEXT") -- one datum either way,
+		// so it cannot shift the surrounding structure, carrying the text the consumer
+		// needs to decide.
+		String input = "#.*string-file* #.,foo\n#+late (late) 42";
+		LispReader.NextForm first = LispReader.readNextForm(input, 0, Features.INTERPRETER, "lib.asd");
+		assertThat(first.forms()).containsExactly(LispReader.readFromString("(%read-eval *string-file*)"));
+		LispReader.NextForm second = LispReader.readNextForm(input, first.end(), Features.INTERPRETER, "lib.asd");
+		assertThat(second.forms()).containsExactly(LispReader.readFromString("(%read-eval-unreadable \",foo\")"));
+		assertThat(LispReader.readNextForm(input, second.end(), Features.INTERPRETER.with(List.of("late")), "lib.asd")
+			.forms()).containsExactly(LispReader.readFromString("(late)"));
+		LispReader.NextForm dropped = LispReader.readNextForm(input, second.end(), Features.INTERPRETER, "lib.asd");
+		assertThat(dropped.forms()).containsExactly(new LispInteger(42));
+		assertThat(LispReader.readNextForm(input, dropped.end(), Features.INTERPRETER, "lib.asd").end()).isEqualTo(-1);
+		// A read error names the file's own line, not a line of the step's span.
+		assertThatThrownBy(() -> LispReader.readNextForm("(a)\n(b))", 7, Features.INTERPRETER, "lib.asd"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.asd:2:");
 	}
 
 	@Test
@@ -1008,18 +1024,6 @@ class LispReaderTest {
 		// The runtime read built-ins' entry point: one datum, marker mode.
 		assertThat(LispReader.readFromStringWithReadEvalMarkers("#.(+ 1 2)", Features.INTERPRETER))
 			.isEqualTo(LispReader.readFromString("(%read-eval (+ 1 2))"));
-	}
-
-	@Test
-	void readReadEvalUnparsableDatumCarriesItsRawTextInTolerantMode() {
-		// A #. datum that does not parse (here an unquote outside a backquote) becomes a
-		// (%read-eval-unreadable "RAW TEXT") marker: it occupies exactly one datum, so it
-		// cannot shift the surrounding structure (e.g. plist/alist pairing inside an .asd
-		// option), and it carries the source text the CONSUMER needs to decide -- silent
-		// in metadata, a hard error where the value would decide what gets loaded.
-		List<LispVal> result = LispReader.readAllSkippingReadEval("#.,foo 42", Features.INTERPRETER);
-		assertThat(result).containsExactly(LispReader.readFromString("(%read-eval-unreadable \",foo\")"),
-				new LispInteger(42));
 	}
 
 	@Test

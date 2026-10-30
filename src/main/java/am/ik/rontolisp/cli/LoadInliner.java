@@ -25,11 +25,13 @@ import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -215,7 +217,7 @@ public final class LoadInliner {
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
-				baseDir, standards);
+				baseDir, standards, new BuildImage(features));
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
 		}
@@ -246,14 +248,46 @@ public final class LoadInliner {
 	 * system reads when it derives a dependency), the already-loaded systems, the
 	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
 	 * which {@code ql:quickload} extends with the downloaded cache directories -- the
-	 * reader features for loaded files, the dist downloader, and the entry source's
-	 * directory (the base every path in the spliced program is resolved against once this
-	 * pass has flattened it).
+	 * reader features for loaded files, the dist downloader, the entry source's directory
+	 * (the base every path in the spliced program is resolved against once this pass has
+	 * flattened it), and the build image {@code .asd} files are loaded into.
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
 			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
-			@Nullable String entryBaseDir, SourceStandards standards) {
+			@Nullable String entryBaseDir, SourceStandards standards, BuildImage buildImage) {
+	}
+
+	/**
+	 * The image the compile path loads {@code .asd} files into
+	 * ({@link LispEvaluator#buildImage}): an interpreter at compile time, created on the
+	 * first {@code .asd} -- a program whose systems are all built in or defined inline
+	 * never pays for one. What a file does there stays there; the program gets the plan
+	 * its {@code defsystem} forms record. Its output goes to standard error, where a
+	 * compiler's diagnostics go.
+	 */
+	private static final class BuildImage {
+
+		private final Features target;
+
+		@Nullable private LispEvaluator image;
+
+		BuildImage(Features target) {
+			this.target = target;
+		}
+
+		LispEvaluator image(Ctx ctx, List<String> searchDirs) {
+			LispEvaluator built = this.image;
+			if (built == null) {
+				built = LispEvaluator.buildImage(System.err, this.target, ctx.loader(), ctx.systems(),
+						ctx.systemPackages());
+				this.image = built;
+			}
+			// A system a .asd loads is searched for where the compile path searches.
+			built.setSystemPath(searchDirs);
+			return built;
+		}
+
 	}
 
 	/**
@@ -583,11 +617,22 @@ public final class LoadInliner {
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
-			// .asd forms read upcased like all source; AsdfSystems matches clause
-			// keywords case-insensitively and coerce-names system designators.
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(), ctx.features(),
-					ctx.systemPackages())) {
-				ctx.systems().putIfAbsent(defined.name(), defined);
+			// The .asd runs in the build image, and each system it defines is registered
+			// the moment it is defined. .asd forms read upcased like all source;
+			// AsdfSystems matches clause keywords case-insensitively and coerce-names
+			// system designators.
+			LispEvaluator image = ctx.buildImage().image(ctx, searchDirs);
+			try {
+				AsdfSystems.loadAsd(asd.source(), asd.path(), ctx.features(), ctx.systemPackages(), image.asdImage(),
+						defined -> ctx.systems().putIfAbsent(defined.name(), defined));
+			}
+			catch (IllegalStateException | LispReadException ex) {
+				throw ex;
+			}
+			catch (RuntimeException ex) {
+				// What the file's own forms signalled, at compile time: name the file,
+				// as a defsystem the parse refuses does.
+				throw new IllegalStateException(asd.path() + ": " + ex.getMessage(), ex);
 			}
 			system = ctx.systems().get(name);
 			if (system == null) {
@@ -610,7 +655,8 @@ public final class LoadInliner {
 		Ctx systemCtx = system.features().isEmpty() ? ctx
 				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
 						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
-						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir(), ctx.standards());
+						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir(), ctx.standards(),
+						ctx.buildImage());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each

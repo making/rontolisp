@@ -225,8 +225,44 @@ public final class LispLexer {
 	record Prefix(List<LocatedToken> tokens, @Nullable LispReadException error) {
 	}
 
+	/**
+	 * The end of the next top-level datum at or after {@code start}: the offset one past
+	 * it, or {@code -1} when only whitespace and comments remain. A failed
+	 * {@code #+}/{@code #-} guard and its form are consumed on the way, so the span may
+	 * hold no datum at all when a dropped form is the last one in the input.
+	 * @param start the offset to scan from
+	 * @return the offset after the datum, or {@code -1} at end of input
+	 */
+	int nextDatumEnd(int start) {
+		this.pos = start;
+		skipInterTokenSpace();
+		if (this.pos >= this.input.length()) {
+			return -1;
+		}
+		skipDatum();
+		return this.pos;
+	}
+
+	/**
+	 * Tokenizes {@code input[start, end)}, the span {@link #nextDatumEnd} measured, with
+	 * every token positioned in the WHOLE input.
+	 * @param start the first offset
+	 * @param end the offset one past the span
+	 * @return the positioned tokens
+	 */
+	List<LocatedToken> tokenizeSpan(int start, int end) {
+		List<LocatedToken> tokens = new ArrayList<>();
+		this.pos = start;
+		tokenizeInto(tokens, end);
+		return tokens;
+	}
+
 	private void tokenizeInto(List<LocatedToken> tokens) {
-		while (this.pos < this.input.length()) {
+		tokenizeInto(tokens, this.input.length());
+	}
+
+	private void tokenizeInto(List<LocatedToken> tokens, int end) {
+		while (this.pos < end) {
 			char c = this.input.charAt(this.pos);
 			// Whitespace, comments and feature conditionals produce no token; consuming
 			// them here lets every token branch below start at a real token start.
@@ -302,8 +338,8 @@ public final class LispLexer {
 				int datumStart = this.pos;
 				skipDatum();
 				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker for
-				// the consumer to resolve: AsdfSystems against a .asd file's defparameter
-				// bindings, the evaluator's load against the global environment. In
+				// the consumer to resolve: AsdfSystems in the image a .asd file is loaded
+				// into, the evaluator's load against the global environment. In
 				// SKIP_UNREADABLE mode a datum using syntax the lexer does not support
 				// becomes a (%read-eval-unreadable "RAW TEXT") marker instead: it keeps
 				// the surrounding structure (a #. inside a plist/alist must not shift the

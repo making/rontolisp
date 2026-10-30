@@ -257,7 +257,10 @@ constructor is a compile error there.
   spelling ([Reader Case](reader-case.md)). The ordinary printing operators do
   not consult `*print-pprint-dispatch*`: an entry fires where the program calls
   the entry function itself.
-- `#.` read-time eval is skipped with a warning inside `.asd` files.
+- In a `.asd` file, a `#.` inside a `defsystem` is evaluated only where its
+  value decides what gets loaded; in ignored metadata (`:long-description`,
+  `:version`, ...) it is dropped unevaluated, and a top-level one (an ASDF
+  version guard) is skipped.
 - built-in macro names (`cond`, `case`, `when`, `setf`, `push`, ...) cannot be
   redefined.
 

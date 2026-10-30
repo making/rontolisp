@@ -1130,10 +1130,10 @@ public final class PackageRegistry {
 						LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK,
 						LispNames.FFI_POKE, LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP,
 						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO, LispNames.FFI_APPLY_CALL))));
-		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
-		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
-		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not
-		// use cl; every registered symbol is external.
+		// A limited, API-compatible subset of ASDF (.asd files run as Lisp, their
+		// defsystem forms parsed as data -- see eval.AsdfSystems; the runtime component
+		// metaobject family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp).
+		// Does not use cl; every registered symbol is external.
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
 						LispNames.TEST_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,

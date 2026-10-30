@@ -18,7 +18,6 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
-import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.reader.Features;
@@ -26,12 +25,13 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The shared core of the limited ASDF subset: parses {@code asdf:defsystem} forms and
- * {@code .asd} files as plain data (they are never evaluated), orders a system's
- * components by their {@code :depends-on}/{@code :serial} constraints, and locates
- * {@code NAME.asd} files on a search path. Real ASDF is not ported -- there is no CLOS
- * {@code operate} machinery, no general {@code :perform} -- so anything outside the
- * supported subset is a hard error naming the unsupported clause.
+ * The shared core of the limited ASDF subset: loads {@code .asd} files ({@link #loadAsd}
+ * -- the file runs as Lisp in an {@link AsdImage}, and its {@code defsystem} forms are
+ * parsed as plain data), orders a system's components by their
+ * {@code :depends-on}/{@code :serial} constraints, and locates {@code NAME.asd} files on
+ * a search path. Real ASDF is not ported -- the plan a system is loaded by is fixed, not
+ * computed, and a {@code defsystem} option outside the supported subset is a hard error
+ * naming the unsupported clause.
  *
  * <p>
  * The supported {@code defsystem} grammar is: a literal system name (string, keyword or
@@ -72,12 +72,12 @@ public final class AsdfSystems {
 	 * working-directory-relative)
 	 * @param features the feature names this system holds beyond the loader's own set:
 	 * those its {@code :rontolisp-features} option declares, plus those the enclosing
-	 * {@code .asd} really pushed onto {@code *features*} from an {@code eval-when} ahead
-	 * of the form ({@code AsdfSystems.collectFeaturePushes}) -- one mechanism, two
-	 * spellings. They hold while THIS system's own clauses are parsed and while its
-	 * component files are read, and each loader widens its own base set with them
-	 * ({@code Features.with}) -- so the backend feature stays the loader's, and a
-	 * dependency (parsed from its own {@code .asd}) never inherits them
+	 * {@code .asd} pushed onto {@code *features*} ahead of the form, however it computed
+	 * them ({@link AsdLoad#pushedFeatures}) -- one mechanism, two spellings. They hold
+	 * while THIS system's own clauses are parsed and while its component files are read,
+	 * and each loader widens its own base set with them ({@code Features.with}) -- so the
+	 * backend feature stays the loader's, and a dependency (parsed from its own
+	 * {@code .asd}) never inherits them
 	 * @param packageInferredDir the directory a SUB-SYSTEM name resolves against when
 	 * this system is a {@code :class :package-inferred-system} ({@code ""} when the
 	 * system declares no {@code :pathname}, so sub-systems sit beside the {@code .asd}),
@@ -158,8 +158,8 @@ public final class AsdfSystems {
 
 	/**
 	 * Returns whether {@code form} is an {@code asdf:defsystem} form. Only the
-	 * {@code asdf}-qualified spelling counts here (inside a {@code .asd} file, parsed by
-	 * {@link #parseAsdSource}, the bare {@code defsystem} spelling is accepted too).
+	 * {@code asdf}-qualified spelling counts here (inside a {@code .asd} file, loaded by
+	 * {@link #loadAsd}, the bare {@code defsystem} spelling is accepted too).
 	 * @param form the form to test
 	 * @return {@code true} if the form is an {@code asdf:defsystem} call
 	 */
@@ -241,172 +241,286 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Parses the source text of a {@code .asd} file as plain data: {@code defsystem}
-	 * forms (any package spelling) become {@link LispSystem}s whose component files
-	 * resolve against the {@code .asd} file's directory, {@code in-package} and
-	 * {@code defpackage} forms are skipped (the file is never evaluated, so the
-	 * system-definition package header idiom does not matter), a top-level
-	 * {@code defparameter} is evaluated into a parse-time data environment when its value
-	 * is pure data (the cl-postgres {@code *string-file*} idiom); an IMPURE value does
-	 * not fail the file -- the name is recorded as unevaluable instead, and only a later
-	 * form that actually reads it fails, naming the parameter (the consumer-decides rule
-	 * {@code #.} already follows, below), a top-level {@code eval-when} announcing
-	 * features with {@code pushnew} declares them for the systems defined after it
-	 * ({@link #collectFeaturePushes}), a top-level {@code defmethod} is tolerated and
-	 * ignored, except that a {@code source-file-type} method sets its class's file
-	 * extension (collected in a pre-pass by {@link #collectSourceFileTypes}), a
-	 * component-class {@code defclass} declares a component type
-	 * ({@link #collectComponentClass}), a top-level {@code progn} is FLATTENED -- its
-	 * body forms are spliced back onto the form worklist and each hits this same
-	 * recognizer, so a nested {@code progn} recurses, an empty one is a no-op and an
-	 * unsupported form inside one still errors by its own name rather than by
-	 * {@code PROGN} -- and any other form is a hard error naming the file. A {@code #.}
-	 * read-time-eval datum (wrapped in a {@code %read-eval} marker by the tolerant
-	 * reader) is resolved against that environment WHERE ITS VALUE IS CONSUMED
-	 * ({@link #resolveReadEval}); a top-level one is ignored (the ASDF-version-guard
-	 * idiom). {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
+	 * The image a {@code .asd} file is LOADED into: the evaluator its forms run in. A
+	 * real {@code .asd} is a Lisp program -- a conditional {@code defpackage}, a
+	 * {@code warn}, a {@code find-system} probe, a feature it computes and pushes -- so
+	 * it runs in one ({@link #loadAsd}). The interpreter's image is the program's own
+	 * evaluator; a compile path's is a build-time evaluator whose state never reaches the
+	 * program, so what the program gets from a {@code .asd} is the plan its
+	 * {@code defsystem} forms record, on every backend alike.
+	 */
+	@FunctionalInterface
+	public interface AsdImage {
+
+		/**
+		 * Opens the load of one {@code .asd}: {@code *package*} bound to
+		 * {@code asdf-user} (an {@code in-package} inside is scoped to the load),
+		 * {@code *load-pathname*}/{@code *load-truename*} to the file, and
+		 * {@code *features*} to its current value, so what the file pushes is ITS
+		 * declaration ({@link AsdLoad#pushedFeatures}), undone when the load ends. A
+		 * system the file's own forms load stays loaded, and so do the features it
+		 * pushes.
+		 * @param asdPath the resolved path of the {@code .asd} file
+		 * @param nestedDefsystems records an {@code asdf:defsystem} that EVALUATION
+		 * reaches -- one a {@code when} guards, or a macro expands to -- and answers the
+		 * system it defined
+		 * @return the open load, closed when the file is done
+		 */
+		AsdLoad open(String asdPath, Function<LispVal, LispSystem> nestedDefsystems);
+
+	}
+
+	/**
+	 * One open {@code .asd} load ({@link AsdImage#open}).
+	 */
+	public interface AsdLoad extends AutoCloseable {
+
+		/**
+		 * Evaluates a top-level form of the file, its {@code #.} markers resolved first.
+		 * @param form the form as read
+		 */
+		void eval(LispVal form);
+
+		/**
+		 * The value of a {@code #.} datum that a load-bearing {@code defsystem} option
+		 * holds ({@link #resolveReadEval}).
+		 * @param datum the datum of the {@code %read-eval} marker
+		 * @return its value
+		 */
+		LispVal readEval(LispVal datum);
+
+		/**
+		 * The feature names the load has pushed onto {@code *features*} since it opened,
+		 * in push order and spelled as {@code :rontolisp-features} records them -- what
+		 * the file's later forms are read with and what a system it defines next holds.
+		 * @return the pushed names
+		 */
+		List<String> pushedFeatures();
+
+		/**
+		 * The systems the file's OWN forms loaded ({@code asdf:load-system} and what
+		 * calls it) since the last call, in order. Real ASDF loads them into the image
+		 * while it reads the file, ahead of every system the file defines after the call,
+		 * which is what {@code :defsystem-depends-on} declares.
+		 * @return the loaded names
+		 */
+		List<String> takeLoadedSystems();
+
+		@Override
+		void close();
+
+	}
+
+	/**
+	 * Loads the source text of a {@code .asd} file into {@code image}, form at a time,
+	 * and answers the systems it defined. The file is Lisp and runs as Lisp; what the
+	 * PLAN reads is recognized by its shape before anything runs, so a system's
+	 * definition never depends on evaluating ASDF's own machinery:
+	 * <ul>
+	 * <li>{@code defsystem} (any package spelling) is the recording operator: its options
+	 * are parsed as data ({@link #parseDefsystem}) with the features the file has pushed
+	 * so far, and a {@code #.} in an option that decides what gets loaded is resolved in
+	 * the image ({@link #resolveReadEval}). An {@code asdf:defsystem} that evaluation
+	 * reaches instead -- inside a {@code when}, out of a macro -- is handed back through
+	 * the image and recorded the same way.</li>
+	 * <li>{@code register-system-packages} is recorded into {@code systemPackages}.</li>
+	 * <li>A component-class {@code defclass} declares a component type
+	 * ({@link #componentClass}); a {@code source-file-type} method sets its class's
+	 * extension (a pre-pass, {@link #collectSourceFileTypes}); every other
+	 * {@code defmethod} is ignored -- it extends the operations of the image the file was
+	 * loaded into, which a compile path's program never meets, and the plan here is fixed
+	 * rather than computed by them.</li>
+	 * <li>{@code progn}, and an {@code eval-when} whose situations fire on load, are
+	 * flattened, so each form inside meets these same rules; an {@code eval-when} that
+	 * does not fire is dropped. A top-level {@code #.} is ignored (the ASDF version
+	 * guard, whose whole effect is to refuse an old ASDF).</li>
+	 * <li>Every other form is EVALUATED in the image: the package header (a conditional
+	 * {@code defpackage} included), a {@code warn}, a {@code find-system} probe, a
+	 * {@code defparameter} a later {@code #.} reads, a feature push however it is
+	 * computed, an {@code asdf:load-system} -- whose system then precedes every system
+	 * defined after it, as a {@code :defsystem-depends-on} entry.</li>
+	 * </ul>
+	 * Each form is read with the loader's {@code features} widened by what the file has
+	 * pushed so far, so a {@code #+} sees the push of any form above it -- CL's
+	 * form-at-a-time {@code load}. A pushed feature is the file's declaration and reaches
+	 * only the systems it defines after the push (their {@link LispSystem#features}); it
+	 * does not stay in {@code *features*}, so no other system's read, and no other
+	 * {@code .asd}, depends on which files happened to load first.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
-	 * @param features the active reader features
-	 * @return the systems defined by the file
+	 * @param features the loader's reader features
+	 * @param systemPackages the loader's package-to-system map, extended in place by
+	 * {@code register-system-packages} ({@link #inferPackageInferredSystems} reads it)
+	 * @param image the image the file runs in
+	 * @param register enters a defined system into the loader's registry the moment it is
+	 * defined, so a later form of the same file finds or loads it
+	 * @return the systems the file defined, in order
 	 */
-	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features) {
-		return parseAsdSource(source, asdPath, features, new HashMap<>());
-	}
-
-	/**
-	 * Parses a {@code .asd} file ({@link #parseAsdSource(String, String, Features)}),
-	 * merging the file's {@code register-system-packages} declarations into
-	 * {@code systemPackages}: the loader-wide "package P lives in system S" map a
-	 * package-inferred system consults when it turns a component file's
-	 * {@code defpackage} dependency into a system name
-	 * ({@link #inferPackageInferredSystems}). ningle.asd's three lines are load-bearing
-	 * -- without them {@code app.lisp}'s {@code (:import-from #:lack.request ...)} asks
-	 * for a system called {@code lack.request}, and no such {@code .asd} exists.
-	 * @param source the {@code .asd} source text
-	 * @param asdPath the resolved path of the {@code .asd} file
-	 * @param features the active reader features
-	 * @param systemPackages the loader's package-to-system map, extended in place
-	 * @return the systems defined by the file
-	 */
-	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features,
-			Map<String, String> systemPackages) {
-		String baseDir = SourceLoader.parentDir(asdPath);
-		List<LispSystem> systems = new ArrayList<>();
-		Map<String, LispVal> parameters = new HashMap<>();
-		// Names an impure top-level defparameter bound, with the reason evalDataForm
-		// rejected the value, mapped to string(nameSym) -> reason. Recorded rather than
-		// failed at parse time: the "consumer decides" rule (#. below) applies here too
-		// --
-		// most such bindings exist for the .asd's own runtime and are never read by a
-		// later clause (see defineParameter).
-		Map<String, String> unevaluableParameters = new HashMap<>();
-		// Features the file pushes onto *features* ahead of a defsystem, accumulated in
-		// file order and merged into the declared features of every LATER system (see
-		// collectFeaturePushes).
-		List<String> pushedFeatures = new ArrayList<>();
-		// The component classes a tolerated top-level defclass declared, in file order
-		// like the feature pushes: they reach only the systems defined after them. The
-		// source-file-type extension overrides are collected in a PRE-PASS instead --
-		// real ASDF calls that generic function when it OPERATES on a component, long
-		// after the file is read, so where the method sits relative to the defsystem
-		// that uses the class must not matter (htmlgen.asd writes it right under the
-		// defclass, acl-compat.asd a hundred lines below one).
-		ComponentClasses componentClasses = new ComponentClasses();
-		// A top-level progn is flattened by splicing its body back onto the front of this
-		// worklist, so each subform hits the same recognizer below (nested progn
-		// recurses, an unsupported form inside one still names itself, not PROGN).
-		List<LispVal> forms = LispReader.readAllSkippingReadEval(source, features, asdPath);
-		collectSourceFileTypes(forms, componentClasses);
-		Deque<LispVal> pending = new ArrayDeque<>(forms);
-		while (!pending.isEmpty()) {
-			LispVal form = pending.removeFirst();
-			if (isReadEvalMarker(form) || isUnreadableReadEvalMarker(form)) {
-				// A top-level #. form (an ASDF version guard) has side effects the data
-				// parse cannot perform; ignore it, re-lexable or not.
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.PROGN)) {
-				List<LispVal> body = ((LispCons) form).toList();
-				for (int i = body.size() - 1; i >= 1; i--) {
-					pending.addFirst(body.get(i));
+	public static List<LispSystem> loadAsd(String source, String asdPath, Features features,
+			Map<String, String> systemPackages, AsdImage image, java.util.function.Consumer<LispSystem> register) {
+		AsdFile file = new AsdFile(asdPath, features, register);
+		// The source-file-type methods are a PRE-pass: real ASDF calls that generic
+		// function when it OPERATES on a component, long after the whole file is read,
+		// so where the method sits relative to the defsystem that uses the class must
+		// not matter (htmlgen.asd writes it right under the defclass, acl-compat.asd a
+		// hundred lines below one).
+		collectSourceFileTypes(LispReader.scanForms(source, features, asdPath), file.componentClasses);
+		try (AsdLoad load = image.open(asdPath, file::defineSystem)) {
+			file.load = load;
+			Deque<LispVal> pending = new ArrayDeque<>();
+			int offset = 0;
+			while (true) {
+				if (pending.isEmpty()) {
+					LispReader.NextForm next = LispReader.readNextForm(source, offset, file.features(), asdPath);
+					if (next.end() < 0) {
+						break;
+					}
+					offset = next.end();
+					pending.addAll(next.forms());
+					continue;
 				}
-				continue;
+				LispVal form = pending.removeFirst();
+				if (isReadEvalMarker(form) || isUnreadableReadEvalMarker(form)) {
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.PROGN)) {
+					pushBody(pending, ((LispCons) form).toList(), 1);
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.EVAL_WHEN)) {
+					List<LispVal> items = properList(LispNames.EVAL_WHEN, form);
+					if (items.size() >= 2 && firesOnLoad(items.get(1))) {
+						pushBody(pending, items, 2);
+					}
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.REGISTER_SYSTEM_PACKAGES)) {
+					collectSystemPackages(form, systemPackages, asdPath);
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.DEFMETHOD)) {
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.DEFCLASS) && file.declareComponentClass(form)) {
+					continue;
+				}
+				if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
+					file.defineSystem(form);
+					continue;
+				}
+				LispCons unreadable = unreadableReadEval(form);
+				if (unreadable != null) {
+					throw new IllegalStateException(
+							asdPath + ": the #. datum " + unreadableReadEvalText(unreadable) + " could not be read");
+				}
+				load.eval(form);
 			}
-			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.REGISTER_SYSTEM_PACKAGES)) {
-				collectSystemPackages(form, systemPackages, asdPath);
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.DEFPARAMETER)) {
-				defineParameter(form, parameters, unevaluableParameters, asdPath);
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.EVAL_WHEN) || operatorMemberIs(form, LispNames.PUSHNEW)
-					|| operatorMemberIs(form, LispNames.PUSH)) {
-				collectFeaturePushes(form, true, pushedFeatures, asdPath);
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.DEFMETHOD)) {
-				// Tolerated and ignored whole: there is no operate machinery for a
-				// method to run on. The one method whose EFFECT is representable here,
-				// source-file-type, was already collected by the pre-pass above.
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.DEFCLASS)) {
-				collectComponentClass(form, componentClasses, asdPath);
-				continue;
-			}
-			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(form, baseDir, features, pushedFeatures, componentClasses,
-						new AsdContext(asdPath, parameters, unevaluableParameters)));
-				continue;
-			}
-			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
-					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER + ", "
-					+ LispNames.REGISTER_SYSTEM_PACKAGES + ", a " + LispNames.EVAL_WHEN + "/" + LispNames.PUSHNEW
-					+ " feature announcement, a " + LispNames.DEFMETHOD + " hook, a component-class "
-					+ LispNames.DEFCLASS + " and a top-level " + LispNames.PROGN + " are recognized): " + form.print());
 		}
-		return systems;
+		return List.copyOf(file.systems);
+	}
+
+	/** Puts {@code items[from..]} back on the front of the worklist, in order. */
+	private static void pushBody(Deque<LispVal> pending, List<LispVal> items, int from) {
+		for (int i = items.size() - 1; i >= from; i--) {
+			pending.addFirst(items.get(i));
+		}
 	}
 
 	/**
-	 * Evaluates a top-level {@code (defparameter NAME VALUE [DOC])} in a {@code .asd}
-	 * file into the parse-time data environment. When the value is pure data the mini
-	 * evaluator supports ({@link #evalDataForm}) the name resolves to it; otherwise the
-	 * BINDING is not a parse error -- most such names exist for the {@code .asd}'s own
-	 * runtime and nothing here ever reads them (cl-json's {@code *cl-json-directory*}).
-	 * The name is instead recorded as unevaluable, with the reason, so it parses and then
-	 * fails NAMING ITSELF only where a later form actually reads it
-	 * ({@code evalDataForm}'s symbol case) -- the same "the consumer decides" rule this
-	 * file already applies to {@code #.} ({@link #resolveReadEval}). The shape of the
-	 * form itself (name, arity) is still checked eagerly: that is a syntax error, not a
-	 * purity question.
+	 * One {@code .asd} file being loaded: its directory, the component classes in scope,
+	 * the systems it defined so far, and the systems its own forms loaded, which precede
+	 * every system it defines after them.
 	 */
-	private static void defineParameter(LispVal form, Map<String, LispVal> parameters, Map<String, String> unevaluable,
-			String asdPath) {
-		List<LispVal> items = ((LispCons) form).toList();
-		if ((items.size() != 3 && items.size() != 4) || !(items.get(1) instanceof LispSymbol nameSym)) {
-			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER
-					+ " in a .asd file expects (defparameter NAME VALUE): " + form.print());
+	private static final class AsdFile {
+
+		private final String asdPath;
+
+		private final String baseDir;
+
+		private final Features features;
+
+		private final java.util.function.Consumer<LispSystem> register;
+
+		private final ComponentClasses componentClasses = new ComponentClasses();
+
+		private final List<LispSystem> systems = new ArrayList<>();
+
+		private final List<String> loadedByFile = new ArrayList<>();
+
+		@Nullable private AsdLoad load;
+
+		AsdFile(String asdPath, Features features, java.util.function.Consumer<LispSystem> register) {
+			this.asdPath = asdPath;
+			String parent = SourceLoader.parentDir(asdPath);
+			this.baseDir = parent == null ? "" : parent;
+			this.features = features;
+			this.register = register;
 		}
-		String name = symbolName(nameSym);
-		try {
-			LispVal value = evalDataForm(items.get(2), parameters, unevaluable);
-			parameters.put(name, value);
-			unevaluable.remove(name);
+
+		private AsdLoad load() {
+			return java.util.Objects.requireNonNull(this.load, "the .asd load is not open");
 		}
-		catch (IllegalStateException ex) {
-			parameters.remove(name);
-			unevaluable.put(name,
-					(ex.getMessage() == null ? "unsupported form" : ex.getMessage())
-							+ " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not over"
-							+ " earlier defparameters)");
+
+		/**
+		 * The features the next form is read with: the loader's plus the file's pushes.
+		 */
+		Features features() {
+			List<String> pushed = load().pushedFeatures();
+			return pushed.isEmpty() ? this.features : this.features.with(pushed);
 		}
+
+		/**
+		 * Declares the component class a {@code defclass} defines, or answers
+		 * {@code false} when it is not one -- an ordinary class, which the file then
+		 * evaluates like any other form.
+		 */
+		boolean declareComponentClass(LispVal form) {
+			List<LispVal> items = ((LispCons) form).toList();
+			ComponentClass declared = componentClass(items, this.componentClasses);
+			if (declared == null) {
+				return false;
+			}
+			this.componentClasses.declare(memberName((LispSymbol) items.get(1)), declared);
+			return true;
+		}
+
+		/** Parses and registers one {@code defsystem} form, answering the system. */
+		LispSystem defineSystem(LispVal form) {
+			AsdLoad open = load();
+			this.loadedByFile.addAll(open.takeLoadedSystems());
+			LispSystem system = parseDefsystem(form, this.baseDir, this.features, open.pushedFeatures(),
+					this.componentClasses, new AsdContext(this.asdPath, open));
+			system = withEarlierLoads(system, this.loadedByFile);
+			this.register.accept(system);
+			this.systems.add(system);
+			return system;
+		}
+
+	}
+
+	/**
+	 * {@code system} with the systems its {@code .asd} loaded before defining it leading
+	 * its {@code :defsystem-depends-on} -- loaded first, never a sideway dependency.
+	 */
+	private static LispSystem withEarlierLoads(LispSystem system, List<String> loaded) {
+		List<String> merged = new ArrayList<>();
+		for (String name : loaded) {
+			if (!name.equals(system.name()) && !merged.contains(name)) {
+				merged.add(name);
+			}
+		}
+		if (merged.isEmpty()) {
+			return system;
+		}
+		for (String name : system.defsystemDependsOn()) {
+			if (!merged.contains(name)) {
+				merged.add(name);
+			}
+		}
+		return new LispSystem(system.name(), system.dependsOn(), system.files(), system.baseDir(), system.features(),
+				system.packageInferredDir(), system.packageInferredClass(), system.testOp(), system.testOpEdges(),
+				List.copyOf(merged), system.version());
 	}
 
 	/**
@@ -481,9 +595,9 @@ public final class AsdfSystems {
 	private static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
 
 	/**
-	 * The component classes in scope while one {@code .asd} file is parsed: ASDF's own,
+	 * The component classes in scope while one {@code .asd} file is loaded: ASDF's own,
 	 * the ones the file declared with a top-level {@code defclass}
-	 * ({@link #collectComponentClass}), and the file-extension overrides its
+	 * ({@link #componentClass}), and the file-extension overrides its
 	 * {@code source-file-type} methods set ({@link #collectSourceFileTypes}).
 	 */
 	private static final class ComponentClasses {
@@ -521,8 +635,8 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Pre-pass over a {@code .asd}'s top-level forms -- descending into {@code progn},
-	 * the way the main worklist flattens one -- for
+	 * Pre-pass over a {@code .asd}'s top-level forms -- descending into {@code progn} and
+	 * a firing {@code eval-when}, the way {@link #loadAsd} flattens them -- for
 	 * {@code (defmethod source-file-type ((c CLASS) (s module)) "ext")}, the other half
 	 * of how a class says its sources are not named {@code .lisp} (the first half being a
 	 * {@code (type :initform "ext")} slot). It is a PRE-pass because real ASDF calls the
@@ -537,6 +651,14 @@ public final class AsdfSystems {
 			if (operatorMemberIs(form, LispNames.PROGN)) {
 				List<LispVal> body = ((LispCons) form).toList();
 				collectSourceFileTypes(body.subList(1, body.size()), classes);
+				continue;
+			}
+			if (operatorMemberIs(form, LispNames.EVAL_WHEN)) {
+				List<LispVal> items = ((LispCons) form).toList();
+				if (items.size() >= 2 && items.get(1) instanceof LispCons situations && situations.isProperList()
+						&& firesOnLoad(situations)) {
+					collectSourceFileTypes(items.subList(2, items.size()), classes);
+				}
 				continue;
 			}
 			if (!operatorMemberIs(form, LispNames.DEFMETHOD)) {
@@ -558,12 +680,12 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Collects a tolerated top-level {@code defclass} in a {@code .asd} file. Only a
-	 * COMPONENT class is accepted -- every superclass must be one ASDF defines
-	 * ({@link #BUILTIN_COMPONENT_CLASSES}) or one this file declared earlier, which costs
-	 * nothing in generality because real ASDF resolves a component type by
-	 * {@code find-class} while it READS the {@code defsystem}, so the class has to
-	 * precede its use anyway -- and the declaration decides only what a
+	 * The component class a top-level {@code defclass} in a {@code .asd} file declares,
+	 * or {@code null} when it declares none. A COMPONENT class is one whose every
+	 * superclass ASDF defines ({@link #BUILTIN_COMPONENT_CLASSES}) or this file declared
+	 * earlier, which costs nothing in generality because real ASDF resolves a component
+	 * type by {@code find-class} while it READS the {@code defsystem}, so the class has
+	 * to precede its use anyway -- and the declaration decides only what a
 	 * {@link ComponentClass} holds: whether components of the class contribute a source
 	 * file (inherited from the superclasses) and their file extension (inherited too, and
 	 * overridable by a {@code (type :initform "ext")} slot, which is the very slot ASDF's
@@ -571,38 +693,29 @@ public final class AsdfSystems {
 	 * {@code (defclass txt-file (doc-file) ((type :initform "txt")))} -- ordering-only --
 	 * and portableaserve's
 	 * {@code (defclass legacy-acl-source-file (cl-source-file.cl) ())}, whose components
-	 * load {@code NAME.cl}. A defclass that is not a component class (an operation, a
-	 * condition) stays a hard error.
+	 * load {@code NAME.cl}. Any other class (an operation, a condition) is the file's own
+	 * business: {@link #loadAsd} evaluates it.
 	 */
-	private static void collectComponentClass(LispVal form, ComponentClasses classes, String asdPath) {
-		List<LispVal> items = ((LispCons) form).toList();
-		if (items.size() >= 3 && items.get(1) instanceof LispSymbol name && items.get(2) instanceof LispCons supers
-				&& supers.isProperList()) {
-			boolean source = false;
-			String fileType = "";
-			boolean allComponents = true;
-			for (LispVal superClass : supers.toList()) {
-				ComponentClass resolved = superClass instanceof LispSymbol superSym ? classes.find(memberName(superSym))
-						: null;
-				if (resolved == null) {
-					allComponents = false;
-					break;
-				}
-				if (resolved.source() && !source) {
-					source = true;
-					fileType = resolved.fileType();
-				}
+	@Nullable private static ComponentClass componentClass(List<LispVal> items, ComponentClasses classes) {
+		if (items.size() < 3 || !(items.get(1) instanceof LispSymbol) || !(items.get(2) instanceof LispCons supers)
+				|| !supers.isProperList()) {
+			return null;
+		}
+		boolean source = false;
+		String fileType = "";
+		for (LispVal superClass : supers.toList()) {
+			ComponentClass resolved = superClass instanceof LispSymbol superSym ? classes.find(memberName(superSym))
+					: null;
+			if (resolved == null) {
+				return null;
 			}
-			if (allComponents) {
-				String initform = items.size() >= 4 ? slotTypeInitform(items.get(3)) : null;
-				classes.declare(memberName(name), new ComponentClass(source, initform == null ? fileType : initform));
-				return;
+			if (resolved.source() && !source) {
+				source = true;
+				fileType = resolved.fileType();
 			}
 		}
-		throw new IllegalStateException(asdPath + ": only a component class -- a subclass of ASDF's cl-source-file"
-				+ " (incl. cl-source-file.cl/.lsp), static-file or doc-file, or of a class declared earlier in the"
-				+ " same file -- is tolerated as a top-level " + LispNames.DEFCLASS + " in a .asd file: "
-				+ form.print());
+		String initform = items.size() >= 4 ? slotTypeInitform(items.get(3)) : null;
+		return new ComponentClass(source, initform == null ? fileType : initform);
 	}
 
 	/**
@@ -651,62 +764,8 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Collects the features a top-level {@code (eval-when (SITUATION...) (pushnew :F
-	 * *features*) ...)} -- or a bare top-level {@code pushnew}/{@code push} -- announces.
-	 * This is the idiom a real {@code .asd} uses to say "this library is present" and to
-	 * take its own per-implementation decisions before its {@code defsystem} reads them
-	 * back; fast-io.asd opens with exactly two of them.
-	 * <p>
-	 * The push is recorded STATICALLY and handed to {@link #parseDefsystem} as if the
-	 * system had declared it with {@code :rontolisp-features} -- one mechanism, so an
-	 * upstream file and a bundled replacement {@code .asd} behave identically (see
-	 * {@code .kb/asdf.md}). What that buys is the system's own {@code :if-feature} /
-	 * {@code (:feature ...)} clauses and the reading of its component files -- carrying
-	 * the announcement OUT of the {@code .asd}, which is the half the reader cannot do
-	 * for itself (a {@code #+} in the SAME file already sees the push,
-	 * {@code reader.FeaturePushes}). It does not reach a dependency, which declares its
-	 * own.
-	 * <p>
-	 * Only the feature-announcement shape is accepted -- anything else inside the
-	 * {@code eval-when} is a hard error naming the form, like every other unsupported
-	 * {@code .asd} form (deny by default; the file is data, never evaluated).
-	 * @param form the {@code eval-when}/{@code pushnew} form
-	 * @param fires whether the enclosing {@code eval-when} situations fire when the
-	 * {@code .asd} is loaded
-	 * @param pushed the accumulating feature names, in file order
-	 * @param asdPath the {@code .asd} path, for error messages
-	 */
-	private static void collectFeaturePushes(LispVal form, boolean fires, List<String> pushed, String asdPath) {
-		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
-			throw featurePushError(asdPath, form);
-		}
-		List<LispVal> items = cons.toList();
-		if (operatorMemberIs(form, LispNames.EVAL_WHEN)) {
-			if (items.size() < 2) {
-				throw featurePushError(asdPath, form);
-			}
-			boolean nested = fires && firesOnLoad(items.get(1));
-			for (LispVal body : items.subList(2, items.size())) {
-				collectFeaturePushes(body, nested, pushed, asdPath);
-			}
-			return;
-		}
-		if (!operatorMemberIs(form, LispNames.PUSHNEW) && !operatorMemberIs(form, LispNames.PUSH)) {
-			throw featurePushError(asdPath, form);
-		}
-		if (items.size() != 3 || !(items.get(1) instanceof LispSymbol feature) || !feature.isKeyword()
-				|| !isFeaturesReference(items.get(2))) {
-			throw featurePushError(asdPath, form);
-		}
-		String name = symbolName(feature);
-		if (fires && !pushed.contains(name)) {
-			pushed.add(name);
-		}
-	}
-
-	/**
-	 * Merges the {@code .asd}'s feature pushes with a system's own declared features,
-	 * pushes first, without duplicates.
+	 * Merges the features a {@code .asd} pushed before a {@code defsystem} with the
+	 * system's own declared features, pushes first, without duplicates.
 	 */
 	private static List<String> mergeFeatureNames(List<String> pushed, List<String> declared) {
 		if (pushed.isEmpty()) {
@@ -721,16 +780,11 @@ public final class AsdfSystems {
 		return List.copyOf(merged);
 	}
 
-	private static IllegalStateException featurePushError(String asdPath, LispVal form) {
-		return new IllegalStateException(asdPath + ": only a feature announcement -- (pushnew :FEATURE *features*),"
-				+ " alone or inside an " + LispNames.EVAL_WHEN + " -- is supported here: " + form.print());
-	}
-
 	/**
 	 * Whether an {@code eval-when}'s situation list fires when the {@code .asd} is
 	 * LOADED. ASDF {@code load}s a system-definition file and never compiles it, so a
-	 * {@code (:compile-toplevel)}-only push genuinely has no effect in a real
-	 * implementation either and must not widen the feature set here.
+	 * {@code (:compile-toplevel)}-only body genuinely has no effect in a real
+	 * implementation either and must not run here.
 	 */
 	private static boolean firesOnLoad(LispVal situations) {
 		for (LispVal situation : properList(LispNames.EVAL_WHEN, situations)) {
@@ -746,119 +800,17 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Whether {@code form} is a reference to {@code *features*}. One spelling reaches
-	 * here on every target: the symbol itself, because {@code *features*} is a variable
-	 * on all of them ({@code .kb/reader-features.md}). It used to be two -- the compile
-	 * backends had the reader substitute the quoted feature list for the symbol, which
-	 * this had to match against the active set to keep a stray
-	 * {@code (pushnew :x '(:a :b))} an error.
-	 */
-	private static boolean isFeaturesReference(LispVal form) {
-		return form instanceof LispSymbol sym && LispNames.FEATURES_VAR.equals(memberNameOf(sym));
-	}
-
-	/** The symbol's name with any package qualifier removed ({@code cl:*features*}). */
-	private static String memberNameOf(LispSymbol symbol) {
-		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(symbol.name());
-		return qualified == null ? symbol.name() : qualified.member();
-	}
-
-	/**
-	 * The mini evaluator for {@code .asd} parse-time data: literals evaluate to
-	 * themselves, a symbol reads an earlier {@code defparameter} (keywords are
-	 * self-evaluating), and {@code quote}/{@code if}/{@code or}/{@code and}/{@code not}
-	 * are supported -- exactly enough for the cl-postgres header
-	 * {@code (defparameter *string-file* (if *unicode* ...))} shape. Anything else throws
-	 * (deny by default; the {@code .asd} is never really evaluated). A symbol naming a
-	 * defparameter that WAS bound but to an impure value raises a distinct error naming
-	 * the parameter ({@code unevaluable}) rather than "undefined variable" -- this is the
-	 * "the consumer decides" enforcement point for {@link #defineParameter}.
-	 */
-	private static LispVal evalDataForm(LispVal form, Map<String, LispVal> parameters,
-			Map<String, String> unevaluable) {
-		if (form instanceof LispSymbol sym) {
-			if (sym.isKeyword()) {
-				return sym;
-			}
-			String name = symbolName(sym);
-			LispVal value = parameters.get(name);
-			if (value == null) {
-				String reason = unevaluable.get(name);
-				if (reason != null) {
-					throw new IllegalStateException(
-							LispNames.DEFPARAMETER + " " + sym.name() + " is not pure data (" + reason + ")");
-				}
-				throw new IllegalStateException("undefined variable " + sym.name());
-			}
-			return value;
-		}
-		if (!(form instanceof LispCons cons)) {
-			// Literals (strings, numbers, t, nil) evaluate to themselves.
-			return form;
-		}
-		if (!(cons.car() instanceof LispSymbol op)) {
-			throw new IllegalStateException("unsupported form " + form.print());
-		}
-		List<LispVal> items = cons.toList();
-		switch (op.name()) {
-			case LispNames.QUOTE -> {
-				return items.get(1);
-			}
-			case LispNames.IF -> {
-				if (items.size() != 3 && items.size() != 4) {
-					throw new IllegalStateException("unsupported form " + form.print());
-				}
-				boolean test = !(evalDataForm(items.get(1), parameters, unevaluable) instanceof LispNil);
-				if (test) {
-					return evalDataForm(items.get(2), parameters, unevaluable);
-				}
-				return items.size() == 4 ? evalDataForm(items.get(3), parameters, unevaluable) : LispNil.INSTANCE;
-			}
-			case LispNames.NOT -> {
-				if (items.size() != 2) {
-					throw new IllegalStateException("unsupported form " + form.print());
-				}
-				return evalDataForm(items.get(1), parameters, unevaluable) instanceof LispNil ? LispTrue.INSTANCE
-						: LispNil.INSTANCE;
-			}
-			case LispNames.OR -> {
-				LispVal result = LispNil.INSTANCE;
-				for (int i = 1; i < items.size(); i++) {
-					result = evalDataForm(items.get(i), parameters, unevaluable);
-					if (!(result instanceof LispNil)) {
-						return result;
-					}
-				}
-				return result;
-			}
-			case LispNames.AND -> {
-				LispVal result = LispTrue.INSTANCE;
-				for (int i = 1; i < items.size(); i++) {
-					result = evalDataForm(items.get(i), parameters, unevaluable);
-					if (result instanceof LispNil) {
-						return result;
-					}
-				}
-				return result;
-			}
-			default -> throw new IllegalStateException("unsupported form " + form.print());
-		}
-	}
-
-	/**
-	 * The enclosing {@code .asd} file's parse-time context: its path (for error messages)
-	 * and the data environment its top-level {@code defparameter}s built, which a
-	 * {@code #.} marker in a load-bearing option resolves against. A {@code defsystem}
-	 * written directly in a {@code .lisp} file has neither ({@link #NONE}).
+	 * The enclosing {@code .asd} file's load context: its path (for error messages) and
+	 * the open load whose image a {@code #.} marker in a load-bearing option is evaluated
+	 * in. A {@code defsystem} written directly in a {@code .lisp} file has neither
+	 * ({@link #NONE}).
 	 *
 	 * @param path the {@code .asd} path, or {@code null} when the form is not from one
-	 * @param parameters the parse-time {@code defparameter} bindings
-	 * @param unevaluable the names bound to an impure value, each mapped to the reason
-	 * {@link #evalDataForm} rejected it ({@link #defineParameter})
+	 * @param load the open load, or {@code null} when the form is not from one
 	 */
-	private record AsdContext(@Nullable String path, Map<String, LispVal> parameters, Map<String, String> unevaluable) {
+	private record AsdContext(@Nullable String path, @Nullable AsdLoad load) {
 
-		private static final AsdContext NONE = new AsdContext(null, Map.of(), Map.of());
+		private static final AsdContext NONE = new AsdContext(null, null);
 
 		/** The {@code "<path>: "} prefix every error from this file carries. */
 		private String prefix() {
@@ -868,10 +820,9 @@ public final class AsdfSystems {
 
 	/**
 	 * Resolves every {@code #.} marker inside a LOAD-BEARING {@code defsystem} value to
-	 * its parse-time value: a reference to an earlier {@code defparameter} or anything
-	 * else the mini evaluator supports ({@link #evalDataForm}) -- the cl-postgres
-	 * {@code (:file #.*string-file*)} idiom. An unresolvable one is a hard error naming
-	 * the {@code .asd} and the clause, like every other unsupported {@code .asd} shape.
+	 * its value in the image the {@code .asd} is loaded into -- a {@code defparameter}
+	 * the file evaluated above it, say: the cl-postgres {@code (:file #.*string-file*)}
+	 * idiom. An unresolvable one is a hard error naming the {@code .asd} and the clause.
 	 * <p>
 	 * Only the CONSUMER may call this, and only where the value decides something: what
 	 * gets loaded ({@code :depends-on}, {@code :components}, {@code :serial},
@@ -905,12 +856,16 @@ public final class AsdfSystems {
 			if (items.size() != 2) {
 				throw unresolvableReadEval(asd, context, cons.print(), "malformed read-time-eval marker");
 			}
-			try {
-				return evalDataForm(items.get(1), asd.parameters(), asd.unevaluable());
+			AsdLoad load = asd.load();
+			if (load == null) {
+				throw unresolvableReadEval(asd, context, items.get(1).print(), "no .asd is being loaded");
 			}
-			catch (IllegalStateException ex) {
+			try {
+				return load.readEval(items.get(1));
+			}
+			catch (RuntimeException ex) {
 				throw unresolvableReadEval(asd, context, items.get(1).print(),
-						ex.getMessage() == null ? "unsupported form" : ex.getMessage());
+						ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
 			}
 		}
 		if (isUnreadableReadEvalMarker(cons)) {
@@ -924,8 +879,7 @@ public final class AsdfSystems {
 	private static IllegalStateException unresolvableReadEval(AsdContext asd, String context, String datum,
 			String reason) {
 		return new IllegalStateException(asd.prefix() + context + ": cannot resolve the #. read-time-eval form " + datum
-				+ " (" + reason + "), and this clause decides what gets loaded -- a .asd is parsed as data, so only"
-				+ " literals, quote and if/or/and/not over earlier defparameters resolve");
+				+ " (" + reason + "), and this clause decides what gets loaded");
 	}
 
 	private static boolean isReadEvalMarker(LispVal form) {
@@ -962,25 +916,7 @@ public final class AsdfSystems {
 	 * @return the parsed system
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures) {
-		return parseDefsystem(form, baseDir, givenFeatures, List.of());
-	}
-
-	/**
-	 * Parses a {@code defsystem} form that an enclosing {@code .asd} preceded with
-	 * feature pushes ({@link #collectFeaturePushes}). The pushed names are merged into
-	 * the system's declared features ahead of its own {@code :rontolisp-features}, so
-	 * both spellings of "this system holds these features" travel one path.
-	 * @param form the {@code defsystem} form
-	 * @param baseDir the directory the component files resolve against, or {@code null}
-	 * for working-directory-relative
-	 * @param givenFeatures the features the {@code :if-feature} component option tests
-	 * @param pushedFeatures the feature names the enclosing {@code .asd} pushed onto
-	 * {@code *features*} before this form
-	 * @return the parsed system
-	 */
-	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
-			List<String> pushedFeatures) {
-		return parseDefsystem(form, baseDir, givenFeatures, pushedFeatures, new ComponentClasses(), AsdContext.NONE);
+		return parseDefsystem(form, baseDir, givenFeatures, List.of(), new ComponentClasses(), AsdContext.NONE);
 	}
 
 	/**
@@ -1014,12 +950,13 @@ public final class AsdfSystems {
 	 * for working-directory-relative
 	 * @param givenFeatures the features the {@code :if-feature} component option tests
 	 * @param pushedFeatures the feature names the enclosing {@code .asd} pushed onto
-	 * {@code *features*} before this form
+	 * {@code *features*} before this form, merged into the system's declared features
+	 * ahead of its own {@code :rontolisp-features}, so both spellings of "this system
+	 * holds these features" travel one path
 	 * @param componentClasses the component classes in scope in the enclosing
 	 * {@code .asd}
-	 * @param asd the enclosing {@code .asd} file's path and parse-time
-	 * {@code defparameter} bindings, which a load-bearing option's {@code #.} marker
-	 * resolves against
+	 * @param asd the enclosing {@code .asd} file's path and open load, whose image a
+	 * load-bearing option's {@code #.} marker is evaluated in
 	 * @return the parsed system
 	 */
 	private static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
@@ -1049,8 +986,8 @@ public final class AsdfSystems {
 		// :defsystem-depends-on is the one real ASDF loads while the .asd is READ; a
 		// plain :depends-on is loaded before this system's files are compiled, so it
 		// shows them its pushes too. Only a BUILT-IN system announces anything here (its
-		// features are a static table -- nothing is evaluated at parse time), which is
-		// exactly the trivial-features case the option exists for.
+		// features are a static table, and the defsystem parse itself evaluates
+		// nothing), which is exactly the trivial-features case the option exists for.
 		Features preFeatures = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> defsystemDependsOn = dependencyNames(":DEFSYSTEM-DEPENDS-ON", name, items, asd, preFeatures);
 		List<String> announcers = new ArrayList<>(defsystemDependsOn);
@@ -1219,6 +1156,27 @@ public final class AsdfSystems {
 		return new TestOp(List.copyOf(params), List.copyOf(body));
 	}
 
+	/**
+	 * The first {@code (%read-eval-unreadable "RAW")} marker in {@code form}, or
+	 * {@code null}: a {@code #.} the tolerant read could not re-lex, which a form about
+	 * to RUN cannot hold -- CL's read of it would have failed.
+	 */
+	@Nullable private static LispCons unreadableReadEval(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return null;
+		}
+		if (isUnreadableReadEvalMarker(cons)) {
+			return cons;
+		}
+		for (LispVal cell = cons; cell instanceof LispCons link; cell = link.cdr()) {
+			LispCons found = unreadableReadEval(link.car());
+			if (found != null) {
+				return found;
+			}
+		}
+		return null;
+	}
+
 	private static boolean containsReadEvalMarker(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (containsReadEvalMarker(cons.car())) {
@@ -1377,11 +1335,11 @@ public final class AsdfSystems {
 	 * of the option loop. rontolisp's own extension, not an ASDF option: it declares
 	 * statically what an upstream {@code .asd} pushes onto {@code *features*} from an
 	 * {@code eval-when}, for a replacement {@code .asd} that also has to decide the
-	 * per-implementation branch upstream takes at run time (postmodern's two). The
-	 * upstream push itself is read too now ({@link #collectFeaturePushes}) and lands in
-	 * the same place; what neither can reach is a {@code #+} in the SAME file, resolved
-	 * when the file was read. The declaration is additive only -- there is no way to turn
-	 * a feature OFF, since that would let a system claim to be a backend it is not.
+	 * per-implementation branch upstream takes at run time (postmodern's two). An
+	 * upstream {@code .asd}'s own push lands in the same place
+	 * ({@link AsdLoad#pushedFeatures}). The declaration is additive only -- there is no
+	 * way to turn a feature OFF, since that would let a system claim to be a backend it
+	 * is not.
 	 */
 	private static List<String> declaredFeatures(String systemName, List<LispVal> items, AsdContext asd) {
 		String context = LispNames.ASDF_DEFSYSTEM + " " + systemName + " :rontolisp-features";
@@ -1411,10 +1369,10 @@ public final class AsdfSystems {
 	 * What a dependency may CONTRIBUTE is narrow and deliberately so: only a BUILT-IN
 	 * system announces features ({@code BuiltinSystems.declaredFeatures}), because that
 	 * is a static table a parse can read, while a real third-party system announces its
-	 * features by RUNNING -- and a {@code .asd} is parsed as data, never evaluated. Both
-	 * options announce, because real ASDF loads a {@code :depends-on} system before this
-	 * system's files are compiled and so shows them its pushes too; the only divergence
-	 * is that here such an announcement also reaches this definition's OWN
+	 * features by RUNNING, and it runs only when the loader loads it, after this parse.
+	 * Both options announce, because real ASDF loads a {@code :depends-on} system before
+	 * this system's files are compiled and so shows them its pushes too; the only
+	 * divergence is that here such an announcement also reaches this definition's OWN
 	 * {@code :if-feature} clauses (there is no "load between the clauses" in a one-pass
 	 * parse), which is precisely what {@code :defsystem-depends-on} exists to guarantee.
 	 * @param option the option keyword, upcased with its leading colon
@@ -1463,9 +1421,10 @@ public final class AsdfSystems {
 			}
 			try {
 				String source = loader.load(path);
-				// An executable .asd (ironclad's) cannot be parsed as data: substitute
-				// the bundled replacement declaring the loadable slice, keeping the
-				// located path so component files resolve against the real library.
+				// A .asd whose systems this subset cannot take as written (ironclad's):
+				// substitute the bundled replacement declaring the loadable slice,
+				// keeping the located path so component files resolve against the real
+				// library.
 				String replacement = AsdOverrides.replacementSource(fileName);
 				return new LocatedAsd(path, replacement != null ? replacement : source);
 			}

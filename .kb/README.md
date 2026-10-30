@@ -214,8 +214,10 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Ecosystem and tooling
 
-- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset, and
-  the operation protocol (`asdf:perform` around every component load, the compile paths' thunks)
+- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset, a `.asd`
+  run as Lisp in an image (the compile paths' build image) with its `defsystem` forms parsed as
+  data, the measured decision for that over a data-only parse, and the operation protocol
+  (`asdf:perform` around every component load, the compile paths' thunks)
 - [uiop.md](uiop.md) -- uiop as the 15-sub-package bundle upstream is
 - [dists.md](dists.md) -- the download half of `ql:quickload`; `am.ik.artifact`, the fetch-and-cache layer every downloader shares (size + MD5 verification, timeouts, tar.gz/zip, atomic install)
 - [git-fetcher.md](git-fetcher.md) -- `am.ik.artifact.GitFetcher`: a repository at a full sha into the cache through the `git` CLI (why not forge archives), the clone/checkout layout and key, tag checks, the resolver's questions (a revision's commit, a tag, the descendant of two commits), the refusals
