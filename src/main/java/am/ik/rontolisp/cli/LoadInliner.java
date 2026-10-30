@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
 import am.ik.rontolisp.eval.AsdfSystems;
@@ -627,7 +628,15 @@ public final class LoadInliner {
 				// search path), so its directory becomes the first search entry.
 				spliceSystem(dependency, out, ctx, system.baseDir());
 			}
-			for (String file : system.files()) {
+			// Where the interpreter performs the system's own actions and each
+			// component's (the operation protocol, asdf.lisp): brackets the compilers
+			// lower into asdf:perform calls once the program defines a perform method,
+			// and that are dropped otherwise (SplicedComponentGroups).
+			out.add(SplicedComponentGroups.systemOpMarker(name, true));
+			List<String> files = system.files();
+			for (int index = 0; index < files.size(); index++) {
+				String file = files.get(index);
+				out.add(SplicedComponentGroups.componentMarker(name, index));
 				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), ctx.loader());
 				if (leafShim != null) {
 					// A substituted leaf module: splice the shim forms in the file's
@@ -644,16 +653,19 @@ public final class LoadInliner {
 					if (shimBracket) {
 						out.add(marker(LispNames.POP_PACKAGE));
 					}
-					continue;
 				}
-				// A component is loaded by its RESOLVED path (real ASDF hands load the
-				// component pathname), so *load-pathname* equals *load-truename* equals
-				// asdf:component-pathname for it -- what rove's file-to-package map
-				// correlates by.
-				String resolved = SourceLoader.resolve(system.baseDir(), file);
-				spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, systemCtx, resolved, name, file,
-						system.baseDir());
+				else {
+					// A component is loaded by its RESOLVED path (real ASDF hands load
+					// the component pathname), so *load-pathname* equals
+					// *load-truename* equals asdf:component-pathname for it -- what
+					// rove's file-to-package map correlates by.
+					String resolved = SourceLoader.resolve(system.baseDir(), file);
+					spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, systemCtx, resolved, name, file,
+							system.baseDir());
+				}
+				out.add(SplicedComponentGroups.componentEndMarker());
 			}
+			out.add(SplicedComponentGroups.systemOpMarker(name, false));
 			// The system's recorded :perform (test-op ...) body, as the defun the
 			// generated asdf:test-system dispatch calls -- emitted at the system's own
 			// splice point, so the body compiles in the system's context

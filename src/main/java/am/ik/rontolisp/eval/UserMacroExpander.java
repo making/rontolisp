@@ -1225,15 +1225,19 @@ public final class UserMacroExpander {
 		// (defmacro symbolic ...)), the shape every let-plus and array-operations form
 		// resolves through. Replaying the whole let gives the macro-time definition the
 		// same closure, and the binding inits (gensym calls here) run once, at macro
-		// time. Gated on the body being macro definitions only, so an unrelated
-		// top-level side effect is never swallowed.
-		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name)) {
+		// time. Gated on the body being macro definitions only -- plus a quoted value,
+		// which has no effect at top level -- so an unrelated top-level side effect is
+		// never swallowed. A flet/labels around the macros is the same shape over local
+		// functions: fiveam's def-special-environment expands to
+		// (flet () (defmacro ...) ... 'name).
+		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name) || LispNames.FLET.equals(name)
+				|| LispNames.LABELS.equals(name)) {
 			List<LispVal> letParts = cons.toList();
-			if (letParts.size() < 3) {
+			if (letParts.size() < 3 || !isOperator(letParts.get(2), LispNames.DEFMACRO)) {
 				return form;
 			}
-			for (int i = 2; i < letParts.size(); i++) {
-				if (!isOperator(letParts.get(i), LispNames.DEFMACRO)) {
+			for (int i = 3; i < letParts.size(); i++) {
+				if (!isOperator(letParts.get(i), LispNames.DEFMACRO) && !isOperator(letParts.get(i), LispNames.QUOTE)) {
 					return form;
 				}
 			}

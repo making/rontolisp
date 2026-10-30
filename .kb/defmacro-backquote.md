@@ -124,11 +124,13 @@ registry with plain top-level CALLS was invisible (trivia's `(set-vector-matcher
 - **A `defmacro` a macro EXPANDS to is consumed wherever it lands**
   (`stripDefmacroDefinitions`): directly, inside the `progn` the macro wrapped around it
   (recursing through `progn`/`eval-when`, dropping an emptied wrapper, mirroring
-  `stripSymbolMacroDefinitions`), and inside a top-level `let` that CLOSES OVER it -- the
-  whole `let` is replayed so the definition keeps its closure and the gensym inits run once,
-  gated on the body being macro definitions only. **Trap: a definition left in place compiles
-  to a call of the undefined function `DEFMACRO`, and every call site of the macro it should
-  have defined fails at run time.**
+  `stripSymbolMacroDefinitions`), and inside a top-level `let`/`let*`/`flet`/`labels` that
+  CLOSES OVER it -- the whole form is replayed so the definition keeps its closure and the
+  gensym inits run once, gated on the body being macro definitions only (a quoted value after
+  the first one is allowed: fiveam's `def-special-environment` ends its `(flet () ...)` with
+  `',name`). **Trap: a definition left in place compiles to a call of the undefined function
+  `DEFMACRO`, and every call site of the macro it should have defined fails at run time.**
+  Pinned by `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`.
 
 `define-compiler-macro` reuses `makeUserMacro`, `&whole`/`&environment` and `expandMacroCall`
 but lives in its own table ([compiler-macros.md](compiler-macros.md)).

@@ -170,8 +170,9 @@ library still has to stay inside the supported subset below.
   expression holds, or `(:version NAME "1.2.3")`, resolving to the plain
   dependency (the version constraint is not checked — the `:version` option is
   ignored metadata here, so there is nothing to check against). A top-level
-  `defmethod` is tolerated and ignored — there is no `operate` machinery for
-  one to run on — except
+  `defmethod` is tolerated and ignored — the `.asd` is data and never runs
+  (a library's `asdf:perform` method in its own sources does run, see below) —
+  except
   `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
   class's file extension wherever in the file it sits. A top-level `defclass`
   declares a **component class**: every superclass must be one of ASDF's
@@ -220,12 +221,12 @@ library still has to stay inside the supported subset below.
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
-  order. The test-op wiring options are the one op with machinery behind
-  them: `:in-order-to ((test-op (test-op ...)))` and
-  `:perform (test-op (o c) ...)` are recorded and driven by
-  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (any other
-  operation, a qualified `test-op :after` method, or a `#.` in the body stays
-  tolerated and ignored — there is still no general `operate` machinery). A
+  order. The test-op wiring options are recorded:
+  `:in-order-to ((test-op (test-op ...)))` and
+  `:perform (test-op (o c) ...)` are driven by
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (a
+  `:perform` for any other operation, a qualified `test-op :after` method, or a
+  `#.` in the body stays tolerated and ignored). A
   `:version` value may be any literal form including ASDF's
   `(:read-file-form ...)` indirection (never inspected — only a plain string is
   recorded). Anything else (`:around-compile`, ...) is an error naming the
@@ -275,12 +276,26 @@ library still has to stay inside the supported subset below.
   lists every registered name, and `asdf:*user-cache*` is external and `nil`
   (there is no fasl cache). This is the component model rove's system-driven
   test runner reads.
+- **So is the operation protocol.** Every action of a load is an
+  [`asdf:perform`](../reference/functions/asdf-perform.md) call on an
+  operation instance (`asdf:prepare-op`, `asdf:compile-op`, `asdf:load-op`,
+  `asdf:test-op`, all `asdf:operation`s) and a component: `prepare-op` on the
+  system, `prepare-op`/`compile-op`/`load-op` on each component file in load
+  order, then `compile-op`/`load-op` on the system. A library's method on
+  `perform` therefore runs around every component load on every backend —
+  asdf-flv's `:around` method gives fiveam its file-local `*suite*`.
+  [`asdf:operate`](../reference/functions/asdf-operate.md) performs `load-op`
+  (`load-system`) or `test-op` (`test-system`); `asdf:make-operation`,
+  `asdf:input-files`, `asdf:output-files` and `asdf:source-file-type` exist
+  for the methods libraries define. `asdf/interface` and real ASDF's internal
+  packages (`asdf/component`, `asdf/action`, ...) name these same symbols.
 - **`asdf:test-system` runs the recorded test-op wiring.**
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) loads the
-  system, follows its `:in-order-to` test-op chain, and runs each recorded
-  `:perform (test-op (o c) ...)` body with the component bound to the system
-  metaobject. On the compile paths a literal top-level call splices the test
-  systems too.
+  system, follows its `:in-order-to` test-op chain, and performs `test-op` on
+  each system, whose default method runs the recorded
+  `:perform (test-op (o c) ...)` body with the operation bound to the
+  `asdf:test-op` instance and the component to the system metaobject. On the
+  compile paths a literal top-level call splices the test systems too.
 - **Compiling tree-shakes the system.** A function, variable or constant a
   loaded system defines but your program never reaches — following names
   through the source, including quoted symbols and whole string literals — is

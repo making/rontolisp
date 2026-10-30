@@ -34,6 +34,7 @@ import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.RuntimeFunctionNames;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
@@ -504,6 +505,18 @@ final class JvmExprCompiler {
 			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
 		}
 		if (head instanceof LispSymbol sym) {
+			if (LispNames.RUN_TOP_GROUP.equals(sym.name())) {
+				// A top-level group's forms, run where this thunk body stands: Pass 2b
+				// compiled them into chunk methods main does not call
+				// (compiler/SplicedComponentGroups). Lambda bodies compile after Pass 2b,
+				// so the chunks are known here.
+				for (MethodRefEntry chunk : ctx.topGroupChunks
+					.getOrDefault(SplicedComponentGroups.runTopGroupIndex(cons), List.of())) {
+					ctx.body.invokestatic(chunk);
+				}
+				ctx.body.aconst_null();
+				return;
+			}
 			// A wrapped built-in called with a count its lambda list rules out never
 			// reaches a lowering, which would drop the surplus or index past the form: it
 			// evaluates its arguments and signals the interpreter's program-error

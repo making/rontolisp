@@ -1056,6 +1056,8 @@ categories:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
       - { slug: asdf-test-system, name: "asdf:test-system" }
+      - { slug: asdf-operate, name: "asdf:operate" }
+      - { slug: asdf-perform, name: "asdf:perform" }
       - { slug: asdf-find-system, name: "asdf:find-system" }
       - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }

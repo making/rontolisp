@@ -24,6 +24,7 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.wasm.Instruction;
@@ -463,6 +464,24 @@ final class WasmExprCompiler {
 			}
 		}
 		if (head instanceof LispSymbol sym) {
+			if (LispNames.RUN_TOP_GROUP.equals(sym.name())) {
+				// A top-level group's forms, run where this thunk body stands: the
+				// top-level emission compiled them into chunk functions _start does not
+				// call (compiler/SplicedComponentGroups), each an arity-0 callable
+				// ((env) -> eq) like every chunk. Lambda bodies compile after _start, so
+				// the chunks are known here.
+				for (int chunk : ctx.topGroupChunks.getOrDefault(SplicedComponentGroups.runTopGroupIndex(cons),
+						java.util.List.of())) {
+					ctx.writer.write(Instruction.REF_NULL);
+					ctx.writer.writeHeapType(Type.EQ.code());
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(chunk);
+					ctx.writer.write(Instruction.DROP);
+				}
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				return;
+			}
 			// A wrapped built-in called with a count its lambda list rules out never
 			// reaches a lowering, which would drop the surplus or index past the form: it
 			// evaluates its arguments and signals the interpreter's program-error
