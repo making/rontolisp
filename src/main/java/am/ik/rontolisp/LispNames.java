@@ -2260,6 +2260,15 @@ public final class LispNames {
 	public static final String DEFSTRUCT = "DEFSTRUCT";
 
 	/**
+	 * The {@code defstruct} header option {@code PackageResolver} adds when the struct
+	 * name, written unqualified, resolves to a symbol of ANOTHER package (inherited or
+	 * imported): {@code (:%intern-package "PKG")} names the package current at the form,
+	 * where CL interns the derived constructor, predicate, copier and accessor names.
+	 * Without it the derived names land in the struct name's own package.
+	 */
+	public static final String DEFSTRUCT_INTERN_PACKAGE = ":%INTERN-PACKAGE";
+
+	/**
 	 * The {@code defclass} special form (static CLOS subset). Expanded into the defuns it
 	 * generates (keyword constructor, reader/accessor functions) by
 	 * {@code LispMacroExpander.expandDefclass}: the interpreter expands at evaluation

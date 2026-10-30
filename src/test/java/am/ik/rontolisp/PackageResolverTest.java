@@ -504,6 +504,8 @@ class PackageResolverTest {
 		assertThat(resolve("(closer-common-lisp:class-slots c)")).isEqualTo("(CLOSER-MOP:CLASS-SLOTS C)");
 		assertThat(resolve("(c2cl:class-name c)")).isEqualTo("(CLOSER-MOP:CLASS-NAME C)");
 		assertThat(resolve("(c2cl:defclass foo nil nil)")).isEqualTo("(DEFCLASS FOO NIL NIL)");
+		// Exported though not implemented: rutils names it in code loading never runs.
+		assertThat(resolve("(c2mop:intern-eql-specializer x)")).isEqualTo("(CLOSER-MOP:INTERN-EQL-SPECIALIZER X)");
 	}
 
 	@Test
@@ -555,15 +557,23 @@ class PackageResolverTest {
 	void exportOfAStandardNameReExportsTheClSymbol() {
 		// (:use :cl) + (:export #:car) exports cl's CAR (CLHS 11.1.1.2), so the qualified
 		// spelling and a package using this one -- even without cl -- reach the bare
-		// name.
+		// name. rontolisp's own while is not a standard name: exporting it makes the
+		// package's own symbol, which a package using cl as well inherits (parenscript).
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage :rsa (:use :cl) (:export :car :boole))");
+		resolve(resolver, "(defpackage :rsa (:use :cl) (:export :car :boole :while))");
 		assertThat(resolve(resolver, "(rsa:car x)")).isEqualTo("(CAR X)");
 		assertThat(resolve(resolver, "(rsa::boole x)")).isEqualTo("(BOOLE X)");
 		resolve(resolver, "(defpackage :rsb (:use :rsa))");
+		resolve(resolver, "(defpackage :rsc (:use :cl :rsa))");
 		resolve(resolver, "(in-package :rsb)");
 		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR RSB::X)");
 		assertThat(resolve(resolver, "'(car boole)")).isEqualTo("'(CAR BOOLE)");
+		resolve(resolver, "(in-package :rsc)");
+		assertThat(resolve(resolver, "(while x)")).isEqualTo("(RSA:WHILE RSC::X)");
+		resolve(resolver, "(in-package :rsa)");
+		assertThat(resolve(resolver, "(while x)")).isEqualTo("(RSA:WHILE RSA::X)");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(while x)")).isEqualTo("(WHILE X)");
 	}
 
 	@Test
@@ -607,6 +617,13 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
 		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
 		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(DEFUN STRPKG:H NIL 3)");
+		// A qualified symbol designates its NAME only (misc-extensions: (:shadow
+		// cl:let)).
+		resolve(resolver, "(defpackage :qualpkg (:use :cl) (:shadow cl:let) (:export strpkg:own)"
+				+ " (:intern cl-user::hidden) (:shadowing-import-from :strpkg strpkg:f))");
+		resolve(resolver, "(in-package :qualpkg)");
+		assertThat(resolve(resolver, "(let (own hidden) (f))"))
+			.isEqualTo("(QUALPKG::LET (QUALPKG:OWN QUALPKG::HIDDEN) (STRPKG:F))");
 	}
 
 	@Test

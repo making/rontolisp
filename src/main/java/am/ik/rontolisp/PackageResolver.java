@@ -878,7 +878,12 @@ public final class PackageResolver {
 				this.registry.rehome(target, name);
 			}
 			else {
-				imports.put(name, trueHome(java.util.Objects.requireNonNull(id.home()), name));
+				String home = java.util.Objects.requireNonNull(id.home());
+				// A symbol its home uninterned is no longer reachable through that home's
+				// table, which may hold another symbol of the name by now (parenscript's
+				// re-export: shadowing-import cl's symbol into the home, then the old one
+				// into the next package); the redirect keeps the old spelling.
+				imports.put(name, this.registry.isUnhomed(home, name) ? home : trueHome(home, name));
 			}
 			if (shadowing) {
 				shadows.add(name);
@@ -1545,12 +1550,15 @@ public final class PackageResolver {
 		// (usedExport) only see this map. cl is asked first, as resolveUnqualified asks
 		// it before the use list; a name an EXISTING package already owns stays its own
 		// (a pre-seeded linalg:sin is not cl's).
+		// A cl extension name (while) is the package's own unless another used package
+		// exports it (PackageRegistry.isClExtensionName).
 		boolean usesCl = useList.contains(LispNames.CL_PKG);
 		for (String exported : exports) {
 			if (shadows.contains(exported) || imports.containsKey(exported)) {
 				continue;
 			}
-			if (usesCl && this.registry.get(LispNames.CL_PKG).exports(exported)) {
+			if (usesCl && this.registry.get(LispNames.CL_PKG).exports(exported)
+					&& !PackageRegistry.isClExtensionName(exported)) {
 				if (existing == null || !existing.owns(exported)) {
 					imports.put(exported, LispNames.CL_PKG);
 				}
@@ -1889,10 +1897,10 @@ public final class PackageResolver {
 
 	private static String designator(String context, String kind, LispVal designator) {
 		return switch (designator) {
-			// A keyword (:cl-user), an uninterned symbol (#:cl-user, the common
-			// defpackage idiom) or a bare symbol (cl-user); strip the prefix.
-			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
-					: sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			// A symbol designates its symbol-name: a keyword (:cl-user), an uninterned
+			// symbol (#:cl-user, the common defpackage idiom), a bare symbol (cl-user)
+			// or a qualified one ((:shadow cl:let) names "LET", not the symbol).
+			case LispSymbol sym -> LispSymbol.memberName(sym.name());
 			case LispString str -> str.value();
 			// A CHARACTER is a string designator too (CLHS glossary), so #\A names the
 			// package -- or the symbol -- "A"; the defpackage tests spell every clause
@@ -1905,10 +1913,55 @@ public final class PackageResolver {
 	private LispVal resolveForm(LispVal form) {
 		return switch (form) {
 			case LispSymbol sym -> resolveSymbol(sym);
-			case LispCons cons -> resolveCons(cons);
+			case LispCons cons -> withDefstructInternPackage(cons, resolveCons(cons));
 			case LispStructLiteral literal -> resolveStructLiteralType(literal);
 			default -> form;
 		};
+	}
+
+	/**
+	 * Marks a {@code defstruct} whose derived names belong to a package other than its
+	 * name's. CL interns the derived constructor, predicate, copier and accessor names in
+	 * the package current at the form, while the expansion runs after resolution and only
+	 * sees the resolved name: an unqualified name inherited or imported from another
+	 * package ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
+	 * {@code optima.core}) put {@code and-pattern-p} there, where no call site of the
+	 * defining package looked. The header gains {@code (:%intern-package "CURRENT")}
+	 * ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE}). A name written package-qualified
+	 * keeps its own package (the bundled libraries spell
+	 * {@code (defstruct (bordeaux-threads:lock ...))} from {@code cl-user} and call
+	 * {@code bordeaux-threads::lock-...}).
+	 */
+	private LispVal withDefstructInternPackage(LispCons original, LispVal resolved) {
+		if (!(original.car() instanceof LispSymbol op) || !LispNames.DEFSTRUCT.equals(operatorMember(op))
+				|| !(original.cdr() instanceof LispCons nameCell) || !(resolved instanceof LispCons out)
+				|| !(out.cdr() instanceof LispCons outNameCell)) {
+			return resolved;
+		}
+		LispVal written = nameCell.car() instanceof LispCons header ? header.car() : nameCell.car();
+		LispVal name = outNameCell.car() instanceof LispCons header ? header.car() : outNameCell.car();
+		if (!(written instanceof LispSymbol writtenSym) || writtenSym.isKeyword()
+				|| PackageRegistry.splitQualified(writtenSym.name()) != null || !(name instanceof LispSymbol nameSym)) {
+			return resolved;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(nameSym.name());
+		String home = qn == null ? LispNames.CL_USER_PKG : qn.pkg();
+		if (home.equals(current())) {
+			return resolved;
+		}
+		LispVal option = new LispCons(new LispSymbol(LispNames.DEFSTRUCT_INTERN_PACKAGE),
+				new LispCons(new LispString(current()), LispNil.INSTANCE));
+		LispVal header = outNameCell.car() instanceof LispCons given
+				? LispCons.rebuiltList(given, appended(given.toList(), option))
+				: new LispCons(nameSym, new LispCons(option, LispNil.INSTANCE));
+		return SourceProvenance.inherit(out,
+				LispCons.rebuilt(out, out.car(), LispCons.rebuilt(outNameCell, header, outNameCell.cdr())));
+	}
+
+	private static List<LispVal> appended(List<LispVal> list, LispVal element) {
+		List<LispVal> out = new ArrayList<>(list);
+		out.add(element);
+		return out;
 	}
 
 	/**
@@ -2328,20 +2381,43 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Whether {@code member} is external in {@code pkg} -- i.e. whether this resolver
-	 * spells that symbol with ONE colon. A macro expansion that SYNTHESIZES a name (the
-	 * only one is {@code defstruct}: its constructor/predicate/copier/accessors are
-	 * derived from the struct name, not written down) must ask, because the name it emits
-	 * has to be the same string a call site resolves to. Reading it wrong is not a
-	 * package error but an undefined function: an interpreted {@code (quri:uri-p x)} used
-	 * to look for {@code QURI.URI:URI-P} while the {@code defstruct} had defined
-	 * {@code QURI.URI::URI-P}.
-	 * @param pkg the canonical package name
+	 * The spelling a bare {@code member} read with {@code pkg} current resolves to: CL's
+	 * {@code intern} of a synthesized name, which finds an accessible symbol (inherited,
+	 * imported, the package's own) before making one. A macro expansion that SYNTHESIZES
+	 * names (the only one is {@code defstruct}: its constructor, predicate, copier and
+	 * accessors are derived from the struct name, not written down) must ask, because the
+	 * name it defines has to be the string a call site in that package resolves to.
+	 * Reading it wrong is not a package error but an undefined function: an interpreted
+	 * {@code (quri:uri-p x)} looked for {@code QURI.URI:URI-P} while the
+	 * {@code defstruct} had defined {@code QURI.URI::URI-P}. A name only {@code cl}
+	 * provides stays the package's own symbol, as it was: defining it would be a
+	 * redefinition of a standard operator. Nothing is minted.
+	 * @param pkg the canonical package name the name is interned in
 	 * @param member the unqualified symbol name
-	 * @return {@code true} when the package exports the name
+	 * @return the canonical spelling
 	 */
-	public synchronized boolean spellsAsExternal(String pkg, String member) {
-		return this.registry.contains(pkg) && spellsExternal(pkg, member);
+	public synchronized String internedSpelling(String pkg, String member) {
+		if (!this.registry.contains(pkg)) {
+			return PackageRegistry.qualifyInternal(pkg, member);
+		}
+		Object previous = bindThreadPackage(pkg);
+		boolean savedProbing = this.probing;
+		this.probing = true;
+		try {
+			LispVal resolved = resolveUnqualified(member);
+			if (resolved instanceof LispSymbol sym
+					&& (LispNames.CL_USER_PKG.equals(pkg) || PackageRegistry.splitQualified(sym.name()) != null)) {
+				return sym.name();
+			}
+		}
+		catch (LispPackageException ex) {
+			// No bare reference to the name resolves in this package; keep its own.
+		}
+		finally {
+			this.probing = savedProbing;
+			unbindThreadPackage(previous);
+		}
+		return canonical(pkg, member).name();
 	}
 
 	private LispVal resolveUnqualified(String name) {
@@ -2367,6 +2443,19 @@ public final class PackageResolver {
 			return canonical(current(), name);
 		}
 		if (PackageRegistry.isClSymbol(name)) {
+			if (PackageRegistry.isClExtensionName(name)) {
+				// cl's while yields to the package's own symbol and to another used
+				// package's (PackageRegistry.isClExtensionName).
+				if (current.owns(name) && !this.registry.isUnhomed(current(), name)) {
+					return canonical(current(), name);
+				}
+				for (String used : current.useList()) {
+					LispSymbol viaUsed = LispNames.CL_PKG.equals(used) ? null : usedExport(used, name);
+					if (viaUsed != null) {
+						return viaUsed;
+					}
+				}
+			}
 			if (currentUsesCl()) {
 				return new LispSymbol(name);
 			}
@@ -2759,6 +2848,14 @@ public final class PackageResolver {
 		if (present != null) {
 			return present;
 		}
+		if (PackageRegistry.isClExtensionName(member)) {
+			for (String used : p.useList()) {
+				Accessible inherited = LispNames.CL_PKG.equals(used) ? null : inheritedFrom(used, member);
+				if (inherited != null) {
+					return inherited;
+				}
+			}
+		}
 		if (!unhomed) {
 			if (LispNames.CL_USER_PKG.equals(pkg) && PackageRegistry.isClMemberName(member)) {
 				// A standard name reaches cl-user through its use of cl -- inherited,
@@ -2915,6 +3012,10 @@ public final class PackageResolver {
 					continue;
 				}
 				Accessible inherited = inheritedFrom(used, name);
+				if (inherited != null && PackageRegistry.isClExtensionName(name)) {
+					// Whichever used package's symbol wins (accessibleIn), not each.
+					inherited = accessibleIn(pkg, name, s -> false);
+				}
 				if (inherited != null) {
 					bySpelling.putIfAbsent(inherited.spelling(), inherited);
 				}

@@ -157,6 +157,21 @@ public final class AsdfSystems {
 	}
 
 	/**
+	 * No directory on the search path holds the {@code .asd} a system name needs -- the
+	 * miss {@code ql:quickload} answers by downloading the system, as Quicklisp installs
+	 * a dependency its index never named.
+	 */
+	public static final class SystemNotFoundException extends IllegalStateException {
+
+		private static final long serialVersionUID = 1L;
+
+		SystemNotFoundException(String message) {
+			super(message);
+		}
+
+	}
+
+	/**
 	 * Returns whether {@code form} is an {@code asdf:defsystem} form. Only the
 	 * {@code asdf}-qualified spelling counts here (inside a {@code .asd} file, loaded by
 	 * {@link #loadAsd}, the bare {@code defsystem} spelling is accepted too).
@@ -1409,6 +1424,7 @@ public final class AsdfSystems {
 	 * working-directory-relative)
 	 * @param loader the loader used to read candidate files
 	 * @return the located {@code .asd} file
+	 * @throws SystemNotFoundException if no directory holds it
 	 */
 	public static LocatedAsd locate(String name, List<String> searchDirs, SourceLoader loader) {
 		int slash = name.indexOf('/');
@@ -1432,7 +1448,7 @@ public final class AsdfSystems {
 				tried.add(path);
 			}
 		}
-		throw new IllegalStateException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found (tried: "
+		throw new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found (tried: "
 				+ String.join(", ", tried) + "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY");
 	}
 

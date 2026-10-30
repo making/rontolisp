@@ -3602,7 +3602,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic,
+				packageResolver::internedSpelling, this.dynamic,
 				entryReportOnly ? SignalMessages.ENTRY_REPORT
 						: reportsUncaught ? SignalMessages.RENDERED : SignalMessages.LAZY,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
@@ -13502,6 +13502,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 				break;
 			}
+		}
+		// A failed check-type constructs its simple-type-error during the EXPRESSION
+		// expansion (expandCheckType) -- after this scan -- so the operator stands in.
+		if (symbols.contains(LispNames.CHECK_TYPE)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-TYPE-ERROR");
 		}
 		// #'aref / #'array-row-major-index construct a type-error instance in
 		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
