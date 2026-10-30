@@ -908,7 +908,8 @@
 
 ;;; ~{...~}: the four iteration shapes. An empty body takes the control string
 ;;; from the next argument, ~n{ caps the passes, and ~:} runs the body at least
-;;; once. A ~^ inside the body ends the iteration without propagating.
+;;; once. A ~^ inside the body ends the iteration without propagating -- a
+;;; ~:{ / ~:@{ pass only, the next sublist starting at once (CLHS 22.3.9.2).
 (defun %fmt-iterate (ctrl end all out pos i params colon at)
   (let* ((close (%fmt-match ctrl pos end #\}))
          (sh (%fmt-shape ctrl (+ close 1) end))
@@ -946,7 +947,9 @@
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq pieces (cons (nth 0 r) pieces))
                 (setq passes (+ passes 1))
-                (if (or (nth 2 r) (<= next cur) (>= next n)) (setq go nil))
+                (if (or (and (nth 2 r) (not sublists)) (<= next cur)
+                        (>= next n))
+                    (setq go nil))
                 (setq cur next)))))
     (list (%fmt-join pieces) after i nil)))
 
@@ -970,6 +973,8 @@
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq pieces (cons (nth 0 r) pieces))
                 (setq passes (+ passes 1))
-                (if (or (nth 2 r) (<= next cur) (>= next n)) (setq go nil))
+                (if (or (and (nth 2 r) (not sublists)) (<= next cur)
+                        (>= next n))
+                    (setq go nil))
                 (setq cur next)))))
     (list (%fmt-join pieces) after cur nil)))
