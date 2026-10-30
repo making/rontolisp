@@ -11,12 +11,14 @@ import java.util.function.Predicate;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
@@ -52,6 +54,14 @@ public final class FunctionDesignators {
 		}
 		DESIGNATOR_ARGUMENT = Map.copyOf(index);
 	}
+
+	/**
+	 * The built-ins outside the wrapper catalog whose generated defun
+	 * {@code LispMacroExpander.expandTopLevelDefinitions} injects only for a program
+	 * referencing the operator (a call or {@code #'name}).
+	 */
+	private static final Set<String> REFERENCE_INJECTED_RUNTIMES = Set.of(LispNames.FIND_CLASS,
+			LispNames.ALLOCATE_INSTANCE, LispNames.COMPILE);
 
 	private static final Set<String> CASE_FORMS = Set.of(LispNames.CASE, LispNames.ECASE, LispNames.CCASE,
 			LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE);
@@ -102,7 +112,182 @@ public final class FunctionDesignators {
 				out.add(rewritten);
 			}
 		}
-		return out == null ? program : out;
+		List<LispVal> normalized = out == null ? program : out;
+		return withDataCalledReferences(normalized);
+	}
+
+	/**
+	 * The program with a top-level {@code (function name)} appended for every
+	 * reference-gated built-in only quoted data names ({@link #dataCalledNames}): the
+	 * wrapper gates, and every scan pairing a runtime with a wrapper body, read that
+	 * spelling, so the data symbol reaches the same wrapper {@code #'name} does. A
+	 * {@code car}/{@code cdr} composition needs no runtime of its own and gets no
+	 * reference: its wrapper is injected from {@link #dataCalledNames} itself, so a
+	 * program spelling {@code #'cadr} keeps the inline lambda it always had.
+	 */
+	private static List<LispVal> withDataCalledReferences(List<LispVal> program) {
+		Set<String> dataCalled = dataCalledNames(program);
+		if (dataCalled.isEmpty()) {
+			return program;
+		}
+		Set<String> spelled = BuiltinFunctionWrappers.functionValueNames(program);
+		List<String> missing = dataCalled.stream()
+			.filter(name -> !LispNames.isCarCdrComposition(name) && !spelled.contains(name))
+			.sorted()
+			.toList();
+		if (missing.isEmpty()) {
+			return program;
+		}
+		List<LispVal> out = new ArrayList<>(program);
+		for (String name : missing) {
+			out.add(new LispCons(new LispSymbol(LispNames.FUNCTION),
+					new LispCons(new LispSymbol(name), LispNil.INSTANCE)));
+		}
+		return out;
+	}
+
+	/**
+	 * The built-ins a program can call only through a symbol it holds in quoted data
+	 * ({@code '((aref x) (cadr x))}, an esrap-style rule table): every {@code cl}
+	 * function whose compiled value is injected only for a program spelling
+	 * {@code #'name} -- the reference-gated wrappers
+	 * ({@link BuiltinFunctionWrappers#REFERENCE_GATED_FUNCTIONS},
+	 * {@link BuiltinFunctionWrappers#COMPLEX_GATED_FUNCTIONS}), the restart runtime's
+	 * functions and the generated {@code find-class}/{@code allocate-instance}/
+	 * {@code compile} defuns -- and the {@code car}/{@code cdr} compositions, which
+	 * compile inline and have no named function otherwise. Empty unless the program can
+	 * turn a datum into a call ({@link #turnsDataIntoCalls}), so a program that cannot
+	 * keeps its output.
+	 * @param program the package-resolved top-level forms
+	 * @return the names quoted data spells
+	 */
+	public static Set<String> dataCalledNames(List<LispVal> program) {
+		if (!turnsDataIntoCalls(program)) {
+			return Set.of();
+		}
+		Set<String> names = new HashSet<>();
+		for (LispVal form : program) {
+			collectQuotedNames(form, names);
+		}
+		return names;
+	}
+
+	private static boolean isDataCallable(String name) {
+		return LispNames.isCarCdrComposition(name) || PackageRegistry.splitQualified(name) == null
+				&& (BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS.contains(name)
+						|| BuiltinFunctionWrappers.COMPLEX_GATED_FUNCTIONS.contains(name)
+						|| LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
+						|| REFERENCE_INJECTED_RUNTIMES.contains(name));
+	}
+
+	/**
+	 * The arguments (1-based) an operator reads as a type, class, condition or slot name:
+	 * a quoted symbol there ({@code (typep c 'error)}, {@code (slot-value o 'log)}) is
+	 * consumed by the call and never reaches a computed call, so it names no function.
+	 */
+	private static final Map<String, Set<Integer>> NAME_ARGUMENTS = Map.ofEntries(Map.entry(LispNames.TYPEP, Set.of(2)),
+			Map.entry(LispNames.SUBTYPEP, Set.of(1, 2)), Map.entry(LispNames.COERCE, Set.of(2)),
+			Map.entry(LispNames.MAKE_INSTANCE, Set.of(1)), Map.entry(LispNames.FIND_CLASS, Set.of(1)),
+			Map.entry(LispNames.MAKE_CONDITION, Set.of(1)), Map.entry(LispNames.ERROR, Set.of(1)),
+			Map.entry(LispNames.SIGNAL, Set.of(1)), Map.entry(LispNames.WARN, Set.of(1)),
+			Map.entry(LispNames.CERROR, Set.of(2)), Map.entry(LispNames.CONCATENATE, Set.of(1)),
+			Map.entry(LispNames.MAKE_SEQUENCE, Set.of(1)), Map.entry(LispNames.MAP, Set.of(1)),
+			Map.entry(LispNames.MERGE, Set.of(1)), Map.entry(LispNames.SLOT_VALUE, Set.of(2)),
+			Map.entry(LispNames.SLOT_BOUNDP, Set.of(2)), Map.entry(LispNames.SLOT_MAKUNBOUND, Set.of(2)),
+			Map.entry(LispNames.SLOT_EXISTS_P, Set.of(2)));
+
+	// The data-callable symbols inside every (quote datum) of a form, but for the
+	// quoted names NAME_ARGUMENTS skips.
+	private static void collectQuotedNames(LispVal form, Set<String> names) {
+		Set<Integer> skipped = form instanceof LispCons call && call.car() instanceof LispSymbol head
+				? NAME_ARGUMENTS.getOrDefault(head.name(), Set.of()) : Set.of();
+		LispVal node = form;
+		int index = 0;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+				collectDatumNames(cons.cdr(), names);
+				return;
+			}
+			if (!(skipped.contains(index) && isQuote(cons.car()))) {
+				collectQuotedNames(cons.car(), names);
+			}
+			node = cons.cdr();
+			index++;
+		}
+	}
+
+	private static boolean isQuote(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name());
+	}
+
+	private static void collectDatumNames(LispVal datum, Set<String> names) {
+		LispVal node = datum;
+		while (node instanceof LispCons cons) {
+			collectDatumNames(cons.car(), names);
+			node = cons.cdr();
+		}
+		if (node instanceof LispSymbol sym && isDataCallable(sym.name())) {
+			names.add(sym.name());
+		}
+		else if (node instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				collectDatumNames(element, names);
+			}
+		}
+	}
+
+	/**
+	 * Whether the program can call a function named by a symbol it computes: a
+	 * {@code funcall}/{@code apply} or a designator-taking operator ({@code mapcar},
+	 * {@code remove-if}, ...) handed a designator the compiler cannot read, a computed
+	 * {@code fboundp}/{@code symbol-function}/{@code fdefinition}, or one of those
+	 * operators taken as a value.
+	 */
+	private static boolean turnsDataIntoCalls(List<LispVal> program) {
+		return LispMacroExpander.usesRuntimeFunctionDesignator(program)
+				|| LispMacroExpander.usesRuntimeFunctionBox(program)
+				|| program.stream().anyMatch(FunctionDesignators::callsComputedDesignator);
+	}
+
+	private static boolean callsComputedDesignator(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String name = op.name();
+				if (LispNames.QUOTE.equals(name)) {
+					return false;
+				}
+				if (LispNames.FUNCTION.equals(name)) {
+					return cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol fn
+							? DESIGNATOR_ARGUMENT.containsKey(fn.name()) || LispNames.FBOUNDP.equals(fn.name())
+							: callsComputedDesignator(cons.cdr());
+				}
+				if (LispNames.FBOUNDP.equals(name) && cons.cdr() instanceof LispCons arg
+						&& !(arg.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+								&& LispNames.QUOTE.equals(q.name()))) {
+					return true;
+				}
+				Integer index = DESIGNATOR_ARGUMENT.get(name);
+				if (index != null && nthArgument(cons, index) instanceof LispVal designator
+						&& !LispMacroExpander.isStaticFunctionDesignator(designator)) {
+					return true;
+				}
+			}
+			if (callsComputedDesignator(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	private static @Nullable LispVal nthArgument(LispCons call, int index) {
+		LispVal node = call;
+		for (int i = 0; i < index && node instanceof LispCons cell; i++) {
+			node = cell.cdr();
+		}
+		return node instanceof LispCons cell ? cell.car() : null;
 	}
 
 	private static boolean isBuiltin(String name) {

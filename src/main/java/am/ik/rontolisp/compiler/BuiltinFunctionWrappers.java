@@ -310,6 +310,19 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * The catalog wrappers the JVM backend injects only for a program naming the operator
+	 * as a function designator: each body calls a gated {@code _c*} complex helper (or,
+	 * for {@code upgraded-complex-part-type}, the gated {@code %subtypep-runtime}), and
+	 * the bodies of {@code log}/{@code asin}/{@code acos}/{@code expt} take the argument
+	 * from a parameter no literal proves real, so ungated they would open the complex
+	 * gate for every program. The wasm backends gate {@code upgraded-complex-part-type}
+	 * alone.
+	 */
+	public static final List<String> COMPLEX_GATED_FUNCTIONS = List.of(LispNames.COMPLEX, LispNames.CONJUGATE,
+			LispNames.SQRT, LispNames.PHASE, LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.CIS, LispNames.ASINH,
+			LispNames.ACOSH, LispNames.ATANH, LispNames.LOG, LispNames.ASIN, LispNames.ACOS, LispNames.EXPT);
+
+	/**
 	 * Whether the name is a built-in some compiled function value stands for: a catalog
 	 * wrapper or a reference-gated one. Such a name is never undefined on the compile
 	 * paths -- a {@code #'name} of it injects its wrapper.

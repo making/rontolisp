@@ -41,18 +41,30 @@ public final class FunctionValueWrappers {
 
 	/**
 	 * The wrapper forms to splice: the catalog's, then the native built-ins', each for a
-	 * name the program does not define itself and the caller has not excluded.
+	 * name the program does not define itself and the caller has not excluded, then a
+	 * named {@code (lambda (x) (cadr x))} for each {@code car}/{@code cdr} composition
+	 * the program can call only through a symbol in quoted data
+	 * ({@link FunctionDesignators#dataCalledNames}). A composition compiles inline in
+	 * call position and as an anonymous lambda under {@code #'}, so without the wrapper
+	 * no function of its name exists for the registry to answer.
 	 * @param userDefinedNames names the program defines (its own definition wins)
 	 * @param excludedNames names the caller's gates keep out
+	 * @param dataCalledNames the program's {@link FunctionDesignators#dataCalledNames}
 	 * @return the wrapper forms
 	 */
-	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
+	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames,
+			Set<String> dataCalledNames) {
 		List<LispVal> wrappers = new ArrayList<>(BuiltinFunctionWrappers.generate(userDefinedNames, excludedNames));
 		for (Native wrapper : NATIVES) {
 			if (!userDefinedNames.contains(wrapper.name()) && !excludedNames.contains(wrapper.name())) {
 				wrappers.add(wrapper.form());
 			}
 		}
+		dataCalledNames.stream()
+			.filter(name -> LispNames.isCarCdrComposition(name) && !userDefinedNames.contains(name))
+			.sorted()
+			.forEach(name -> wrappers.add(BuiltinFunctionWrappers.setqLambda(name, List.of("x"),
+					List.of(BuiltinFunctionWrappers.call(name, "x")))));
 		return wrappers;
 	}
 
