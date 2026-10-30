@@ -35,7 +35,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [loop-iteration-heads.md](loop-iteration-heads.md) -- `loop` per-clause iteration heads: what is assigned before vs after the termination test
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` as let-bound lambdas + Lisp-2 call-site rewrite
 - [symbol-macrolet.md](symbol-macrolet.md) -- `symbol-macrolet` via one shared shadow-aware substitution
-- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a local `(declare (special ...))` scoped as CLHS 3.3.4 scopes it (no dual binding: a closure reads the binding active when it runs), a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker), a read of one signalling `unbound-variable`, and of a global before its first store
+- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a local `(declare (special ...))` scoped as CLHS 3.3.4 scopes it (no dual binding: a closure reads the binding active when it runs), a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker), a read of one signalling `unbound-variable`, and of a global before its first store, `makunbound`
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
@@ -46,7 +46,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
-- [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence
+- [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence, `compiler-macro-function`
 - [make-load-form.md](make-load-form.md) -- a literal object is dumped by its own `make-load-form` method
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`

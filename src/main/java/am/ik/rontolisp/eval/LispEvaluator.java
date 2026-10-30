@@ -1477,6 +1477,30 @@ public final class LispEvaluator {
 				return macroexpand1(macroCallForm(name, callArgs.get(0)));
 			});
 		}));
+		// compiler-macro-function: macro-function's twin over the define-compiler-macro
+		// table -- the expander (funcall f form env), or nil when the name has none.
+		this.globalEnv.defineFunction(LispNames.COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.COMPILER_MACRO_FUNCTION, args -> {
+					if (args.isEmpty() || args.size() > 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.COMPILER_MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispSymbol sym) || !this.compilerMacros.containsKey(sym.name())) {
+						return LispNil.INSTANCE;
+					}
+					String name = sym.name();
+					return new LispFunction(LispNames.COMPILER_MACRO_FUNCTION + " " + name, callArgs -> {
+						if (callArgs.size() != 2) {
+							throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+									"a compiler macro function expects 2 arguments, got " + callArgs.size());
+						}
+						UserMacro macro = this.compilerMacros.get(name);
+						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
+							return callArgs.get(0);
+						}
+						return expandMacroCall(name, macro, form);
+					});
+				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -2576,6 +2600,26 @@ public final class LispEvaluator {
 			this.globalEnv.undefineFunction(name);
 			removeUserMacro(name);
 			return args.get(0);
+		}));
+		// makunbound: set's unbinding twin -- the CURRENT dynamic binding loses its value
+		// when one is active (the global comes back with the binding's exit), otherwise
+		// the global value is dropped. boundp then answers nil and a read signals the
+		// unbound-variable. Answers the symbol.
+		this.globalEnv.defineFunction(LispNames.MAKUNBOUND, new LispFunction(LispNames.MAKUNBOUND, args -> {
+			requireSingleArg(LispNames.MAKUNBOUND, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || sym.name().isEmpty() || LispNames.PACKAGE_VAR.equals(sym.name())) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " cannot make " + sym.print() + " unbound");
+			}
+			if (this.dynamicBindings.isBound(sym.name())) {
+				this.dynamicBindings.unbindCurrent(sym.name());
+			}
+			else {
+				this.globalEnv.undefine(sym.name());
+			}
+			return sym;
 		}));
 		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
 		// install fn as f's global function binding -- fmakunbound's write-side twin,
@@ -4945,6 +4989,21 @@ public final class LispEvaluator {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
+		if (cons.car() instanceof LispCons element && isMarker(element, LispNames.READ_TIME_FEATURE)) {
+			// A deferred #+#. guard as a list element: the guarded datum splices in, or
+			// the element is dropped.
+			LispVal rest = resolveReadTimeEval(cons.cdr(), inCode);
+			LispVal guarded = readTimeFeatureChoice(element, inCode);
+			return guarded == null ? rest : new LispCons(guarded, rest);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE)) {
+			// The whole form is the guard (a top-level #+#.): a dropped form is nil.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, inCode), LispNil.INSTANCE);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE_TEMPLATE)) {
+			// Inside backquote construction code the marker is a spliced segment.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, true), LispNil.INSTANCE);
+		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			requireReadEvalEnabled();
@@ -4991,6 +5050,50 @@ public final class LispEvaluator {
 			return new LispCons(cons.car(), rest);
 		}
 		return null;
+	}
+
+	/**
+	 * Decides a {@code %read-time-feature} marker (or its template variant): its feature
+	 * expression's {@code #.} values put in place and the result tested against the
+	 * feature set the read used, as a {@code #+}/{@code #-} would have.
+	 * @return the guarded datum, resolved, when the guard holds; {@code null} when it
+	 * fails or nested guards left no datum
+	 */
+	private @Nullable LispVal readTimeFeatureChoice(LispCons marker, boolean inCode) {
+		List<LispVal> parts = marker.toList();
+		if (parts.size() < 4 || parts.size() > 5 || !(parts.get(1) instanceof LispString sign)
+				|| !(parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
+			throw new LispEvalException("malformed " + LispNames.READ_TIME_FEATURE + " marker: " + marker.print());
+		}
+		requireReadEvalEnabled();
+		List<String> spelling = new ArrayList<>();
+		if (parts.get(2) instanceof LispCons set) {
+			for (LispVal name : set.toList()) {
+				spelling.add(((LispString) name).value());
+			}
+		}
+		LispVal expr = resolveReadTimeEval(parts.get(3), false);
+		boolean holds;
+		try {
+			holds = Features.decode(spelling).isEnabled(expr) != "-".equals(sign.value());
+		}
+		catch (LispReadException ex) {
+			throw new LispEvalException("#" + sign.value() + "#.: " + ex.getMessage());
+		}
+		if (!holds || parts.size() < 5) {
+			return null;
+		}
+		LispVal guarded = parts.get(4);
+		if (isMarker(guarded, LispNames.READ_EVAL_UNREADABLE) && guarded instanceof LispCons raw
+				&& raw.cdr() instanceof LispCons text && text.car() instanceof LispString source) {
+			throw new LispEvalException("#" + sign.value() + "#.: the guard holds, but the form behind it could not"
+					+ " be read: " + source.value());
+		}
+		return resolveReadTimeEval(guarded, inCode);
+	}
+
+	private static boolean isMarker(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && name.equals(head.name());
 	}
 
 	/**
@@ -10298,6 +10401,16 @@ public final class LispEvaluator {
 	 */
 	public List<String> userMacroNames() {
 		return this.userMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
+	 * Returns the names {@code define-compiler-macro} registered, sorted -- the table
+	 * {@code UserMacroExpander} bakes into a compiled program for
+	 * {@code compiler-macro-function}.
+	 * @return the sorted compiler macro names
+	 */
+	public List<String> compilerMacroNames() {
+		return this.compilerMacros.keySet().stream().sorted().toList();
 	}
 
 	/**

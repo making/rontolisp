@@ -332,7 +332,50 @@ public final class UserMacroExpander {
 		}
 		emitMacroGeneratedDeftypes(macroEval, result);
 		emitMacroFunctionTable(macroEval, result);
+		emitCompilerMacroFunctionTable(macroEval, result);
 		return result;
+	}
+
+	/**
+	 * Appends the program's own {@code compiler-macro-function} when the program names
+	 * the function and defines a compiler macro: the compile path expanded every compiler
+	 * macro away, so the answer is a NAME test against the names this pass registered,
+	 * answering the {@code %macro-expander-stub} {@code macro-function} answers. The
+	 * prelude definition (nil for every name) is suppressed by this one; spelling as
+	 * {@link #emitMacroFunctionTable}.
+	 */
+	private static void emitCompilerMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
+		List<String> names = macroEval.compilerMacroNames();
+		if (names.isEmpty() || result.stream().noneMatch(form -> mentions(form, LispNames.COMPILER_MACRO_FUNCTION))
+				|| result.stream().anyMatch(form -> definesFunction(form, LispNames.COMPILER_MACRO_FUNCTION))) {
+			return;
+		}
+		StringBuilder table = new StringBuilder();
+		for (String name : names) {
+			table.append(table.isEmpty() ? "" : " ")
+				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
+		}
+		result.addAll(LispReader.readAllFromString(
+				"(defun " + LispNames.COMPILER_MACRO_FUNCTION + " (name &optional environment) (if (member name '("
+						+ table + ")) #'" + LispNames.MACRO_EXPANDER_STUB + " nil))",
+				Features.INTERPRETER));
+	}
+
+	/** Whether the form names {@code name} anywhere (a call, {@code #'} it). */
+	private static boolean mentions(LispVal form, String name) {
+		while (form instanceof LispCons cons) {
+			if (mentions(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && name.equals(member(sym.name()));
+	}
+
+	/** Whether the top-level form is the program's OWN defun of {@code name}. */
+	private static boolean definesFunction(LispVal form, String name) {
+		return isOperator(form, LispNames.DEFUN) && form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol defined && name.equals(member(defined.name()));
 	}
 
 	/**

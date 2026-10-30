@@ -84,6 +84,16 @@ final class DynamicBindings {
 	}
 
 	/**
+	 * Leaves the current (innermost) dynamic binding of a bound special without a value
+	 * -- {@code makunbound} inside a binding. The caller must have checked
+	 * {@link #isBound(String)}.
+	 * @param name the variable name
+	 */
+	void unbindCurrent(String name) {
+		setCurrent(name, UNBOUND);
+	}
+
+	/**
 	 * Establishes a new dynamic binding for a special (pushes onto its stack). Balanced
 	 * by a {@link #pop(String)} in a {@code finally} on the binding form's exit.
 	 * @param name the variable name

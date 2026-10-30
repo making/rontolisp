@@ -266,7 +266,9 @@ public final class SpecialVarCollector {
 	 * binding, and for good by a store inside one, so {@code (boundp '*x*)} of a
 	 * {@code (defvar *x*)} must be T inside {@code (let ((*x* 1)) ...)} and NIL again
 	 * after it. A special whose definer gives it a value is bound from that form on; only
-	 * a binding made before the form ran could tell the two apart.
+	 * a binding made before the form ran could tell the two apart -- or a
+	 * {@code makunbound}: in a program that calls it every special but a {@code cl}
+	 * symbol is a candidate.
 	 * @param forms the program's forms, the injected runtime's included
 	 * @param specials the program's special-variable names
 	 * @return those specials, in {@code specials} order
@@ -284,7 +286,11 @@ public final class SpecialVarCollector {
 		if (!computed && probed.isEmpty()) {
 			return new LinkedHashSet<>();
 		}
-		LinkedHashSet<String> out = collectValueless(forms, specials);
+		// makunbound can take the value of any special, inside a binding as outside, so
+		// in a program that calls it every special carries its bound-ness in its
+		// variable.
+		LinkedHashSet<String> out = LispMacroExpander.programCallsMakunbound(forms) ? collectUnbindable(forms, specials)
+				: collectValueless(forms, specials);
 		if (!computed) {
 			out.retainAll(probed);
 		}
@@ -323,22 +329,21 @@ public final class SpecialVarCollector {
 	}
 
 	/**
-	 * The specials a {@code progv} short of values can leave without a value: in a
-	 * program that calls {@code progv}, every special but a {@code cl} symbol, since the
-	 * symbols a {@code progv} binds are run-time values and any special may be among
-	 * them. A symbol past the end of the values is unbound for the extent, so the compile
-	 * paths bind each of these to the UNBOUND marker there and test every read of it, as
-	 * they do for {@link #collectValueless}'s from the start. A {@code cl} symbol (the
-	 * standard variables the backends seed, whose values the runtime also reads outside
-	 * any compiled read) is bound to nil instead.
+	 * The specials a {@code progv} short of values or a {@code makunbound} can leave
+	 * without a value: in a program that calls either
+	 * ({@link LispMacroExpander#programUnbindsSpecials}), every special but a {@code cl}
+	 * symbol, since the symbols they name are run-time values and any special may be
+	 * among them. The compile paths store the UNBOUND marker there and test every read of
+	 * it, as they do for {@link #collectValueless}'s from the start. A {@code cl} symbol
+	 * (the standard variables the backends seed, whose values the runtime also reads
+	 * outside any compiled read) is bound to nil instead.
 	 * @param program the program's forms
 	 * @param specials the program's special-variable names
-	 * @return those specials, in {@code specials} order; empty without a {@code progv}
+	 * @return those specials, in {@code specials} order; empty without either
 	 */
-	public static LinkedHashSet<String> collectProgvUnbindable(Collection<LispVal> program,
-			SequencedSet<String> specials) {
+	public static LinkedHashSet<String> collectUnbindable(Collection<LispVal> program, SequencedSet<String> specials) {
 		LinkedHashSet<String> out = new LinkedHashSet<>();
-		if (specials.isEmpty() || !LispMacroExpander.programCallsProgv(program)) {
+		if (specials.isEmpty() || !LispMacroExpander.programUnbindsSpecials(program)) {
 			return out;
 		}
 		for (String name : specials) {

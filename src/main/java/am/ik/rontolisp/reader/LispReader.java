@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
@@ -203,7 +204,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllFromString(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, null);
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, null, null);
 	}
 
 	/**
@@ -216,7 +217,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllFromString(String input, Features features, @Nullable String file) {
-		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, file);
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, file, null);
 	}
 
 	/**
@@ -228,7 +229,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllSkippingReadEval(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, null);
+		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, null, null);
 	}
 
 	/**
@@ -241,7 +242,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllSkippingReadEval(String input, Features features, @Nullable String file) {
-		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
+		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file, null);
 	}
 
 	/**
@@ -256,7 +257,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null);
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null, null);
 	}
 
 	/**
@@ -272,7 +273,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features, @Nullable String file) {
-		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, file);
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, file, null);
 	}
 
 	/**
@@ -346,7 +347,7 @@ public final class LispReader {
 	 * @return the forms before the first error, and that error
 	 */
 	public static ReadPrefix readPrefixFromString(String input, Features features, @Nullable String file) {
-		return readPrefix(input, features, LispLexer.ReadEvalMode.ERROR, file);
+		return readPrefix(input, features, LispLexer.ReadEvalMode.ERROR, file, null);
 	}
 
 	/**
@@ -358,12 +359,28 @@ public final class LispReader {
 	 * @return the forms before the first error, and that error
 	 */
 	public static ReadPrefix readPrefixWithReadEvalMarkers(String input, Features features, @Nullable String file) {
-		return readPrefix(input, features, LispLexer.ReadEvalMode.MARKER, file);
+		return readPrefix(input, features, LispLexer.ReadEvalMode.MARKER, file, null);
+	}
+
+	/**
+	 * {@link #readAllWithReadEvalMarkers(String, Features)} for a read that runs with an
+	 * evaluator at hand -- the runtime {@code read} family: a {@code #+}/{@code #-} guard
+	 * whose feature expression holds a {@code #.} is decided while reading, as CL's
+	 * reader decides it, instead of being deferred to a marker.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features,
+			UnaryOperator<LispVal> readTimeEval) {
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null, readTimeEval);
 	}
 
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
-			@Nullable String file) {
-		ReadPrefix read = readPrefix(input, features, readEvalMode, file);
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval);
 		LispReadException error = read.error();
 		if (error != null) {
 			throw error;
@@ -372,14 +389,14 @@ public final class LispReader {
 	}
 
 	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
-			@Nullable String file) {
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
 		// A source may announce features about ITSELF -- the header
 		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
 		// see them. Real CL gets that free by loading form at a time; here the reader
 		// makes the announcement instead, so every backend agrees without evaluating
 		// anything (FeaturePushes).
 		Features effective = FeaturePushes.widen(input, features, readEvalMode, file);
-		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file).tokenizePrefix();
+		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file, readTimeEval).tokenizePrefix();
 		LispReader reader = new LispReader(lexed.tokens(), effective, input, file, true);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
@@ -444,18 +461,30 @@ public final class LispReader {
 	 */
 	static boolean parsesAsExpressions(List<LocatedToken> tokens, Features features) {
 		try {
-			// A validation-only parse: it holds no source text of its own and its
-			// conses are thrown away, so it must not put a bogus position in the
-			// provenance table (an entry there is first-write-wins).
-			LispReader reader = new LispReader(tokens, features, "", null, false);
-			while (reader.pos < reader.tokens.size()) {
-				reader.readExpr();
-			}
+			readUnrecorded(tokens, features);
 			return true;
 		}
 		catch (LispReadException ex) {
 			return false;
 		}
+	}
+
+	/**
+	 * Reads every expression of tokens lexed out of a FRAGMENT of some source (a
+	 * {@code #.} datum, a feature expression). The fragment holds no source text of its
+	 * own, so the read must not put a bogus position in the provenance table (an entry
+	 * there is first-write-wins).
+	 * @param tokens the tokens to read
+	 * @param features the active reader features
+	 * @return the expressions
+	 */
+	static List<LispVal> readUnrecorded(List<LocatedToken> tokens, Features features) {
+		LispReader reader = new LispReader(tokens, features, "", null, false);
+		List<LispVal> result = new ArrayList<>();
+		while (reader.pos < reader.tokens.size()) {
+			result.add(reader.readExpr());
+		}
+		return result;
 	}
 
 	/**
@@ -1227,6 +1256,9 @@ public final class LispReader {
 		this.rawSawNestedBackquote = false;
 		LispVal raw = readRawTemplate();
 		if (this.rawSawNestedBackquote) {
+			if (mentions(raw, LispNames.READ_TIME_FEATURE)) {
+				throw err("a #+/#- guard computed by #. is not supported inside a nested backquote template");
+			}
 			return bqCompletelyProcess(raw);
 		}
 		this.pos = save;
@@ -1262,6 +1294,10 @@ public final class LispReader {
 				// template). An unresolved occurrence still evaluates as the identity,
 				// deferring the read-time evaluation to macro-expansion time.
 				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
+						&& LispNames.READ_TIME_FEATURE.equals(sym.name())) {
+					yield readTimeFeatureTemplate();
+				}
+				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
 						&& LispNames.READ_EVAL.equals(sym.name())) {
 					LispVal marker = readExpr();
 					if (marker instanceof LispCons markerCons) {
@@ -1292,6 +1328,43 @@ public final class LispReader {
 	}
 
 	// 'x inside a template is the two-element template (quote x); #'x is (function x).
+	// A deferred #+#. guard inside a template: (%read-time-feature SIGN SET EXPR [FORM])
+	// becomes the SPLICED element (%read-time-feature-template SIGN SET EXPR SEGMENT),
+	// SEGMENT being the guarded element's own segment code -- (list FORM-CODE), or the
+	// ,@ form itself -- so resolving the marker to SEGMENT or to nil splices the element
+	// in or leaves nothing.
+	private TemplateElement readTimeFeatureTemplate() {
+		int open = this.pos;
+		this.pos += 2; // '(' and the marker symbol
+		LispVal sign = readExpr();
+		LispVal set = readExpr();
+		LispVal expr = readExpr();
+		LispVal segment = LispNil.INSTANCE;
+		if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			TemplateElement guarded = readTemplateElement();
+			segment = guarded.splicing() ? guarded.form()
+					: properList(new LispSymbol(LispNames.LIST), List.of(guarded.form()));
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		return new TemplateElement(
+				properList(new LispSymbol(LispNames.READ_TIME_FEATURE_TEMPLATE), List.of(sign, set, expr, segment)),
+				true);
+	}
+
+	private static boolean mentions(LispVal form, String name) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (mentions(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return node instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
 	private LispVal readWrappedTemplate(String operator) {
 		TemplateElement inner = readTemplateElement();
 		LispVal quoteSym = new LispCons(new LispSymbol(LispNames.QUOTE),

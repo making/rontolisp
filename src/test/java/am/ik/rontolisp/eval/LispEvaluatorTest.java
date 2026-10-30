@@ -14974,6 +14974,14 @@ class LispEvaluatorTest {
 				  (list (multiple-value-list (read-from-string "#+nope #+x a b c"))
 				        (multiple-value-list (read-from-string "#+nope #-x a b c"))))""").print())
 			.isEqualTo("((B 15) (C 16))");
+		// A guard computed by #. is decided while reading, with the stop index
+		// following it; a failing one skips a form naming a package that does not
+		// exist, without looking the package up.
+		assertThat(eval("""
+				(list (multiple-value-list (read-from-string "#-#.(if t '(and) '(or)) 5 6"))
+				      (multiple-value-list (read-from-string "#+#.(if nil '(and) '(or)) (sb-ext:foo) 2"))
+				      (multiple-value-list (read-from-string "#+nope #+#.(if t '(and) '(or)) a b c")))""").print())
+			.isEqualTo("((6 27) (2 40) (B 35))");
 	}
 
 	@Test

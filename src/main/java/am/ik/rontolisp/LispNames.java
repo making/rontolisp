@@ -4450,6 +4450,15 @@ public final class LispNames {
 	public static final String MACRO_FUNCTION = "MACRO-FUNCTION";
 
 	/**
+	 * The {@code compiler-macro-function} standard function: the compiler macro
+	 * {@code define-compiler-macro} registered for a name, or nil. The interpreter
+	 * answers the real expander; a compiled program has expanded its compiler macros
+	 * away, so it answers {@link #MACRO_EXPANDER_STUB} for a registered name (a prelude
+	 * defun the compile path's macro pass overrides with the program's table).
+	 */
+	public static final String COMPILER_MACRO_FUNCTION = "COMPILER-MACRO-FUNCTION";
+
+	/**
 	 * The {@code %macro-fn} internal: the compile-path body of {@link #MACRO_FUNCTION},
 	 * testing the name against the baked built-in macro table plus the program's own
 	 * macro names ({@code UserMacroExpander} passes them in).
@@ -8794,6 +8803,26 @@ public final class LispNames {
 	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
 
 	/**
+	 * The marker a source read leaves for a {@code #+}/{@code #-} guard whose feature
+	 * expression holds a {@code #.} ({@code #+#.(cl:if ... '(and) '(or)) FORM}): no
+	 * evaluator exists while a source is read, so the guard is decided where the
+	 * {@link #READ_EVAL} markers are resolved. Shape:
+	 * {@code (%read-time-feature "+"|"-" (FEATURE-SET-SPELLING...) EXPR [FORM])} --
+	 * {@code EXPR} with its {@code #.} as {@code %read-eval} markers, the set as
+	 * {@code reader.Features.encode} spells it, {@code FORM} absent when nested guards
+	 * left nothing. The resolution splices {@code FORM} in or drops the element.
+	 */
+	public static final String READ_TIME_FEATURE = "%READ-TIME-FEATURE";
+
+	/**
+	 * The {@link #READ_TIME_FEATURE} variant inside backquote construction code: a
+	 * SPLICED template element whose last argument is the guarded element's segment code
+	 * (a {@code (list ...)} or the {@code ,@} form), resolved to that code or to
+	 * {@code nil}.
+	 */
+	public static final String READ_TIME_FEATURE_TEMPLATE = "%READ-TIME-FEATURE-TEMPLATE";
+
+	/**
 	 * {@code *read-eval*} -- whether {@code #.} read-time evaluation is enabled (CLHS:
 	 * binding it to {@code nil} makes the reader signal on {@code #.}). Seeded {@code t}
 	 * and proclaimed special on the interpreter, checked by
@@ -9352,6 +9381,16 @@ public final class LispNames {
 	 * ({@code .kb/symbol-runtime-api.md}).
 	 */
 	public static final String FMAKUNBOUND = "FMAKUNBOUND";
+
+	/**
+	 * The {@code makunbound} built-in function: the symbol's current value binding -- the
+	 * active dynamic binding, else the global value -- loses its value, so {@code boundp}
+	 * answers nil and a read signals {@code unbound-variable}. The compile paths store
+	 * the UNBOUND marker into the variable
+	 * ({@code LispMacroExpander.expandMakunboundForCompile}) and take the name out of the
+	 * eval mirror ({@code .kb/dynamic-special-variables.md}).
+	 */
+	public static final String MAKUNBOUND = "MAKUNBOUND";
 
 	/**
 	 * The internal primitive behind {@code (setf (symbol-function 'f) fn)} /

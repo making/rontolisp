@@ -205,6 +205,7 @@ categories:
       - { slug: both-case-p, name: "both-case-p" }
       - { slug: special-operator-p, name: "special-operator-p" }
       - { slug: macro-function, name: "macro-function" }
+      - { slug: compiler-macro-function, name: "compiler-macro-function" }
       - { slug: compiled-function-p, name: "compiled-function-p" }
       - { slug: function-lambda-expression, name: "function-lambda-expression" }
       - { slug: list-all-packages, name: "list-all-packages" }
@@ -444,6 +445,7 @@ categories:
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }
       - { slug: fmakunbound, name: "fmakunbound" }
+      - { slug: makunbound, name: "makunbound" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }

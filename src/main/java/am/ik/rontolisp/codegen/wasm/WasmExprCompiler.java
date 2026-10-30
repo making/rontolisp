@@ -247,8 +247,8 @@ final class WasmExprCompiler {
 		// so it is read from the global below wherever it is read -- in a closure as in
 		// the binding function. In the function whose let made the binding it is active,
 		// so the value is never the UNBOUND marker (a progv inside, which can bind it,
-		// compiles with no such special).
-		if (ctx.boundSpecials.contains(name) && ctx.globalIndices.containsKey(name)) {
+		// compiles with no such special) -- unless a makunbound can unbind it.
+		if (!ctx.unbindsSpecials && ctx.boundSpecials.contains(name) && ctx.globalIndices.containsKey(name)) {
 			emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
 			return;
 		}
@@ -1240,6 +1240,7 @@ final class WasmExprCompiler {
 			case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
 			case LispNames.SYMBOL_VALUE -> WasmSymbolApiCompiler.compileSymbolValue(cons, ctx);
 			case LispNames.SET -> WasmSymbolApiCompiler.compileSet(cons, ctx);
+			case LispNames.MAKUNBOUND -> WasmSymbolApiCompiler.compileMakunbound(cons, ctx);
 			case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
 			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx);
 			case LispNames.FENV_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileFenvFunction(cons, ctx);

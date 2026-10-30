@@ -500,6 +500,13 @@ public final class LispPreludeLibrary {
 				(defun macro-function (symbol &optional environment)
 				  (%macro-fn symbol nil))
 				""");
+		// compiler-macro-function: nil for every name in a program without a compiler
+		// macro; UserMacroExpander overrides it with the program's own table, answering
+		// the expander stub below. The interpreter defines the real one eagerly.
+		SOURCES.put(LispNames.COMPILER_MACRO_FUNCTION, """
+				(defun compiler-macro-function (name &optional environment)
+				  nil)
+				""");
 		SOURCES.put(LispNames.MACRO_FN_INTERNAL, """
 				(defun %%macro-fn (symbol names)
 				  (if (or (member symbol names) (member symbol '(%s)))

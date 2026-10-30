@@ -123,6 +123,7 @@ page.
 | `both-case-p` | `(both-case-p #\a)` | True for a cased letter (`lower-case-p` or `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | `t` for the 25 ANSI special operators, `nil` for everything else |
 | `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
+| `compiler-macro-function` | `(compiler-macro-function 'square)` | The `define-compiler-macro` expander (real on the interpreter, a signalling stub in compiled output), `nil` when the name has none |
 | `compiled-function-p` | `(compiled-function-p #'car)` | Lite stub: always `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Every registered package, as the keywords `find-package` answers (the compilers answer from a table baked in at compile time) |
@@ -173,6 +174,7 @@ page.
 | `boundp` | `(boundp '*level*)` | `t` when the symbol names a bound global variable (t/nil/keywords are self-bound) |
 | `fboundp` | `(fboundp 'car)` | `t` for functions, macros and special forms (compilers: a computed argument sees functions only) |
 | `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- makes the name call-time-undefined again (compilers: late-bound references only) |
+| `makunbound` | `(makunbound '*level*)` | `*level*` -- its current binding loses its value: `boundp` answers `nil`, a read signals `unbound-variable` |
 | `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- expand the top-level form once (user and built-in macros) |
 | `macroexpand` | `(macroexpand '(outer 41))` | The full expansion: `macroexpand-1` repeated to a fixpoint |
 | `null` | `(null nil)` | `t` |

@@ -5033,7 +5033,8 @@ public final class LispMacroExpander {
 									cons2(cons2(v.name, v.val), genvRead)))))));
 			LispVal hideStep = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordHidden, v.saved))),
-					listToCons(List.of(new LispSymbol(LispNames.IF), v.entry, mirrorUnlink(v), LispNil.INSTANCE))));
+					listToCons(List.of(new LispSymbol(LispNames.IF), v.entry, mirrorUnlink(v.env, v.name),
+							LispNil.INSTANCE))));
 			LispVal mirrorStep = listToCons(
 					List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, v.vals), bindStep, hideStep));
 			iterBody
@@ -5062,13 +5063,11 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Removes the first mirror binding of {@code v.name}, if any:
+	 * Removes the first mirror binding of the name {@code name} holds, if any:
 	 * {@code (let ((env (%progv-genv))) (if HEAD-MATCHES (%progv-genv-set (cdr env))
 	 * UNLINK-LOOP))}.
 	 */
-	private static LispVal mirrorUnlink(ProgvVars v) {
-		LispSymbol env = v.env;
-		LispSymbol name = v.name;
+	private static LispVal mirrorUnlink(LispSymbol env, LispSymbol name) {
 		LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
 		LispVal removeHead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET), callOf(LispNames.CDR, env)));
 		LispVal headMatches = listToCons(List.of(
@@ -5116,10 +5115,10 @@ public final class LispMacroExpander {
 					listToCons(List.of(listToCons(List.of(v.entry,
 							callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))))))),
 					listToCons(List.of(new LispSymbol(LispNames.IF), hidden,
-							listToCons(List.of(new LispSymbol(LispNames.PROGN), mirrorUnlink(v), relink)),
+							listToCons(List.of(new LispSymbol(LispNames.PROGN), mirrorUnlink(v.env, v.name), relink)),
 							listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
 									listToCons(List.of(new LispSymbol(LispNames.RPLACD), v.entry, old)),
-									mirrorUnlink(v))))))));
+									mirrorUnlink(v.env, v.name))))))));
 		}
 		LispVal cleanupLet = listToCons(concat(
 				List.of(new LispSymbol(LispNames.LET_STAR),
@@ -5271,6 +5270,100 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a special can lose its value while the program runs: some form calls
+	 * {@code progv} (a symbol short of values) or names {@code makunbound} (a call, or
+	 * {@code #'makunbound}, whose wrapper calls it). In such a program every special but
+	 * a {@code cl} symbol is read-checked
+	 * ({@code SpecialVarCollector.collectUnbindable}).
+	 * @param forms the program's top-level forms
+	 * @return true when a special can be left without a value
+	 */
+	public static boolean programUnbindsSpecials(java.util.Collection<LispVal> forms) {
+		return programCallsProgv(forms) || programCallsMakunbound(forms);
+	}
+
+	/**
+	 * Whether any form names {@code makunbound} as a function -- a call, or
+	 * {@code #'makunbound}, whose wrapper calls it (quoted data skipped).
+	 * @param forms the program's top-level forms
+	 * @return true when a {@code makunbound} can run
+	 */
+	public static boolean programCallsMakunbound(java.util.Collection<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (callsOperator(form, LispNames.MAKUNBOUND) || namesFunction(form, LispNames.MAKUNBOUND)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether {@code form} holds {@code (function operator)}, quoted data skipped. */
+	private static boolean namesFunction(LispVal form, String operator) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name())) {
+				return false;
+			}
+			if (LispNames.FUNCTION.equals(head.name()) && cons.cdr() instanceof LispCons arg
+					&& arg.car() instanceof LispSymbol named && operator.equals(named.name())) {
+				return true;
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (namesFunction(cell.car(), operator)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@code (makunbound name)} on the compile paths: the name is taken out of the eval
+	 * mirror (when the program has one), and a name among {@code targets} -- the globals
+	 * whose every read tests for the UNBOUND marker -- has the marker stored where a
+	 * {@code setq} of it stores (the active dynamic binding, else the global). Answers
+	 * the symbol. A literal quoted name folds to its one arm; a name outside the targets
+	 * (a {@code cl} symbol, an unchecked global) is only taken out of the mirror.
+	 * @param cons the {@code (makunbound name)} form
+	 * @param targets the read-checked globals with a backing variable
+	 * @param specials the program's specials (kept out of the temporaries' names)
+	 * @param mirror whether the eval runtime's global env mirror exists in this program
+	 * @return the lowering
+	 */
+	public static LispVal expandMakunboundForCompile(LispCons cons, java.util.Collection<String> targets,
+			java.util.Collection<String> specials, boolean mirror) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.MAKUNBOUND + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		LispSymbol n = new LispSymbol(freshName("__MAKUNBOUND_NAME", specials));
+		LispSymbol env = new LispSymbol(freshName("__MAKUNBOUND_ENV", specials));
+		java.util.function.Function<LispSymbol, LispVal> store = s -> listToCons(
+				List.of(new LispSymbol(LispNames.GLOBAL_STORE_SET), s,
+						listToCons(List.of(new LispSymbol(LispNames.PROGV_UNBOUND)))));
+		LispVal unbind;
+		if (parts.get(1) instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons body
+				&& body.car() instanceof LispSymbol literal) {
+			unbind = targets.contains(literal.name()) ? store.apply(literal) : LispNil.INSTANCE;
+		}
+		else {
+			unbind = nameChain(n, new ArrayList<>(targets), store, LispNil.INSTANCE);
+		}
+		List<LispVal> body = new ArrayList<>();
+		body.add(new LispSymbol(LispNames.LET));
+		body.add(listToCons(List.of(listToCons(List.of(n, parts.get(1))))));
+		if (mirror) {
+			body.add(mirrorUnlink(env, n));
+		}
+		body.add(unbind);
+		body.add(n);
+		return listToCons(body);
 	}
 
 	/** Whether {@code form} holds a call of {@code operator}, quoted data skipped. */
