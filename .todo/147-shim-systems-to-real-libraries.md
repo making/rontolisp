@@ -13,7 +13,9 @@ Current built-in systems (`eval.BuiltinSystems` + `eval.ShimLibraries`):
   protocol, `eval.GrayStreamsLibrary` / `gray.lisp`; the real library is
   `#+sbcl`/`#+ccl`... branches with no rontolisp arm).
 - `closer-mop` -- KEEP as shim for the same reason (wraps per-implementation
-  MOP packages). Slot-definition metaobjects: h49.
+  MOP packages). Slot-definition metaobjects landed 2026-10-30 (`.kb/clos.md`); the
+  jzon `{}` note that moved with them was stale -- `JzonE2eTest` pins a CLOS instance
+  stringifying its bound slots on all four backends.
 - `float-features` -- KEEP as shim (wraps per-implementation float bit
   intrinsics; rontolisp's are the `%ieee754-*` built-ins).
 - `uiop` -- KEEP as a stub package/system (ASDF-implementation

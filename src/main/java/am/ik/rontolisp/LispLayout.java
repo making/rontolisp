@@ -173,6 +173,29 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 4);
 
 	/**
+	 * The instance tag of the built-in readtable type, spelled in upper case for the same
+	 * reason as {@link #PATHNAME_TAG}: prelude Lisp quotes it literally
+	 * ({@code (%obj-is x '%READTABLE)}) and the reader upcases source symbols.
+	 */
+	public static final String READTABLE_TAG = "%READTABLE";
+
+	/**
+	 * The layout of every readtable value ({@code .kb/readtables.md}): slot 0 the
+	 * {@code readtable-case} keyword, slot 1 an {@code eql} hash table from a character
+	 * to its syntax entry, holding ONLY the characters whose syntax differs from the
+	 * standard one -- so the standard readtable is an empty table and a copy of it costs
+	 * nothing. The entries are prelude Lisp's to read and write on every backend; the
+	 * interpreter's reader reads them through {@code eval/ReadtableSyntax}.
+	 *
+	 * <p>
+	 * {@link Kind#OPAQUE}: a readtable prints as {@code #<READTABLE>} on every backend,
+	 * the table's contents never reach the output. A FIXED layout, seeded into
+	 * {@code ClosRegistry.layoutsByTag} as a LAYOUT ONLY like {@link #PATHNAME}.
+	 */
+	public static final LispLayout READTABLE = new LispLayout(READTABLE_TAG, "READTABLE", Kind.OPAQUE,
+			List.of("CASE", "CHARS"), List.of(LispNil.INSTANCE, LispNil.INSTANCE), 2);
+
+	/**
 	 * The reserved {@link #STREAM} cell the wasm backends' {@code close} sets to t, and
 	 * that their {@code open-stream-p} and a second {@code close} read
 	 * ({@code .kb/read-load-streams.md}, "A stream is a VALUE, not a handle"). The

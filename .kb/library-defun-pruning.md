@@ -107,11 +107,11 @@ is not a prunable library definition.
   `#aSynthesizedCallEntryIsRootedByTheLiveFormsOnly`.
 - Two spellings widen this for THIRD-PARTY names only: an uninterned `'#:foo` designator, and
   a string literal whose WHOLE content is a canonical or member name. Both hash lookups.
-- **Not reference sources**: a `set-dispatch-macro-character` HOOK
-  (`LispMacroExpander.isReadtableHookRegistration` / `isDeadReadtableHook`; rontolisp's reader
-  is not readtable-driven, so the registration is a no-op -- but a hook argument that is a CALL
-  still counts); a top-level `declaim`/`proclaim` (the FORM STAYS for
-  `SpecialVarCollector.collectForm`, only its symbol occurrences stop counting).
+- **Not reference sources**: a top-level `declaim`/`proclaim` (the FORM STAYS for
+  `SpecialVarCollector.collectForm`, only its symbol occurrences stop counting). A
+  `set-dispatch-macro-character` hook IS one since readtables became values
+  ([readtables.md](readtables.md)): `get-dispatch-macro-character` answers the function, so
+  ironclad's `array-reader` -- and the `read` it calls -- stays in a compiled ironclad.
 - **A class header is not a call site**: `collectClassDefinitionReferences` walks
   `defclass`/`define-condition` by POSITION, because the pass has ONE string key space while
   the language has two namespaces (`.kb/lisp2-namespaces.md`). Skipped are only the DEFINING

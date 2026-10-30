@@ -2,7 +2,7 @@
 
 `(deftype name lambda-list body...)`
 
-**引数なし** の `deftype` で本体がリテラル (クオートされた) 型指定子の場合は登録され、定義した名前を後続の [`typep`](typep.md)/[`typecase`](typecase.md) の型テストで型として解決できます (`(satisfies predicate)` の本体は指定した述語を呼び出します。名前がさらに別の型名へ展開される形も可能です)。**引数あり** やその他計算を伴う `deftype` は、パース済み no-op として `nil` を返すままです — 呼び出しごとの展開を行わないため名前は解決できません。これは、その名前が(同じく no-op の)`declaim`/`declare` 宣言の中にのみ現れる、ライブラリでよくある形を通すためのものです。
+`name` を後続の [`typep`](typep.md)/[`typecase`](typecase.md) の型テストで使える型として定義し、`nil` を返します。本体は、その名前が表す型指定子を返します (`(satisfies predicate)` の本体は指定した述語を呼び出します。名前がさらに別の型名へ展開される形も可能です)。引数ありの `deftype` では、複合型指定子 `(name args...)` は、ラムダリストを `args` に束縛して本体が返す型指定子を表します。初期値形式のない `&optional`/`&key` パラメータは `*` になります。パラメータがすべて省略可能な場合、名前だけの指定は `(name)` と同じです。
 
 ```lisp
 (deftype my-even () '(satisfies evenp))
@@ -10,5 +10,6 @@
 ```
 
 ```lisp
-(deftype array-index (&optional (length 1000)) `(integer 0 (,length))) ; => NIL
+(deftype vec-of (n) `(simple-vector ,n))
+(list (typep (vector 1 2) '(vec-of 2)) (typep (vector 1 2 3) '(vec-of 2))) ; => (T NIL)
 ```

@@ -8,6 +8,8 @@
 `eq` 安定です: 同じスレッドから繰り返し呼んでも同じハンドルが返るため、`eq`
 ハッシュテーブルのキーに使えます。この性質は `bt2:current-thread` シム (そして
 それを介した `dbi` のスレッド別コネクションキャッシュ) が依存しているものです。
+[`rontolisp:make-thread`](rontolisp-make-thread.md) で生成したスレッドの中では、
+`make-thread` が返したハンドルそのものです。
 
 ```lisp
 (let ((h (rontolisp:current-thread)))
@@ -23,10 +25,5 @@
 
 ## 制限事項
 
-- 生成されたスレッドの関数が自分自身に対して見るハンドルは、自身がキャッシュした
-  ものであり、生成側が `make-thread` から受け取ったハンドルとは別です — どちらの
-  ハンドルでも移植可能なのは
-  [`rontolisp:threadp`](rontolisp-threadp.md) /
-  [`rontolisp:thread-alive-p`](rontolisp-thread-alive-p.md) の答えだけです。
 - 自分自身のハンドルを [`rontolisp:join-thread`](rontolisp-join-thread.md) に渡すと
   永久にブロックします (自分自身への join は upstream でも同じです)。

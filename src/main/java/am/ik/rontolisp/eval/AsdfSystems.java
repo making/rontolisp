@@ -373,11 +373,11 @@ public final class AsdfSystems {
 			while (true) {
 				if (pending.isEmpty()) {
 					LispReader.NextForm next = LispReader.readNextForm(source, offset, file.features(), asdPath);
-					if (next.end() < 0) {
+					if (next.form() == null) {
 						break;
 					}
 					offset = next.end();
-					pending.addAll(next.forms());
+					pending.add(next.form());
 					continue;
 				}
 				LispVal form = pending.removeFirst();

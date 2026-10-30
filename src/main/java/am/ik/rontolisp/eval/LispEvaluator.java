@@ -73,6 +73,7 @@ import am.ik.rontolisp.clojure.ClojureTopLevel;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.reader.ReadSyntax;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import org.jspecify.annotations.Nullable;
@@ -719,6 +720,9 @@ public final class LispEvaluator {
 		// spelled (let ((*read-suppress* t)) (read ...)), which is a dynamic binding or
 		// nothing.
 		this.specialVars.add(LispNames.READ_SUPPRESS_VAR);
+		// *readtable* joins them: load binds it around a file, and a reader macro's own
+		// read runs under a (let ((*readtable* ...)) ...) of its library's.
+		this.specialVars.add(LispNames.READTABLE_VAR);
 		// *default-pathname-defaults* joins them: a portable program binds it around a
 		// block of path work ((let ((*default-pathname-defaults* d)) ...)), which is a
 		// dynamic binding or nothing.
@@ -834,6 +838,102 @@ public final class LispEvaluator {
 	 */
 	public @Nullable LispVal findDeftype(String name) {
 		return this.closRegistry.findDeftype(name);
+	}
+
+	/**
+	 * The parameterized {@code deftype} forms this evaluator has seen, keyed by the
+	 * normalized type name: what a compound specifier headed by one expands through.
+	 */
+	private final Map<String, LispCons> parameterizedDeftypes = new java.util.LinkedHashMap<>();
+
+	/**
+	 * Whether the specifier head names a parameterized {@code deftype} this evaluator has
+	 * seen.
+	 * @param name the head symbol's name
+	 * @return true when a compound specifier with that head expands here
+	 */
+	public boolean namesParameterizedDeftype(String name) {
+		return parameterizedDeftype(name) != null;
+	}
+
+	/**
+	 * Whether this evaluator has seen any parameterized {@code deftype}.
+	 * @return true when at least one is defined
+	 */
+	public boolean definesParameterizedDeftypes() {
+		return !this.parameterizedDeftypes.isEmpty();
+	}
+
+	private @Nullable LispCons parameterizedDeftype(String name) {
+		LispCons exact = this.parameterizedDeftypes.get(ClosRegistry.normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.parameterizedDeftypes.get(qn.member());
+		}
+		return null;
+	}
+
+	/**
+	 * Expands a compound type specifier headed by a parameterized {@code deftype}: the
+	 * body runs with the lambda list bound to the specifier's arguments, an
+	 * {@code &optional} or {@code &key} parameter with no init-form defaulting to the
+	 * symbol {@code *} (CLHS deftype).
+	 * @param specifier the compound specifier
+	 * @return the type specifier it denotes, or null when its head names no parameterized
+	 * deftype or the body fails on these arguments
+	 */
+	public @Nullable LispVal expandDeftypeSpecifier(LispCons specifier) {
+		if (!(specifier.car() instanceof LispSymbol head) || !specifier.isProperList()) {
+			return null;
+		}
+		LispCons deftype = parameterizedDeftype(head.name());
+		if (deftype == null) {
+			return null;
+		}
+		List<LispVal> parts = deftype.toList();
+		LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));
+		List<LispVal> lambdaList = new ArrayList<>();
+		boolean defaulted = false;
+		LispVal cur = parts.get(2);
+		while (cur instanceof LispCons c) {
+			LispVal item = c.car();
+			cur = c.cdr();
+			if (item instanceof LispSymbol marker && marker.name().startsWith("&")) {
+				if (LispNames.LAMBDA_ENVIRONMENT.equals(marker.name()) && cur instanceof LispCons skipped) {
+					cur = skipped.cdr();
+					continue;
+				}
+				defaulted = LispNames.LAMBDA_OPTIONAL.equals(marker.name())
+						|| LispNames.LAMBDA_KEY.equals(marker.name());
+				lambdaList.add(item);
+			}
+			else if (defaulted && item instanceof LispSymbol param) {
+				lambdaList.add(consListOf(List.of(param, quotedStar)));
+			}
+			else if (defaulted && item instanceof LispCons param && param.cdr() instanceof LispNil) {
+				lambdaList.add(consListOf(List.of(param.car(), quotedStar)));
+			}
+			else {
+				lambdaList.add(item);
+			}
+		}
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(lambdaList.isEmpty() ? LispNil.INSTANCE : consListOf(lambdaList));
+		lambda.addAll(parts.subList(3, parts.size()));
+		LispVal call = consListOf(List.of(new LispSymbol(LispNames.APPLY),
+				consListOf(List.of(new LispSymbol(LispNames.FUNCTION), consListOf(lambda))),
+				consListOf(List.of(new LispSymbol(LispNames.QUOTE), specifier.cdr()))));
+		try {
+			LispVal spec = withoutDebugger(() -> eval(call, this.globalEnv));
+			return spec instanceof LispSymbol || spec instanceof LispCons || spec instanceof LispNil
+					|| spec instanceof LispTrue ? spec : null;
+		}
+		catch (RuntimeException bodyRefusesTheArguments) {
+			return null;
+		}
 	}
 
 	/**
@@ -1372,6 +1472,9 @@ public final class LispEvaluator {
 		// read that follows it. The read-time set cannot answer for that; it was fixed
 		// when the frontend read this source.
 		this.globalEnv.setReadFeaturesQuery(this::currentReadFeatures);
+		// *readtable* for the runtime readers, for the same reason: the readtable a
+		// read honors is the one current WHEN it reads (.kb/readtables.md).
+		this.globalEnv.setReadSyntaxQuery(this::currentReadSyntax);
 		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
 		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
@@ -2643,6 +2746,22 @@ public final class LispEvaluator {
 					removeUserMacro(name);
 					return args.get(1);
 				}));
+		// The run-time typep dispatch expands a designator headed by a parameterized
+		// deftype through this before it reads the head (expandRuntimeTypep); a chain
+		// of such heads expands to its end, bounded like an alias chain.
+		this.globalEnv.defineFunction(LispNames.DEFTYPE_EXPAND_INTERNAL,
+				new LispFunction(LispNames.DEFTYPE_EXPAND_INTERNAL, args -> {
+					requireSingleArg(LispNames.DEFTYPE_EXPAND_INTERNAL, args);
+					LispVal spec = args.get(0);
+					for (int hop = 0; hop < 16 && spec instanceof LispCons compound; hop++) {
+						LispVal expansion = expandDeftypeSpecifier(compound);
+						if (expansion == null) {
+							break;
+						}
+						spec = expansion;
+					}
+					return spec;
+				}));
 		// The compile paths' setf-only-alias forwarder body reads the binding through
 		// this primitive; the interpreter serves it against the live environment so
 		// one program means the same thing on every backend.
@@ -3227,14 +3346,14 @@ public final class LispEvaluator {
 		// bindings from its spawner and its own pushes die with it -- no pop is needed.
 		String makeThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
 		this.globalEnv.defineFunction(makeThreadName, new LispFunction(makeThreadName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
+			if (args.isEmpty() || args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.MAKE_THREAD + " expects 1 or 2 arguments, got " + args.size());
+						LispNames.MAKE_THREAD + " expects 1 to 3 arguments, got " + args.size());
 			}
 			LispVal fn = args.get(0);
 			List<String> bindingNames = new ArrayList<>();
 			List<LispVal> bindingValues = new ArrayList<>();
-			if (args.size() == 2) {
+			if (args.size() >= 2) {
 				LispVal cur = args.get(1);
 				while (cur instanceof LispCons cons) {
 					if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol sym)) {
@@ -3260,7 +3379,7 @@ public final class LispEvaluator {
 					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
 				}
 				return apply(fn, List.of(), this.globalEnv);
-			});
+			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
 		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
@@ -3305,6 +3424,11 @@ public final class LispEvaluator {
 			thread.thread().interrupt();
 			return thread;
 		}));
+		// %thread-name: the name make-thread was given (nil for none, and for a thread
+		// it did not spawn) -- bordeaux-threads:thread-name.
+		String threadNameName = LispNames.THREAD_NAME_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(threadNameName,
+				new LispFunction(threadNameName, args -> requireThread(LispNames.THREAD_NAME, args).name()));
 		String currentThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD);
 		this.globalEnv.defineFunction(currentThreadName, new LispFunction(currentThreadName, args -> {
 			if (!args.isEmpty()) {
@@ -4273,6 +4397,9 @@ public final class LispEvaluator {
 		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(systemName != null ? resolved : rawPath));
 		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR,
 				new LispString(this.sourceLoader.canonicalPath(resolved)));
+		// *readtable* too (CLHS load): an in-readtable inside the file is the file's.
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
 		// The file's forms are TOP-LEVEL forms whoever called load -- a function, or
 		// asdf:perform's load-op method, which is where every ASDF component load runs
 		// -- so a macro they call expands in the file's package (expandMacroCall).
@@ -4293,16 +4420,16 @@ public final class LispEvaluator {
 				requireWholeClojureLibrary("load of " + resolved);
 			}
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			if (language == SourceLanguage.COMMON_LISP) {
+				// Form at a time: each form is read with the readtable the forms before
+				// it left (.kb/readtables.md).
+				loadForms(SourceLanguage.readForms(source, features, resolved), resolved, source, markers);
+				return;
+			}
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
 					this.sourceLoader);
-			LoadRecorder recorder = language == SourceLanguage.COMMON_LISP ? this.loadRecorder : null;
-			if (recorder == null) {
-				for (LispVal form : read.forms()) {
-					eval(markers ? resolveReadTimeEvalInCode(form) : form);
-				}
-			}
-			else {
-				loadRecorded(recorder, this.sourceLoader.canonicalPath(resolved), source, read.forms(), markers);
+			for (LispVal form : read.forms()) {
+				eval(markers ? resolveReadTimeEvalInCode(form) : form);
 			}
 			LispReadException error = read.error();
 			if (error != null) {
@@ -4311,6 +4438,7 @@ public final class LispEvaluator {
 		}
 		finally {
 			this.functionBodyDepth = callerFunctionBodyDepth;
+			this.dynamicBindings.pop(LispNames.READTABLE_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
 			this.packageResolver.popPackage();
@@ -4319,20 +4447,196 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Runs a loaded file's forms as {@link #loadFile} does, then hands the forms that
-	 * ran, as resolved, to the record of definitions and uses -- also when one of them
-	 * fails.
+	 * Reads and runs a loaded Common Lisp file's forms one at a time, each read with the
+	 * readtable current when the read reaches it ({@code .kb/readtables.md}). A read
+	 * error is signalled after the forms before it ran, as a catchable
+	 * {@code end-of-file} / {@code reader-error}. With a record of definitions and uses
+	 * installed, the forms that ran, as resolved, are handed to it -- also when one of
+	 * them fails.
 	 */
-	private void loadRecorded(LoadRecorder recorder, String file, String source, List<LispVal> forms, boolean markers) {
+	private void loadForms(SourceLanguage.Forms forms, String file, String source, boolean markers) {
+		LoadRecorder recorder = this.loadRecorder;
+		List<LispVal> read = new ArrayList<>();
 		List<LispVal> resolved = new ArrayList<>();
 		try {
-			for (LispVal form : forms) {
-				evalTopLevel(markers ? resolveReadTimeEvalInCode(form) : form, resolved::add);
+			while (true) {
+				LispVal form;
+				try {
+					form = forms.next(currentReadSyntax());
+				}
+				catch (LispReadException error) {
+					throw loadReadError(error);
+				}
+				if (form == null) {
+					return;
+				}
+				LispVal ready = markers ? resolveReadTimeEvalInCode(form) : form;
+				if (recorder == null) {
+					eval(ready);
+				}
+				else {
+					read.add(form);
+					evalTopLevel(ready, resolved::add);
+				}
 			}
 		}
 		finally {
-			recorder.recordLoaded(file, source, forms, resolved);
+			if (recorder != null) {
+				recorder.recordLoaded(this.sourceLoader.canonicalPath(file), source, read, resolved);
+			}
 		}
+	}
+
+	/**
+	 * Reads and runs a program's Common Lisp entry source one form at a time, each read
+	 * with the readtable current when the read reaches it -- the same discipline as
+	 * {@code load} ({@code .kb/readtables.md}). A read error propagates as it is, after
+	 * the forms before it ran.
+	 * @param source the program text
+	 * @param file the entry file, or {@code null}
+	 */
+	public void evalSource(String source, @Nullable String file) {
+		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file);
+		for (LispVal form = forms.next(currentReadSyntax()); form != null; form = forms.next(currentReadSyntax())) {
+			eval(markers ? resolveReadTimeEvalInCode(form) : form);
+		}
+	}
+
+	/**
+	 * The syntax the reader reads with now: the current -- dynamic binding first --
+	 * {@code *readtable*}, or {@code null} while it reads as the standard readtable
+	 * ({@code .kb/readtables.md}).
+	 * @return the syntax
+	 */
+	@Nullable ReadSyntax currentReadSyntax() {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		return readtable == null ? null : ReadtableSyntax.of(readtable, this::callReaderMacro);
+	}
+
+	/**
+	 * Calls a reader macro function over the text being read: a string input stream
+	 * positioned where the macro character left the text is its first argument, and where
+	 * the function left that stream is where the read goes on.
+	 */
+	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments) {
+		StringStreamTable table = this.globalEnv.stringStreams();
+		LispVal stream = table.open(input, offset);
+		try {
+			List<LispVal> args = new ArrayList<>(arguments.size() + 1);
+			args.add(stream);
+			args.addAll(arguments);
+			this.globalEnv.clearSpill();
+			List<LispVal> values = consumeValues(apply(function, args, this.globalEnv));
+			am.ik.rontolisp.runtime.RontoStringInputStream reader = table.reader(stream);
+			int end = reader == null ? offset : table.logicalOffset(stream, reader);
+			return new ReadSyntax.Result(values.isEmpty() ? null : values.get(0), end);
+		}
+		finally {
+			table.close(stream);
+		}
+	}
+
+	/**
+	 * Serves a {@code read} or {@code read-delimited-list} call off a STRING stream under
+	 * a non-standard readtable ({@code .kb/readtables.md}): the text is read in place
+	 * through the reader, which honors the readtable -- the prelude's scanner, which
+	 * delimits a datum by the standard syntax, cannot. Any other call -- the standard
+	 * readtable, another stream -- answers {@code null} and runs the prelude defun.
+	 * @param name {@link LispNames#READ} or {@link LispNames#READ_DELIMITED_LIST}
+	 * @param args the evaluated arguments
+	 * @return the call's value, or {@code null} to decline
+	 */
+	private @Nullable LispVal readWithSyntax(String name, List<LispVal> args) {
+		ReadSyntax syntax = currentReadSyntax();
+		if (syntax == null) {
+			return null;
+		}
+		boolean delimited = LispNames.READ_DELIMITED_LIST.equals(name);
+		int streamIndex = delimited ? 1 : 0;
+		LispVal designator = args.size() > streamIndex ? args.get(streamIndex) : LispNil.INSTANCE;
+		if (designator instanceof LispNil) {
+			LispVal input = currentSpecialValue(LispNames.STANDARD_INPUT_VAR);
+			designator = input == null ? LispNil.INSTANCE : input;
+		}
+		StringStreamTable table = this.globalEnv.stringStreams();
+		am.ik.rontolisp.runtime.RontoStringInputStream reader = table.reader(designator);
+		if (reader == null || delimited && !(args.get(0) instanceof LispChar)) {
+			return null;
+		}
+		String text = reader.text();
+		boolean markers = SourceLanguage.usesReadEvalMarkers(text);
+		LispReader.Forms forms = LispReader.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
+				table.logicalOffset(designator, reader), false);
+		try {
+			if (delimited) {
+				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
+				table.moveTo(designator, reader, forms.position());
+				LispVal list = LispNil.INSTANCE;
+				for (int i = items.size() - 1; i >= 0; i--) {
+					LispVal item = items.get(i);
+					list = new LispCons(markers ? resolveReadTimeEval(item) : item, list);
+				}
+				return homeReadSymbols(list);
+			}
+			LispVal datum = forms.next(syntax);
+			int end = forms.position();
+			if (datum == null) {
+				table.moveTo(designator, reader, end);
+				if (args.size() > 1 && args.get(1) instanceof LispNil) {
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				throw new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE,
+						ClosRegistry.newEndOfFileCondition(designator));
+			}
+			// CLHS 23.2: the whitespace character that ends the datum is consumed.
+			if (end < text.length() && Character.isWhitespace(text.charAt(end))) {
+				end++;
+			}
+			table.moveTo(designator, reader, end);
+			return homeReadSymbols(
+					StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry));
+		}
+		catch (LispReadException e) {
+			table.moveTo(designator, reader, forms.position());
+			String message = String.valueOf(e.getMessage());
+			throw new LispEvalException(message, e.isEndOfFile() ? ClosRegistry.newEndOfFileCondition(designator)
+					: ClosRegistry.newReaderErrorCondition(new LispString(e.reason()), designator));
+		}
+	}
+
+	/**
+	 * The symbols of a datum the readtable-honoring read answered, homed in the current
+	 * package as data -- what CL's reader does when it interns. A reader macro inspects
+	 * what it reads at read time (cl-annot looks an annotation's arity up on the symbol
+	 * it read), so a bare spelling, which names a {@code cl-user} symbol, would miss the
+	 * current package's own one.
+	 */
+	private LispVal homeReadSymbols(LispVal datum) {
+		if (!(datum instanceof LispSymbol) && !(datum instanceof LispCons)) {
+			return datum;
+		}
+		LispVal resolved = this.packageResolver
+			.resolve(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE)));
+		return resolved instanceof LispCons quote && quote.cdr() instanceof LispCons rest ? rest.car() : datum;
+	}
+
+	/**
+	 * Evaluates a {@code read} or {@code read-delimited-list} call: the prelude defun,
+	 * with the readtable-honoring read of a string stream in front of it
+	 * ({@link #readWithSyntax}) -- the {@link #evalSequenceScan} shape, serving the call
+	 * only while the name still resolves to the prelude's own definition.
+	 */
+	private LispVal evalReadCall(LispCons cons, Environment env, String name) {
+		LispVal function = resolveFunction(name);
+		List<LispVal> args = evalArgs(cons, env);
+		if (function == this.preludeDefinitions.get(name)) {
+			LispVal read = readWithSyntax(name, args);
+			if (read != null) {
+				return read;
+			}
+		}
+		return apply(function, args, env);
 	}
 
 	/**
@@ -8958,12 +9262,6 @@ public final class LispEvaluator {
 				return LispMacroExpander.expandMakeCondition(cons, this.closRegistry);
 			case LispNames.DOCUMENTATION:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
-			case LispNames.COPY_READTABLE:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandCopyReadtable);
-			case LispNames.SET_DISPATCH_MACRO_CHARACTER:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandSetDispatchMacroCharacter);
-			case LispNames.READTABLE_CASE:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandReadtableCase);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
@@ -9500,6 +9798,11 @@ public final class LispEvaluator {
 				// prelude defuns whose elt-per-element inner loop costs the interpreter
 				// ~2.5 us per element PAIR. The arm declines to this same call.
 				return singleValue(evalSequenceScan(cons, env, name));
+			case LispNames.READ:
+			case LispNames.READ_DELIMITED_LIST:
+				// The prelude defun, with the readtable-honoring read of a string stream
+				// in front of it (.kb/readtables.md). The arm declines to this same call.
+				return singleValue(evalReadCall(cons, env, name));
 		}
 		return UNHANDLED;
 	}
@@ -12765,6 +13068,18 @@ public final class LispEvaluator {
 	public LispVal foldDeftype(LispCons cons) {
 		LispMacroExpander.expandDeftype(cons, this.closRegistry);
 		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol typeName) {
+			// A parameterized deftype is kept whole: a compound specifier headed by it
+			// expands by running the body over that specifier's arguments.
+			String key = ClosRegistry.normalize(typeName.name());
+			if (parts.get(2) instanceof LispCons) {
+				this.parameterizedDeftypes.put(key, cons);
+				this.closRegistry.setDeftypeExpander(this::expandDeftypeSpecifier);
+			}
+			else {
+				this.parameterizedDeftypes.remove(key);
+			}
+		}
 		if (parts.size() >= 4 && parts.get(1) instanceof LispSymbol nameSym
 				&& this.closRegistry.findDeftype(nameSym.name()) == null) {
 			LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));

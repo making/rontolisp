@@ -2,8 +2,15 @@
 
 `(readtable-case readtable)`
 
-Lite stub: always returns `:upcase` -- the reader is not readtable-driven and always upcases unescaped symbol names, which is exactly the standard readtable's `:upcase` mode. The argument is evaluated but ignored (the `*readtable*` variable exists but is seeded to `nil`). Exists so library code that branches on the readtable case, like s-sql's `from-sql-name`, takes the standard-mode branch.
+The case a readtable converts the unescaped letters of a token to: `:upcase` (the standard readtable's), `:downcase`, `:preserve` or `:invert` (a token whose unescaped letters are all one case is inverted, any other one kept). `(setf (readtable-case readtable) mode)` sets it. Works on all four backends; only the interpreter's reader converts by it.
 
 ```lisp
 (readtable-case *readtable*) ; => :UPCASE
+```
+
+```lisp
+(let ((*readtable* (copy-readtable nil)))
+  (setf (readtable-case *readtable*) :invert)
+  (list (read-from-string "foo") (read-from-string "Foo")))
+; => (FOO |Foo|)
 ```

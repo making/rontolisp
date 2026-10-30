@@ -39,7 +39,7 @@ final class Target_AsyncRuntime {
 	}
 
 	@Substitute
-	static LispThread spawnThread(Supplier<LispVal> body) {
+	static LispThread spawnThread(Supplier<LispVal> body, LispVal name) {
 		// no threads in the browser worker: the body runs synchronously to completion
 		// and an already-settled handle is returned (the async-run precedent above).
 		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
@@ -49,7 +49,7 @@ final class Target_AsyncRuntime {
 		catch (RuntimeException ex) {
 			result.completeExceptionally(ex);
 		}
-		return new LispThread(Thread.currentThread(), result);
+		return new LispThread(Thread.currentThread(), result, name);
 	}
 
 	@Substitute

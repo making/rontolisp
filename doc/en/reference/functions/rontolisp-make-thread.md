@@ -1,6 +1,6 @@
 # rontolisp:make-thread
 
-`(rontolisp:make-thread function &optional bindings)`
+`(rontolisp:make-thread function &optional bindings name)`
 
 Spawns a new (virtual) thread running the zero-argument `function` and returns an
 **opaque thread handle** immediately. Pass the handle to
@@ -17,6 +17,9 @@ no dynamic bindings from its spawner: without an entry here it reads every speci
 variable's global value. Binding `*standard-output*` this way routes the new thread's
 print family into a stream of your choice — the shape the `bordeaux-threads`/`bt2`
 libraries (and Clack's handler) use.
+
+`name` (default `nil`) rides the handle; `bt:thread-name` answers it, and inside the new
+thread [`rontolisp:current-thread`](rontolisp-current-thread.md) is this same handle.
 
 ```lisp
 (defvar *cap* (make-string-output-stream))

@@ -1,9 +1,9 @@
 # copy-readtable
 
-`(copy-readtable &optional from to)`
+`(copy-readtable &optional (from-readtable *readtable*) to-readtable)`
 
-ライト版スタブ: 何もせず `nil` を返します。リーダーはリードテーブル駆動ではないため、コピーすべきリードテーブルオブジェクトが存在しません (変数 `*readtable*` は存在しますが `nil` に初期化されています)。引数は評価されます。ライブラリでよくあるヘッダーイディオム `(defparameter *my-readtable* (copy-readtable nil))` がロードできるように存在します。
+リードテーブルの複製を返します。ケースと、文字に与えたマクロ文字・ディスパッチテーブル・構文をすべて複製します。`from-readtable` の `nil` は標準リードテーブルを指すため、`(copy-readtable nil)` は新しい標準リードテーブルです。`to-readtable` を渡すと、そのリードテーブルを上書きして返します。4つのバックエンドすべてで動作します。
 
 ```lisp
-(copy-readtable nil) ; => NIL
+(readtablep (copy-readtable nil)) ; => T
 ```

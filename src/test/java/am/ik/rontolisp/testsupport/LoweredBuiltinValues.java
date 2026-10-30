@@ -42,7 +42,6 @@ public final class LoweredBuiltinValues {
 			(print (funcall #'typep 3 'integer))
 			(print (funcall #'typep "x" 'integer))
 			(print (funcall #'/= 1 2))
-			(print (funcall #'readtable-case nil))
 			""";
 
 	/** What every backend prints for {@link #PROGRAM}. */
@@ -69,7 +68,6 @@ public final class LoweredBuiltinValues {
 			T
 			T
 			NIL
-			T
-			:UPCASE""";
+			T""";
 
 }

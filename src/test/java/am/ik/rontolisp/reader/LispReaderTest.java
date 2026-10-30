@@ -918,6 +918,21 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readComputedFeatureGuardDefersOnlyWhereAListElementStands() {
+		// #0A takes the next datum with no parenthesis of its own: an earlier, complete
+		// one leaves a later guard in plain lists, while a guard that is (or sits inside)
+		// its datum ends up in an array no marker walk reaches.
+		String guard = "#+#.(if t '(and) '(or)) 1";
+		assertThat(LispReader.readAllWithReadEvalMarkers("#0A5 (a #0A(1 2) " + guard + ") " + guard, Features.JVM))
+			.hasSize(3);
+		for (String refused : List.of("#0A " + guard, "#0A(a " + guard + ")", "'#0A(a (b " + guard + "))")) {
+			assertThatThrownBy(() -> LispReader.readAllWithReadEvalMarkers(refused, Features.JVM)).as(refused)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("a #+/#- guard computed by #. is supported only");
+		}
+	}
+
+	@Test
 	void readFeatureConditionalAtEndOfInputFails() {
 		assertThatThrownBy(() -> LispReader.readAllFromString("#+sbcl")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("expected a form to skip");
@@ -1005,15 +1020,15 @@ class LispReaderTest {
 		// needs to decide.
 		String input = "#.*string-file* #.,foo\n#+late (late) 42";
 		LispReader.NextForm first = LispReader.readNextForm(input, 0, Features.INTERPRETER, "lib.asd");
-		assertThat(first.forms()).containsExactly(LispReader.readFromString("(%read-eval *string-file*)"));
+		assertThat(first.form()).isEqualTo(LispReader.readFromString("(%read-eval *string-file*)"));
 		LispReader.NextForm second = LispReader.readNextForm(input, first.end(), Features.INTERPRETER, "lib.asd");
-		assertThat(second.forms()).containsExactly(LispReader.readFromString("(%read-eval-unreadable \",foo\")"));
+		assertThat(second.form()).isEqualTo(LispReader.readFromString("(%read-eval-unreadable \",foo\")"));
 		assertThat(LispReader.readNextForm(input, second.end(), Features.INTERPRETER.with(List.of("late")), "lib.asd")
-			.forms()).containsExactly(LispReader.readFromString("(late)"));
+			.form()).isEqualTo(LispReader.readFromString("(late)"));
 		LispReader.NextForm dropped = LispReader.readNextForm(input, second.end(), Features.INTERPRETER, "lib.asd");
-		assertThat(dropped.forms()).containsExactly(new LispInteger(42));
-		assertThat(LispReader.readNextForm(input, dropped.end(), Features.INTERPRETER, "lib.asd").end()).isEqualTo(-1);
-		// A read error names the file's own line, not a line of the step's span.
+		assertThat(dropped.form()).isEqualTo(new LispInteger(42));
+		assertThat(LispReader.readNextForm(input, dropped.end(), Features.INTERPRETER, "lib.asd").form()).isNull();
+		// A read error names its line in the whole file.
 		assertThatThrownBy(() -> LispReader.readNextForm("(a)\n(b))", 7, Features.INTERPRETER, "lib.asd"))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("lib.asd:2:");

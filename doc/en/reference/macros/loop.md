@@ -61,10 +61,11 @@ Accumulation and numeric ranges cover the common cases directly:
 (loop for i from 1 to 10 when (evenp i) sum i) ; => 30
 ```
 
-A `while`/`until` after body clauses (or after a `for` that assigns its variable at the top of the body, such as `in`/`on`/`across`) tests at its textual position, so it can reference the current element:
+A `while`/`until` tests at its textual position: after a `for` it sees that clause's current element, and before a `for` it tests before that clause assigns (as SBCL does; CLHS calls a `while` before a `for` nonconforming):
 
 ```lisp
 (loop for x in '(1 2 3 9 4) while (< x 4) collect x) ; => (1 2 3)
+(let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x)) ; => (1 2 3)
 ```
 
 Inside a `when`/`if`/`unless`, the anaphoric `it` names the value the test produced:

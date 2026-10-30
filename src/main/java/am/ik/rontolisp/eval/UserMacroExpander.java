@@ -81,6 +81,10 @@ public final class UserMacroExpander {
 		List<LispVal> mopSplice = new ArrayList<>();
 		macroEval.setMopEvalSpliceSink(mopSplice);
 		List<LispVal> result = new ArrayList<>();
+		// Every top-level form as this pass RESOLVED it (canonical spellings), whatever
+		// spelling `result` keeps: the compound specifiers headed by a parameterized
+		// deftype are found in these (emitDeftypeInstances).
+		List<LispVal> canonicalForms = new ArrayList<>();
 		// The program's global symbol macros, each remembering the point in `result`
 		// from which it is active: define-symbol-macro is a COMPILE-TIME fact here (the
 		// backends have no symbol-macro table at run time), so the definition is dropped
@@ -246,6 +250,7 @@ public final class UserMacroExpander {
 			if (expanded == null) {
 				continue;
 			}
+			canonicalForms.add(expanded);
 			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
 				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
 				// were flattened before the loop): honor the compile-file situations.
@@ -331,6 +336,7 @@ public final class UserMacroExpander {
 			result.set(i, LoadFormSubstituter.substitute(result.get(i), macroEval));
 		}
 		emitMacroGeneratedDeftypes(macroEval, result);
+		emitDeftypeInstances(macroEval, canonicalForms, result);
 		emitMacroFunctionTable(macroEval, result);
 		emitCompilerMacroFunctionTable(macroEval, result);
 		return result;
@@ -469,6 +475,79 @@ public final class UserMacroExpander {
 						properList(List.of(new LispSymbol(LispNames.QUOTE), expansion)))));
 			}
 		}
+	}
+
+	/**
+	 * Appends one {@code (declaim (%deftype-instance 'spec 'expansion))} per compound
+	 * specifier headed by a parameterized {@code deftype} that the program spells --
+	 * {@code (proper-list integer)} -- with the expansion this pass's evaluator computes
+	 * by running the deftype's body over the arguments. The compilers have no evaluator,
+	 * so this record is how a compound use reaches them; their definition walk registers
+	 * it ({@code ClosRegistry.registerDeftypeInstance}). The walk covers every resolved
+	 * form but the deftypes themselves (a parameterized body is a template, not a use),
+	 * every registered deftype's expansion, and each expansion it computes, which can
+	 * spell a further instance ({@code (association-list k v)} expands to a
+	 * {@code proper-list} one).
+	 *
+	 * <p>
+	 * The record is appended at the END of the program, where the compilers' resolver
+	 * reads it under whatever package the program last selected, so every bare symbol is
+	 * spelled {@code common-lisp-user::} -- the package whose view a bare canonical
+	 * spelling denotes ({@link #contextFreeSpelling}).
+	 */
+	private static void emitDeftypeInstances(LispEvaluator macroEval, List<LispVal> canonicalForms,
+			List<LispVal> result) {
+		if (!macroEval.definesParameterizedDeftypes()) {
+			return;
+		}
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		for (LispVal form : canonicalForms) {
+			pending.add(form);
+		}
+		for (String name : macroEval.deftypeNames()) {
+			LispVal expansion = macroEval.findDeftype(name);
+			if (expansion != null) {
+				pending.add(expansion);
+			}
+		}
+		Set<String> seen = new java.util.HashSet<>();
+		while (!pending.isEmpty()) {
+			if (!(pending.pop() instanceof LispCons cons) || isOperator(cons, LispNames.DEFTYPE)) {
+				continue;
+			}
+			if (cons.car() instanceof LispSymbol head && cons.isProperList()
+					&& macroEval.namesParameterizedDeftype(head.name()) && seen.add(cons.print())) {
+				LispVal expansion = macroEval.expandDeftypeSpecifier(cons);
+				if (expansion != null) {
+					result.add(LispMacroExpander.deftypeInstanceDeclamation((LispCons) contextFreeSpelling(cons),
+							contextFreeSpelling(expansion)));
+					pending.push(expansion);
+				}
+			}
+			LispVal cur = cons;
+			while (cur instanceof LispCons cell) {
+				pending.push(cell.car());
+				cur = cell.cdr();
+			}
+		}
+	}
+
+	/**
+	 * The datum with every bare non-keyword symbol spelled {@code common-lisp-user::}: a
+	 * bare canonical spelling names a {@code cl} or {@code cl-user} symbol, and
+	 * {@code cl-user}'s view resolves both to that same canonical spelling from under any
+	 * package.
+	 */
+	private static LispVal contextFreeSpelling(LispVal datum) {
+		if (datum instanceof LispSymbol sym) {
+			String name = sym.name();
+			return name.startsWith(":") || name.startsWith("#") || PackageRegistry.splitQualified(name) != null ? sym
+					: new LispSymbol(LispNames.CL_USER_PKG + "::" + name);
+		}
+		if (datum instanceof LispCons cons) {
+			return new LispCons(contextFreeSpelling(cons.car()), contextFreeSpelling(cons.cdr()));
+		}
+		return datum;
 	}
 
 	/**
