@@ -421,7 +421,17 @@ file's forms: a loaded file's forms are top-level wherever `load` was called fro
 component is loaded from inside `asdf:perform`'s method, `.kb/asdf.md`). Both halves are
 load-bearing (fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known
 approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P
-where CL uses Q. Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+where CL uses Q. **The swap only reaches what is homed DURING the expansion**: `intern`, and
+(h62, 2026-10-31) every interpreter runtime read -- `read-from-string`, `read`, a readtable
+view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
+`PackageResolver.readSpelling`, recording like `intern`) homes each symbol TOKEN as it is read.
+Until then a read answered a bare spelling, resolved later in the caller's package: cl-pdf's AFM
+parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET-AFM-STRING`.
+Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
+are not homed; a token qualified by an unknown package keeps its spelling. The compiled
+backends' run-time reader stays package-blind like their 1-arg `intern`
+(`.kb/symbol-runtime-api.md`). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
 

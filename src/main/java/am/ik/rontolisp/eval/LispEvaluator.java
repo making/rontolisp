@@ -1469,6 +1469,12 @@ public final class LispEvaluator {
 		// it (a bare Environment) the error-mode read signals, matching the compiled
 		// backends' embedded readers.
 		this.globalEnv.setReadTimeEvalResolver(this::resolveReadTimeEval);
+		// Symbol interning for the runtime readers: a token is homed in the package
+		// current WHEN it is read, as CL's reader interns in *package* -- a macro that
+		// reads a name at expansion time (cl-pdf's AFM parser) expands inside its
+		// defining package (expandMacroCall), and the caller's package is current again
+		// by the time the expansion runs.
+		this.globalEnv.setReadSymbolHome(this.packageResolver::readSpelling);
 		// *read-suppress* for the runtime readers: the built-in holds the global
 		// environment, so the dynamic binding a (let ((*read-suppress* t)) ...) makes is
 		// visible only from here.
@@ -4576,8 +4582,10 @@ public final class LispEvaluator {
 		}
 		String text = reader.text();
 		boolean markers = SourceLanguage.usesReadEvalMarkers(text);
-		LispReader.Forms forms = LispReader.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
-				table.logicalOffset(designator, reader), false);
+		LispReader.Forms forms = LispReader
+			.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
+					table.logicalOffset(designator, reader), false)
+			.homingSymbols(this.packageResolver::readSpelling);
 		try {
 			if (delimited) {
 				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
@@ -4587,7 +4595,7 @@ public final class LispEvaluator {
 					LispVal item = items.get(i);
 					list = new LispCons(markers ? resolveReadTimeEval(item) : item, list);
 				}
-				return homeReadSymbols(list);
+				return list;
 			}
 			LispVal datum = forms.next(syntax);
 			int end = forms.position();
@@ -4604,8 +4612,7 @@ public final class LispEvaluator {
 				end++;
 			}
 			table.moveTo(designator, reader, end);
-			return homeReadSymbols(
-					StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry));
+			return StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry);
 		}
 		catch (LispReadException e) {
 			table.moveTo(designator, reader, forms.position());
@@ -4613,22 +4620,6 @@ public final class LispEvaluator {
 			throw new LispEvalException(message, e.isEndOfFile() ? ClosRegistry.newEndOfFileCondition(designator)
 					: ClosRegistry.newReaderErrorCondition(new LispString(e.reason()), designator));
 		}
-	}
-
-	/**
-	 * The symbols of a datum the readtable-honoring read answered, homed in the current
-	 * package as data -- what CL's reader does when it interns. A reader macro inspects
-	 * what it reads at read time (cl-annot looks an annotation's arity up on the symbol
-	 * it read), so a bare spelling, which names a {@code cl-user} symbol, would miss the
-	 * current package's own one.
-	 */
-	private LispVal homeReadSymbols(LispVal datum) {
-		if (!(datum instanceof LispSymbol) && !(datum instanceof LispCons)) {
-			return datum;
-		}
-		LispVal resolved = this.packageResolver
-			.resolve(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE)));
-		return resolved instanceof LispCons quote && quote.cdr() instanceof LispCons rest ? rest.car() : datum;
 	}
 
 	/**

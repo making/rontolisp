@@ -27113,15 +27113,27 @@ class LispEvaluatorTest {
 		// interpreter expands it lazily, at call time, so without the definition-package
 		// swap the (intern "SECRET") landed in the caller's package. A TOP-LEVEL macro
 		// call keeps the current package (trivia's lispn:define-namespace needs that).
+		// A name READ at expansion time (cl-pdf's AFM parser) is homed as it is read,
+		// so it lands in the same package: the runtime reader interns like intern does,
+		// read and read-from-string with a standard or a custom readtable alike.
 		assertThat(evalMulti("""
 				(defpackage :mp-lib (:use :cl) (:export :call-it))
 				(in-package :mp-lib)
 				(defun mp-lib::secret (x) (* x 2))
 				(defmacro mp-lib::name-of (x) (list (intern "SECRET") x))
-				(defun mp-lib:call-it (x) (mp-lib::name-of x))
+				(defmacro mp-lib::read-of (x) (list (read-from-string "secret") x))
+				(defmacro mp-lib::read-full-of (x) (list (read-from-string " secret" t nil :start 1) x))
+				(defmacro mp-lib::stream-read-of (x) (list (read (make-string-input-stream "secret")) x))
+				(defmacro mp-lib::syntax-read-of (x)
+				  (let ((*readtable* (copy-readtable nil)))
+				    (list (read (make-string-input-stream "secret")) x)))
+				(defun mp-lib:call-it (x)
+				  (list (mp-lib::name-of x) (mp-lib::read-of x) (mp-lib::read-full-of x) (mp-lib::stream-read-of x)
+				        (mp-lib::syntax-read-of x) (eq (read-from-string "secret") 'secret)
+				        (read-from-string "(a cl-user::b mp-lib::c :d #:e)")))
 				(in-package :cl-user)
 				(mp-lib:call-it 21)
-				""").print()).isEqualTo("42");
+				""").print()).isEqualTo("(42 42 42 42 42 NIL (A B MP-LIB::C :D #:E))");
 	}
 
 	@Test

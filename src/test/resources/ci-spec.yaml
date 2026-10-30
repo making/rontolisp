@@ -3992,6 +3992,24 @@ cases:
     expected: |
       (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
       (T T T T INTEGER)
+  - name: expansion-time-read-homes-in-the-macro-package
+    source: |
+      ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
+      ;; time. The interpreter expands a macro inside a function body lazily, in its
+      ;; defining package, and the caller's package is current again when the
+      ;; expansion runs: the read has to intern as it reads, as intern does.
+      (defpackage :ci-etr (:use :cl))
+      (in-package :ci-etr)
+      (defun get-x (a) (list :x a))
+      (defmacro call-get (type arg) `(,(read-from-string (format nil "get-~A" type)) ,arg))
+      (defmacro call-get-full (type arg) `(,(read-from-string (format nil " get-~A" type) t nil :start 1) ,arg))
+      (defmacro call-get-read (type arg) `(,(read (make-string-input-stream (format nil "get-~A" type))) ,arg))
+      (defmacro call-get-intern (type arg) `(,(intern (string-upcase (format nil "get-~A" type))) ,arg))
+      (defun use-it () (list (call-get "x" 1) (call-get-full "x" 2) (call-get-read "x" 3) (call-get-intern "x" 4)))
+      (in-package :cl-user)
+      (print (ci-etr::use-it))
+    expected: |
+      ((:X 1) (:X 2) (:X 3) (:X 4))
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)
