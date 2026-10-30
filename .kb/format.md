@@ -128,24 +128,36 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
 
 - Only a PROPER list is materialized, and only at 8+ elements; a dotted list, a non-sequence, a
   string, a vector and a short list get `(list x nil)`.
-- `%fmt-arg` consults the vector only for an index INSIDE it (negative or past the end falls
-  through to `(nth i list)`, reproducing NIL past the end); `%fmt-count` falls back to
+- `(%fmt-arg all i d)` reads index `i` for directive `d` and SIGNALS past either end
+  (`%fmt-no-arg`, below); a non-list keeps `(nth i x)`'s answer. `%fmt-count` falls back to
   `(length x)`, so `(format nil "~{~a~}" 5)` is `LENGTH`'s `SEQUENCE` type-error (it rendered
-  nothing until 2026-09-26).
+  nothing until 2026-09-26). `%fmt-shape` scans with a nil `all`, so `%fmt-param` reads a `v`
+  only when `all` is non-nil.
 - The pair is rebuilt per NESTED level: `~{`'s list argument, `~:{`/`~:@{`'s per-pass sublist, a
   logical block's list argument, `~?`'s list through `%fmt-render`.
 - The iteration directives collect their pieces and join once: `%fmt-join` halves the piece list
   until one string is left, O(n log n) characters copied, no mutable buffer.
 - **Trap: a new directive arm reading `all` must use those three functions.** `(nth i all)` reads
-  the wrapper cons, and the renderer never signals, so it would answer quietly wrong text.
+  the wrapper cons and answers quietly wrong text instead of signalling past the end.
   `%fmt-cat`-per-character inside `%fmt-run` stays quadratic in the CONTROL STRING.
 
 ## Deliberate divergences
-- **The renderer never signals**: a malformed control, an unknown directive, an unterminated
-  `~{`, a missing argument all render as text (`NIL` for the missing argument); the literal path
-  signals the same at EXPANSION time. A condition report must not fail while reporting -- do not
-  "fix" this. Exceptions: the absent `~/name/` arm, a missing capability rather than bad input, and
-  the range errors of the no-radix `~r` below.
+- **A malformed control renders as text**: an unknown directive, an unterminated `~{`, a trailing
+  `~`; the literal path signals the same at EXPANSION time. Exceptions: the absent `~/name/` arm,
+  a missing capability rather than bad input, and the range errors of the no-radix `~r` below.
+- **A read past the argument list SIGNALS** a `simple-error` with the literal path's text (`format:
+  not enough arguments for directive ~a`, `format: ~* moves outside the argument list`) -- every
+  directive SBCL 2.2.9 rejects with `No more arguments` / `No previous argument` / `Index out of
+  bounds`, measured directive by directive 2026-10-30: the argument directives, `v`, `~[` (all three
+  forms), `~{`, `~?`/`~@?`, a block `~<...~:>`, `~/name/`, `~:p` at the first argument, and `~*`
+  / `~:*` / `~n@*` leaving `[0, count]`. `~@{`, `~^`, `#` and `~t` still render; a forced `~:{...~:}`
+  over no sublist runs against an empty one (`%fmt-sublist`), so its first read signals, as SBCL's
+  does. Until 2026-10-30 the missing argument rendered `NIL` ("a report must not fail while
+  reporting"); a rendered message now enters a condition only as its text control
+  ([error-handling.md](error-handling.md)), so only a report whose own `:format-control` lacks its
+  arguments signals while printing, as SBCL's does. Pinned by ci-spec
+  `format-runtime-control-signals-a-missing-argument`. The literal path's `~{` body still reads
+  past its list's end as NIL (`carChain`).
 - **`~t`, `~p`, `~<...~>` and `~/name/` are renderer-only.** If the static path grows them, drop
   them from this list, not from the renderer.
 - **`~<...~>` is JUSTIFICATION, `~<...~:>` a LOGICAL BLOCK, and the closing directive decides.**
@@ -170,7 +182,7 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
 - `~r` without a radix (none, or `v` reading NIL) is renderer-only (the static parser declines it) and
   spells the integer: cardinal, `~:r` ordinal, `~@r` Roman 1..3999, `~:@r` old Roman 1..4999, every other
   parameter ignored; `|n| >= 10^66` (cardinal, ordinal) and the Roman ranges SIGNAL `simple-error` with
-  SBCL's text -- an exception to "never signals" like the absent `~/name/` arm. The
+  SBCL's text -- signalled on data like a missing argument. The
   ordinal's error names `|n|` with its last two digits dropped, as SBCL does. A non-integer argument prints
   as `~a` (CLHS 22.3.2; SBCL signals a `format-error` instead). Pinned by `FormatSpelledNumbersFixture` on
   all four backends and ci-spec `format-r-without-a-radix-spells-the-number`; SBCL 2.2.9 answered all 1,312

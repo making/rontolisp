@@ -7549,56 +7549,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunTheFormatRendererReadsItsArgumentListThroughAMaterializedVector() throws Exception {
-		// The renderer indexed its argument list with (nth i all) per directive and
-		// measured (length items) TWICE per ~{ pass, so an iteration over a long list
-		// was quadratic. `all` is now the (list vector) pair %fmt-args builds, read
-		// through %fmt-arg / %fmt-count -- the argument pointer moves in FOUR
-		// directions, so a monotone cursor could not have served it. These are the
-		// repositioning directives, above and below the materialization threshold.
-		assertThat(compileAndRun("""
-				(let ((c "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
-				  (princ (apply #'format nil c '(a b c d e f g h i j k l)))
-				  (princ (apply #'format nil c '(a b c))))
-				""")).isEqualTo("ABBAAFLNIL|ABBAANILNILNIL|");
-		assertThat(compileAndRun("""
-				(let ((c "~a~*~a~*~a"))
-				  (princ (apply #'format nil c '(1 2 3 4 5)))
-				  (princ (apply #'format nil c '(1 2 3 4 5 6 7 8 9 10))))
-				""")).isEqualTo("135135");
-		assertThat(compileAndRun("""
-				(let ((c "~#a~a"))
-				  (princ (apply #'format nil c '(x y z)))
-				  (princ (apply #'format nil c '(x y z 1 2 3 4 5 6 7))))
-				""")).isEqualTo("X  YX         Y");
-		assertThat(compileAndRun("""
-				(let ((c "~{~a~^,~}"))
-				  (print (list (format nil c '(1 2 3))
-				               (format nil c '(1 2 3 4 5 6 7 8 9 10 11 12))
-				               (format nil c nil)
-				               (format nil "~:{[~a ~a]~}" '((1 2) (3 4) (5 6) (7 8) (9 10)))
-				               (apply #'format nil "|~@{~a~^-~}" '(1 2 3 4 5 6 7 8 9)))))
-				""")).isEqualTo("(\"1,2,3\" \"1,2,3,4,5,6,7,8,9,10,11,12\" \"\" \"[1 2][3 4][5 6][7 8][9 10]\" "
-				+ "\"|1-2-3-4-5-6-7-8-9\")");
-		// Only a PROPER list is materialized; a non-sequence keeps the (length x) / (nth
-		// i x) the renderer always made.
-		assertThat(compileAndRun("""
-				(let ((c "~{~a~}[~a]"))
-				  (princ (handler-case (format nil c 5 'tail) (type-error (e) (type-error-expected-type e))))
-				  (princ (format nil c nil 'tail)))
-				""")).isEqualTo("SEQUENCE[TAIL]");
-		// Long enough that the head-walk showed: 0.56 ms a call at n = 2000 before.
-		assertThat(compileAndRun("""
-				(let* ((c "~{~a~}")
-				       (long (let ((out nil))
-				               (dotimes (i 3000) (setq out (cons (mod i 7) out)))
-				               (nreverse out)))
-				       (s (format nil c long)))
-				  (print (list (length s) (subseq s 0 9) (subseq s 2991))))
-				""")).isEqualTo("(3000 \"012345601\" \"234560123\")");
-	}
-
-	@Test
 	void compileAndRunTheMapIntoWrapperWalksAListDestinationWithACursor() throws Exception {
 		// #'map-into as a VALUE stored with (setf (elt r i) v), an O(i) head-walk for a
 		// list destination; the wrapper now carries the result cursor its call-position

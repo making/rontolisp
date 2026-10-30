@@ -131,6 +131,8 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   tested argument, `#` and `~@{` are not available inside a `~{ ... ~}` body, and
   an argument-divergent `~[` nested inside another composite directive
   (`~(`/`~{`) is not supported.
+- A `~{ ... ~}` body that reads past the end of its list renders `NIL` for the
+  missing element; a runtime control signals there.
 - `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
 - `~w` prints as `prin1` and does not read `*print-escape*` / `*print-readably*`, so binding one of them around it does not switch it to `princ` -- the same gap `write-to-string` has (`write` itself honors them).
 
@@ -144,12 +146,14 @@ directives as the table above, so the same control string and arguments produce
 the same text whichever way `format` reaches them (on every backend). Two
 differences follow from the control being data rather than source:
 
-- The renderer never signals: a malformed control (`"abc~"`), an unknown
-  directive (`~Q`), an unterminated `~{`, and a missing argument render as text
-  (the directive verbatim, `NIL` for the missing argument) rather than raising an
-  error. A literal control reports the same problems at expansion time, where a
-  diagnostic belongs; a runtime control usually arrives with the data being
-  reported, and a report must not fail while reporting.
+- A malformed control (`"abc~"`), an unknown directive (`~Q`) and an
+  unterminated `~{` render as text (the directive verbatim) rather than raising
+  an error; a literal control reports them at expansion time. A directive that
+  reads past the arguments signals an `error`, as Common Lisp requires: an
+  argument directive, a `v` parameter, `~[`, `~{`, `~?` or `~<...~:>` with no
+  argument left, `~:p` with none before it, and `~*`, `~:*` or `~n@*` moving
+  outside the argument list. `~@{`, `~^` and `#` over an exhausted list still
+  render.
 - The column-control directive `~t` (`~n,mT`, `~n@T`), the plural directive
   `~p`, the logical-block / justification directive `~<...~>` and the
   call-a-function directive `~/name/` are available here but not in the literal

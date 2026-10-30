@@ -83,17 +83,17 @@ class FormatRendererTest {
 	}
 
 	/**
-	 * A runtime control is DATA -- a condition's format-control slot, a server's message
-	 * -- so the renderer must answer a string for anything, never signal. (The literal
-	 * path signals at expansion time, which is a compile-time diagnostic, not a crash in
-	 * the middle of reporting an error.)
+	 * A malformed runtime control renders as text; a directive reading past the arguments
+	 * signals, with the literal path's text (ci-spec
+	 * {@code format-runtime-control-signals-a-missing-argument} covers every backend).
 	 */
 	@Test
-	void aMalformedRuntimeControlRendersInsteadOfSignalling() {
+	void aMalformedRuntimeControlRendersButAMissingArgumentSignals() {
 		assertThat(eval("(let ((c \"abc~\")) (format nil c))")).isEqualTo(new LispString("abc~"));
 		assertThat(eval("(let ((c \"a~Qb\")) (format nil c 1))")).isEqualTo(new LispString("a~Qb"));
 		assertThat(eval("(let ((c \"~{~a\")) (format nil c '(1 2)))")).isEqualTo(new LispString("12"));
-		assertThat(eval("(let ((c \"~a ~a\")) (format nil c 1))")).isEqualTo(new LispString("1 NIL"));
+		assertThat(eval("(let ((c \"~a ~a\")) (handler-case (format nil c 1) (error (e) (princ-to-string e))))"))
+			.isEqualTo(new LispString("format: not enough arguments for directive ~a"));
 		assertThat(eval("(let ((c \"~d\")) (format nil c \"xyz\"))")).isEqualTo(new LispString("xyz"));
 	}
 

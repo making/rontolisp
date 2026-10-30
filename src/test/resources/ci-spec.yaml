@@ -5223,9 +5223,9 @@ cases:
       ;; (length items) TWICE per ~{ pass. The pointer moves in four directions,
       ;; so the repositioning directives are what says the materialization did not
       ;; break the addressing: below and above the threshold, forwards, backwards,
-      ;; absolutely, and past the end.
+      ;; absolutely, and to the end.
       (defun ci-fmt-jump (c) (apply #'format nil c '(a b c d e f g h i j k l)))
-      (princ (ci-fmt-jump "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
+      (princ (ci-fmt-jump "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*|"))
       (terpri)
       (princ (apply #'format nil (list "~a~*~a~*~a" 1 2 3 4 5)))
       (terpri)
@@ -5252,7 +5252,7 @@ cases:
       A=1 S="s" D=42 00007% 1,2 cond=c ~ end
       A | B (00007) 1,234,567
       &#xE9;
-      ABBAAFLNIL|
+      ABBAAFL|
       135
       1,2,3,4,5,6,7,8,9,10,11,12
       1,2,3
@@ -5260,6 +5260,58 @@ cases:
       3000
       many X|1-2-3-4-5-6-7-8-9
       TYPE-ERROR[TAIL]
+  # A run-time control signals where a directive reads past the argument list, as
+  # the literal path does and SBCL does; ~@{, ~^, ~# and a forced pass reading
+  # nothing still render.
+  - name: format-runtime-control-signals-a-missing-argument
+    source: |
+      (defun ci-fmt-missing (c &rest args)
+        (handler-case (apply #'format nil c args)
+          (error (e) (princ-to-string e))))
+      (dolist (c '("Skip ~a." "~s" "~d" "~x" "~8r" "~r" "~p" "~:p" "~c" "~f" "~e" "~$"
+                   "~w" "~?" "~[a~]" "~:[a~;b~]" "~@[~a~]" "~{~a~}" "~va" "~<~a~:>"
+                   "~(~a~)" "~*" "~:*"))
+        (princ (ci-fmt-missing c))
+        (terpri))
+      (princ (ci-fmt-missing "~{~a ~a~}" '(1 2 3)))
+      (terpri)
+      (princ (ci-fmt-missing "~:{~a~:}" nil))
+      (terpri)
+      (princ (ci-fmt-missing "~2@*" 1))
+      (terpri)
+      (princ (ci-fmt-missing "~@?" "~a"))
+      (terpri)
+      (princ (ci-fmt-missing "~a~:*~a~{x~:}~@{~a~}~#[ end~]" 1 nil))
+      (terpri)
+    expected: |
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~s
+      format: not enough arguments for directive ~d
+      format: not enough arguments for directive ~x
+      format: not enough arguments for directive ~r
+      format: not enough arguments for directive ~r
+      format: not enough arguments for directive ~p
+      format: not enough arguments for directive ~p
+      format: not enough arguments for directive ~c
+      format: not enough arguments for directive ~f
+      format: not enough arguments for directive ~e
+      format: not enough arguments for directive ~$
+      format: not enough arguments for directive ~w
+      format: not enough arguments for directive ~?
+      format: not enough arguments for directive ~[
+      format: not enough arguments for directive ~[
+      format: not enough arguments for directive ~[
+      format: not enough arguments for directive ~{
+      format: not enough arguments for directive ~v
+      format: not enough arguments for directive ~<
+      format: not enough arguments for directive ~a
+      format: ~* moves outside the argument list
+      format: ~* moves outside the argument list
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: ~* moves outside the argument list
+      format: not enough arguments for directive ~a
+      11x end
   # ~W writes its argument as `write` does (prin1 under the printer control
   # variables) and consumes exactly one -- rove's assertion description ends in
   # ~:[...~], which reads the wrong argument if ~W is copied out verbatim.

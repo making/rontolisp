@@ -290,7 +290,6 @@ pre-existing `evalCopyTreeAndSearch`,
 `compileSearchAndMismatchWalkAListWithACursor`,
 `compileAndRunMakeArrayInitialContentsWalksAListWithACursor`,
 `compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor`,
-`compileAndRunTheFormatRendererReadsItsArgumentListThroughAMaterializedVector`,
 `compileAndRunTheMapIntoWrapperWalksAListDestinationWithACursor`,
 `compileCoerceConversions`; ci-spec `map-walks-a-list-with-a-cursor`,
 `the-string-result-of-map-joins-its-pieces-once`.
@@ -300,8 +299,8 @@ pre-existing `evalCopyTreeAndSearch`,
 `searchAndMismatchAnswerTheSameAsTheInterpretersNativeArm`,
 `searchAndMismatchWalkAListWithACursor`,
 `makeArrayInitialContentsWalksAListWithACursor`,
-the list-source rows appended to `replaceIntoAList`, and the last two without
-the `compileAndRun` prefix. **The search/mismatch ones must use
+the list-source rows appended to `replaceIntoAList`, and `theMapIntoWrapperWalksAListDestinationWithACursor`; the
+format renderer's twins went to ci-spec `format-runtime-control-string` (2026-10-30). **The search/mismatch ones must use
 `compileAndRunPrelude`, not `compileAndRun`**: without the prelude splice the
 module has no `search` at all and traps. Each cursor test carries a 2,000-element operand.
 

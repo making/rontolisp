@@ -6496,12 +6496,14 @@ class LispEvaluatorTest {
 		// once the list is long enough to pay for it -- read through %fmt-arg /
 		// %fmt-count. The pointer moves in FOUR directions, so a monotone cursor could
 		// not have served it; these are the repositioning directives, above and below
-		// the materialization threshold.
+		// the materialization threshold. A read or a jump past the end signals on both.
 		assertThat(evalMulti("""
-				(let ((c "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
+				(let ((c "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*|"))
 				  (list (apply #'format nil c '(a b c d e f g h i j k l))
-				        (apply #'format nil c '(a b c))))
-				""").print()).isEqualTo("(\"ABBAAFLNIL|\" \"ABBAANILNILNIL|\")");
+				        (handler-case (apply #'format nil c '(a b c)) (error () :past))
+				        (handler-case (apply #'format nil "~12@*~a" '(a b c d e f g h i j k l))
+				          (error () :past))))
+				""").print()).isEqualTo("(\"ABBAAFL|\" :PAST :PAST)");
 		assertThat(evalMulti("""
 				(let ((c "~a~*~a~*~a"))
 				  (list (apply #'format nil c '(1 2 3 4 5))

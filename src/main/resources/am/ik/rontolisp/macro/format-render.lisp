@@ -61,14 +61,14 @@
 ;;; instead. Without it `(nth i all)` per directive and `(length items)` twice per
 ;;; ~{ pass made every iteration over a long list quadratic in its length.
 ;;;
-;;; Only a PROPER list is materialized, and the vector is only ever consulted for
-;;; an index INSIDE it: a dotted list, a non-sequence, a short list and every
-;;; out-of-range or negative index fall through to the very (nth i list) /
-;;; (length list) the renderer used to make, so nothing it answered -- nil past
-;;; the end, whatever a non-list makes those two operators do -- moves.
-;;; A short list is left alone because the vector costs more than the walk it
-;;; saves; the two paths answer identically, so the threshold is a cost choice
-;;; only.
+;;; Only a PROPER list is materialized; a dotted list, a short list and a
+;;; non-list are read by walking the list as given. A short list is left alone
+;;; because the vector costs more than the walk it saves; the two paths answer
+;;; identically, so the threshold is a cost choice only.
+;;;
+;;; A read past either end of the list signals, as CLHS 22.3 requires and the
+;;; literal expansion does: `d` names the directive that wanted the argument.
+;;; A non-list keeps whatever (nth i x) / (length x) makes it do.
 
 (defun %fmt-args (x)
   (let ((c x) (n 0))
@@ -77,9 +77,15 @@
       (setq c (cdr c)))
     (if (and (null c) (>= n 8)) (list x (coerce x 'vector)) (list x nil))))
 
-(defun %fmt-arg (all i)
-  (let ((v (nth 1 all)))
-    (if (and v (>= i 0) (< i (length v))) (aref v i) (nth i (nth 0 all)))))
+(defun %fmt-arg (all i d)
+  (let ((v (nth 1 all)) (x (nth 0 all)))
+    (cond (v (if (and (>= i 0) (< i (length v))) (aref v i) (%fmt-no-arg d)))
+          ((not (listp x)) (nth i x))
+          (t (let ((tail (if (< i 0) nil (nthcdr i x))))
+               (if (consp tail) (car tail) (%fmt-no-arg d)))))))
+
+(defun %fmt-no-arg (d)
+  (error "format: not enough arguments for directive ~~~a" d))
 
 (defun %fmt-count (all)
   (let ((v (nth 1 all))) (if v (length v) (length (nth 0 all)))))
@@ -158,7 +164,7 @@
            (list (if (< (+ pos 1) end) (char ctrl (+ pos 1)) #\Space) (+ pos 2)
                  i))
           ((or (char= c #\v) (char= c #\V))
-           (list (%fmt-arg all i) (+ pos 1) (+ i 1)))
+           (list (if all (%fmt-arg all i #\v) nil) (+ pos 1) (+ i 1)))
           ((char= c #\#) (list (- (%fmt-count all) i) (+ pos 1) i))
           ((or (%fmt-digitp c) (char= c #\-))
            (let ((start pos) (p (+ pos 1)))
@@ -170,8 +176,8 @@
 ;;; --------------------------------------------------------------- the tokens
 ;;; (list pos params colon at directive-char i) for the directive whose ~ is at
 ;;; (- pos 1). A control string ending in ~ yields a literal tilde rather than an
-;;; error: the renderer must never signal on data (a condition report renders
-;;; through it).
+;;; error: a malformed control renders as text (.kb/format.md). %fmt-shape passes
+;;; a nil `all`, so a `v` parameter reads nothing while a scanner walks.
 
 (defun %fmt-token (ctrl pos end all i)
   (let* ((st (%fmt-params ctrl pos end all i))
@@ -286,8 +292,7 @@
       (setq rem (subseq rem 0 (- (length rem) iv))))
     (%fmt-cat rem out)))
 
-;;; ~D. A non-number argument prints as if by ~A, as Common Lisp specifies (and
-;;; as the condition-report path needs: a report must never signal).
+;;; ~D. A non-number argument prints as if by ~A, as Common Lisp specifies.
 (defun %fmt-dec (n colon comma interval at)
   (if (not (numberp n))
       (%princ-piece n)
@@ -550,7 +555,7 @@
          (pre (if (> n 1) (nth 0 segs) nil))
          (suf (if (> n 2) (nth 2 segs) nil))
          ;; Without @ the block's arguments are the elements of ONE argument.
-         (items (if at all (%fmt-args (%fmt-arg all i))))
+         (items (if at all (%fmt-args (%fmt-arg all i #\<))))
          (start (if at i 0))
          (r (%fmt-run ctrl (nth 0 body) (nth 1 body) items start))
          (acc out))
@@ -581,9 +586,13 @@
           (setq p (+ p 1))))
     p))
 
+;;; A target outside [0, count] signals, as the literal expansion's does.
 (defun %fmt-jump (all i params colon at)
-  (let ((n (%fmt-int params 0 (if at 0 1))))
-    (cond (at n) (colon (let ((k (- i n))) (if (< k 0) 0 k))) (t (+ i n)))))
+  (let* ((n (%fmt-int params 0 (if at 0 1)))
+         (k (cond (at n) (colon (- i n)) (t (+ i n)))))
+    (if (or (< k 0) (> k (%fmt-count all)))
+        (error "format: ~~* moves outside the argument list")
+        k)))
 
 ;;; ~^ fires when the current argument list is exhausted; ~n^ when n is zero and
 ;;; ~n,m^ when n and m are equal.
@@ -597,24 +606,25 @@
 (defun %fmt-value (ctrl end all out pos i params colon at d)
   (cond ((char= d #\?) (%fmt-recursive ctrl end all out pos i at))
         ((char= d #\p) (%fmt-plural out pos all i colon at))
-        (t (list (%fmt-cat out (%fmt-field (%fmt-arg all i) params colon at d))
-                 pos (+ i 1) nil))))
+        (t
+         (list (%fmt-cat out (%fmt-field (%fmt-arg all i d) params colon at d))
+               pos (+ i 1) nil))))
 
 ;;; ~? / ~@?: the next argument is a control string. Plain ~? takes its arguments
 ;;; from the following argument (a list); ~@? takes them from the remaining
 ;;; arguments of the current level and consumes what it uses.
 (defun %fmt-recursive (ctrl end all out pos i at)
-  (let ((inner (%fmt-arg all i)))
+  (let ((inner (%fmt-arg all i #\?)))
     (if at
         (let ((r (%fmt-run inner 0 (length inner) all (+ i 1))))
           (list (%fmt-cat out (nth 0 r)) pos (nth 1 r) nil))
-        (list (%fmt-cat out (%fmt-render inner (%fmt-arg all (+ i 1)))) pos
+        (list (%fmt-cat out (%fmt-render inner (%fmt-arg all (+ i 1) #\?))) pos
               (+ i 2) nil))))
 
 ;;; ~P: ~:P re-uses the preceding argument instead of consuming a new one.
 (defun %fmt-plural (out pos all i colon at)
   (let* ((k (if colon (- i 1) i))
-         (v (%fmt-arg all (if (< k 0) 0 k)))
+         (v (%fmt-arg all k #\p))
          (one (and (numberp v) (= v 1)))
          (s (if at (if one "y" "ies") (if one "" "s"))))
     (list (%fmt-cat out s) pos (if colon i (+ i 1)) nil)))
@@ -864,16 +874,17 @@
           (t (%fmt-cond-index ctrl all out after segs i params)))))
 
 (defun %fmt-cond-at (ctrl all out after segs i)
-  (if (null (%fmt-arg all i))
+  (if (null (%fmt-arg all i #\[))
       (list out after (+ i 1) nil)
       (%fmt-clause ctrl all out after (nth 0 segs) i)))
 
 (defun %fmt-cond-colon (ctrl all out after segs i)
-  (%fmt-clause ctrl all out after (nth (if (%fmt-arg all i) 1 0) segs) (+ i 1)))
+  (%fmt-clause ctrl all out after (nth (if (%fmt-arg all i #\[) 1 0) segs)
+               (+ i 1)))
 
 (defun %fmt-cond-index (ctrl all out after segs i params)
   (let* ((given (%fmt-nth params 0))
-         (sel (if (null given) (%fmt-arg all i) given))
+         (sel (if (null given) (%fmt-arg all i #\[) given))
          (ni (if (null given) (+ i 1) i)))
     (%fmt-clause ctrl all out after (%fmt-select segs sel) ni)))
 
@@ -904,7 +915,7 @@
          (force (nth 2 sh))
          (after (nth 0 sh))
          (empty (= pos close))
-         (body (if empty (%fmt-arg all i) ctrl))
+         (body (if empty (%fmt-arg all i #\{) ctrl))
          (bstart (if empty 0 pos))
          (bend (if empty (length body) close))
          (bi (if empty (+ i 1) i))
@@ -912,8 +923,8 @@
          (maxn (if (integerp maxp) maxp -1)))
     (if at
         (%fmt-iterate-args body bstart bend all out after bi maxn force colon)
-        (%fmt-iterate-list body bstart bend (%fmt-args (%fmt-arg all bi)) out
-                           after (+ bi 1) maxn force colon))))
+        (%fmt-iterate-list body bstart bend (%fmt-args (%fmt-arg all bi #\{))
+                           out after (+ bi 1) maxn force colon))))
 
 ;;; ~{ over one list argument (~:{ over a list of sublists).
 ;;; The pieces are COLLECTED and joined once (%fmt-join): growing one accumulator
@@ -930,7 +941,7 @@
               (let* ((r
                       (if sublists
                           (%fmt-run ctrl start end
-                                    (%fmt-args (%fmt-arg items cur)) 0)
+                                    (%fmt-args (%fmt-sublist items cur n)) 0)
                           (%fmt-run ctrl start end items cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq pieces (cons (nth 0 r) pieces))
@@ -938,6 +949,10 @@
                 (if (or (nth 2 r) (<= next cur) (>= next n)) (setq go nil))
                 (setq cur next)))))
     (list (%fmt-join pieces) after i nil)))
+
+;;; A ~:{ / ~:@{ pass's sublist; the forced pass of ~:} over none runs against
+;;; an empty one, so its first read is the one that signals, as SBCL's does.
+(defun %fmt-sublist (all cur n) (if (< cur n) (%fmt-arg all cur #\{) nil))
 
 ;;; ~@{ over the remaining arguments (~:@{ treating each as a sublist).
 (defun %fmt-iterate-args (ctrl start end all out after i maxn force sublists)
@@ -950,7 +965,7 @@
               (let* ((r
                       (if sublists
                           (%fmt-run ctrl start end
-                                    (%fmt-args (%fmt-arg all cur)) 0)
+                                    (%fmt-args (%fmt-sublist all cur n)) 0)
                           (%fmt-run ctrl start end all cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq pieces (cons (nth 0 r) pieces))

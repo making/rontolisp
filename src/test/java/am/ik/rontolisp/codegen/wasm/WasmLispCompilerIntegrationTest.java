@@ -7496,52 +7496,6 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void theFormatRendererReadsItsArgumentListThroughAMaterializedVector() throws Exception {
-		// The renderer indexed its argument list with (nth i all) per directive and
-		// measured (length items) TWICE per ~{ pass: 3.00 ms a call at n = 2000, 50x
-		// building the same text by hand. `all` is now the (list vector) pair %fmt-args
-		// builds, read through %fmt-arg / %fmt-count -- the argument pointer moves in
-		// FOUR directions, so a monotone cursor could not have served it.
-		assertThat(compileAndRun("""
-				(let ((c "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
-				  (princ (apply #'format nil c '(a b c d e f g h i j k l)))
-				  (princ (apply #'format nil c '(a b c))))
-				""")).isEqualTo("ABBAAFLNIL|ABBAANILNILNIL|");
-		assertThat(compileAndRun("""
-				(let ((c "~a~*~a~*~a"))
-				  (princ (apply #'format nil c '(1 2 3 4 5)))
-				  (princ (apply #'format nil c '(1 2 3 4 5 6 7 8 9 10))))
-				""")).isEqualTo("135135");
-		assertThat(compileAndRun("""
-				(let ((c "~#a~a"))
-				  (princ (apply #'format nil c '(x y z)))
-				  (princ (apply #'format nil c '(x y z 1 2 3 4 5 6 7))))
-				""")).isEqualTo("X  YX         Y");
-		assertThat(compileAndRun("""
-				(let ((c "~{~a~^,~}"))
-				  (print (list (format nil c '(1 2 3))
-				               (format nil c '(1 2 3 4 5 6 7 8 9 10 11 12))
-				               (format nil c nil)
-				               (format nil "~:{[~a ~a]~}" '((1 2) (3 4) (5 6) (7 8) (9 10)))
-				               (apply #'format nil "|~@{~a~^-~}" '(1 2 3 4 5 6 7 8 9)))))
-				""")).isEqualTo("(\"1,2,3\" \"1,2,3,4,5,6,7,8,9,10,11,12\" \"\" \"[1 2][3 4][5 6][7 8][9 10]\" "
-				+ "\"|1-2-3-4-5-6-7-8-9\")");
-		assertThat(compileAndRun("""
-				(let ((c "~{~a~}[~a]"))
-				  (princ (handler-case (format nil c 5 'tail) (type-error () :type-error)))
-				  (princ (format nil c nil 'tail)))
-				""")).isEqualTo("TYPE-ERROR[TAIL]");
-		assertThat(compileAndRun("""
-				(let* ((c "~{~a~}")
-				       (long (let ((out nil))
-				               (dotimes (i 3000) (setq out (cons (mod i 7) out)))
-				               (nreverse out)))
-				       (s (format nil c long)))
-				  (print (list (length s) (subseq s 0 9) (subseq s 2991))))
-				""")).isEqualTo("(3000 \"012345601\" \"234560123\")");
-	}
-
-	@Test
 	void theMapIntoWrapperWalksAListDestinationWithACursor() throws Exception {
 		// #'map-into as a VALUE stored with (setf (elt r i) v), an O(i) head-walk for a
 		// list destination: 2.14 ms a call at n = 2000, 54x the same operation in call
