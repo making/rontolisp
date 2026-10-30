@@ -1,0 +1,5 @@
+(require :asdf)
+(push #p"@WORK@/dl/micros/" asdf:*central-registry*)
+(asdf:load-system "micros")
+(micros:create-server :port (parse-integer (car (last sb-ext:*posix-argv*))) :dont-close t)
+(loop (sleep 1000))

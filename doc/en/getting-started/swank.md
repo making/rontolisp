@@ -1,7 +1,9 @@
-# SWANK (SLIME)
+# SWANK (SLIME, SLY, Lem)
 
 `rontolisp --swank` serves the Common Lisp [REPL](repl.md) over SWANK, the protocol of
-Emacs's [SLIME](https://slime.common-lisp.dev). It listens on localhost, on SWANK's port
+Emacs's [SLIME](https://slime.common-lisp.dev), and over the protocols of its fork
+[SLY](https://github.com/joaotavora/sly) and of [Lem](https://lem-project.github.io)'s Lisp
+mode ([below](#sly-and-lem)). It listens on localhost, on SWANK's port
 4005 unless `--swank=PORT` names another (`--swank=0` takes a free one), and prints the
 line SWANK's own `create-server` prints:
 
@@ -25,6 +27,10 @@ SLIME of another version asks "Versions differ" first, as it does for any SWANK 
 | Echo area | the argument list of the operator around the cursor, the argument being typed marked; a variable's value |
 | `C-c C-d d`, `C-c C-d f` | a symbol's description: what it names, its lambda list and documentation string, a variable's value |
 | `C-c C-m`, `C-c M-m` | a macro's expansion, one step or every macro in the form |
+| `C-c M-e` (macrostep) | a macro form expanded in place one step at a time, the macro forms in the expansion marked |
+| `M-.` | the definition of the name at point: where `C-c C-c`, `C-c C-k` or a `load` (`C-c C-l`, a program's, an ASDF system's) ran it -- a function, macro, generic function and its methods, variable, class and its accessors, structure and its functions, package; one typed at the REPL has no place, as in SBCL; a built-in operator has none |
+| `C-c C-w c` `w` `r` `b` `s` `m` `a`, `C-c <`, `C-c >` | cross references in the code compiled, loaded or typed at the REPL while the server runs: who calls a function and what it calls, who references, binds or sets a special variable, who expands a macro, which methods specialize on a class |
+| `C-c I` | the inspector: a list's or an array's elements, a hash table's entries, an instance's slots, what a symbol names, a number's representations, a class, slot definition, generic function and its methods, package and its symbols, pathname, each part inspected in turn, with the inspector's actions (remove an entry, unbind a symbol, set a slot, remove a method ...) |
 | An error | the debugger (SLDB) opened where it was signalled, below |
 | `C-c C-b` | the running evaluation stopped in the debugger, `c` going on with it |
 
@@ -66,13 +72,51 @@ its format control without the arguments.
 
 ## Differences from SBCL
 
-Not answered: the inspector, cross references and `M-.` (no definition is found),
-tracing and profiling, presentations, changing the working directory. A package prints
-as its keyword (`:CL-USER`), a macro expansion on one line, a condition with its report
-(`#<SIMPLE-ERROR "boom 1">`), and a value or a name the way rontolisp prints it
-(`CL-USER::F`, where SBCL writes `COMMON-LISP-USER::F`). The server runs on the
-interpreter only; SLIME's fork SLY and Lem's micros speak protocols of their own and are
-not served.
+Not answered: tracing and profiling, presentations, changing the working directory.
+Cross references cover only code compiled from the editor, and a function typed at the
+REPL has no place to go to. A package prints as its keyword (`:CL-USER`), a macro
+expansion on one line, a condition with its report (`#<SIMPLE-ERROR "boom 1">`), and a
+value or a name the way rontolisp prints it (`CL-USER::F`, where SBCL writes
+`COMMON-LISP-USER::F`). The server runs on the interpreter only.
 
-A program cannot start the server: `swank:create-server` (the built-in `swank` system,
-[Systems (asdf)](../guides/asdf-systems.md)) still signals, naming `rontolisp --swank`.
+## SLY and Lem
+
+The same server answers SLY and Lem, each request in the protocol of the client that sent
+it, so the three editors can be connected at once. In SLY, `M-x sly-connect RET 127.0.0.1
+RET 4005 RET` opens SLY's REPL; the server speaks the protocol of SLY 1.0.43, and a SLY of
+another version asks "Versions differ" first. In Lem, `M-x slime-connect` with the same host
+and port opens Lem's REPL (measured against Lem 2.3.0).
+
+The table's REPL, evaluation, compilation, completion, echo area, description and expansion
+rows hold for both, on their own keys. SLY's REPL shows a number with its other notations
+(`3 (2 bits, #x3, #o3, #b11)`) and completes flexibly (`mvbind` finds
+`multiple-value-bind`); Lem's completion shows each candidate's kind, argument list and
+description, and `C-c Return` expands a macro one step. Neither has the debugger: an error,
+like an interrupt, aborts the evaluation.
+`M-.`, cross references and the inspector are measured with SLIME only; SLY's stickers and
+trace dialog and Lem's inspection of a printed value are not answered.
+
+## From a running program
+
+A program run by the interpreter (a file, `-e`, the REPL) starts the same server on its
+own image with `swank:create-server` from the built-in `swank` system
+([Systems (asdf)](../guides/asdf-systems.md)), and goes on running while SLIME inspects
+and redefines it:
+
+```console
+$ cat app.lisp
+(asdf:load-system "swank")
+(defvar *requests* 0)
+(swank:create-server :port 4005 :dont-close t)
+$ rontolisp app.lisp
+;; Swank started at port: 4005.
+```
+
+It takes SWANK's keys, prints SWANK's line on `*error-output*` and returns the port. With `:dont-close t`
+it accepts every connection and returns at once; without it (SWANK's default) it waits for
+the first connection and then closes the port. `:interface` names the address to listen
+on (localhost by default). `(swank:stop-server 4005)` closes the port; connections already
+made go on. A program that ran off its end keeps serving until the port is closed and the
+editor disconnects; quitting from SLIME ends the process. A compiled program has no
+interpreter to serve: there `swank:create-server` signals and `swank:stop-server` returns
+`nil`.

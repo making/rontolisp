@@ -54,10 +54,11 @@ import org.jspecify.annotations.Nullable;
  * race, not a saving. See {@code .kb/asdf.md}.
  *
  * <p>
- * {@code swank} is the degenerate end of the same ladder: a shim system whose whole
- * content is two functions, one of which signals. It exists because clack's {@code .asd}
- * hard-depends on it, and the alternative -- letting {@code ql:quickload} fetch SLIME --
- * ends in an unparseable system definition rather than a clear message.
+ * {@code swank} is the thin end of the same ladder: a shim system whose whole content is
+ * {@code create-server} and {@code stop-server} over the interpreter's {@link SwankHost},
+ * signalling in a compiled program. clack's {@code .asd} hard-depends on it, and the
+ * alternative -- letting {@code ql:quickload} fetch SLIME -- ends in an unparseable
+ * system definition rather than a clear message.
  *
  * <p>
  * A third, lighter form of substitution rewrites INDIVIDUAL FORMS of a real component and

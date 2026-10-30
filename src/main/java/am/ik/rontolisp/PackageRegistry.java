@@ -992,6 +992,11 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.HTTP_SERVER_JOIN);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_STOP);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_PORT);
+		// Internal: the interpreter's SWANK server hook behind the swank shim's
+		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
+		rontolispSymbols.add(LispNames.SWANK_LISTEN);
+		rontolispSymbols.add(LispNames.SWANK_SERVE);
+		rontolispSymbols.add(LispNames.SWANK_STOP);
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), rontolispSymbols, Set.copyOf(rontolispExternals)));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
@@ -1305,12 +1310,12 @@ public final class PackageRegistry {
 				"%COUNT-CODE-POINTS", "%COUNT-OCTETS", "%DECODE-INTO", "%ENCODE-INTO", "%UTF-8-DECODE-1",
 				"%CONTINUATION-P", "%INVALID-CB-P", "STRING-GET", "STRING-SET"));
 		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));
-		// swank: the STUB behind the built-in ASDF system of the same name
+		// swank: the shim behind the built-in ASDF system of the same name
 		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half,
 		// whose .asd is a program the defsystem-as-data front-end cannot read at all;
-		// the interpreter's own server is the command line's --swank (cli.SwankServer).
-		// clack's .asd hard-depends on it, so without the stub (ql:quickload "clack")
-		// downloads the SLIME tarball and dies on it.
+		// on the interpreter the shim's create-server starts the command line's server
+		// (cli.SwankServer). clack's .asd hard-depends on it, so without the shim
+		// (ql:quickload "clack") downloads the SLIME tarball and dies on it.
 		define(new LispPackage(LispNames.SWANK_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER))));
 		// trivial-cltl2 (nickname cltl2): the shim behind the built-in ASDF system of

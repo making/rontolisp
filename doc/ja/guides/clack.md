@@ -587,9 +587,10 @@ UTF-8 としてデコードし、しかも検証しません)、*渡ること自
 
 - Clack サーバはプロセスあたり 1 つ: 2 つ目の同時 `clackup` は 1 つ目の
   アプリケーションを置き換えます。
-- `clack.socket` (WebSocket) と `:swank-port` は未対応です (`:swank-port` は
-  `swank` スタブに到達し、エラーを送出します。[`rontolisp --swank`](../getting-started/swank.md)
-  は SLIME に REPL を提供し、そこで評価した `clackup` がアプリケーションを提供します)。
+- `clack.socket` (WebSocket) は未対応です。
+- `:swank-port` はインタプリタでは [SWANK サーバ](../getting-started/swank.md#from-a-running-program)
+  を起動し、実行中のアプリケーションに SLIME から接続できます。コンパイルしたプログラムには
+  提供するインタプリタがないので、エラーを送出します。
 - streaming writer 形のレスポンスと裸の文字列／pathname のボディは上記の
   とおりエラーを送出します (delayed 形の関数レスポンスは動作します)。
 

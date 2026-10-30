@@ -334,14 +334,20 @@ public final class LispEvaluator {
 	/**
 	 * What a {@code defun}, {@code defmacro} or {@code defgeneric} wrote down, keyed by
 	 * the name it defined: the lambda list as written (a {@link LispLambda} keeps only
-	 * its desugared shape) and the documentation string, for an editor's argument list
-	 * and description ({@link CommonLispSwank}). {@code documentation} itself answers nil
-	 * on every backend, so nothing a program reads changes.
+	 * its desugared shape), the documentation string and the file and line a
+	 * {@link LocatedCons} carried, for an editor's argument list, description and
+	 * {@code M-.} ({@link CommonLispSwank}). {@code documentation} itself answers nil on
+	 * every backend, so nothing a program reads changes.
 	 *
+	 * @param operator the defining operator's name ({@code DEFUN}, {@code DEFMACRO} or
+	 * {@code DEFGENERIC})
 	 * @param lambdaList the lambda list, as written
 	 * @param documentation the documentation string, or null
+	 * @param file the file the definition was read from, or null
+	 * @param line the 1-based line its form starts on, 0 without a file
 	 */
-	record Definition(LispVal lambdaList, @Nullable String documentation) {
+	record Definition(String operator, LispVal lambdaList, @Nullable String documentation, @Nullable String file,
+			int line) {
 	}
 
 	private final java.util.Map<String, Definition> definitions = new java.util.concurrent.ConcurrentHashMap<>();
@@ -566,6 +572,36 @@ public final class LispEvaluator {
 	 * {@link #setDistClient}.
 	 */
 	@Nullable private DistClient distClient;
+
+	/**
+	 * The SWANK server {@code swank:create-server} starts on this evaluator: the command
+	 * line's ({@link #setSwankHost}), none for an embedded evaluator.
+	 */
+	@Nullable private volatile SwankHost swankHost;
+
+	/**
+	 * What records the definitions and uses of the code a {@code load} runs, while a
+	 * SWANK server serves this evaluator ({@link #recordLoadsTo}); null otherwise, so a
+	 * load pays one read.
+	 */
+	@Nullable private volatile LoadRecorder loadRecorder;
+
+	/**
+	 * What sees the forms of every Common Lisp file a {@code load} runs: an editor's
+	 * record of definitions and uses ({@code M-.}, {@code xref}).
+	 */
+	interface LoadRecorder {
+
+		/**
+		 * Records what a loaded file's forms that ran define and use.
+		 * @param file the file's true name
+		 * @param code its text
+		 * @param read the forms read from it, in order, as read
+		 * @param resolved the first of them, as many as ran, as resolved
+		 */
+		void recordLoaded(String file, String code, List<LispVal> read, List<LispVal> resolved);
+
+	}
 
 	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
@@ -1192,6 +1228,79 @@ public final class LispEvaluator {
 	 */
 	public void setDistClient(DistClient client) {
 		this.distClient = client;
+	}
+
+	/**
+	 * Installs the SWANK server the program's {@code swank:create-server} starts on this
+	 * evaluator ({@code rontolisp::%swank-*}); the command line installs its own before
+	 * the program runs.
+	 * @param host the host
+	 */
+	public void setSwankHost(SwankHost host) {
+		this.swankHost = host;
+	}
+
+	/**
+	 * Hands every Common Lisp file a {@code load} runs from now on to an editor's record
+	 * of definitions and uses ({@code M-.}, {@code xref}), each form as resolved, once
+	 * the file's forms ran.
+	 * @param recorder the record
+	 */
+	void recordLoadsTo(LoadRecorder recorder) {
+		this.loadRecorder = recorder;
+	}
+
+	/**
+	 * Defines {@code rontolisp::%swank-listen}, {@code %swank-serve} and
+	 * {@code %swank-stop}, the interpreter's half of the {@code swank} shim, over the
+	 * installed {@link SwankHost}.
+	 */
+	private void registerSwankHost() {
+		String listenName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_LISTEN);
+		this.globalEnv.defineFunction(listenName, new LispFunction(listenName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_LISTEN + " expects (port interface), got " + args);
+			}
+			String host = args.get(1) instanceof LispString name ? name.value() : null;
+			try {
+				return new LispInteger(requireSwankHost().listen(host, (int) port.value()));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot listen on port " + port.value() + ": " + ex.getMessage());
+			}
+		}));
+		String serveName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_SERVE);
+		this.globalEnv.defineFunction(serveName, new LispFunction(serveName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_SERVE + " expects (port dont-close), got " + args);
+			}
+			try {
+				requireSwankHost().serve((int) port.value(), !(args.get(1) instanceof LispNil));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot accept on port " + port.value() + ": " + ex.getMessage());
+			}
+			return LispNil.INSTANCE;
+		}));
+		String stopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_STOP);
+		this.globalEnv.defineFunction(stopName, new LispFunction(stopName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_STOP + " expects a port, got " + args);
+			}
+			SwankHost host = this.swankHost;
+			return host != null && host.stop((int) port.value()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private SwankHost requireSwankHost() {
+		SwankHost host = this.swankHost;
+		if (host == null) {
+			throw new LispEvalException("swank:create-server is not supported here: this evaluator has no SWANK"
+					+ " server; the rontolisp command line's interpreter serves one");
+		}
+		return host;
 	}
 
 	/**
@@ -3246,6 +3355,7 @@ public final class LispEvaluator {
 			return new LispInteger(
 					RontoHttpServer.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
 		}));
+		registerSwankHost();
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
@@ -4095,8 +4205,14 @@ public final class LispEvaluator {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
 					this.sourceLoader);
-			for (LispVal form : read.forms()) {
-				eval(markers ? resolveReadTimeEvalInCode(form) : form);
+			LoadRecorder recorder = language == SourceLanguage.COMMON_LISP ? this.loadRecorder : null;
+			if (recorder == null) {
+				for (LispVal form : read.forms()) {
+					eval(markers ? resolveReadTimeEvalInCode(form) : form);
+				}
+			}
+			else {
+				loadRecorded(recorder, this.sourceLoader.canonicalPath(resolved), source, read.forms(), markers);
 			}
 			LispReadException error = read.error();
 			if (error != null) {
@@ -4108,6 +4224,23 @@ public final class LispEvaluator {
 			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
 			this.packageResolver.popPackage();
 			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Runs a loaded file's forms as {@link #loadFile} does, then hands the forms that
+	 * ran, as resolved, to the record of definitions and uses -- also when one of them
+	 * fails.
+	 */
+	private void loadRecorded(LoadRecorder recorder, String file, String source, List<LispVal> forms, boolean markers) {
+		List<LispVal> resolved = new ArrayList<>();
+		try {
+			for (LispVal form : forms) {
+				evalTopLevel(markers ? resolveReadTimeEvalInCode(form) : form, resolved::add);
+			}
+		}
+		finally {
+			recorder.recordLoaded(file, source, forms, resolved);
 		}
 	}
 
@@ -5637,9 +5770,24 @@ public final class LispEvaluator {
 	 * @return the form's values, primary first (empty for {@code (values)})
 	 */
 	public List<LispVal> evalValues(LispVal expr) {
+		return evalValues(expr, null);
+	}
+
+	/**
+	 * Evaluates a top-level form as {@link #evalValues(LispVal)} does, handing the form
+	 * as resolved to {@code resolvedForm} before it runs: an editor's REPL records what
+	 * its input defines and uses ({@link CommonLispSwank}).
+	 * @param expr the top-level form
+	 * @param resolvedForm what sees the resolved form, or null
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	List<LispVal> evalValues(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
 		// Resolution is not idempotent under a :shadow package (see evalResolved), so the
 		// form is resolved once here and evaluated through evalResolved.
 		LispVal resolved = this.packageResolver.resolve(expr);
+		if (resolvedForm != null) {
+			resolvedForm.accept(resolved);
+		}
 		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
 			LispVal capture = new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
 					new LispCons(resolved, LispNil.INSTANCE));
@@ -9140,6 +9288,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefun(LispCons cons, Environment env) {
+		LispCons source = cons;
 		checkAwaitPlacement(cons);
 		if (treeContainsMacrolet(cons)) {
 			// A body carrying a macrolet is pre-expanded at DEFINITION time, like CL's
@@ -9205,17 +9354,18 @@ public final class LispEvaluator {
 		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
 		this.globalEnv.defineFunction(funcName,
 				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
-		recordDefinition(funcName, parts);
+		recordDefinition(funcName, source, parts);
 		return singleValue(nameForm);
 	}
 
 	/**
-	 * Writes down a definition's lambda list and documentation string
+	 * Writes down a definition's lambda list, documentation string and where it was read
 	 * ({@link #definitions}).
 	 * @param name the defined name
+	 * @param source the definition form as it reached the evaluator
 	 * @param parts the definition form: operator, name, lambda list, body
 	 */
-	private void recordDefinition(String name, List<LispVal> parts) {
+	private void recordDefinition(String name, LispCons source, List<LispVal> parts) {
 		if (parts.size() < 3) {
 			return;
 		}
@@ -9231,7 +9381,14 @@ public final class LispEvaluator {
 				break;
 			}
 		}
-		this.definitions.put(name, new Definition(parts.get(2), documentation));
+		this.definitions.put(name, definition(source, parts.get(2), documentation));
+	}
+
+	private static Definition definition(LispCons source, LispVal lambdaList, @Nullable String documentation) {
+		String operator = source.car() instanceof LispSymbol head ? LispSymbol.memberName(head.name()) : "DEFUN";
+		return source instanceof LocatedCons located
+				? new Definition(operator, lambdaList, documentation, located.file(), located.line())
+				: new Definition(operator, lambdaList, documentation, null, 0);
 	}
 
 	/**
@@ -9384,6 +9541,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
+		LispCons source = cons;
 		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		ensureGrayProtocolDeclared(cons);
@@ -9404,7 +9562,7 @@ public final class LispEvaluator {
 					documentation = doc.value();
 				}
 			}
-			this.definitions.put(generic, new Definition(parts.get(2), documentation));
+			this.definitions.put(generic, definition(source, parts.get(2), documentation));
 		}
 		return parts.get(1);
 	}
@@ -9441,6 +9599,23 @@ public final class LispEvaluator {
 			}
 		}
 		return cons.toList().get(1);
+	}
+
+	/**
+	 * Removes one method of a generic function and reinstalls its dispatcher: an editor
+	 * inspector's {@code [remove method]} ({@link SwankInspector}). There is no method
+	 * metaobject for {@code remove-method} to take (its prelude definition signals).
+	 * @param generic the generic function's name
+	 * @param key the method's key in {@link ClosRegistry.GenericInfo#methods()}
+	 */
+	void removeMethod(String generic, String key) {
+		ClosRegistry.GenericInfo info = this.closRegistry.findGeneric(generic);
+		if (info == null || info.methods().remove(key) == null) {
+			return;
+		}
+		info.methodShapes().remove(key);
+		info.inlineMethodKeys().remove(key);
+		defineDispatcher(info.name(), this.globalEnv);
 	}
 
 	/**
@@ -9675,7 +9850,7 @@ public final class LispEvaluator {
 		}
 		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
-		recordDefinition(name.name(), parts);
+		recordDefinition(name.name(), cons, parts);
 		return singleValue(name);
 	}
 

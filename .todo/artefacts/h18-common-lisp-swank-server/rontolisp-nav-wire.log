@@ -1,0 +1,163 @@
+>> (:emacs-rex (swank:connection-info) "COMMON-LISP-USER" t 1)\n
+<< (:return (:ok (:pid 2981115 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL") :package (:name "CL-USER" :prompt "CL-USER") :version "2.32")) 1)
+>> (:emacs-rex (swank:swank-require '(swank-indentation swank-trace-dialog swank-package-fu swank-presentations swank-macrostep swank-fuzzy swank-fancy-inspector swank-c-p-c swank-arglists swank-repl)) "COMMON-LISP-USER" t 2)\n
+<< (:return (:ok ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL" "SWANK-INDENTATION" "SWANK-TRACE-DIALOG" "SWANK-PACKAGE-FU" "SWANK-PRESENTATIONS" "SWANK-MACROSTEP" "SWANK-FANCY-INSPECTOR")) 2)
+>> (:emacs-rex (swank:init-presentations) "COMMON-LISP-USER" t 3)\n
+<< (:return (:ok nil) 3)
+>> (:emacs-rex (swank-repl:create-repl nil) "COMMON-LISP-USER" t 4)\n
+<< (:return (:ok ("CL-USER" "CL-USER")) 4)
+>> (:emacs-rex (swank:compile-file-for-emacs "@WORK@/out/work/drv-nav.lisp" t) "CL-USER" t 5)\n
+<< (:return (:ok (:compilation-result nil t 0.145102005 nil nil)) 5)
+>> (:emacs-rex (swank:compile-string-for-emacs "(defun drv-buf-fn ()\n  (drv-callee 7))\n" "drv-nav2.lisp" '((:position 2) (:line 2 1)) "@WORK@/out/work/drv-nav2.lisp" 'nil) "CL-USER" t 6)\n
+<< (:return (:ok (:compilation-result nil t 0.001152056 nil nil)) 6)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-repl-fn () (drv-callee 3))\n") "CL-USER" :repl-thread 7)\n
+<< (:write-string "DRV-REPL-FN\n" :repl-result)
+<< (:return (:ok nil) 7)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-callee") "CL-USER" t 8)\n
+<< (:return (:ok (("(DEFUN DRV-CALLEE)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 70) (:snippet "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n"))))) 8)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-caller") "CL-USER" t 9)\n
+<< (:return (:ok (("(DEFUN DRV-CALLER)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 120) (:snippet "(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1)"))))) 9)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-mac") "CL-USER" t 10)\n
+<< (:return (:ok (("(DEFMACRO DRV-MAC)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 23) (:snippet "(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :inita"))))) 10)
+>> (:emacs-rex (swank:find-definitions-for-emacs "*drv-var*") "CL-USER" t 11)\n
+<< (:return (:ok (("(DEFVAR *DRV-VAR*)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 1) (:snippet "(defvar *drv-var* 1)\n\n(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass d"))))) 11)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-gen") "CL-USER" t 12)\n
+<< (:return (:ok (("(DEFGENERIC DRV-GEN (O))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 220) (:snippet "(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN DRV-POINT)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 327) (:snippet "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 12)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-point") "CL-USER" t 13)\n
+<< (:return (:ok (("(DEFCLASS DRV-POINT)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 246) (:snippet "(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 13)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-point-x") "CL-USER" t 14)\n
+<< (:return (:ok (("(DEFMETHOD DRV-POINT-X DRV-POINT)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 270) (:snippet "(x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 14)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-st") "CL-USER" t 15)\n
+<< (:return (:ok (("(DEFSTRUCT DRV-ST)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 379) (:snippet "(defstruct drv-st a b)\n"))))) 15)
+>> (:emacs-rex (swank:find-definitions-for-emacs "make-drv-st") "CL-USER" t 16)\n
+<< (:return (:ok (("(DEFUN MAKE-DRV-ST)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 379) (:snippet "(defstruct drv-st a b)\n"))))) 16)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-buf-fn") "CL-USER" t 17)\n
+<< (:return (:ok (("(DEFUN DRV-BUF-FN)" (:location (:buffer-and-file "drv-nav2.lisp" "@WORK@/out/work/drv-nav2.lisp") (:offset 2 0) (:snippet "(defun drv-buf-fn ()\n  (drv-callee 7))"))))) 17)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-repl-fn") "CL-USER" t 18)\n
+<< (:return (:ok (("(DEFUN DRV-REPL-FN)" (:error "Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.")))) 18)
+>> (:emacs-rex (swank:find-definitions-for-emacs "mapcar") "CL-USER" t 19)\n
+<< (:return (:ok nil) 19)
+>> (:emacs-rex (swank:find-definitions-for-emacs "when") "CL-USER" t 20)\n
+<< (:return (:ok nil) 20)
+>> (:emacs-rex (swank:find-definitions-for-emacs "no-such-thing") "CL-USER" t 21)\n
+<< (:return (:ok nil) 21)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-callee,") "CL-USER" t 22)\n
+<< (:return (:ok (("(DEFUN DRV-CALLEE)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 70) (:snippet "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n"))))) 22)
+>> (:emacs-rex (swank:find-definitions-for-emacs "(setf drv-point-x)") "CL-USER" t 23)\n
+<< (:return (:ok (("(DEFMETHOD (SETF DRV-POINT-X) T DRV-POINT)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 270) (:snippet "(x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 23)
+>> (:emacs-rex (swank:find-definitions-for-emacs "cl-user") "CL-USER" t 24)\n
+<< (:return (:ok nil) 24)
+>> (:emacs-rex (swank:find-definitions-for-emacs "drv-callee") "CL-USER" t 25)\n
+<< (:return (:ok (("(DEFUN DRV-CALLEE)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 70) (:snippet "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n"))))) 25)
+>> (:emacs-rex (swank:xref :calls "drv-callee") "CL-USER" t 26)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 201) (:snippet "(drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 362) (:snippet "(drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-BUF-FN" (:location (:buffer-and-file "drv-nav2.lisp" "@WORK@/out/work/drv-nav2.lisp") (:offset 2 23) (:snippet "(drv-callee 7)"))))) 26)
+>> (:emacs-rex (swank:xref :calls-who "drv-callee") "CL-USER" t 27)\n
+<< (:return (:ok nil) 27)
+>> (:emacs-rex (swank:xref :references "drv-callee") "CL-USER" t 28)\n
+<< (:return (:ok nil) 28)
+>> (:emacs-rex (swank:xref :binds "drv-callee") "CL-USER" t 29)\n
+<< (:return (:ok nil) 29)
+>> (:emacs-rex (swank:xref :sets "drv-callee") "CL-USER" t 30)\n
+<< (:return (:ok nil) 30)
+>> (:emacs-rex (swank:xref :macroexpands "drv-callee") "CL-USER" t 31)\n
+<< (:return (:ok nil) 31)
+>> (:emacs-rex (swank:xref :specializes "drv-callee") "CL-USER" t 32)\n
+<< (:return (:ok nil) 32)
+>> (:emacs-rex (swank:xref :callers "drv-callee") "CL-USER" t 33)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 120) (:snippet "(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1)"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 327) (:snippet "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-BUF-FN" (:location (:buffer-and-file "drv-nav2.lisp" "@WORK@/out/work/drv-nav2.lisp") (:offset 2 0) (:snippet "(defun drv-buf-fn ()\n  (drv-callee 7))"))))) 33)
+>> (:emacs-rex (swank:xref :callees "drv-callee") "CL-USER" t 34)\n
+<< (:return (:ok nil) 34)
+>> (:emacs-rex (swank:xref :calls-who "drv-caller") "CL-USER" t 35)\n
+<< (:return (:ok (("DRV-CALLEE" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 70) (:snippet "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n"))))) 35)
+>> (:emacs-rex (swank:xref :references "*drv-var*") "CL-USER" t 36)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 192) (:snippet "(drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 36)
+>> (:emacs-rex (swank:xref :binds "*drv-var*") "CL-USER" t 37)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 144) (:snippet "(let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b"))))) 37)
+>> (:emacs-rex (swank:xref :sets "*drv-var*") "CL-USER" t 38)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 169) (:snippet "(setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 38)
+>> (:emacs-rex (swank:xref :macroexpands "drv-mac") "CL-USER" t 39)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 192) (:snippet "(drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 39)
+>> (:emacs-rex (swank:xref :specializes "drv-point") "CL-USER" t 40)\n
+<< (:return (:ok (("(DEFMETHOD DRV-GEN)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 327) (:snippet "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-POINT-X)" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 270) (:snippet "(x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD (SETF DRV-POINT-X))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 270) (:snippet "(x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 40)
+>> (:emacs-rex (swank:xref :calls "no-such-thing") "CL-USER" t 41)\n
+<< (:return (:ok nil) 41)
+>> (:emacs-rex (swank:xrefs '(:calls :calls-who) "drv-callee") "CL-USER" t 42)\n
+<< (:return (:ok ((:calls ("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 201) (:snippet "(drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 362) (:snippet "(drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-BUF-FN" (:location (:buffer-and-file "drv-nav2.lisp" "@WORK@/out/work/drv-nav2.lisp") (:offset 2 23) (:snippet "(drv-callee 7)")))))) 42)
+>> (:emacs-rex (swank:xref ':calls '"drv-callee") "CL-USER" t 43)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 201) (:snippet "(drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/out/work/drv-nav.lisp") (:position 362) (:snippet "(drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-BUF-FN" (:location (:buffer-and-file "drv-nav2.lisp" "@WORK@/out/work/drv-nav2.lisp") (:offset 2 23) (:snippet "(drv-callee 7)"))))) 43)
+>> (:emacs-rex (swank:init-inspector "(list 1 \"two\" 'three)") "CL-USER" t 44)\n
+<< (:return (:ok (:title "#<CONS {710CAF68}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "1" 1) "\n" "1" ": " (:value "\"two\"" 2) "\n" "2" ": " (:value "THREE" 3) "\n") 14 0 500))) 44)
+>> (:emacs-rex (swank:inspect-nth-part 1) "CL-USER" t 45)\n
+<< (:return (:ok (:title "#<INTEGER {11B2636D}>" :id 0 :content (("Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0" "\n" "Code-char" ": " (:value "#\\" 1) "\n" "Integer-length" ": " (:value "@1=1" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:01Z\"" 3) "\n") 14 0 500))) 45)
+>> (:emacs-rex (swank:inspector-pop) "CL-USER" t 46)\n
+<< (:return (:ok (:title "#<CONS {710CAF68}>" :id 4 :content (("A proper list:" "\n" "0" ": " (:value "@1=1" 5) "\n" "1" ": " (:value "\"two\"" 6) "\n" "2" ": " (:value "THREE" 7) "\n") 14 0 500))) 46)
+>> (:emacs-rex (swank:inspector-next) "CL-USER" t 47)\n
+<< (:return (:ok (:title "#<INTEGER {11B2636D}>" :id 4 :content (("Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0" "\n" "Code-char" ": " (:value "#\\" 5) "\n" "Integer-length" ": " (:value "@1=1" 6) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:01Z\"" 7) "\n") 14 0 500))) 47)
+>> (:emacs-rex (swank:inspector-pop) "CL-USER" t 48)\n
+<< (:return (:ok (:title "#<CONS {710CAF68}>" :id 8 :content (("A proper list:" "\n" "0" ": " (:value "@1=1" 9) "\n" "1" ": " (:value "\"two\"" 10) "\n" "2" ": " (:value "THREE" 11) "\n") 14 0 500))) 48)
+>> (:emacs-rex (swank:inspector-pop) "CL-USER" t 49)\n
+<< (:return (:ok nil) 49)
+>> (:emacs-rex (swank:inspector-reinspect) "CL-USER" t 50)\n
+<< (:return (:ok (:title "#<CONS {710CAF68}>" :id 12 :content (("A proper list:" "\n" "0" ": " (:value "@1=1" 13) "\n" "1" ": " (:value "\"two\"" 14) "\n" "2" ": " (:value "THREE" 15) "\n") 14 0 500))) 50)
+>> (:emacs-rex (swank:inspector-range 0 2) "CL-USER" t 51)\n
+<< (:return (:ok (("A proper list:" "\n") 1002 0 2)) 51)
+>> (:emacs-rex (swank:inspector-nth-part 0) "CL-USER" t 52)\n
+<< (:return (:ok (1 "two" three)) 52)
+>> (:emacs-rex (swank:describe-inspectee) "CL-USER" t 53)\n
+<< (:return (:ok "(1 \"two\" THREE)\n  [list]\n") 53)
+>> (:emacs-rex (swank:inspector-history) "CL-USER" t 54)\n
+<< (:return (:ok "--- next/prev chain ---\n  @1 #<INTEGER {11B2636D}>\n *@0 #<CONS {710CAF68}>\n\n--- all visited objects ---\n 0 #<CONS {710CAF68}>\n 1 #<INTEGER {11B2636D}>") 54)
+>> (:emacs-rex (swank:inspector-eval "(length *)") "CL-USER" t 55)\n
+<< (:return (:ok "3") 55)
+>> (:emacs-rex (swank:quit-inspector) "CL-USER" t 56)\n
+<< (:return (:ok nil) 56)
+>> (:emacs-rex (swank:init-inspector "(cons 1 2)") "CL-USER" t 57)\n
+<< (:return (:ok (:title "#<CONS {51E8B2AB}>" :id 0 :content (("CAR" ": " (:value "1" 1) "\n" "CDR" ": " (:value "2" 2) "\n") 8 0 500))) 57)
+>> (:emacs-rex (swank:init-inspector "(vector 1 2)") "CL-USER" t 58)\n
+<< (:return (:ok (:title "#<(SIMPLE-VECTOR 2) {3437B287}>" :id 0 :content (("Dimensions" ": " (:value "(2)" 1) "\n" "Element type" ": " (:value "T" 2) "\n" "Total size" ": " (:value "2" 3) "\n" "Adjustable" ": " (:value "NIL" 4) "\n" "Fill pointer" ": " (:value "NIL" 5) "\n" "Contents:" "\n" "0" ": " (:value "1" 6) "\n" "1" ": " (:value "2" 7) "\n") 30 0 500))) 58)
+>> (:emacs-rex (swank:init-inspector "\"abc\"") "CL-USER" t 59)\n
+<< (:return (:ok (:title "#<STRING {6051BAB3}>" :id 0 :content (("Dimensions" ": " (:value "(3)" 1) "\n" "Element type" ": " (:value "CHARACTER" 2) "\n" "Total size" ": " (:value "3" 3) "\n" "Adjustable" ": " (:value "NIL" 4) "\n" "Fill pointer" ": " (:value "NIL" 5) "\n" "Contents:" "\n" "0" ": " (:value "#\\a" 6) "\n" "1" ": " (:value "#\\b" 7) "\n" "2" ": " (:value "#\\c" 8) "\n") 34 0 500))) 59)
+>> (:emacs-rex (swank:init-inspector "42") "CL-USER" t 60)\n
+<< (:return (:ok (:title "#<INTEGER {7F51535F}>" :id 0 :content (("Value: 42 = #x0000002A = #o52 = #b101010 = 4.2e+1" "\n" "Code-char" ": " (:value "#\\*" 1) "\n" "Integer-length" ": " (:value "6" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:42Z\"" 3) "\n") 14 0 500))) 60)
+>> (:emacs-rex (swank:init-inspector "1.5") "CL-USER" t 61)\n
+<< (:return (:ok (:title "#<FLOAT {13039EC1}>" :id 0 :content (("Scientific: " "1.5e+0" "\n" "Decoded: " (:value "1.0" 1) " * " (:value "0.75" 2) " * " (:value "2" 3) "^" (:value "1" 4) "\n" "Digits" ": " (:value "53" 5) "\n" "Precision" ": " (:value "53" 6) "\n") 20 0 500))) 61)
+>> (:emacs-rex (swank:init-inspector "(let ((h (make-hash-table))) (setf (gethash :a h) 1) h)") "CL-USER" t 62)\n
+<< (:return (:ok (:title "#<HASH-TABLE {3A462FC8}>" :id 0 :content (("Count" ": " (:value "1" 1) "\n" "Size" ": " (:value "1" 2) "\n" "Test" ": " (:value "EQUAL" 3) "\n" "Rehash size" ": " (:value "1.5" 4) "\n" "Rehash threshold" ": " (:value "1.0" 5) "\n" (:action "[clear hashtable]" 0) "\n" "Contents: " "\n" (:value ":A" 6) " = " (:value "1" 7) " " (:action "[remove entry]" 1) "\n") 30 0 500))) 62)
+>> (:emacs-rex (swank:init-inspector "(make-instance 'drv-point :x 1)") "CL-USER" t 63)\n
+<< (:return (:ok (:title "#<DRV-POINT {7FA7AAA2}>" :id 0 :content (("Class: " (:value "#<STANDARD-CLASS :NAME DRV-POINT :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS (#<STANDARD-EFFECTIVE-SLOT-DEFINITION :NAME X :INITARGS (:X) :INITFORM NIL :TYPE T :READERS (DRV-POINT-X) :INITFUNCTION NIL> #<STANDARD-EFFECTIVE-SLOT-DEFINITION :NAME Y :INITARGS (:Y) :INITFORM 5 :TYPE T :READERS NIL :INITFUNCTION NIL>) :FINALIZED-P T>" 1) "\n" "--------------------" "\n" " Group slots by inheritance " (:action "[ ]" 0) "\n" " Sort slots alphabetically  " (:action "[X]" 1) "\n" "\n" "All Slots:" "\n" (:action "[ ]" 2) "  " (:value "X" 2) "" " = " (:value "1" 3) "\n" (:action "[ ]" 3) "  " (:value "Y" 4) "" " = " (:value "5" 5) "\n" "\n" (:action "[set value]" 4) "  " (:action "[make unbound]" 5) "\n") 33 0 500))) 63)
+>> (:emacs-rex (swank:init-inspector "(make-drv-st :a 1 :b 2)") "CL-USER" t 64)\n
+<< (:return (:ok (:title "#<DRV-ST {619A03D7}>" :id 0 :content (("The object is a STRUCTURE-OBJECT of type DRV-ST." "\n" "A" ": " (:value "1" 1) "\n" "B" ": " (:value "2" 2) "\n") 10 0 500))) 64)
+>> (:emacs-rex (swank:init-inspector "'drv-callee") "CL-USER" t 65)\n
+<< (:return (:ok (:title "#<SYMBOL {3B891C23}>" :id 0 :content (("Its name is" ": " (:value "\"DRV-CALLEE\"" 1) "\n" "It is unbound." "\n" "It is a function: " (:value "#<function DRV-CALLEE>" 2) " " (:action "[unbind]" 0) "\n" "Function documentation" ": " "Callee doc." "\n" "It is " "internal" " to the package: " (:value "CL-USER" 3) " " (:action "[export]" 1) " " (:action "[unintern]" 2) "\n" "Property list" ": " (:value "NIL" 4) "\n") 28 0 500))) 65)
+>> (:emacs-rex (swank:init-inspector ":foo") "CL-USER" t 66)\n
+<< (:return (:ok (:title "#<KEYWORD {7FC22C56}>" :id 0 :content (("Its name is" ": " (:value "\"FOO\"" 1) "\n" "It is a constant of value" ": " (:value "@0=:FOO" 2) " " (:action "[unbind]" 0) "\n" "It has no function value." "\n" "It is " "external" " to the package: " (:value "KEYWORD" 3) " " (:action "[unintern]" 1) "\n" "Property list" ": " (:value "NIL" 4) "\n") 23 0 500))) 66)
+>> (:emacs-rex (swank:init-inspector "nil") "CL-USER" t 67)\n
+<< (:return (:ok (:title "#<NULL {14076883}>" :id 0 :content (("Its name is" ": " (:value "\"NIL\"" 1) "\n" "It is a constant of value" ": " (:value "@0=NIL" 2) " " (:action "[unbind]" 0) "\n" "It has no function value." "\n" "It is " "external" " to the package: " (:value "CL" 3) " " (:action "[unintern]" 1) "\n" "Property list" ": " (:value "@0=NIL" 4) "\n") 23 0 500))) 67)
+>> (:emacs-rex (swank:init-inspector "#'drv-callee") "CL-USER" t 68)\n
+<< (:return (:ok (:title "#<T {163D05AB}>" :id 0 :content (("Name" ": " (:value "DRV-CALLEE" 1) "\n" "Its argument list is: " "(A)" "\n" "Documentation" ": " "Callee doc." "\n") 11 0 500))) 68)
+>> (:emacs-rex (swank:init-inspector "#\\a") "CL-USER" t 69)\n
+<< (:return (:ok (:title "#<CHARACTER {3DF43356}>" :id 0 :content (("Char code" ": " (:value "97" 1) "\n" "Lower cased" ": " (:value "@0=#\\a" 2) "\n" "Upper cased" ": " (:value "#\\A" 3) "\n") 12 0 500))) 69)
+>> (:emacs-rex (swank:init-inspector "(list 1 2)" nil) "CL-USER" t 70)\n
+<< (:return (:ok (:title "#<CONS {4F56BD72}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "1" 1) "\n" "1" ": " (:value "2" 2) "\n") 10 0 500))) 70)
+>> (:emacs-rex (swank:quit-inspector) "CL-USER" t 71)\n
+<< (:return (:ok nil) 71)
+>> (:emacs-rex (swank-macrostep:macro-form-p "(when a b)" nil nil) "CL-USER" t 72)\n
+<< (:return (:ok (:ok :macro)) 72)
+>> (:emacs-rex (swank-macrostep:macro-form-p "(+ 1 2)" nil nil) "CL-USER" t 73)\n
+<< (:return (:ok (:ok nil)) 73)
+>> (:emacs-rex (swank-macrostep:macro-form-p "foo" nil nil) "CL-USER" t 74)\n
+<< (:return (:ok (:ok nil)) 74)
+>> (:emacs-rex (swank-macrostep:macro-form-p "(drv-mac 1)" nil nil) "CL-USER" t 75)\n
+<< (:return (:ok (:ok :macro)) 75)
+>> (:emacs-rex (swank-macrostep:macro-form-p "(when" nil nil) "CL-USER" t 76)\n
+<< (:return (:ok (:error "Read error: Unexpected end of input, expected ')'")) 76)
+>> (:emacs-rex (swank-macrostep:macrostep-expand-1 "(when a b)" nil nil) "CL-USER" t 77)\n
+<< (:return (:ok (:ok "(IF A B NIL)" nil)) 77)
+>> (:emacs-rex (swank-macrostep:macrostep-expand-1 "(when a (unless b c))" nil nil) "CL-USER" t 78)\n
+<< (:return (:ok (:ok "(IF A (UNLESS B C) NIL)" (("UNLESS" :macro 6)))) 78)
+>> (:emacs-rex (swank-macrostep:macrostep-expand-1 "(drv-mac (when x y))" nil nil) "CL-USER" t 79)\n
+<< (:return (:ok (:ok "(LIST (WHEN X Y) *DRV-VAR*)" (("WHEN" :macro 6)))) 79)
+>> (:emacs-rex (swank-macrostep:macrostep-expand-1 "(+ 1 2)" nil nil) "CL-USER" t 80)\n
+<< (:return (:ok (:error "Not a macro form")) 80)
+>> (:emacs-rex (swank-macrostep:macrostep-expand-1 "(+ 1 2)" t nil) "CL-USER" t 81)\n
+<< (:return (:ok (:error "Not a macro or compiler-macro form")) 81)

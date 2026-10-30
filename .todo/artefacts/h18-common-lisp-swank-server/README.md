@@ -16,17 +16,21 @@ Paths are placeholders: `@WORK@` is a work directory, `@CHECKOUT@` this reposito
   expansions, `set-package`, an error and an interrupt, through SLIME's own commands where
   it has them (`slime-repl-return`, `slime-compile-defun`, `slime-compile-and-load-file`,
   `completion-at-point`, `slime-autodoc`, `slime-macroexpand-1`, `slime-interrupt`).
-- `run-sbcl.sh OUTDIR` / `run-ronto.sh OUTDIR` -- start the Lisp, the proxy and the
-  driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update` messages dropped)
-  and `rontolisp-wire.log` are the two recordings; `cli/SwankServerTest` replays the
-  requests and pins rontolisp's answers.
-- `drive-sldb.el` -- the debugger session, the same head with `DRV_STEPS=sldb`:
-  an error quit with `q` after `c` found no continue restart, a `restart-case`'s numbered
-  restart, `cerror`'s continue, a worker's `a`, frames with their locals and an evaluation
-  in a frame, an interrupt continued and then quit, a nested level returned from. Run it
-  with `run-sbcl.sh` / `run-ronto.sh` loading it instead of `drive.el`; `sbcl-sldb-wire.log`
-  and `rontolisp-sldb-wire.log` are the two recordings (the `:debug` messages and their
-  order agree; the frames are each Lisp's own).
+- `run-sbcl.sh OUTDIR [STEPS]` / `run-ronto.sh OUTDIR [STEPS]` -- start the Lisp, the
+  proxy and the driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update`
+  messages dropped) and `rontolisp-wire.log` are the two recordings of the `basic` steps;
+  `sbcl-nav-wire.log` and `rontolisp-nav-wire.log` of the `nav` steps (`M-.`, xref, the
+  inspector, macrostep; work paths as `@WORK@/out/work`); `sbcl-loaded-wire.log` and
+  `rontolisp-loaded-wire.log` of the `loaded` steps (h23: `C-c C-l`, REPL definitions,
+  their `M-.` and xref, the class, slot, generic function, method, package and pathname
+  pages). `cli/SwankServerTest` replays
+  the requests and pins rontolisp's answers.
+- The `sldb` steps (the debugger): an error quit with `q` after `c` found no continue
+  restart, a `restart-case`'s numbered restart, `cerror`'s continue, a worker's `a`, frames
+  with their locals and an evaluation in a frame, an interrupt continued and then quit, a
+  nested level returned from; `sbcl-sldb-wire.log` and `rontolisp-sldb-wire.log` are the
+  two recordings (the `:debug` messages and their order agree; the frames are each Lisp's
+  own).
 - `gen-arglists.lisp OUT` -- writes `src/main/resources/am/ik/rontolisp/eval/cl-arglists.txt`
   (after its four comment lines): `sbcl --non-interactive --load gen-arglists.lisp
   --end-toplevel-options OUT`.

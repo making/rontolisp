@@ -1,0 +1,5 @@
+(load "@WORK@/dl/sly/slynk/slynk-loader.lisp")
+(setf slynk-loader::*fasl-directory* "@WORK@/sly-oracle/fasl/")
+(slynk-loader:init)
+(slynk:create-server :port (parse-integer (car (last sb-ext:*posix-argv*))) :dont-close t)
+(loop (sleep 1000))
