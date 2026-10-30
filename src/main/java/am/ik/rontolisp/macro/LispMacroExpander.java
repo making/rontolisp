@@ -207,8 +207,9 @@ public final class LispMacroExpander {
 	 * form has none ({@code return}, {@code lambda}), or -- for {@code handler-case} and
 	 * the definers, which have no lowering -- a form {@link #foldNativeExpansion} turns
 	 * back into the native one. A code walker that trusts {@code macro-function} emits
-	 * what this answers, so it must run on every backend. Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
-	 * passes, which keep these forms native.
+	 * what this answers, so it must run on every backend. Kept apart from
+	 * {@link #expandBuiltinMacro} because that one also feeds the compile passes, which
+	 * keep these forms native.
 	 * @param cons the form to expand
 	 * @return the expansion, or {@code null} when the operator has none here
 	 */
