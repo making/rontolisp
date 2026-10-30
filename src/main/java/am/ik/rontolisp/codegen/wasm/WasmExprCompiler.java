@@ -290,6 +290,12 @@ final class WasmExprCompiler {
 			emitCheckedRead(ctx, name, globalIndex);
 			return;
 		}
+		if (LispNames.REPL_VARIABLES.contains(name)) {
+			// A REPL history variable the program never assigns: nil, as outside any
+			// REPL.
+			compileExpr(LispNil.INSTANCE, ctx);
+			return;
+		}
 		if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileVarRef(name, ctx);
 			return;

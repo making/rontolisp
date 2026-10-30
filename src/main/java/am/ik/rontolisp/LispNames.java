@@ -251,6 +251,15 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "MOD";
 
+	/**
+	 * The REPL history variables ({@code *} {@code **} {@code ***}, {@code /} ...,
+	 * {@code +} ...): standard {@code cl} variables only a REPL sets, nil everywhere
+	 * else. The interpreter binds them globally and SWANK's listener sets them; a
+	 * compiled program reads nil from one it never assigns.
+	 */
+	public static final java.util.List<String> REPL_VARIABLES = java.util.List.of("*", "**", "***", "/", "//", "///",
+			"+", "++", "+++");
+
 	/** The {@code rem} built-in function. */
 	public static final String REM = "REM";
 

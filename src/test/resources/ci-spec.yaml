@@ -23177,6 +23177,25 @@ cases:
         0
         NIL
 
+  # The REPL history variables (* ** *** / // /// + ++ +++) are cl variables, nil
+  # outside a REPL: a compiled read of one never assigned answers nil, and a
+  # package using cl names cl's (trivial-types' proper-list-p reads *).
+  - name: repl-history-variables-are-nil-outside-a-repl
+    source: |
+      (defpackage :ci-repl-vars (:use :cl))
+      (in-package :ci-repl-vars)
+      (defun ci-proper-list-p (var)
+        (loop (typecase var
+                (null (return t))
+                (cons (if (or t (typep (car var) *)) (setq var (cdr var)) (return)))
+                (t (return)))))
+      (print (list (ci-proper-list-p '(1 2 3)) (eq '** 'cl:**)))
+      (print (list * ** *** / // /// + ++ +++))
+      (in-package :cl-user)
+    expected: |
+      (T T)
+      (NIL NIL NIL NIL NIL NIL NIL NIL NIL)
+
   - name: complex-reader-constructor-predicates
     source: |
       (print #C(1 2))

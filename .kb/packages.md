@@ -40,8 +40,8 @@ strings, so no per-backend codegen exists.
 ## The `cl` external list is the STANDARD's list, not the implemented one
 CLHS 11.1.2.1 fixes the `common-lisp` package's external set at the **978 standard names**,
 independently of whether an implementation has an operator behind one: the name being there is a
-`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The 187 names
-rontolisp does not implement are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
+`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The names
+rontolisp does not implement (101 on 2026-10-30) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
 because there is no implementation to name, and a name that gains one moves OUT of the set into
 its category.
 
@@ -77,6 +77,14 @@ spellings from `PackageRegistry.CL_EXPORTED_ONLY`, where `.todo/796` had had to 
 missing standard names while the invented spellings sat beside them. `boole` itself stays
 unimplemented (still in `CL_EXPORTED_ONLY`) -- a prelude defun over these constants belongs with
 `.todo/037`'s `logeqv`/`lognor` row.
+
+**The REPL history variables** (`*` `**` `***` `/` `//` `///` `+` `++` `+++`,
+`LispNames.REPL_VARIABLES`) are `CL_VARIABLES` (2026-10-30; the six non-operator spellings left
+`CL_EXPORTED_ONLY`), so a cl-using package's `**` is `cl:**`. Nil outside a REPL: the interpreter
+binds them in `Environment.createGlobal` (SWANK's listener sets them), and a compiled read of one
+the program never assigns compiles to nil (`compileSymbolRef` on the JVM and WASM, ahead of the
+`--dynamic` arm) -- trivial-types' `proper-list-p` reads `*`. Pinned by ci-spec
+`repl-history-variables-are-nil-outside-a-repl`.
 
 **One name still makes `no-extra-symbols-exported-from-common-lisp` fail**, and it is not a name
 list bug: `while` is rontolisp's own loop primitive and lives in `cl` because that is where the
