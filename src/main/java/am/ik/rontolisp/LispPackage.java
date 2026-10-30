@@ -21,14 +21,15 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The owned set doubles as the package's MEMBER table: a name the runtime {@code intern}
- * mints in the package is {@linkplain #addSymbol recorded} there, so {@code find-symbol}
- * can answer nil before the intern and the symbol after, and {@code unintern} can take it
- * {@linkplain #removeSymbol out} again. The set is therefore a mutable, thread-safe one
- * whatever the caller passed -- the canonical constructor copies it -- while the other
- * components stay as given (the rarer package operations rebuild the record). The copy is
- * a {@link MemberTable}: an immutable base plus what was interned and uninterned since,
- * so copying a package with a thousand symbols -- every registry does it for every
- * built-in package -- costs nothing until the program interns.
+ * -- or the reader of a live image -- mints in the package is {@linkplain #addSymbol
+ * recorded} there, so {@code find-symbol} can answer nil before the intern (or the read)
+ * and the symbol after, and {@code unintern} can take it {@linkplain #removeSymbol out}
+ * again. The set is therefore a mutable, thread-safe one whatever the caller passed --
+ * the canonical constructor copies it -- while the other components stay as given (the
+ * rarer package operations rebuild the record). The copy is a {@link MemberTable}: an
+ * immutable base plus what was interned and uninterned since, so copying a package with a
+ * thousand symbols -- every registry does it for every built-in package -- costs nothing
+ * until the program interns.
  *
  * @param name the package name (e.g. {@code cl}, {@code cl-user}, {@code rontolisp})
  * @param useList the names of packages this package uses (whose symbols are visible
@@ -109,8 +110,8 @@ public record LispPackage(String name, List<String> useList, Set<String> symbols
 	}
 
 	/**
-	 * Records a name the runtime {@code intern} minted in this package as one of its own
-	 * symbols (the member table's write).
+	 * Records a name the runtime {@code intern} or the reader minted in this package as
+	 * one of its own symbols (the member table's write).
 	 * @param symbolName the symbol name
 	 */
 	public void addSymbol(String symbolName) {

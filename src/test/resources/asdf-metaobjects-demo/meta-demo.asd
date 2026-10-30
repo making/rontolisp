@@ -5,6 +5,28 @@
 ;; asdf:component-version) and a :defsystem-depends-on on the built-in
 ;; trivial-features shim, whose announced features have to be in force while
 ;; src/one.lisp is READ.
+;;
+;; The file runs as Lisp. Its header is cl-csv.asd's (a defpackage guarded by
+;; find-package) and cl-pdf.asd's (a feature computed from *features*, pushed,
+;; and read by the #- below it and by src/one.lisp); then the file loads
+;; meta-demo-tool itself, which every system defined after that call needs.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (unless (find-package :meta-demo.system)
+    (defpackage :meta-demo.system
+      (:use :common-lisp :asdf))))
+
+(in-package :meta-demo.system)
+
+(eval-when (:load-toplevel :compile-toplevel :execute)
+  (when (notany #'(lambda (feature) (find feature *features*))
+                '(:meta-demo-fast :meta-demo-small))
+    (push :meta-demo-small *features*)))
+
+#-(or meta-demo-fast meta-demo-small)
+(error "meta-demo: no build was chosen")
+
+(load-system "meta-demo-tool")
+
 (defsystem "meta-demo"
   :version "1.2.3"
   :defsystem-depends-on ("trivial-features")

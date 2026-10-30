@@ -106,7 +106,10 @@ public final class LispEvaluator {
 
 	private final Environment globalEnv;
 
-	private final PackageResolver packageResolver = new PackageResolver();
+	// The image's reader: a symbol source reads is a member of its package from then on
+	// (find-symbol, the enumerations), on the interpreter and in the compile paths'
+	// macro-time evaluator alike.
+	private final PackageResolver packageResolver = new PackageResolver().recordingReadSymbols();
 
 	/**
 	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
@@ -512,16 +515,23 @@ public final class LispEvaluator {
 
 	/**
 	 * The systems registered by {@code asdf:defsystem} (evaluated inline or read out of a
-	 * {@code NAME.asd} file), by name. Kept per evaluator like the provided-module set.
+	 * {@code NAME.asd} file), by name. Kept per evaluator like the provided-module set --
+	 * a compile path's BUILD image shares the compile path's own ({@link #buildImage}).
 	 */
-	private final java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.LinkedHashMap<>();
+	private java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.LinkedHashMap<>();
 
 	/**
 	 * "Package P lives in system S", merged from the {@code register-system-packages}
 	 * forms of every {@code .asd} read so far. Read when a package-inferred system turns
 	 * a component file's {@code defpackage} dependency into a system name.
 	 */
-	private final java.util.Map<String, String> asdfSystemPackages = new java.util.HashMap<>();
+	private java.util.Map<String, String> asdfSystemPackages = new java.util.HashMap<>();
+
+	/**
+	 * The {@code .asd} loads open on this evaluator, innermost last: a {@code .asd} that
+	 * loads a system can make the loader read that system's {@code .asd} too.
+	 */
+	private final java.util.Deque<AsdLoadScope> asdLoads = new java.util.ArrayDeque<>();
 
 	/**
 	 * The systems already loaded by {@code asdf:load-system} (loading again is a no-op).
@@ -5445,8 +5455,9 @@ public final class LispEvaluator {
 	 * files in their {@code :depends-on}/{@code :serial} order, each through
 	 * {@link #loadFile}. An already-loaded system is a no-op. An unknown system is
 	 * located as {@code NAME.asd} in the directory of the loading file and then on the
-	 * {@link #setSystemPath system path}; the {@code .asd} file is parsed as plain data
-	 * (never evaluated), like the compile-time {@code LoadInliner} pass.
+	 * {@link #setSystemPath system path}, and loaded into this image
+	 * ({@link AsdfSystems#loadAsd}), as the compile-time {@code LoadInliner} pass loads
+	 * it into its build image.
 	 */
 	/**
 	 * Implements {@code ql:quickload}: downloads the named system (and its transitive
@@ -5770,6 +5781,20 @@ public final class LispEvaluator {
 	}
 
 	private void loadSystem(String name) {
+		AsdLoadScope asd = this.asdLoads.peekLast();
+		if (asd != null && asd.isOwnForm()) {
+			// A .asd's own form loads a system: real ASDF loads it into the image while
+			// it reads the file, ahead of every system the file defines after the call.
+			asd.noteLoaded(name);
+			if (!this.loadedSystems.contains(name)) {
+				asd.loadOutsideTheFile(() -> loadSystemNow(name));
+			}
+			return;
+		}
+		loadSystemNow(name);
+	}
+
+	private void loadSystemNow(String name) {
 		if (this.loadedSystems.contains(name)) {
 			return;
 		}
@@ -5824,13 +5849,13 @@ public final class LispEvaluator {
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
-			// .asd forms read upcased like all source; AsdfSystems matches clause
-			// keywords case-insensitively and coerce-names (downcases) system
-			// designators.
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(), this.features,
-					this.asdfSystemPackages)) {
-				this.asdfSystems.putIfAbsent(defined.name(), defined);
-			}
+			// The .asd runs in this image -- the program's own, as real ASDF loads it
+			// into the image that then loads the system -- and each system it defines is
+			// registered the moment it is defined. .asd forms read upcased like all
+			// source; AsdfSystems matches clause keywords case-insensitively and
+			// coerce-names (downcases) system designators.
+			AsdfSystems.loadAsd(asd.source(), asd.path(), this.features, this.asdfSystemPackages, asdImage(),
+					defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
 			system = this.asdfSystems.get(name);
 			if (system == null) {
 				// A NAME/SUB of a :package-inferred-system: the .asd declares no
@@ -5895,14 +5920,244 @@ public final class LispEvaluator {
 	 * Evaluates an {@code (asdf:defsystem NAME ...)} special form: the options are plain
 	 * data (never evaluated), so the form is parsed like a {@code .asd} entry and the
 	 * system registered for a later {@code asdf:load-system}. Component paths resolve
-	 * against the directory of the source being loaded.
+	 * against the directory of the source being loaded. One a {@code .asd} file's own
+	 * form evaluates -- inside a {@code when}, out of a macro -- is that file's, recorded
+	 * by its load like the ones the file holds at top level.
 	 */
 	private LispVal evalDefsystem(LispCons cons) {
 		ensureAsdfRuntimeLoaded();
+		AsdLoadScope asd = this.asdLoads.peekLast();
+		if (asd != null && asd.isOwnForm()) {
+			return new LispSymbol(asd.defineNested(cons).name());
+		}
 		String baseDir = this.loadDirStack.peekLast();
 		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
+	}
+
+	/**
+	 * This evaluator as the image a {@code .asd} file is loaded into
+	 * ({@link AsdfSystems#loadAsd}).
+	 * @return the image
+	 */
+	public AsdfSystems.AsdImage asdImage() {
+		return AsdLoadScope::new;
+	}
+
+	/**
+	 * A compile path's BUILD image: the evaluator its {@code .asd} files are loaded into
+	 * at compile time, whose state never reaches the program. It shares the compile
+	 * path's registry, so a {@code find-system} in a file sees what the compile path
+	 * registered and a system a file loads is registered where the compile path splices
+	 * it from; it reads every source with the TARGET's features and starts
+	 * {@code *features*} at the target's list, so a {@code .asd} decides for the program
+	 * it is compiled into, not for this interpreter.
+	 * @param out where the files' output goes (a {@code warn} goes to the error output)
+	 * @param target the compile target's reader features
+	 * @param loader the loader the compile path reads through
+	 * @param systems the compile path's system registry, shared
+	 * @param systemPackages the compile path's package-to-system map, shared
+	 * @return the image
+	 */
+	public static LispEvaluator buildImage(PrintStream out, Features target, SourceLoader loader,
+			java.util.Map<String, AsdfSystems.LispSystem> systems, java.util.Map<String, String> systemPackages) {
+		LispEvaluator image = new LispEvaluator(out);
+		image.setSourceLoader(loader);
+		image.asdfSystems = systems;
+		image.asdfSystemPackages = systemPackages;
+		image.features = target;
+		image.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(target.names()));
+		return image;
+	}
+
+	/**
+	 * Defines {@code asdf-user}, the package real ASDF loads a {@code .asd} in: it uses
+	 * {@code cl}, {@code asdf} and {@code uiop}. Here {@code asdf:*user-cache*} and
+	 * {@code uiop:*user-cache*} are two symbols (real ASDF's are one), so asdf's shadows.
+	 * Defined on the first {@code .asd} an image loads.
+	 */
+	private void ensureAsdfUserPackage() {
+		if (this.packageResolver.findPackageName(LispNames.ASDF_USER_PKG) == null) {
+			eval(consList(List.of(new LispSymbol(PackageRegistry.qualify("CL", LispNames.DEFPACKAGE)),
+					new LispSymbol("#:" + LispNames.ASDF_USER_PKG),
+					consList(List.of(new LispSymbol(":USE"), new LispSymbol("#:CL"),
+							new LispSymbol("#:" + LispNames.ASDF_PKG), new LispSymbol("#:UIOP"))),
+					consList(
+							List.of(new LispSymbol(":SHADOWING-IMPORT-FROM"), new LispSymbol("#:" + LispNames.ASDF_PKG),
+									new LispSymbol("#:" + LispNames.ASDF_USER_CACHE))))));
+		}
+	}
+
+	/** The current value of {@code *features*}, dynamic binding first. */
+	private LispVal currentFeatures() {
+		LispVal value = currentSpecialValue(LispNames.FEATURES_VAR);
+		return value == null ? LispNil.INSTANCE : value;
+	}
+
+	/**
+	 * One {@code .asd} file being loaded into this evaluator ({@link #asdImage}): the
+	 * bindings it runs under, the features it has pushed, and the systems its own forms
+	 * loaded. Opened and closed by {@link AsdfSystems#loadAsd}, innermost last on
+	 * {@link #asdLoads}.
+	 */
+	private final class AsdLoadScope implements AsdfSystems.AsdLoad {
+
+		private final java.util.function.Function<LispVal, AsdfSystems.LispSystem> nestedDefsystems;
+
+		/**
+		 * The depth of {@link #loadingSystems} when the file opened: a
+		 * {@code load-system} or {@code defsystem} evaluated at this depth is one of the
+		 * file's OWN forms, not a form of a system it loads.
+		 */
+		private final int depth;
+
+		/** The printed elements of {@code *features*} when the file opened. */
+		private final Set<String> featuresAtOpen = new HashSet<>();
+
+		private final int callerFunctionBodyDepth;
+
+		/** The package current when the file opened. */
+		private final String packageAtOpen;
+
+		private final List<String> loaded = new ArrayList<>();
+
+		/**
+		 * Whether a system the file asked for is loading ({@link #loadOutsideTheFile}).
+		 */
+		private boolean loadingForTheFile;
+
+		AsdLoadScope(String asdPath, java.util.function.Function<LispVal, AsdfSystems.LispSystem> nestedDefsystems) {
+			// A .asd is an ASDF program: its forms name ASDF's classes and functions.
+			ensureAsdfRuntimeLoaded();
+			ensureAsdfUserPackage();
+			this.nestedDefsystems = nestedDefsystems;
+			this.depth = LispEvaluator.this.loadingSystems.size();
+			this.packageAtOpen = LispEvaluator.this.packageResolver.currentPackageName();
+			String truename = LispEvaluator.this.sourceLoader.canonicalPath(asdPath);
+			LispVal features = currentFeatures();
+			for (LispVal cell = features; cell instanceof LispCons cons; cell = cons.cdr()) {
+				this.featuresAtOpen.add(cons.car().print());
+			}
+			// Nothing below throws, so close() undoes exactly what is pushed here.
+			// Relative to the file, like a loaded source: a (load "x") in it, and the
+			// first search directory of a system it loads.
+			String dir = SourceLoader.parentDir(asdPath);
+			LispEvaluator.this.loadDirStack.addLast(dir == null ? "" : dir);
+			LispEvaluator.this.packageResolver.pushPackage();
+			LispEvaluator.this.packageResolver.setCurrentPackage(LispNames.ASDF_USER_PKG);
+			LispEvaluator.this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+			LispEvaluator.this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(asdPath));
+			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(truename));
+			LispEvaluator.this.dynamicBindings.push(LispNames.FEATURES_VAR, features);
+			this.callerFunctionBodyDepth = LispEvaluator.this.functionBodyDepth;
+			LispEvaluator.this.functionBodyDepth = 0;
+			LispEvaluator.this.asdLoads.addLast(this);
+		}
+
+		/**
+		 * Whether the form being evaluated is the file's own -- not one of a system it
+		 * loads (see {@link #depth}), nor of a {@code .asd} that load reads.
+		 */
+		boolean isOwnForm() {
+			return LispEvaluator.this.asdLoads.peekLast() == this && !this.loadingForTheFile
+					&& LispEvaluator.this.loadingSystems.size() == this.depth;
+		}
+
+		void noteLoaded(String name) {
+			if (!this.loaded.contains(name)) {
+				this.loaded.add(name);
+			}
+		}
+
+		/**
+		 * Loads a system the file asked for OUTSIDE the file's bindings, as the plan the
+		 * compile paths splice it from loads it: in the package that was current when the
+		 * file opened -- not the file's own, which only the image has (SBCL reads a
+		 * component without an {@code in-package} in the {@code .asd}'s package) -- and
+		 * with what that system pushes onto {@code *features*} the image's, as from any
+		 * load, so it stays when the file is done. The file sees the pushes too, from
+		 * then on.
+		 */
+		void loadOutsideTheFile(Runnable load) {
+			LispVal bound = currentFeatures();
+			String filePackage = LispEvaluator.this.packageResolver.currentPackageName();
+			LispEvaluator.this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+			LispEvaluator.this.packageResolver.setCurrentPackage(this.packageAtOpen);
+			LispVal before = currentFeatures();
+			this.loadingForTheFile = true;
+			try {
+				load.run();
+			}
+			finally {
+				this.loadingForTheFile = false;
+				LispEvaluator.this.packageResolver.setCurrentPackage(filePackage);
+				Set<String> had = new HashSet<>();
+				for (LispVal cell = before; cell instanceof LispCons cons; cell = cons.cdr()) {
+					had.add(cons.car().print());
+				}
+				List<LispVal> added = new ArrayList<>();
+				for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
+					if (!had.contains(cons.car().print())) {
+						added.add(cons.car());
+					}
+				}
+				LispVal rebound = bound;
+				for (int i = added.size() - 1; i >= 0; i--) {
+					rebound = new LispCons(added.get(i), rebound);
+				}
+				LispEvaluator.this.dynamicBindings.push(LispNames.FEATURES_VAR, rebound);
+			}
+		}
+
+		AsdfSystems.LispSystem defineNested(LispCons form) {
+			return this.nestedDefsystems.apply(form);
+		}
+
+		@Override
+		public void eval(LispVal form) {
+			LispEvaluator.this.eval(resolveReadTimeEvalInCode(form));
+		}
+
+		@Override
+		public LispVal readEval(LispVal datum) {
+			return LispEvaluator.this.eval(resolveReadTimeEvalInCode(datum));
+		}
+
+		@Override
+		public List<String> pushedFeatures() {
+			List<String> pushed = new ArrayList<>();
+			for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
+				if (cons.car() instanceof LispSymbol feature && !this.featuresAtOpen.contains(feature.print())) {
+					String name = feature.isKeyword() ? feature.name().substring(1) : feature.name();
+					String spelled = name.toLowerCase(java.util.Locale.ROOT);
+					if (!pushed.contains(spelled)) {
+						pushed.add(0, spelled);
+					}
+				}
+			}
+			return pushed;
+		}
+
+		@Override
+		public List<String> takeLoadedSystems() {
+			List<String> taken = List.copyOf(this.loaded);
+			this.loaded.clear();
+			return taken;
+		}
+
+		@Override
+		public void close() {
+			LispEvaluator.this.asdLoads.removeLastOccurrence(this);
+			LispEvaluator.this.functionBodyDepth = this.callerFunctionBodyDepth;
+			LispEvaluator.this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+			LispEvaluator.this.packageResolver.popPackage();
+			LispEvaluator.this.loadDirStack.removeLast();
+		}
+
 	}
 
 	/**
@@ -6816,14 +7071,27 @@ public final class LispEvaluator {
 	 * Calls a printer written as a one-argument lambda on a value the program computed.
 	 * The value is handed to the closure as an ARGUMENT, never quoted into a form: a
 	 * top-level form is walked by the package resolver first, and that walk never ends on
-	 * a cyclic value.
+	 * a cyclic value. The printer is the implementation's own helper, read in
+	 * {@code cl-user} and interning nothing ({@link #evalHelper}).
 	 * @param printer the source of a {@code (lambda (x) ...)} answering the text
 	 * @param value the value to print
 	 * @return what the printer answered
 	 */
 	LispVal printThrough(String printer, LispVal value) {
-		LispVal closure = eval(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
+		LispVal closure = evalHelper(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
 		return applyGlobal(closure, List.of(value));
+	}
+
+	/**
+	 * Evaluates a top-level form of the implementation's own -- a helper evaluated on the
+	 * program's behalf, never the program's source -- resolved in {@code cl-user}
+	 * whatever package is current, and interning nothing: its names are not symbols the
+	 * program read ({@code PackageResolver.resolveHelper}).
+	 * @param form the helper form
+	 * @return its value
+	 */
+	LispVal evalHelper(LispVal form) {
+		return evalResolved(this.packageResolver.resolveHelper(form));
 	}
 
 	/** The elements of a value list (nil -- no values -- included). */

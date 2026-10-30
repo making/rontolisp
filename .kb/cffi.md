@@ -11,8 +11,8 @@ underneath: `.kb/ffi.md`.
 - the `cffi-sys` backend -- `eval/cffi-rontolisp.lisp` (resource), spliced as component
   `src/cffi-rontolisp.lisp` by `ShimLibraries.LEAF_MODULES`; resource-only, so upstream's tree is
   never edited.
-- a replacement `cffi.asd` -- `eval/cffi-rontolisp.asd`, `AsdOverrides`; upstream's is unreadable
-  as data (an `(error "Sorry, this Lisp is not yet supported")` and a `defmethod`).
+- a replacement `cffi.asd` -- `eval/cffi-rontolisp.asd`, `AsdOverrides`; upstream's opens with
+  `(error "Sorry, this Lisp is not yet supported")` for an implementation it does not list.
 - a substitute for `src/strings.lisp` -- `eval/cffi-strings.lisp`, `ShimLibraries.LEAF_MODULES`;
   the ONE portable file that cannot load (babel's `instantiate-concrete-mappings` generator), kept
   over `babel:string-to-octets` / `octets-to-string`.

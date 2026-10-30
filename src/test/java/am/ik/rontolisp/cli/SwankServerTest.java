@@ -259,19 +259,23 @@ class SwankServerTest {
 					"CL-USER", ":repl-thread");
 			assertThat(client.upTo("debug-activate").getFirst()).startsWith("(:debug tid 1 (");
 			assertThat(client.sldb("(swank:throw-to-toplevel)", removed).getLast()).startsWith("(:return (:abort ");
+			// DRV-PKG's present symbols: HELLO, exported, and HI, which the REPL read
+			// there
 			assertThat(client.rex("(swank:init-inspector \"(find-package :drv-pkg)\")", "CL-USER", "t").getLast())
 				.contains(":content ((\"\" \"Name: \" (:value \"\\\"DRV-PKG\\\"\" 1) \"\n\" \"Nicknames: \" \"\n\""
-						+ " \"Use list: \" (:value \"CL\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"1 present"
-						+ " symbol.\" 3) \"\n\" (:value \"1 external symbol.\" 4) \"\n\" \"0 internal symbols.\" \"\n\"");
+						+ " \"Use list: \" (:value \"CL\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"2 present"
+						+ " symbols.\" 3) \"\n\" (:value \"1 external symbol.\" 4) \"\n\" (:value \"1 internal"
+						+ " symbol.\" 5) \"\n\"");
 			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
 				.contains(":content ((\"All present symbols of package \\\"DRV-PKG\\\"\" \"\n\" \"\n\" \"A symbol is"
 						+ " considered present in a package if it's\" \"\n\"")
 				.contains("\"  \" (:action \"[Group by classification]\" 0) \"\n\" \"\n\" \"\" \"Symbols:\" \"       \""
 						+ " \"Flags:\" \"\n\" \"-------------- ---------\" \"\n\" (:value \"HELLO          \" 1)"
-						+ " \"-f-------\" \"\n\")");
+						+ " \"-f-------\" \"\n\" (:value \"HI             \" 2) \"---------\" \"\n\")");
 			assertThat(client.rex("(swank:inspector-call-nth-action 0)", "CL-USER", "t").getLast())
 				.contains("\"  \" (:action \"[Group by symbol]\" 1) \"\n\" \"\n\" \"FUNCTION\" \"\n\" \""
-						+ "-".repeat(64) + "\" \"\n\" (:value \"HELLO\" 3) \"\n\" \"\n\")");
+						+ "-".repeat(64) + "\" \"\n\" (:value \"HELLO\" 4) \"\n\" \"\n\" \"MISC\" \"\n\" \""
+						+ "-".repeat(64) + "\" \"\n\" (:value \"HI\" 5) \"\n\" \"\n\")");
 			assertThat(client.rex("(swank:init-inspector \"#p\\\"/no/such/drv.lisp\\\"\")", "CL-USER", "t").getLast())
 				.contains(":content ((\"A pathname.\" \"\n\" \"Namestring\" \": \" (:value"
 						+ " \"\\\"/no/such/drv.lisp\\\"\" 1) \"\n\" \"Host\" \": \" (:value \"NIL\" 2) \"\n\" \"Device\""

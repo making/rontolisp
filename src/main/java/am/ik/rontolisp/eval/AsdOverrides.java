@@ -10,17 +10,17 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Hand-authored replacements for {@code .asd} files that cannot be parsed as plain data.
- * A real library's {@code .asd} is sometimes an executable program (ironclad's defines
- * component classes and generates its defsystems with a macro); {@link AsdfSystems}
- * deliberately never evaluates system definitions, so such a file cannot be read at all.
- * For those libraries this registry substitutes a bundled replacement source -- written
- * in the supported defsystem subset, declaring the subsystems rontolisp can actually load
- * -- at {@link AsdfSystems#locate} time. The located path (and therefore the base
- * directory the component files resolve against) is kept, so the REAL library sources are
- * loaded; only the system metadata is redeclared. Both system loaders (the interpreter's
- * {@code loadSystem} and the compile-time {@code LoadInliner}) go through {@code locate},
- * so one entry serves every backend.
+ * Hand-authored replacements for {@code .asd} files whose systems this subset cannot take
+ * as written. A real library's {@code .asd} is sometimes a program that reaches past the
+ * subset (ironclad's defines a system class and generates its defsystems with a macro;
+ * {@link AsdfSystems} runs the file, but parses each {@code defsystem} as data and models
+ * no system class). For those libraries this registry substitutes a bundled replacement
+ * source -- written in the supported defsystem subset, declaring the subsystems rontolisp
+ * can actually load -- at {@link AsdfSystems#locate} time. The located path (and
+ * therefore the base directory the component files resolve against) is kept, so the REAL
+ * library sources are loaded; only the system metadata is redeclared. Both system loaders
+ * (the interpreter's {@code loadSystem} and the compile-time {@code LoadInliner}) go
+ * through {@code locate}, so one entry serves every backend.
  */
 public final class AsdOverrides {
 

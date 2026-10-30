@@ -254,6 +254,10 @@ feature requires symbol identity beyond string equality"). It is one data point,
 decision: the example works, taught through the other half of the rule. Recorded so the
 go/no-go has a concrete cost to weigh rather than only the rewrite's price.
 
+Since then the member table (`.todo/917`) answers that half, and since 2026-10-30 the reader
+records what it reads into it (`.todo/h34`): plump, whose matcher DSL needed `find-symbol`
+to see a name it only read, needed MEMBERSHIP, not identity. Still no consumer for A1.
+
 ## Status
 
 IN PROGRESS (A2-first) 2026-07-20. Supersedes `.todo/155` item 1 (closed into this

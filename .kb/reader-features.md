@@ -60,8 +60,9 @@ Three callers; nothing may switch a backend feature off and claim to be that bac
 1. **Per-system**: an ASDF system's `:rontolisp-features (...)` in defsystem -- the static encoding
    of a `.asd` that pushes onto `*features*` from an `eval-when`, which cannot reach the reads of
    the system's COMPONENT FILES on its own. Each loader widens ITS OWN base set; a dependency keeps
-   the outer set. The `.asd`'s own push is read into the same place
-   (`AsdfSystems.collectFeaturePushes`). What it adds over `FeaturePushes` is CROSS-FILE reach:
+   the outer set. An upstream `.asd`'s own push lands in the same place: the file RUNS, form at a
+   time, and what it pushed before a `defsystem` is recorded on that system
+   (`AsdfSystems.loadAsd`, [[asdf]]). What it adds over `FeaturePushes` is CROSS-FILE reach:
    `:if-feature`/`(:feature ...)` clauses and component reads ([[asdf]]). It also reaches SHIM
    sources -- `ShimLibraries.forms` takes the target backend's features instead of hardcoding
    INTERPRETER ([[mutexes]]).
@@ -151,7 +152,7 @@ once at the frontend, so a compiled program's `#+` set is fixed at compile time.
 `RontoLispCli.compileToFile` picks `WASM` iff the output ends `.wasm`, else `JVM`; interpret/REPL
 use the default. `LoadInliner.Ctx` carries the features; the playground (`src/web/java`) passes
 JVM/WASM per compile entry point. `LispEvaluator` reads through its own `features` field, from
-which `loadFile`, `parseAsdSource`, `parseDefsystem`, `inferPackageInferredSystems` take it.
+which `loadFile`, `loadAsd`, `parseDefsystem`, `inferPackageInferredSystems` take it.
 
 ## Lexer (`LispLexer`)
 New `#`-dispatch cases before `#\`/`#(`/radix: `#|...|#` (nesting, `skipBlockComment`), `#+`/`#-`
@@ -212,8 +213,8 @@ Pinned by `LispReaderTest.readOwnFeaturePush*`,
   COMPILE PATH (`compileToFile` + `LoadInliner.spliceFile` read with markers whenever the source
   textually contains `#.`; `UserMacroExpander.expand` resolves them before package resolution, so
   a datum sees preceding forms' defuns/defvars).
-- **Tolerant** (`ReadEvalMode.SKIP_UNREADABLE`; `readAllSkippingReadEval`, used only by
-  `AsdfSystems.parseAsdSource`, and `readFirstForm`): same marker plus
+- **Tolerant** (`ReadEvalMode.SKIP_UNREADABLE`; `readNextForm`/`scanForms`, used only by
+  `AsdfSystems.loadAsd`, and `readFirstForm`): same marker plus
   `(%read-eval-unreadable "RAW TEXT")` (`LispNames.READ_EVAL_UNREADABLE`) for a datum it cannot
   re-lex. **It prints nothing** -- the marker travels and `AsdfSystems` decides: silent in an
   ignored option, hard error where the value would pick a dependency or a source file ([[asdf]]).

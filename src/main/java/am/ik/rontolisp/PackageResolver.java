@@ -121,6 +121,26 @@ public final class PackageResolver {
 	private boolean exactCase = false;
 
 	/**
+	 * Whether resolution reads something other than the program's source: the printer's
+	 * accessibility probe ({@link #printsBare}), or a helper the implementation evaluates
+	 * on the program's behalf ({@link #resolveHelper}). Like the exact-case resolution of
+	 * the runtime {@code intern} and {@code find-symbol}, it mints nothing (see
+	 * {@link #mint}).
+	 */
+	private boolean probing = false;
+
+	/**
+	 * Whether a name this resolver mints while reading source joins the member table of
+	 * its home package -- CL's reader interning what it reads (see {@link #mint}). Set
+	 * for the resolver of a live image ({@link #recordingReadSymbols}): the interpreter
+	 * and the compile paths' macro-time evaluator. A backend's whole-program resolution
+	 * records nothing it reads: its registry becomes the tables a compiled program
+	 * carries, whose run-time lookups still build a symbol for any name
+	 * ({@code .kb/symbol-runtime-api.md}).
+	 */
+	private boolean recordsReadSymbols = false;
+
+	/**
 	 * The external set each package was DECLARED with -- its {@code defpackage}
 	 * {@code :export} clause, or the set the registry seeded a built-in package with --
 	 * captured the first time a runtime {@code export}/{@code unexport} directive touches
@@ -151,6 +171,19 @@ public final class PackageResolver {
 	 */
 	public PackageResolver(PackageRegistry registry) {
 		this.registry = registry;
+	}
+
+	/**
+	 * Makes this resolver the reader of a live image: from now on a name it mints while
+	 * reading source -- a symbol its package did not provide yet -- is recorded as a
+	 * member of that package, as CL's reader interns what it reads. {@code find-symbol}
+	 * then answers a symbol that was only read (plump's matcher DSL dispatches on one),
+	 * and the enumerations and the package operators' conflict checks see it too.
+	 * @return this resolver
+	 */
+	public PackageResolver recordingReadSymbols() {
+		this.recordsReadSymbols = true;
+		return this;
 	}
 
 	/**
@@ -243,6 +276,28 @@ public final class PackageResolver {
 					return false;
 				}
 			}
+		}
+	}
+
+	/**
+	 * Resolves a form of the implementation's own -- a helper it reads and evaluates on
+	 * the program's behalf, such as a printer closure or an inspector query -- in
+	 * {@code cl-user}, whatever package is current, minting nothing: a helper's names
+	 * (its lambda's parameters) are not symbols the program read, so no package records
+	 * them.
+	 * @param form the helper form
+	 * @return the resolved form
+	 */
+	public synchronized LispVal resolveHelper(LispVal form) {
+		Object previous = bindThreadPackage(LispNames.CL_USER_PKG);
+		boolean savedProbing = this.probing;
+		this.probing = true;
+		try {
+			return resolve(form);
+		}
+		finally {
+			this.probing = savedProbing;
+			unbindThreadPackage(previous);
 		}
 	}
 
@@ -618,8 +673,8 @@ public final class PackageResolver {
 	 * <p>
 	 * The symbol has to be accessible in the target (CLHS: a {@code package-error}
 	 * otherwise): one the package owns is, whether or not the member table knows it yet
-	 * -- a symbol only READ under the package is never recorded (see
-	 * {@link #recordInterned}) -- so a symbol homed in the target is taken on its
+	 * -- a backend's resolution records no symbol it only READ (see
+	 * {@link #recordsReadSymbols}) -- so a symbol homed in the target is taken on its
 	 * spelling alone, and it is symbols homed ELSEWHERE that must be imported or
 	 * inherited. Two name conflicts signal the same way: a different symbol of that name
 	 * already accessible in the target, and a package USING the target that has its own
@@ -2244,14 +2299,10 @@ public final class PackageResolver {
 		}
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.
-		if (LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg)) {
+		if (LispNames.CL_PKG.equals(pkg)) {
 			return new LispSymbol(member);
 		}
-		if (!this.exactCase && !providesMember(pkg, member)) {
-			// Source minted a name the table does not hold (see PackageRegistry.sealed).
-			this.registry.unseal(pkg);
-		}
-		return canonical(pkg, member);
+		return providesMember(pkg, member) ? canonical(pkg, member) : mint(pkg, member);
 	}
 
 	// Whether the package provides (owns, exports or imports) the member under this
@@ -2331,8 +2382,7 @@ public final class PackageResolver {
 			// the reader interns it in the current package, exactly like any other
 			// unknown name below.
 			if (this.inQuotedData) {
-				unsealCurrent();
-				return canonical(current(), name);
+				return mint(current(), name);
 			}
 			throw new LispPackageException(
 					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
@@ -2403,17 +2453,30 @@ public final class PackageResolver {
 			}
 		}
 		// Unknown symbol: a user definition or forward reference in the current package.
-		unsealCurrent();
-		return canonical(current(), name);
+		return mint(current(), name);
 	}
 
-	// Source minted an unrecorded name in the current package (see
-	// PackageRegistry.sealed); a runtime intern or find-symbol probe (exactCase) does
-	// not: the first records what it mints, the second mints nothing in CL.
-	private void unsealCurrent() {
-		if (!this.exactCase) {
-			this.registry.unseal(current());
+	/**
+	 * The symbol source names when it spells a name the package does not provide yet: the
+	 * reader interning it there. The package is no longer sealed (see
+	 * {@code PackageRegistry.sealed}), and a resolver {@link #recordingReadSymbols
+	 * recording read symbols} records the name in the member table, so a symbol that was
+	 * only read is a member from then on -- except a standard name {@code cl} exports
+	 * without implementing, which a package using {@code cl} reads as its own symbol (see
+	 * {@link #resolveUnqualified}) while {@code find-symbol} keeps answering the
+	 * inherited one, as CL does. The exact-case resolution of the runtime {@code intern}
+	 * (which records what it interns itself) and {@code find-symbol}, the printer's probe
+	 * and the implementation's helper forms ({@link #probing}) mint nothing.
+	 */
+	private LispSymbol mint(String pkg, String name) {
+		LispSymbol symbol = canonical(pkg, name);
+		if (!this.exactCase && !this.probing) {
+			this.registry.unseal(pkg);
+			if (this.recordsReadSymbols && !(PackageRegistry.isClMemberName(name) && packageUsesCl(pkg))) {
+				recordInterned(symbol.name());
+			}
 		}
+		return symbol;
 	}
 
 	/**
@@ -2478,11 +2541,11 @@ public final class PackageResolver {
 	}
 
 	private boolean currentUsesCl() {
-		if (LispNames.CL_PKG.equals(current())) {
-			return true;
-		}
-		LispPackage current = this.registry.get(current());
-		return current != null && current.uses(LispNames.CL_PKG);
+		return packageUsesCl(current());
+	}
+
+	private boolean packageUsesCl(String pkg) {
+		return LispNames.CL_PKG.equals(pkg) || this.registry.get(pkg).uses(LispNames.CL_PKG);
 	}
 
 	/**
@@ -2597,18 +2660,16 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * The member-table write of the runtime {@code intern}: the home package of the
-	 * spelling {@code intern} answered now OWNS the member name, unless it already
-	 * provides it (an own or imported symbol; a name {@code unintern} took out is homed
-	 * again). The package's own symbols are the member table (see {@link LispPackage}),
-	 * which is what lets {@code find-symbol} answer nil before an intern and the symbol
-	 * after, and {@code do-symbols} enumerate what a program interned. Only the runtime
-	 * {@code intern} writes it: a symbol merely READ under a package is not recorded,
-	 * deliberately -- recording every name the resolver mints would grow every package's
-	 * enumeration (and the compiled backends' baked tables) with every local variable
-	 * ever read, and the ANSI tests that would notice are the ones the driver cannot run
-	 * anyway (they need {@code in-package}).
-	 * @param spelling the canonical spelling {@code intern} answered
+	 * The member-table write of the runtime {@code intern} and of a reading resolver's
+	 * {@link #mint}: the home package of the spelling now OWNS the member name, unless it
+	 * already provides it (an own or imported symbol; a name {@code unintern} took out is
+	 * homed again). The package's own symbols are the member table (see
+	 * {@link LispPackage}), which is what lets {@code find-symbol} answer nil before an
+	 * intern or a read and the symbol after, and {@code do-symbols} enumerate what a
+	 * program interned or read. A backend's whole-program resolution records no read
+	 * symbol (see {@link #recordsReadSymbols}).
+	 * @param spelling the canonical spelling {@code intern} answered, or the reader
+	 * minted
 	 */
 	private void recordInterned(String spelling) {
 		if (spelling.startsWith(":") || spelling.startsWith("#:")) {
@@ -3401,7 +3462,9 @@ public final class PackageResolver {
 			return true;
 		}
 		boolean savedQuoted = this.inQuotedData;
+		boolean savedProbing = this.probing;
 		this.inQuotedData = true;
+		this.probing = true;
 		try {
 			return resolveUnqualified(qn.member()) instanceof LispSymbol sym && sym.name().equals(symbolName);
 		}
@@ -3410,6 +3473,7 @@ public final class PackageResolver {
 		}
 		finally {
 			this.inQuotedData = savedQuoted;
+			this.probing = savedProbing;
 		}
 	}
 

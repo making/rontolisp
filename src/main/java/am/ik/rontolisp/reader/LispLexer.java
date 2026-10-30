@@ -412,8 +412,8 @@ public final class LispLexer {
 				int datumStart = this.pos;
 				skipDatum();
 				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker for
-				// the consumer to resolve: AsdfSystems against a .asd file's defparameter
-				// bindings, the evaluator's load against the global environment. In
+				// the consumer to resolve: AsdfSystems in the image a .asd file is loaded
+				// into, the evaluator's load against the global environment. In
 				// SKIP_UNREADABLE mode a datum using syntax the lexer does not support
 				// becomes a (%read-eval-unreadable "RAW TEXT") marker instead: it keeps
 				// the surrounding structure (a #. inside a plist/alist must not shift the

@@ -149,7 +149,9 @@ alone, and it is what the backends already did for bignums and characters.
 - Interpreter: `LispEquality.eq` delegates to `eql`; `LispHashTable`'s `TEST_EQ` compares with it
   and hashes a number by value, as for `eql`.
 - JVM: `eq` and `eql` sites share the per-class `_pEql` helper over `_eqv`; the `_eq` numeric op is
-  gone. `JvmHashRuntimeBuilder.emitTestCompare` sends test code >= 2 (eql, eq) to `_eqv`.
+  gone. `JvmHashRuntimeBuilder`'s chain `Compare` sends test code >= 2 (eql, eq) to `_eqv`, which
+  therefore takes nil (null) on either side: identity first, then a null operand is a miss (a
+  stored `nil` key in an `eql` table threw an NPE until 2026-10-31).
 - WASM: `WasmEmitHelper.emitEqlComparison` is every site (`eq`, `eql`, the conditional fusion,
   `catch` tags, `remf`, the hash bucket scan): `ref.eq` inline, then inline the symbol/string
   offset compare and the i31 miss (an i31 is eql only to itself), then one call to `_eql_tail`
