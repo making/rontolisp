@@ -1019,10 +1019,13 @@ public final class RontoLispCli {
 		serveSwankFromPrograms(evaluator);
 		// a whole Clojure program: its library without the arms it can never take, or,
 		// where it lowers as it runs, every arm and its lowering kept for the run
+		// A Common Lisp program is read form at a time as it runs (evalSource), so a form
+		// is read with the readtable the forms before it left (.kb/readtables.md).
 		List<LispVal> exprs = language == SourceLanguage.CLOJURE
 				? evaluator.clojureProgram(language.readClojure(source, evaluator.features(), entryFile, standards,
 						evaluator.sourceLoader()))
-				: language.read(source, evaluator.features(), entryFile, standards, evaluator.sourceLoader());
+				: language == SourceLanguage.COMMON_LISP ? List.of()
+						: language.read(source, evaluator.features(), entryFile, standards, evaluator.sourceLoader());
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		// A Common Lisp entry file is the file being loaded: its forms -- and its #.
 		// data, resolved just before each form runs -- see *load-pathname* (the path as
@@ -1034,6 +1037,9 @@ public final class RontoLispCli {
 			evaluator.pushLoadContext(loadedFile, evaluator.sourceLoader().canonicalPath(loadedFile));
 		}
 		try {
+			if (language == SourceLanguage.COMMON_LISP) {
+				evaluator.evalSource(source, entryFile);
+			}
 			for (LispVal expr : exprs) {
 				evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 			}

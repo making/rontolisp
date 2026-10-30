@@ -90,9 +90,13 @@ page.
 | `read` | `(read)`, `(read stream)`, `(read stream eof-error-p eof-value)` | Read one S-expression from stdin (or from an input stream), consuming exactly that datum's characters (all three backends). `eof-value` (default `nil`) on EOF |
 | `read-from-string` | `(read-from-string "(+ 1 2)")`, `(read-from-string s nil :eof :start 3)` | Parse one datum from a string (all four backends), answering the stop index as the second value. Takes `eof-error-p`/`eof-value` and `:start`/`:end`/`:preserve-whitespace` |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | Parse an integer from a string. Supports `:start`/`:end`/`:radix`/`:junk-allowed` on all backends; the stop position is the second value, observable through `multiple-value-bind`. Without `:junk-allowed`, trailing non-whitespace is an error |
-| `copy-readtable` | `(copy-readtable nil)` | Lite stub: always `nil` -- the reader is not readtable-driven, so there is no readtable object (`*readtable*` exists but is seeded to `nil`) |
-| `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | Lite stub: accepted and ignored, returns `t` (user dispatch macros cannot extend the reader) |
-| `readtable-case` | `(readtable-case *readtable*)` | Lite stub: always `:upcase` -- the reader always upcases unescaped symbol names, the standard readtable's mode |
+| `read-delimited-list` | `(read-delimited-list #\) stream)` | Read datums up to a character, consuming it |
+| `copy-readtable` | `(copy-readtable nil)` | A copy of a readtable (`nil`: the standard one). Only the interpreter's reader reads with a readtable so far ([readtables](../../guides/readtables.md)) |
+| `readtablep` | `(readtablep *readtable*)` | True for a readtable |
+| `readtable-case` | `(readtable-case *readtable*)` | `:upcase`, `:downcase`, `:preserve` or `:invert`; `setf`-able |
+| `get-macro-character` `set-macro-character` | `(set-macro-character #\! fn)` | A character's reader macro function, and whether it is non-terminating |
+| `make-dispatch-macro-character` `get-dispatch-macro-character` `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\? fn)` | Dispatch macro characters and their sub-character functions |
+| `set-syntax-from-char` | `(set-syntax-from-char #\} #\))` | Copy a character's syntax to another character |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index (a non-string or a non-integer index signals a `type-error`) |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
 | `char-int` | `(char-int #\A)` | `65` -- a non-negative integer encoding the character; with no implementation-defined attributes, the same value `char-code` answers |

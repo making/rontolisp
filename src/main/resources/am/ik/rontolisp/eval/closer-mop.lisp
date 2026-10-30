@@ -58,6 +58,14 @@
 (defun closer-mop:slot-definition-readers (slot)
   (if (%obj-p slot) (slot-value slot 'readers) nil))
 
+(defun closer-mop:slot-definition-writers (slot)
+  ;; Index 6 (appended 2026-10-30): (setf accessor) and :writer names on a direct
+  ;; slot definition; an effective one has none (AMOP 5.4.3).
+  (if (%obj-p slot) (slot-value slot 'writers) nil))
+
+(defun closer-mop:slot-definition-initform (slot)
+  (if (%obj-p slot) (slot-value slot 'initform) nil))
+
 (defun closer-mop:slot-definition-initfunction (slot)
   ;; The initfunction slot (appended 2026-08-03): a live (lambda () initform)
   ;; thunk on DRIVER-built definitions (a :metaclass class's canonicalized
@@ -66,9 +74,9 @@
   (if (%obj-p slot) (slot-value slot 'initfunction) nil))
 
 (defun closer-mop:class-direct-slots (class)
-  ;; Direct-slot-definition metaobjects; nil on a materialized plain view (the
-  ;; static registry keeps direct specs, but only the metaclass driver builds
-  ;; direct-slot metaobjects).
+  ;; Direct-slot-definition metaobjects: the driver builds them for a :metaclass
+  ;; class, the materialized plain view from the registry's direct specs (nil for a
+  ;; struct or a built-in class).
   (slot-value class 'direct-slots))
 
 (defun closer-mop:class-direct-subclasses (class)

@@ -1,9 +1,9 @@
 # copy-readtable
 
-`(copy-readtable &optional from to)`
+`(copy-readtable &optional (from-readtable *readtable*) to-readtable)`
 
-Lite stub: a no-op returning `nil` — the reader is not readtable-driven, so there is no readtable object to copy (the `*readtable*` variable exists but is seeded to `nil`). The arguments are still evaluated. Exists so the common library header idiom `(defparameter *my-readtable* (copy-readtable nil))` loads.
+Returns a copy of a readtable: its case and every macro character, dispatch table and syntax it gives a character. `nil` as `from-readtable` designates the standard readtable, so `(copy-readtable nil)` is a fresh standard one. Given `to-readtable`, that readtable is overwritten and returned. Works on all four backends.
 
 ```lisp
-(copy-readtable nil) ; => NIL
+(readtablep (copy-readtable nil)) ; => T
 ```

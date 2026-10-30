@@ -404,9 +404,16 @@ categories:
       - { slug: unread-char, name: "unread-char" }
       - { slug: read-from-string, name: "read-from-string" }
       - { slug: parse-integer, name: "parse-integer" }
+      - { slug: read-delimited-list, name: "read-delimited-list" }
       - { slug: copy-readtable, name: "copy-readtable" }
-      - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
+      - { slug: readtablep, name: "readtablep" }
       - { slug: readtable-case, name: "readtable-case" }
+      - { slug: get-macro-character, name: "get-macro-character" }
+      - { slug: set-macro-character, name: "set-macro-character" }
+      - { slug: make-dispatch-macro-character, name: "make-dispatch-macro-character" }
+      - { slug: get-dispatch-macro-character, name: "get-dispatch-macro-character" }
+      - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
+      - { slug: set-syntax-from-char, name: "set-syntax-from-char" }
       - { slug: eval, name: "eval" }
       - { slug: compile, name: "compile" }
       - { slug: load, name: "load" }

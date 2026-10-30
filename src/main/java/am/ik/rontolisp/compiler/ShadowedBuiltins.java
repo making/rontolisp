@@ -122,9 +122,8 @@ public final class ShadowedBuiltins {
 			LispNames.LIST_STAR, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.VECTOR, LispNames.SVREF,
 			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO, LispNames.NOTANY, LispNames.NOTEVERY,
-			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.WRITE_CHAR, LispNames.COPY_READTABLE,
-			LispNames.READTABLE_CASE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION, LispNames.INTERSECTION,
-			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET,
+			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.WRITE_CHAR, LispNames.UNION,
+			LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET,
 			LispNames.MAKE_BROADCAST_STREAM, LispNames.BOUNDP, LispNames.FBOUNDP);
 
 	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;

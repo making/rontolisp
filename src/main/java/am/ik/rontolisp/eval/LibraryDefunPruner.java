@@ -1591,21 +1591,6 @@ public final class LibraryDefunPruner {
 					form = cons.cdr();
 					continue;
 				}
-				case LispCons cons when LispMacroExpander.isReadtableHookRegistration(cons) && cons.isProperList() -> {
-					// A reader hook rontolisp's reader can never fire: the registration
-					// lowers to a no-op that does not even evaluate the hook, so the
-					// #'name
-					// naming it is not a reference. ironclad registers its #@ reader this
-					// way, and that one defun -- whose body calls read -- was the only
-					// read
-					// in a whole postmodern program.
-					List<LispVal> parts = cons.toList();
-					for (LispVal arg : parts.subList(1, parts.size())) {
-						if (!LispMacroExpander.isDeadReadtableHook(arg)) {
-							collectReferences(arg, prunable, out, ctx);
-						}
-					}
-				}
 				case LispCons cons when isStructuralClassForm(cons) ->
 					collectClassDefinitionReferences(cons, prunable, out, ctx);
 				case LispCons cons -> {

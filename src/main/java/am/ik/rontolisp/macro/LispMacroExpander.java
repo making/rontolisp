@@ -6567,96 +6567,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (copy-readtable ...)} into a nil-returning progn over its arguments:
-	 * rontolisp's reader is not readtable-driven, so a "readtable" is an opaque nil token
-	 * (the ironclad {@code *ironclad-readtable*} header binds one and never uses it for
-	 * reading -- its {@code #N@(...)} syntax is native in the lexer).
-	 * @param cons the copy-readtable expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCopyReadtable(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
-		forms.add(LispNil.INSTANCE);
-		return makeProgn(forms);
-	}
-
-	/**
-	 * Expands {@code (set-dispatch-macro-character c1 c2 fn [readtable])} into a
-	 * t-returning progn over its arguments: user dispatch macros cannot extend the
-	 * Java-side reader, so the registration is accepted and ignored (see
-	 * {@link #expandCopyReadtable}).
-	 *
-	 * <p>
-	 * The HOOK argument is dropped, not evaluated -- see
-	 * {@link #isDeadReadtableHook(LispVal)}. A {@code #'name} is the only trace of the
-	 * hook function anywhere in the program, and keeping it here is what kept ironclad's
-	 * {@code #@} reader (whose body calls {@code read}) alive in every program that loads
-	 * ironclad -- alive enough to make the compile emit the reader runtime and to hold
-	 * the {@code --optimize} funcall-dispatch gate open. A function reference has no
-	 * effect of its own, so dropping it costs nothing else.
-	 * @param cons the set-dispatch-macro-character expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandSetDispatchMacroCharacter(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>();
-		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
-			if (!isDeadReadtableHook(arg)) {
-				forms.add(arg);
-			}
-		}
-		forms.add(LispTrue.INSTANCE);
-		return makeProgn(forms);
-	}
-
-	/**
-	 * Whether the form registers a reader hook that rontolisp's reader can never fire --
-	 * today exactly {@code set-dispatch-macro-character}, which
-	 * {@link #expandSetDispatchMacroCharacter} lowers to a no-op.
-	 * @param form a form of the program
-	 * @return true when the form is such a registration
-	 */
-	public static boolean isReadtableHookRegistration(LispVal form) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.SET_DISPATCH_MACRO_CHARACTER.equals(memberOf(op.name()));
-	}
-
-	/**
-	 * Whether the argument of such a registration is the hook itself: a {@code #'name}
-	 * reference or a {@code (lambda ...)}. Both are pure references -- evaluating one has
-	 * no effect -- and the function behind them is unreachable, since nothing can call
-	 * the registration back. {@code LibraryDefunPruner} skips exactly these when it
-	 * collects references, so the definition it names may be pruned; a hook argument that
-	 * is a CALL stays, because a call can do something else too.
-	 * @param arg an argument of a readtable-hook registration
-	 * @return true when the argument is a dead hook reference
-	 */
-	public static boolean isDeadReadtableHook(LispVal arg) {
-		return arg instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& (LispNames.FUNCTION.equals(head.name()) || LispNames.LAMBDA.equals(head.name()));
-	}
-
-	/**
-	 * Expands {@code (readtable-case readtable)} into a constant {@code :upcase} progn
-	 * over its argument: the reader always upcases unescaped symbol names -- the standard
-	 * readtable's {@code :upcase} mode -- and there is no readtable object to consult
-	 * (see {@link #expandCopyReadtable}).
-	 * @param cons the readtable-case expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandReadtableCase(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>();
-		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
-			// Only a call can have an effect worth keeping; an atom argument -- usually
-			// the bare *readtable*, which has no compiled global cell -- is dropped.
-			if (arg instanceof LispCons) {
-				forms.add(arg);
-			}
-		}
-		forms.add(new LispSymbol(":UPCASE"));
-		return makeProgn(forms);
-	}
-
-	/**
 	 * A {@code read-from-string} call carrying more than the string --
 	 * {@code eof-error-p}, {@code eof-value} or the keyword tail -- becomes a call of the
 	 * prelude {@code %read-from-string-full}, which takes CL's whole lambda list and
@@ -20335,6 +20245,8 @@ public final class LispMacroExpander {
 				readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
 			}
 			spec.add(quotedData(readers));
+			spec.add(new LispSymbol(":WRITERS"));
+			spec.add(quotedData(ClosRegistry.slotWriters(slot)));
 			// The extras alternate keyword and VALUE; the value position is quoted so
 			// the spec list evaluates (the spine is a list call now).
 			List<LispVal> extras = parsed.extras();
@@ -22957,11 +22869,13 @@ public final class LispMacroExpander {
 		if (form instanceof LispInstance) {
 			return true;
 		}
-		if (form instanceof LispSymbol sym && LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())) {
+		if (form instanceof LispSymbol sym && (LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())
+				|| LispNames.READTABLE_VAR.equals(sym.name()))) {
 			// Mentioning the variable is what makes injectMvSpillGlobal put its #P""
 			// initial value into the program -- an instance literal added AFTER this
 			// scan, so the mention has to stand in for it. Same rule as a #P in source
-			// flipping the gate by itself (.kb/pathnames.md).
+			// flipping the gate by itself (.kb/pathnames.md), and for *readtable*'s
+			// readtable value (.kb/readtables.md).
 			return true;
 		}
 		if (form instanceof LispArray array) {
@@ -25122,7 +25036,15 @@ public final class LispMacroExpander {
 			if (tail.stream().anyMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_KEY.equals(s.name())) && tail
 				.stream()
 				.noneMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_ALLOW_OTHER_KEYS.equals(s.name()))) {
-				tail.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
+				// It closes the &key section, so it goes ahead of an &aux section.
+				int auxAt = tail.size();
+				for (int i = 0; i < tail.size(); i++) {
+					if (tail.get(i) instanceof LispSymbol s && LispNames.LAMBDA_AUX.equals(s.name())) {
+						auxAt = i;
+						break;
+					}
+				}
+				tail.add(auxAt, new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
 			}
 		}
 		// A bare (call-next-method) passes the method's ORIGINAL arguments, the optional
@@ -25969,7 +25891,7 @@ public final class LispMacroExpander {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
 			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
 					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS",
-					"BUILT-IN-CLASS" ->
+					"BUILT-IN-CLASS", "READTABLE" ->
 				true;
 			default -> false;
 		};
@@ -36678,13 +36600,10 @@ public final class LispMacroExpander {
 				// synonym-stream's.
 				return objIs(value, List.of(LispLayout.CLASS_TAG_PREFIX + "%" + name));
 			case "READTABLE":
-				// A readtable is the opaque nil token: the reader is not
-				// readtable-driven,
-				// copy-readtable answers nil and *readtable* is seeded nil, so nil is the
-				// only value that can be one (see LispNames.COPY_READTABLE). The test is
-				// therefore `null`, which is what makes (typep *readtable* 'readtable)
-				// answer t rather than lying in the other direction.
-				return callOf(LispNames.NULL, value);
+				// A readtable is a VALUE of the fixed LispLayout.READTABLE layout on
+				// every
+				// backend (.kb/readtables.md), so the test is its tag.
+				return objIs(value, List.of(LispLayout.READTABLE_TAG));
 			case "VECTOR":
 				// A vector IS a rank-1 array, and a string is a rank-1 character array,
 				// so the rank is checked here and a rank-2 (or rank-0) array fails --
@@ -42480,7 +42399,8 @@ public final class LispMacroExpander {
 					LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.DECODE_FLOAT,
 					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME,
 					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
-					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT ->
+					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT,
+					LispNames.GET_MACRO_CHARACTER ->
 				true;
 			default -> false;
 		};
@@ -46523,21 +46443,23 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> slotDefs = new java.util.ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				List<String> readerNames = new java.util.ArrayList<>(slot.readers());
-				readerNames.addAll(slot.accessors());
-				LispVal readers = LispNil.INSTANCE;
-				for (int i = readerNames.size() - 1; i >= 0; i--) {
-					readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
-				}
-				slotDefs.add(listToCons(List.of(new LispSymbol(slot.baseName()),
-						listToCons(slot.initargs().stream().<LispVal>map(LispSymbol::new).toList()),
-						slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
-						readers)));
+				slotDefs.add(slotDataRow(slot));
+			}
+			// The direct slots, each (writers . slot-data) with the slot data a full
+			// row, or (writers name) when the effective slot is the same spec (an own
+			// slot nothing shadows, the common case), so the table repeats only what
+			// differs. Proper lists only: quoted-data passes walk them with toList.
+			List<LispVal> directDefs = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec direct : info.directSlots()) {
+				boolean sameAsEffective = info.slots().stream().anyMatch(direct::equals);
+				directDefs.add(new LispCons(ClosRegistry.slotWriters(direct), sameAsEffective
+						? new LispCons(new LispSymbol(direct.baseName()), LispNil.INSTANCE) : slotDataRow(direct)));
 			}
 			LispVal superNames = info.superclasses().isEmpty() ? LispNil.INSTANCE
 					: listToCons(info.superclasses().stream().<LispVal>map(LispSymbol::new).toList());
 			entries.add(listToCons(List.of(listToCons(spellingSyms), superNames,
-					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
+					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs),
+					directDefs.isEmpty() ? LispNil.INSTANCE : listToCons(directDefs))));
 		}
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (!layout.tag().startsWith(LispLayout.STRUCT_TAG_PREFIX) || !seen.add(layout.printName())) {
@@ -46575,6 +46497,15 @@ public final class LispMacroExpander {
 		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO),
 				LispNil.INSTANCE)));
 		return forms;
+	}
+
+	// One slot's (name initargs initform type readers) row of the class meta table.
+	private static LispVal slotDataRow(ClosRegistry.SlotSpec slot) {
+		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+		readerNames.addAll(slot.accessors());
+		return listToCons(List.of(new LispSymbol(slot.baseName()), ClosRegistry.symbolList(slot.initargs()),
+				slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
+				ClosRegistry.symbolList(readerNames)));
 	}
 
 	/**
@@ -46715,13 +46646,33 @@ public final class LispMacroExpander {
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
 		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
 		// plain views: the table is quoted data and cannot carry a live thunk; only
-		// driver-built definitions fill it.
+		// driver-built definitions fill it. The 7th (writers) is nil on an effective
+		// slot.
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE)),
 						slots)))));
+		// The direct slots: each table element is (writers . data), the data either a
+		// full row or (name) naming the effective row it equals (see the table
+		// builder).
+		LispSymbol directSlots = new LispSymbol("%fc_ds");
+		LispSymbol directDef = new LispSymbol("%fc_d");
+		LispVal directData = mvCall(LispNames.CAR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, entry))));
+		LispVal directRow = makeIf(mvCall(LispNames.CDR, mvCall(LispNames.CDR, directDef)),
+				mvCall(LispNames.CDR, directDef),
+				mvCall(LispNames.ASSOC, mvCall(LispNames.CAR, mvCall(LispNames.CDR, directDef)), slotData));
+		// The row binds the same %fc_s variable, so s0..s4 read it.
+		LispVal directInstance = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef)));
+		LispVal pushDirect = listToCons(List.of(new LispSymbol(LispNames.SETQ), directSlots,
+				mvCall(LispNames.CONS, directInstance, directSlots)));
+		LispVal directBuild = listToCons(
+				List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(directDef, directData, LispNil.INSTANCE)),
+						listToCons(List.of(new LispSymbol(LispNames.LET),
+								listToCons(List.of(listToCons(List.of(slotDef, directRow)))), pushDirect))));
 		// The entry's superclass column is a LIST of names (multiple inheritance);
 		// materialize each through the recursive resolver, preserving order.
 		LispVal superNames = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
@@ -46734,14 +46685,15 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), superAcc, mvCall(LispNames.CONS,
 								mvCall(LispNames.FIND_CLASS_INTERNAL, superVar, LispTrue.INSTANCE), superAcc))))),
 				mvCall(LispNames.REVERSE, superAcc)));
-		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
-				List.of(name, supers, LispNil.INSTANCE, mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
+		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME, List.of(name,
+				supers, mvCall(LispNames.REVERSE, directSlots), mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
 		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),
 				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
 						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
 		LispVal construct = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)))), slotBuild,
-				listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)),
+						listToCons(List.of(directSlots, LispNil.INSTANCE)))),
+				slotBuild, directBuild, listToCons(List.of(new LispSymbol(LispNames.LET),
 						listToCons(List.of(listToCons(List.of(metaobject, buildMetaobject)))), memoize, metaobject))));
 		LispVal materialize = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.FIND_CLASS_MATERIALIZE), listToCons(List.of(name, entry)),
@@ -46896,7 +46848,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the {@code defclass} form names one of the seeded MOP base classes
-	 * ({@code standard-class}, the two slot-definition classes) as a superclass -- a
+	 * ({@code standard-class}, the slot-definition classes) as a superclass -- a
 	 * metaclass or slot-definition-class definition, which needs
 	 * {@code ClosRegistry.ensureMopClassesSeeded()} to have run before the superclass
 	 * lookup. Qualified spellings ({@code closer-mop:standard-direct-slot-definition})
@@ -46913,9 +46865,7 @@ public final class LispMacroExpander {
 			if (superName instanceof LispSymbol sym) {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				String member = qn == null ? sym.name() : qn.member();
-				if (ClosRegistry.STANDARD_CLASS_NAME.equals(member)
-						|| ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME.equals(member)
-						|| ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME.equals(member)) {
+				if (!ClosRegistry.CLASS_NAME.equals(member) && ClosRegistry.isMopBaseClassName(member)) {
 					return true;
 				}
 			}
@@ -48392,18 +48342,13 @@ public final class LispMacroExpander {
 		java.util.List<String> printerVars = new java.util.ArrayList<>();
 		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c) plus
 		// *readtable*, which a loader binds in the same let (clack's %load-file binds all
-		// four around its read/eval loop), and *modules*. On the compile paths they are
-		// all
-		// nil and stay nil: a library file is SPLICED into the program at compile time,
-		// so
-		// nothing is being loaded -- nor compile-file'd, nor require'd/provide'd -- at
-		// run
-		// time, and the reader is the frontend's, with no runtime readtable object to
-		// name.
-		// Declared anyway so a library that reads or rebinds one (local-time's
-		// (or *compile-file-truename* *load-truename*) zoneinfo lookup, esrap's
-		// (member "SWANK-INDENTATION" *modules*) editor probe) compiles; nil is also what
-		// the interpreter's *readtable* holds, so the value agrees everywhere.
+		// four around its read/eval loop), and *modules*. On the compile paths the
+		// pathname ones are nil and stay nil: a library file is SPLICED into the program
+		// at compile time, so nothing is being loaded -- nor compile-file'd, nor
+		// require'd/provide'd -- at run time. Declared anyway so a library that reads or
+		// rebinds one (local-time's (or *compile-file-truename* *load-truename*) zoneinfo
+		// lookup, esrap's (member "SWANK-INDENTATION" *modules*) editor probe) compiles.
+		// *readtable* holds a standard readtable, as on the interpreter.
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		boolean quiet = false;
 		for (LispVal form : program) {
@@ -48588,7 +48533,13 @@ public final class LispMacroExpander {
 					new LispSymbol(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED), LispNil.INSTANCE)));
 		}
 		for (String name : loadContextVars) {
-			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
+			// *readtable* holds a readtable VALUE on every backend (.kb/readtables.md): a
+			// fresh standard one, the instance mayCreateInstance answers for by name.
+			LispVal init = LispNames.READTABLE_VAR.equals(name)
+					? listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.READTABLE_TAG),
+							new LispSymbol(":UPCASE"), listToCons(List.of(new LispSymbol(LispNames.MAKE_HASH_TABLE)))))
+					: LispNil.INSTANCE;
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), init)));
 		}
 		// The printer-mode variables: declared with defvar (not setq) because they are
 		// BOUND, not just read -- the print-object route binds *print-escape* around the
