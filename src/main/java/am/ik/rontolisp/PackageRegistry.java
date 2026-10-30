@@ -97,6 +97,9 @@ public final class PackageRegistry {
 			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
 			// minting that package's own (quri's uri method).
 			LispNames.PRINT_OBJECT,
+			// The slot-access generics, cl-owned for the same reason: zpng's
+			// slot-unbound method must reach the generic every unbound read calls.
+			LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING,
 			// The instance-initialization generics, cl-owned for the same reason: CL has
 			// ONE of each, and make-instance's protocol chain must reach a hook whatever
 			// package defined it (cl-ppcre's initialize-instance :after and postmodern's
@@ -411,11 +414,11 @@ public final class PackageRegistry {
 			"NOTINLINE", "OPTIMIZE", "PATHNAME-MATCH-P", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL",
 			"PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT",
 			"RANDOM-STATE", "RANDOM-STATE-P", "READ-DELIMITED-LIST", "READ-PRESERVING-WHITESPACE", "READTABLEP",
-			"RESTART", "ROOM", "SAFETY", "SET-MACRO-CHARACTER", "SET-SYNTAX-FROM-CHAR", "SIMPLE-BASE-STRING",
-			"SLOT-MISSING", "SLOT-UNBOUND", "SPACE", "SPECIAL", "SPEED", "STANDARD", "STANDARD-METHOD", "STEP",
-			"STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
-			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE",
-			"VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+			"RESTART", "ROOM", "SAFETY", "SET-MACRO-CHARACTER", "SET-SYNTAX-FROM-CHAR", "SIMPLE-BASE-STRING", "SPACE",
+			"SPECIAL", "SPEED", "STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT",
+			"SYMBOL", "T", "TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS",
+			"UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS",
+			"YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes

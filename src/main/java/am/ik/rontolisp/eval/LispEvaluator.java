@@ -4648,7 +4648,7 @@ public final class LispEvaluator {
 	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
 	 * computed name -- a variable or expression, e.g. a serializer walking
 	 * {@code %class-slot-defs} results as data -- resolves the slot at runtime by base
-	 * name (interpreter only).
+	 * name, and checks it is bound like the compile paths' {@code %slot-read} wrap.
 	 */
 	private LispVal evalSlotValue(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -4662,7 +4662,10 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.SLOT_VALUE + ": unknown slot " + slotName.print() + " on " + instance.print());
 			}
-			return slot.read();
+			// Boundness-checked like a literal name's read: an unbound slot reaches
+			// slot-unbound.
+			return apply(resolveFunction(LispNames.SLOT_READ_INTERNAL), List.of(slot.read(), instance, slotName),
+					this.globalEnv);
 		}
 		return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
 	}
@@ -11954,7 +11957,7 @@ public final class LispEvaluator {
 			// same AST.
 			if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
 					&& this.loadedPreludeNames.add(name)) {
-				for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
+				for (LispVal form : LispMacroExpander.slotUnboundDefuns(true)) {
 					eval(form, this.globalEnv);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

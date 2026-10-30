@@ -1268,8 +1268,8 @@ public final class ClosRegistry {
 
 	/**
 	 * The lambda-list shape CL gives a standard generic function the static subset
-	 * models, or null for any other name: the instance-initialization trio and
-	 * {@code print-object}.
+	 * models, or null for any other name: the instance-initialization trio,
+	 * {@code print-object}, {@code slot-unbound} and {@code slot-missing}.
 	 * @param plainName the generic's name without a package qualifier
 	 * @return the standard shape, or null
 	 */
@@ -1279,6 +1279,8 @@ public final class ClosRegistry {
 				new LambdaListShape(1, 0, true, true, List.of(), true);
 			case "SHARED-INITIALIZE" -> new LambdaListShape(2, 0, true, true, List.of(), true);
 			case LispNames.PRINT_OBJECT -> new LambdaListShape(2, 0, false, false, List.of(), false);
+			case LispNames.SLOT_UNBOUND -> new LambdaListShape(3, 0, false, false, List.of(), false);
+			case LispNames.SLOT_MISSING -> new LambdaListShape(4, 1, false, false, List.of(), false);
 			default -> null;
 		};
 	}

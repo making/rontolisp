@@ -31488,3 +31488,29 @@ standalone:
     stdout: |
       (T T T)
       (NIL T)
+  # A slot-unbound or slot-missing method routes EVERY unbound read and missing-slot
+  # access of the program through the generic, so it runs alone, not in the corpus.
+  - name: clos-slot-unbound-and-slot-missing-methods
+    source: |
+      ;; zpng fills a slot lazily from slot-unbound, specialized on (eql 'slot) in
+      ;; its own package; a read the method does not cover reaches the system method.
+      (defpackage :susm (:use :cl))
+      (in-package :susm)
+      (defclass png () ((data :reader data :writer (setf %data)) (other :accessor other)))
+      (defmethod slot-unbound (class (p png) (slot (eql 'data)))
+        (setf (%data p) (list :lazy)))
+      (print (list (data (make-instance 'png)) (slot-value (make-instance 'png) 'data)
+                   (with-slots (data) (make-instance 'png) data)
+                   (let ((name 'data)) (slot-value (make-instance 'png) name))))
+      (print (handler-case (other (make-instance 'png))
+               (unbound-slot (c) (list :unbound (cell-error-name c)))))
+      (defmethod slot-missing (class (p png) name op &optional value)
+        (list :missing name op value))
+      (print (list (slot-value (make-instance 'png) 'nope)
+                   (setf (slot-value (make-instance 'png) 'nope) 3)))
+      (print (handler-case (slot-value 5 'nope) (error (e) (princ-to-string e))))
+    stdout: |
+      ((:LAZY) (:LAZY) (:LAZY) (:LAZY))
+      (:UNBOUND OTHER)
+      ((:MISSING NOPE SLOT-VALUE NIL) 3)
+      "The slot NOPE is missing"

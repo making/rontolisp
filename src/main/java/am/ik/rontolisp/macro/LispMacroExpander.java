@@ -4099,7 +4099,7 @@ public final class LispMacroExpander {
 					if (litSlot != null && resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry) == null) {
 						// No registered class declares the slot: a run-time error like
 						// the READ's, never a compile-time one (see missingSlotStub).
-						yield missingSlotStub(slotBaseSpelling(litSlot), placeParts.get(1), value);
+						yield missingSlotAccess(litSlot, closRegistry, placeParts.get(1), value);
 					}
 					if (litSlot != null) {
 						String cellBase = resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry);
@@ -19983,8 +19983,8 @@ public final class LispMacroExpander {
 			// overrides must cover them all. An instance slot keeps the own set only
 			// (inherited methods stay valid -- positions are shared).
 			ClosRegistry.SlotSpec slot = cellVar != null ? effective : entry.getValue();
-			LispVal body = cellVar != null ? checkedCellRead(cellVar, obj, effective.baseName())
-					: checkedSlotRead(obj, i, effective.baseName());
+			LispVal body = cellVar != null ? checkedCellRead(cellVar, obj, effective.name())
+					: checkedSlotRead(obj, i, effective.name());
 			LispVal writeBody = cellVar != null
 					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cellVar), newVal))
 					: objSet(obj, i, newVal);
@@ -20048,7 +20048,7 @@ public final class LispMacroExpander {
 				if (!shifted) {
 					continue;
 				}
-				LispVal body = checkedSlotRead(obj, i, slot.baseName());
+				LispVal body = checkedSlotRead(obj, i, slot.name());
 				LispVal writeBody = objSet(obj, i, newVal);
 				LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
 				for (String reader : slot.readers()) {
@@ -20507,16 +20507,27 @@ public final class LispMacroExpander {
 	 * check runs over the shared cell's value instead of an instance slot, with the same
 	 * {@code %unspelled-quote} name carrier (the spelling is compiler-synthesized).
 	 */
-	private static LispVal checkedCellRead(String cellVar, LispVal objVar, String baseName) {
-		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), new LispSymbol(cellVar), objVar,
-				listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE),
-						new LispSymbol(baseName.toUpperCase(java.util.Locale.ROOT))))));
+	private static LispVal checkedCellRead(String cellVar, LispVal objVar, String slotName) {
+		return listToCons(List
+			.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), new LispSymbol(cellVar), objVar, listToCons(
+					List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE), new LispSymbol(slotNameSpelling(slotName))))));
 	}
 
-	private static LispVal checkedSlotRead(LispVal objVar, int index, String baseName) {
-		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), objRef(objVar, index), objVar,
-				listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE),
-						new LispSymbol(baseName.toUpperCase(java.util.Locale.ROOT))))));
+	private static LispVal checkedSlotRead(LispVal objVar, int index, String slotName) {
+		return listToCons(List
+			.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), objRef(objVar, index), objVar, listToCons(
+					List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE), new LispSymbol(slotNameSpelling(slotName))))));
+	}
+
+	/**
+	 * The slot name a boundness-checked read hands to {@code unbound-slot} and
+	 * {@code slot-unbound}: the symbol as declared, so a package-qualified slot keeps its
+	 * package and an {@code (eql 'slot)} specializer written in that package matches. An
+	 * unqualified spelling is upcased, since a Java-synthesized read may spell a seeded
+	 * slot in lower case.
+	 */
+	private static String slotNameSpelling(String spelled) {
+		return PackageRegistry.splitQualified(spelled) == null ? spelled.toUpperCase(java.util.Locale.ROOT) : spelled;
 	}
 
 	/**
@@ -20526,9 +20537,9 @@ public final class LispMacroExpander {
 	 * corpus ran the top-level method past the 64 KB method limit
 	 * ({@code .kb/jvm-method-size-limits.md}).
 	 */
-	private static LispVal slotReadCall(LispVal value, LispVal objVar, String baseName) {
+	private static LispVal slotReadCall(LispVal value, LispVal objVar, String slotName) {
 		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), value, objVar,
-				quoteOf(baseName.toUpperCase(java.util.Locale.ROOT))));
+				quoteOf(slotNameSpelling(slotName))));
 	}
 
 	/** Builds {@code (%slot-bound-p value)} -- the out-of-line unbound-marker test. */
@@ -20542,21 +20553,31 @@ public final class LispMacroExpander {
 	 * how large the instance-of test and the typed-signal expansion are. The compile path
 	 * emits them once per program that needs them ({@code expandTopLevelDefinitions});
 	 * the interpreter evaluates them on the first resolution of either name.
+	 * @param routed whether an unbound read calls the {@code slot-unbound} generic (whose
+	 * system method signals) rather than signalling {@code unbound-slot} directly: the
+	 * compile path routes when the program has the generic, the interpreter always
 	 * @return the {@code %slot-read} and {@code %slot-bound-p} defuns
 	 */
-	public static List<LispVal> slotUnboundDefuns() {
+	public static List<LispVal> slotUnboundDefuns(boolean routed) {
 		LispSymbol value = new LispSymbol("__value");
 		LispSymbol instance = new LispSymbol("__instance");
 		LispSymbol name = new LispSymbol("__name");
 		LispVal isUnbound = objIs(value, List.of(ClosRegistry.UNBOUND_TAG));
-		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf("UNBOUND-SLOT"),
-				new LispSymbol(":NAME"), name, new LispSymbol(":INSTANCE"), instance));
+		LispVal signal = routed ? listToCons(
+				List.of(new LispSymbol(LispNames.SLOT_UNBOUND), callOf(LispNames.CLASS_OF, instance), instance, name))
+				: unboundSlotSignal(instance, name);
 		LispVal read = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_READ_INTERNAL),
 				listToCons(List.of(value, instance, name)), makeIf(isUnbound, signal, value)));
 		LispVal boundp = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.SLOT_BOUND_P_INTERNAL), listToCons(List.of(value)),
 				makeIf(objIs(value, List.of(ClosRegistry.UNBOUND_TAG)), LispNil.INSTANCE, LispTrue.INSTANCE)));
 		return List.of(read, boundp);
+	}
+
+	/** {@code (error 'unbound-slot :name name :instance instance)}. */
+	private static LispVal unboundSlotSignal(LispVal instance, LispVal name) {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf("UNBOUND-SLOT"), new LispSymbol(":NAME"),
+				name, new LispSymbol(":INSTANCE"), instance));
 	}
 
 	/**
@@ -21013,23 +21034,27 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandSlotValue(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol slotSym = parts.size() == 3 ? quotedSymbol(parts.get(2)) : null;
-		LispVal raw = expandSlotValueRaw(cons, closRegistry);
-		if (slotSym == null) {
-			// A runtime slot name already dispatches per layout; wrapping the whole
-			// dispatch would need the name at expansion time, so those reads keep the raw
-			// value (an unbound slot reads as the marker there -- documented in
-			// .kb/clos).
-			return raw;
+		if (parts.size() != 3) {
+			return expandSlotValueRaw(cons, closRegistry);
 		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
-		String baseName = qn == null ? slotSym.name() : qn.member();
+		LispSymbol slotSym = quotedSymbol(parts.get(2));
+		if (slotSym == null) {
+			// A runtime slot name: the per-layout dispatch reads the raw value, checked
+			// against the name the program computed, so the instance and the name are
+			// each evaluated once.
+			LispSymbol objVar = new LispSymbol("__sv" + MV_COUNTER.getAndIncrement() + "_o");
+			LispSymbol nameVar = new LispSymbol("__sv" + MV_COUNTER.getAndIncrement() + "_n");
+			LispVal rawOverVars = expandSlotValueRaw((LispCons) listToCons(List.of(parts.get(0), objVar, nameVar)),
+					closRegistry);
+			return makeLet(objVar.name(), parts.get(1), makeLet(nameVar.name(), parts.get(2),
+					listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), rawOverVars, objVar, nameVar))));
+		}
 		// The read is boundness-checked: the instance expression is hoisted so the
 		// unbound-slot signal can name it without evaluating it twice.
 		LispSymbol objVar = new LispSymbol("__sv" + MV_COUNTER.getAndIncrement() + "_o");
 		LispVal rawOverVar = expandSlotValueRaw((LispCons) listToCons(List.of(parts.get(0), objVar, parts.get(2))),
 				closRegistry);
-		return makeLet(objVar.name(), parts.get(1), slotReadCall(rawOverVar, objVar, baseName));
+		return makeLet(objVar.name(), parts.get(1), slotReadCall(rawOverVar, objVar, slotSym.name()));
 	}
 
 	/**
@@ -21057,7 +21082,7 @@ public final class LispMacroExpander {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = resolveSlotBaseName(qn == null ? slotSym.name() : qn.member(), closRegistry);
 		if (baseName == null) {
-			return missingSlotStub(qn == null ? slotSym.name() : qn.member(), parts.get(1));
+			return missingSlotAccess(slotSym, closRegistry, parts.get(1), null);
 		}
 		LispVal cellRead = classSlotCellRead(parts.get(1), baseName, closRegistry);
 		if (cellRead != null) {
@@ -21099,6 +21124,37 @@ public final class LispMacroExpander {
 		List<LispVal> forms = new java.util.ArrayList<>(List.of(subforms));
 		forms.add(callTimeUnsupportedStub("The slot " + slotName + " is missing"));
 		return prognOf(forms);
+	}
+
+	/**
+	 * The lowering of a {@code slot-value} read ({@code value} null) or write naming a
+	 * slot NO registered class declares. With a {@code slot-missing} generic in the
+	 * program it is CL's call {@code (slot-missing (class-of obj) obj 'slot 'slot-value)}
+	 * -- {@code 'setf} plus the new value for a write, which then answers the new value
+	 * -- else the {@link #missingSlotStub} its system method stands for.
+	 * @param slotSym the slot symbol as written
+	 * @param closRegistry the class registry
+	 * @param obj the instance form
+	 * @param value the new-value form of a write, or null for a read
+	 * @return the expression
+	 */
+	private static LispVal missingSlotAccess(LispSymbol slotSym, ClosRegistry closRegistry, LispVal obj,
+			@Nullable LispVal value) {
+		if (closRegistry.findGeneric(LispNames.SLOT_MISSING) == null) {
+			return value == null ? missingSlotStub(slotBaseSpelling(slotSym), obj)
+					: missingSlotStub(slotBaseSpelling(slotSym), obj, value);
+		}
+		LispSymbol objVar = new LispSymbol("__slot_missing_obj");
+		List<LispVal> call = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.SLOT_MISSING), callOf(LispNames.CLASS_OF, objVar), objVar,
+						quoteOf(slotSym.name()), quoteOf(value == null ? LispNames.SLOT_VALUE : LispNames.SETF)));
+		if (value == null) {
+			return makeLet(objVar.name(), obj, listToCons(call));
+		}
+		LispSymbol valueVar = new LispSymbol("__slot_missing_value");
+		call.add(valueVar);
+		return makeLet(objVar.name(), obj,
+				makeLet(valueVar.name(), value, prognOf(List.of(listToCons(call), valueVar))));
 	}
 
 	/** A slot symbol's base name: the member of a package-qualified spelling. */
@@ -24991,8 +25047,64 @@ public final class LispMacroExpander {
 			synthesized.add(methodDefun);
 			return makeProgn(synthesized);
 		}
+		// slot-unbound / slot-missing too: their system methods signal for every
+		// object, which is what a read the user's method does not cover still does.
+		if (isSlotProtocolGeneric(plainName(generic.name())) && !hasDefaultPrimary(generic)) {
+			List<LispVal> synthesized = new java.util.ArrayList<>();
+			synthesizeSlotProtocolDefault(generic, synthesized);
+			synthesized.add(methodDefun);
+			return makeProgn(synthesized);
+		}
 		return methodDefun;
 	}
+
+	/** Whether the plain generic name is {@code slot-unbound} or {@code slot-missing}. */
+	private static boolean isSlotProtocolGeneric(String plainName) {
+		return LispNames.SLOT_UNBOUND.equals(plainName) || LispNames.SLOT_MISSING.equals(plainName);
+	}
+
+	/**
+	 * Synthesizes the system default primary of {@code slot-unbound} or
+	 * {@code slot-missing} into {@code out} and registers it on the generic. The
+	 * {@code slot-unbound} one signals {@code unbound-slot} with the slot name and the
+	 * instance, exactly what an unbound read signals when the program has no such
+	 * generic; the {@code slot-missing} one signals the error a read or write of an
+	 * undeclared slot signals then. {@code slot-missing}'s optional new value rides in a
+	 * rest parameter.
+	 * @param generic the generic
+	 * @param out the forms to append the default method's defun to
+	 */
+	private static void synthesizeSlotProtocolDefault(ClosRegistry.GenericInfo generic, List<LispVal> out) {
+		List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
+		for (int i = 0; i < generic.paramNames().size(); i++) {
+			defaults.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		String defaultName = methodFunctionName(generic);
+		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		List<LispVal> params = new java.util.ArrayList<>();
+		params.add(new LispSymbol(NEXT_METHOD_VAR));
+		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
+		LispSymbol object = new LispSymbol(generic.paramNames().get(1));
+		LispSymbol slotName = new LispSymbol(generic.paramNames().get(2));
+		LispVal body;
+		if (LispNames.SLOT_UNBOUND.equals(plainName(generic.name()))) {
+			body = unboundSlotSignal(object, slotName);
+		}
+		else {
+			generic.markVariadic();
+			params.add(new LispSymbol(LispNames.LAMBDA_REST));
+			params.add(new LispSymbol("%slot-missing-args"));
+			body = listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(MISSING_SLOT_MESSAGE), slotName));
+		}
+		out.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
+	}
+
+	/**
+	 * The error a read or write of a slot no class declares signals, as a format control
+	 * over the slot name.
+	 */
+	private static final String MISSING_SLOT_MESSAGE = "The slot ~A is missing";
 
 	/**
 	 * Whether the generic already has an unqualified method specialized on nothing (the
@@ -25029,7 +25141,7 @@ public final class LispMacroExpander {
 	/** The names {@link #isCallableSystemGenericName} answers, in synthesis order. */
 	private static final List<String> CALLABLE_SYSTEM_GENERICS = List.of(LispNames.INITIALIZE_INSTANCE,
 			LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE, LispNames.PRINT_OBJECT,
-			LispNames.MAKE_LOAD_FORM);
+			LispNames.MAKE_LOAD_FORM, LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING);
 
 	/**
 	 * Creates the plainly-named instance-initialization generic with its system default
@@ -25058,6 +25170,15 @@ public final class LispMacroExpander {
 			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, List.of("%mlf-object"));
 			closRegistry.registerGeneric(generic);
 			synthesizeMakeLoadFormDefault(generic, out);
+			return out;
+		}
+		if (isSlotProtocolGeneric(name)) {
+			List<String> slotParams = LispNames.SLOT_UNBOUND.equals(name)
+					? List.of("%su-class", "%su-instance", "%su-name")
+					: List.of("%sm-class", "%sm-object", "%sm-name", "%sm-operation");
+			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, slotParams);
+			closRegistry.registerGeneric(generic);
+			synthesizeSlotProtocolDefault(generic, out);
 			return out;
 		}
 		List<String> paramNames = "SHARED-INITIALIZE".equals(name) ? List.of("%obj", "%slot-names") : List.of("%obj");
@@ -27097,7 +27218,11 @@ public final class LispMacroExpander {
 		// resolves its answers through %find-class, so it forces the metaobject runtime
 		// with it.
 		boolean classDirectSubclasses = needsClassDirectSubclassesRuntime(program);
-		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program) || classDirectSubclasses;
+		// slot-unbound / slot-missing are called with the object's class, so a program
+		// naming either needs class-of as well.
+		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program) || classDirectSubclasses
+				|| program.stream()
+					.anyMatch(f -> usesSymbol(f, LispNames.SLOT_UNBOUND) || usesSymbol(f, LispNames.SLOT_MISSING));
 		if (metaobjectRuntime) {
 			closRegistry.ensureMopClassesSeeded();
 		}
@@ -27531,7 +27656,7 @@ public final class LispMacroExpander {
 			}
 		}
 		if (needsSlotUnboundHelper(program, out)) {
-			out.addAll(slotUnboundDefuns());
+			out.addAll(slotUnboundDefuns(closRegistry.findGeneric(LispNames.SLOT_UNBOUND) != null));
 		}
 		// The (setf accessor) functions of the defstruct slots the program takes as
 		// functions, ahead of the scan below: each checks its object as the place does.

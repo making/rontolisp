@@ -364,7 +364,7 @@ Three congruence rules:
   that an UNSUPPLIED optional is not passed on. Gated on the body mentioning
   `call-next-method`/`next-method-p`; pinned against SBCL over six tail shapes.
 
-**The trio, `print-object` and `make-load-form` are function values with no method in the
+**The trio, `print-object`, `make-load-form`, `slot-unbound` and `slot-missing` are function values with no method in the
 program** (`isCallableSystemGenericName`): the interpreter synthesizes the generic in
 `resolveFunction`, the compile path in `expandTopLevelDefinitions` for any program that NAMES one
 (which also takes it off the no-CLOS fast path). Before 2026-10-07, `#'initialize-instance`
@@ -468,11 +468,35 @@ initforms, supplied initargs stored, the instance is the value.
   it must not arm the funcall-dispatch gate's name probes
   ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)); a user-written
   `slot-value` keeps the plain quote. `expandSlotValue` is the CHECKED read,
-  `expandSlotValueRaw` the unchecked one the `setf` place expansion (and a runtime name) needs.
+  `expandSlotValueRaw` the unchecked one the `setf` place expansion needs. A RUNTIME slot name
+  is checked too (`%slot-read` over the computed name; the interpreter's `evalSlotValue` calls
+  the same defun) -- before 2026-10-30 it read the marker `#<%UNBOUND%>` on all four backends.
+- **The name `%slot-read` carries is the slot symbol as declared** (`slotNameSpelling`), so
+  `cell-error-name` of a slot declared in package `zp` is `ZP::DATA`, `eq` to `'data` read
+  there (it was the unqualified `DATA` before 2026-10-30), and an `(eql 'data)` specializer
+  written in `zp` matches.
 - `unbound-slot` is seeded under `cell-error` (which gained CL's `name` slot) with an extra
   `instance` slot and a `:report` LAMBDA built in Java (`ClosRegistry.unboundSlotReport`, over
   `%obj-ref` indexes rather than `slot-value`). `type-error-datum`,
   `type-error-expected-type`, `cell-error-name`, `unbound-slot-instance` are prelude defuns.
+
+## `slot-unbound` / `slot-missing`
+CL generics (`CL_FUNCTIONS`, `isCallableSystemGenericName`, `standardGenericShape` 3 / 4+1
+optional); a method in any `(:use :cl)` package joins the one generic. The first method (or a
+mere call) synthesizes the SYSTEM default primary (`synthesizeSlotProtocolDefault`) signalling
+what the program signals without the generic, so an uncovered read is unchanged.
+- **Routing is gated on the generic existing.** Compile paths: `%slot-read`'s unbound arm is
+  `(slot-unbound (class-of instance) instance name)` when the registry has `SLOT-UNBOUND` after
+  the walk (`slotUnboundDefuns(routed)`), else the direct `unbound-slot` signal; a program
+  NAMING either generic forces the metaobject runtime (`class-of`). The interpreter always
+  routes (its `%slot-read` is defined once, lazily, before a later `defmethod` could be seen).
+- `missingSlotAccess`: with `SLOT-MISSING` registered when the access expands, a literal-name
+  read is `(slot-missing (class-of o) o 'slot 'slot-value)`, a `setf`
+  `(slot-missing ... 'setf v)` answering `v`; else `missingSlotStub`. Residuals: `slot-boundp`
+  of an undeclared slot answers nil without the call, a runtime-name access of an undeclared
+  slot keeps its own error, and a slot SOME other class declares is not detected as missing.
+- ci-spec: standalone `clos-slot-unbound-and-slot-missing-methods` (a method reroutes every
+  slot read of the program, so it stays out of the shared corpus).
 
 ## Slot shadowing, `:default-initargs`, `with-slots`/`with-accessors`, slot options
 - **A subclass may re-declare an inherited slot** (CLHS 7.5.3): STORAGE stays the one
