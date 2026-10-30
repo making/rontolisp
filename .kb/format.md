@@ -43,6 +43,17 @@ A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
 Together these put a literal in FRONT of a backend's literal fold
 ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)).
 
+A `~{` body binds its items eagerly (`letItems`, `(car (nthcdr k base))`), so a read past the
+list cannot be caught at the binding: a `~^` or a clause may never reach it. Instead
+`FmtArgs` tracks how many elements of the pass's list are KNOWN present (`guaranteed`: 1 for a
+flat pass, whose loop tests `consp`; 0 for a sublist and for a pass `~:}` forces), and a read or
+`~*` beyond it adds an `FmtNeed` that `opsToPieces` wraps around the next piece as
+`(if (nthcdr k base) piece (error ...))`. A non-firing `~^` and a clause set every clause covers
+raise the guarantee, so `~{~a~^, ~}` and `~{~a~^ ~a~}` carry no check. Cost, measured
+2026-10-30: +24 B P1 and +282 B JVM class for one `~{~a=~a~%~}`; +212 B P1 for that plus a
+three-item `~:{` (four checks) under EH mode. Before it the body read NIL past the end and
+ignored `~:}` (the renderer already signalled and forced).
+
 ## `~F` / `~$` lower to ONE call, and must keep doing so
 `decimalFloatExpr` emits exactly `(%fixed-decimal value places int-digits plus-p)` --
 `compiler/FixedDecimal` in the interpreter, `_fixdec` on the JVM (`JvmNumericRuntimeBuilder`),
@@ -156,8 +167,9 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
   reporting"); a rendered message now enters a condition only as its text control
   ([error-handling.md](error-handling.md)), so only a report whose own `:format-control` lacks its
   arguments signals while printing, as SBCL's does. Pinned by ci-spec
-  `format-runtime-control-signals-a-missing-argument`. The literal path's `~{` body still reads
-  past its list's end as NIL (`carChain`).
+  `format-runtime-control-signals-a-missing-argument`, whose `ci-fmt-both` rows run a `~{` body
+  through BOTH paths. A `~^` ends only the current pass of a `~:{`/`~:@{` (CLHS 22.3.9.2); until
+  2026-10-30 the renderer ended the whole iteration there.
 - **`~t`, `~p`, `~<...~>` and `~/name/` are renderer-only.** If the static path grows them, drop
   them from this list, not from the renderer.
 - **`~<...~>` is JUSTIFICATION, `~<...~:>` a LOGICAL BLOCK, and the closing directive decides.**

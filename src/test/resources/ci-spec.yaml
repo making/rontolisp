@@ -5262,21 +5262,31 @@ cases:
       TYPE-ERROR[TAIL]
   # A run-time control signals where a directive reads past the argument list, as
   # the literal path does and SBCL does; ~@{, ~^, ~# and a forced pass reading
-  # nothing still render.
+  # nothing still render. ci-fmt-both runs a ~{ body through both paths and prints
+  # one line when they agree; a ~^ ends only the current pass of a ~:{.
   - name: format-runtime-control-signals-a-missing-argument
     source: |
       (defun ci-fmt-missing (c &rest args)
         (handler-case (apply #'format nil c args)
           (error (e) (princ-to-string e))))
+      (defmacro ci-fmt-both (c &rest args)
+        `(let ((lit (handler-case (format nil ,c ,@args)
+                      (error (e) (princ-to-string e))))
+               (run (ci-fmt-missing ,c ,@args)))
+           (princ (if (equal lit run) lit (list lit run)))
+           (terpri)))
       (dolist (c '("Skip ~a." "~s" "~d" "~x" "~8r" "~r" "~p" "~:p" "~c" "~f" "~e" "~$"
                    "~w" "~?" "~[a~]" "~:[a~;b~]" "~@[~a~]" "~{~a~}" "~va" "~<~a~:>"
                    "~(~a~)" "~*" "~:*"))
         (princ (ci-fmt-missing c))
         (terpri))
-      (princ (ci-fmt-missing "~{~a ~a~}" '(1 2 3)))
-      (terpri)
-      (princ (ci-fmt-missing "~:{~a~:}" nil))
-      (terpri)
+      (ci-fmt-both "~{~a ~a~}" '(1 2 3))
+      (ci-fmt-both "~:{~a~:}" nil)
+      (ci-fmt-both "~{~a~:}" nil)
+      (ci-fmt-both "~:{~a ~a~}" '((1)))
+      (ci-fmt-both "~{~a~*~}" '(1))
+      (ci-fmt-both "~:{~a~^-~a~}" '((3) (4 5) nil))
+      (ci-fmt-both "~{~a~^ ~a~:[~;!~]~}" '(1 2 t 3))
       (princ (ci-fmt-missing "~2@*" 1))
       (terpri)
       (princ (ci-fmt-missing "~@?" "~a"))
@@ -5309,6 +5319,11 @@ cases:
       format: ~* moves outside the argument list
       format: not enough arguments for directive ~a
       format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: ~* moves outside the argument list
+      format: not enough arguments for directive ~a
+      1 2!3
       format: ~* moves outside the argument list
       format: not enough arguments for directive ~a
       11x end

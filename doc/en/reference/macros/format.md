@@ -131,8 +131,6 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   tested argument, `#` and `~@{` are not available inside a `~{ ... ~}` body, and
   an argument-divergent `~[` nested inside another composite directive
   (`~(`/`~{`) is not supported.
-- A `~{ ... ~}` body that reads past the end of its list renders `NIL` for the
-  missing element; a runtime control signals there.
 - `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
 - `~w` prints as `prin1` and does not read `*print-escape*` / `*print-readably*`, so binding one of them around it does not switch it to `princ` -- the same gap `write-to-string` has (`write` itself honors them).
 

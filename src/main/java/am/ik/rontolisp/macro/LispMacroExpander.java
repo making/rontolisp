@@ -28914,7 +28914,7 @@ public final class LispMacroExpander {
 	 * A parsed unit of a format control string: either a literal text run, a
 	 * string-valued expression to emit, a run of newlines, or a fresh-line.
 	 */
-	private sealed interface FmtOp permits FmtLiteral, FmtString, FmtNewline, FmtFreshLine, FmtCut {
+	private sealed interface FmtOp permits FmtLiteral, FmtString, FmtNewline, FmtFreshLine, FmtCut, FmtNeed {
 
 	}
 
@@ -28940,6 +28940,16 @@ public final class LispMacroExpander {
 	 * cut that truncates the remaining ops).
 	 */
 	private record FmtCut(int consumed) implements FmtOp {
+	}
+
+	/**
+	 * A read inside a {@code ~{ ... ~}} body the list may be too short for: the directive
+	 * after it needs {@code count} elements of {@code base} (the pass's tail or sublist)
+	 * and signals {@code message} -- the text a short static argument list signals at
+	 * expansion time -- when they are not there. {@link #opsToPieces} lowers it around
+	 * the next piece.
+	 */
+	private record FmtNeed(LispVal base, int count, String message) implements FmtOp {
 	}
 
 	/**
@@ -28971,18 +28981,68 @@ public final class LispMacroExpander {
 		 */
 		private boolean cutTerminated;
 
-		private FmtArgs(List<LispVal> syms, @Nullable String runtimePrefix, int index) {
+		/**
+		 * The list a runtime source reads (an iteration pass's tail or sublist), or null
+		 * when no read can be short: a static source, or a throwaway parse.
+		 */
+		@Nullable private final LispVal base;
+
+		/** How many elements of {@link #base} are known present at the cursor. */
+		private int guaranteed;
+
+		/**
+		 * The reads past {@link #guaranteed} the directive being parsed made, in order;
+		 * {@link FmtParser#parseOps} puts them in front of the directive's ops.
+		 */
+		private final List<FmtNeed> pending = new java.util.ArrayList<>();
+
+		private FmtArgs(List<LispVal> syms, @Nullable String runtimePrefix, int index, @Nullable LispVal base,
+				int guaranteed) {
 			this.syms = syms;
 			this.runtimePrefix = runtimePrefix;
 			this.index = index;
+			this.base = base;
+			this.guaranteed = guaranteed;
 		}
 
 		static FmtArgs forTemps(List<LispVal> temps) {
-			return new FmtArgs(temps, null, 0);
+			return new FmtArgs(temps, null, 0, null, Integer.MAX_VALUE);
 		}
 
+		/** A throwaway runtime source: parsed for syntax, its ops never emitted. */
 		static FmtArgs forRuntimeItems(String prefix) {
-			return new FmtArgs(new java.util.ArrayList<>(), prefix, 0);
+			return forRuntimeItems(prefix, null, Integer.MAX_VALUE);
+		}
+
+		/**
+		 * The items of one iteration pass over {@code base}, the first {@code guaranteed}
+		 * of which the loop already knows are present.
+		 */
+		static FmtArgs forRuntimeItems(String prefix, @Nullable LispVal base, int guaranteed) {
+			return new FmtArgs(new java.util.ArrayList<>(), prefix, 0, base, guaranteed);
+		}
+
+		/** The element count known present once the pending reads are checked. */
+		int covered() {
+			return this.pending.isEmpty() ? this.guaranteed
+					: Math.max(this.guaranteed, this.pending.get(this.pending.size() - 1).count());
+		}
+
+		private void require(int count, String message) {
+			if (this.base != null && count > covered()) {
+				this.pending.add(new FmtNeed(this.base, count, message));
+			}
+		}
+
+		List<FmtNeed> takePending() {
+			this.guaranteed = covered();
+			List<FmtNeed> taken = List.copyOf(this.pending);
+			this.pending.clear();
+			return taken;
+		}
+
+		void guaranteeAtLeast(int count) {
+			this.guaranteed = Math.max(this.guaranteed, count);
 		}
 
 		boolean isStatic() {
@@ -28998,6 +29058,7 @@ public final class LispMacroExpander {
 				}
 				throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
 			}
+			require(this.index + 1, "format: not enough arguments for directive ~" + directive);
 			while (this.syms.size() <= this.index) {
 				this.syms.add(new LispSymbol(this.runtimePrefix + this.syms.size()));
 			}
@@ -29013,6 +29074,7 @@ public final class LispMacroExpander {
 			if (to < 0 || (this.runtimePrefix == null && to > this.syms.size())) {
 				throw new IllegalArgumentException("format: ~" + directive + " moves outside the argument list");
 			}
+			require(to, "format: ~" + directive + " moves outside the argument list");
 			this.index = to;
 		}
 
@@ -29025,13 +29087,15 @@ public final class LispMacroExpander {
 		}
 
 		FmtArgs branch() {
-			FmtArgs branched = new FmtArgs(this.syms, this.runtimePrefix, this.index);
-			branched.cutTerminated = this.cutTerminated;
-			return branched;
+			return branchAt(this.index);
 		}
 
+		/**
+		 * A cursor at {@code index} for a clause. It starts out covering what this one
+		 * will once its pending reads -- checked in front of the whole directive -- are.
+		 */
 		FmtArgs branchAt(int index) {
-			FmtArgs branched = new FmtArgs(this.syms, this.runtimePrefix, index);
+			FmtArgs branched = new FmtArgs(this.syms, this.runtimePrefix, index, this.base, covered());
 			branched.cutTerminated = this.cutTerminated;
 			return branched;
 		}
@@ -29048,7 +29112,7 @@ public final class LispMacroExpander {
 	}
 
 	/** A parsed conditional clause: its ops and the argument position it ended at. */
-	private record FmtClause(List<FmtOp> ops, int end, boolean isDefault) {
+	private record FmtClause(List<FmtOp> ops, int end, boolean isDefault, int covered) {
 	}
 
 	/**
@@ -29119,6 +29183,7 @@ public final class LispMacroExpander {
 					continue;
 				}
 				this.pos++; // skip '~'
+				int opsBefore = ops.size();
 				List<LispVal> params = parseParams(args);
 				boolean colon = false;
 				boolean at = false;
@@ -29137,11 +29202,16 @@ public final class LispMacroExpander {
 				char directive = this.src.charAt(this.pos++);
 				if (stoppers.indexOf(directive) >= 0) {
 					flushFmtLiteral(lit, ops);
+					ops.addAll(opsBefore, args.takePending());
 					this.stopChar = directive;
 					this.stopColon = colon;
 					return ops;
 				}
 				dispatch(directive, params, colon, at, args, ops, lit, stoppers);
+				// Reads past what the list is known to hold are checked in front of
+				// the directive -- and of the literal text it flushed, which no reader
+				// can tell apart.
+				ops.addAll(opsBefore, args.takePending());
 				if (this.remainderTaken) {
 					// An argument-divergent ~[ re-parsed everything after itself once per
 					// clause; stopChar/stopColon are already those of that tail parse.
@@ -29446,6 +29516,8 @@ public final class LispMacroExpander {
 					}
 					else {
 						ops.add(new FmtCut(args.position()));
+						// Past a cut that did not fire, an element remains.
+						args.guaranteeAtLeast(args.position() + 1);
 					}
 				}
 				case ';', ']', '}', ')' -> throw new IllegalArgumentException("format: misplaced ~" + directive);
@@ -29462,7 +29534,7 @@ public final class LispMacroExpander {
 			while (true) {
 				FmtArgs branch = args.branch();
 				List<FmtOp> body = parseOps(branch, ";]");
-				clauses.add(new FmtClause(body, branch.position(), nextIsDefault));
+				clauses.add(new FmtClause(body, branch.position(), nextIsDefault, branch.covered()));
 				if (this.stopChar == ']') {
 					return clauses;
 				}
@@ -29578,6 +29650,8 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException("format: ~:[ requires exactly two clauses");
 				}
 				List<LispVal> exprs = clauseExprs(clauses, args, stoppers);
+				// One of the two runs, and each checked what it read.
+				args.guaranteeAtLeast(Math.min(clauses.get(0).covered(), clauses.get(1).covered()));
 				ops.add(new FmtString(makeIf(sel, exprs.get(1), exprs.get(0))));
 				return;
 			}
@@ -29603,6 +29677,7 @@ public final class LispMacroExpander {
 						FmtArgs branch = args.branch();
 						chosenOps = parseOps(branch, ";]");
 						chosenEnd = branch.position();
+						args.guaranteeAtLeast(branch.covered());
 					}
 					else {
 						parseOps(FmtArgs.forRuntimeItems("__fmtdis" + this.gensym++ + "_"), ";]");
@@ -29626,6 +29701,8 @@ public final class LispMacroExpander {
 			for (int i = 0; i < clauses.size(); i++) {
 				if (clauses.get(i).isDefault()) {
 					dflt = exprs.get(i);
+					// With a default, some clause always runs and checked what it read.
+					args.guaranteeAtLeast(clauses.stream().mapToInt(FmtClause::covered).min().orElse(0));
 				}
 				else {
 					numbered.add(exprs.get(i));
@@ -29661,11 +29738,9 @@ public final class LispMacroExpander {
 					if (colon) {
 						// ~:@{: each remaining argument is one iteration's sublist.
 						LispVal sub = args.next('{');
-						FmtArgs items = FmtArgs.forRuntimeItems("__fmtsub" + id + "_" + passes + "_");
 						this.pos = bodyStart;
-						List<FmtOp> body = parseOps(items, "}");
+						ops.add(sublistPass(sub, "__fmtsub" + id + "_" + passes + "_"));
 						bodyEnd = this.pos;
-						ops.add(new FmtString(letItems(items.items(), sub, cutBodyExpr(body, sub, null))));
 						passes++;
 					}
 					else {
@@ -29685,6 +29760,17 @@ public final class LispMacroExpander {
 					// Zero passes ran; skip the body with a throwaway parse.
 					this.pos = bodyStart;
 					parseOps(FmtArgs.forRuntimeItems("__fmtskip" + id + "_"), "}");
+					if (this.stopColon && limit > 0) {
+						// ~:} forces one pass: over no sublist, or over the exhausted
+						// arguments, whose first read fails as any static one does.
+						this.pos = bodyStart;
+						if (colon) {
+							ops.add(sublistPass(LispNil.INSTANCE, "__fmtsub" + id + "_0_"));
+						}
+						else {
+							ops.addAll(truncateAtCut(parseOps(args, "}")));
+						}
+					}
 				}
 				else {
 					this.pos = bodyEnd;
@@ -29692,15 +29778,35 @@ public final class LispMacroExpander {
 				return;
 			}
 			LispVal listSym = args.next('{');
-			FmtArgs items = FmtArgs.forRuntimeItems("__fmtit" + id + "_");
-			List<FmtOp> body = parseOps(items, "}");
 			LispVal maxExpr = (maxParam instanceof LispNil) ? null : maxParam;
+			int bodyStart = this.pos;
+			// A flat pass runs while the list is a cons, so its first item is present --
+			// unless ~:} forces a pass over an empty list, known only at the body's end.
+			FmtArgs items = colon ? FmtArgs.forRuntimeItems("__fmtit" + id + "_", sublistLoopSublist(id), 0)
+					: FmtArgs.forRuntimeItems("__fmtit" + id + "_", flatLoopTail(id), 1);
+			List<FmtOp> body = parseOps(items, "}");
+			boolean forced = this.stopColon;
+			if (forced && !colon) {
+				items = FmtArgs.forRuntimeItems("__fmtit" + id + "_", flatLoopTail(id), 0);
+				this.pos = bodyStart;
+				body = parseOps(items, "}");
+			}
 			if (!colon && items.position() == 0) {
 				throw new UnsupportedOperationException("format: the ~{ body must consume at least one argument");
 			}
-			LispVal loop = colon ? sublistLoopExpr(listSym, items, body, maxExpr, id)
-					: flatLoopExpr(listSym, items, body, maxExpr, id);
+			LispVal loop = colon ? sublistLoopExpr(listSym, items, body, maxExpr, forced, id)
+					: flatLoopExpr(listSym, items, body, maxExpr, forced, id);
 			ops.add(new FmtString(loop));
+		}
+
+		/**
+		 * Parses one {@code ~:@&#123;} pass over the sublist {@code sub} from the body
+		 * start into its string piece.
+		 */
+		private FmtOp sublistPass(LispVal sub, String prefix) {
+			FmtArgs items = FmtArgs.forRuntimeItems(prefix, sub, 0);
+			List<FmtOp> body = parseOps(items, "}");
+			return new FmtString(letItems(items.items(), sub, cutBodyExpr(body, sub, null)));
 		}
 
 	}
@@ -30106,6 +30212,8 @@ public final class LispMacroExpander {
 				// leaking into any other composite body cannot be lowered statically.
 				case FmtCut ignored -> throw new UnsupportedOperationException(
 						"format: ~^ is only supported at the top level and inside ~{ ... ~}");
+				// Only an iteration body emits one, and a body always folds to a string.
+				case FmtNeed ignored -> throw new IllegalStateException("format: a ~{ body read outside its body");
 			}
 		}
 		return forms;
@@ -30119,27 +30227,28 @@ public final class LispMacroExpander {
 	 */
 	private static List<LispVal> opsToPieces(List<FmtOp> ops) {
 		List<LispVal> pieces = new java.util.ArrayList<>();
+		List<FmtNeed> needs = new java.util.ArrayList<>();
 		boolean atLineStart = true;
 		for (FmtOp op : ops) {
 			switch (op) {
 				case FmtLiteral l -> {
-					pieces.add(new LispString(l.text()));
+					addGuardedPiece(pieces, needs, new LispString(l.text()));
 					atLineStart = l.text().endsWith("\n");
 				}
 				case FmtString f -> {
-					pieces.add(f.expr());
+					addGuardedPiece(pieces, needs, f.expr());
 					atLineStart = false;
 				}
 				case FmtNewline nl -> {
 					if (nl.count() > 0) {
-						pieces.add(new LispString("\n".repeat(nl.count())));
+						addGuardedPiece(pieces, needs, new LispString("\n".repeat(nl.count())));
 						atLineStart = true;
 					}
 				}
 				case FmtFreshLine fl -> {
 					int emit = atLineStart ? fl.count() - 1 : fl.count();
 					if (emit > 0) {
-						pieces.add(new LispString("\n".repeat(emit)));
+						addGuardedPiece(pieces, needs, new LispString("\n".repeat(emit)));
 					}
 					atLineStart = true;
 				}
@@ -30147,9 +30256,34 @@ public final class LispMacroExpander {
 				// leaking into any other composite body cannot be lowered statically.
 				case FmtCut ignored -> throw new UnsupportedOperationException(
 						"format: ~^ is only supported at the top level and inside ~{ ... ~}");
+				case FmtNeed need -> needs.add(need);
 			}
 		}
+		if (!needs.isEmpty()) {
+			addGuardedPiece(pieces, needs, new LispString(""));
+		}
 		return pieces;
+	}
+
+	/**
+	 * Adds {@code piece} evaluated only once the pending {@code needs} hold, the first
+	 * need outermost: {@code (if (nthcdr k-1 base) piece (error message))}. Every read a
+	 * need stands for sits in a later piece, so guarding the NEXT piece keeps the signal
+	 * in reading order.
+	 */
+	private static void addGuardedPiece(List<LispVal> pieces, List<FmtNeed> needs, LispVal piece) {
+		LispVal guarded = piece;
+		for (int i = needs.size() - 1; i >= 0; i--) {
+			FmtNeed need = needs.get(i);
+			int k = need.count() - 1;
+			LispVal tail = (k == 0) ? need.base() : (k == 1) ? fmtCall(LispNames.CDR, need.base())
+					: fmtCall(LispNames.NTHCDR, new LispInteger(k), need.base());
+			// The message is the control string of the error form: its tilde is escaped.
+			guarded = makeIf(tail, guarded,
+					fmtCall(LispNames.ERROR, new LispString(need.message().replace("~", "~~"))));
+		}
+		needs.clear();
+		pieces.add(guarded);
 	}
 
 	/**
@@ -30348,18 +30482,43 @@ public final class LispMacroExpander {
 	 * an accumulator, and advances the cursor by {@code m}; an optional {@code maxExpr}
 	 * caps the number of passes.
 	 */
+	private static LispSymbol flatLoopTail(int id) {
+		return new LispSymbol("__fmtl" + id);
+	}
+
+	private static LispSymbol sublistLoopSublist(int id) {
+		return new LispSymbol("__fmtsl" + id);
+	}
+
+	/**
+	 * Binds {@code first} to t ahead of a loop whose {@code ~:&#125;} forces a first
+	 * pass, adds the pass's clearing of it to {@code loopParts}, and answers the pass
+	 * test that lets that pass through.
+	 */
+	private static LispVal forcedPassTest(LispVal test, LispSymbol first, List<LispVal> bindings,
+			List<LispVal> loopParts) {
+		bindings.add(listToCons(List.of(first, LispTrue.INSTANCE)));
+		loopParts.add(fmtCall(LispNames.SETQ, first, LispNil.INSTANCE));
+		return fmtCall(LispNames.OR, first, test);
+	}
+
 	private static LispVal flatLoopExpr(LispVal listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
-			int id) {
+			boolean forced, int id) {
 		int m = items.position();
-		LispSymbol l = new LispSymbol("__fmtl" + id);
+		LispSymbol l = flatLoopTail(id);
 		LispSymbol o = new LispSymbol("__fmto" + id);
 		LispSymbol c = new LispSymbol("__fmtc" + id);
+		LispSymbol first = new LispSymbol("__fmtf" + id);
 		boolean hasCut = body.stream().anyMatch(op -> op instanceof FmtCut);
 		LispSymbol done = new LispSymbol("__fmtdone" + id);
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		bindings.add(listToCons(List.of(l, listSym)));
 		bindings.add(listToCons(List.of(o, new LispString(""))));
 		LispVal test = fmtCall(LispNames.CONSP, l);
+		List<LispVal> passEnd = new java.util.ArrayList<>();
+		if (forced) {
+			test = forcedPassTest(test, first, bindings, passEnd);
+		}
 		if (hasCut) {
 			// A fired ~^ ends the whole flat iteration, not just the current pass.
 			bindings.add(listToCons(List.of(done, LispNil.INSTANCE)));
@@ -30379,6 +30538,7 @@ public final class LispMacroExpander {
 		if (maxExpr != null) {
 			loopParts.add(fmtCall(LispNames.SETQ, c, fmtCall(LispNames.ADD, c, new LispInteger(1))));
 		}
+		loopParts.addAll(passEnd);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), listToCons(loopParts), o));
 	}
 
@@ -30388,15 +30548,20 @@ public final class LispMacroExpander {
 	 * one.
 	 */
 	private static LispVal sublistLoopExpr(LispVal listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
-			int id) {
-		LispSymbol l = new LispSymbol("__fmtl" + id);
+			boolean forced, int id) {
+		LispSymbol l = flatLoopTail(id);
 		LispSymbol o = new LispSymbol("__fmto" + id);
 		LispSymbol c = new LispSymbol("__fmtc" + id);
-		LispSymbol sub = new LispSymbol("__fmtsl" + id);
+		LispSymbol sub = sublistLoopSublist(id);
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		bindings.add(listToCons(List.of(l, listSym)));
 		bindings.add(listToCons(List.of(o, new LispString(""))));
 		LispVal test = fmtCall(LispNames.CONSP, l);
+		List<LispVal> passEnd = new java.util.ArrayList<>();
+		if (forced) {
+			// The forced pass over an empty list runs against an empty sublist.
+			test = forcedPassTest(test, new LispSymbol("__fmtf" + id), bindings, passEnd);
+		}
 		if (maxExpr != null) {
 			bindings.add(listToCons(List.of(c, new LispInteger(0))));
 			test = fmtCall(LispNames.AND, test, fmtCall(LispNames.LT, c, maxExpr));
@@ -30417,6 +30582,7 @@ public final class LispMacroExpander {
 		if (maxExpr != null) {
 			loopParts.add(fmtCall(LispNames.SETQ, c, fmtCall(LispNames.ADD, c, new LispInteger(1))));
 		}
+		loopParts.addAll(passEnd);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), listToCons(loopParts), o));
 	}
 
