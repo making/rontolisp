@@ -79,6 +79,11 @@ public final class LispMacroExpander {
 		PRINTER_MODE_VARS.put(LispNames.DEBUG_IO_VAR, () -> LispTrue.INSTANCE);
 		PRINTER_MODE_VARS.put(LispNames.QUERY_IO_VAR, () -> LispTrue.INSTANCE);
 		PRINTER_MODE_VARS.put(LispNames.TERMINAL_IO_VAR, () -> LispTrue.INSTANCE);
+		// The reader-control variables the interpreter seeds, for the same reason: a
+		// program binds one around a read, and a reader macro tests *read-suppress*
+		// (puri's #u). The emitted readers consult neither (.kb/read-load-streams.md).
+		PRINTER_MODE_VARS.put(LispNames.READ_EVAL_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.READ_SUPPRESS_VAR, () -> LispNil.INSTANCE);
 		// (list nil): the one-element list a pprint dispatch table is, built at run time
 		// so
 		// the table the program mutates is its own.

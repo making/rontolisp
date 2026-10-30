@@ -127,7 +127,10 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   so an unknown package, a bogus character name and an out-of-range digit all pass. The
   interpreter's built-in reads the variable through `Environment.setReadSuppressQuery`,
   which the evaluator installs for the reason the `#.` resolver is installed: the built-in
-  holds the GLOBAL environment and the binding is always dynamic.
+  holds the GLOBAL environment and the binding is always dynamic. The VARIABLE exists on all
+  four (since 2026-10-31, with `*read-eval*`): a compiled program naming either gets a `defvar`
+  (`LispMacroExpander.PRINTER_MODE_VARS`), so puri's `#u` (`(if *read-suppress* ...)`)
+  compiles; pinned by ci-spec `source-reads-with-the-readtable-an-eval-when-installs`.
 - **`read` must stay SINGLE-valued**: its prelude body ends in `(values (read-from-string
   %rd-text))`, and without that `values` the index rides out of the tail through the spill
   and every `(read s)` answers two values.
