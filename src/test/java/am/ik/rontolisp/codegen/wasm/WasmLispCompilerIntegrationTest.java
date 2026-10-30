@@ -10923,6 +10923,11 @@ class WasmLispCompilerIntegrationTest {
 			(print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
 			(print (translate-logical-pathname "d/a.txt"))
 			(print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+			(print (list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+			             (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp")))
+			(setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+			(print (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+			             (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))
 			(print (handler-case (rename-file "a.txt" "b.txt") (error () :no-rename)))
 			""";
 
@@ -10937,6 +10942,8 @@ class WasmLispCompilerIntegrationTest {
 			"x/b-y.c"
 			#P"d/a.txt"
 			:SIGNALLED
+			(T NIL NIL T)
+			(#P"/opt/src/a/foo.lisp" :TYPE-ERROR)
 			:NO-RENAME""";
 
 	@Test

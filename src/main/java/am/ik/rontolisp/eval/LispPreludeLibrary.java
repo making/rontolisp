@@ -1143,14 +1143,117 @@ public final class LispPreludeLibrary {
 						                                         ""
 						                                         (concatenate 'string "." %tp-type))))))))))
 						""");
-		SOURCES.put(LispNames.TRANSLATE_LOGICAL_PATHNAME, """
-				(defun translate-logical-pathname (%tlp-path &rest %tlp-args)
-				  (pathname %tlp-path))
+		// pathname-match-p: the component-wise match translate-pathname applies, as a
+		// predicate. A missing wildcard component matches anything and a * component
+		// matches a missing one (CLHS: missing wildcard components default to :wild);
+		// a ** directory component consumes a run of levels, zero first, and a source
+		// with no directory matches a wildcard directory that opens with ** (SBCL's
+		// directory-components-match).
+		SOURCES.put(LispNames.PATHNAME_MATCH_P, """
+				(defun pathname-match-p (%pmp-path %pmp-wild)
+				  (let ((%pmp-s (%pathname-split (namestring %pmp-path)))
+				        (%pmp-w (%pathname-split (namestring %pmp-wild))))
+				    (labels ((%pmp-comp (%pmp-x %pmp-p)
+				               (or (null %pmp-p)
+				                   (string= %pmp-p "*")
+				                   (and %pmp-x (not (eq (%wild-captures %pmp-p %pmp-x) :no-match)))))
+				             (%pmp-dirs (%pmp-x %pmp-p)
+				               (cond ((null %pmp-p) (null %pmp-x))
+				                     ((string= (car %pmp-p) "**")
+				                      (or (%pmp-dirs %pmp-x (cdr %pmp-p))
+				                          (and %pmp-x (%pmp-dirs (cdr %pmp-x) %pmp-p))))
+				                     ((null %pmp-x) nil)
+				                     (t (and (%pmp-comp (car %pmp-x) (car %pmp-p))
+				                             (%pmp-dirs (cdr %pmp-x) (cdr %pmp-p))))))
+				             (%pmp-abs (%pmp-d)
+				               (and (> (length %pmp-d) 0) (char= (char %pmp-d 0) #\\/))))
+				      (let ((%pmp-sd (first %pmp-s)) (%pmp-wd (first %pmp-w)))
+				        (and (or (string= %pmp-wd "")
+				                 (and (string= %pmp-sd "") (equal (car (%path-dir-parts %pmp-wd)) "**"))
+				                 (and (eq(%pmp-abs %pmp-sd) (%pmp-abs %pmp-wd))
+				                      (%pmp-dirs (%path-dir-parts %pmp-sd) (%path-dir-parts %pmp-wd))))
+				             (%pmp-comp (second %pmp-s) (second %pmp-w))
+				             (%pmp-comp (third %pmp-s) (third %pmp-w))
+				             t)))))
 				""");
+		// The logical-host table: one (HOST . translations) cell per defined host, HOST
+		// upcased as a logical namestring is. A logical pathname is not a value of its
+		// own (.kb/pathnames.md): it is a namestring whose prefix before the first colon
+		// names a host defined here, and translate-logical-pathname is what reads it.
+		SOURCES.put(LispNames.LOGICAL_HOST_ENTRY, """
+				(defvar %logical-hosts nil)
+				(defun %logical-host-entry (%lhe-host &optional %lhe-create)
+				  (let* ((%lhe-name (string-upcase (string %lhe-host)))
+				         (%lhe-e (assoc %lhe-name %logical-hosts :test #'string=)))
+				    (when (and (null %lhe-e) %lhe-create)
+				      (setq %lhe-e (cons %lhe-name nil))
+				      (setq %logical-hosts (cons %lhe-e %logical-hosts)))
+				    %lhe-e))
+				""");
+		SOURCES.put(LispNames.LOGICAL_PATHNAME_TRANSLATIONS, """
+				(defun logical-pathname-translations (%lpt-host)
+				  (let ((%lpt-e (%logical-host-entry %lpt-host)))
+				    (unless %lpt-e
+				      (error 'type-error :datum %lpt-host :expected-type 'logical-host))
+				    (cdr %lpt-e)))
+				(defun (setf logical-pathname-translations) (%lpt-new %lpt-host)
+				  (rplacd (%logical-host-entry %lpt-host t) %lpt-new)
+				  %lpt-new)
+				""");
+		SOURCES.put(LispNames.LOAD_LOGICAL_PATHNAME_TRANSLATIONS, """
+				(defun load-logical-pathname-translations (%llpt-host)
+				  (if (%logical-host-entry %llpt-host)
+				      nil
+				      (%file-error %llpt-host
+				                   (format nil "LOAD-LOGICAL-PATHNAME-TRANSLATIONS: logical host ~A is not defined"
+				                           %llpt-host))))
+				""");
+		// translate-logical-pathname: the logical part is spelled physically -- downcased
+		// (SBCL's customary-case rule for a Unix target), ; as /, the version dropped --
+		// and so is each rule's from-pattern, so the first rule matching under
+		// pathname-match-p translates it through translate-pathname. The answer is
+		// translated again, as CL allows a rule to name another logical host.
+		SOURCES.put(LispNames.TRANSLATE_LOGICAL_PATHNAME,
+				"""
+						(defun translate-logical-pathname (%tlp-path &rest %tlp-args)
+						  (let* ((%tlp-ns (namestring %tlp-path))
+						         (%tlp-colon (position #\\: %tlp-ns))
+						         (%tlp-e (and %tlp-colon (%logical-host-entry (subseq %tlp-ns 0 %tlp-colon)))))
+						    (if (null %tlp-e)
+						        (pathname %tlp-path)
+						        (labels ((%tlp-phys (%tlp-s)
+						                   (let* ((%tlp-d (string-downcase %tlp-s))
+						                          (%tlp-r (substitute #\\/ #\\;
+						                                              (if (and (> (length %tlp-d) 0)
+						                                                       (char= (char %tlp-d 0) #\\;))
+						                                                  (subseq %tlp-d 1)
+						                                                  %tlp-d)))
+						                          (%tlp-k (position #\\/ %tlp-r :from-end t))
+						                          (%tlp-d1 (position #\\. %tlp-r :start (if %tlp-k (+ %tlp-k 1) 0)))
+						                          (%tlp-d2 (and %tlp-d1 (position #\\. %tlp-r :start (+ %tlp-d1 1)))))
+						                     (if %tlp-d2 (subseq %tlp-r 0 %tlp-d2) %tlp-r)))
+						                 (%tlp-local (%tlp-p)
+						                   (let* ((%tlp-n (namestring %tlp-p))
+						                          (%tlp-c (position #\\: %tlp-n)))
+						                     (if (and %tlp-c (string-equal (subseq %tlp-n 0 %tlp-c) (car %tlp-e)))
+						                         (subseq %tlp-n (+ %tlp-c 1))
+						                         %tlp-n))))
+						          (let ((%tlp-src (%tlp-phys (subseq %tlp-ns (+ %tlp-colon 1)))))
+						            (dolist (%tlp-rule (cdr %tlp-e)
+						                     (%file-error %tlp-path
+						                                  (format nil "TRANSLATE-LOGICAL-PATHNAME: no translation for ~A" %tlp-ns)))
+						              (let ((%tlp-from (%tlp-phys (%tlp-local (first %tlp-rule)))))
+						                (when (pathname-match-p %tlp-src %tlp-from)
+						                  (return (translate-logical-pathname
+						                           (translate-pathname %tlp-src %tlp-from (second %tlp-rule))))))))))))
+						""");
 		SOURCES.put(LispNames.LOGICAL_PATHNAME, """
 				(defun logical-pathname (%lp-thing)
-				  (error "LOGICAL-PATHNAME: ~S does not name a logical pathname (rontolisp defines no logical hosts)"
-				         %lp-thing))
+				  (let* ((%lp-ns (and (or (stringp %lp-thing) (pathnamep %lp-thing)) (namestring %lp-thing)))
+				         (%lp-colon (and %lp-ns (position #\\: %lp-ns))))
+				    (if (and %lp-colon (%logical-host-entry (subseq %lp-ns 0 %lp-colon)))
+				        (pathname %lp-ns)
+				        (error 'type-error :datum %lp-thing :expected-type 'logical-pathname))))
 				""");
 		SOURCES.put(LispNames.PATHNAME_DIRECTORY_STRING, """
 				(defun %pathname-directory-string (%pds-dir)

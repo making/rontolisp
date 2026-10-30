@@ -8473,6 +8473,17 @@ class LispEvaluatorTest {
 		// library's same-named symbol is a macro to expand must get no (iterate's
 		// (iter ... (while test)) clause).
 		assertThat(eval("(macro-function 'while)").print()).isEqualTo("NIL");
+		// macro-function and macroexpand-1 agree (iterate's walker calls the second when
+		// the first says macro): typep/format are CL FUNCTIONS the expander rewrites
+		// inline, and return/prog are CL macros the evaluator runs natively. SBCL 2.2.9.
+		assertThat(eval("""
+				(list (macro-function 'typep) (macro-function 'format) (macro-function 'declare)
+				      (multiple-value-list (macroexpand-1 '(typep 1 x)))
+				      (multiple-value-list (macroexpand-1 '(return 1)))
+				      (multiple-value-list (macroexpand-1 '(prog (a) (return a))))
+				      (multiple-value-list (macroexpand-1 '(lambda (x) x))))
+				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
+				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T))");
 	}
 
 	@Test
@@ -11885,11 +11896,21 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(translate-pathname \"d/a.txt\" \"e/*.*\" \"f/*.*\")"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("does not match");
-		// Every rontolisp pathname is physical, so the logical translation is the
-		// identity and logical-pathname itself can never succeed.
+		// A namestring is logical only under a host defined through (setf
+		// logical-pathname-translations): any other is physical and answers itself, and
+		// no host (SYS included) is predefined.
 		assertThat(eval("(translate-logical-pathname \"d/a.txt\")").print()).isEqualTo("#P\"d/a.txt\"");
-		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("does not name a logical pathname");
+		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class);
+		assertThat(eval("""
+				(list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+				      (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp"))""").print())
+			.isEqualTo("(T NIL NIL T)");
+		assertThat(eval("""
+				(progn
+				  (setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+				  (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+				        (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))""").print())
+			.isEqualTo("(#P\"/opt/src/a/foo.lisp\" :TYPE-ERROR)");
 	}
 
 	@Test
@@ -17752,6 +17773,11 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(fboundp 'cond)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(fboundp 'defun)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(fboundp 'cadr)")).isEqualTo(LispTrue.INSTANCE);
+		// A function a library defines answers before its first call loads it, however
+		// the symbol was built.
+		assertThat(evalMulti("""
+				(list (fboundp 'alphanumericp) (fboundp (find-symbol "EQUALP" "CL"))
+				      (fboundp (intern "SPLIT-STRING" "UIOP")))""").print()).isEqualTo("(T T T)");
 		assertThat(evalMulti("(fboundp 'no-such-fn)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(defun fb-fn (x) x) (fboundp 'fb-fn)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(defmacro fb-mac (x) x) (fboundp 'fb-mac)")).isEqualTo(LispTrue.INSTANCE);

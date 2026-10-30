@@ -289,6 +289,9 @@ public final class ShimLibraries {
 		else if (NamedReadtablesForms.SYSTEM.equals(systemName)) {
 			rewritten = NamedReadtablesForms.rewrite(componentFile, source);
 		}
+		else if (ClFadForms.SYSTEM.equals(systemName)) {
+			rewritten = ClFadForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

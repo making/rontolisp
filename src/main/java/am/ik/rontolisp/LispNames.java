@@ -251,6 +251,15 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "MOD";
 
+	/**
+	 * The REPL history variables ({@code *} {@code **} {@code ***}, {@code /} ...,
+	 * {@code +} ...): standard {@code cl} variables only a REPL sets, nil everywhere
+	 * else. The interpreter binds them globally and SWANK's listener sets them; a
+	 * compiled program reads nil from one it never assigns.
+	 */
+	public static final java.util.List<String> REPL_VARIABLES = java.util.List.of("*", "**", "***", "/", "//", "///",
+			"+", "++", "+++");
+
 	/** The {@code rem} built-in function. */
 	public static final String REM = "REM";
 
@@ -2260,6 +2269,15 @@ public final class LispNames {
 	public static final String DEFSTRUCT = "DEFSTRUCT";
 
 	/**
+	 * The {@code defstruct} header option {@code PackageResolver} adds when the struct
+	 * name, written unqualified, resolves to a symbol of ANOTHER package (inherited or
+	 * imported): {@code (:%intern-package "PKG")} names the package current at the form,
+	 * where CL interns the derived constructor, predicate, copier and accessor names.
+	 * Without it the derived names land in the struct name's own package.
+	 */
+	public static final String DEFSTRUCT_INTERN_PACKAGE = ":%INTERN-PACKAGE";
+
+	/**
 	 * The {@code defclass} special form (static CLOS subset). Expanded into the defuns it
 	 * generates (keyword constructor, reader/accessor functions) by
 	 * {@code LispMacroExpander.expandDefclass}: the interpreter expands at evaluation
@@ -3075,6 +3093,14 @@ public final class LispNames {
 	 * {@link #STANDARD_NAME_P_INTERNAL} ({@code LispMacroExpander.injectBakedAccess}).
 	 */
 	public static final String CL_USERS_INTERNAL = "%CL-USERS%";
+
+	/**
+	 * The {@code (%program-package-p keyword)} helper: whether a computed package
+	 * designator's package is one the program defines, whose name nothing answers builds
+	 * the INTERNAL spelling {@code PKG::NAME}
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String PROGRAM_PACKAGE_P_INTERNAL = "%PROGRAM-PACKAGE-P";
 
 	/**
 	 * The {@code (%standard-access-status package name)} helper: the status half of a
@@ -5143,22 +5169,49 @@ public final class LispNames {
 	public static final String WILD_CAPTURES = "%WILD-CAPTURES";
 
 	/**
-	 * The {@code translate-logical-pathname} built-in: the pathname itself. Every
-	 * rontolisp pathname is PHYSICAL -- there are no logical hosts and no
-	 * {@code logical-pathname-translations} table to consult -- so the translation is the
-	 * identity, which is what CL prescribes for a physical pathname argument. See
-	 * {@link #LOGICAL_PATHNAME} for the other half of that decision.
+	 * The {@code translate-logical-pathname} built-in. A namestring whose prefix before
+	 * the first {@code :} is a host defined through
+	 * {@link #LOGICAL_PATHNAME_TRANSLATIONS} is translated by the first rule whose
+	 * from-pattern it matches ({@link #PATHNAME_MATCH_P}, then
+	 * {@link #TRANSLATE_PATHNAME}); every other pathname is physical and answers itself,
+	 * as CL prescribes.
 	 */
 	public static final String TRANSLATE_LOGICAL_PATHNAME = "TRANSLATE-LOGICAL-PATHNAME";
 
 	/**
-	 * The {@code logical-pathname} built-in: always signals. CL requires a
-	 * {@code type-error} unless the argument is a logical pathname or a logical-pathname
-	 * namestring, and rontolisp can define no logical host, so NO argument can satisfy
-	 * it. Answering a physical pathname instead would claim a translation table exists;
-	 * signalling is the honest half of the pair with {@link #TRANSLATE_LOGICAL_PATHNAME}.
+	 * The {@code logical-pathname} built-in: the pathname of a namestring naming a
+	 * defined logical host; any other argument signals the {@code type-error} CL
+	 * requires. The answer is the flat pathname value -- there is no distinct
+	 * logical-pathname type ({@code .kb/pathnames.md}).
 	 */
 	public static final String LOGICAL_PATHNAME = "LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code logical-pathname-translations} accessor and its {@code setf} writer: the
+	 * translation list recorded per logical host. Reading an undefined host signals a
+	 * {@code type-error}, as SBCL does.
+	 */
+	public static final String LOGICAL_PATHNAME_TRANSLATIONS = "LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The {@code load-logical-pathname-translations} built-in: nil for a defined host;
+	 * there is no translations file to search, so an undefined one signals a
+	 * {@code file-error}.
+	 */
+	public static final String LOAD_LOGICAL_PATHNAME_TRANSLATIONS = "LOAD-LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The internal {@code (%logical-host-entry host &optional create)} helper: the
+	 * {@code (HOST . translations)} cell of the logical-host table, created when asked.
+	 */
+	public static final String LOGICAL_HOST_ENTRY = "%LOGICAL-HOST-ENTRY";
+
+	/**
+	 * The {@code pathname-match-p} built-in: component-wise wildcard matching over the
+	 * flat namestring, the same per-component rule {@link #TRANSLATE_PATHNAME} matches by
+	 * (a missing wildcard component matches anything, {@code *} a missing component).
+	 */
+	public static final String PATHNAME_MATCH_P = "PATHNAME-MATCH-P";
 
 	/**
 	 * The {@code *default-pathname-defaults*} variable: the pathname {@code merge}-style

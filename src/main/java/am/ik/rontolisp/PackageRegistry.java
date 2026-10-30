@@ -195,15 +195,17 @@ public final class PackageRegistry {
 			LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE,
 			LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P, LispNames.ENOUGH_NAMESTRING,
 			LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME,
-			LispNames.RENAME_FILE, LispNames.FILE_NAMESTRING, LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING,
-			LispNames.NSTRING_UPCASE, LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE,
-			LispNames.LISP_IMPLEMENTATION_TYPE, LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE,
-			LispNames.SOFTWARE_VERSION, LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE,
-			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL,
-			LispNames.INVOKE_DEBUGGER, LispNames.REMOVE_METHOD, LispNames.COMPILE_FILE, LispNames.COMPILE_FILE_PATHNAME,
-			LispNames.MAKE_PACKAGE, LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGEP,
-			LispNames.PACKAGE_NICKNAMES, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS, LispNames.APROPOS_LIST,
-			LispNames.PACKAGE_ERROR_PACKAGE, LispNames.SHADOW, LispNames.SHADOWING_IMPORT, LispNames.UNINTERN);
+			LispNames.LOGICAL_PATHNAME_TRANSLATIONS, LispNames.LOAD_LOGICAL_PATHNAME_TRANSLATIONS,
+			LispNames.PATHNAME_MATCH_P, LispNames.RENAME_FILE, LispNames.FILE_NAMESTRING,
+			LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING, LispNames.NSTRING_UPCASE,
+			LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE, LispNames.LISP_IMPLEMENTATION_TYPE,
+			LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE, LispNames.SOFTWARE_VERSION,
+			LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE, LispNames.SHORT_SITE_NAME,
+			LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL, LispNames.INVOKE_DEBUGGER,
+			LispNames.REMOVE_METHOD, LispNames.COMPILE_FILE, LispNames.COMPILE_FILE_PATHNAME, LispNames.MAKE_PACKAGE,
+			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGEP, LispNames.PACKAGE_NICKNAMES,
+			LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS, LispNames.APROPOS_LIST, LispNames.PACKAGE_ERROR_PACKAGE,
+			LispNames.SHADOW, LispNames.SHADOWING_IMPORT, LispNames.UNINTERN);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = union(Set.of(LispNames.PACKAGE_VAR,
@@ -229,7 +231,7 @@ public final class PackageRegistry {
 			LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR),
 			// The float-range constants (most-positive-single-float &c): constant
 			// variables like pi, bound as globals (see ClConstants).
-			ClConstants.FLOAT_NAMES);
+			ClConstants.FLOAT_NAMES, Set.copyOf(LispNames.REPL_VARIABLES));
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -359,9 +361,10 @@ public final class PackageRegistry {
 			LispNames.READ_LINK_INTERNAL, LispNames.TERMINAL_P_INTERNAL, LispNames.REAL_PATH_INTERNAL,
 			LispNames.ABSOLUTE_PATH_INTERNAL, LispNames.PATH_NS, LispNames.STREAM_TARGET, LispNames.CLOSE_INTERNAL,
 			LispNames.MACRO_FN_INTERNAL, LispNames.MACRO_EXPANDER_STUB, LispNames.WILD_COMPONENT_P,
-			LispNames.WILD_CAPTURES, LispNames.WILD_INFERIORS_AT, LispNames.PATHNAME_DIRECTORY_COMPONENT,
-			LispNames.DIRECTORY_IN, LispNames.DIRECTORY_SUBDIRS, LispNames.WILD_DIRS, LispNames.PATH_DIR_PARTS,
-			LispNames.RENAME_FILE_INTERNAL, LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL,
+			LispNames.WILD_CAPTURES, LispNames.LOGICAL_HOST_ENTRY, LispNames.WILD_INFERIORS_AT,
+			LispNames.PATHNAME_DIRECTORY_COMPONENT, LispNames.DIRECTORY_IN, LispNames.DIRECTORY_SUBDIRS,
+			LispNames.WILD_DIRS, LispNames.PATH_DIR_PARTS, LispNames.RENAME_FILE_INTERNAL,
+			LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL,
 			LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, LispNames.PRINT_CASED_WALK_INTERNAL,
 			LispNames.PRINT_CASED_ON_PATH_INTERNAL, LispNames.PRINT_CASED_CHAIN_STOP_INTERNAL,
 			LispNames.PRINT_RADIXED_INTERNAL, LispNames.PRINT_IN_BASE_INTERNAL,
@@ -406,25 +409,23 @@ public final class PackageRegistry {
 	 * standard's own list, so neither direction can drift.
 	 */
 	private static final Set<String> CL_EXPORTED_ONLY = Set.of("&ALLOW-OTHER-KEYS", "&AUX", "&BODY", "&ENVIRONMENT",
-			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "**", "***", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*",
-			"*MACROEXPAND-HOOK*", "*READ-BASE*", "++", "+++", "//", "///", "ADD-METHOD", "ARITHMETIC-ERROR-OPERANDS",
-			"ARITHMETIC-ERROR-OPERATION", "BOOLE", "BREAK", "CALL-METHOD", "CALL-NEXT-METHOD", "COMPILATION-SPEED",
-			"COMPILED-FUNCTION", "COMPILER-MACRO", "COMPUTE-APPLICABLE-METHODS", "DEBUG", "DECLARATION",
-			"DEFINE-METHOD-COMBINATION", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT",
-			"ED", "ENSURE-GENERIC-FUNCTION", "EXTENDED-CHAR", "FILE-AUTHOR", "FIND-METHOD", "FLOAT-PRECISION",
-			"FLOATING-POINT-INEXACT", "FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW",
-			"FLOATING-POINT-UNDERFLOW", "FORMATTER", "FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE",
-			"INLINE", "INSPECT", "INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD",
-			"LOAD-LOGICAL-PATHNAME-TRANSLATIONS", "LOGICAL-PATHNAME-TRANSLATIONS", "LOOP-FINISH",
-			"MAKE-INSTANCES-OBSOLETE", "MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR",
-			"METHOD-QUALIFIERS", "NAME-CHAR", "NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD",
-			"NOTINLINE", "OPTIMIZE", "PATHNAME-MATCH-P", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL",
-			"PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT",
-			"RANDOM-STATE", "RANDOM-STATE-P", "READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY",
-			"SIMPLE-BASE-STRING", "SPACE", "SPECIAL", "SPEED", "STANDARD", "STANDARD-METHOD", "STEP",
-			"STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
-			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE",
-			"VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*", "*MACROEXPAND-HOOK*",
+			"*READ-BASE*", "ADD-METHOD", "ARITHMETIC-ERROR-OPERANDS", "ARITHMETIC-ERROR-OPERATION", "BOOLE", "BREAK",
+			"CALL-METHOD", "CALL-NEXT-METHOD", "COMPILATION-SPEED", "COMPILED-FUNCTION", "COMPILER-MACRO",
+			"COMPUTE-APPLICABLE-METHODS", "DEBUG", "DECLARATION", "DEFINE-METHOD-COMBINATION", "DESCRIBE",
+			"DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT", "ED", "ENSURE-GENERIC-FUNCTION",
+			"EXTENDED-CHAR", "FILE-AUTHOR", "FIND-METHOD", "FLOAT-PRECISION", "FLOATING-POINT-INEXACT",
+			"FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW", "FLOATING-POINT-UNDERFLOW", "FORMATTER",
+			"FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT",
+			"INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-INSTANCES-OBSOLETE",
+			"MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR", "METHOD-QUALIFIERS", "NAME-CHAR",
+			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE",
+			"PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR",
+			"PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P",
+			"READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY", "SIMPLE-BASE-STRING", "SPACE", "SPECIAL",
+			"SPEED", "STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T",
+			"TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS",
+			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
@@ -770,21 +771,40 @@ public final class PackageRegistry {
 			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
 
 	/**
-	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special operators
-	 * plus {@code while}. {@code while} is rontolisp's OWN extension, not a CL name at
-	 * all, and it only sits in the {@code cl} package because that is where the built-in
-	 * operators live -- so claiming a macro function for it answers a question about a
-	 * symbol CL does not have. A code walker asking "is this head a macro I should
-	 * expand?" about a library's own {@code while} then gets a yes and refuses to walk
-	 * its own clause: iterate's `(iter ... (while test))` warned "a macro that won't
-	 * expand" and looped forever, because the clause survived into the emitted tagbody
-	 * instead of becoming its exit test.
+	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special
+	 * operators, {@code while}, and the names of {@link #inlineExpandedClFunctions()}.
+	 * {@code while} is rontolisp's OWN extension, not a CL name at all, and it only sits
+	 * in the {@code cl} package because that is where the built-in operators live -- so
+	 * claiming a macro function for it answers a question about a symbol CL does not
+	 * have. A code walker asking "is this head a macro I should expand?" about a
+	 * library's own {@code while} then gets a yes and refuses to walk its own clause:
+	 * iterate's `(iter ... (while test))` warned "a macro that won't expand" and looped
+	 * forever, because the clause survived into the emitted tagbody instead of becoming
+	 * its exit test.
 	 */
-	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE));
+	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE),
+			Set.of(LispNames.DECLARE), PackageRegistry.inlineExpandedClFunctions());
+
+	/**
+	 * The CL FUNCTIONS (and {@code declare}, which CL defines as no operator at all) that
+	 * sit in {@link #CL_MACROS} only because the expander rewrites their calls inline. CL
+	 * gives them no macro function and {@code macroexpand-1} leaves their calls alone
+	 * (SBCL 2.2.9): iterate's walker asks {@code macro-function} about every head and
+	 * warned "a macro that won't expand" for each {@code typep} in an {@code iter} body.
+	 * @return the inline-expanded CL function names
+	 */
+	private static Set<String> inlineExpandedClFunctions() {
+		return Set.of(LispNames.CERROR, LispNames.CHANGE_CLASS, LispNames.COMPLEMENT, LispNames.DOCUMENTATION,
+				LispNames.ERROR, LispNames.FORMAT, LispNames.MAKE_CONDITION, LispNames.MAKE_INSTANCE,
+				LispNames.MAKE_SEQUENCE, LispNames.PROCLAIM, LispNames.SIGNAL, LispNames.SLOT_BOUNDP,
+				LispNames.SLOT_EXISTS_P, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_VALUE, LispNames.TYPEP,
+				LispNames.WARN);
+	}
 
 	/**
 	 * Returns the operators {@code macro-function} must answer nil for -- the ANSI
-	 * special operators plus rontolisp's own {@code while}.
+	 * special operators, rontolisp's own {@code while}, {@code declare}, and the CL
+	 * functions the expander rewrites inline.
 	 * @return the names with no macro function
 	 */
 	public static Set<String> namesWithoutMacroFunction() {
@@ -932,17 +952,16 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
-			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
-					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
-					LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG, LispNames.METAL_PKG,
-					LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
-					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
+			LispNames.TOKENIZER_PKG, LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG,
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG,
+			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
+			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
+			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+			LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG,
+			LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, LispNames.QL_DIST_PKG, "KEYWORD"),
 			union(Set.copyOf(UiopExports.subPackages()), ASDF_SUB_PACKAGES.keySet()));
 
 	/**

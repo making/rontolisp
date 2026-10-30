@@ -18,9 +18,10 @@ import java.util.List;
  * {@code sum}, {@code multiply}, {@code maximize}, {@code minimize}, {@code counting},
  * {@code always}, {@code thereis}, {@code appending}, {@code reducing}), the control
  * clauses ({@code repeat}, {@code with}, {@code while}, {@code until},
- * {@code if-first-time}, {@code finally}) and a nested {@code iter} feeding a named outer
- * one through {@code (in outer ...)}. Every expected line was verified against the same
- * sources on SBCL 2.2.9 (byte-identical).
+ * {@code if-first-time}, {@code finally}), clauses nested in {@code typep} and
+ * {@code return} forms, and a nested {@code iter} feeding a named outer one through
+ * {@code (in outer ...)}. Every expected line was verified against the same sources on
+ * SBCL 2.2.9 (byte-identical).
  *
  * <p>
  * Substrate the load and run exercise, all of it landed when iterate first ran: the
@@ -74,6 +75,11 @@ class IterateE2eTest extends AsdfLibraryE2eSupport {
 			(print (iter (for i from 1) (while (< i 4)) (collect i)))
 			(print (iter (for i from 1) (until (> i 3)) (collect i)))
 			(print (iter (for x in '(a b c)) (if-first-time (collect :first) (collect x))))
+			;; --- clauses inside a CL function call (typep) and a CL macro rontolisp
+			;; runs natively (return): the walker reaches both only when macro-function
+			;; and macroexpand-1 agree about them ---
+			(print (iter (for x in '(1 2 a 3))
+			             (when (typep (collect x) 'list) (if (symbolp x) (return (collect :end))))))
 			;; --- a nested iter feeding the named outer one ---
 			(print (iter outer (for i from 1 to 3)
 			             (iter (for j from 1 to i) (in outer (collect (list i j))))))
@@ -88,8 +94,8 @@ class IterateE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final List<String> EXPECTED = List.of("(1 2 3 4 5)", "(10 9 8 7 6)", "(0 2 4)", "22", "24",
 			"((A B C) (B C) (C))", "(#\\a #\\b #\\c)", "3", "1", "2", "T", "4", "(1 2 3 4 5)", "110", "(1 4 9)",
-			"(7 8 9)", "30", "(1 2 3)", "(1 2 3)", "(:FIRST B C)", "((1 1) (2 1) (2 2) (3 1) (3 2) (3 3))",
-			"((A . 1) (B . 2) (C . 3))");
+			"(7 8 9)", "30", "(1 2 3)", "(1 2 3)", "(:FIRST B C)", "(1 2 A :END)",
+			"((1 1) (2 1) (2 2) (3 1) (3 2) (3 3))", "((A . 1) (B . 2) (C . 3))");
 
 	@Override
 	protected String systemDir() {

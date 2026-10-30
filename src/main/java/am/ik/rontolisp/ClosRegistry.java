@@ -75,6 +75,11 @@ public final class ClosRegistry {
 		// parse-error provides the slot layout, stream-error joins the ancestor set
 		// (the define-condition multiple-parents rule).
 		registerExtraAncestors(READER_ERROR_CLASS_NAME, List.of("STREAM-ERROR"));
+		// simple-type-error is both a simple-condition and a type-error (CLHS):
+		// type-error
+		// provides the layout (it carries the format pair), simple-condition joins the
+		// ancestor set.
+		registerExtraAncestors("SIMPLE-TYPE-ERROR", List.of("SIMPLE-CONDITION"));
 		for (ConditionSeed seed : CONDITION_SEEDS) {
 			seedClass(seed.name(), seed.parent(), seed.slots().toArray(new String[0]));
 		}

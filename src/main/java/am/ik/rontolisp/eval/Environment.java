@@ -1123,6 +1123,10 @@ public final class Environment implements Scope {
 		env.define(LispNames.PRINT_PPRINT_DISPATCH_VAR, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE));
 		// The provided-module list `provide` pushes onto and `require` consults.
 		env.define(LispNames.MODULES_VAR, LispNil.INSTANCE);
+		// The REPL history variables: nil outside a REPL (SWANK's listener sets them).
+		for (String name : LispNames.REPL_VARIABLES) {
+			env.define(name, LispNil.INSTANCE);
+		}
 		// The current readtable: a fresh standard one (.kb/readtables.md), the value the
 		// compile paths seed too (LispMacroExpander.injectMvSpillGlobal).
 		env.define(LispNames.READTABLE_VAR, newStandardReadtable());

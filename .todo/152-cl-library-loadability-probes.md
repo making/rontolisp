@@ -126,10 +126,11 @@ verification against the actual Quicklisp dist at probe time)
   - Load and match SBCL: `metabang-bind`, `arrow-macros`, `cl-slug`, `do-urlencode`,
     `cl-yaml` (cffi + libyaml; only the table test differs, h47), `trivial-types`
     (parameterized types since h42, interpreter and JVM; wasm does not compile it, h61).
-  - Load, wrong result: `3bmd` (warning, h39), `optima` (h40), `zpng` (h41),
+  - Load, wrong result: `3bmd` (warning, h39), `optima` (h40 done: `match` runs on the interpreter), `zpng` (h41),
     `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53),
     `lass` (a block keeps only its first property: h46; `~&` inside `~@[`: `.todo/001`).
-  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49 done: `access` loads and runs; next h59), `hunchentoot`/`cl-fad` (h50),
+  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49 done: `access` loads and runs; next h59), `hunchentoot` (h50 done:
+    `cl-fad` loads and runs; next `flex:make-external-format`, h52),
     `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
     `cl-store` (implementation guard), `screamer` (not in the dist).

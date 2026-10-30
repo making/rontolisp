@@ -1913,10 +1913,55 @@ public final class PackageResolver {
 	private LispVal resolveForm(LispVal form) {
 		return switch (form) {
 			case LispSymbol sym -> resolveSymbol(sym);
-			case LispCons cons -> resolveCons(cons);
+			case LispCons cons -> withDefstructInternPackage(cons, resolveCons(cons));
 			case LispStructLiteral literal -> resolveStructLiteralType(literal);
 			default -> form;
 		};
+	}
+
+	/**
+	 * Marks a {@code defstruct} whose derived names belong to a package other than its
+	 * name's. CL interns the derived constructor, predicate, copier and accessor names in
+	 * the package current at the form, while the expansion runs after resolution and only
+	 * sees the resolved name: an unqualified name inherited or imported from another
+	 * package ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
+	 * {@code optima.core}) put {@code and-pattern-p} there, where no call site of the
+	 * defining package looked. The header gains {@code (:%intern-package "CURRENT")}
+	 * ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE}). A name written package-qualified
+	 * keeps its own package (the bundled libraries spell
+	 * {@code (defstruct (bordeaux-threads:lock ...))} from {@code cl-user} and call
+	 * {@code bordeaux-threads::lock-...}).
+	 */
+	private LispVal withDefstructInternPackage(LispCons original, LispVal resolved) {
+		if (!(original.car() instanceof LispSymbol op) || !LispNames.DEFSTRUCT.equals(operatorMember(op))
+				|| !(original.cdr() instanceof LispCons nameCell) || !(resolved instanceof LispCons out)
+				|| !(out.cdr() instanceof LispCons outNameCell)) {
+			return resolved;
+		}
+		LispVal written = nameCell.car() instanceof LispCons header ? header.car() : nameCell.car();
+		LispVal name = outNameCell.car() instanceof LispCons header ? header.car() : outNameCell.car();
+		if (!(written instanceof LispSymbol writtenSym) || writtenSym.isKeyword()
+				|| PackageRegistry.splitQualified(writtenSym.name()) != null || !(name instanceof LispSymbol nameSym)) {
+			return resolved;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(nameSym.name());
+		String home = qn == null ? LispNames.CL_USER_PKG : qn.pkg();
+		if (home.equals(current())) {
+			return resolved;
+		}
+		LispVal option = new LispCons(new LispSymbol(LispNames.DEFSTRUCT_INTERN_PACKAGE),
+				new LispCons(new LispString(current()), LispNil.INSTANCE));
+		LispVal header = outNameCell.car() instanceof LispCons given
+				? LispCons.rebuiltList(given, appended(given.toList(), option))
+				: new LispCons(nameSym, new LispCons(option, LispNil.INSTANCE));
+		return SourceProvenance.inherit(out,
+				LispCons.rebuilt(out, out.car(), LispCons.rebuilt(outNameCell, header, outNameCell.cdr())));
+	}
+
+	private static List<LispVal> appended(List<LispVal> list, LispVal element) {
+		List<LispVal> out = new ArrayList<>(list);
+		out.add(element);
+		return out;
 	}
 
 	/**
@@ -2336,20 +2381,43 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Whether {@code member} is external in {@code pkg} -- i.e. whether this resolver
-	 * spells that symbol with ONE colon. A macro expansion that SYNTHESIZES a name (the
-	 * only one is {@code defstruct}: its constructor/predicate/copier/accessors are
-	 * derived from the struct name, not written down) must ask, because the name it emits
-	 * has to be the same string a call site resolves to. Reading it wrong is not a
-	 * package error but an undefined function: an interpreted {@code (quri:uri-p x)} used
-	 * to look for {@code QURI.URI:URI-P} while the {@code defstruct} had defined
-	 * {@code QURI.URI::URI-P}.
-	 * @param pkg the canonical package name
+	 * The spelling a bare {@code member} read with {@code pkg} current resolves to: CL's
+	 * {@code intern} of a synthesized name, which finds an accessible symbol (inherited,
+	 * imported, the package's own) before making one. A macro expansion that SYNTHESIZES
+	 * names (the only one is {@code defstruct}: its constructor, predicate, copier and
+	 * accessors are derived from the struct name, not written down) must ask, because the
+	 * name it defines has to be the string a call site in that package resolves to.
+	 * Reading it wrong is not a package error but an undefined function: an interpreted
+	 * {@code (quri:uri-p x)} looked for {@code QURI.URI:URI-P} while the
+	 * {@code defstruct} had defined {@code QURI.URI::URI-P}. A name only {@code cl}
+	 * provides stays the package's own symbol, as it was: defining it would be a
+	 * redefinition of a standard operator. Nothing is minted.
+	 * @param pkg the canonical package name the name is interned in
 	 * @param member the unqualified symbol name
-	 * @return {@code true} when the package exports the name
+	 * @return the canonical spelling
 	 */
-	public synchronized boolean spellsAsExternal(String pkg, String member) {
-		return this.registry.contains(pkg) && spellsExternal(pkg, member);
+	public synchronized String internedSpelling(String pkg, String member) {
+		if (!this.registry.contains(pkg)) {
+			return PackageRegistry.qualifyInternal(pkg, member);
+		}
+		Object previous = bindThreadPackage(pkg);
+		boolean savedProbing = this.probing;
+		this.probing = true;
+		try {
+			LispVal resolved = resolveUnqualified(member);
+			if (resolved instanceof LispSymbol sym
+					&& (LispNames.CL_USER_PKG.equals(pkg) || PackageRegistry.splitQualified(sym.name()) != null)) {
+				return sym.name();
+			}
+		}
+		catch (LispPackageException ex) {
+			// No bare reference to the name resolves in this package; keep its own.
+		}
+		finally {
+			this.probing = savedProbing;
+			unbindThreadPackage(previous);
+		}
+		return canonical(pkg, member).name();
 	}
 
 	private LispVal resolveUnqualified(String name) {
@@ -3046,8 +3114,9 @@ public final class PackageResolver {
 	 * cannot fold -- a computed name or package designator -- asks a read/compile-time
 	 * package for a name the package does not own: every symbol it reaches through an
 	 * import, a re-export or a {@code :use} of a package other than {@code cl}, plus
-	 * every present symbol that answers differently from the {@code PKG:NAME} spelling
-	 * such a lookup builds when nothing answers (a shadowing or internal member). The
+	 * every present symbol that answers differently from the spelling such a lookup
+	 * builds when nothing answers ({@link #permissiveAnswer}: an export of a package the
+	 * program defines, a shadowing member, an internal member of a pre-seeded one). The
 	 * lookup is {@link #accessible}'s, split so the runtime can run it: a row's
 	 * {@code present} triples first, then the {@code exports} of each of its {@code uses}
 	 * in order, then -- when {@code standardNames} and the package uses {@code cl} -- the
@@ -3184,12 +3253,18 @@ public final class PackageResolver {
 
 	/**
 	 * The answer a compiled {@code find-symbol} builds when no table row answers: the
-	 * bare internal name in {@code cl-user}, the single-colon external spelling
-	 * elsewhere.
+	 * bare internal name in {@code cl-user}, the internal {@code PKG::NAME} in a package
+	 * the program defines (an export of it answers from its row), the single-colon
+	 * external spelling in a pre-seeded package (whose rows a computed lookup does not
+	 * carry).
 	 */
 	private static Accessible permissiveAnswer(String canonical, String upper, String name) {
-		return LispNames.CL_USER_PKG.equals(canonical) ? new Accessible(name, LispNames.STATUS_INTERNAL)
-				: new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL);
+		if (LispNames.CL_USER_PKG.equals(canonical)) {
+			return new Accessible(name, LispNames.STATUS_INTERNAL);
+		}
+		return PackageRegistry.isBuiltinPackageName(canonical)
+				? new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL)
+				: new Accessible(upper + "::" + name, LispNames.STATUS_INTERNAL);
 	}
 
 	/**

@@ -71,9 +71,10 @@ literals.
   nil before an intern and the symbol after hold there too). What the registry KNOWS a baked
   package reaches -- an import, a re-export, a `:use`-inherited symbol, a recorded own member
   (`:shadow`, `:intern`) -- answers as on the interpreter, literal or computed
-  (`.kb/packages.md`, "Compiled lookups answer through the registry"). Two deviations for
-  the rest: an unknown name yields a symbol instead of nil, and the qualifier is the
-  single-colon EXTERNAL spelling. **The first is NOT harmless in the `find-symbol` ->
+  (`.kb/packages.md`, "Compiled lookups answer through the registry"). For the rest the
+  build answers: `PKG::NAME :internal` in a package the program defines (its exports are row
+  entries, `.kb/packages.md`), `PKG:NAME :external` in a pre-seeded one. The deviation left:
+  an unknown name yields a symbol instead of nil. **It is NOT harmless in the `find-symbol` ->
   `symbol-function` idiom**: sxql's `find-make-op` probes with `:errorp nil` expecting nil, so
   every sxql SQL FUNCTION operator dies on JVM and WASM while the interpreter is correct. The
   honest fix is symbol IDENTITY. Tripwire:
@@ -142,6 +143,24 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
 (variable lookups see GLOBAL bindings only — CL's dynamic-only semantics) and
 `userMacros`/`SPECIAL_OPERATORS`. t/nil/keywords are self-bound in boundp/symbol-value on every
 backend.
+
+**Interpreter `fboundp` answers what a call would** (`LispEvaluator.fbound` ->
+`loadFunction`, the lazy-load half `resolveFunction` shares): a probe of a library-defined name
+LOADS it (a prelude defun, a uiop definition, a qualified library, a system generic, the
+restart runtime), as the first call would. It does not take `resolveFunction`'s last step, the
+`pkg::member` -> bare image-function fallback: a package's own symbol that only falls back is no
+definition of it. Measured 2026-10-31 against SBCL 2.2.9's 636 external `cl` functions
+(macros and special operators excluded): 223 NIL before (183 of them callable, e.g.
+`alphanumericp`, `equalp`, `get`, `read`, which esrap's rule check warned about), 40 after --
+exactly the unimplemented ones (`CL_EXPORTED_ONLY`: `add-method`, `boole`, `describe`, ...,
+owned by `.todo/715`/`041`/`042`), the same 40 the compiled literal fold (`CL_FUNCTIONS`)
+answers NIL for. `uiop:split-string`, `linalg:` and `appkit:` names were NIL before their first
+call too. **Compiled computed probe** (data-held symbol, same 636): 163 NIL on the JVM, i.e.
+123 implemented functions -- the reference-gated / native / complex wrappers a program does not
+take as `#'name`, and the `car`/`cdr` compositions -- which `symbol-function` / `funcall` of the
+same symbol also call undefined, so the backend is consistent with itself; the reach is
+`.todo/h65`. Pinned by `BoundpFunctionValueFixture` (all four) and
+`LispEvaluatorTest#fboundpChecksFunctionsMacrosAndSpecialForms`.
 
 **JVM** (`JvmSymbolApiCompiler`): symbol-name = the princ-to-string emission; intern/make-symbol
 = quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp, and symbol-value of a name no
@@ -469,8 +488,9 @@ A computed NAME lowers to `(intern name)` (`LispMacroExpander.computedFindSymbol
 IS the lookup — carrying the unknown-name-yields-a-symbol deviation. A computed PACKAGE
 designator builds the spelling through a runtime test of the three packages whose members carry
 no qualifier (`computedQualifiedSpelling`: `keyword` -> `:NAME`, `cl`/`cl-user` -> bare,
-anything else -> `PKG:NAME`); unconditionally prefixing `(string PKG)` built `KEYWORD:X` instead
-of the keyword `:X`. Before either build, a package the registry knows to reach the name
+anything else -> `PKG:NAME`, or `K::NAME` under the found package's own name when
+`%program-package-p` says the program defines it); unconditionally prefixing `(string PKG)`
+built `KEYWORD:X` instead of the keyword `:X`. Before either build, a package the registry knows to reach the name
 another way answers it (`%baked-access`, `.kb/packages.md` "Compiled lookups answer through
 the registry"), and a standard name a package using `cl` inherits answers the `cl` symbol
 (`.kb/packages.md`, "The standard names at run time").
@@ -558,13 +578,16 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `{LispEvaluatorTest,JvmLispCompilerTest,WasmLispCompilerIntegrationTest}#internIntoAMissingPackage*`.
 - **Alias rows for internal names in the `_lookup` registries**
   (`JvmEvalRuntimeBuilder.lookupSegments`, the registry-blob loop in `WasmLispCompiler`): the
-  runtime-built spelling is always the single-colon EXTERNAL one, so every registered
-  `PKG::NAME` defun also answers to `PKG:NAME` — appended after the base rows, genuine keys win.
+  runtime-built spelling in a pre-seeded package, or in a program package whose row a site the
+  scan missed did not carry, is the single-colon EXTERNAL one, so every registered `PKG::NAME`
+  defun also answers to `PKG:NAME` — appended after the base rows, genuine keys win. (Before
+  `.todo/h55` every build was single-colon, so these rows carried every internal designator.)
   Emitted only when the registry is (`usesRuntimeFunctionDesignator` / `usesEval`) **and only
   when the alias SPELLING can reach the run time** (a builder can assemble it, the reader can
   read it under `--dynamic`/`anyNameResolvable`, or this compile spells it). Pinned by
   `WasmLispCompilerTest.theRegistrysSingleColonAliasShipsOnlyWhereItCanBeSpelled`. **VARIABLES
-  do not get the alias**: only EXPORTED specials resolve through the `_genv` mirror.
+  do not get the alias**: an internal special resolves through the `_genv` mirror only where
+  the build spells it `PKG::NAME` (a program package, `.todo/h55`).
 - **CLASS names get the same widening, at the LOOKUP**: every generated class-designator
   dispatch (`%find-class`, `%mop-make-instance`, `%allocate-instance`, the runtime
   `typep`/`subtypep` tables, the condition-class arm of `error`) matches BOTH colon spellings of
@@ -695,7 +718,26 @@ Verified form for form against SBCL 2.2.9.
 operators plus `while`, consulted by BOTH `runtimeMacroNames()` and
 `LispEvaluator.isMacroName`), because iterate's `walk` asks `(macro-function (car form))` before
 recognizing its own clauses and a yes made it refuse to walk `(iter ... (while test))`.
-**General rule: a name CL does not have must not claim a macro function.**
+**General rule: a name CL does not have must not claim a macro function.** Nor does a CL
+FUNCTION that sits in `CL_MACROS` only because the expander rewrites its calls inline
+(`typep`, `format`, `error`, `signal`, `make-instance`, `slot-value`, ... --
+`PackageRegistry.inlineExpandedClFunctions()`), nor `declare`: both join
+`namesWithoutMacroFunction()`. iterate warned "a macro that won't expand" for every `typep` in
+an `iter` body and skipped the clauses inside it (2026-10-30). SBCL 2.2.9 answers nil for all.
+
+**`macroexpand-1` expands exactly what `macro-function` claims** (`LispEvaluator.macroexpand1`
+gates on `isMacroName`, so the literal fold on the compile paths follows). A CL macro the
+evaluator runs natively expands through `LispMacroExpander.expandNativeMacro`: the expansion
+every backend already lowers it to (`prog`, `psetf`, `shiftf`, `with-open-stream`,
+`do-symbols`, ...) or CL's own (`return` -> `(return-from nil ...)`, `lambda` -> `#'(lambda
+...)`). It is kept out of `expandBuiltinMacro`, which also feeds compile passes that keep these
+forms native. A walker EMITS what it gets, so the expansion must run on every backend. Still
+answered unchanged with `expanded-p` nil (the contradiction left): `handler-case` and the
+definers run as special forms (`defun`, `defmacro`, `defvar`, `defparameter`, `defconstant`,
+`defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
+`define-symbol-macro`, `in-package`). Pins: `IterateE2eTest` (clauses inside `typep`/`return`),
+`LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators`, ci-spec
+`macro-function-and-special-operator-p`.
 
 **One definition per predicate, shared by every backend, and no compile-time fold.** Both are
 `LispPreludeLibrary` entries whose baked name table is GENERATED from `PackageRegistry` (so it

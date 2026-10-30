@@ -196,6 +196,40 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Single-step expansion, for {@code macroexpand-1} only, of a CL macro the evaluator
+	 * and the compilers run natively instead of through {@link #expandBuiltinMacro}: the
+	 * same expansion every backend lowers the form to, or the CL one where the native
+	 * form has none ({@code return}, {@code lambda}). A code walker that trusts
+	 * {@code macro-function} emits what this answers, so it must run on every backend.
+	 * Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
+	 * passes, which keep these forms native.
+	 * @param cons the form to expand
+	 * @return the expansion, or {@code null} when the operator has none here
+	 */
+	public static @Nullable LispVal expandNativeMacro(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		return switch (sym.name()) {
+			case LispNames.RETURN ->
+				new LispCons(new LispSymbol(LispNames.RETURN_FROM), new LispCons(LispNil.INSTANCE, cons.cdr()));
+			case LispNames.LAMBDA -> listToCons(List.of(new LispSymbol(LispNames.FUNCTION), cons));
+			case LispNames.PROG -> expandProg(cons, false);
+			case LispNames.PROG_STAR -> expandProg(cons, true);
+			case LispNames.PSETF -> expandPsetf(cons);
+			case LispNames.SHIFTF -> expandShiftf(cons);
+			case LispNames.WITH_OPEN_STREAM -> expandWithOpenStream(cons, true);
+			case LispNames.PRINT_UNREADABLE_OBJECT -> expandPrintUnreadableObject(cons);
+			case LispNames.WITH_PACKAGE_ITERATOR -> expandWithPackageIterator(cons);
+			case LispNames.DO_SYMBOLS -> expandDoSymbols(cons, false);
+			case LispNames.DO_EXTERNAL_SYMBOLS -> expandDoSymbols(cons, true);
+			case LispNames.DO_ALL_SYMBOLS -> expandDoAllSymbols(cons);
+			case LispNames.DEFINE_MODIFY_MACRO -> expandDefineModifyMacro(cons);
+			default -> null;
+		};
+	}
+
+	/**
 	 * Expands (cond (test body...) ...) into nested if/let/progn expressions.
 	 *
 	 * <pre>
@@ -15246,12 +15280,13 @@ public final class LispMacroExpander {
 	 * canonical spelling there, so building that spelling is the lookup -- with two
 	 * deviations from the interpreter's registry-backed version: an unknown name yields a
 	 * symbol instead of nil (harmless where find-symbol feeds a plist/dispatch lookup
-	 * that then answers nil anyway), and the qualifier is the single-colon EXTERNAL
-	 * spelling, which is what a library's exported API uses. The {@code keyword},
-	 * {@code cl} and {@code cl-user} packages need no qualifier work, and a designator
-	 * naming NO package signals a call-time {@code package-error} (the interpreter's
-	 * answer): a literal one is decided against the backend's baked package table, a
-	 * computed one behind a {@code find-package} guard.
+	 * that then answers nil anyway), and the qualifier follows the package: the internal
+	 * {@code PKG::} in a package the program defines, whose exports its row answers
+	 * ({@link #builtQualifier}), the single-colon {@code PKG:} in a pre-seeded one. The
+	 * {@code keyword}, {@code cl} and {@code cl-user} packages need no qualifier work,
+	 * and a designator naming NO package signals a call-time {@code package-error} (the
+	 * interpreter's answer): a literal one is decided against the backend's baked package
+	 * table, a computed one behind a {@code find-package} guard.
 	 * @param cons the find-symbol call
 	 * @param packageTable the backend's baked package table
 	 * ({@code PackageResolver.runtimePackageTable()})
@@ -15353,9 +15388,10 @@ public final class LispMacroExpander {
 			// reading: cl exports every standard name, implemented or not.
 			return PackageRegistry.isClMemberName(str.value()) ? symbolFormOfSpelling(str.value()) : LispNil.INSTANCE;
 		}
+		String qualifier = builtQualifier(pkg, name, access);
 		LispVal accessed = accessedSymbol(name, pkg, definedFunction, access,
-				nameForm -> permissivePackageSpelling(cons, pkg, nameForm));
-		return accessed != null ? accessed : permissivePackageSpelling(cons, pkg, name);
+				nameForm -> permissivePackageSpelling(pkg, qualifier, nameForm));
+		return accessed != null ? accessed : permissivePackageSpelling(pkg, qualifier, name);
 	}
 
 	/**
@@ -15382,7 +15418,7 @@ public final class LispMacroExpander {
 		}
 		if (name instanceof LispString str) {
 			PackageResolver.Accessible answer = access.answer(pkg, str.value());
-			return answer == null || answer.spelling().equals(builtSpelling(pkg, str.value())) ? null
+			return answer == null || answer.spelling().equals(builtSpelling(pkg, str, access)) ? null
 					: symbolFormOfSpelling(answer.spelling());
 		}
 		String row = access.rowName(pkg);
@@ -15416,11 +15452,25 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The spelling the compile paths build for a name in a literal package when nothing
-	 * answers it: bare in {@code cl-user}, {@code PKG:NAME} elsewhere.
+	 * The spelling the compile paths build for a literal name in a literal package when
+	 * nothing answers it: bare in {@code cl-user}, else as {@link #builtQualifier} spells
+	 * it.
 	 */
-	private static String builtSpelling(String pkg, String name) {
-		return LispNames.CL_USER_PKG.equalsIgnoreCase(pkg) ? name : pkg + ":" + name;
+	private static String builtSpelling(String pkg, LispString name, BakedSymbolAccess access) {
+		return LispNames.CL_USER_PKG.equalsIgnoreCase(pkg) ? name.value()
+				: builtQualifier(pkg, name, access) + name.value();
+	}
+
+	/**
+	 * The qualifier the spelling build puts before a name in a literal package other than
+	 * {@code keyword} / {@code cl} / {@code cl-user}: {@code PKG::} in a package the
+	 * program defines -- a name it does not export is internal, CL's answer -- when the
+	 * lookup knows its exports (a literal name always; a computed one when the row
+	 * travels, {@link BakedSymbolAccess#internalBuild}); {@code PKG:} otherwise.
+	 */
+	private static String builtQualifier(String pkg, LispVal name, BakedSymbolAccess access) {
+		String own = name instanceof LispString ? access.programPackage(pkg) : access.internalBuild(pkg);
+		return own != null ? own + "::" : pkg + ":";
 	}
 
 	/** The temporary {@link #bakedAccessLookup} binds the row's answer to. */
@@ -15450,17 +15500,16 @@ public final class LispMacroExpander {
 
 	/**
 	 * The permissive spelling build at the tail of
-	 * {@link #expandFindSymbolInPackage(LispCons, java.util.Map, boolean)}: a runtime
-	 * package owns no recorded members on the compiled backends (nothing is interned into
-	 * a table), so any name is spelled {@code PKG:NAME} -- the same deviation the
-	 * computed-designator path has always carried.
-	 * @param cons the find-symbol call
+	 * {@link #expandFindSymbolInPackage(LispCons, java.util.Map, boolean)}: any name
+	 * nothing answers is spelled {@code QUALIFIER NAME} ({@link #builtQualifier}) -- the
+	 * unknown-name-yields-a-symbol deviation.
 	 * @param pkg the literal package designator spelling
+	 * @param qualifier the qualifier of the build
 	 * @param name the name form (the call's own, or the temporary a row lookup bound it
 	 * to)
 	 * @return the spelling-build expression
 	 */
-	private static LispVal permissivePackageSpelling(LispCons cons, String pkg, LispVal name) {
+	private static LispVal permissivePackageSpelling(String pkg, String qualifier, LispVal name) {
 		if ("KEYWORD".equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
 		}
@@ -15471,7 +15520,7 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
 		}
 		LispVal qualified = listToCons(
-				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
+				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(qualifier), name));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
 	}
 
@@ -15552,10 +15601,10 @@ public final class LispMacroExpander {
 	 * registry-backed one. Anything the compile-time view cannot decide (a computed name,
 	 * a computed package designator) reports the status of the SPELLING the lowering
 	 * builds, which is the only symbol identity a compiled program has: a {@code PKG:}
-	 * spelling is external, an unqualified one is internal to the current package. The
-	 * residual divergence is a known one -- a compiled {@code find-symbol} answers a
-	 * symbol where the interpreter answers nil -- and it retires with the planned
-	 * symbol-identity model.
+	 * spelling is external, a {@code PKG::} or unqualified one internal. The residual
+	 * divergence is a known one -- a compiled {@code find-symbol} answers a symbol where
+	 * the interpreter answers nil -- and it retires with the planned symbol-identity
+	 * model.
 	 * @param cons the find-symbol / intern call
 	 * @param packageTable the backend's baked package table
 	 * @param userDefunNames the Pass-1 user definition names
@@ -15620,11 +15669,19 @@ public final class LispMacroExpander {
 		}
 		String pkg = literalPackageDesignator(parts.get(2));
 		if (pkg == null) {
-			// A computed designator builds the single-colon EXTERNAL spelling -- unless
-			// it names a runtime package, whose member table answers, or a package
-			// whose %baked-access row does (the designator is a bound temporary here,
-			// so reading it again costs nothing).
+			// A computed designator builds PKG::NAME (:internal) in a package the
+			// program defines and PKG:NAME (:external) elsewhere -- unless it names a
+			// runtime package, whose member table answers, or a package whose
+			// %baked-access row does (the designator is a bound temporary here, so
+			// reading it again costs nothing).
 			LispVal built = new LispSymbol(LispNames.STATUS_EXTERNAL);
+			if (definedFunction.test(LispNames.PROGRAM_PACKAGE_P_INTERNAL)) {
+				LispVal found = listToCons(List.of(new LispSymbol(LispNames.IF),
+						listToCons(List.of(new LispSymbol(LispNames.KEYWORDP), parts.get(2))), parts.get(2),
+						listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), parts.get(2)))));
+				built = makeIf(listToCons(List.of(new LispSymbol(LispNames.PROGRAM_PACKAGE_P_INTERNAL), found)),
+						new LispSymbol(LispNames.STATUS_INTERNAL), built);
+			}
 			if (definedFunction.test(LispNames.STANDARD_ACCESS_STATUS_INTERNAL)) {
 				built = listToCons(
 						List.of(new LispSymbol(LispNames.STANDARD_ACCESS_STATUS_INTERNAL), parts.get(2), name));
@@ -15660,7 +15717,8 @@ public final class LispMacroExpander {
 					: new LispSymbol(LispNames.STATUS_INTERNAL);
 		}
 		else {
-			built = new LispSymbol(LispNames.STATUS_EXTERNAL);
+			built = new LispSymbol(builtQualifier(pkg, name, access).endsWith("::") ? LispNames.STATUS_INTERNAL
+					: LispNames.STATUS_EXTERNAL);
 		}
 		if (literal != null) {
 			PackageResolver.Accessible answer = access.answer(pkg, literal);
@@ -15837,8 +15895,10 @@ public final class LispMacroExpander {
 	 * shim package's own row travels only when a literal site names it (its re-exports
 	 * would otherwise ride along in every program that computes a designator); its
 	 * exports travel whenever a travelling row uses it. The spliced
-	 * {@code %symbol-in-package} is rewritten to consult the rows. A program no row
-	 * serves stays byte-identical. Runs after package resolution, like
+	 * {@code %symbol-in-package} is rewritten to consult the rows. With a computed
+	 * designator, {@code %program-package-p} lists every designator of the program's own
+	 * packages, whose unanswered names the build spells {@code PKG::NAME}. A program
+	 * neither serves stays byte-identical. Runs after package resolution, like
 	 * {@link #injectFindPackageHelper}; a site the scan cannot see keeps the spelling
 	 * build, because the lowerings ask the function table and the served rows.
 	 *
@@ -15886,13 +15946,29 @@ public final class LispMacroExpander {
 				exporters.addAll(row.uses());
 			}
 		}
-		if (served.isEmpty() && !standardNames) {
+		// Every designator of a package the program defines whose exports the computed
+		// lookup knows (its row travels, or it answers no name itself): a name nothing
+		// answers there is built PKG::NAME, as CL interns it.
+		List<LispVal> programPackages = new java.util.ArrayList<>();
+		if (sites.computedDesignator) {
+			new java.util.TreeMap<>(access.designators()).forEach((designator, canonical) -> {
+				if (!PackageRegistry.isBuiltinPackageName(canonical)
+						&& (served.contains(canonical) || !BakedSymbolAccess.answersItself(rows.get(canonical)))) {
+					programPackages.add(new LispSymbol(":" + designator));
+				}
+			});
+		}
+		if (served.isEmpty() && !standardNames && programPackages.isEmpty()) {
 			return program;
 		}
+		boolean programBuild = !programPackages.isEmpty();
 		List<LispVal> out = new java.util.ArrayList<>(program.size() + 8);
+		if (programBuild) {
+			out.add(programPackageDefun(programPackages));
+		}
 		if (!served.isEmpty()) {
 			out.add(bakedAccessTable(rows, served, exporters, access));
-			out.addAll(LispReader.readAllFromString(BAKED_ACCESS_SOURCE, Features.INTERPRETER));
+			out.addAll(LispReader.readAllFromString(bakedAccessSource(programBuild), Features.INTERPRETER));
 		}
 		boolean computedStandard = standardNames && sites.computedDesignator;
 		if (standardNames) {
@@ -15902,13 +15978,13 @@ public final class LispMacroExpander {
 			}
 			if (computedStandard) {
 				out.add(clUsersTable(access, rows));
-				out.addAll(LispReader.readAllFromString(standardAccessStatusDefinition(!served.isEmpty()),
+				out.addAll(LispReader.readAllFromString(standardAccessStatusDefinition(!served.isEmpty(), programBuild),
 						Features.INTERPRETER));
 			}
 		}
 		for (LispVal form : program) {
 			out.add(isDefunOf(form, LispNames.SYMBOL_IN_PACKAGE_INTERNAL)
-					? symbolInPackageDefun(!served.isEmpty(), computedStandard) : form);
+					? symbolInPackageDefun(!served.isEmpty(), computedStandard, programBuild) : form);
 		}
 		access.served(served, standardNames);
 		return out;
@@ -15980,6 +16056,18 @@ public final class LispMacroExpander {
 		});
 		return listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CL_USERS_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), consList(keywords)))));
+	}
+
+	/**
+	 * The {@code (defun %program-package-p (k) (member k '(...)))} a computed
+	 * designator's build asks whether the package it found is one the program defines
+	 * ({@link #injectBakedAccess}).
+	 */
+	private static LispVal programPackageDefun(List<LispVal> keywords) {
+		LispSymbol k = new LispSymbol("%PPP-K");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PROGRAM_PACKAGE_P_INTERNAL),
+				listToCons(List.of(k)), listToCons(List.of(new LispSymbol(LispNames.MEMBER), k,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), consList(keywords)))))));
 	}
 
 	/** Whether a top-level form is {@code (defun NAME ...)}. */
@@ -16155,6 +16243,11 @@ public final class LispMacroExpander {
 	 * cell; the table's entry for the name after that -- {@code (symbol . status)}, or
 	 * nil. A package with no row costs one {@code eq} scan of the index, no hashing.
 	 */
+	private static String bakedAccessSource(boolean programBuild) {
+		return BAKED_ACCESS_SOURCE.replace("BUILT",
+				programBuild ? "(if (%program-package-p %bas-k) :internal :external)" : ":external");
+	}
+
 	private static final String BAKED_ACCESS_SOURCE = """
 			(defvar %baked-access-index% nil)
 			(defun %baked-access-fill (%baf-h %baf-s %baf-prefixes %baf-present)
@@ -16194,28 +16287,32 @@ public final class LispMacroExpander {
 			          (rplacd %ba-c %ba-h)))
 			      (gethash %ba-n (cdr %ba-c)))))
 			(defun %baked-access-status (%bas-p %bas-n)
-			  (let ((%bas-hit (%baked-access (if (keywordp %bas-p) %bas-p (find-package %bas-p)) %bas-n)))
-			    (if %bas-hit (cdr %bas-hit) :external)))
+			  (let* ((%bas-k (if (keywordp %bas-p) %bas-p (find-package %bas-p)))
+			         (%bas-hit (%baked-access %bas-k %bas-n)))
+			    (if %bas-hit (cdr %bas-hit) BUILT)))
 			""";
 
 	/**
 	 * The {@code %standard-access-status} defun: the status of a computed designator's
 	 * lookup -- the found package's row first when the program carries rows, then a
-	 * standard name through {@code cl}, else the build's {@code :external}. A keyword
-	 * designator is taken as it comes ({@code %cl-users%} and the rows' aliases hold
-	 * every designator), as {@code %baked-access-status} takes it.
+	 * standard name through {@code cl}, else the build's status ({@code :internal} in a
+	 * package the program defines with {@code programBuild}, {@code :external}). A
+	 * keyword designator is taken as it comes ({@code %cl-users%} and the rows' aliases
+	 * hold every designator), as {@code %baked-access-status} takes it.
 	 * @param rows whether the program carries {@code %baked-access} rows
+	 * @param programBuild whether the program carries {@code %program-package-p}
 	 * @return the defun source
 	 */
-	private static String standardAccessStatusDefinition(boolean rows) {
+	private static String standardAccessStatusDefinition(boolean rows, boolean programBuild) {
 		return """
 				(defun %standard-access-status (%sas-p %sas-n)
 				  (let* ((%sas-k (if (keywordp %sas-p) %sas-p (find-package %sas-p)))
 				         (%sas-hit ROWS))
 				    (cond (%sas-hit (cdr %sas-hit))
 				          ((and (member %sas-k %cl-users%) (%standard-name-p %sas-n)) :inherited)
-				          (t :external))))
-				""".replace("ROWS", rows ? "(%baked-access %sas-k %sas-n)" : "nil");
+				          (t BUILT))))
+				""".replace("ROWS", rows ? "(%baked-access %sas-k %sas-n)" : "nil")
+			.replace("BUILT", programBuild ? "(if (%program-package-p %sas-k) :internal :external)" : ":external");
 	}
 
 	/** The first character of a prefix-length mark in {@link #packStandardNames}. */
@@ -16915,7 +17012,8 @@ public final class LispMacroExpander {
 		LispVal built = helper
 				? listToCons(List.of(new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL), nameVar, pkgVar))
 				: computedGuardedSpelling(pkgVar, nameVar, definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL),
-						definedFunction.test(LispNames.STANDARD_ACCESS_STATUS_INTERNAL));
+						definedFunction.test(LispNames.STANDARD_ACCESS_STATUS_INTERNAL),
+						definedFunction.test(LispNames.PROGRAM_PACKAGE_P_INTERNAL));
 		if (!runtimeMutation) {
 			return bindFindSymbolTemps(name, packageForm, built);
 		}
@@ -16928,21 +17026,22 @@ public final class LispMacroExpander {
 	 * read/compile-time half of every computed-designator lookup, inline at a site or as
 	 * the body of the {@code %symbol-in-package} prelude defun
 	 * ({@link #symbolInPackageDefinition}). With {@code bakedAccess} the found package's
-	 * {@code %baked-access} row answers first, and with {@code standardNames} a standard
-	 * name the found package inherits from {@code cl} answers before the build
-	 * ({@link #injectBakedAccess}).
+	 * {@code %baked-access} row answers first, with {@code standardNames} a standard name
+	 * the found package inherits from {@code cl} answers before the build, and with
+	 * {@code programPackages} the build spells a name in a package the program defines
+	 * {@code PKG::NAME} ({@link #injectBakedAccess}).
 	 */
 	private static LispVal computedGuardedSpelling(LispSymbol pkgVar, LispSymbol nameVar, boolean bakedAccess,
-			boolean standardNames) {
-		LispVal built = listToCons(
-				List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar)));
-		if (!bakedAccess && !standardNames) {
+			boolean standardNames, boolean programPackages) {
+		LispSymbol found = new LispSymbol(FIND_SYMBOL_FOUND_PACKAGE_VAR);
+		LispVal built = listToCons(List.of(new LispSymbol(LispNames.INTERN),
+				computedQualifiedSpelling(pkgVar, nameVar, programPackages ? found : null)));
+		if (!bakedAccess && !standardNames && !programPackages) {
 			return makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)), built,
 					computedNoSuchPackage(pkgVar));
 		}
 		// (let ((K (find-package PKG))) (if K <row answer, else the build> <signal>)):
 		// the package is found once, and its value is the row key.
-		LispSymbol found = new LispSymbol(FIND_SYMBOL_FOUND_PACKAGE_VAR);
 		if (standardNames) {
 			LispVal inherits = listToCons(List.of(new LispSymbol(LispNames.AND),
 					listToCons(List.of(new LispSymbol(LispNames.MEMBER), found,
@@ -16964,19 +17063,19 @@ public final class LispMacroExpander {
 	 * @return the {@code defun} source text
 	 */
 	public static String symbolInPackageDefinition() {
-		return symbolInPackageDefun(false, false).print();
+		return symbolInPackageDefun(false, false, false).print();
 	}
 
 	/**
-	 * The {@code %symbol-in-package} defun, reading the {@code %baked-access} rows and
-	 * the standard names or not.
+	 * The {@code %symbol-in-package} defun, reading the {@code %baked-access} rows, the
+	 * standard names and the program's packages or not.
 	 */
-	private static LispVal symbolInPackageDefun(boolean bakedAccess, boolean standardNames) {
+	private static LispVal symbolInPackageDefun(boolean bakedAccess, boolean standardNames, boolean programPackages) {
 		LispSymbol nameVar = new LispSymbol("%SIP-NAME");
 		LispSymbol pkgVar = new LispSymbol("%SIP-PKG");
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL),
 				listToCons(List.of(nameVar, pkgVar)),
-				computedGuardedSpelling(pkgVar, nameVar, bakedAccess, standardNames)));
+				computedGuardedSpelling(pkgVar, nameVar, bakedAccess, standardNames, programPackages)));
 	}
 
 	/**
@@ -17042,10 +17141,13 @@ public final class LispMacroExpander {
 	 * the package held by {@code pkgVar}, shared by the computed-package
 	 * {@code find-symbol} and {@code intern} lowerings: {@code keyword} members are
 	 * spelled {@code :NAME}, {@code cl}/{@code cl-user} members bare, anything else
-	 * {@code PKG:NAME} (the single-colon external spelling -- right for a library's
-	 * exported API; internal names resolve through the function registry's alias rows).
+	 * {@code PKG:NAME} -- or, given the {@code found} package and when
+	 * {@code %program-package-p} says the program defines it, {@code PKG::NAME} under its
+	 * own name, whatever designator named it (its exports answer from its row). Internal
+	 * names of a pre-seeded package resolve through the function registry's alias rows.
 	 */
-	private static LispVal computedQualifiedSpelling(LispSymbol pkgVar, LispSymbol nameVar) {
+	private static LispVal computedQualifiedSpelling(LispSymbol pkgVar, LispSymbol nameVar,
+			@Nullable LispSymbol found) {
 		LispVal pkgString = listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar));
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
@@ -17057,8 +17159,16 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.STRING_EQ), pkgString,
 					new LispString(bare.toUpperCase(java.util.Locale.ROOT)))), nameVar)));
 		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
-				quoteOf("STRING"), pkgString, new LispString(":"), nameVar)))));
+		LispVal external = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), pkgString,
+				new LispString(":"), nameVar));
+		if (found != null) {
+			external = makeIf(listToCons(List.of(new LispSymbol(LispNames.PROGRAM_PACKAGE_P_INTERNAL), found)),
+					listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+							listToCons(List.of(new LispSymbol(LispNames.STRING), found)), new LispString("::"),
+							nameVar)),
+					external);
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, external)));
 		return listToCons(clauses);
 	}
 
@@ -17161,21 +17271,23 @@ public final class LispMacroExpander {
 			}
 			return runtimeMemberLookup(new LispString(pkg), LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, name, signal);
 		}
+		String qualifier = builtQualifier(pkg, name, access);
 		LispVal accessed = accessedSymbol(name, pkg, definedFunction, access,
-				nameForm -> internSpellingBuild(pkg, nameForm));
-		return accessed != null ? accessed : internSpellingBuild(pkg, name);
+				nameForm -> internSpellingBuild(pkg, qualifier, nameForm));
+		return accessed != null ? accessed : internSpellingBuild(pkg, qualifier, name);
 	}
 
 	/**
 	 * The spelling build of {@code (intern NAME PKG)} for a literal package: bare in
-	 * {@code cl} / {@code cl-user}, {@code PKG:NAME} elsewhere.
+	 * {@code cl} / {@code cl-user}, {@code QUALIFIER NAME} elsewhere
+	 * ({@link #builtQualifier}).
 	 */
-	private static LispVal internSpellingBuild(String pkg, LispVal name) {
+	private static LispVal internSpellingBuild(String pkg, String qualifier, LispVal name) {
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
 		}
 		LispVal qualified = listToCons(
-				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
+				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(qualifier), name));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
 	}
 
@@ -18377,33 +18489,36 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * As {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry)}, with the export
-	 * oracle that decides how a SYNTHESIZED name is spelled.
+	 * As {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry)}, with the oracle
+	 * that decides how a SYNTHESIZED name is spelled.
 	 *
 	 * <p>
-	 * A generated name lands in the struct's package, and the string it is defined under
-	 * has to be the one a call site resolves to -- {@code PKG:NAME} for an exported
-	 * member, {@code PKG::NAME} otherwise ({@link PackageResolver#spellsAsExternal}).
-	 * Without the oracle every generated name takes the internal spelling, which is right
-	 * only for a struct whose {@code defpackage} exports none of them; quri's does export
+	 * A generated name is interned in the struct's package -- the
+	 * {@code (:%intern-package "PKG")} option {@code PackageResolver} adds when that is
+	 * not the name's own ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE}) -- and the string
+	 * it is defined under has to be the one a call site resolves to: {@code PKG:NAME} for
+	 * an exported member, {@code PKG::NAME} for an internal one, a used package's symbol
+	 * for an inherited one ({@link PackageResolver#internedSpelling}). Without the oracle
+	 * every generated name takes the internal spelling, which is right only for a struct
+	 * whose {@code defpackage} exports none of them; quri's does export
 	 * {@code uri-p}/{@code uri-scheme}/{@code make-uri-http}/..., and those resolved to a
 	 * name nothing had defined.
 	 * @param cons the defstruct expression
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated when non-null: the struct type and its layout
-	 * @param exported {@code (package, member) -> is it external}, or {@code null} to
-	 * spell every generated name internally (the pre-oracle behavior)
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null} to spell every generated name internally
 	 * @return the generated top-level forms, in definition order
 	 */
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			@org.jspecify.annotations.Nullable ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
-		return expandDefstruct(cons, structAccessors, closRegistry, exported, true);
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling) {
+		return expandDefstruct(cons, structAccessors, closRegistry, spelling, true);
 	}
 
 	/**
 	 * As
-	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BiPredicate)},
+	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BinaryOperator)},
 	 * choosing whether the generated accessors, accessor places and copier check their
 	 * object ({@link #checkedStructRead}). Unchecked is for a backend where nothing can
 	 * read the report: a wasm-GC module outside exception-handling mode traps on the
@@ -18411,14 +18526,14 @@ public final class LispMacroExpander {
 	 * @param cons the defstruct expression
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated when non-null: the struct type and its layout
-	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null}
 	 * @param checked whether a non-instance signals the accessor's {@code type-error}
 	 * @return the generated top-level forms, in definition order
 	 */
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			@org.jspecify.annotations.Nullable ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
-			boolean checked) {
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling, boolean checked) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
@@ -18463,6 +18578,9 @@ public final class LispMacroExpander {
 		LispVal printer = null;
 		boolean printerTakesDepth = false;
 		boolean printerGiven = false;
+		// (:%intern-package "PKG"): where the derived names are interned, when not in
+		// the struct name's own package (see LispNames.DEFSTRUCT_INTERN_PACKAGE).
+		String internPackage = null;
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
 		}
@@ -18592,6 +18710,13 @@ public final class LispMacroExpander {
 						// keeps the plain (vector ...) construction.
 						typedVectorElementBits = packedElementBits(optValue);
 					}
+					case LispNames.DEFSTRUCT_INTERN_PACKAGE -> {
+						if (!(optValue instanceof LispString pkg)) {
+							throw new UnsupportedOperationException(
+									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
+						}
+						internPackage = pkg.value();
+					}
 					default -> throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 				}
@@ -18610,15 +18735,14 @@ public final class LispMacroExpander {
 		}
 		String structName = nameSym.name();
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
-		// A generated name of a qualified struct lands in the struct's package, spelled
-		// exactly as the resolver spells that symbol at a CALL site: one colon when the
-		// defpackage exports it, two otherwise. Without the oracle (a direct
-		// expandDefstruct caller that has no resolver) every generated name takes the
-		// internal spelling -- correct for a struct whose names are not exported, which
-		// is what every caller before quri had.
-		java.util.function.UnaryOperator<String> inPackage = member -> qn == null ? member
-				: exported != null && exported.test(qn.pkg(), member) ? PackageRegistry.qualify(qn.pkg(), member)
-						: PackageRegistry.qualifyInternal(qn.pkg(), member);
+		// A generated name lands in the package current at the defstruct (the struct
+		// name's own unless the resolver recorded another), spelled exactly as the
+		// resolver spells a bare reference there at a CALL site. Without the oracle (a
+		// direct expandDefstruct caller that has no resolver) every generated name takes
+		// the internal spelling.
+		String home = internPackage != null ? internPackage : qn == null ? LispNames.CL_USER_PKG : qn.pkg();
+		java.util.function.UnaryOperator<String> inPackage = member -> spelling != null ? spelling.apply(home, member)
+				: LispNames.CL_USER_PKG.equals(home) ? member : PackageRegistry.qualifyInternal(home, member);
 		String base = qn == null ? structName : qn.member();
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		// Synthesized affixes follow the base name's case: an upcased-reader struct PT
@@ -19194,6 +19318,7 @@ public final class LispMacroExpander {
 		String concNameOverride = null;
 		boolean concNameGiven = false;
 		String includeParent = null;
+		String internPackage = null;
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
 		}
@@ -19248,6 +19373,11 @@ public final class LispMacroExpander {
 							includeParent = inc.name();
 						}
 					}
+					case LispNames.DEFSTRUCT_INTERN_PACKAGE -> {
+						if (optValue instanceof LispString pkg) {
+							internPackage = pkg.value();
+						}
+					}
 					default -> {
 					}
 				}
@@ -19262,18 +19392,18 @@ public final class LispMacroExpander {
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		List<String> defined = new java.util.ArrayList<>(prunerSpellings(structName));
 		if (defaultConstructor) {
-			defined.addAll(spellingsInPackageOf(structName, affixFor("make-", base) + base));
+			defined.addAll(derivedSpellings(structName, internPackage, affixFor("make-", base) + base));
 		}
 		for (String ctor : constructorNames) {
 			defined.addAll(prunerSpellings(ctor));
 		}
 		if (!suppressPredicate) {
 			defined.addAll(customPredicate != null ? prunerSpellings(customPredicate)
-					: spellingsInPackageOf(structName, base + affixFor("-p", base)));
+					: derivedSpellings(structName, internPackage, base + affixFor("-p", base)));
 		}
 		if (!suppressCopier) {
 			defined.addAll(customCopier != null ? prunerSpellings(customCopier)
-					: spellingsInPackageOf(structName, affixFor("copy-", base) + base));
+					: derivedSpellings(structName, internPackage, affixFor("copy-", base) + base));
 		}
 		List<String> ownSlotBases = new java.util.ArrayList<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
@@ -19290,13 +19420,13 @@ public final class LispMacroExpander {
 		}
 		List<String> instantiators = new java.util.ArrayList<>(prunerSpellings(structName));
 		if (defaultConstructor) {
-			instantiators.addAll(spellingsInPackageOf(structName, affixFor("make-", base) + base));
+			instantiators.addAll(derivedSpellings(structName, internPackage, affixFor("make-", base) + base));
 		}
 		for (String ctor : constructorNames) {
 			instantiators.addAll(prunerSpellings(ctor));
 		}
 		return new StructDefinedNames(structName, includeParent, List.copyOf(ownSlotBases), List.copyOf(defined),
-				List.copyOf(instantiators), concName, base);
+				List.copyOf(instantiators), concName, base, internPackage);
 	}
 
 	/**
@@ -19311,9 +19441,11 @@ public final class LispMacroExpander {
 	 * the struct name (a {@code #S} literal, {@code make-instance}) and the constructors
 	 * @param concName the accessor prefix (member spelling)
 	 * @param caseBase the base name whose case the generated affixes follow
+	 * @param internPackage the {@code :%intern-package} of the derived names, or null
 	 */
 	public record StructDefinedNames(String structName, @Nullable String includeParent, List<String> ownSlotBases,
-			List<String> definedNames, List<String> instantiatorNames, String concName, String caseBase) {
+			List<String> definedNames, List<String> instantiatorNames, String concName, String caseBase,
+			@Nullable String internPackage) {
 
 		/**
 		 * The accessor spellings for one slot base name -- own or inherited; the caller
@@ -19322,7 +19454,8 @@ public final class LispMacroExpander {
 		 * @return the accessor name in every spelling a reference can take
 		 */
 		public List<String> accessorSpellings(String slotBase) {
-			return spellingsInPackageOf(this.structName, this.concName + affixFor(slotBase, this.caseBase));
+			return derivedSpellings(this.structName, this.internPackage,
+					this.concName + affixFor(slotBase, this.caseBase));
 		}
 	}
 
@@ -19357,6 +19490,7 @@ public final class LispMacroExpander {
 		String concNameOverride = null;
 		boolean concNameGiven = false;
 		String includeParent = null;
+		String internPackage = null;
 		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
@@ -19422,6 +19556,14 @@ public final class LispMacroExpander {
 							opaque = true;
 						}
 					}
+					case LispNames.DEFSTRUCT_INTERN_PACKAGE -> {
+						if (optValue instanceof LispString pkg) {
+							internPackage = pkg.value();
+						}
+						else {
+							opaque = true;
+						}
+					}
 					default -> opaque = true;
 				}
 			}
@@ -19435,7 +19577,7 @@ public final class LispMacroExpander {
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		if (!explicitConstructor && !suppressConstructor) {
 			constructors.add(new StructSlotFlow.CtorFlow(
-					spellingsInPackageOf(structName, affixFor("make-", base) + base), null));
+					derivedSpellings(structName, internPackage, affixFor("make-", base) + base), null));
 		}
 		List<StructSlotFlow.SlotFlow> ownSlots = new java.util.ArrayList<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
@@ -19461,7 +19603,7 @@ public final class LispMacroExpander {
 		}
 		return new StructSlotFlow(structName, prunerSpellings(structName), includeParent,
 				java.util.Map.copyOf(includeOverrides), List.copyOf(ownSlots), List.copyOf(constructors), concName,
-				base, opaque);
+				base, internPackage, opaque);
 	}
 
 	/**
@@ -19477,12 +19619,13 @@ public final class LispMacroExpander {
 	 * list (null = the keyword constructor)
 	 * @param concName the accessor prefix (member spelling)
 	 * @param caseBase the base name whose case the generated affixes follow
+	 * @param internPackage the {@code :%intern-package} of the derived names, or null
 	 * @param opaque true when an option this summary cannot attribute is present -- the
 	 * consumer must widen every slot of this struct to unknown
 	 */
 	public record StructSlotFlow(String structName, List<String> structSpellings, @Nullable String includeParent,
 			java.util.Map<String, LispVal> includeOverrides, List<SlotFlow> ownSlots, List<CtorFlow> constructors,
-			String concName, String caseBase, boolean opaque) {
+			String concName, String caseBase, @Nullable String internPackage, boolean opaque) {
 
 		/**
 		 * One slot.
@@ -19509,7 +19652,8 @@ public final class LispMacroExpander {
 		 * @return the accessor name in every spelling a reference can take
 		 */
 		public List<String> accessorSpellings(String slotBase) {
-			return spellingsInPackageOf(this.structName, this.concName + affixFor(slotBase, this.caseBase));
+			return derivedSpellings(this.structName, this.internPackage,
+					this.concName + affixFor(slotBase, this.caseBase));
 		}
 	}
 
@@ -19644,13 +19788,24 @@ public final class LispMacroExpander {
 				PackageRegistry.qualifyInternal(qn.pkg(), qn.member()));
 	}
 
-	/** A generated member name spelled in the owning name's package, both colon forms. */
-	private static List<String> spellingsInPackageOf(String owner, String member) {
+	/**
+	 * A generated member name spelled in the owning name's package, both colon forms --
+	 * and, for a struct whose derived names are interned in another package
+	 * ({@code internPackage}), in that one too. The owner's spellings stay: an inherited
+	 * derived name (an exported {@code make-x} of the package the struct name comes from)
+	 * is that package's symbol. A summary without a resolver over-approximates; a name it
+	 * misses makes the pruner drop a definition a kept call site still needs.
+	 */
+	private static List<String> derivedSpellings(String owner, @Nullable String internPackage, String member) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(owner);
-		if (qn == null) {
-			return List.of(member);
+		List<String> spellings = new java.util.ArrayList<>(qn == null ? List.of(member) : List
+			.of(PackageRegistry.qualify(qn.pkg(), member), PackageRegistry.qualifyInternal(qn.pkg(), member)));
+		if (internPackage != null) {
+			spellings.addAll(LispNames.CL_USER_PKG.equals(internPackage) ? List.of(member)
+					: List.of(PackageRegistry.qualify(internPackage, member),
+							PackageRegistry.qualifyInternal(internPackage, member)));
 		}
-		return List.of(PackageRegistry.qualify(qn.pkg(), member), PackageRegistry.qualifyInternal(qn.pkg(), member));
+		return List.copyOf(new java.util.LinkedHashSet<>(spellings));
 	}
 
 	private static boolean isDefstructForm(LispVal form) {
@@ -27248,23 +27403,24 @@ public final class LispMacroExpander {
 	 * As {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry)}, threading
 	 * the export oracle a {@code defstruct} needs to spell its generated names the way
 	 * the program's call sites do -- see
-	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BiPredicate)}.
+	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BinaryOperator)}.
 	 * Each compiler passes the {@link PackageResolver} it just resolved the program with.
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods
-	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null}
 	 * @return the program with each definition replaced by its generated defuns
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
-		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, false);
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, spelling, false);
 	}
 
 	/**
 	 * As
-	 * {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry, java.util.function.BiPredicate)},
+	 * {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry, java.util.function.BinaryOperator)},
 	 * threading the backend's late-binding mode. The only thing it decides here is
 	 * whether the format renderer's {@code ~/name/} arm is injected unconditionally:
 	 * under {@code --dynamic} any name resolves at run time, so the arm's cost -- keeping
@@ -27272,16 +27428,16 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods
-	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null}
 	 * @param dynamic whether the backend compiles in late-binding mode
 	 * ({@code --dynamic})
 	 * @return the program with each definition replaced by its generated defuns
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
-			boolean dynamic) {
-		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, dynamic, false);
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling, boolean dynamic) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, spelling, dynamic, false);
 	}
 
 	/**
@@ -27297,16 +27453,17 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods
-	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null}
 	 * @param dynamic whether the backend compiles in late-binding mode
 	 * @param lazyConditionMessages whether the backend never renders signal messages
 	 * @return the program with each definition replaced by its generated defuns
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling, boolean dynamic,
 			boolean lazyConditionMessages) {
-		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, dynamic,
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, spelling, dynamic,
 				lazyConditionMessages ? SignalMessages.LAZY : SignalMessages.RENDERED, null);
 	}
 
@@ -27324,7 +27481,8 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods
-	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param spelling {@code (package, member) -> the name interned there}, or
+	 * {@code null}
 	 * @param dynamic whether the backend compiles in late-binding mode
 	 * @param signalMessages who reads a signal's message ({@link SignalMessages})
 	 * @param narrower the dispatch narrower, or {@code null} to keep every branch
@@ -27332,7 +27490,7 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
-			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
+			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling, boolean dynamic,
 			SignalMessages signalMessages, @org.jspecify.annotations.Nullable DispatchNarrower narrower) {
 		// The one whole-program pass both compilers already run, so the pure-builtin fold
 		// and the load-time-value hoist ride along instead of needing their own
@@ -27502,7 +27660,7 @@ public final class LispMacroExpander {
 				// Plain defuns, plus -- for a (:print-object ...) / (:print-function ...)
 				// struct -- a synthesized print-object defmethod, which needs the same
 				// registration + dispatcher placement a top-level defmethod gets.
-				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, exported,
+				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, spelling,
 						signalMessages != SignalMessages.LAZY)) {
 					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
 				}
@@ -27515,7 +27673,7 @@ public final class LispMacroExpander {
 				// The regenerated forms are discarded (the stream carries the kept
 				// subset; a (:print-object ...) struct's synthesized defmethod rides the
 				// stream too and registers through the defmethod arm above).
-				expandDefstruct(structPayload, structAccessors, closRegistry, exported,
+				expandDefstruct(structPayload, structAccessors, closRegistry, spelling,
 						signalMessages != SignalMessages.LAZY);
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {

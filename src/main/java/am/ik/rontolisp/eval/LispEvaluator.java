@@ -10228,7 +10228,7 @@ public final class LispEvaluator {
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
-				this.packageResolver::spellsAsExternal)) {
+				this.packageResolver::internedSpelling)) {
 			eval(form, env);
 			// A writable slot's accessor has its (setf accessor) function too. The
 			// compile path emits it only for a program that takes it; here it costs a
@@ -11765,7 +11765,10 @@ public final class LispEvaluator {
 	 * Expands the top-level form once when its operator is a user macro or a built-in
 	 * macro ({@code macroexpand-1}). Subforms are not walked. Returns the form itself
 	 * (same reference) when the operator is not a macro, so callers can detect
-	 * non-expansion by identity.
+	 * non-expansion by identity. It expands exactly the names {@code macro-function}
+	 * claims ({@link #isMacroName}): a code walker trusts the one and calls the other, so
+	 * a CL function the expander happens to rewrite inline ({@code typep}) stays a call,
+	 * and a CL macro the evaluator runs natively ({@code return}) still expands.
 	 * @param form the form to expand
 	 * @return the expansion, or {@code form} unchanged
 	 */
@@ -11774,7 +11777,13 @@ public final class LispEvaluator {
 			if (isUserMacro(sym.name())) {
 				return expandUserMacro(cons);
 			}
+			if (!isMacroName(sym.name())) {
+				return form;
+			}
 			LispVal expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandNativeMacro(cons);
+			}
 			if (expanded != null) {
 				return expanded;
 			}
@@ -11816,9 +11825,9 @@ public final class LispEvaluator {
 	/**
 	 * Whether the name has a macro function: a user {@code defmacro} (a {@code macrolet}
 	 * body's local macro and a {@code (setf macro-function)} alias register in the same
-	 * table) or a built-in operator with no function value that is not one of the 25 ANSI
-	 * special operators -- the CL macros the expander dispatches on, plus the ones
-	 * rontolisp implements as special forms of its own.
+	 * table) or a built-in operator with no function value outside
+	 * {@link PackageRegistry#namesWithoutMacroFunction()} -- the CL macros the expander
+	 * dispatches on, plus the ones rontolisp implements as special forms of its own.
 	 */
 	private boolean isMacroName(String name) {
 		return isUserMacro(name)
@@ -12480,6 +12489,39 @@ public final class LispEvaluator {
 		if (SPECIAL_OPERATORS.contains(name)) {
 			throw CellErrorException.undefinedFunction(name);
 		}
+		LispVal loaded = loadFunction(name);
+		if (loaded != null) {
+			return loaded;
+		}
+		// Last resort, past every lazy load: a shared image function spelled from
+		// another package. The reader canonicalizes the symbol to pkg::member, while
+		// the function table keys the image-wide %-helpers cl does not own by their
+		// bare member -- a CL-USER spelling canonifies to bare and resolves, a
+		// foreign one must reach the same entry here, where the qualified lazy loads
+		// have all declined. The user defuns this fallback could shadow live
+		// under their own qualified keys, which the lookup at the top already missed.
+		// fbound does not take this step: a package's own symbol that only falls back
+		// to an image function is no definition of that symbol.
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified != null) {
+			LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
+			if (bare != null) {
+				return bare;
+			}
+		}
+		throw CellErrorException.undefinedFunction(name);
+	}
+
+	/**
+	 * The function a name resolves to once the library that defines it is loaded: every
+	 * lazily loaded definition (the prelude defuns, the uiop and asdf runtimes, the
+	 * qualified libraries, the generated runtimes, the system generics) and the car/cdr
+	 * compositions. {@link #resolveFunction} and {@link #fbound} both ask it, so a name a
+	 * call reaches is a name {@code fboundp} answers t for.
+	 * @param name the function name
+	 * @return the loaded function, or null when no library defines the name
+	 */
+	private @Nullable LispVal loadFunction(String name) {
 		// Everything below LOADS something into the shared global environment, so it runs
 		// under the library lock: a concurrently served request must either see the load
 		// finished or wait for it, never fall through a gate whose flag is already set
@@ -12908,21 +12950,7 @@ public final class LispEvaluator {
 				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
 				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 			}
-			// Last resort, past every lazy load: a shared image function spelled from
-			// another package. The reader canonicalizes the symbol to pkg::member, while
-			// the function table keys the image-wide %-helpers cl does not own by their
-			// bare member -- a CL-USER spelling canonifies to bare and resolves, a
-			// foreign one must reach the same entry here, where the qualified lazy loads
-			// above have all declined. The user defuns this fallback could shadow live
-			// under their own qualified keys, which the lookup at the top already missed.
-			PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
-			if (qualified != null) {
-				LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
-				if (bare != null) {
-					return bare;
-				}
-			}
-			throw CellErrorException.undefinedFunction(name);
+			return null;
 		}
 	}
 
@@ -15772,11 +15800,13 @@ public final class LispEvaluator {
 	 */
 	boolean fbound(String name) {
 		// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until its
-		// first #' resolution evaluates the wrapper (resolveFunction), and is a function
-		// all the same.
+		// first #' resolution evaluates the wrapper (resolveFunction), and a library
+		// function (alphanumericp, equalp, uiop:split-string, ...) none until its first
+		// resolution loads it: each is a function all the same, so the probe loads what a
+		// call would.
 		return SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-				|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
-				|| BuiltinFunctionWrappers.names().contains(name);
+				|| this.globalEnv.lookupFunctionOrNull(name) != null || BuiltinFunctionWrappers.names().contains(name)
+				|| loadFunction(name) != null;
 	}
 
 	/**
