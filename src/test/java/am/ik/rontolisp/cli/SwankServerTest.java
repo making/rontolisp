@@ -2,11 +2,14 @@ package am.ik.rontolisp.cli;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.net.ConnectException;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,6 +19,9 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.cli.SwankWire.Keyword;
 import am.ik.rontolisp.cli.SwankWire.Symbol;
@@ -25,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The SWANK server against a client replaying what SLIME 2.32 ({@code slime-fancy}) sent
@@ -277,6 +284,72 @@ class SwankServerTest {
 			// the REPL thread goes on, its package switch never announced
 			assertThat(client.repl("(list (package-name *package*) (+ 40 2))")).first()
 				.isEqualTo("(:write-string \"(\\\"CL-USER\\\" 42)\n\" :repl-result)");
+		}
+	}
+
+	@Test
+	void aProgramStartsTheServerOnItsOwnEvaluatorAndGoesOn() throws Exception {
+		int waiting;
+		try (ServerSocket probe = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+			waiting = probe.getLocalPort();
+		}
+		BlockingQueue<String> lines = new LinkedBlockingQueue<>();
+		OutputStream sink = new OutputStream() {
+			private final ByteArrayOutputStream line = new ByteArrayOutputStream();
+
+			@Override
+			public synchronized void write(int b) {
+				if (b == '\n') {
+					lines.add(this.line.toString(StandardCharsets.UTF_8));
+					this.line.reset();
+				}
+				else {
+					this.line.write(b);
+				}
+			}
+		};
+		RontoLispCli cli = new RontoLispCli(InputStream.nullInputStream(), new PrintStream(sink, true));
+		// :dont-close t returns at once; SWANK's default waits for one connection, then
+		// closes the port
+		Thread program = Thread.ofPlatform().start(() -> cli.run(new String[] { "-e", """
+				(asdf:load-system "swank")
+				(defvar *state* 41)
+				(format t "port ~a~%%" (swank:create-server :port 0 :dont-close t))
+				(finish-output)
+				(swank:create-server :port %d)
+				(format t "went on~%%")
+				""".formatted(waiting) }));
+		String announced = Objects.requireNonNull(lines.poll(60, TimeUnit.SECONDS));
+		assertThat(announced).startsWith("port ");
+		int port = Integer.parseInt(announced.substring("port ".length()));
+		try (Client client = new Client(port); Client first = connect(waiting)) {
+			assertThat(lines.poll(60, TimeUnit.SECONDS)).isEqualTo("went on");
+			program.join();
+			// both serve the program's own evaluator
+			assertThat(client.repl("(1+ *state*)")).first().isEqualTo("(:write-string \"42\n\" :repl-result)");
+			assertThat(first.repl("*state*")).first().isEqualTo("(:write-string \"41\n\" :repl-result)");
+			assertThatThrownBy(() -> new Socket(InetAddress.getLoopbackAddress(), waiting).close())
+				.isInstanceOf(ConnectException.class);
+			// stop-server closes the port, the connection going on
+			client.repl("(swank:stop-server " + port + ")");
+			assertThatThrownBy(() -> new Socket(InetAddress.getLoopbackAddress(), port).close())
+				.isInstanceOf(ConnectException.class);
+			assertThat(client.repl("(+ 1 2)")).first().isEqualTo("(:write-string \"3\n\" :repl-result)");
+		}
+	}
+
+	/** Connects to a port a program is about to listen on. */
+	private static Client connect(int port) throws IOException, InterruptedException {
+		for (int attempt = 0;; attempt++) {
+			try {
+				return new Client(port);
+			}
+			catch (ConnectException ex) {
+				if (attempt == 600) {
+					throw ex;
+				}
+				Thread.sleep(100);
+			}
 		}
 	}
 

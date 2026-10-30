@@ -46,5 +46,27 @@ the way rontolisp prints it (`CL-USER::F`, where SBCL writes `COMMON-LISP-USER::
 server runs on the interpreter only; SLIME's fork SLY and Lem's micros speak protocols of
 their own and are not served.
 
-A program cannot start the server: `swank:create-server` (the built-in `swank` system,
-[Systems (asdf)](../guides/asdf-systems.md)) still signals, naming `rontolisp --swank`.
+## From a running program
+
+A program run by the interpreter (a file, `-e`, the REPL) starts the same server on its
+own image with `swank:create-server` from the built-in `swank` system
+([Systems (asdf)](../guides/asdf-systems.md)), and goes on running while SLIME inspects
+and redefines it:
+
+```console
+$ cat app.lisp
+(asdf:load-system "swank")
+(defvar *requests* 0)
+(swank:create-server :port 4005 :dont-close t)
+$ rontolisp app.lisp
+;; Swank started at port: 4005.
+```
+
+It takes SWANK's keys, prints SWANK's line on `*error-output*` and returns the port. With `:dont-close t`
+it accepts every connection and returns at once; without it (SWANK's default) it waits for
+the first connection and then closes the port. `:interface` names the address to listen
+on (localhost by default). `(swank:stop-server 4005)` closes the port; connections already
+made go on. A program that ran off its end keeps serving until the port is closed and the
+editor disconnects; quitting from SLIME ends the process. A compiled program has no
+interpreter to serve: there `swank:create-server` signals and `swank:stop-server` returns
+`nil`.

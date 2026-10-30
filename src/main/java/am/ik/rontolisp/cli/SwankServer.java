@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
@@ -92,7 +93,14 @@ final class SwankServer implements AutoCloseable {
 	private volatile @Nullable LispExitSignal exit;
 
 	/**
-	 * A server listening on a port.
+	 * For a server a program started ({@link SwankServers}), what a request's quit does
+	 * once the server closed; {@code null} for the command line's, whose {@link #serve}
+	 * throws it.
+	 */
+	private final @Nullable Consumer<LispExitSignal> onExit;
+
+	/**
+	 * A server listening on a port, which {@link #serve} runs for the command line.
 	 * @param lisp the Common Lisp half every request evaluates through
 	 * @param evaluator the evaluator it runs on
 	 * @param bind the address to listen on
@@ -102,9 +110,26 @@ final class SwankServer implements AutoCloseable {
 	 */
 	SwankServer(CommonLispSwank lisp, LispEvaluator evaluator, InetAddress bind, int port, long stackBytes)
 			throws IOException {
+		this(lisp, evaluator, bind, port, stackBytes, null);
+	}
+
+	/**
+	 * A server listening on a port.
+	 * @param lisp the Common Lisp half every request evaluates through
+	 * @param evaluator the evaluator it runs on
+	 * @param bind the address to listen on
+	 * @param port the port, 0 for any free one
+	 * @param stackBytes the stack of each request's thread
+	 * @param onExit for a server a program started, what a request's quit does: its
+	 * connections then keep the process alive as the program's own threads do
+	 * @throws IOException when the port cannot be listened on
+	 */
+	SwankServer(CommonLispSwank lisp, LispEvaluator evaluator, InetAddress bind, int port, long stackBytes,
+			@Nullable Consumer<LispExitSignal> onExit) throws IOException {
 		this.lisp = lisp;
 		this.evaluator = evaluator;
 		this.stackBytes = stackBytes;
+		this.onExit = onExit;
 		this.server = new ServerSocket(port, 50, bind);
 	}
 
@@ -131,20 +156,8 @@ final class SwankServer implements AutoCloseable {
 	 * @throws LispExitSignal what an evaluation's {@code exit} asked for
 	 */
 	void serve() throws IOException {
-		while (!this.server.isClosed()) {
-			Socket socket;
-			try {
-				socket = this.server.accept();
-			}
-			catch (SocketException ex) {
-				if (this.server.isClosed()) {
-					break;
-				}
-				throw ex;
-			}
-			Connection connection = new Connection(socket);
-			this.connections.add(connection);
-			Thread.ofVirtual().name("swank-reader").start(connection);
+		while (accept()) {
+			// the next connection
 		}
 		LispExitSignal asked = this.exit;
 		if (asked != null) {
@@ -152,14 +165,43 @@ final class SwankServer implements AutoCloseable {
 		}
 	}
 
-	@Override
-	public void close() {
+	/**
+	 * Accepts one connection and starts reading it: on a virtual thread for the command
+	 * line's server, on a platform one that keeps the process alive for a program's.
+	 * @return false when the server closed instead
+	 * @throws IOException when accepting fails other than by the close
+	 */
+	boolean accept() throws IOException {
+		Socket socket;
+		try {
+			socket = this.server.accept();
+		}
+		catch (SocketException ex) {
+			if (this.server.isClosed()) {
+				return false;
+			}
+			throw ex;
+		}
+		Connection connection = new Connection(socket);
+		this.connections.add(connection);
+		(this.onExit == null ? Thread.ofVirtual() : Thread.ofPlatform().daemon(false)).name("swank-reader")
+			.start(connection);
+		return true;
+	}
+
+	/** Closes the port, the connections made going on (SWANK's {@code stop-server}). */
+	void stopListening() {
 		try {
 			this.server.close();
 		}
 		catch (IOException ex) {
 			// closing anyway
 		}
+	}
+
+	@Override
+	public void close() {
+		stopListening();
 		for (Connection connection : this.connections) {
 			connection.close();
 		}
@@ -329,6 +371,10 @@ final class SwankServer implements AutoCloseable {
 				output.flush();
 				SwankServer.this.exit = ex;
 				SwankServer.this.close();
+				Consumer<LispExitSignal> onExit = SwankServer.this.onExit;
+				if (onExit != null) {
+					onExit.accept(ex);
+				}
 				return;
 			}
 			catch (StackOverflowError ex) {

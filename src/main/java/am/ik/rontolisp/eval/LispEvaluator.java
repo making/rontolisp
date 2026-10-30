@@ -547,6 +547,12 @@ public final class LispEvaluator {
 	@Nullable private DistClient distClient;
 
 	/**
+	 * The SWANK server {@code swank:create-server} starts on this evaluator: the command
+	 * line's ({@link #setSwankHost}), none for an embedded evaluator.
+	 */
+	@Nullable private volatile SwankHost swankHost;
+
+	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
 	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
 	 * as places. Kept per evaluator, like the user macro table.
@@ -1171,6 +1177,69 @@ public final class LispEvaluator {
 	 */
 	public void setDistClient(DistClient client) {
 		this.distClient = client;
+	}
+
+	/**
+	 * Installs the SWANK server the program's {@code swank:create-server} starts on this
+	 * evaluator ({@code rontolisp::%swank-*}); the command line installs its own before
+	 * the program runs.
+	 * @param host the host
+	 */
+	public void setSwankHost(SwankHost host) {
+		this.swankHost = host;
+	}
+
+	/**
+	 * Defines {@code rontolisp::%swank-listen}, {@code %swank-serve} and
+	 * {@code %swank-stop}, the interpreter's half of the {@code swank} shim, over the
+	 * installed {@link SwankHost}.
+	 */
+	private void registerSwankHost() {
+		String listenName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_LISTEN);
+		this.globalEnv.defineFunction(listenName, new LispFunction(listenName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_LISTEN + " expects (port interface), got " + args);
+			}
+			String host = args.get(1) instanceof LispString name ? name.value() : null;
+			try {
+				return new LispInteger(requireSwankHost().listen(host, (int) port.value()));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot listen on port " + port.value() + ": " + ex.getMessage());
+			}
+		}));
+		String serveName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_SERVE);
+		this.globalEnv.defineFunction(serveName, new LispFunction(serveName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_SERVE + " expects (port dont-close), got " + args);
+			}
+			try {
+				requireSwankHost().serve((int) port.value(), !(args.get(1) instanceof LispNil));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot accept on port " + port.value() + ": " + ex.getMessage());
+			}
+			return LispNil.INSTANCE;
+		}));
+		String stopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_STOP);
+		this.globalEnv.defineFunction(stopName, new LispFunction(stopName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_STOP + " expects a port, got " + args);
+			}
+			SwankHost host = this.swankHost;
+			return host != null && host.stop((int) port.value()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private SwankHost requireSwankHost() {
+		SwankHost host = this.swankHost;
+		if (host == null) {
+			throw new LispEvalException("swank:create-server is not supported here: this evaluator has no SWANK"
+					+ " server; the rontolisp command line's interpreter serves one");
+		}
+		return host;
 	}
 
 	/**
@@ -3223,6 +3292,7 @@ public final class LispEvaluator {
 			return new LispInteger(
 					RontoHttpServer.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
 		}));
+		registerSwankHost();
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);

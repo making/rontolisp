@@ -255,7 +255,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   match2*+ onto `:trivial`); `cl+ssl` (over `rontolisp:tls-upgrade`, `.kb/tcp-sockets.md`);
   `mgl-pax-bootstrap` (package `mgl-pax`, nickname `pax`; `defsection` -> `(defvar NAME nil)`;
   its real `.asd` declares `:around-compile`, which is why the shim stays); `swank`
-  (`create-server` SIGNALS — clack's `.asd` hard-depends on it).
+  (`create-server` starts the command line's server on the interpreter, `.kb/swank.md`, and
+  SIGNALS in a compiled program — clack's `.asd` hard-depends on it).
 - **`trivial-features`** — whose whole content IS the announcement
   (`BuiltinSystems.DECLARED_FEATURES` + generated `pushnew` forms from the same list, so the
   read-time and run-time halves cannot drift). Declares **`:unix`**, **`:little-endian`** and

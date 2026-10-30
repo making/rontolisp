@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.IntConsumer;
 
 import am.ik.maven.MavenResolver;
 import am.ik.maven.RemoteRepository;
@@ -80,6 +81,13 @@ public final class RontoLispCli {
 	 * session of an nREPL server's thread takes too.
 	 */
 	private long stackBytes = SizedThread.WORKER_STACK_BYTES;
+
+	/**
+	 * What ends the process when a request to a SWANK server a program started quits:
+	 * {@code System.exit} under {@code main}, nothing when embedded (that server only
+	 * closes).
+	 */
+	private @Nullable IntConsumer processExit;
 
 	private @Nullable Function<List<RemoteRepository>, MavenResolver> javaDependencyResolver;
 
@@ -688,6 +696,7 @@ public final class RontoLispCli {
 			evaluator.setParallel(true);
 		}
 		evaluator.setSourceStandards(standards);
+		serveSwankFromPrograms(evaluator);
 		return new Interactive(evaluator, files);
 	}
 
@@ -764,6 +773,14 @@ public final class RontoLispCli {
 			// refused below
 		}
 		throw new IllegalArgumentException("--swank=PORT expects a port between 0 and 65535, not '" + option + "'");
+	}
+
+	/**
+	 * Lets the program an evaluator runs start the SWANK server on it
+	 * ({@code swank:create-server}) and go on.
+	 */
+	private void serveSwankFromPrograms(LispEvaluator evaluator) {
+		evaluator.setSwankHost(new SwankServers(evaluator, this.stackBytes, this.processExit));
 	}
 
 	/**
@@ -994,6 +1011,7 @@ public final class RontoLispCli {
 		// are the source-language seam's, in the entry file's language.
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
 		evaluator.setSourceStandards(standards);
+		serveSwankFromPrograms(evaluator);
 		// a whole Clojure program: its library without the arms it can never take, or,
 		// where it lowers as it runs, every arm and its lowering kept for the run
 		List<LispVal> exprs = language == SourceLanguage.CLOJURE
@@ -2147,6 +2165,7 @@ public final class RontoLispCli {
 		if (!buffered) {
 			RontoLispCli cli = new RontoLispCli(System.in, System.out);
 			cli.stackBytes = stackBytes;
+			cli.processExit = System::exit;
 			int code = runReporting(cli, args);
 			return new Launched(code, cli.quitRequested);
 		}
@@ -2157,6 +2176,7 @@ public final class RontoLispCli {
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
 		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
 		cli.stackBytes = stackBytes;
+		cli.processExit = System::exit;
 		try {
 			int code = runReporting(cli, args);
 			return new Launched(code, cli.quitRequested);
