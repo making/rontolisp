@@ -6216,6 +6216,7 @@ cases:
       (print (loop for x = 1 then (* x 2) repeat 3 finally (return x)))
       (print (loop repeat 2 for x in '(1 2 3) finally (return x)))
       (print (loop for x in '(1 2 3) repeat 2 finally (return x)))
+      (print (let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x)))
     expected: |
       (3 3 3)
       ((3 4) (3 4))
@@ -6234,6 +6235,7 @@ cases:
       8
       2
       3
+      (1 2 3)
   - name: delete-delete-if-delete-if-not
     source: |
       (print (delete 2 '(1 2 3 2 1)))

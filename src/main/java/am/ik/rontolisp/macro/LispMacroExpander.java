@@ -1144,14 +1144,15 @@ public final class LispMacroExpander {
 		private final List<LispVal> steps = new java.util.ArrayList<>();
 
 		// Termination tests other than per-piece driver ends and user
-		// while/until (which live in iterationHeads / userEndTests): always /
-		// never / thereis contribute here.
+		// while/until (which live in iterationHeads): always / never / thereis
+		// contribute here.
 		private final List<LispVal> endTests = new java.util.ArrayList<>();
 
 		// Per-clause iteration heads (source order): for each `for` group we emit
 		// one composite form that (a) checks the group's driver terminations, and
-		// (b) runs the group's `for X = init` setqs. The while cond is
-		// (and iterHead-1 iterHead-2 ... userEndTests) so a driver terminating in
+		// (b) runs the group's `for X = init` setqs; a `repeat` or a pre-body
+		// `while`/`until` contributes its test at its own position. The while cond is
+		// (and iterHead-1 iterHead-2 ...) so a driver terminating in
 		// clause K skips the assigns of clauses K+1..N -- matching CL's per-clause
 		// evaluation order (uax-15's compose-hangul relies on driver K firing
 		// before the following `for ch = (aref ...)` init runs; parse-number's
@@ -1159,12 +1160,6 @@ public final class LispMacroExpander {
 		// updating left BEFORE the subsequent `for point in splits` driver
 		// terminates, so its `finally` sees the fresh left).
 		private final List<LispVal> iterationHeads = new java.util.ArrayList<>();
-
-		// User-supplied `while`/`until` end-tests that appear BEFORE any mainBody
-		// form. Emitted AFTER every iterationHead so an all-clauses-passed loop
-		// still respects the outer termination (CL semantics for
-		// `for c = (form) while c`).
-		private final List<LispVal> userEndTests = new java.util.ArrayList<>();
 
 		// A shared iteration flag: {@code t} on the first pass through the body,
 		// {@code nil} thereafter. Materialized on demand by
@@ -1252,13 +1247,9 @@ public final class LispMacroExpander {
 			// Per-iteration control order: process for-groups in source order, each
 			// group checking its drivers then running its `for X = init` setqs; a
 			// terminating driver short-circuits the following groups' setqs. After
-			// every group runs its setqs, user `while`/`until` clauses evaluate and
-			// finally any leftover `endTests` (from always/never/thereis) fire.
+			// every head, any leftover `endTests` (from always/never/thereis) fire.
 			List<LispVal> conjuncts = new java.util.ArrayList<>();
 			conjuncts.addAll(iterationHeads);
-			if (!userEndTests.isEmpty()) {
-				conjuncts.add(makeNot(orOf(userEndTests)));
-			}
 			if (!endTests.isEmpty()) {
 				conjuncts.add(makeNot(orOf(endTests)));
 			}
@@ -2069,19 +2060,16 @@ public final class LispMacroExpander {
 		}
 
 		/**
-		 * A {@code while}/{@code until} before any body clause is hoisted into the loop
-		 * head (iteration variables are already current there — they sync at binding time
-		 * and at the end of the step forms); once body statements exist, the test runs at
-		 * its textual position and exits through the epilogue (finally + result) when it
-		 * fires.
+		 * A {@code while}/{@code until} before any body clause is an iteration head at
+		 * its own position in the clause order: {@code for c = (form) while c} tests the
+		 * freshly assigned c, and {@code while s for x = (pop s)} tests before popping
+		 * (SBCL's order; CLHS calls a {@code while} before a {@code for} nonconforming).
+		 * Once body statements exist, the test runs at its textual position and exits
+		 * through the epilogue (finally + result) when it fires.
 		 */
 		private void addTerminationTest(LispVal test, boolean until) {
 			if (mainBody.isEmpty()) {
-				// Route to userEndTests so the per-iteration bodyPrefix (from
-				// `for X = init` clauses) runs BEFORE this check -- CL semantics for
-				// `for c = (form) while c` requires c to be freshly assigned before
-				// the check.
-				userEndTests.add(until ? test : makeNot(test));
+				iterationHeads.add(until ? makeNot(test) : test);
 			}
 			else if (until) {
 				mainBody.add(makeIf(test, EPILOGUE_MARKER, LispNil.INSTANCE));

@@ -4626,7 +4626,7 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalLoopRepeatIsAClauseOrderedDriver() {
+	void evalLoopRepeatAndWhileAreClauseOrdered() {
 		// `repeat` terminates at its own position in the clause order, so a clause
 		// written AFTER it does not run one extra time on the terminating pass...
 		assertThat(eval("(let ((s (list 1 2 3 4 5))) (loop repeat 3 for x = (pop s) collect x) s)").print())
@@ -4644,6 +4644,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(loop repeat 3 collect 'x)").print()).isEqualTo("(X X X)");
 		assertThat(eval("(loop repeat 0 collect 'x)")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(loop for x in '(1 2) repeat 5 collect x)").print()).isEqualTo("(1 2)");
+		// A `while`/`until` written before a `for` tests before that `for` assigns
+		// (nonconforming per CLHS, but SBCL keeps source order and cl-markup relies on
+		// it).
+		assertThat(eval("(let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x))").print())
+			.isEqualTo("(1 2 3)");
+		assertThat(eval("(let ((s (list 1 2 3)) (n 0)) (loop until (null s) for x = (progn (incf n) (pop s))) n)"))
+			.isEqualTo(new LispInteger(3));
+		assertThat(eval("(let ((s (list 1 2 3))) (loop for x = (pop s) while x collect x))").print())
+			.isEqualTo("(1 2 3)");
 	}
 
 	@Test
