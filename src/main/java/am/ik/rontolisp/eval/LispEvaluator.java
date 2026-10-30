@@ -553,6 +553,30 @@ public final class LispEvaluator {
 	@Nullable private volatile SwankHost swankHost;
 
 	/**
+	 * What records the definitions and uses of the code a {@code load} runs, while a
+	 * SWANK server serves this evaluator ({@link #recordLoadsTo}); null otherwise, so a
+	 * load pays one read.
+	 */
+	@Nullable private volatile LoadRecorder loadRecorder;
+
+	/**
+	 * What sees the forms of every Common Lisp file a {@code load} runs: an editor's
+	 * record of definitions and uses ({@code M-.}, {@code xref}).
+	 */
+	interface LoadRecorder {
+
+		/**
+		 * Records what a loaded file's forms that ran define and use.
+		 * @param file the file's true name
+		 * @param code its text
+		 * @param read the forms read from it, in order, as read
+		 * @param resolved the first of them, as many as ran, as resolved
+		 */
+		void recordLoaded(String file, String code, List<LispVal> read, List<LispVal> resolved);
+
+	}
+
+	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
 	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
 	 * as places. Kept per evaluator, like the user macro table.
@@ -1187,6 +1211,16 @@ public final class LispEvaluator {
 	 */
 	public void setSwankHost(SwankHost host) {
 		this.swankHost = host;
+	}
+
+	/**
+	 * Hands every Common Lisp file a {@code load} runs from now on to an editor's record
+	 * of definitions and uses ({@code M-.}, {@code xref}), each form as resolved, once
+	 * the file's forms ran.
+	 * @param recorder the record
+	 */
+	void recordLoadsTo(LoadRecorder recorder) {
+		this.loadRecorder = recorder;
 	}
 
 	/**
@@ -4142,8 +4176,14 @@ public final class LispEvaluator {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
 					this.sourceLoader);
-			for (LispVal form : read.forms()) {
-				eval(markers ? resolveReadTimeEvalInCode(form) : form);
+			LoadRecorder recorder = language == SourceLanguage.COMMON_LISP ? this.loadRecorder : null;
+			if (recorder == null) {
+				for (LispVal form : read.forms()) {
+					eval(markers ? resolveReadTimeEvalInCode(form) : form);
+				}
+			}
+			else {
+				loadRecorded(recorder, this.sourceLoader.canonicalPath(resolved), source, read.forms(), markers);
 			}
 			LispReadException error = read.error();
 			if (error != null) {
@@ -4155,6 +4195,23 @@ public final class LispEvaluator {
 			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
 			this.packageResolver.popPackage();
 			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Runs a loaded file's forms as {@link #loadFile} does, then hands the forms that
+	 * ran, as resolved, to the record of definitions and uses -- also when one of them
+	 * fails.
+	 */
+	private void loadRecorded(LoadRecorder recorder, String file, String source, List<LispVal> forms, boolean markers) {
+		List<LispVal> resolved = new ArrayList<>();
+		try {
+			for (LispVal form : forms) {
+				evalTopLevel(markers ? resolveReadTimeEvalInCode(form) : form, resolved::add);
+			}
+		}
+		finally {
+			recorder.recordLoaded(file, source, forms, resolved);
 		}
 	}
 
@@ -5678,9 +5735,24 @@ public final class LispEvaluator {
 	 * @return the form's values, primary first (empty for {@code (values)})
 	 */
 	public List<LispVal> evalValues(LispVal expr) {
+		return evalValues(expr, null);
+	}
+
+	/**
+	 * Evaluates a top-level form as {@link #evalValues(LispVal)} does, handing the form
+	 * as resolved to {@code resolvedForm} before it runs: an editor's REPL records what
+	 * its input defines and uses ({@link CommonLispSwank}).
+	 * @param expr the top-level form
+	 * @param resolvedForm what sees the resolved form, or null
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	List<LispVal> evalValues(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
 		// Resolution is not idempotent under a :shadow package (see evalResolved), so the
 		// form is resolved once here and evaluated through evalResolved.
 		LispVal resolved = this.packageResolver.resolve(expr);
+		if (resolvedForm != null) {
+			resolvedForm.accept(resolved);
+		}
 		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
 			LispVal capture = new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
 					new LispCons(resolved, LispNil.INSTANCE));
@@ -9126,6 +9198,23 @@ public final class LispEvaluator {
 			}
 		}
 		return cons.toList().get(1);
+	}
+
+	/**
+	 * Removes one method of a generic function and reinstalls its dispatcher: an editor
+	 * inspector's {@code [remove method]} ({@link SwankInspector}). There is no method
+	 * metaobject for {@code remove-method} to take (its prelude definition signals).
+	 * @param generic the generic function's name
+	 * @param key the method's key in {@link ClosRegistry.GenericInfo#methods()}
+	 */
+	void removeMethod(String generic, String key) {
+		ClosRegistry.GenericInfo info = this.closRegistry.findGeneric(generic);
+		if (info == null || info.methods().remove(key) == null) {
+			return;
+		}
+		info.methodShapes().remove(key);
+		info.inlineMethodKeys().remove(key);
+		defineDispatcher(info.name(), this.globalEnv);
 	}
 
 	/**

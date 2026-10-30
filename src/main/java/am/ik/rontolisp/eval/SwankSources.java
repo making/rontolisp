@@ -24,25 +24,27 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.CallSiteWalk;
-import am.ik.rontolisp.eval.CommonLispSwank.Location;
 
 /**
- * Where the code an editor compiled defines things and what it calls, binds, sets,
- * references and expands, for SWANK's {@code find-definitions-for-emacs} ({@code M-.})
- * and {@code xref}. A compile request ({@link CommonLispSwank#compileString},
- * {@link CommonLispSwank#compileFile}) hands its forms as resolved, once they ran, to
- * {@link #record}, whose walk also finds the calls of functions nothing defines. A
- * definition recompiled replaces what the last compile recorded for it.
+ * Where the code an editor compiled, loaded or typed defines things and what it calls,
+ * binds, sets, references and expands, for SWANK's {@code find-definitions-for-emacs}
+ * ({@code M-.}) and {@code xref}. A compile request
+ * ({@link CommonLispSwank#compileString}, {@link CommonLispSwank#compileFile}) hands its
+ * forms as resolved, once they ran, to {@link #record}, whose walk also finds the calls
+ * of functions nothing defines; a {@code load} while a server runs hands its file's forms
+ * ({@link #recordLoaded}), a REPL or editor evaluation its forms with no place
+ * ({@link #recordEvaluated}). A definition run again replaces what was recorded for it.
  *
  * <p>
- * A definition the editor did not compile -- loaded, or typed at the REPL -- is found
- * through the evaluator's own record of a {@code defun}, {@code defmacro} or
- * {@code defgeneric} ({@link LispEvaluator#definition}), at the file and line its form
- * was read from when it came from a file. Built-in operators have no definitions.
+ * A definition run before a server started is found through the evaluator's own record of
+ * a {@code defun}, {@code defmacro} or {@code defgeneric}
+ * ({@link LispEvaluator#definition}), at the file and line its form was read from when it
+ * came from a file. Built-in operators have no definitions.
  */
-public final class SwankSources {
+public final class SwankSources implements LispEvaluator.LoadRecorder {
 
 	/** How many characters of a file a definition's snippet carries, as SWANK's. */
 	private static final int SNIPPET_LENGTH = 256;
@@ -109,8 +111,14 @@ public final class SwankSources {
 	 * @param snippet the text there, which the editor searches for when the position is
 	 * off, or null
 	 */
-	public record Place(Location location, @Nullable String snippet) {
+	public record Place(SwankLocation location, @Nullable String snippet) {
 	}
+
+	/** The kind of definition SBCL names when it knows no place of one. */
+	private static final Map<String, String> SOURCELESS_KINDS = Map.of(LispNames.DEFMACRO, "macro", LispNames.DEFVAR,
+			"variable", LispNames.DEFCONSTANT, "constant", LispNames.DEFCLASS, "class", LispNames.DEFINE_CONDITION,
+			"condition", LispNames.DEFSTRUCT, "structure", LispNames.DEFTYPE, "type", LispNames.DEFMETHOD, "method",
+			LispNames.DEFGENERIC, "generic-function", LispNames.DEFPACKAGE, "package");
 
 	/**
 	 * A definition.
@@ -120,10 +128,10 @@ public final class SwankSources {
 	 * a package
 	 * @param qualifiers a method's qualifiers
 	 * @param specializers a method's specializers, or a generic function's lambda list
-	 * @param place where it is
+	 * @param place where it is, or null for a definition typed at the REPL
 	 */
 	private record Def(String operator, LispVal name, List<LispVal> qualifiers, @Nullable List<LispVal> specializers,
-			Place place) {
+			@Nullable Place place) {
 
 		boolean method() {
 			return LispNames.DEFMETHOD.equals(this.operator);
@@ -137,9 +145,9 @@ public final class SwankSources {
 	 * @param use what kind of use
 	 * @param target the used name's key ({@link #key})
 	 * @param container the definition it is in
-	 * @param place where it is
+	 * @param place where it is, or null in a definition typed at the REPL
 	 */
-	private record Ref(Use use, String target, Def container, Place place) {
+	private record Ref(Use use, String target, Def container, @Nullable Place place) {
 	}
 
 	/**
@@ -152,7 +160,7 @@ public final class SwankSources {
 	public record Entry(String label, @Nullable Place place, @Nullable String error) {
 	}
 
-	private final CommonLispSwank lisp;
+	private final SwankLisp lisp;
 
 	private final LispEvaluator evaluator;
 
@@ -162,7 +170,14 @@ public final class SwankSources {
 	/** The uses in each definition the editor compiled, by the definition's key. */
 	private final Map<String, List<Ref>> uses = new LinkedHashMap<>();
 
-	SwankSources(CommonLispSwank lisp, LispEvaluator evaluator) {
+	/**
+	 * The documentation strings of the classes recorded ({@code documentation} answers
+	 * nil for a class here), by the class's canonical name, and of their slots, by the
+	 * class's name and the slot's member name.
+	 */
+	private final Map<String, String> documentation = new HashMap<>();
+
+	SwankSources(SwankLisp lisp, LispEvaluator evaluator) {
 		this.lisp = lisp;
 		this.evaluator = evaluator;
 	}
@@ -176,12 +191,76 @@ public final class SwankSources {
 	 * @param code the text
 	 * @param forms the forms
 	 * @param starts each form's offset in the text
-	 * @param place the location of an offset in the text
+	 * @param place the location of an offset in the text, null for a text typed at the
+	 * REPL, which has no place
 	 * @param buffer whether the text is a buffer's (a snippet is then the datum at the
 	 * place) rather than a file's (the next {@value #SNIPPET_LENGTH} characters)
 	 */
-	record Compiled(String code, List<LispVal> forms, List<Integer> starts, IntFunction<Location> place,
+	record Compiled(String code, List<LispVal> forms, List<Integer> starts, IntFunction<@Nullable SwankLocation> place,
 			boolean buffer) {
+	}
+
+	/**
+	 * Records what a file a {@code load} ran defines and uses, at the file's positions
+	 * ({@link #formStarts}).
+	 */
+	@Override
+	public void recordLoaded(String file, String code, List<LispVal> read, List<LispVal> resolved) {
+		List<Integer> starts = formStarts(code, read).subList(0, resolved.size());
+		record(new Compiled(code, resolved, starts, offset -> new SwankLocation.File(file, offset + 1), false));
+	}
+
+	/**
+	 * Records what a REPL input or an editor's evaluation defines and uses: SBCL keeps no
+	 * place of such a definition, so neither does this.
+	 * @param code the text
+	 * @param forms the forms that ran, as resolved
+	 */
+	void recordEvaluated(String code, List<LispVal> forms) {
+		record(new Compiled(code, forms, java.util.Collections.nCopies(forms.size(), 0), offset -> null, false));
+	}
+
+	/**
+	 * Where each top-level form read from a file starts in its text: the first datum on
+	 * the line its {@link LocatedCons} was read from, past the last form's, a datum a
+	 * reader conditional left out skipped by the line; a form that is no cons (it defines
+	 * nothing) takes the last form's start.
+	 * @param code the text
+	 * @param forms the forms read from it, in order
+	 * @return each form's start
+	 */
+	static List<Integer> formStarts(String code, List<LispVal> forms) {
+		List<Integer> data = topLevelOffsets(code, true);
+		List<Integer> lineStarts = new ArrayList<>();
+		lineStarts.add(0);
+		for (int i = code.indexOf('\n'); i >= 0; i = code.indexOf('\n', i + 1)) {
+			lineStarts.add(i + 1);
+		}
+		List<Integer> out = new ArrayList<>(forms.size());
+		int next = 0;
+		int last = 0;
+		for (LispVal form : forms) {
+			if (form instanceof LocatedCons located && located.line() >= 1) {
+				int line = located.line();
+				while (next < data.size() && lineOf(lineStarts, data.get(next)) < line) {
+					next++;
+				}
+				if (next < data.size() && lineOf(lineStarts, data.get(next)) == line) {
+					last = data.get(next++);
+				}
+				else if (line <= lineStarts.size()) {
+					last = Math.max(last, lineStarts.get(line - 1));
+				}
+			}
+			out.add(last);
+		}
+		return out;
+	}
+
+	/** The 1-based line an offset is on. */
+	private static int lineOf(List<Integer> lineStarts, int offset) {
+		int index = Collections.binarySearch(lineStarts, offset);
+		return (index >= 0 ? index : -index - 2) + 1;
 	}
 
 	/**
@@ -224,11 +303,22 @@ public final class SwankSources {
 
 		final Map<String, Integer> cursors = new HashMap<>();
 
+		/**
+		 * The form's text in lower case, character for character: a search stays inside
+		 * the form, so a loaded file's walk is not quadratic in its length.
+		 */
+		final String lower;
+
 		Text(Compiled compiled, int start, int end, LispVal form) {
 			this.compiled = compiled;
 			this.start = start;
 			this.end = end;
 			this.form = form;
+			char[] chars = new char[end - start];
+			for (int i = start; i < end; i++) {
+				chars[i - start] = Character.toLowerCase(compiled.code().charAt(i));
+			}
+			this.lower = new String(chars);
 			collect(form);
 		}
 
@@ -238,11 +328,15 @@ public final class SwankSources {
 			}
 		}
 
-		Place place(int offset) {
+		@Nullable Place place(int offset) {
+			SwankLocation location = this.compiled.place().apply(offset);
+			if (location == null) {
+				return null;
+			}
 			String code = this.compiled.code();
 			String snippet = this.compiled.buffer() ? code.substring(offset, datumEnd(code, offset))
 					: code.substring(offset, Math.min(code.length(), offset + SNIPPET_LENGTH));
-			return new Place(this.compiled.place().apply(offset), snippet);
+			return new Place(location, snippet);
 		}
 
 		/**
@@ -252,11 +346,18 @@ public final class SwankSources {
 		int next(String token) {
 			String key = token.toLowerCase(Locale.ROOT);
 			int from = this.cursors.getOrDefault(key, this.start);
-			int at = find(this.compiled.code(), "(" + key, from, this.end);
-			if (at >= 0) {
-				this.cursors.put(key, at + 1);
+			int at = find(this.lower, "(" + key, from - this.start);
+			if (at < 0) {
+				return -1;
 			}
-			return at;
+			this.cursors.put(key, this.start + at + 1);
+			return this.start + at;
+		}
+
+		/** Where a symbol's name first occurs in the form as a token, or -1. */
+		int token(String member) {
+			int at = findToken(this.lower, member.toLowerCase(Locale.ROOT));
+			return at < 0 ? -1 : this.start + at;
 		}
 
 	}
@@ -476,6 +577,9 @@ public final class SwankSources {
 					if (def != null && parts.size() > 3) {
 						accessors(name, parts.get(3));
 					}
+					if (name instanceof LispSymbol symbol) {
+						documentation(symbol.name(), parts);
+					}
 					return false;
 				}
 				case LispNames.DEFSTRUCT -> {
@@ -514,6 +618,32 @@ public final class SwankSources {
 			return out;
 		}
 
+		/** A class's documentation string and its slots', for the inspector. */
+		private void documentation(String className, List<LispVal> parts) {
+			Map<String, String> docs = SwankSources.this.documentation;
+			docs.keySet().removeIf(key -> key.equals(className) || key.startsWith(className + " "));
+			for (int i = 4; i < parts.size(); i++) {
+				if (parts.get(i) instanceof LispCons option && option.car() instanceof LispSymbol key
+						&& ":DOCUMENTATION".equals(key.name()) && option.cdr() instanceof LispCons value
+						&& value.car() instanceof LispString doc) {
+					docs.put(className, doc.value());
+				}
+			}
+			for (LispVal rest = parts.size() > 3 ? parts.get(3)
+					: LispNil.INSTANCE; rest instanceof LispCons cell; rest = cell.cdr()) {
+				if (cell.car() instanceof LispCons slot && slot.car() instanceof LispSymbol slotName) {
+					List<LispVal> options = slot.toList();
+					for (int i = 1; i + 1 < options.size(); i += 2) {
+						if (options.get(i) instanceof LispSymbol key && ":DOCUMENTATION".equals(key.name())
+								&& options.get(i + 1) instanceof LispString doc) {
+							docs.put(className + " " + LispSymbol.memberName(slotName.name()).toUpperCase(Locale.ROOT),
+									doc.value());
+						}
+					}
+				}
+			}
+		}
+
 		/** A class's slot accessors, readers and writers: methods at their slots. */
 		private void accessors(LispVal className, LispVal slots) {
 			for (LispVal rest = slots; rest instanceof LispCons cell; rest = cell.cdr()) {
@@ -550,8 +680,8 @@ public final class SwankSources {
 		/** Where the slot specification naming an accessor starts. */
 		private int slotOffset(LispVal accessor) {
 			String code = this.text.compiled.code();
-			int found = accessor instanceof LispSymbol symbol
-					? findToken(code, LispSymbol.memberName(symbol.name()), this.text.start, this.text.end) : -1;
+			int found = accessor instanceof LispSymbol symbol ? this.text.token(LispSymbol.memberName(symbol.name()))
+					: -1;
 			if (found < 0) {
 				return this.text.start;
 			}
@@ -578,7 +708,7 @@ public final class SwankSources {
 				return;
 			}
 			int at = definitionOffset(form, LispNames.DEFSTRUCT);
-			Place place = this.text.place(at);
+			@Nullable Place place = this.text.place(at);
 			put(new Def(LispNames.DEFSTRUCT, name, List.of(), null, place));
 			String member = LispSymbol.memberName(symbol.name());
 			String conc = member + "-";
@@ -671,8 +801,7 @@ public final class SwankSources {
 		}
 
 		private int tokenOffset(LispSymbol symbol) {
-			int at = findToken(this.text.compiled.code(), LispSymbol.memberName(symbol.name()), this.text.start,
-					this.text.end);
+			int at = this.text.token(LispSymbol.memberName(symbol.name()));
 			return at < 0 ? this.text.start : at;
 		}
 
@@ -727,6 +856,25 @@ public final class SwankSources {
 
 	// ------------------------------------------------------------------------------------
 	// Queries
+
+	/**
+	 * A recorded class's documentation string.
+	 * @param className the class's canonical name
+	 * @return the string, or null
+	 */
+	synchronized @Nullable String classDocumentation(String className) {
+		return this.documentation.get(className);
+	}
+
+	/**
+	 * The documentation string of a recorded class's slot.
+	 * @param className the class's canonical name
+	 * @param slot the slot's member name
+	 * @return the string, or null
+	 */
+	synchronized @Nullable String slotDocumentation(String className, String slot) {
+		return this.documentation.get(className + " " + slot.toUpperCase(Locale.ROOT));
+	}
 
 	/**
 	 * The definitions of what a name names, as SWANK's {@code find-definitions-for-emacs}
@@ -819,10 +967,25 @@ public final class SwankSources {
 		List<Entry> out = new ArrayList<>();
 		if (defs != null) {
 			for (Def def : defs.values()) {
-				out.add(new Entry(dspec(def), def.place(), null));
+				out.add(entry(dspec(def), def.place(), def));
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * An entry at a place, or, with none -- a definition typed at the REPL -- the error
+	 * SBCL answers for its definition.
+	 */
+	private static Entry entry(String label, @Nullable Place place, Def def) {
+		return place != null ? new Entry(label, place, null) : new Entry(label, null, sourceless(def));
+	}
+
+	private static String sourceless(Def def) {
+		String name = def.name() instanceof LispString pkg ? pkg.value()
+				: def.name() instanceof LispSymbol symbol ? LispSymbol.memberName(symbol.name()) : def.name().print();
+		return "Error: DEFINITION-SOURCE of " + SOURCELESS_KINDS.getOrDefault(def.operator(), "function") + " "
+				+ name.toUpperCase(Locale.ROOT) + " did not contain meaningful information.";
 	}
 
 	/**
@@ -874,7 +1037,7 @@ public final class SwankSources {
 		while (offset < code.length() && (code.charAt(offset) == ' ' || code.charAt(offset) == '\t')) {
 			offset++;
 		}
-		return new Place(new Location.File(path.toString(), offset + 1),
+		return new Place(new SwankLocation.File(path.toString(), offset + 1),
 				code.substring(offset, Math.min(code.length(), offset + SNIPPET_LENGTH)));
 	}
 
@@ -910,7 +1073,7 @@ public final class SwankSources {
 				Set<String> seen = new LinkedHashSet<>();
 				for (Ref ref : refs(use, spelling)) {
 					if (seen.add(key(ref.container()))) {
-						out.add(new Entry(caller(ref.container()), ref.container().place(), null));
+						out.add(entry(caller(ref.container()), ref.container().place(), ref.container()));
 					}
 				}
 			}
@@ -922,7 +1085,7 @@ public final class SwankSources {
 								&& in.name().equals(spelling) && seen.add(ref.target())) {
 							for (Entry definition : entries(this.definitions.get(ref.target()))) {
 								out.add(new Entry(this.lisp.print(new LispSymbol(ref.target())), definition.place(),
-										null));
+										definition.error()));
 							}
 						}
 					}
@@ -934,14 +1097,14 @@ public final class SwankSources {
 						List<LispVal> specializers = def.specializers();
 						if (def.method() && specializers != null && specializers.stream()
 							.anyMatch(s -> s instanceof LispSymbol symbol && symbol.name().equals(spelling))) {
-							out.add(new Entry("(DEFMETHOD " + this.lisp.print(def.name()) + ")", def.place(), null));
+							out.add(entry("(DEFMETHOD " + this.lisp.print(def.name()) + ")", def.place(), def));
 						}
 					}
 				}
 			}
 			default -> {
 				for (Ref ref : refs(use, spelling)) {
-					out.add(new Entry(caller(ref.container()), ref.place(), null));
+					out.add(entry(caller(ref.container()), ref.place(), ref.container()));
 				}
 			}
 		}
@@ -1034,33 +1197,143 @@ public final class SwankSources {
 	}
 
 	/**
-	 * Where {@code needle} (lower case) next occurs in the text between two offsets as a
-	 * whole token, ignoring case, or -1.
+	 * Where {@code needle} (lower case) next occurs in a lower-cased text from an offset,
+	 * followed by a delimiter or the end, or -1.
 	 */
-	private static int find(String code, String needle, int from, int to) {
-		String lower = code.toLowerCase(Locale.ROOT);
-		for (int at = lower.indexOf(needle, from); at >= 0 && at < to; at = lower.indexOf(needle, at + 1)) {
+	private static int find(String lower, String needle, int from) {
+		for (int at = lower.indexOf(needle, Math.max(0, from)); at >= 0; at = lower.indexOf(needle, at + 1)) {
 			int after = at + needle.length();
-			if (after >= code.length() || delimiter(code.charAt(after))) {
+			if (after >= lower.length() || delimiter(lower.charAt(after))) {
 				return at;
 			}
 		}
 		return -1;
 	}
 
-	/** Where a symbol's name next occurs as a token, ignoring case, or -1. */
-	private static int findToken(String code, String member, int from, int to) {
-		String lower = code.toLowerCase(Locale.ROOT);
-		String needle = member.toLowerCase(Locale.ROOT);
-		for (int at = lower.indexOf(needle, from); at >= 0 && at < to; at = lower.indexOf(needle, at + 1)) {
+	/**
+	 * Where a lower-cased member name first occurs as a token in a lower-cased text, or
+	 * -1.
+	 */
+	private static int findToken(String lower, String needle) {
+		for (int at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, at + 1)) {
 			int after = at + needle.length();
-			boolean before = at == 0 || delimiter(code.charAt(at - 1)) || code.charAt(at - 1) == ':'
-					|| code.charAt(at - 1) == '\'' || code.charAt(at - 1) == '`' || code.charAt(at - 1) == ',';
-			if (before && (after >= code.length() || delimiter(code.charAt(after)))) {
+			char previous = at == 0 ? ' ' : lower.charAt(at - 1);
+			boolean before = delimiter(previous) || previous == ':' || previous == '`' || previous == ',';
+			if (before && (after >= lower.length() || delimiter(lower.charAt(after)))) {
 				return at;
 			}
 		}
 		return -1;
+	}
+
+	/**
+	 * Where each top-level datum of a text starts: whitespace, comments, strings and
+	 * character literals skipped, a quote or other prefix belonging to the datum it
+	 * prefixes. A top-level reader conditional answers no offsets, since whether its
+	 * datum reads depends on the features: the caller then places every note at the start
+	 * -- unless {@code conditionals} asks for every datum after one, read or not.
+	 */
+	static List<Integer> topLevelOffsets(String code, boolean conditionals) {
+		List<Integer> offsets = new ArrayList<>();
+		int depth = 0;
+		boolean prefixed = false;
+		int i = 0;
+		int n = code.length();
+		while (i < n) {
+			char c = code.charAt(i);
+			if (c == ';') {
+				while (i < n && code.charAt(i) != '\n') {
+					i++;
+				}
+				continue;
+			}
+			if (c == '#' && i + 1 < n && code.charAt(i + 1) == '|') {
+				int nesting = 1;
+				i += 2;
+				while (i < n && nesting > 0) {
+					if (code.startsWith("|#", i)) {
+						nesting--;
+						i += 2;
+					}
+					else if (code.startsWith("#|", i)) {
+						nesting++;
+						i += 2;
+					}
+					else {
+						i++;
+					}
+				}
+				continue;
+			}
+			if (Character.isWhitespace(c)) {
+				i++;
+				continue;
+			}
+			if (c == ')') {
+				depth = Math.max(0, depth - 1);
+				i++;
+				continue;
+			}
+			if (depth == 0 && !prefixed) {
+				offsets.add(i);
+			}
+			prefixed = false;
+			if (c == '\'' || c == '`' || c == ',') {
+				prefixed = true;
+				i += c == ',' && i + 1 < n && code.charAt(i + 1) == '@' ? 2 : 1;
+				continue;
+			}
+			if (c == '#' && i + 1 < n) {
+				char dispatch = code.charAt(i + 1);
+				if ((dispatch == '+' || dispatch == '-') && depth == 0) {
+					if (!conditionals) {
+						return List.of();
+					}
+					// the feature expression is the datum the prefix takes; the guarded
+					// datum after it starts one of its own
+					if (!offsets.isEmpty() && offsets.getLast() == i) {
+						offsets.removeLast();
+					}
+					prefixed = true;
+					i += 2;
+					continue;
+				}
+				if (dispatch == '\\') {
+					i += 3;
+					while (i < n && !delimiter(code.charAt(i))) {
+						i++;
+					}
+					continue;
+				}
+				// #'f, #(...), #.(...), #:g, #x1F ...: the datum after the dispatch
+				prefixed = true;
+				i += dispatch == '(' ? 1 : 2;
+				continue;
+			}
+			if (c == '(') {
+				depth++;
+				i++;
+				continue;
+			}
+			if (c == '"') {
+				i++;
+				while (i < n && code.charAt(i) != '"') {
+					i += code.charAt(i) == '\\' ? 2 : 1;
+				}
+				i++;
+				continue;
+			}
+			while (i < n && !delimiter(code.charAt(i))) {
+				if (code.charAt(i) == '|') {
+					i++;
+					while (i < n && code.charAt(i) != '|') {
+						i++;
+					}
+				}
+				i += i < n && code.charAt(i) == '\\' ? 2 : 1;
+			}
+		}
+		return offsets;
 	}
 
 	private static boolean delimiter(char c) {

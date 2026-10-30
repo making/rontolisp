@@ -142,7 +142,8 @@ class SwankServerTest {
 			client.rex("(swank:compile-string-for-emacs \"(defun drv-buf-fn ()\n  (drv-callee 7))\n\" \"drv-nav2.lisp\""
 					+ " '((:position 2) (:line 2 1)) " + string(nav2.toString()) + " 'nil)", "CL-USER", "t");
 			Path loaded = this.tempDir.resolve("drv-load.lisp");
-			Files.writeString(loaded, "(defvar *unused*)\n\n  (defun drv-loaded () 1)\n");
+			Files.writeString(loaded,
+					"(defvar *unused*)\n\n#+(or) (defun drv-never () 0)\n  (defun drv-loaded () (drv-callee 1))\n");
 			client.rex("(swank:load-file " + string(loaded.toString()) + ")", "CL-USER", "t");
 			client.repl("(defun drv-repl-fn () (drv-callee 3))");
 			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-callee\")", "CL-USER", "t"))
@@ -158,7 +159,7 @@ class SwankServerTest {
 				.containsExactly("(DEFMETHOD (SETF DRV-POINT-X) T DRV-POINT) (:position 270)");
 			assertThat(definitions(client, "make-drv-st")).containsExactly("(DEFUN MAKE-DRV-ST) (:position 379)");
 			assertThat(definitions(client, "*drv-var*,")).containsExactly("(DEFVAR *DRV-VAR*) (:position 1)");
-			assertThat(definitions(client, "drv-loaded")).containsExactly("(DEFUN DRV-LOADED) (:position 22)");
+			assertThat(definitions(client, "drv-loaded")).containsExactly("(DEFUN DRV-LOADED) (:position 52)");
 			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-buf-fn\")", "CL-USER", "t")).containsExactly(
 					"(:return (:ok ((\"(DEFUN DRV-BUF-FN)\" (:location (:buffer-and-file \"drv-nav2.lisp\" "
 							+ string(nav2.toString()) + ") (:offset 2 0) (:snippet \"(defun drv-buf-fn ()\n"
@@ -169,10 +170,15 @@ class SwankServerTest {
 			assertThat(client.rex("(swank:find-definitions-for-emacs \"mapcar\")", "CL-USER", "t"))
 				.containsExactly("(:return (:ok nil) id)");
 			// cross references: each use, labelled with the definition it is in
+			// a loaded file's uses too, and a REPL definition's, which has no place
 			assertThat(xref(client, ":calls", "drv-callee")).containsExactly("DRV-CALLER (:position 201)",
-					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 362)", "DRV-BUF-FN (:offset 2 23)");
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 362)", "DRV-BUF-FN (:offset 2 23)",
+					"DRV-LOADED (:position 73)",
+					"DRV-REPL-FN Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.");
 			assertThat(xref(client, ":callers", "drv-callee")).containsExactly("DRV-CALLER (:position 120)",
-					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 327)", "DRV-BUF-FN (:offset 2 0)");
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 327)", "DRV-BUF-FN (:offset 2 0)",
+					"DRV-LOADED (:position 52)",
+					"DRV-REPL-FN Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.");
 			assertThat(xref(client, ":calls-who", "drv-caller")).containsExactly("DRV-CALLEE (:position 70)");
 			assertThat(xref(client, ":references", "*drv-var*")).containsExactly("DRV-CALLER (:position 192)");
 			assertThat(xref(client, ":binds", "*drv-var*")).containsExactly("DRV-CALLER (:position 144)");
@@ -217,6 +223,54 @@ class SwankServerTest {
 			assertThat(client.rex("(swank:init-inspector \"'drv-callee\")", "CL-USER", "t").getLast())
 				.contains("\"It is a function: \" (:value \"#<function DRV-CALLEE>\" 2) \" \" (:action \"[unbind]\" 0)"
 						+ " \"\n\" \"Function documentation\" \": \" \"Callee doc.\" \"\n\" \"It is \" \"internal\"");
+			// a class, a slot definition, a generic function and its method, a package
+			// and its symbols, a pathname: the fancy inspector's pages for them
+			assertThat(client.rex("(swank:init-inspector \"(find-class 'drv-point)\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"Name: \" (:value \"DRV-POINT\" 1) \"\n\" \"Super classes: \" \"\n\""
+						+ " \"Direct Slots: \" (:value \"X\" 2) \", \" (:value \"Y\" 3) \"\n\" \"Effective Slots: \""
+						+ " (:value \"X\" 4) \", \" (:value \"Y\" 5) \"\n\" \"Sub classes: \" \"\n\" \"Precedence List: \""
+						+ " (:value \"DRV-POINT\" 6) \"\n\" \"It is used as a direct specializer in the following"
+						+ " methods:\" \"\n\" \"  \" (:value \"(DRV-GEN DRV-POINT)\" 7) \"\n\"")
+				.contains("\"Prototype: \" (:value \"#<DRV-POINT ");
+			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
+				.contains(":content ((\"Name: \" (:value \"Y\" 1) \"\n\" \"Init args: \" (:value \"(:Y)\" 2) \"\n\""
+						+ " \"Init form: \" (:value \"5\" 3) \"\n\" \"Init function: \" (:value \"NIL\" 4) \"\n\""
+						+ " \"--------------------\"");
+			assertThat(client.rex("(swank:init-inspector \"#'drv-gen\")", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<STANDARD-GENERIC-FUNCTION \\{[0-9A-F]+\\}>\" :id 0 :content"
+						+ " \\(\\(\"Name\" \": \" \\(:value \"DRV-GEN\" 1\\) \"\n\" \"Arguments\" \": \" \\(:value \"\\(O\\)\""
+						+ " 2\\) \"\n\" \"Method combination\" \": \" \\(:value \"STANDARD\" 3\\) \"\n\" \"Methods: \" \"\n\""
+						+ " \\(:value \"\\(DRV-POINT\\)\" 4\\) \" \" \\(:action \"\\[remove method\\]\" 0\\) \"\n\" \"\n\"\\)"
+						+ " 19 0 500\\)\\)\\) id\\)");
+			assertThat(client.rex("(swank:inspect-nth-part 4)", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<STANDARD-METHOD \\{[0-9A-F]+\\}>\" :id 0 :content"
+						+ " \\(\\(\"Method defined on the generic function \" \\(:value \"DRV-GEN\" 1\\) \"\n\""
+						+ " \"Lambda List: \" \\(:value \"\\(O\\)\" 2\\) \"\n\" \"Specializers: \" \\(:value"
+						+ " \"\\(DRV-POINT\\)\" 3\\) \"\n\" \"Qualifiers: \" \\(:value \"NIL\" 4\\) \"\n\""
+						+ " \"Method function: \" \\(:value \"#<function %DRV-GEN--m0>\" 5\\) \"\n\"\\) 15 0 500\\)\\)\\) id\\)");
+			client.rex("(swank:inspector-pop)", "CL-USER", "t");
+			assertThat(client.rex("(swank:inspector-call-nth-action 1)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			assertThat(client.repl("(drv-gen (make-instance 'drv-point))").getLast()).startsWith("(:return (:abort ");
+			assertThat(client.rex("(swank:init-inspector \"(find-package :drv-pkg)\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"\" \"Name: \" (:value \"\\\"DRV-PKG\\\"\" 1) \"\n\" \"Nicknames: \" \"\n\""
+						+ " \"Use list: \" (:value \"CL\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"1 present"
+						+ " symbol.\" 3) \"\n\" (:value \"1 external symbol.\" 4) \"\n\" \"0 internal symbols.\" \"\n\"");
+			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
+				.contains(":content ((\"All present symbols of package \\\"DRV-PKG\\\"\" \"\n\" \"\n\" \"A symbol is"
+						+ " considered present in a package if it's\" \"\n\"")
+				.contains("\"  \" (:action \"[Group by classification]\" 0) \"\n\" \"\n\" \"\" \"Symbols:\" \"       \""
+						+ " \"Flags:\" \"\n\" \"-------------- ---------\" \"\n\" (:value \"HELLO          \" 1)"
+						+ " \"-f-------\" \"\n\")");
+			assertThat(client.rex("(swank:inspector-call-nth-action 0)", "CL-USER", "t").getLast())
+				.contains("\"  \" (:action \"[Group by symbol]\" 1) \"\n\" \"\n\" \"FUNCTION\" \"\n\" \""
+						+ "-".repeat(64) + "\" \"\n\" (:value \"HELLO\" 3) \"\n\" \"\n\")");
+			assertThat(client.rex("(swank:init-inspector \"#p\\\"/no/such/drv.lisp\\\"\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"A pathname.\" \"\n\" \"Namestring\" \": \" (:value"
+						+ " \"\\\"/no/such/drv.lisp\\\"\" 1) \"\n\" \"Host\" \": \" (:value \"NIL\" 2) \"\n\" \"Device\""
+						+ " \": \" (:value \"NIL\" 3) \"\n\" \"Directory\" \": \" (:value \"(:ABSOLUTE \\\"no\\\""
+						+ " \\\"such\\\")\" 4) \"\n\" \"Name\" \": \" (:value \"\\\"drv\\\"\" 5) \"\n\" \"Type\" \": \""
+						+ " (:value \"\\\"lisp\\\"\" 6) \"\n\" \"Version\" \": \" (:value \"NIL\" 7) \"\n\") 30 0 500)");
 			assertThat(client.rex("(swank:quit-inspector)", "CL-USER", "t")).containsExactly("(:return (:ok nil) id)");
 			// macrostep: one step of a macro form, the macro forms it holds placed
 			assertThat(client.rex("(swank-macrostep:macro-form-p \"(drv-mac 1)\" nil nil)", "CL-USER", "t"))
@@ -388,7 +442,9 @@ class SwankServerTest {
 		List<String> out = new ArrayList<>();
 		for (Object entry : (List<?>) Objects.requireNonNull(((List<?>) Objects.requireNonNull(reply.get(1))).get(1))) {
 			List<?> pair = (List<?>) Objects.requireNonNull(entry);
-			out.add(pair.getFirst() + " " + SwankWire.print(((List<?>) Objects.requireNonNull(pair.get(1))).get(2)));
+			List<?> where = (List<?>) Objects.requireNonNull(pair.get(1));
+			// a place's position, or the error a definition with none answers
+			out.add(pair.getFirst() + " " + (where.size() > 2 ? SwankWire.print(where.get(2)) : where.get(1)));
 		}
 		return out;
 	}

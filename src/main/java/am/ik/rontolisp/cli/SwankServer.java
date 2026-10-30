@@ -42,6 +42,7 @@ import am.ik.rontolisp.Version;
 import am.ik.rontolisp.cli.SwankWire.Keyword;
 import am.ik.rontolisp.cli.SwankWire.Symbol;
 import am.ik.rontolisp.eval.CommonLispSwank;
+import am.ik.rontolisp.eval.SwankLocation;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispInterruptSignal;
@@ -131,6 +132,7 @@ final class SwankServer implements AutoCloseable {
 		this.stackBytes = stackBytes;
 		this.onExit = onExit;
 		this.server = new ServerSocket(port, 50, bind);
+		lisp.recordLoads();
 	}
 
 	/**
@@ -945,20 +947,20 @@ final class SwankServer implements AutoCloseable {
 		return list(kw("compilation-result"), notes, result.success(), result.seconds(), loaded, null);
 	}
 
-	private static List<Object> location(CommonLispSwank.@Nullable Location location) {
+	private static List<Object> location(@Nullable SwankLocation location) {
 		return location(location, null);
 	}
 
-	private static List<Object> location(CommonLispSwank.@Nullable Location location, @Nullable String snippet) {
+	private static List<Object> location(@Nullable SwankLocation location, @Nullable String snippet) {
 		Object hints = snippet == null ? null : list(kw("snippet"), snippet);
 		return switch (location) {
 			case null -> list(kw("error"), "No location");
-			case CommonLispSwank.Location.Buffer buffer -> list(kw("location"), list(kw("buffer"), buffer.buffer()),
+			case SwankLocation.Buffer buffer -> list(kw("location"), list(kw("buffer"), buffer.buffer()),
 					list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), hints);
-			case CommonLispSwank.Location.BufferAndFile buffer ->
+			case SwankLocation.BufferAndFile buffer ->
 				list(kw("location"), list(kw("buffer-and-file"), buffer.buffer(), buffer.file()),
 						list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), hints);
-			case CommonLispSwank.Location.File file -> list(kw("location"), list(kw("file"), file.file()),
+			case SwankLocation.File file -> list(kw("location"), list(kw("file"), file.file()),
 					list(kw("position"), (long) file.position()), hints);
 		};
 	}

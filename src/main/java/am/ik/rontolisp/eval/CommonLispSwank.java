@@ -57,7 +57,7 @@ import am.ik.rontolisp.reader.LispReader;
  * thread and its workers do. The standard streams write to the request's own writer. One
  * evaluator serves every request, so what one defines another calls.
  */
-public final class CommonLispSwank {
+public final class CommonLispSwank implements SwankLisp {
 
 	/** The marker an editor puts where its cursor stands in an {@code autodoc} form. */
 	public static final Object CURSOR = new Object() {
@@ -113,6 +113,7 @@ public final class CommonLispSwank {
 	 * @param designator the designator, or null
 	 * @return the package's canonical name, or null when none is named
 	 */
+	@Override
 	public @Nullable String guessPackage(@Nullable String designator) {
 		if (designator == null || designator.isEmpty()) {
 			return null;
@@ -142,6 +143,7 @@ public final class CommonLispSwank {
 	 * @param pkg the package's canonical name
 	 * @return the name
 	 */
+	@Override
 	public String packageName(String pkg) {
 		return pkg.toUpperCase(Locale.ROOT);
 	}
@@ -268,6 +270,14 @@ public final class CommonLispSwank {
 	}
 
 	/**
+	 * Records, from now on, what every file a {@code load} runs on the evaluator defines
+	 * and uses, for {@code M-.} and {@code xref}: called when a server starts serving.
+	 */
+	public void recordLoads() {
+		this.evaluator.recordLoadsTo(this.sources);
+	}
+
+	/**
 	 * Captures the evaluator's control state before a request, so a stack overflow it
 	 * survives can put it back ({@link LispEvaluator#controlState}).
 	 * @return the state
@@ -328,9 +338,16 @@ public final class CommonLispSwank {
 		List<LispVal> forms = read(code);
 		List<LispVal> values = List.of();
 		LispVal last = LispNil.INSTANCE;
-		for (LispVal form : forms) {
-			last = form;
-			values = this.evaluator.evalValues(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+		List<LispVal> resolved = new ArrayList<>();
+		try {
+			for (LispVal form : forms) {
+				last = form;
+				values = this.evaluator.evalValues(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form,
+						resolved::add);
+			}
+		}
+		finally {
+			this.sources.recordEvaluated(code, resolved);
 		}
 		return new Region(values, last);
 	}
@@ -350,8 +367,15 @@ public final class CommonLispSwank {
 
 	private List<LispVal> evalFirstValues(String code) {
 		LispVal form = readFirst(code);
-		return this.evaluator.evalValues(
-				SourceLanguage.usesReadEvalMarkers(code) ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+		List<LispVal> resolved = new ArrayList<>(1);
+		try {
+			return this.evaluator.evalValues(
+					SourceLanguage.usesReadEvalMarkers(code) ? this.evaluator.resolveReadTimeEvalInCode(form) : form,
+					resolved::add);
+		}
+		finally {
+			this.sources.recordEvaluated(code, resolved);
+		}
 	}
 
 	/**
@@ -548,42 +572,7 @@ public final class CommonLispSwank {
 	 * {@code style-warning} or {@code note}
 	 * @param location where, or null when nowhere in particular
 	 */
-	public record Note(String message, String severity, @Nullable Location location) {
-	}
-
-	/** Where a note points. */
-	public sealed interface Location {
-
-		/**
-		 * A place in an editor buffer.
-		 *
-		 * @param buffer the buffer's name
-		 * @param start the buffer position the compiled text starts at
-		 * @param offset the offset within the compiled text
-		 */
-		record Buffer(String buffer, int start, int offset) implements Location {
-		}
-
-		/**
-		 * A place in an editor buffer visiting a file.
-		 *
-		 * @param buffer the buffer's name
-		 * @param file the file
-		 * @param start the buffer position the compiled text starts at
-		 * @param offset the offset within the compiled text
-		 */
-		record BufferAndFile(String buffer, String file, int start, int offset) implements Location {
-		}
-
-		/**
-		 * A place in a file.
-		 *
-		 * @param file the file
-		 * @param position the 1-based character position
-		 */
-		record File(String file, int position) implements Location {
-		}
-
+	public record Note(String message, String severity, @Nullable SwankLocation location) {
 	}
 
 	/**
@@ -621,9 +610,9 @@ public final class CommonLispSwank {
 	 * @return the outcome
 	 */
 	public Compilation compileString(String code, String buffer, int start, @Nullable String file) {
-		return compile(code, offset -> new Location.Buffer(buffer, start, offset), true,
-				file == null ? offset -> new Location.Buffer(buffer, start, offset)
-						: offset -> new Location.BufferAndFile(buffer, file, start, offset),
+		return compile(code, offset -> new SwankLocation.Buffer(buffer, start, offset), true,
+				file == null ? offset -> new SwankLocation.Buffer(buffer, start, offset)
+						: offset -> new SwankLocation.BufferAndFile(buffer, file, start, offset),
 				true);
 	}
 
@@ -645,17 +634,17 @@ public final class CommonLispSwank {
 			return new Compilation(List.of(new Note("Can't read " + filename + ": " + ex.getMessage(), "error", null)),
 					false, 0.0);
 		}
-		java.util.function.IntFunction<Location> place = offset -> new Location.File(filename, offset + 1);
+		java.util.function.IntFunction<SwankLocation> place = offset -> new SwankLocation.File(filename, offset + 1);
 		return compile(code, place, load, place, false);
 	}
 
-	private Compilation compile(String code, java.util.function.IntFunction<Location> place, boolean run,
-			java.util.function.IntFunction<Location> definitionPlace, boolean buffer) {
+	private Compilation compile(String code, java.util.function.IntFunction<SwankLocation> place, boolean run,
+			java.util.function.IntFunction<SwankLocation> definitionPlace, boolean buffer) {
 		long started = System.nanoTime();
 		List<Note> notes = new ArrayList<>();
 		LispReader.ReadPrefix read = SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.features(), null,
 				this.evaluator.sourceStandards(), null);
-		List<Integer> offsets = topLevelOffsets(code);
+		List<Integer> offsets = SwankSources.topLevelOffsets(code, false);
 		boolean aligned = offsets.size() >= read.forms().size();
 		boolean markers = SourceLanguage.usesReadEvalMarkers(code);
 		boolean success = true;
@@ -691,7 +680,7 @@ public final class CommonLispSwank {
 			success = false;
 		}
 		List<String> undefined = this.sources
-			.record(new SwankSources.Compiled(code, resolved, starts, definitionPlace, buffer));
+			.record(new SwankSources.Compiled(code, resolved, starts, definitionPlace::apply, buffer));
 		if (success) {
 			for (String name : undefined) {
 				int at = callOffset(code, LispSymbol.memberName(name));
@@ -713,106 +702,6 @@ public final class CommonLispSwank {
 			offset = newline + 1;
 		}
 		return Math.min(code.length(), offset + Math.max(0, column - 1));
-	}
-
-	/**
-	 * Where each top-level datum of a text starts: whitespace, comments, strings and
-	 * character literals skipped, a quote or other prefix belonging to the datum it
-	 * prefixes. A top-level reader conditional answers no offsets, since whether its
-	 * datum reads depends on the features: the caller then places every note at the
-	 * start.
-	 */
-	static List<Integer> topLevelOffsets(String code) {
-		List<Integer> offsets = new ArrayList<>();
-		int depth = 0;
-		boolean prefixed = false;
-		int i = 0;
-		int n = code.length();
-		while (i < n) {
-			char c = code.charAt(i);
-			if (c == ';') {
-				while (i < n && code.charAt(i) != '\n') {
-					i++;
-				}
-				continue;
-			}
-			if (c == '#' && i + 1 < n && code.charAt(i + 1) == '|') {
-				int nesting = 1;
-				i += 2;
-				while (i < n && nesting > 0) {
-					if (code.startsWith("|#", i)) {
-						nesting--;
-						i += 2;
-					}
-					else if (code.startsWith("#|", i)) {
-						nesting++;
-						i += 2;
-					}
-					else {
-						i++;
-					}
-				}
-				continue;
-			}
-			if (Character.isWhitespace(c)) {
-				i++;
-				continue;
-			}
-			if (c == ')') {
-				depth = Math.max(0, depth - 1);
-				i++;
-				continue;
-			}
-			if (depth == 0 && !prefixed) {
-				offsets.add(i);
-			}
-			prefixed = false;
-			if (c == '\'' || c == '`' || c == ',') {
-				prefixed = true;
-				i += c == ',' && i + 1 < n && code.charAt(i + 1) == '@' ? 2 : 1;
-				continue;
-			}
-			if (c == '#' && i + 1 < n) {
-				char dispatch = code.charAt(i + 1);
-				if ((dispatch == '+' || dispatch == '-') && depth == 0) {
-					return List.of();
-				}
-				if (dispatch == '\\') {
-					i += 3;
-					while (i < n && !delimiter(code.charAt(i))) {
-						i++;
-					}
-					continue;
-				}
-				// #'f, #(...), #.(...), #:g, #x1F ...: the datum after the dispatch
-				prefixed = true;
-				i += dispatch == '(' ? 1 : 2;
-				continue;
-			}
-			if (c == '(') {
-				depth++;
-				i++;
-				continue;
-			}
-			if (c == '"') {
-				i++;
-				while (i < n && code.charAt(i) != '"') {
-					i += code.charAt(i) == '\\' ? 2 : 1;
-				}
-				i++;
-				continue;
-			}
-			while (i < n && !delimiter(code.charAt(i))) {
-				if (code.charAt(i) == '|') {
-					i++;
-					while (i < n && code.charAt(i) != '|') {
-						i++;
-					}
-				}
-				i += i < n && code.charAt(i) == '\\' ? 2 : 1;
-			}
-		}
-		return offsets;
 	}
 
 	private static boolean delimiter(char c) {
@@ -925,19 +814,34 @@ public final class CommonLispSwank {
 
 	/**
 	 * Every symbol accessible in a package (only its externals when asked), each member
-	 * name mapped to its canonical spelling: the registry's entries, and the image's
-	 * definitions homed there, since a definition interns its name.
+	 * name mapped to its canonical spelling ({@link #accessibleSymbols}).
 	 */
 	private Map<String, String> symbolsIn(String pkg, boolean externalOnly) {
 		Map<String, String> symbols = new TreeMap<>();
+		for (Map.Entry<String, PackageResolver.Accessible> entry : accessibleSymbols(pkg).entrySet()) {
+			if (!externalOnly || LispNames.STATUS_EXTERNAL.equals(entry.getValue().status())) {
+				symbols.put(entry.getKey(), entry.getValue().spelling());
+			}
+		}
+		return symbols;
+	}
+
+	/**
+	 * Every symbol accessible in a package with its status, by member name: the
+	 * registry's entries, and the image's definitions homed there, since a definition
+	 * interns its name.
+	 * @param pkg the package's canonical name
+	 * @return the symbols, in member name order
+	 */
+	@Override
+	public Map<String, PackageResolver.Accessible> accessibleSymbols(String pkg) {
+		Map<String, PackageResolver.Accessible> symbols = new TreeMap<>();
 		if ("keyword".equals(pkg)) {
 			return symbols;
 		}
 		try {
 			for (PackageResolver.Accessible entry : this.resolver.accessibleEntries(pkg)) {
-				if (!externalOnly || LispNames.STATUS_EXTERNAL.equals(entry.status())) {
-					symbols.put(LispSymbol.memberName(entry.spelling()), entry.spelling());
-				}
+				symbols.put(LispSymbol.memberName(entry.spelling()), entry);
 			}
 		}
 		catch (RuntimeException ex) {
@@ -952,18 +856,16 @@ public final class CommonLispSwank {
 		for (String spelling : defined) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelling);
 			if (qn == null) {
-				if (clUser && !externalOnly && !spelling.startsWith(":") && !spelling.startsWith("#:")
+				if (clUser && !spelling.startsWith(":") && !spelling.startsWith("#:")
 						&& !PackageRegistry.isClMemberName(spelling)) {
-					symbols.putIfAbsent(spelling, spelling);
+					symbols.putIfAbsent(spelling, new PackageResolver.Accessible(spelling, LispNames.STATUS_INTERNAL));
 				}
 				continue;
 			}
 			String home = this.resolver.findPackageName(qn.pkg());
 			if (home != null && packageName(home).equals(upper)) {
-				boolean external = !spelling.contains("::");
-				if (!externalOnly || external) {
-					symbols.putIfAbsent(qn.member(), spelling);
-				}
+				symbols.putIfAbsent(qn.member(), new PackageResolver.Accessible(spelling,
+						spelling.contains("::") ? LispNames.STATUS_INTERNAL : LispNames.STATUS_EXTERNAL));
 			}
 		}
 		return symbols;
@@ -974,7 +876,8 @@ public final class CommonLispSwank {
 	 * letter per property -- bound, fbound, generic function, class, type, macro, special
 	 * operator, package, accessor -- or a dash.
 	 */
-	private String classification(String spelling) {
+	@Override
+	public String classification(String spelling) {
 		char[] flags = "---------".toCharArray();
 		String member = LispSymbol.memberName(spelling);
 		boolean cl = PackageRegistry.isClMemberName(spelling);
@@ -1286,7 +1189,8 @@ public final class CommonLispSwank {
 	 * The lambda list of what a canonical name defines: the one its definition wrote, the
 	 * desugared one of a function value, or the standard one of a built-in.
 	 */
-	@Nullable LispVal arglist(String spelling) {
+	@Override
+	public @Nullable LispVal arglist(String spelling) {
 		LispEvaluator.Definition definition = this.evaluator.definition(spelling);
 		if (definition != null) {
 			return definition.lambdaList();
@@ -1339,6 +1243,11 @@ public final class CommonLispSwank {
 	 * A lambda list item as an argument list shows it: names only, downcased unless
 	 * asked.
 	 */
+	@Override
+	public String arglistText(LispVal arglist) {
+		return arglistText(arglist, true);
+	}
+
 	static String arglistText(LispVal item, boolean upcase) {
 		return switch (item) {
 			case LispSymbol symbol -> {
@@ -1584,6 +1493,7 @@ public final class CommonLispSwank {
 	 * @return the description
 	 * @throws LispEvalException when no such symbol is accessible
 	 */
+	@Override
 	public String describeSymbol(String name) {
 		String spelling = findSymbolOrLose(name);
 		String member = LispSymbol.memberName(spelling).toUpperCase(Locale.ROOT);
@@ -1878,11 +1788,12 @@ public final class CommonLispSwank {
 	 * @return the inspector
 	 */
 	public SwankInspector newInspector() {
-		return new SwankInspector(this, this.evaluator);
+		return new SwankInspector(this, this.evaluator, this.sources);
 	}
 
 	/** The canonical spelling of the symbol a name names, without interning it. */
-	@Nullable String symbolNamed(String text) {
+	@Override
+	public @Nullable String symbolNamed(String text) {
 		return findSymbol(text);
 	}
 
@@ -1890,7 +1801,8 @@ public final class CommonLispSwank {
 	 * The canonical spellings a symbol token may have in the calling thread's package:
 	 * bare in {@code cl-user}, else qualified internal, then external.
 	 */
-	List<String> spellingsOf(String text) {
+	@Override
+	public List<String> spellingsOf(String text) {
 		Token token = Token.of(text);
 		String name = readerName(token.name());
 		String pkg = token.pkg() == null ? currentPackage()
@@ -1909,13 +1821,15 @@ public final class CommonLispSwank {
 	}
 
 	/** A member name spelled in the package a canonical spelling is homed in. */
-	String homedLike(String spelling, String member) {
+	@Override
+	public String homedLike(String spelling, String member) {
 		int colon = spelling.indexOf(':');
 		return colon > 0 ? spelling.substring(0, spelling.lastIndexOf(':') + 1) + member : member;
 	}
 
 	/** A text read as one form, its symbols resolved in the calling thread's package. */
-	LispVal readResolved(String code) {
+	@Override
+	public LispVal readResolved(String code) {
 		return this.evaluator.resolvePackages(readFirst(code));
 	}
 
@@ -1927,6 +1841,7 @@ public final class CommonLispSwank {
 	 * @param value the value
 	 * @return the text
 	 */
+	@Override
 	public String print(LispVal value) {
 		return this.evaluator.prin1ToStringRouted(value);
 	}
@@ -1951,7 +1866,8 @@ public final class CommonLispSwank {
 	}
 
 	/** Calls a one-argument lambda, read once in {@code cl-user}, on a value. */
-	LispVal helper(String source, LispVal argument) {
+	@Override
+	public LispVal helper(String source, LispVal argument) {
 		LispVal function = this.helpers.computeIfAbsent(source, text -> {
 			Object previous = this.resolver.bindThreadPackage(LispNames.CL_USER_PKG);
 			try {

@@ -13,6 +13,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
@@ -30,6 +31,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -39,6 +41,8 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
 
 /**
  * One editor's inspector, as SWANK's with the {@code swank-fancy-inspector} contrib: a
@@ -135,6 +139,40 @@ public final class SwankInspector {
 	private record RLine(String label, LispVal value) implements Raw {
 	}
 
+	/**
+	 * A method of a generic function. No method is a first-class object here (a method is
+	 * a registry row and a generated function), so a page holds this, wrapped, where
+	 * SWANK's holds a method metaobject.
+	 *
+	 * @param generic the generic function's name
+	 * @param key the method's key in its generic's table
+	 * @param info the method
+	 */
+	private record Method(String generic, String key, ClosRegistry.MethodInfo info) {
+	}
+
+	/**
+	 * SWANK's {@code %package-symbols-container}: some of a package's symbols, listed
+	 * alphabetically or grouped by what they name.
+	 */
+	private static final class Symbols {
+
+		final String title;
+
+		final List<Raw> description;
+
+		final List<String> spellings;
+
+		boolean byClassification;
+
+		Symbols(String title, List<Raw> description, List<String> spellings) {
+			this.title = title;
+			this.description = description;
+			this.spellings = spellings;
+		}
+
+	}
+
 	/** An inspected value and what its page shows. */
 	private final class State {
 
@@ -162,9 +200,15 @@ public final class SwankInspector {
 
 	}
 
-	private final CommonLispSwank lisp;
+	private final SwankLisp lisp;
 
 	private final LispEvaluator evaluator;
+
+	/** The record of what the editor's code defines, for documentation strings. */
+	private final SwankSources sources;
+
+	/** The class each slot definition a class page showed belongs to. */
+	private final Map<LispVal, String> slotOwners = new IdentityHashMap<>();
 
 	private @Nullable State state;
 
@@ -174,9 +218,10 @@ public final class SwankInspector {
 	/** What reads a line from the editor while an action runs, or null. */
 	private @Nullable Function<String, @Nullable String> asking;
 
-	SwankInspector(CommonLispSwank lisp, LispEvaluator evaluator) {
+	SwankInspector(SwankLisp lisp, LispEvaluator evaluator, SwankSources sources) {
 		this.lisp = lisp;
 		this.evaluator = evaluator;
+		this.sources = sources;
 	}
 
 	// ------------------------------------------------------------------------------------
@@ -351,7 +396,7 @@ public final class SwankInspector {
 	 * @return the text
 	 */
 	public synchronized String printPart(int index) {
-		return this.lisp.print(nthPart(index));
+		return display(nthPart(index));
 	}
 
 	// ------------------------------------------------------------------------------------
@@ -360,6 +405,7 @@ public final class SwankInspector {
 	private void reset() {
 		this.state = null;
 		this.history.clear();
+		this.slotOwners.clear();
 	}
 
 	private State current() {
@@ -385,21 +431,60 @@ public final class SwankInspector {
 	}
 
 	private Page show(State s) {
-		String title = s.verbose ? this.lisp.print(s.object) : title(s.object);
+		String title = s.verbose ? display(s.object) : title(s.object);
 		int id = assign(s.parts, s.object);
 		return new Page(title, id, prepare(s, 0, FIRST_RANGE));
 	}
 
 	private String title(LispVal object) {
-		String type;
+		return "#<" + typeName(object) + " {"
+				+ Integer.toHexString(System.identityHashCode(object)).toUpperCase(Locale.ROOT) + "}>";
+	}
+
+	/** What a value is, as a title names it: its {@code type-of}, or SWANK's class. */
+	private String typeName(LispVal object) {
+		if (object instanceof LispJavaObject wrapped && wrapped.ref() instanceof Method) {
+			return "STANDARD-METHOD";
+		}
+		if (object instanceof LispJavaObject wrapped && wrapped.ref() instanceof Symbols) {
+			return "SWANK::%PACKAGE-SYMBOLS-CONTAINER";
+		}
+		if (object instanceof LispSymbol symbol && packageDesignator(symbol)) {
+			return "PACKAGE";
+		}
+		if (object instanceof LispLambda lambda && generic(lambda.name()) != null
+				|| object instanceof LispFunction function && generic(function.name()) != null) {
+			return "STANDARD-GENERIC-FUNCTION";
+		}
 		try {
-			type = this.lisp.print(this.lisp.helper("(lambda (o) (type-of o))", object));
+			return this.lisp.print(this.lisp.helper("(lambda (o) (type-of o))", object));
 		}
 		catch (RuntimeException ex) {
-			type = "T";
+			return "T";
 		}
-		return "#<" + type + " {" + Integer.toHexString(System.identityHashCode(object)).toUpperCase(Locale.ROOT)
-				+ "}>";
+	}
+
+	/**
+	 * A value printed: a metaobject as SBCL prints one ({@code #<STANDARD-CLASS NAME>}),
+	 * a method by its generic function and specializers, anything else as {@code prin1}.
+	 */
+	private String display(LispVal value) {
+		if (value instanceof LispJavaObject wrapped && wrapped.ref() instanceof Method method) {
+			StringBuilder text = new StringBuilder("#<STANDARD-METHOD ")
+				.append(this.lisp.print(functionName(method.generic())));
+			for (LispVal qualifier : qualifiers(method)) {
+				text.append(' ').append(this.lisp.print(qualifier));
+			}
+			return text.append(' ').append(princ(list(specializerNames(method)))).append('>').toString();
+		}
+		if (value instanceof LispJavaObject wrapped && wrapped.ref() instanceof Symbols) {
+			return "#<SWANK::%PACKAGE-SYMBOLS-CONTAINER>";
+		}
+		if (value instanceof LispInstance instance
+				&& (isA(instance, ClosRegistry.CLASS_NAME) || slotDefinition(instance))) {
+			return "#<" + instance.layout().printName() + " " + this.lisp.print(slot(instance, "NAME")) + ">";
+		}
+		return this.lisp.print(value);
 	}
 
 	private Range prepare(State s, int start, int end) {
@@ -437,7 +522,7 @@ public final class SwankInspector {
 	private String printPart(LispVal value) {
 		String text;
 		try {
-			text = this.lisp.print(value);
+			text = display(value);
 		}
 		catch (RuntimeException ex) {
 			text = "#<error printing object>";
@@ -482,6 +567,7 @@ public final class SwankInspector {
 			case LispCons cons -> cons(out, cons);
 			case LispNil nil -> symbol(out, o);
 			case LispTrue t -> symbol(out, o);
+			case LispSymbol symbol when packageDesignator(symbol) -> packagePage(out, symbol);
 			case LispSymbol symbol -> symbol(out, o);
 			case LispInteger i -> integer(out, o, BigInteger.valueOf(i.value()));
 			case LispBigInteger big -> integer(out, o, big.value());
@@ -497,12 +583,22 @@ public final class SwankInspector {
 			case LispFloatArray array -> array(out, o);
 			case LispIntVector array -> array(out, o);
 			case LispHashTable table -> hashTable(out, table);
+			case LispLambda lambda when generic(lambda.name()) != null ->
+				genericFunction(out, Objects.requireNonNull(generic(lambda.name())));
 			case LispLambda lambda -> function(out, o, lambda.name());
+			case LispFunction function when generic(function.name()) != null ->
+				genericFunction(out, Objects.requireNonNull(generic(function.name())));
 			case LispFunction function -> function(out, o, function.name());
+			case LispInstance instance when instance.layout().kind() == LispLayout.Kind.PATHNAME ->
+				pathname(out, instance);
+			case LispInstance instance when isA(instance, ClosRegistry.CLASS_NAME) -> classPage(out, s, instance);
+			case LispInstance instance when slotDefinition(instance) -> slotDefinitionPage(out, s, instance);
 			case LispInstance instance when instance.layout().kind() == LispLayout.Kind.CLASS ->
 				standardObject(out, s, instance);
 			case LispInstance instance when instance.layout().kind() == LispLayout.Kind.STRUCT ->
 				structure(out, instance);
+			case LispJavaObject wrapped when wrapped.ref() instanceof Method method -> method(out, method);
+			case LispJavaObject wrapped when wrapped.ref() instanceof Symbols symbols -> symbols(out, symbols);
 			default -> unknown(out, o);
 		}
 		return out;
@@ -835,8 +931,7 @@ public final class SwankInspector {
 			arglist = list(params);
 		}
 		out.add(new RText("Its argument list is: "));
-		out.add(new RText(
-				arglist == null || arglist instanceof LispNil ? "()" : CommonLispSwank.arglistText(arglist, true)));
+		out.add(new RText(arglist == null || arglist instanceof LispNil ? "()" : this.lisp.arglistText(arglist)));
 		out.add(new RNewline());
 		LispEvaluator.Definition definition = name == null ? null : this.evaluator.definition(name);
 		docstring(out, "Documentation", definition == null ? null : definition.documentation());
@@ -859,6 +954,17 @@ public final class SwankInspector {
 	 */
 	private void standardObject(List<Raw> out, State s, LispInstance instance) {
 		LispVal classObject = this.lisp.helper("(lambda (o) (class-of o))", instance);
+		out.add(new RText("Class: "));
+		out.add(new RValue(classObject, null));
+		out.add(new RNewline());
+		allSlots(out, s, instance);
+	}
+
+	/**
+	 * SWANK's {@code all-slots-for-inspector}: an instance's slots, the check boxes and
+	 * the actions on the picked ones.
+	 */
+	private void allSlots(List<Raw> out, State s, LispInstance instance) {
 		String className = instance.layout().printName();
 		ClosRegistry.ClassInfo info = this.evaluator.closRegistry().findClass(className);
 		List<String> slots = new ArrayList<>(instance.layout().slotNames());
@@ -888,9 +994,6 @@ public final class SwankInspector {
 			slots.sort(Comparator.comparing(name -> home.getOrDefault(name, className)));
 		}
 		int longest = slots.stream().mapToInt(name -> LispSymbol.memberName(name).length()).max().orElse(0);
-		out.add(new RText("Class: "));
-		out.add(new RValue(classObject, null));
-		out.add(new RNewline());
 		out.add(new RText("--------------------"));
 		out.add(new RNewline());
 		out.add(new RText(" Group slots by inheritance "));
@@ -996,6 +1099,613 @@ public final class SwankInspector {
 				list(instance, new LispSymbol(slot), value));
 	}
 
+	// ------------------------------------------------------------------------------------
+	// Metaobjects, packages and pathnames
+
+	/** Whether an instance's class is a class or has it among its superclasses. */
+	private boolean isA(LispInstance instance, String className) {
+		ClosRegistry.ClassInfo info = this.evaluator.closRegistry().findClass(instance.layout().printName());
+		return info != null && info.cpl().contains(className);
+	}
+
+	private boolean slotDefinition(LispInstance instance) {
+		return isA(instance, ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME)
+				|| isA(instance, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME);
+	}
+
+	/** The value of an instance's slot by its member name, nil when it has none. */
+	private static LispVal slot(LispInstance instance, String member) {
+		List<String> names = instance.layout().slotNames();
+		for (int i = 0; i < names.size() && i < instance.slotCount(); i++) {
+			if (LispSymbol.memberName(names.get(i)).equalsIgnoreCase(member)) {
+				LispVal value = instance.slot(i);
+				return value == null ? LispNil.INSTANCE : value;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/** A value printed as {@code princ-to-string} prints it. */
+	private String princ(LispVal value) {
+		LispVal text = this.lisp.helper("(lambda (x) (princ-to-string x))", value);
+		return text instanceof LispString s ? s.value() : this.lisp.print(value);
+	}
+
+	/** SWANK's {@code common-seperated-spec}: the parts, a comma between two. */
+	private static <T> void separated(List<Raw> out, List<T> items, Function<T, Raw> part) {
+		for (int i = 0; i < items.size(); i++) {
+			if (i > 0) {
+				out.add(new RText(", "));
+			}
+			out.add(part.apply(items.get(i)));
+		}
+	}
+
+	/** A class's metaobject by its name, or the name when it has none. */
+	private LispVal classValue(String name) {
+		LispInstance metaobject = null;
+		try {
+			metaobject = this.evaluator.closRegistry().classMetaobject(name);
+		}
+		catch (RuntimeException ex) {
+			// no metaobject: the name stands for it
+		}
+		return metaobject != null ? metaobject : new LispSymbol(name);
+	}
+
+	/** A class's name as SWANK's page shows it: {@code princ}'d. */
+	private String className(String name) {
+		return princ(new LispSymbol(name));
+	}
+
+	/**
+	 * A class, as the fancy inspector's page for one: its name, superclasses, slots,
+	 * documentation, subclasses, precedence list, the methods specialized on it and a
+	 * prototype, then its own slots.
+	 */
+	private void classPage(List<Raw> out, State s, LispInstance klass) {
+		ClosRegistry registry = this.evaluator.closRegistry();
+		LispVal name = slot(klass, "NAME");
+		String spelling = name instanceof LispSymbol symbol ? symbol.name() : this.lisp.print(name);
+		ClosRegistry.ClassInfo info = registry.findClass(spelling);
+		String canonical = info != null ? info.name() : spelling;
+		out.add(new RText("Name: "));
+		out.add(new RValue(name, null));
+		out.add(new RNewline());
+		out.add(new RText("Super classes: "));
+		separated(out, elements(slot(klass, "DIRECT-SUPERCLASSES")), each -> new RValue(each, null));
+		out.add(new RNewline());
+		List<LispVal> effective = elements(slot(klass, "EFFECTIVE-SLOTS"));
+		List<LispVal> direct = elements(slot(klass, "DIRECT-SLOTS"));
+		if (direct.isEmpty() && info != null) {
+			// a plain class keeps no direct slot metaobjects: its own slots' effective
+			// ones
+			java.util.Set<String> own = new java.util.HashSet<>();
+			for (ClosRegistry.SlotSpec spec : info.directSlots()) {
+				own.add(spec.baseName().toUpperCase(Locale.ROOT));
+			}
+			direct = effective.stream()
+				.filter(each -> each instanceof LispInstance def && own
+					.contains(LispSymbol.memberName(this.lisp.print(slot(def, "NAME"))).toUpperCase(Locale.ROOT)))
+				.toList();
+		}
+		for (LispVal each : effective) {
+			this.slotOwners.put(each, canonical);
+		}
+		for (LispVal each : direct) {
+			this.slotOwners.put(each, canonical);
+		}
+		out.add(new RText("Direct Slots: "));
+		separated(out, direct, each -> new RValue(each, slotName(each)));
+		out.add(new RNewline());
+		out.add(new RText("Effective Slots: "));
+		separated(out, effective, each -> new RValue(each, slotName(each)));
+		out.add(new RNewline());
+		String doc = this.sources.classDocumentation(canonical);
+		if (doc != null) {
+			out.add(new RText("Documentation:"));
+			out.add(new RNewline());
+			out.add(new RText(doc));
+			out.add(new RNewline());
+		}
+		out.add(new RText("Sub classes: "));
+		separated(out, registry.directSubclassNames(canonical), each -> new RValue(classValue(each), className(each)));
+		out.add(new RNewline());
+		out.add(new RText("Precedence List: "));
+		separated(out, info == null ? List.<String>of() : info.cpl(),
+				each -> new RValue(classValue(each), className(each)));
+		out.add(new RNewline());
+		List<Method> methods = specializedOn(canonical);
+		if (!methods.isEmpty()) {
+			out.add(new RText("It is used as a direct specializer in the following methods:"));
+			out.add(new RNewline());
+			for (Method method : methods) {
+				out.add(new RText("  "));
+				out.add(new RValue(new LispJavaObject(method), princ(methodForInspect(method))));
+				out.add(new RNewline());
+				String methodDoc = info == null ? null : accessorDocumentation(method, info);
+				if (methodDoc != null) {
+					out.add(new RText("    Documentation: "));
+					out.add(new RText(abbreviate(methodDoc)));
+					out.add(new RNewline());
+				}
+			}
+		}
+		out.add(new RText("Prototype: "));
+		out.add(new RValue(this.lisp.helper("(lambda (c) (ignore-errors (allocate-instance c)))", klass), null));
+		out.add(new RNewline());
+		allSlots(out, s, klass);
+	}
+
+	private String slotName(LispVal slotDefinition) {
+		return slotDefinition instanceof LispInstance def ? princ(slot(def, "NAME")) : princ(slotDefinition);
+	}
+
+	/** SWANK's {@code abbrev-doc}: the first sentence, at most 80 characters. */
+	private static String abbreviate(String doc) {
+		int period = doc.indexOf('.');
+		return doc.substring(0, Math.min(Math.min(period >= 0 ? period + 1 : 79, 80), doc.length()));
+	}
+
+	/**
+	 * The methods with a class among their specializers, ordered by their generic
+	 * function's name, as SWANK's {@code specializer-direct-methods}.
+	 */
+	private List<Method> specializedOn(String className) {
+		List<Method> out = new ArrayList<>();
+		for (ClosRegistry.GenericInfo generic : List.copyOf(this.evaluator.closRegistry().generics().values())) {
+			for (Map.Entry<String, ClosRegistry.MethodInfo> entry : List.copyOf(generic.methods().entrySet())) {
+				boolean on = entry.getValue()
+					.specializers()
+					.stream()
+					.anyMatch(spec -> spec.kind() == ClosRegistry.SpecializerKind.CLASS && spec.name() != null
+							&& ClosRegistry.normalize(spec.name()).equals(ClosRegistry.normalize(className)));
+				if (on) {
+					out.add(new Method(generic.name(), entry.getKey(), entry.getValue()));
+				}
+			}
+		}
+		out.sort(Comparator.comparing(method -> placeName(method.generic())));
+		return out;
+	}
+
+	/** The documentation a slot accessor's method carries: its slot's. */
+	private @Nullable String accessorDocumentation(Method method, ClosRegistry.ClassInfo info) {
+		String member = LispSymbol.memberName(method.generic());
+		String place = member.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)
+				? member.substring(ClosRegistry.SETF_FUNCTION_PREFIX.length()) : null;
+		for (ClosRegistry.SlotSpec spec : info.directSlots()) {
+			boolean accessor = spec.readers().stream().anyMatch(r -> LispSymbol.memberName(r).equalsIgnoreCase(member))
+					|| spec.accessors()
+						.stream()
+						.anyMatch(a -> LispSymbol.memberName(a).equalsIgnoreCase(place != null ? place : member))
+					|| spec.writers().stream().anyMatch(w -> LispSymbol.memberName(w).equalsIgnoreCase(member));
+			if (accessor) {
+				return this.sources.slotDocumentation(info.name(), spec.baseName());
+			}
+		}
+		return null;
+	}
+
+	/** A function's name: a symbol, or {@code (setf place)} for a writer. */
+	private static LispVal functionName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		String member = qn == null ? name : qn.member();
+		if (member.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)) {
+			String place = member.substring(ClosRegistry.SETF_FUNCTION_PREFIX.length());
+			return list(new LispSymbol(LispNames.SETF), new LispSymbol(qn == null ? place : qn.pkg() + "::" + place));
+		}
+		return new LispSymbol(name);
+	}
+
+	/** The name a generic function sorts by: its place's for a writer. */
+	private static String placeName(String name) {
+		String member = LispSymbol.memberName(name);
+		return member.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)
+				? member.substring(ClosRegistry.SETF_FUNCTION_PREFIX.length()).toUpperCase(Locale.ROOT)
+				: member.toUpperCase(Locale.ROOT);
+	}
+
+	private static List<LispVal> qualifiers(Method method) {
+		String qualifier = method.info().qualifier();
+		return qualifier.isEmpty() ? List.of() : List.of(new LispSymbol(qualifier));
+	}
+
+	/** A method's specializers as SWANK prints them: class names, {@code (eql x)}. */
+	private static List<LispVal> specializerNames(Method method) {
+		List<LispVal> out = new ArrayList<>();
+		for (ClosRegistry.Specializer spec : method.info().specializers()) {
+			out.add(switch (spec.kind()) {
+				case EQL -> list(new LispSymbol(LispNames.EQL), Objects.requireNonNull(spec.eqlValue()));
+				case CLASS, TYPE -> new LispSymbol(Objects.requireNonNull(spec.name()));
+				case DEFAULT -> new LispSymbol("T");
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * SWANK's {@code method-for-inspect-value}: the generic's name, qualifiers,
+	 * specializers.
+	 */
+	private static LispVal methodForInspect(Method method) {
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(functionName(method.generic()));
+		parts.addAll(qualifiers(method));
+		parts.addAll(specializerNames(method));
+		return list(parts);
+	}
+
+	/** A slot definition, as the fancy inspector's page for one, then its own slots. */
+	private void slotDefinitionPage(List<Raw> out, State s, LispInstance definition) {
+		LispVal name = slot(definition, "NAME");
+		out.add(new RText("Name: "));
+		out.add(new RValue(name, null));
+		out.add(new RNewline());
+		String owner = this.slotOwners.get(definition);
+		String doc = owner == null ? null : this.sources.slotDocumentation(owner, princ(name));
+		if (doc != null) {
+			out.add(new RText("Documentation:"));
+			out.add(new RNewline());
+			out.add(new RValue(LispString.literal(doc), null));
+			out.add(new RNewline());
+		}
+		out.add(new RText("Init args: "));
+		out.add(new RValue(slot(definition, "INITARGS"), null));
+		out.add(new RNewline());
+		out.add(new RText("Init form: "));
+		LispVal initfunction = slot(definition, "INITFUNCTION");
+		LispVal initform = slot(definition, "INITFORM");
+		// a plain class's slot definition carries the initform it wrote, no function
+		if (truthy(initfunction) || truthy(initform)) {
+			out.add(new RValue(initform, null));
+		}
+		else {
+			out.add(new RText("#<unspecified>"));
+		}
+		out.add(new RNewline());
+		out.add(new RText("Init function: "));
+		out.add(new RValue(initfunction, null));
+		out.add(new RNewline());
+		allSlots(out, s, definition);
+	}
+
+	/** The generic function a function value's name names, or null. */
+	private ClosRegistry.@Nullable GenericInfo generic(@Nullable String name) {
+		return name == null ? null : this.evaluator.closRegistry().findGeneric(name);
+	}
+
+	/**
+	 * A generic function, as the fancy inspector's page for one: its name, argument list,
+	 * documentation, method combination and methods, each with {@code [remove method]}.
+	 */
+	private void genericFunction(List<Raw> out, ClosRegistry.GenericInfo generic) {
+		String name = generic.name();
+		line(out, "Name", functionName(name));
+		LispVal arglist = this.lisp.arglist(name);
+		if (arglist == null) {
+			arglist = list(generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList());
+		}
+		line(out, "Arguments", arglist);
+		LispEvaluator.Definition definition = this.evaluator.definition(name);
+		String doc = generic.documentation();
+		docstring(out, "Documentation", doc != null ? doc : definition == null ? null : definition.documentation());
+		String combination = generic.methodCombination();
+		line(out, "Method combination",
+				new LispSymbol(combination == null ? "STANDARD" : combination.toUpperCase(Locale.ROOT)));
+		out.add(new RText("Methods: "));
+		out.add(new RNewline());
+		List<Method> methods = new ArrayList<>();
+		for (Map.Entry<String, ClosRegistry.MethodInfo> entry : List.copyOf(generic.methods().entrySet())) {
+			methods.add(new Method(name, entry.getKey(), entry.getValue()));
+		}
+		for (Method method : byApplicability(methods)) {
+			List<LispVal> label = new ArrayList<>(qualifiers(method));
+			label.addAll(specializerNames(method));
+			out.add(new RValue(new LispJavaObject(method), princ(list(label))));
+			out.add(new RText(" "));
+			out.add(new RAction("[remove method]", () -> this.evaluator.removeMethod(name, method.key()), false));
+			out.add(new RNewline());
+		}
+		out.add(new RNewline());
+	}
+
+	/**
+	 * Methods ordered most specific first, as SWANK's {@code methods-by-applicability}: a
+	 * stable sort on the first specializer pair that differs.
+	 */
+	private List<Method> byApplicability(List<Method> methods) {
+		List<Method> out = new ArrayList<>();
+		for (Method method : methods) {
+			int at = out.size();
+			while (at > 0 && before(method, out.get(at - 1))) {
+				at--;
+			}
+			out.add(at, method);
+		}
+		return out;
+	}
+
+	private boolean before(Method a, Method b) {
+		List<ClosRegistry.Specializer> as = a.info().specializers();
+		List<ClosRegistry.Specializer> bs = b.info().specializers();
+		for (int i = 0; i < as.size() && i < bs.size(); i++) {
+			if (moreSpecific(bs.get(i), as.get(i))) {
+				return false;
+			}
+			if (moreSpecific(as.get(i), bs.get(i))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean moreSpecific(ClosRegistry.Specializer a, ClosRegistry.Specializer b) {
+		if (a.kind() == ClosRegistry.SpecializerKind.EQL) {
+			return b.kind() != ClosRegistry.SpecializerKind.EQL;
+		}
+		if (a.kind() == ClosRegistry.SpecializerKind.DEFAULT || b.kind() == ClosRegistry.SpecializerKind.EQL) {
+			return false;
+		}
+		if (b.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
+			return true;
+		}
+		ClosRegistry.ClassInfo info = this.evaluator.closRegistry().findClass(Objects.requireNonNull(a.name()));
+		return info != null && !Objects.equals(a.name(), b.name())
+				&& info.cpl()
+					.stream()
+					.anyMatch(each -> ClosRegistry.normalize(each)
+						.equals(ClosRegistry.normalize(Objects.requireNonNull(b.name()))));
+	}
+
+	/**
+	 * A method, as the fancy inspector's page for one: its generic function, lambda list
+	 * (the generic's: a method's own is not kept), specializers, qualifiers and function.
+	 */
+	private void method(List<Raw> out, Method method) {
+		LispVal generic = this.evaluator.globalEnvironment().lookupFunctionOrNull(method.generic());
+		if (generic != null) {
+			out.add(new RText("Method defined on the generic function "));
+			out.add(new RValue(generic, princ(functionName(method.generic()))));
+		}
+		else {
+			out.add(new RText("Method without a generic function"));
+		}
+		out.add(new RNewline());
+		LispVal arglist = this.lisp.arglist(method.generic());
+		ClosRegistry.GenericInfo info = generic(method.generic());
+		if (arglist == null) {
+			arglist = list(
+					info == null ? List.of() : info.paramNames().stream().<LispVal>map(LispSymbol::new).toList());
+		}
+		out.add(new RText("Lambda List: "));
+		out.add(new RValue(arglist, null));
+		out.add(new RNewline());
+		List<LispVal> specializers = new ArrayList<>();
+		for (ClosRegistry.Specializer spec : method.info().specializers()) {
+			specializers.add(switch (spec.kind()) {
+				case EQL -> list(new LispSymbol(LispNames.EQL), Objects.requireNonNull(spec.eqlValue()));
+				case CLASS, TYPE -> classValue(Objects.requireNonNull(spec.name()));
+				case DEFAULT -> classValue("T");
+			});
+		}
+		out.add(new RText("Specializers: "));
+		out.add(new RValue(list(specializers), princ(list(specializerNames(method)))));
+		out.add(new RNewline());
+		out.add(new RText("Qualifiers: "));
+		out.add(new RValue(list(qualifiers(method)), null));
+		out.add(new RNewline());
+		LispVal function = this.evaluator.globalEnvironment().lookupFunctionOrNull(method.info().functionName());
+		out.add(new RText("Method function: "));
+		out.add(new RValue(function == null ? LispNil.INSTANCE : function, null));
+		out.add(new RNewline());
+	}
+
+	/** Whether a keyword names a package: a package is its keyword here. */
+	private boolean packageDesignator(LispSymbol symbol) {
+		return symbol.name().startsWith(":")
+				&& truthy(this.lisp.helper("(lambda (o) (ignore-errors (packagep o)))", symbol));
+	}
+
+	/**
+	 * A package, as the fancy inspector's page for one: its name, nicknames, use lists
+	 * and its symbols counted by status, each count a page listing them.
+	 */
+	private void packagePage(List<Raw> out, LispSymbol pkg) {
+		List<LispVal> facts = elements(this.lisp
+			.helper("(lambda (p) (list (package-name p)" + " (sort (copy-list (package-nicknames p)) #'string<)"
+					+ " (ignore-errors (package-local-nicknames p)) (ignore-errors (documentation p t))"
+					+ " (sort (copy-list (package-use-list p)) #'string< :key #'package-name)"
+					+ " (sort (copy-list (package-used-by-list p)) #'string< :key #'package-name)"
+					+ " (mapcar #'symbol-name (package-shadowing-symbols p))))", pkg));
+		String name = facts.get(0) instanceof LispString s ? s.value() : this.lisp.print(facts.get(0));
+		out.add(new RText(""));
+		out.add(new RText("Name: "));
+		out.add(new RValue(facts.get(0), null));
+		out.add(new RNewline());
+		out.add(new RText("Nicknames: "));
+		separated(out, elements(facts.get(1)), each -> new RValue(each, null));
+		out.add(new RNewline());
+		if (truthy(facts.get(2))) {
+			out.add(new RText("Package-local nicknames: "));
+			out.add(new RValue(facts.get(2), null));
+			out.add(new RNewline());
+		}
+		if (facts.get(3) instanceof LispString doc) {
+			out.add(new RText("Documentation:"));
+			out.add(new RNewline());
+			out.add(new RText(doc.value()));
+			out.add(new RNewline());
+		}
+		out.add(new RText("Use list: "));
+		separated(out, elements(facts.get(4)), each -> new RValue(each, packageName(each)));
+		out.add(new RNewline());
+		out.add(new RText("Used by list: "));
+		separated(out, elements(facts.get(5)), each -> new RValue(each, packageName(each)));
+		out.add(new RNewline());
+		String canonical = this.lisp.guessPackage(LispSymbol.memberName(pkg.name()));
+		List<String> present = new ArrayList<>();
+		List<String> external = new ArrayList<>();
+		List<String> internal = new ArrayList<>();
+		List<String> inherited = new ArrayList<>();
+		if (canonical != null) {
+			for (PackageResolver.Accessible each : this.lisp.accessibleSymbols(canonical).values()) {
+				switch (each.status()) {
+					case LispNames.STATUS_INHERITED -> inherited.add(each.spelling());
+					case LispNames.STATUS_EXTERNAL -> {
+						present.add(each.spelling());
+						external.add(each.spelling());
+					}
+					default -> {
+						present.add(each.spelling());
+						internal.add(each.spelling());
+					}
+				}
+			}
+		}
+		List<String> shadowed = new ArrayList<>();
+		for (LispVal each : elements(facts.get(6))) {
+			if (each instanceof LispString member) {
+				String found = this.lisp.symbolNamed(name + "::" + member.value());
+				shadowed.add(found != null ? found : member.value());
+			}
+		}
+		shadowed.sort(Comparator.comparing(LispSymbol::memberName));
+		symbolsLink(out, "present", present, name,
+				texts("A symbol is considered present in a package if it's",
+						"\"accessible in that package directly, rather than", "being inherited from another package.\"",
+						"(CLHS glossary entry for `present')"));
+		out.add(new RNewline());
+		symbolsLink(out, "external", external, name, texts("A symbol is considered external of a package if it's",
+				"\"part of the `external interface' to the package and",
+				"[is] inherited by any other package that uses the", "package.\" (CLHS glossary entry of `external')"));
+		out.add(new RNewline());
+		symbolsLink(out, "internal", internal, name, texts("A symbol is considered internal of a package if it's",
+				"present and not external---that is if the package is",
+				"the home package of the symbol, or if the symbol has", "been explicitly imported into the package.",
+				"", "Notice that inherited symbols will thus not be listed,",
+				"which deliberately deviates from the CLHS glossary",
+				"entry of `internal' because it's assumed to be more", "useful this way."));
+		out.add(new RNewline());
+		symbolsLink(out, "inherited", inherited, name,
+				texts("A symbol is considered inherited in a package if it", "was made accessible via USE-PACKAGE."));
+		out.add(new RNewline());
+		symbolsLink(out, "shadowed", shadowed, name, List.of());
+	}
+
+	/** Lines of text, each ended by a newline, as SWANK's descriptions are written. */
+	private static List<Raw> texts(String... lines) {
+		List<Raw> out = new ArrayList<>();
+		for (String line : lines) {
+			if (!line.isEmpty()) {
+				out.add(new RText(line));
+			}
+			out.add(new RNewline());
+		}
+		return out;
+	}
+
+	/** SWANK's {@code display-link}: a count of symbols, a page listing them. */
+	private static void symbolsLink(List<Raw> out, String kind, List<String> spellings, String pkg,
+			List<Raw> description) {
+		int n = spellings.size();
+		if (n == 0) {
+			out.add(new RText("0 " + kind + " symbols."));
+			return;
+		}
+		Symbols symbols = new Symbols("All " + kind + " symbols of package \"" + pkg + "\"", description,
+				List.copyOf(spellings));
+		out.add(new RValue(new LispJavaObject(symbols), n + " " + kind + " symbol" + (n == 1 ? "" : "s") + "."));
+	}
+
+	/** The classifications SWANK groups symbols by, each with its flag letter. */
+	private static final List<Map.Entry<String, Character>> CLASSIFICATIONS = List.of(Map.entry("BOUNDP", 'b'),
+			Map.entry("CLASS", 'c'), Map.entry("FUNCTION", 'f'), Map.entry("GENERIC-FUNCTION", 'g'),
+			Map.entry("MACRO", 'm'), Map.entry("PACKAGE", 'p'), Map.entry("SPECIAL-OPERATOR", 's'),
+			Map.entry("TYPESPEC", 't'));
+
+	/**
+	 * Some of a package's symbols, as SWANK's {@code %package-symbols-container} page:
+	 * listed with their classification flags, or grouped by classification.
+	 */
+	private void symbols(List<Raw> out, Symbols symbols) {
+		out.add(new RText(symbols.title));
+		out.add(new RNewline());
+		out.add(new RNewline());
+		out.addAll(symbols.description);
+		out.add(new RNewline());
+		out.add(new RText("  "));
+		boolean grouped = symbols.byClassification;
+		out.add(new RAction(grouped ? "[Group by symbol]" : "[Group by classification]",
+				() -> symbols.byClassification = !grouped, true));
+		out.add(new RNewline());
+		out.add(new RNewline());
+		if (!grouped) {
+			int longest = symbols.spellings.stream().mapToInt(s -> LispSymbol.memberName(s).length()).max().orElse(0);
+			int distance = 10;
+			out.add(new RText(""));
+			out.add(new RText("Symbols:"));
+			out.add(new RText(" ".repeat(Math.max(0, longest + distance - 8))));
+			out.add(new RText("Flags:"));
+			out.add(new RNewline());
+			out.add(new RText("-".repeat(Math.max(0, longest + distance - 1)) + " ---------"));
+			out.add(new RNewline());
+			for (String spelling : symbols.spellings) {
+				String member = LispSymbol.memberName(spelling);
+				out.add(new RValue(new LispSymbol(spelling),
+						member + " ".repeat(longest - member.length() + distance)));
+				out.add(new RText(this.lisp.classification(spelling)));
+				out.add(new RNewline());
+			}
+			return;
+		}
+		Map<String, List<String>> groups = new java.util.TreeMap<>();
+		for (String spelling : symbols.spellings) {
+			String flags = this.lisp.classification(spelling);
+			boolean any = false;
+			for (Map.Entry<String, Character> each : CLASSIFICATIONS) {
+				char letter = each.getValue();
+				boolean has = flags.indexOf(letter) >= 0
+						&& (letter != 'f' || flags.indexOf('m') < 0 && flags.indexOf('s') < 0);
+				if (has) {
+					groups.computeIfAbsent(each.getKey(), k -> new ArrayList<>()).add(spelling);
+					any = true;
+				}
+			}
+			if (!any) {
+				groups.computeIfAbsent("~MISC", k -> new ArrayList<>()).add(spelling);
+			}
+		}
+		for (Map.Entry<String, List<String>> group : groups.entrySet()) {
+			out.add(new RText(group.getKey().equals("~MISC") ? "MISC" : group.getKey()));
+			out.add(new RNewline());
+			out.add(new RText("-".repeat(64)));
+			out.add(new RNewline());
+			for (String spelling : group.getValue()) {
+				out.add(new RValue(new LispSymbol(spelling), LispSymbol.memberName(spelling)));
+				out.add(new RNewline());
+			}
+			out.add(new RNewline());
+		}
+	}
+
+	/** A pathname, as the fancy inspector's page for one. */
+	private void pathname(List<Raw> out, LispInstance pathname) {
+		List<LispVal> facts = elements(this.lisp.helper("(lambda (p) (list (wild-pathname-p p) (namestring p)"
+				+ " (pathname-host p) (pathname-device p) (pathname-directory p) (pathname-name p)"
+				+ " (pathname-type p) (pathname-version p)"
+				+ " (and (not (wild-pathname-p p)) (ignore-errors (probe-file p)))))", pathname));
+		out.add(new RText(truthy(facts.get(0)) ? "A wild pathname." : "A pathname."));
+		out.add(new RNewline());
+		String[] labels = { "Namestring", "Host", "Device", "Directory", "Name", "Type", "Version" };
+		for (int i = 0; i < labels.length; i++) {
+			line(out, labels[i], facts.get(i + 1));
+		}
+		if (truthy(facts.get(8))) {
+			line(out, "Truename", facts.get(8));
+		}
+	}
+
 	private void unknown(List<Raw> out, LispVal object) {
 		out.add(new RText("Type: "));
 		out.add(new RValue(this.lisp.helper("(lambda (o) (type-of o))", object), null));
@@ -1022,7 +1732,7 @@ public final class SwankInspector {
 		if (object instanceof LispCons) {
 			type = "LIST";
 		}
-		return this.lisp.print(object) + "\n  [" + type.toLowerCase(Locale.ROOT) + "]\n";
+		return display(object) + "\n  [" + type.toLowerCase(Locale.ROOT) + "]\n";
 	}
 
 	// ------------------------------------------------------------------------------------
