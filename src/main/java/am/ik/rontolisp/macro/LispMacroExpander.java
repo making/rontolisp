@@ -27480,7 +27480,7 @@ public final class LispMacroExpander {
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || structDefinitionPayload(f) != null || isClosDefinitionForm(f)
 							|| isSetfFunctionDefun(f) || isLetWithNestedDefmethod(f)
-							|| isNamedForm(f, LispNames.DEFTYPE))) {
+							|| isNamedForm(f, LispNames.DEFTYPE) || deftypeInstanceDeclamation(f) != null)) {
 			// No definitions to splice, so the registry stays as seeded: a #S(...)
 			// literal
 			// here can only name an unregistered structure type and the fold says so. It
@@ -27586,6 +27586,16 @@ public final class LispMacroExpander {
 				// Register a zero-parameter deftype so a later typep/typecase resolves
 				// its name; the form itself is a runtime no-op (replaced by nil).
 				out.add(expandDeftype((LispCons) form, closRegistry));
+			}
+			else if (deftypeInstanceDeclamation(form) instanceof LispCons instance) {
+				// What one compound specifier headed by a parameterized deftype expands
+				// to, computed by the macro pass's evaluator: registered here, before
+				// any type test reads it, and a runtime no-op like the deftype itself.
+				List<LispVal> payload = instance.toList();
+				if (payload.size() == 3 && unquoted(payload.get(1)) instanceof LispCons specifier) {
+					closRegistry.registerDeftypeInstance(specifier, unquoted(payload.get(2)));
+				}
+				out.add(LispNil.INSTANCE);
 			}
 			else if (isSetfFindClassForm(form)) {
 				// (setf (find-class 'alias) (find-class 'target)): the alias must join
@@ -27793,17 +27803,18 @@ public final class LispMacroExpander {
 			// The stream subtype names are narrowed the same way: a program that neither
 			// spells one nor can turn a stream into one keeps the bytes it had.
 			java.util.Set<String> spelled = spelledSymbolNames(out);
-			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, spelled);
+			RuntimeDeftypeTable deftypes = narrowedDeftypeAliases(closRegistry, spelled);
+			boolean resolvesDeftypes = !deftypes.aliases().isEmpty() || !deftypes.instances().isEmpty();
 			List<String> streamNames = runtimeStreamTypeNames(spelled);
-			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty(), streamNames));
+			out.add(runtimeTypepDefun(closRegistry, resolvesDeftypes, streamNames));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry, streamNames));
-			if (!aliases.isEmpty()) {
+			if (resolvesDeftypes) {
 				// The user-deftype alias resolver the dispatch above normalizes its
 				// designator through, gated on the program registering one: without an
 				// alias the module must compile to the bytes it did before.
-				out.add(deftypeAliasDefun());
-				out.addAll(0, deftypeAliasTableForms(aliases));
+				out.add(deftypeAliasDefun(!deftypes.instances().isEmpty()));
+				out.addAll(0, deftypeAliasTableForms(deftypes));
 			}
 		}
 		if (runtimeElementTypeAlias && !elementTypeAliasExpansions(closRegistry).isEmpty()) {
@@ -37231,6 +37242,15 @@ public final class LispMacroExpander {
 			default: {
 				String pred = atomicTypePredicate(plainTypeName(head));
 				if (pred == null) {
+					// A user deftype head: (proper-list integer) is what the body
+					// computes for those arguments; a bare (name) is the name.
+					LispVal deftypeExpansion = closRegistry.expandDeftypeSpecifier(spec);
+					if (deftypeExpansion != null) {
+						return makeTypeTest(value, deftypeExpansion, closRegistry);
+					}
+					if (parts.size() == 1 && closRegistry.findDeftype(head.name()) != null) {
+						return makeTypeTest(value, head, closRegistry);
+					}
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 				}
 				if (!NUMERIC_TYPE_PREDICATES.contains(pred)) {
@@ -37411,6 +37431,49 @@ public final class LispMacroExpander {
 			closRegistry.registerDeftype(nameSym.name(), expansion);
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Builds {@code (declaim (%deftype-instance 'specifier 'expansion))}: the record the
+	 * macro pass leaves of what one compound specifier headed by a parameterized
+	 * {@code deftype} expands to, for the compile paths' definition walk to register. A
+	 * declamation because every pass already reads one as inert data.
+	 * @param specifier the compound specifier
+	 * @param expansion the type specifier its deftype's body computed
+	 * @return the declamation form
+	 */
+	public static LispVal deftypeInstanceDeclamation(LispCons specifier, LispVal expansion) {
+		return listToCons(List.of(new LispSymbol(LispNames.DECLAIM),
+				listToCons(List.of(new LispSymbol(LispNames.DEFTYPE_INSTANCE_DECLARATION), quotedValue(specifier),
+						quotedValue(expansion)))));
+	}
+
+	/**
+	 * The {@code (%deftype-instance 'specifier 'expansion)} declaration of a top-level
+	 * form {@link #deftypeInstanceDeclamation(LispCons, LispVal)} built, or null for any
+	 * other form. Matched by member name: the compilers' resolver may qualify the
+	 * identifier into the package current where the macro pass appended it.
+	 * @param form a top-level form
+	 * @return the declaration, or null
+	 */
+	public static @Nullable LispCons deftypeInstanceDeclamation(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.DECLAIM.equals(LispSymbol.memberName(op.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil && rest.car() instanceof LispCons declaration
+				&& declaration.car() instanceof LispSymbol id
+				&& LispNames.DEFTYPE_INSTANCE_DECLARATION.equals(LispSymbol.memberName(id.name()))) {
+			return declaration;
+		}
+		return null;
+	}
+
+	/** The datum of a {@code (quote datum)} form, or the form itself. */
+	private static LispVal unquoted(LispVal form) {
+		if (form instanceof LispCons quoted && quoted.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && quoted.cdr() instanceof LispCons rest) {
+			return rest.car();
+		}
+		return form;
 	}
 
 	/**
@@ -44366,6 +44429,12 @@ public final class LispMacroExpander {
 		if (normalize != null) {
 			prologue.add(normalize);
 		}
+		// A compound designator headed by a parameterized deftype is expanded first,
+		// through the interpreter's evaluator, since its arguments decide the type.
+		if (closRegistry.expandsDeftypeSpecifiers()) {
+			prologue.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), tn, callOf(LispNames.DEFTYPE_EXPAND_INTERNAL, tn))));
+		}
 		// A designator naming a user deftype is rewritten to its expansion before the
 		// dispatch, so a name held in a VARIABLE decides what its literal spelling
 		// decides. It runs AFTER the metaobject normalization, which turns a class
@@ -45051,15 +45120,11 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispVal spec = registry.findDeftype(name);
-			for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS && spec instanceof LispSymbol sym; hop++) {
-				LispVal next = registry.findDeftype(sym.name());
-				if (next == null || (next instanceof LispSymbol self
-						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name())))) {
-					break;
-				}
-				spec = next;
+			if (spec == null) {
+				continue;
 			}
-			if (spec == null || (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name))) {
+			spec = followDeftypeHops(spec, registry);
+			if (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name)) {
 				continue;
 			}
 			table.put(name, spec);
@@ -45068,19 +45133,81 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Follows a deftype expansion to the end of its chain -- an alias NAME to the
+	 * specifier it names, a compound specifier headed by a parameterized deftype to what
+	 * its body computed -- so the run-time resolver answers in one hop. Bounded like
+	 * {@link #resolveElementTypeAlias}, which is what makes a self-referential deftype
+	 * terminate.
+	 */
+	private static LispVal followDeftypeHops(LispVal spec, ClosRegistry registry) {
+		for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS; hop++) {
+			LispVal next;
+			if (spec instanceof LispSymbol sym) {
+				next = registry.findDeftype(sym.name());
+				if (next instanceof LispSymbol self
+						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name()))) {
+					break;
+				}
+			}
+			else if (spec instanceof LispCons compound) {
+				next = registry.expandDeftypeSpecifier(compound);
+			}
+			else {
+				break;
+			}
+			if (next == null) {
+				break;
+			}
+			spec = next;
+		}
+		return spec;
+	}
+
+	/**
+	 * The recorded compound-specifier instances whose head the program spells, each
+	 * expansion followed to the end of its chain ({@link #followDeftypeHops}).
+	 */
+	private static List<ClosRegistry.DeftypeInstance> deftypeInstanceExpansions(ClosRegistry registry,
+			java.util.Set<String> spelled) {
+		List<ClosRegistry.DeftypeInstance> instances = new java.util.ArrayList<>();
+		for (ClosRegistry.DeftypeInstance instance : registry.deftypeInstances()) {
+			if (instance.specifier().car() instanceof LispSymbol head && spelled.contains(head.name())) {
+				instances.add(new ClosRegistry.DeftypeInstance(instance.specifier(),
+						followDeftypeHops(instance.expansion(), registry)));
+			}
+		}
+		return instances;
+	}
+
+	/**
+	 * What the compile paths' run-time deftype resolver carries: the alias names and the
+	 * compound-specifier instances, each mapped to its resolved expansion.
+	 *
+	 * @param aliases alias name to its expansion
+	 * @param instances the compound-specifier instances
+	 */
+	private record RuntimeDeftypeTable(java.util.Map<String, LispVal> aliases,
+			List<ClosRegistry.DeftypeInstance> instances) {
+	}
+
+	/**
 	 * Builds the {@code %deftype-alias-table%} data-table forms backing
 	 * {@link #deftypeAliasDefun}: each entry maps the spellings of one registered
 	 * {@code deftype} name to the specifier it expands to. Pure quoted data, emitted
 	 * through {@link #chunkedTableForms}.
 	 */
-	private static List<LispVal> deftypeAliasTableForms(java.util.Map<String, LispVal> aliases) {
+	private static List<LispVal> deftypeAliasTableForms(RuntimeDeftypeTable deftypes) {
 		List<LispVal> entries = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+		for (java.util.Map.Entry<String, LispVal> alias : deftypes.aliases().entrySet()) {
 			List<LispVal> nameSyms = new java.util.ArrayList<>();
 			for (String name : deftypeAliasSpellings(alias.getKey())) {
 				nameSyms.add(new LispSymbol(name));
 			}
 			entries.add(listToCons(List.of(listToCons(nameSyms), alias.getValue())));
+		}
+		// A compound instance is its own single key, matched by equal.
+		for (ClosRegistry.DeftypeInstance instance : deftypes.instances()) {
+			entries.add(listToCons(List.of(listToCons(List.of(instance.specifier())), instance.expansion())));
 		}
 		return chunkedTableForms(LispNames.DEFTYPE_ALIAS_TABLE, entries);
 	}
@@ -45127,24 +45254,23 @@ public final class LispMacroExpander {
 	 * forms, taken BEFORE the table's own forms join them
 	 * @return the aliases to emit, in registration order
 	 */
-	private static java.util.Map<String, LispVal> narrowedDeftypeAliases(ClosRegistry closRegistry,
+	private static RuntimeDeftypeTable narrowedDeftypeAliases(ClosRegistry closRegistry,
 			java.util.Set<String> programSpellings) {
 		java.util.Set<String> spelled = new java.util.HashSet<>(programSpellings);
-		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
 		// One entry's EXPANSION can name another alias -- alexandria's proper-sequence
 		// is (or proper-list ...) -- and %typep-compound-runtime recurses back into the
 		// dispatch for a sub-specifier, so the table has to be closed under that
 		// reference even when the program never spelled the inner name itself.
 		while (true) {
+			java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
+			List<ClosRegistry.DeftypeInstance> instances = deftypeInstanceExpansions(closRegistry, spelled);
 			List<LispVal> expansions = new java.util.ArrayList<>(aliases.values());
+			for (ClosRegistry.DeftypeInstance instance : instances) {
+				expansions.add(instance.expansion());
+			}
 			if (!spelled.addAll(spelledSymbolNames(expansions))) {
-				return aliases;
+				return new RuntimeDeftypeTable(aliases, instances);
 			}
-			java.util.Map<String, LispVal> grown = deftypeAliasExpansions(closRegistry, spelled);
-			if (grown.size() == aliases.size()) {
-				return grown;
-			}
-			aliases = grown;
 		}
 	}
 
@@ -45178,13 +45304,19 @@ public final class LispMacroExpander {
 	 * per-alias data lives in the table, so the defun's size is fixed.
 	 * @return the defun form
 	 */
-	private static LispVal deftypeAliasDefun() {
+	private static LispVal deftypeAliasDefun(boolean compoundKeys) {
 		LispSymbol x = new LispSymbol("%dta_x");
 		LispSymbol entry = new LispSymbol("%dta_e");
-		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil))
+		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil)); a
+		// table holding compound-specifier keys compares by equal.
+		LispVal keyTest = compoundKeys
+				? listToCons(List.of(new LispSymbol(LispNames.MEMBER), x, mvCall(LispNames.CAR, entry),
+						new LispSymbol(":TEST"),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.EQUAL)))))
+				: mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry));
 		LispVal scan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(entry, new LispSymbol(LispNames.DEFTYPE_ALIAS_TABLE), x)),
-				makeIf(mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry)), listToCons(
+				makeIf(keyTest, listToCons(
 						List.of(new LispSymbol(LispNames.RETURN), mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry)))),
 						LispNil.INSTANCE)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.DEFTYPE_ALIAS_RUNTIME),

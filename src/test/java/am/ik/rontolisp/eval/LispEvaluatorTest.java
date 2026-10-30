@@ -8014,6 +8014,23 @@ class LispEvaluatorTest {
 				      (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
 				      (typep 3 'octet) (tp 3 'no-such-type))
 				""").print()).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+		// A compound specifier headed by a PARAMETERIZED deftype is what the body
+		// computes for its arguments, literal or held in a value, through a chain
+		// (alist -> a plist instance); the typecase head used to be refused. The
+		// four-backend twin is the typep-parameterized-deftype-compound ci-spec case.
+		assertThat(evalMulti("""
+				(defun plp (x) (listp x))
+				(deftype plist (&optional (et '*)) (declare (ignore et)) '(and list (satisfies plp)))
+				(deftype vec (n) `(simple-vector ,n))
+				(deftype tuple (&rest types)
+				  `(and list ,(reduce (lambda (e acc) `(cons ,e ,acc)) types :from-end t :initial-value 'null)))
+				(deftype alist (&optional (k '*) (v '*)) `(plist (cons ,k ,v)))
+				(defun tp (x ty) (typep x ty))
+				(list (typep '(1 2) '(plist integer)) (typep 3 '(plist integer)) (typep (vector 1 2 3) '(vec 2))
+				      (typep '(1 "a") '(tuple integer string)) (typecase (vector 1 2 3) ((vec 2) :two) ((vec 3) :three))
+				      (tp (vector 1 2 3) '(vec 2)) (tp (vector 1 2) '(or string (vec 2)))
+				      (tp '(1 2) '(tuple integer string)) (tp '((a . 1)) '(alist symbol integer)))
+				""").print()).isEqualTo("(T NIL NIL T :THREE NIL T NIL T)");
 	}
 
 	@Test

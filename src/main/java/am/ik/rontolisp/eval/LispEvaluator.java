@@ -830,6 +830,102 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The parameterized {@code deftype} forms this evaluator has seen, keyed by the
+	 * normalized type name: what a compound specifier headed by one expands through.
+	 */
+	private final Map<String, LispCons> parameterizedDeftypes = new java.util.LinkedHashMap<>();
+
+	/**
+	 * Whether the specifier head names a parameterized {@code deftype} this evaluator has
+	 * seen.
+	 * @param name the head symbol's name
+	 * @return true when a compound specifier with that head expands here
+	 */
+	public boolean namesParameterizedDeftype(String name) {
+		return parameterizedDeftype(name) != null;
+	}
+
+	/**
+	 * Whether this evaluator has seen any parameterized {@code deftype}.
+	 * @return true when at least one is defined
+	 */
+	public boolean definesParameterizedDeftypes() {
+		return !this.parameterizedDeftypes.isEmpty();
+	}
+
+	private @Nullable LispCons parameterizedDeftype(String name) {
+		LispCons exact = this.parameterizedDeftypes.get(ClosRegistry.normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.parameterizedDeftypes.get(qn.member());
+		}
+		return null;
+	}
+
+	/**
+	 * Expands a compound type specifier headed by a parameterized {@code deftype}: the
+	 * body runs with the lambda list bound to the specifier's arguments, an
+	 * {@code &optional} or {@code &key} parameter with no init-form defaulting to the
+	 * symbol {@code *} (CLHS deftype).
+	 * @param specifier the compound specifier
+	 * @return the type specifier it denotes, or null when its head names no parameterized
+	 * deftype or the body fails on these arguments
+	 */
+	public @Nullable LispVal expandDeftypeSpecifier(LispCons specifier) {
+		if (!(specifier.car() instanceof LispSymbol head) || !specifier.isProperList()) {
+			return null;
+		}
+		LispCons deftype = parameterizedDeftype(head.name());
+		if (deftype == null) {
+			return null;
+		}
+		List<LispVal> parts = deftype.toList();
+		LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));
+		List<LispVal> lambdaList = new ArrayList<>();
+		boolean defaulted = false;
+		LispVal cur = parts.get(2);
+		while (cur instanceof LispCons c) {
+			LispVal item = c.car();
+			cur = c.cdr();
+			if (item instanceof LispSymbol marker && marker.name().startsWith("&")) {
+				if (LispNames.LAMBDA_ENVIRONMENT.equals(marker.name()) && cur instanceof LispCons skipped) {
+					cur = skipped.cdr();
+					continue;
+				}
+				defaulted = LispNames.LAMBDA_OPTIONAL.equals(marker.name())
+						|| LispNames.LAMBDA_KEY.equals(marker.name());
+				lambdaList.add(item);
+			}
+			else if (defaulted && item instanceof LispSymbol param) {
+				lambdaList.add(consListOf(List.of(param, quotedStar)));
+			}
+			else if (defaulted && item instanceof LispCons param && param.cdr() instanceof LispNil) {
+				lambdaList.add(consListOf(List.of(param.car(), quotedStar)));
+			}
+			else {
+				lambdaList.add(item);
+			}
+		}
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(lambdaList.isEmpty() ? LispNil.INSTANCE : consListOf(lambdaList));
+		lambda.addAll(parts.subList(3, parts.size()));
+		LispVal call = consListOf(List.of(new LispSymbol(LispNames.APPLY),
+				consListOf(List.of(new LispSymbol(LispNames.FUNCTION), consListOf(lambda))),
+				consListOf(List.of(new LispSymbol(LispNames.QUOTE), specifier.cdr()))));
+		try {
+			LispVal spec = withoutDebugger(() -> eval(call, this.globalEnv));
+			return spec instanceof LispSymbol || spec instanceof LispCons || spec instanceof LispNil
+					|| spec instanceof LispTrue ? spec : null;
+		}
+		catch (RuntimeException bodyRefusesTheArguments) {
+			return null;
+		}
+	}
+
+	/**
 	 * Generic-function name -&gt; the internal name the Java-backed built-in it shadows
 	 * was stashed under, for the generics whose name a program defined a method on. The
 	 * stash happens EXACTLY ONCE per name and every later dispatcher regeneration (there
@@ -2635,6 +2731,22 @@ public final class LispEvaluator {
 					this.globalEnv.defineFunction(name, args.get(1));
 					removeUserMacro(name);
 					return args.get(1);
+				}));
+		// The run-time typep dispatch expands a designator headed by a parameterized
+		// deftype through this before it reads the head (expandRuntimeTypep); a chain
+		// of such heads expands to its end, bounded like an alias chain.
+		this.globalEnv.defineFunction(LispNames.DEFTYPE_EXPAND_INTERNAL,
+				new LispFunction(LispNames.DEFTYPE_EXPAND_INTERNAL, args -> {
+					requireSingleArg(LispNames.DEFTYPE_EXPAND_INTERNAL, args);
+					LispVal spec = args.get(0);
+					for (int hop = 0; hop < 16 && spec instanceof LispCons compound; hop++) {
+						LispVal expansion = expandDeftypeSpecifier(compound);
+						if (expansion == null) {
+							break;
+						}
+						spec = expansion;
+					}
+					return spec;
 				}));
 		// The compile paths' setf-only-alias forwarder body reads the binding through
 		// this primitive; the interpreter serves it against the live environment so
@@ -12518,6 +12630,18 @@ public final class LispEvaluator {
 	public LispVal foldDeftype(LispCons cons) {
 		LispMacroExpander.expandDeftype(cons, this.closRegistry);
 		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol typeName) {
+			// A parameterized deftype is kept whole: a compound specifier headed by it
+			// expands by running the body over that specifier's arguments.
+			String key = ClosRegistry.normalize(typeName.name());
+			if (parts.get(2) instanceof LispCons) {
+				this.parameterizedDeftypes.put(key, cons);
+				this.closRegistry.setDeftypeExpander(this::expandDeftypeSpecifier);
+			}
+			else {
+				this.parameterizedDeftypes.remove(key);
+			}
+		}
 		if (parts.size() >= 4 && parts.get(1) instanceof LispSymbol nameSym
 				&& this.closRegistry.findDeftype(nameSym.name()) == null) {
 			LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));

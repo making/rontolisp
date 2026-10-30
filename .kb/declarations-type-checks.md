@@ -228,6 +228,31 @@ that turns a class object into the name this reads.
   answers `nil` on the compile paths; the interpreter resolves it. The `make-array :element-type`
   half is [array-literals.md](array-literals.md), a DIFFERENT narrowing.
 
+## A PARAMETERIZED `deftype` as a compound specifier
+**`(name args...)` is what the deftype's body returns over those arguments, on all four
+backends, literal or computed** (2026-10-30, trivial-types' `(proper-list integer)` /
+`(tuple ...)`; before, a literal answered NIL and a `typecase` head was refused).
+`makeCompoundTypeTest`'s default arm asks `ClosRegistry.expandDeftypeSpecifier`; a bare
+`(name)` of a registered deftype is the name.
+
+- Interpreter: `LispEvaluator.foldDeftype` keeps every parameterized form and installs
+  `expandDeftypeSpecifier` (runs `(apply (lambda ll' . body) 'args)`, an unsupplied
+  `&optional`/`&key` defaulting to `*`) as the registry's expander. The run-time dispatch
+  calls the builtin `%deftype-expand` before the alias cond.
+- Compile paths: no evaluator, so `UserMacroExpander.emitDeftypeInstances` walks every
+  RESOLVED top-level form (deftypes excluded: a parameterized body is a template) plus every
+  registered expansion, expands each compound use, and appends
+  `(declaim (%deftype-instance 'spec 'expansion))` -- a declamation because every pass reads
+  one as inert data. Appended at the END, so bare symbols are spelled `cl-user::`
+  (`contextFreeSpelling`): a bare canonical name means `cl-user`'s view from any package.
+  `expandTopLevelDefinitions` registers it (`registerDeftypeInstance`, keyed by `print()`).
+- Run time on the compile paths: the instances whose head the program spells join
+  `%deftype-alias-table%` as `((spec) expansion)` entries, chains followed at build time
+  (`followDeftypeHops`); the scan's `member` takes `:test #'equal` only then. A spec
+  assembled at run time from NEW arguments resolves on the interpreter only. Pins:
+  `LispEvaluatorTest#evalRuntimeTypepResolvesADeftypeAlias`, ci-spec
+  `typep-parameterized-deftype-compound`.
+
 ## The COMPOUND half of `subtypep`
 **A compound specifier works on either side of `subtypep`, quoted or computed, and answers the same
 on all four backends.** Written twice -- `LispMacroExpander.subtypep` over the AST (the

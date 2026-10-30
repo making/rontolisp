@@ -1728,6 +1728,21 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> deftypes = new LinkedHashMap<>();
 
 	/**
+	 * The expansions of COMPOUND specifiers headed by a parameterized {@code deftype}
+	 * ({@code (proper-list integer)}), keyed by the specifier's printed spelling. The
+	 * compile paths fill it from the {@code %deftype-instance} declamations the macro
+	 * pass emits (it is the pass with an evaluator); the interpreter expands through
+	 * {@link #deftypeExpander} instead.
+	 */
+	private final Map<String, DeftypeInstance> deftypeInstances = new LinkedHashMap<>();
+
+	/**
+	 * The evaluator that runs a parameterized {@code deftype}'s body over a compound
+	 * specifier's arguments, or null where none is installed (the compile paths).
+	 */
+	private java.util.function.@Nullable Function<LispCons, @Nullable LispVal> deftypeExpander;
+
+	/**
 	 * {@code defconstant} name (normalized) to the LITERAL value it was defined with --
 	 * the table an {@code (eql +name+)} parameter specializer resolves through. CLHS
 	 * 7.6.2 evaluates the form of an eql specializer when the method is defined, and a
@@ -1938,6 +1953,68 @@ public final class ClosRegistry {
 	 */
 	public java.util.Set<String> deftypeNames() {
 		return java.util.Collections.unmodifiableSet(this.deftypes.keySet());
+	}
+
+	/**
+	 * A compound specifier headed by a parameterized {@code deftype}, with the type
+	 * specifier the deftype's body computed for its arguments.
+	 *
+	 * @param specifier the compound specifier, as the program spells it
+	 * @param expansion the type specifier it denotes
+	 */
+	public record DeftypeInstance(LispCons specifier, LispVal expansion) {
+	}
+
+	/**
+	 * Records the expansion of one compound specifier headed by a parameterized
+	 * {@code deftype}.
+	 * @param specifier the compound specifier
+	 * @param expansion the type specifier the deftype's body computed for it
+	 */
+	public void registerDeftypeInstance(LispCons specifier, LispVal expansion) {
+		this.deftypeInstances.put(specifier.print(), new DeftypeInstance(specifier, expansion));
+	}
+
+	/**
+	 * Installs the evaluator that expands a compound specifier headed by a parameterized
+	 * {@code deftype} (the interpreter's, which runs the body over the arguments).
+	 * @param expander the specifier-to-expansion function; it answers null for a head
+	 * naming no parameterized deftype or a body that fails
+	 */
+	public void setDeftypeExpander(java.util.function.Function<LispCons, @Nullable LispVal> expander) {
+		this.deftypeExpander = expander;
+	}
+
+	/**
+	 * Whether a compound specifier can expand through an installed evaluator, which is
+	 * what a run-time {@code typep} designator needs on the interpreter.
+	 * @return true when an expander is installed
+	 */
+	public boolean expandsDeftypeSpecifiers() {
+		return this.deftypeExpander != null;
+	}
+
+	/**
+	 * The type specifier a compound specifier headed by a parameterized {@code deftype}
+	 * denotes: a recorded instance first, else the installed expander.
+	 * @param specifier the compound specifier
+	 * @return its expansion, or null when neither knows it
+	 */
+	@Nullable public LispVal expandDeftypeSpecifier(LispCons specifier) {
+		DeftypeInstance instance = this.deftypeInstances.get(specifier.print());
+		if (instance != null) {
+			return instance.expansion();
+		}
+		return this.deftypeExpander == null ? null : this.deftypeExpander.apply(specifier);
+	}
+
+	/**
+	 * The recorded compound-specifier instances, in registration order -- the entries a
+	 * run-time {@code typep} designator resolves through on the compile paths.
+	 * @return the instances
+	 */
+	public java.util.Collection<DeftypeInstance> deftypeInstances() {
+		return java.util.Collections.unmodifiableCollection(this.deftypeInstances.values());
 	}
 
 	/**
