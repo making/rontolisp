@@ -16,7 +16,8 @@ with no parser and no renderer in the artifact.
 Six ways into `(%fmt-render control arguments)`: a computed control expression; `#'format` as a
 value (`BuiltinFunctionWrappers.formatWrapper`, or the interpreter's `format` `LispFunction`);
 `~?`/`~@?`; a literal control the static parser DECLINES (`UnsupportedOperationException` --
-justification `~<`, an argument-divergent `~[` nested in a composite, `~t`, `~p` -- so
+justification `~<`, an argument-divergent `~[` nested in a composite (clauses ending at different
+positions; without `~:;` the no-clause outcome is one more, consuming nothing), `~t`, `~p` -- so
 `expandFormat` falls back rather than failing the compile); a condition's `format-control` slot
 via `%format-condition` ([error-handling.md](error-handling.md)); and
 `(error/warn/signal/cerror <computed datum> args...)` with a run-time STRING datum.

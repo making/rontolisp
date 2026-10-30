@@ -29695,20 +29695,30 @@ public final class LispMacroExpander {
 			}
 			LispVal sel = (selParam instanceof LispNil) ? args.next('[') : selParam;
 			List<FmtClause> clauses = parseClauses(args);
-			List<LispVal> exprs = clauseExprs(clauses, args, stoppers);
-			List<LispVal> numbered = new java.util.ArrayList<>();
-			LispVal dflt = null;
+			int defaultIdx = -1;
 			for (int i = 0; i < clauses.size(); i++) {
 				if (clauses.get(i).isDefault()) {
-					dflt = exprs.get(i);
-					// With a default, some clause always runs and checked what it read.
-					args.guaranteeAtLeast(clauses.stream().mapToInt(FmtClause::covered).min().orElse(0));
+					defaultIdx = i;
 				}
-				else {
+			}
+			if (defaultIdx < 0) {
+				// A selector matching no clause runs nothing and leaves the argument
+				// pointer at the selector: an empty default clause that reads (so
+				// guarantees) nothing, from which clauses that consume diverge.
+				clauses = new java.util.ArrayList<>(clauses);
+				clauses.add(new FmtClause(List.of(), args.position(), true, 0));
+				defaultIdx = clauses.size() - 1;
+			}
+			List<LispVal> exprs = clauseExprs(clauses, args, stoppers);
+			// Some clause always runs and checked what it read.
+			args.guaranteeAtLeast(clauses.stream().mapToInt(FmtClause::covered).min().orElse(0));
+			LispVal chain = exprs.get(defaultIdx);
+			List<LispVal> numbered = new java.util.ArrayList<>();
+			for (int i = 0; i < clauses.size(); i++) {
+				if (!clauses.get(i).isDefault()) {
 					numbered.add(exprs.get(i));
 				}
 			}
-			LispVal chain = (dflt != null) ? dflt : new LispString("");
 			for (int i = numbered.size() - 1; i >= 0; i--) {
 				chain = makeIf(fmtCall(LispNames.EQL, sel, new LispInteger(i)), numbered.get(i), chain);
 			}
