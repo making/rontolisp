@@ -57,6 +57,21 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void anExpansionKeepsClsWhileAfterThePackageTakesTheName() {
+		// The compilers' resolver re-reads the emitted forms after the %own-symbol claim:
+		// cl's while, quoted or not, must still read as cl's there.
+		List<LispVal> resolved = new am.ik.rontolisp.PackageResolver()
+			.resolveProgram(UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defpackage :ume-own-while (:use :cl))
+					(in-package :ume-own-while)
+					(defmacro while (test &body body) `(list ,test ,@body))
+					(print (list (while 1 2) (eq 'while 'cl:while) (cl:while nil)))
+					""")));
+		assertThat(resolved.get(resolved.size() - 1).print())
+			.isEqualTo("(PRINT (LIST (LIST 1 2) (EQ 'UME-OWN-WHILE::WHILE 'WHILE) (WHILE NIL)))");
+	}
+
+	@Test
 	void macroCallsInsideDefunBodiesAreExpanded() {
 		assertThat(expand("""
 				(defmacro twice (x) `(* 2 ,x))

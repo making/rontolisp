@@ -112,8 +112,13 @@ the package's symbol throughout, an undefined operator there; neither library re
 The compile path's macro expander consumes a `defmacro`, so the compilers' own resolver pass never
 sees it: `UserMacroExpander` leaves `(%own-symbol "WHILE")` (`LispNames.OWN_SYMBOL`) in its place,
 which `resolve` consumes as the same claim -- without it `'while` after the definition was `cl`'s
-on the compiled backends (the call sites worked: they are expanded before that pass). Pinned by
-`PackageResolverTest#exportOfAStandardNameReExportsTheClSymbol` and ci-spec
+on the compiled backends (the call sites worked: they are expanded before that pass). The claim
+makes that pass re-read a bare `WHILE` the expander already resolved to `cl`'s as the package's
+own (`(eq 'while 'cl:while)` was `T` on JVM/P1/component, 2026-10-31), so an emitted expansion
+re-spells it `cl:while` (`requalifyShadowedClNames`, via `currentPackageRereadsClName`: shadowed,
+owned, imported or inherited), quoted data included. Pinned by
+`PackageResolverTest#exportOfAStandardNameReExportsTheClSymbol`,
+`UserMacroExpanderTest#anExpansionKeepsClsWhileAfterThePackageTakesTheName` and ci-spec
 `a-package-own-definition-of-while-wins-over-cl`.
 
 ## `defpackage`

@@ -188,16 +188,24 @@ public final class PackageResolver {
 
 	/**
 	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
-	 * declares the given name in its {@code :shadow} clause. Used by
-	 * {@code UserMacroExpander} to spell a bare canonical CL name explicitly
-	 * {@code cl:}-qualified in emitted expansions, so the compilers' own resolution pass
-	 * does not re-capture it as the shadowing package's symbol.
+	 * reads the bare name of a {@code cl} symbol as some other symbol: one it shadows,
+	 * owns ({@link #claimDefinedClExtensionName}), imports or inherits from another used
+	 * package. Used by {@code UserMacroExpander} to spell a bare canonical CL name
+	 * explicitly {@code cl:}-qualified in emitted expansions, so the compilers' own
+	 * resolution pass does not re-capture it as that other symbol.
 	 * @param name the bare symbol name
-	 * @return {@code true} when the current package shadows the name
+	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
 	 */
-	public synchronized boolean currentPackageShadows(String name) {
+	public synchronized boolean currentPackageRereadsClName(String name) {
 		LispPackage current = this.registry.get(current());
-		return current != null && current.shadows(name);
+		if (current == null) {
+			return false;
+		}
+		if (current.shadows(name)) {
+			return true;
+		}
+		return currentUsesCl()
+				&& !(resolveUnqualified(name) instanceof LispSymbol resolved && resolved.name().equals(name));
 	}
 
 	/**

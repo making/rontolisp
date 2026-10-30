@@ -7265,13 +7265,14 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Returns whether the resolver's CURRENT package shadows the given bare name (see
-	 * {@link PackageResolver#currentPackageShadows}).
+	 * Returns whether the resolver's CURRENT package reads the bare name of a {@code cl}
+	 * symbol as some other symbol (see
+	 * {@link PackageResolver#currentPackageRereadsClName}).
 	 * @param name the bare symbol name
-	 * @return {@code true} when the current package shadows the name
+	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
 	 */
-	public boolean currentPackageShadows(String name) {
-		return this.packageResolver.currentPackageShadows(name);
+	public boolean currentPackageRereadsClName(String name) {
+		return this.packageResolver.currentPackageRereadsClName(name);
 	}
 
 	/**
