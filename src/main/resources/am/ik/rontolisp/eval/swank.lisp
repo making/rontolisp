@@ -43,5 +43,4 @@
   (error
    "swank:create-server is not supported in a compiled program: only the interpreter serves SWANK (run the program with rontolisp, or rontolisp --swank)"))
 
-#-rontolisp-interpreter
-(defun swank:stop-server (&rest args) nil)
+#-rontolisp-interpreter (defun swank:stop-server (&rest args) nil)
