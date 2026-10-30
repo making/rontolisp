@@ -14090,13 +14090,14 @@ public final class LispEvaluator {
 	private static final String NIL_BLOCK = "NIL";
 
 	/**
-	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}.
+	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}. A
+	 * keyword names a block of its own: its name keeps the {@code :} marker.
 	 */
 	private static String blockName(LispVal designator) {
 		if (designator instanceof LispNil) {
 			return NIL_BLOCK;
 		}
-		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+		if (designator instanceof LispSymbol sym) {
 			return sym.name();
 		}
 		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
