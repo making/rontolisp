@@ -11,8 +11,29 @@ terminated on a cyclic key.
 backend agrees on; `LispMacroExpander.hashTableTestCode` reads a literal `:test`
 (`'eq` or `#'eq`, and the same for the other three) off a `make-hash-table` form,
 and `programMakesIdentityHashTable` gates the identity machinery beside
-`programMakesEqualpHashTable`'s fold gate. A computed `:test` places as `equal`,
-like an unwritten one.
+`programMakesEqualpHashTable`'s fold gate.
+
+**A computed `:test`** (a variable, a call -- anything but `'x`/`#'x`/a keyword/a
+non-symbol atom) is decided at run time from its VALUE: a symbol by name, a function by
+being the very object `#'eq`/`#'eql`/`#'equal`/`#'equalp` answers (identity; `equalp`
+is a prelude closure with no name). Anything else places as `equal`. Since 2026-10-30;
+before, every backend placed it as `equal` -- a silent miss for alexandria's
+`plist-hash-table`/`alist-hash-table`/`copy-hash-table`, which always pass it computed.
+
+- interpreter: `Environment.hashTableTestName`, comparing with the global function
+  bindings.
+- JVM/WASM: `LispMacroExpander.lowerComputedTestMakeHashTable` (from both
+  `compileMake`s) rewrites the site to `(%make-hash-table-by-test test)`, a prelude
+  helper whose arms write each test LITERALLY -- so the spliced helper is what turns the
+  fold and identity gates on, with no gate change. Selection is a surface fact
+  (`mayMakeHashTableWithComputedTest`, also in `LibraryDefunPruner.SYNTHESIZED_ENTRIES`):
+  a computed `:test`, or `make-hash-table` anywhere but a call head, since the
+  `#'make-hash-table` wrapper passes `(getf initargs :test)` through. The prelude's own
+  `rontolisp:plist-hash-table` siblings reach it through `PULLED_SURFACE_ENTRIES`.
+
+Pinned by `LispEvaluatorTest.aHashTableReportsAndPrintsTheTestItImplements`, its
+`compileEqualpHashTablePrintsAndReportsItsTest` JVM/P1 twins and ci-spec
+`hash-table-computed-test`.
 
 - `equal`: the structural hash plus real `equal` in the bucket.
 - `equalp`: the `equalp` key fold below, then the same pair.
@@ -123,8 +144,8 @@ read back" below).
   again.
 
 **Gate: `LispMacroExpander.programMakesEqualpHashTable`**, one scan shared by both compiled
-backends. `:test` must be written LITERALLY (`'equalp`/`#'equalp`) — the compile paths read it from
-the source; the interpreter evaluates it. **Every count in a WASM module must agree about whether
+backends. It reads LITERAL `:test`s (`'equalp`/`#'equalp`); a computed one reaches it through the
+spliced `%make-hash-table-by-test` ("A computed `:test`" above). **Every count in a WASM module must agree about whether
 the tag is there**, so the gate is carried into each top-level CHUNK context
 (`WasmAsyncEmit.freshCtx`). The identity half rides beside it:
 `programMakesIdentityHashTable` (`'eq`/`'eql`, same literal rule), and a tagged

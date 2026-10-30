@@ -49,7 +49,13 @@ final class WasmHashTableCompiler {
 		// The arguments are read from the SOURCE, never evaluated: a literal :test
 		// tags the header count with the test the table's lookups implement, and
 		// every other keyword (:size and friends) is accepted and ignored. Result: a
-		// cell holding a fresh (count . empty-record) header.
+		// cell holding a fresh (count . empty-record) header. A computed :test is
+		// evaluated and dispatched by the %make-hash-table-by-test helper.
+		LispVal computedTest = LispMacroExpander.lowerComputedTestMakeHashTable(cons, ctx.functions::containsKey);
+		if (computedTest != null) {
+			WasmExprCompiler.compileExpr(computedTest, ctx);
+			return;
+		}
 		emitNewHeader(ctx, tagged(ctx) ? LispMacroExpander.hashTableTestCode(cons) : LispHashTable.TEST_EQUAL);
 		WasmEmitHelper.emitNewCell(ctx);
 	}
