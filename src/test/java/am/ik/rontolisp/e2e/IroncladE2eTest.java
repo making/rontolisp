@@ -4,8 +4,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * An ASDF subset integration target ({@code .kb/asdf.md}): the SHA-2 / HMAC / PBKDF2 /
- * RSA slice of the REAL ironclad v0.61 sources (vendored unmodified under
+ * An ASDF subset integration target ({@code .kb/asdf.md}): the SHA-1 / MD5 / SHA-2 / HMAC
+ * / PBKDF2 / RSA slice of the REAL ironclad v0.61 sources (vendored unmodified under
  * {@code src/test/resources/ironclad}, BSD 3-Clause) loads via {@code asdf:load-system}
  * and reproduces published test vectors on all four backends via
  * {@link AsdfLibraryE2eSupport}.
@@ -19,12 +19,19 @@ import java.util.List;
  * alongside, both as provenance and so the substitution itself is exercised.
  *
  * <p>
- * The vectors: SHA-256 of {@code "abc"} and of a two-block message (FIPS 180-2 appendix
- * B), SHA-224 of {@code "abc"}, SHA-384 and SHA-512 of {@code "abc"} and of the 1024-bit
- * block two-block message (FIPS 180-2 appendices C and D), HMAC-SHA-256/384/512 of RFC
- * 4231 test case 2 (SHA-256 through BOTH the {@code make-mac} API and the deprecated
- * {@code make-hmac} one), HKDF-SHA-256 of RFC 5869 test case 1 (the {@code hmac-kdf}),
- * and PBKDF2-HMAC-SHA-256 at 1 and 4096 iterations.
+ * The exercise opens with {@code ironclad/prngs} ALONE (frugal-uuid's strong-random
+ * dependency): {@code strong-random} folds its bytes with {@code octets-to-integer}, so
+ * the core must carry {@code public-key/public-key.lisp} as the real {@code .asd}'s does.
+ *
+ * <p>
+ * The vectors: SHA-1 and MD5 of {@code "abc"} (FIPS 180-2 appendix A, RFC 1321 -- through
+ * the aggregate, the route uuid's v5/v3 take), SHA-256 of {@code "abc"} and of a
+ * two-block message (FIPS 180-2 appendix B), SHA-224 of {@code "abc"}, SHA-384 and
+ * SHA-512 of {@code "abc"} and of the 1024-bit block two-block message (FIPS 180-2
+ * appendices C and D), HMAC-SHA-256/384/512 of RFC 4231 test case 2 (SHA-256 through BOTH
+ * the {@code make-mac} API and the deprecated {@code make-hmac} one), HKDF-SHA-256 of RFC
+ * 5869 test case 1 (the {@code hmac-kdf}), and PBKDF2-HMAC-SHA-256 at 1 and 4096
+ * iterations.
  *
  * <p>
  * The RSA stack ({@code src/math.lisp} +
@@ -62,7 +69,13 @@ class IroncladE2eTest extends AsdfLibraryE2eSupport {
 		.toString();
 
 	private static final String EXERCISE = """
+			(asdf:load-system "ironclad/prngs")
+			(print (ironclad:strong-random 1 (ironclad:make-prng :os)))
 			(asdf:load-system :ironclad)
+			(print (ironclad:byte-array-to-hex-string
+			        (ironclad:digest-sequence :sha1 (ironclad:ascii-string-to-byte-array "abc"))))
+			(print (ironclad:byte-array-to-hex-string
+			        (ironclad:digest-sequence :md5 (ironclad:ascii-string-to-byte-array "abc"))))
 			(print (ironclad:byte-array-to-hex-string
 			        (ironclad:digest-sequence :sha256 (ironclad:ascii-string-to-byte-array "abc"))))
 			(print (ironclad:byte-array-to-hex-string
@@ -205,7 +218,8 @@ class IroncladE2eTest extends AsdfLibraryE2eSupport {
 			                                      signature))))
 			""";
 
-	private static final List<String> EXPECTED = List.of(
+	private static final List<String> EXPECTED = List.of("0", "\"a9993e364706816aba3e25717850c26c9cd0d89d\"",
+			"\"900150983cd24fb0d6963f7d28e17f72\"",
 			"\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"",
 			"\"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\"",
 			"\"23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7\"",

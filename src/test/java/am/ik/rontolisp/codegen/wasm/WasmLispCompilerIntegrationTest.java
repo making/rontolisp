@@ -10304,7 +10304,9 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void readTimeEvalGeneratedDefconstants() throws Exception {
 		// fast-http's multipart-parser idiom: #. generates the state defconstants via
-		// a backquoted eval-when whose datum value is CODE, evaluated in place.
+		// a backquoted eval-when whose datum value is CODE, evaluated in place. Then
+		// ironclad tiger.lisp's (#.+tiger-block-copy-fn+ block ...): a symbol value in
+		// a call's OPERATOR position names the function, so it splices raw.
 		assertThat(compileAndRunProgram(
 				am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
 						#.`(eval-when (:compile-toplevel :load-toplevel :execute)
@@ -10313,8 +10315,12 @@ class WasmLispCompilerIntegrationTest {
 						             collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
 						(print +re-state-beta+)
 						(print +re-state-gamma+)
+						(eval-when (:compile-toplevel :load-toplevel :execute)
+						  (defconstant +re-copy-fn+ (if (= 1 1) 're-double 're-triple)))
+						(defun re-double (x) (* 2 x))
+						(print (#.+re-copy-fn+ 21))
 						""", am.ik.rontolisp.reader.Features.WASM))))
-			.isEqualTo("1\n2");
+			.isEqualTo("1\n2\n42");
 	}
 
 	@Test

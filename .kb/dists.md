@@ -20,6 +20,17 @@ Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`
   Quicklisp installs first UNLESS the spec list names it (`distNameOrNull`) — the whole
   ordering API. No `ql-dist:preference`.
 
+## A dependency the index does not name
+`systems.txt` names a dependency by its PRIMARY system (cl-smtp's `frugal-uuid/non-frugal` is
+listed as `frugal-uuid`), so `collectProjects` misses what a secondary system needs
+(`ironclad/prngs`). Quicklisp's client installs such a system when ASDF reports it missing; here
+`LispEvaluator.locateAsd` / `LoadInliner.locateAsd` catch `AsdfSystems.SystemNotFoundException`
+WHILE A `ql:quickload` LOADS (`quickloadDepth`), `ensureAvailable` the name and locate again. A
+plain `asdf:load-system` never downloads. Pinned by the `secondaryDependencyDist` fixture
+(`LispEvaluatorQuicklispTest.quickloadDownloadsAndLoadsASystem`,
+`LoadInlinerTest.quickloadProgramCompilesAndRunsOnJvm`). Not over-approximated in
+`collectProjects` (every `P/...` entry's deps): that downloads each primary's test frameworks.
+
 ## What a release contributes
 - **Only the `.asd` files its dist index NAMES** (`releases.txt`'s trailing `file...`
   column, dirs added by `collectAsdDirs`) — a whole-tarball walk let a vendored snapshot
