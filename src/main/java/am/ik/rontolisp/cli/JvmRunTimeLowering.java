@@ -50,7 +50,7 @@ import org.jspecify.annotations.Nullable;
  * A fragment is a class of the host's package defined through the host's own lookup, so
  * it reads the host's fields and calls its methods, and a later fragment its. Its
  * function values carry ids past every id before it, so a function value of one class
- * applied by another is routed to the class that made it ({@link #foreignApply}).
+ * applied by another is routed to the class that made it ({@link Session#foreignApply}).
  */
 public final class JvmRunTimeLowering {
 
