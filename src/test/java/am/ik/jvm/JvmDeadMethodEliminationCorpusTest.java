@@ -30,10 +30,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The guards that need the whole {@code ci-spec.yaml} corpus (the cross-backend feature
  * catalogue) compiled for the JVM, sharing ONE front-end run and ONE compile per
  * optimization level: the write-time shake's coverage of every instruction and
- * constant-pool entry the code generator emits, its behavior preservation, the
- * constant-pool headroom, and the OSR-entry invariant. A corpus compile is the expensive
- * part of each (~13 s), and the OSR guard used to be a class of its own that compiled the
- * identical program at the identical two levels a second time.
+ * constant-pool entry the code generator emits, its behavior preservation, and the
+ * OSR-entry invariant. The corpus no longer fits one class's constant pool, so each
+ * compile is the {@code Test} class plus its {@code Test$PartN} classes
+ * ({@code .kb/quoted-data.md}, {@code .kb/jvm-method-size-limits.md}), and every guard
+ * reads, writes and runs all of them. A corpus compile is the expensive part of each (~13
+ * s), and the OSR guard used to be a class of its own that compiled the identical program
+ * at the identical two levels a second time.
  *
  * <p>
  * <b>The dead-method elimination.</b> The JVM counterpart of
@@ -98,10 +101,46 @@ class JvmDeadMethodEliminationCorpusTest {
 
 	private final ExecutorService compiles = Executors.newFixedThreadPool(2);
 
-	private CompletableFuture<byte[]> plain = CompletableFuture.failedFuture(new IllegalStateException("not started"));
-
-	private CompletableFuture<byte[]> optimized = CompletableFuture
+	private CompletableFuture<Compiled> plain = CompletableFuture
 		.failedFuture(new IllegalStateException("not started"));
+
+	private CompletableFuture<Compiled> optimized = CompletableFuture
+		.failedFuture(new IllegalStateException("not started"));
+
+	/**
+	 * What one compile produced: the program class and every file the compiler writes
+	 * beside it ({@link JvmLispCompiler#runtimeClassFiles()}) -- among them the
+	 * {@code Test$PartN} classes once the corpus no longer fits one class's pool.
+	 *
+	 * @param main the {@code Test} class
+	 * @param beside the files beside it, keyed by their path in an output tree
+	 */
+	private record Compiled(byte[] main, java.util.Map<String, byte[]> beside) {
+
+		/** The {@code Test$PartN} classes, empty while the corpus fits one class. */
+		java.util.Map<String, byte[]> parts() {
+			java.util.Map<String, byte[]> parts = new java.util.TreeMap<>();
+			this.beside.forEach((path, bytes) -> {
+				if (path.startsWith("Test$Part")) {
+					parts.put(path, bytes);
+				}
+			});
+			return parts;
+		}
+
+		/** The program class and its parts: the classes the compile emitted. */
+		List<byte[]> programClasses() {
+			List<byte[]> classes = new java.util.ArrayList<>();
+			classes.add(this.main);
+			classes.addAll(parts().values());
+			return classes;
+		}
+
+		int programBytes() {
+			return programClasses().stream().mapToInt(bytes -> bytes.length).sum();
+		}
+
+	}
 
 	private static String corpusSource() throws IOException {
 		return am.ik.rontolisp.testsupport.YamlResources.corpusSource();
@@ -126,13 +165,16 @@ class JvmDeadMethodEliminationCorpusTest {
 		this.compiles.shutdownNow();
 	}
 
-	private static byte[] compile(List<LispVal> program, OptimizeLevel level) {
-		return am.ik.rontolisp.testsupport.UndefinedWarnings
-			.forbid(() -> JvmLispCompiler.builder().className("Test").optimize(level).build().compile(program));
+	private static Compiled compile(List<LispVal> program, OptimizeLevel level) {
+		return am.ik.rontolisp.testsupport.UndefinedWarnings.forbid(() -> {
+			JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(level).build();
+			byte[] main = compiler.compile(program);
+			return new Compiled(main, compiler.runtimeClassFiles());
+		});
 	}
 
-	private byte[] classAt(OptimizeLevel level) {
-		CompletableFuture<byte[]> compile = switch (level) {
+	private Compiled classAt(OptimizeLevel level) {
+		CompletableFuture<Compiled> compile = switch (level) {
 			case NONE -> this.plain;
 			case DEFAULT -> this.optimized;
 			default -> throw new IllegalArgumentException(level.toString());
@@ -160,36 +202,16 @@ class JvmDeadMethodEliminationCorpusTest {
 	}
 
 	@Test
-	void theCorpusClassKeepsConstantPoolHeadroom() {
-		byte[] plain = classAt(OptimizeLevel.NONE);
-		// The corpus class is the one that once crossed the JVM 65535 constant-pool
-		// ceiling. Past it the compile now splits into $PartN classes instead of failing
-		// (.kb/jvm-method-size-limits.md), so the tripwire guards this class's coverage:
-		// a split corpus would take the splitter's shake either way, and the
-		// decoder check in this class would stop covering the corpus. Measured 51,945
-		// before the quoted-datum table, 43,694 after (.kb/quoted-data.md). 52,004 on
-		// 2026-10-07, which is what a ci-spec case costs (a few dozen entries each);
-		// 59,131 on 2026-10-17 after the per-backend stdout tests moved into ci-spec;
-		// 61,217 on 2026-10-30; 63,387 on 2026-10-31.
-		// The bound is an alarm below the 65,534 ceiling, not a limit.
-		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;
-		System.out.println("corpus class constant-pool entries: " + constantPoolEntries + " / 65534");
-		assertThat(constantPoolEntries)
-			.as("constant-pool headroom (was 65520/65534 before the "
-					+ "LibraryDefunPruner and ConstantPool deduplication)")
-			.isLessThanOrEqualTo(64000);
-	}
-
-	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically(@TempDir Path workDir) throws Exception {
 		// The corpus runs in a private directory, so the project root must come out of
 		// this test exactly as it went in. Entries that VANISH are not asserted on: a
 		// concurrent build in another fork owns its own files, and this test is no
 		// longer the one deleting them.
 		java.util.Set<String> rootBefore = am.ik.rontolisp.testsupport.CorpusFixtures.snapshotTopLevel(Path.of("."));
-		byte[] plain = classAt(OptimizeLevel.NONE);
-		byte[] optimized = classAt(OptimizeLevel.DEFAULT);
-		assertThat(optimized.length).as("optimized should shrink the class").isLessThan(plain.length);
+		Compiled plain = classAt(OptimizeLevel.NONE);
+		Compiled optimized = classAt(OptimizeLevel.DEFAULT);
+		assertThat(optimized.programBytes()).as("optimized should shrink the program's classes")
+			.isLessThan(plain.programBytes());
 		// Two runs in two directories of their own: nothing one writes is visible to the
 		// other, so they overlap.
 		CompletableFuture<String> plainRun = CompletableFuture.supplyAsync(() -> run(plain, workDir));
@@ -204,7 +226,10 @@ class JvmDeadMethodEliminationCorpusTest {
 	@ParameterizedTest
 	@EnumSource(value = OptimizeLevel.class, names = { "NONE", "DEFAULT" })
 	void noEmittedLoopHeadCarriesPendingOperands(OptimizeLevel level) {
-		assertThat(StackMapFrames.osrHostileBackedges(classAt(level)))
+		assertThat(classAt(level).programClasses()
+			.stream()
+			.flatMap(bytes -> StackMapFrames.osrHostileBackedges(bytes).stream())
+			.toList())
 			.as("backward branches into a non-empty operand stack at " + level
 					+ " -- HotSpot refuses to OSR-compile such a method (.kb/jvm-osr-backedges.md)")
 			.isEmpty();
@@ -215,17 +240,26 @@ class JvmDeadMethodEliminationCorpusTest {
 	 * it wrote to standard output. The fresh directory is what makes the two runs
 	 * comparable: both see the same staged fixtures and neither sees the scratch files
 	 * the other left.
-	 * @param classBytes the compiled program
+	 * @param compiled the compiled program, written as a class tree: the class, its
+	 * {@code $PartN} classes and whatever else the compiler writes beside it
 	 * @param workDir the test's own temporary directory (a method parameter, not a field:
 	 * under the per-class lifecycle a {@code @TempDir} field is re-injected and cleaned
 	 * per method, which concurrent methods would share)
 	 * @return its standard output
 	 */
-	private String run(byte[] classBytes, Path workDir) {
+	private String run(Compiled compiled, Path workDir) {
 		try {
 			int n = this.runs.incrementAndGet();
 			Path runDir = Files.createDirectory(workDir.resolve("run" + n));
-			Files.write(runDir.resolve("Test.class"), classBytes);
+			// The classes go in a directory of their own on the classpath, so the
+			// program's working directory holds only what the driver stages.
+			Path classes = Files.createDirectory(workDir.resolve("run" + n + "-classes"));
+			Files.write(classes.resolve("Test.class"), compiled.main());
+			for (java.util.Map.Entry<String, byte[]> file : compiled.beside().entrySet()) {
+				Path target = classes.resolve(file.getKey());
+				Files.createDirectories(target.getParent());
+				Files.write(target, file.getValue());
+			}
 			// The corpus reads fixtures the driver must stage (see CorpusFixtures); here
 			// they are staged inside the run directory, which goes away with the
 			// @TempDir.
@@ -233,7 +267,7 @@ class JvmDeadMethodEliminationCorpusTest {
 			// The test's own classpath supplies what the in-process loader's parent used
 			// to: the emitted class embeds its runtime, but not the classes the compiler
 			// shares with it.
-			String classpath = runDir + java.io.File.pathSeparator + System.getProperty("java.class.path");
+			String classpath = classes + java.io.File.pathSeparator + System.getProperty("java.class.path");
 			// Beside the run directory, not in it, so the program's working directory
 			// holds
 			// exactly what the driver staged.

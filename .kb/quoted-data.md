@@ -48,17 +48,22 @@ Nothing else in the pool is per site: the `String`s are symbol
 names and string literals, each deduped class-wide (the quote-framed ones are
 the runtime's string representation, some also spelled as a bare symbol name -- a
 representation cost, not a site cost), and the own-class
-`Methodref`s are one per callee (`_lambda_N`, `_fx$N`, ...). The tripwire stays
-(52,000 until 2026-10-07, 54,000 until 2026-10-17, 61,000 until 2026-10-30, 63,000 since): past 65,534 the class now splits instead of failing
-(`.kb/jvm-method-size-limits.md`), so what it guards is that the corpus class stays ONE class,
-the shape its run-and-compare covers; the split's placement is pinned by the split tests. It is
-an alarm well below that ceiling, not a budget a ci-spec row has to fit. Since 2026-09-29 every
-level's class is written with a pool of its own holding only what its members reference. The
-tripwire moved to 54,000 on 2026-10-07 when the corpus class's pool count, as the test builds
-it (build info included), crossed the 52,000 the tripwire then stood at -- with
-`.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program) back in. It moved to 61,000 on
-2026-10-17 at 59,131 entries, after the per-backend stdout tests moved into ci-spec, and to
-63,000 on 2026-10-30 at 61,217 entries (ci-spec growth).
+`Methodref`s are one per callee (`_lambda_N`, `_fx$N`, ...).
+
+**The corpus is split, and the one-class tripwire is gone (measured 2026-10-31).** The
+corpus class's pool count (`--optimize=off`, build info included) had a tripwire under it:
+52,000 until 2026-10-07, 54,000 until 2026-10-17, 61,000 until 2026-10-30, 63,000 until
+2026-10-31, 64,000 for a day (59,131 entries on 2026-10-17, 61,217 on 2026-10-30, 63,387
+on 2026-10-31). It guarded that the corpus stayed ONE class, the only shape the
+run-and-compare then covered: past 65,534 the class splits instead of failing
+(`.kb/jvm-method-size-limits.md`), and the harness wrote only `Test.class`. On 2026-10-31
+ci-spec growth tipped it: `Test` 61,223 entries + `Test$Part1` 26,149 at `off`, 61,222 +
+26,049 at default, and the run died on `NoClassDefFoundError: Test$Part1`. The tripwire
+could not fire: it read `Test`'s own count, which the splitter caps at its budget
+(`MAX_INDEX - RESERVED_ENTRIES` = 61,438) below the alarm. Now the harness writes every file
+`runtimeClassFiles()` returns beside the class and runs, shrinks and OSR-checks the class
+and its parts, so the split shape is covered and the tripwire went with what it protected. Raising
+it again would have made it a budget per ci-spec row, which it never was.
 
 Other costs of the change:
 
