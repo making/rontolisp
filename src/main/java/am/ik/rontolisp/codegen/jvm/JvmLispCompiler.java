@@ -1237,7 +1237,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic, SignalMessages.RENDERED,
+				packageResolver::internedSpelling, this.dynamic, SignalMessages.RENDERED,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so

@@ -705,7 +705,7 @@ public final class LibraryDefunPruner {
 				List<LispVal> generated;
 				try {
 					generated = LispMacroExpander.expandDefstruct(resolvedCons, accessors, registry,
-							resolver::spellsAsExternal);
+							resolver::internedSpelling);
 				}
 				catch (RuntimeException ex) {
 					// Not expandable here (e.g. an :include parent this pass has not

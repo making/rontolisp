@@ -10204,7 +10204,7 @@ public final class LispEvaluator {
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
-				this.packageResolver::spellsAsExternal)) {
+				this.packageResolver::internedSpelling)) {
 			eval(form, env);
 			// A writable slot's accessor has its (setf accessor) function too. The
 			// compile path emits it only for a program that takes it; here it costs a
