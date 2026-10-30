@@ -321,6 +321,39 @@ public final class UserMacroExpander {
 			if (!this.shallow) {
 				this.canonicalForms.add(expanded);
 			}
+			// CLHS 3.2.3.1: the members of a top-level progn are top-level forms. Both
+			// resolvers consume a package directive only at top level, so a progn a
+			// macro expanded into that holds one -- cl-annot's @export is
+			// (progn (export 'x) (defun x ...)) -- is processed member by member, and
+			// the forms after it resolve against the package state it leaves.
+			List<LispVal> members = expanded == resolved ? null : prognMembersWithPackageDirective(expanded);
+			if (members != null) {
+				for (LispVal member : members) {
+					if (isPackageDirective(member)) {
+						macroEval.resolvePackages(member);
+						if (!this.shallow) {
+							this.result.add(requalifyShadowedClNames(member, macroEval));
+						}
+					}
+					else {
+						acceptExpansion(member, member, member, compileTime, true);
+					}
+				}
+				return;
+			}
+			acceptExpansion(form, resolved, expanded, compileTime, false);
+		}
+
+		/**
+		 * The rest of {@link #accept} for one expanded top-level form: the compile-file
+		 * situations of an expanded eval-when, the macro-time replay, and the emitted
+		 * spelling.
+		 * @param member whether the form is a member of a progn a macro expanded into,
+		 * which has no original spelling to keep
+		 */
+		private void acceptExpansion(LispVal form, LispVal resolved, LispVal expanded, boolean compileTime,
+				boolean member) {
+			LispEvaluator macroEval = this.macroEval;
 			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
 				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
 				// were flattened before the loop): honor the compile-file situations.
@@ -385,7 +418,7 @@ public final class UserMacroExpander {
 			// SAME object and needs no printing to recognize; the print comparison stays
 			// for a walk that rebuilt an equal form (a macro that expands to itself).
 			if (!this.shallow) {
-				this.result.add(expanded == resolved || expanded.print().equals(resolved.print()) ? form
+				this.result.add(!member && (expanded == resolved || expanded.print().equals(resolved.print())) ? form
 						: requalifyShadowedClNames(expanded, macroEval));
 			}
 			// Drain the definition-time method constructions the form's macro-time
@@ -1398,6 +1431,30 @@ public final class UserMacroExpander {
 				|| LispNames.EXPORT.equals(member) || LispNames.UNEXPORT.equals(member)
 				|| LispNames.IMPORT.equals(member) || LispNames.PUSH_PACKAGE.equals(member)
 				|| LispNames.POP_PACKAGE.equals(member);
+	}
+
+	/**
+	 * The members of a {@code progn}, nested ones flattened, when one of them is a
+	 * package directive; null for any other form.
+	 */
+	private static @Nullable List<LispVal> prognMembersWithPackageDirective(LispVal form) {
+		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
+			return null;
+		}
+		List<LispVal> members = new ArrayList<>();
+		flattenProgn((LispCons) form, members);
+		return members.stream().anyMatch(UserMacroExpander::isPackageDirective) ? members : null;
+	}
+
+	private static void flattenProgn(LispCons progn, List<LispVal> into) {
+		for (LispVal member = progn.cdr(); member instanceof LispCons cell; member = cell.cdr()) {
+			if (isOperator(cell.car(), LispNames.PROGN) && ((LispCons) cell.car()).isProperList()) {
+				flattenProgn((LispCons) cell.car(), into);
+			}
+			else {
+				into.add(cell.car());
+			}
+		}
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {

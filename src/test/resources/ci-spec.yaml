@@ -4402,9 +4402,19 @@ cases:
       (defun ci-unexp-b () 2)
       (in-package :cl-user)
       (print (+ (ci-unexp:ci-unexp-a) (ci-unexp::ci-unexp-b)))
+      ;; A progn a macro expands into is processed member by member at top level
+      ;; (CLHS 3.2.3.1), so its export reaches the forms after it: cl-annot's @export.
+      (defpackage :ci-mexp (:use :cl))
+      (in-package :ci-mexp)
+      (defmacro ci-mexp-exporting (name)
+        `(progn (export ',name) (defun ,name () :exported)))
+      (ci-mexp-exporting ci-mexp-greet)
+      (in-package :cl-user)
+      (print (ci-mexp:ci-mexp-greet))
     expected: |
       42
       3
+      :EXPORTED
   # export grants ACCESSIBILITY and never re-keys the symbol: a defun/defvar/setf-function
   # made BEFORE the export is reachable through the external spelling afterwards. The
   # everyday CL file shape -- define, then export at the end.
