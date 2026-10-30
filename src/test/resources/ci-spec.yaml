@@ -13095,10 +13095,26 @@ cases:
       #-(or sbcl ccl) (print :portable)
       #+(and rontolisp (not sbcl)) (print :compound)
       #+nil (print :never)
+      ;; A guard computed by #. (fiveam's run.lisp): decided where the #. resolves,
+      ;; after the forms before it ran; a failing one drops a form naming packages
+      ;; that do not exist, a holding one inside a template splices an unquote.
+      #+#.(cl:if (cl:find-package "SB-KERNEL") '(and) '(or))
+      (declaim (sb-ext:muffle-conditions sb-kernel:&optional-and-&key-in-lambda-list))
+      (print (list #+#.(cl:if nil '(and) '(or)) (sb-ext:foo) 2))
+      (print (list #-#.(cl:if t '(and) '(or)) 5 6))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defparameter *ci-have-it* t))
+      (print (list #+#.(cl:if *ci-have-it* '(cl:and) '(cl:or)) :earlier-form
+                   #+(or sbcl #.(cl:if t :rontolisp :sbcl)) :computed-name))
+      (print (let ((x 3)) `(a #+#.(cl:if t '(and) '(or)) ,x #-#.(cl:if t '(and) '(or)) b c)))
     expected: |
       :YES
       :PORTABLE
       :COMPOUND
+      (2)
+      (6)
+      (:EARLIER-FORM :COMPUTED-NAME)
+      (A 3 C)
   - name: reader-per-backend-features
     source: |
       (print #+rontolisp-interpreter :interpreter
@@ -13115,26 +13131,26 @@ cases:
     source: |
       (print (length *features*))
       (print (car *features*))
-      (print #+unicode :unicode #-unicode :octets)
+      (print (list #+unicode :unicode #-unicode :octets #+common-lisp :common-lisp))
     expected: |
-      4
+      5
       :RONTOLISP
-      :UNICODE
+      (:UNICODE :COMMON-LISP)
     expectedByBackend:
       # The WASM backends are single-threaded by construction, so :thread-support
       # (declared statically on the interpreter and the JVM, see reader.Features)
       # is absent there.
       wasm: |
-        3
+        4
         :RONTOLISP
-        :UNICODE
+        (:UNICODE :COMMON-LISP)
       # ... and a component carries one MORE than Preview 1: :rontolisp-component,
       # the boundary feature a source guards a core wasm-import with (the reactor
       # features cannot say "not a component" -- a reactor component has them too).
       wasm_component: |
-        4
+        5
         :RONTOLISP
-        :UNICODE
+        (:UNICODE :COMMON-LISP)
   - name: reader-features-own-push-is-visible
     # A source announces a feature about ITSELF -- push in the header, #+ on it
     # below -- and real CL sees it because load/compile-file both go form at a

@@ -14,8 +14,11 @@ import am.ik.rontolisp.LispVal;
  * subset, and -- as its starting point -- the {@code *features*} global every backend
  * seeds at run time. Every backend has {@code :rontolisp} plus one backend-identifying
  * feature ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or
- * {@code :rontolisp-wasm}) and {@code :unicode}; {@code :common-lisp} is deliberately
- * absent (rontolisp is not a conforming implementation).
+ * {@code :rontolisp-wasm}), {@code :unicode} and {@code :common-lisp}. CLHS names
+ * {@code :common-lisp} the feature of the language FAMILY and {@code :ansi-cl} the
+ * conformance claim, so the first is announced and the second is not: portable code
+ * writes {@code #+common-lisp} as its "any CL" fallback (named-readtables' every
+ * {@code define-cruft}), which is exactly the branch rontolisp needs.
  * <p>
  * A read-time feature set and the run-time {@code *features*} list are two different
  * things, and keeping them apart is the whole point: this set is what {@code #+} tests
@@ -54,10 +57,11 @@ public final class Features {
 	 * to t here and to nil there.
 	 */
 	public static final Features INTERPRETER = new Features(
-			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support"));
+			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support", "common-lisp"));
 
 	/** The features active when compiling to JVM bytecode. */
-	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support"));
+	public static final Features JVM = new Features(
+			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp"));
 
 	/**
 	 * The features active when compiling to JVM bytecode in SERVLET mode -- a
@@ -70,10 +74,10 @@ public final class Features {
 	 * ({@code .kb/clack.md}).
 	 */
 	public static final Features JVM_SERVLET = new Features(
-			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "rontolisp-servlet"));
+			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp", "rontolisp-servlet"));
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
-	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"));
+	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode", "common-lisp"));
 
 	/**
 	 * The features active when compiling to WASM in REACTOR mode -- {@code --no-wasi}
@@ -89,7 +93,7 @@ public final class Features {
 	 * {@code clackup} source run on every host ({@code .kb/clack.md}).
 	 */
 	public static final Features WASM_REACTOR = new Features(
-			List.of("rontolisp", "rontolisp-wasm", "unicode", "rontolisp-reactor"));
+			List.of("rontolisp", "rontolisp-wasm", "unicode", "common-lisp", "rontolisp-reactor"));
 
 	/**
 	 * The feature naming the component BOUNDARY, added to whichever WASM set is in force
@@ -140,6 +144,10 @@ public final class Features {
 	 * {@code #+darwin} branches in shipped libraries ({@code .kb/uiop.md}).
 	 */
 	public static final String NATIVE = "rontolisp-native";
+
+	private static final String STATIC_SPELLING = "static";
+
+	private static final String RUNTIME_SPELLING = "runtime";
 
 	private final List<String> names;
 
@@ -223,6 +231,32 @@ public final class Features {
 	}
 
 	/**
+	 * Spells this set as strings, for a {@code %read-time-feature} marker to carry the
+	 * set its deferred guard is tested against; {@link #decode} reads it back.
+	 * @return the kind of set, then its names
+	 */
+	public List<String> encode() {
+		List<String> spelling = new java.util.ArrayList<>();
+		spelling.add(this.designators ? RUNTIME_SPELLING : STATIC_SPELLING);
+		spelling.addAll(this.names);
+		return spelling;
+	}
+
+	/**
+	 * Reads back a set {@link #encode} spelled.
+	 * @param spelling the kind of set, then its names
+	 * @return the set
+	 */
+	public static Features decode(List<String> spelling) {
+		if (spelling.isEmpty()
+				|| !RUNTIME_SPELLING.equals(spelling.get(0)) && !STATIC_SPELLING.equals(spelling.get(0))) {
+			throw new IllegalArgumentException("not an encoded feature set: " + spelling);
+		}
+		return new Features(List.copyOf(spelling.subList(1, spelling.size())),
+				RUNTIME_SPELLING.equals(spelling.get(0)));
+	}
+
+	/**
 	 * Returns whether the named feature is active. The comparison is case-insensitive and
 	 * tolerates a leading {@code :} or {@code #:} (feature expressions are keywords in
 	 * Common Lisp source).
@@ -273,7 +307,9 @@ public final class Features {
 		}
 		List<LispVal> items = cons.toList();
 		List<LispVal> args = items.subList(1, items.size());
-		return switch (featureName(op.name())) {
+		// The operator by its member name: a computed expression (#+#.(...)) spells it
+		// qualified, as swank's '(cl:and) does.
+		return switch (featureName(op.name().substring(op.name().lastIndexOf(':') + 1))) {
 			case "and" -> args.stream().allMatch(this::isEnabled);
 			case "or" -> args.stream().anyMatch(this::isEnabled);
 			case "not" -> {

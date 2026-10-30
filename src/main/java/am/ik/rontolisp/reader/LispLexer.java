@@ -2,6 +2,7 @@ package am.ik.rontolisp.reader;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispCons;
@@ -53,7 +54,17 @@ public final class LispLexer {
 	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
 	private final @Nullable String file;
 
+	/**
+	 * Evaluates the {@code (%read-eval datum)} markers of a feature expression that holds
+	 * a {@code #.}, or {@code null} when this read has no evaluator -- a source read,
+	 * whose guard is then deferred to a {@code %read-time-feature} marker.
+	 */
+	private final @Nullable UnaryOperator<LispVal> readTimeEval;
+
 	private int pos;
+
+	/** Set by {@link #readFeatureExpr} when the expression it read holds a {@code #.}. */
+	private boolean featureExprReadsEval;
 
 	/**
 	 * Create a new lexer for the given input with the interpreter feature set.
@@ -92,10 +103,26 @@ public final class LispLexer {
 	 * @param file the origin file, or {@code null} when unknown
 	 */
 	public LispLexer(String input, Features features, ReadEvalMode readEvalMode, @Nullable String file) {
+		this(input, features, readEvalMode, file, null);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values, so a {@code #+#.(...)} guard is decided while lexing;
+	 * {@code null} defers such a guard to a {@code %read-time-feature} marker
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode, @Nullable String file,
+			@Nullable UnaryOperator<LispVal> readTimeEval) {
 		this.input = input;
 		this.features = features;
 		this.readEvalMode = readEvalMode;
 		this.file = file;
+		this.readTimeEval = readTimeEval;
 		this.pos = 0;
 	}
 
@@ -217,7 +244,7 @@ public final class LispLexer {
 			}
 			if (c == '#' && this.pos + 1 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
-				readFeatureConditional();
+				readFeatureConditional(tokens);
 				continue;
 			}
 			int tokenStart = this.pos;
@@ -1039,13 +1066,154 @@ public final class LispLexer {
 	// a guarded form use syntax rontolisp does not support, which is the whole point
 	// of #+/#- in portable libraries.
 
-	private void readFeatureConditional() {
+	private void readFeatureConditional(List<LocatedToken> tokens) {
+		int start = this.pos;
 		boolean negated = this.input.charAt(this.pos + 1) == '-';
 		this.pos += 2; // skip "#+" / "#-"
+		skipInterTokenSpace();
+		int exprStart = this.pos;
+		this.featureExprReadsEval = false;
 		LispVal expr = readFeatureExpr();
-		if (this.features.isEnabled(expr) == negated) {
-			skipDatum();
+		if (!this.featureExprReadsEval) {
+			if (this.features.isEnabled(expr) == negated) {
+				skipDatum();
+			}
+			return;
 		}
+		String exprText = this.input.substring(exprStart, this.pos);
+		if (this.readTimeEval != null) {
+			if (readTimeFeatureHolds(exprText) == negated) {
+				skipDatum();
+			}
+			return;
+		}
+		if (this.readEvalMode == ReadEvalMode.ERROR) {
+			throw errAt(start, "#. read-time evaluation is not supported");
+		}
+		deferFeatureConditional(tokens, start, negated, exprStart, exprText);
+	}
+
+	// A #+/#- whose feature expression holds a #. and no evaluator to decide it: the
+	// guard becomes a (%read-time-feature "+"|"-" (FEATURES...) EXPR [FORM]) marker,
+	// EXPR carrying its #. as (%read-eval datum) markers and FORM the guarded datum when
+	// it lexes (else a (%read-eval-unreadable "RAW TEXT") marker), resolved -- spliced
+	// in, or dropped -- by the consumer that resolves the #. markers, just before the
+	// top-level form runs. The marker stands where the datum would, so it is refused
+	// where a datum is not simply an element of a list: behind a prefix (', #', `, ,,
+	// ,@, #n=, a dotted '.') or inside a vector/array/structure literal, whose elements
+	// no marker walk reaches.
+	private void deferFeatureConditional(List<LocatedToken> tokens, int start, boolean negated, int exprStart,
+			String exprText) {
+		if (!tokens.isEmpty() && isPrefixToken(tokens.get(tokens.size() - 1).token()) || !insidePlainLists(tokens)) {
+			throw errAt(start, "a #+/#- guard computed by #. is supported only as a top-level form or a list"
+					+ " element without a prefix");
+		}
+		List<LocatedToken> exprTokens;
+		try {
+			exprTokens = new LispLexer(exprText, this.features, ReadEvalMode.MARKER, this.file).tokenizeWithPositions();
+		}
+		catch (LispReadException ex) {
+			throw errAt(exprStart, "#. feature expression could not be read: " + exprText);
+		}
+		int formStart = this.pos;
+		skipDatum();
+		String formText = this.input.substring(formStart, this.pos);
+		add(tokens, new Token.LeftParen(), start);
+		add(tokens, new Token.SymbolToken(LispNames.READ_TIME_FEATURE), start);
+		add(tokens, new Token.StringToken(negated ? "-" : "+"), start);
+		add(tokens, new Token.LeftParen(), start);
+		for (String spelling : this.features.encode()) {
+			add(tokens, new Token.StringToken(spelling), start);
+		}
+		add(tokens, new Token.RightParen(), start);
+		for (LocatedToken exprToken : exprTokens) {
+			tokens.add(new LocatedToken(exprToken.token(), exprStart + exprToken.offset()));
+		}
+		List<LocatedToken> formTokens = tryTokenizeGuardedForm(formText);
+		if (formTokens == null) {
+			add(tokens, new Token.LeftParen(), formStart);
+			add(tokens, new Token.SymbolToken(LispNames.READ_EVAL_UNREADABLE), formStart);
+			add(tokens, new Token.StringToken(formText.trim()), formStart);
+			add(tokens, new Token.RightParen(), this.pos);
+		}
+		else {
+			for (LocatedToken formToken : formTokens) {
+				tokens.add(new LocatedToken(formToken.token(), formStart + formToken.offset()));
+			}
+		}
+		add(tokens, new Token.RightParen(), this.pos);
+	}
+
+	// The guarded form of a deferred guard, lexed as this read lexes: an empty list when
+	// nested guards suppressed it to nothing, null when it does not lex or parse as one
+	// datum -- parsed as a template element too, since a guarded ,x is one only there.
+	@Nullable private List<LocatedToken> tryTokenizeGuardedForm(String text) {
+		try {
+			List<LocatedToken> formTokens = new LispLexer(text, this.features, this.readEvalMode, this.file)
+				.tokenizeWithPositions();
+			if (formTokens.isEmpty() || LispReader.parsesAsExpressions(formTokens, this.features)) {
+				return formTokens;
+			}
+			List<LocatedToken> inTemplate = new ArrayList<>();
+			inTemplate.add(new LocatedToken(new Token.Backquote(), 0));
+			inTemplate.add(new LocatedToken(new Token.LeftParen(), 0));
+			inTemplate.addAll(formTokens);
+			inTemplate.add(new LocatedToken(new Token.RightParen(), text.length()));
+			if (!LispReader.parsesAsExpressions(inTemplate, this.features)) {
+				return null;
+			}
+			return formTokens;
+		}
+		catch (LispReadException ex) {
+			return null;
+		}
+	}
+
+	private static boolean isPrefixToken(Token token) {
+		return token instanceof Token.Quote || token instanceof Token.FunctionQuote || token instanceof Token.Backquote
+				|| token instanceof Token.Unquote || token instanceof Token.UnquoteSplicing
+				|| token instanceof Token.LabelDef || token instanceof Token.Dot || token instanceof Token.SharpL
+				|| token instanceof Token.PathnameOpen;
+	}
+
+	// Whether every literal still open at the end of the tokens is a plain list.
+	private static boolean insidePlainLists(List<LocatedToken> tokens) {
+		int depth = 0;
+		for (int i = tokens.size() - 1; i >= 0; i--) {
+			Token token = tokens.get(i).token();
+			if (token instanceof Token.RightParen) {
+				depth++;
+			}
+			else if (token instanceof Token.LeftParen || token instanceof Token.VectorOpen
+					|| token instanceof Token.StructOpen || token instanceof Token.SharpC
+					|| token instanceof Token.ArrayOpen || token instanceof Token.FloatArrayOpen
+					|| token instanceof Token.IntVectorOpen) {
+				if (depth > 0) {
+					depth--;
+				}
+				else if (!(token instanceof Token.LeftParen)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// Decides a feature expression holding a #. with this read's evaluator: the
+	// expression is read with its #. as (%read-eval datum) markers, the evaluator puts
+	// each value in place, and the result is tested like any feature expression.
+	private boolean readTimeFeatureHolds(String exprText) {
+		UnaryOperator<LispVal> evaluator = this.readTimeEval;
+		if (evaluator == null) {
+			throw err("a #+/#- guard computed by #. cannot be decided inside a skipped form");
+		}
+		List<LispVal> read = LispReader.readUnrecorded(
+				new LispLexer(exprText, this.features, ReadEvalMode.MARKER, this.file).tokenizeWithPositions(),
+				this.features);
+		if (read.size() != 1) {
+			throw err("#. feature expression could not be read: " + exprText);
+		}
+		return this.features.isEnabled(evaluator.apply(read.get(0)));
 	}
 
 	private LispVal readFeatureExpr() {
@@ -1073,6 +1241,14 @@ public final class LispLexer {
 				list = new LispCons(items.get(i), list);
 			}
 			return list;
+		}
+		if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+			// A computed feature expression: only its extent is taken here; the caller
+			// reads it again with an evaluator, or defers it.
+			this.pos += 2;
+			skipDatum();
+			this.featureExprReadsEval = true;
+			return LispNil.INSTANCE;
 		}
 		if (isSymbolChar(c)) {
 			int start = this.pos;
@@ -1165,7 +1341,21 @@ public final class LispLexer {
 	 * @throws LispReadException when the input holds no complete datum
 	 */
 	public static int datumEnd(String input, Features features) {
-		LispLexer lexer = new LispLexer(input, features, ReadEvalMode.SKIP_UNREADABLE);
+		return datumEnd(input, features, null);
+	}
+
+	/**
+	 * {@link #datumEnd(String, Features)} deciding a {@code #+}/{@code #-} guard computed
+	 * by {@code #.} with the given evaluator, as the read itself does.
+	 * @param input the source text
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values, or {@code null} to refuse such a guard
+	 * @return the index of the first character the read did not consume
+	 * @throws LispReadException when the input holds no complete datum
+	 */
+	public static int datumEnd(String input, Features features, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		LispLexer lexer = new LispLexer(input, features, ReadEvalMode.SKIP_UNREADABLE, null, readTimeEval);
 		lexer.skipDatum();
 		int end = lexer.pos;
 		if (end < input.length() && Character.isWhitespace(input.charAt(end))) {
@@ -1272,8 +1462,14 @@ public final class LispLexer {
 				// when f is absent.
 				boolean negated = next == '-';
 				this.pos += 2;
+				skipInterTokenSpace();
+				int exprStart = this.pos;
+				this.featureExprReadsEval = false;
 				LispVal expr = readFeatureExpr();
-				if (this.features.isEnabled(expr) == negated) {
+				boolean enabled = this.featureExprReadsEval
+						? readTimeFeatureHolds(this.input.substring(exprStart, this.pos))
+						: this.features.isEnabled(expr);
+				if (enabled == negated) {
 					skipDatum();
 					return false;
 				}

@@ -15,8 +15,14 @@ a separate ordinary special seeded from it.
   `#+(or sb-unicode unicode ...)` picks `strings-utf-8` vs `strings-ascii`, whose branch announces
   `client_encoding SQL_ASCII`. It is the only `#+unicode` site in the loadable corpus.
 - `contains()` is case-insensitive and strips `:`/`#:`. `isEnabled(LispVal)` evaluates a feature
-  expression (`and`/`or`/`not`; `LispNil` = false, preserving the `#+nil` comment idiom).
-  Deliberately NO `:common-lisp`.
+  expression (`and`/`or`/`not`, the operator by member name so `'(cl:and)` works; `LispNil` =
+  false, preserving the `#+nil` comment idiom).
+- **`common-lisp`** is in every base set since 2026-10-30. CLHS: `:common-lisp` is the language
+  FAMILY, `:ansi-cl` the conformance claim -- only the first is announced. Measured the same day
+  over the 158 cached Quicklisp systems: one library uses it, named-readtables, 13 sites in
+  `src/cruft.lisp`, all `#+ :common-lisp` portable fallbacks of `define-cruft` (without them every
+  body was empty and the load died in `(assert (not (null alternatives)))`); no `#-common-lisp`
+  anywhere. Pinned by ci-spec `reader-features-variable`.
 
 ## Target-shape features beside the backend one
 - `WASM_REACTOR` -> `rontolisp-reactor` (`--no-wasi` or `--no-gc`; [[clack]]).
@@ -103,6 +109,41 @@ from the evaluator), hands the reader `Features.ofRuntimeList` over the live lis
   scanner on every backend ([[read-load-streams]], "`read` is PRELUDE RONTOLISP"). Pinned by
   `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList`,
   `LispReaderTest.readFeatureConditionalStackedUnderAFailedGuardIsEvaluated`.
+
+## A feature expression computed by `#.` (`#+#.(cl:if ... '(and) '(or))`)
+fiveam (`run.lisp`), static-vectors, dissect, swank guard SBCL internals this way. The value of the
+`#.` is the feature expression; `readFeatureExpr` only takes the extent (`featureExprReadsEval`).
+- **With an evaluator at hand** (`LispLexer`'s `readTimeEval` hook: the runtime `read-from-string`
+  via `LispReader.readAllWithReadEvalMarkers(input, features, resolver)`, and `datumEnd(..., hook)`)
+  the guard is decided while lexing: the expression is re-read with `%read-eval` markers, the hook
+  (`LispEvaluator.resolveReadTimeEval`) substitutes, `Features.isEnabled` tests. The same applies to
+  a nested guard in a skip chain.
+- **A source read has no evaluator** (load, every compile path), so the lexer DEFERS:
+  `(%read-time-feature "+"|"-" (SET-SPELLING...) EXPR [FORM])` (`LispNames.READ_TIME_FEATURE`). The
+  set rides along as `Features.encode` strings because the consumer (the macro-time evaluator on the
+  compile paths) has a different set. FORM is the guarded datum lexed normally -- package lookup
+  happens at eval time, after the marker is gone, so `sb-ext:foo` in a dropped form is never looked
+  up; an unlexable FORM is `(%read-eval-unreadable "RAW")`, an error only if the guard holds.
+  `LispEvaluator.resolvedReadTimeEvalNode` resolves it next to `%read-eval`: as a list element it
+  SPLICES (the spine cell's car is the marker), as a whole top-level form a dropped guard is `nil`.
+  Because resolution is per top-level form, the guard sees earlier forms' definitions
+  (`eval-when` defparameter on the compile paths), like CL's form-at-a-time load.
+- In a backquote template `readTimeFeatureTemplate` turns it into the spliced element
+  `(%read-time-feature-template ... SEGMENT)`, resolved to `(list FORM-CODE)` / the `,@` form, or nil.
+  A guarded `,x` only parses as a template element, so `tryTokenizeGuardedForm` re-checks the tokens
+  wrapped in `` `( ) ``.
+- **Refused (read error)** where a marker cannot stand for "zero or one datum": behind a prefix
+  token (`'`, `#'`, `` ` ``, `,`, `,@`, `#n=`, `.`, `#L`, `#P`), inside a vector/array/struct/`#C`
+  literal (no marker walk enters them), in a nested backquote, and as a chain link of a raw skip
+  with no evaluator (`#+nope #+#.x a b`). ERROR mode (playground compile) refuses it like `#.`.
+- `.asd` reads: the marker contains `%read-eval`, so `AsdfSystems.containsReadEvalMarker` treats it
+  as an unresolvable `#.` (ignored in an option nothing reads, an error where it decides a load).
+- Not done: the prelude `read`/multi-arg `read-from-string` scanner (all backends) and the emitted
+  readers know no `#.` at all, so a computed guard there signals like any `#.`.
+- Pinned by ci-spec `reader-feature-conditionals` (all four backends: top-level drop, element
+  splice both ways, earlier-form visibility, `#.` nested in `(or ...)`, template splice) and
+  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList` (runtime read,
+  stop index, skip chain).
 
 ## Threading
 `LispReader.readAllFromString(input, features)` (1-arg overload = INTERPRETER). Reading happens
