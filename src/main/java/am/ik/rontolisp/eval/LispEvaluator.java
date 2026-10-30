@@ -585,6 +585,13 @@ public final class LispEvaluator {
 	@Nullable private DistClient distClient;
 
 	/**
+	 * How many {@code ql:quickload} calls are loading right now: while one is, a system
+	 * no search directory holds is downloaded where it is first needed
+	 * ({@link #locateAsd}).
+	 */
+	private int quickloadDepth;
+
+	/**
 	 * The SWANK server {@code swank:create-server} starts on this evaluator: the command
 	 * line's ({@link #setSwankHost}), none for an embedded evaluator.
 	 */
@@ -5335,6 +5342,23 @@ public final class LispEvaluator {
 	}
 
 	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
+		if (inCode && form instanceof LispCons call && isMarker(call.car(), LispNames.READ_EVAL)) {
+			// A marker in a call's OPERATOR position is not evaluated, so its value
+			// splices raw: ironclad tiger.lisp's (#.+tiger-block-copy-fn+ block ...)
+			// names the function, where a quoted symbol would be no call at all.
+			LispVal head = resolveReadTimeEval(call.car(), false);
+			LispVal rest = resolveReadTimeEvalSpine(call.cdr(), true);
+			return head == call.car() && rest == call.cdr() ? form : new LispCons(head, rest);
+		}
+		return resolveReadTimeEvalSpine(form, inCode);
+	}
+
+	/**
+	 * {@link #resolveReadTimeEval(LispVal, boolean)} over a list's cells without the
+	 * operator-position rule: {@code form} is a TAIL, so its first element is an
+	 * argument.
+	 */
+	private LispVal resolveReadTimeEvalSpine(LispVal form, boolean inCode) {
 		return LispTrees.rebuildSpine(form, node -> resolvedReadTimeEvalNode(node, inCode),
 				car -> resolveReadTimeEval(car, inCode));
 	}
@@ -5351,7 +5375,7 @@ public final class LispEvaluator {
 		if (cons.car() instanceof LispCons element && isMarker(element, LispNames.READ_TIME_FEATURE)) {
 			// A deferred #+#. guard as a list element: the guarded datum splices in, or
 			// the element is dropped.
-			LispVal rest = resolveReadTimeEval(cons.cdr(), inCode);
+			LispVal rest = resolveReadTimeEvalSpine(cons.cdr(), inCode);
 			LispVal guarded = readTimeFeatureChoice(element, inCode);
 			return guarded == null ? rest : new LispCons(guarded, rest);
 		}
@@ -5478,6 +5502,22 @@ public final class LispEvaluator {
 			loadSystem(name);
 			return;
 		}
+		downloadQuicklisp(name);
+		this.quickloadDepth++;
+		try {
+			loadSystem(name);
+		}
+		finally {
+			this.quickloadDepth--;
+		}
+	}
+
+	/**
+	 * Downloads the named system and its index-listed dependencies and adds their
+	 * {@code .asd} directories to the system path.
+	 * @return the directories the download contributed
+	 */
+	private List<String> downloadQuicklisp(String name) {
 		List<String> asdDirs;
 		try {
 			asdDirs = distClient().ensureAvailable(name);
@@ -5492,7 +5532,29 @@ public final class LispEvaluator {
 			}
 		}
 		this.systemPath = List.copyOf(merged);
-		loadSystem(name);
+		return asdDirs;
+	}
+
+	/**
+	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one no search
+	 * directory holds is downloaded first. Quicklisp's index lists a dependency by its
+	 * PRIMARY name only (cl-smtp's {@code frugal-uuid/non-frugal} is indexed as
+	 * {@code frugal-uuid}), so the download in front of the load misses what a secondary
+	 * system needs ({@code ironclad/prngs}); Quicklisp's client installs such a system
+	 * when ASDF reports it missing, and this is that step.
+	 * @param searchDirs the search directories, widened in place by a download
+	 */
+	private AsdfSystems.LocatedAsd locateAsd(String name, List<String> searchDirs) {
+		try {
+			return AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+		}
+		catch (AsdfSystems.SystemNotFoundException ex) {
+			if (this.quickloadDepth == 0) {
+				throw ex;
+			}
+			searchDirs.addAll(downloadQuicklisp(name));
+			return AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+		}
 	}
 
 	/**
@@ -5853,7 +5915,7 @@ public final class LispEvaluator {
 			String baseDir = this.loadDirStack.peekLast();
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
-			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs);
 			// The .asd runs in this image -- the program's own, as real ASDF loads it
 			// into the image that then loads the system -- and each system it defines is
 			// registered the moment it is defined. .asd forms read upcased like all

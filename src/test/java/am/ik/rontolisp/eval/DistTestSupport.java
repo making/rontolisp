@@ -183,6 +183,41 @@ public final class DistTestSupport {
 	}
 
 	/**
+	 * A quicklisp dist whose {@code mylib} {@code :depends-on} the SECONDARY system
+	 * {@code helper/extra}, while its {@code systems.txt} line names only the primary
+	 * {@code helper} -- Quicklisp's own indexing of cl-smtp's
+	 * {@code frugal-uuid/non-frugal}. {@code helper/extra} needs the {@code deep}
+	 * project, which nothing the index says about {@code mylib} reaches, so
+	 * {@code mylib-answer} (42, through {@code deep-seven}) works only when the download
+	 * follows the load.
+	 * @return a recording downloader serving the three releases
+	 */
+	public static RecordingDownloader secondaryDependencyDist() {
+		String mylib = "http://fake.quicklisp/archive/mylib-1.0.tar.gz";
+		String helper = "http://fake.quicklisp/archive/helper-1.0.tar.gz";
+		String deep = "http://fake.quicklisp/archive/deep-1.0.tar.gz";
+		return dist("""
+				mylib mylib mylib helper
+				helper helper helper
+				helper helper helper/extra deep
+				deep deep deep
+				""", """
+				mylib %s {sums} mylib-1.0 mylib
+				helper %s {sums} helper-1.0 helper
+				deep %s {sums} deep-1.0 deep
+				""".formatted(mylib, helper, deep), Map.of(mylib, tarGz(Map.of(//
+				"mylib-1.0/mylib.asd",
+				"(defsystem \"mylib\" :depends-on (\"helper/extra\") :components ((:file \"mylib\")))", //
+				"mylib-1.0/mylib.lisp", "(defun mylib-answer () (* 6 (deep-seven)))")), helper,
+				tarGz(Map.of("helper-1.0/helper.asd", """
+						(defsystem "helper")
+						(defsystem "helper/extra" :depends-on ("deep"))
+						""")), deep, tarGz(Map.of(//
+						"deep-1.0/deep.asd", "(defsystem \"deep\" :components ((:file \"deep\")))", //
+						"deep-1.0/deep.lisp", "(defun deep-seven () 7)"))));
+	}
+
+	/**
 	 * Builds a gzip-compressed USTAR tar archive from {@code files} (archive path to
 	 * content), the shape {@link DistClient} extracts.
 	 * @param files the archive entries: path to UTF-8 content

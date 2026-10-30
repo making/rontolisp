@@ -617,6 +617,13 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
 		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
 		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(DEFUN STRPKG:H NIL 3)");
+		// A qualified symbol designates its NAME only (misc-extensions: (:shadow
+		// cl:let)).
+		resolve(resolver, "(defpackage :qualpkg (:use :cl) (:shadow cl:let) (:export strpkg:own)"
+				+ " (:intern cl-user::hidden) (:shadowing-import-from :strpkg strpkg:f))");
+		resolve(resolver, "(in-package :qualpkg)");
+		assertThat(resolve(resolver, "(let (own hidden) (f))"))
+			.isEqualTo("(QUALPKG::LET (QUALPKG:OWN QUALPKG::HIDDEN) (STRPKG:F))");
 	}
 
 	@Test

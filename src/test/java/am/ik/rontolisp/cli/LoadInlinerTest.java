@@ -523,10 +523,11 @@ class LoadInlinerTest {
 
 	@Test
 	void quickloadProgramCompilesAndRunsOnJvm(@TempDir Path home) throws Exception {
+		// Including a dependency the dist index never names (a secondary system's).
 		List<LispVal> program = LoadInliner.inline(
 				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
 				SourceLoader.fileSystem(), null, List.of(), Features.JVM,
-				quicklispClient(home, "(defun mylib-answer () (* 6 7))"));
+				new DistClient(home, DistTestSupport.secondaryDependencyDist()));
 		byte[] classBytes = new JvmLispCompiler("TestQuickload").compile(program);
 		assertThat(runMain(classBytes, "TestQuickload")).isEqualTo("42");
 	}

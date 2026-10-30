@@ -1897,10 +1897,10 @@ public final class PackageResolver {
 
 	private static String designator(String context, String kind, LispVal designator) {
 		return switch (designator) {
-			// A keyword (:cl-user), an uninterned symbol (#:cl-user, the common
-			// defpackage idiom) or a bare symbol (cl-user); strip the prefix.
-			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
-					: sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			// A symbol designates its symbol-name: a keyword (:cl-user), an uninterned
+			// symbol (#:cl-user, the common defpackage idiom), a bare symbol (cl-user)
+			// or a qualified one ((:shadow cl:let) names "LET", not the symbol).
+			case LispSymbol sym -> LispSymbol.memberName(sym.name());
 			case LispString str -> str.value();
 			// A CHARACTER is a string designator too (CLHS glossary), so #\A names the
 			// package -- or the symbol -- "A"; the defpackage tests spell every clause
