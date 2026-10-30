@@ -3202,10 +3202,9 @@ public final class LispNames {
 
 	/**
 	 * The {@code change-class} macro: mutates an instance IN PLACE into a statically
-	 * known class of the same inheritance chain, retaining the slots both classes share,
-	 * filling the new ones from their initforms (or the supplied initargs) and yielding
-	 * the instance. The MOP protocol around it
-	 * ({@code update-instance-for-different-class}) is out of scope.
+	 * known class, retaining the slots both classes share by name, filling the new ones
+	 * from their initforms (or the supplied initargs) and yielding the instance. The MOP
+	 * protocol around it ({@code update-instance-for-different-class}) is out of scope.
 	 */
 	public static final String CHANGE_CLASS = "CHANGE-CLASS";
 

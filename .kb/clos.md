@@ -163,8 +163,8 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   miss the second super's methods.
 - `conditionReportGroups` inherits `:report` along the CPL; `define-condition` with several
   REGISTERED parents does real MI (an UNREGISTERED extra parent falls back to
-  `registerExtraAncestors`); `change-class`'s initform fill SKIPS a source whose layout is not
-  a base-name prefix of the target; `%class-meta-table%`'s superclass column is a LIST;
+  `registerExtraAncestors`); `change-class` remaps slots by name, so a shifted MI layout is
+  fine; `%class-meta-table%`'s superclass column is a LIST;
   mop-protocol.lisp's `finalize-inheritance` merges inherited effective slots across ALL
   direct supers (first name wins).
 
@@ -429,14 +429,20 @@ table/dispatch built from a class, struct, condition or alias name goes through 
 added spelling can never designate another class; a `cl-user` program is byte-identical.
 
 ## `change-class` — in place, on all four backends
-Object identity and every shared slot survive, slots the new class adds are filled from
-initforms, supplied initargs stored, the instance is the value.
+Object identity and every slot whose NAME both classes have survive (CLHS 7.2, also between
+unrelated classes), slots the new class adds are filled from initforms, supplied initargs
+stored, the instance is the value.
 - `expandChangeClass`: capture the OLD tag -> `(%obj-become obj '%class-T)` -> a `cond` on the
-  captured tag filling `[slotCount(source), slotCount(target))` from the target's initforms ->
-  the initarg stores. **The tag is captured BEFORE the swap.**
+  captured tag, one arm per possible source (the target's chain + every non-seeded class)
+  whose by-name mapping is not the identity: moved values are read from their old index
+  (`let`) before any store, missing slots get the target's initform (unbound without one) ->
+  the initarg stores. **The tag is captured BEFORE the swap.** Arms are sources x targets, so
+  the computed path's dispatch is quadratic in user classes (fine for change-class programs
+  measured so far; a runtime layout-driven remap would make it linear).
 - **`LispLayout.capacity()` is why this works on the JVM**, where an instance IS its
-  `Object[]`: every ancestor of a `change-class` target reserves the target's slot count at
-  construction. `expandTopLevelDefinitions` scans for targets (`registerChangeClassTargets` —
+  `Object[]`: every class an instance can be changed from (the target's ancestors and every
+  non-seeded class) reserves the target's slot count at construction. Before 2026-10-31 only
+  ancestors did, and a change between unrelated classes overflowed the array on JVM and WASM. `expandTopLevelDefinitions` scans for targets (`registerChangeClassTargets` —
   the form lives in a body, not at top level) and calls `applyChangeClassCapacities()` once
   the registry is complete. `%obj-slots` and the printers bound themselves by the LAYOUT's
   slot count, never the array length.
