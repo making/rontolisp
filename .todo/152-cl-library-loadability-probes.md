@@ -113,7 +113,9 @@ verification against the actual Quicklisp dist at probe time)
     included (h30, h31 done). Compiled: the JVM stops on a `nil` hash key (h56); wasm loads,
     then `run!` needs the run-time `compile` of a test body.
   - `parachute`, `plump` -- `compiler-macro-function` (documentation-utils, h32). parachute
-    then runs. plump then needs a symbol that was only read (h34).
+    then runs. plump then needed a symbol that was only read (h34, done): it matches SBCL on
+    the interpreter, and on the JVM through the home packages' names (`plump:` re-exports
+    by a run-time `do-external-symbols` loop, 386); both WASM backends trap in `parse` (h63).
   - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37).
   - `lparallel` -- bt condition variables (h37).
   - `serapeum`, `spinneret` -- metaclass / class-object specializers (h33).

@@ -17019,24 +17019,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void findSymbolSeesDefinitionsMadeInsideAUserPackage() {
-		// A definition IS an interning: a defun (or a defstruct-GENERATED defun)
-		// under (in-package p) is registered only in the function namespace under
-		// its canonical spelling, never in the package registry, so find-symbol
-		// must probe that namespace too. trivia level2's predicatep resolves a
-		// struct's predicate with (find-symbol "POINT-P" (symbol-package 'point-)).
-		assertThat(evalMulti("""
-				(defpackage :fs-probe (:use :cl))
-				(in-package :fs-probe)
-				(defun my-local-fn (x) x)
-				(defstruct fspt a b)
-				(list (find-symbol "MY-LOCAL-FN")
-				      (find-symbol "FSPT-P")
-				      (find-symbol "FSPT-P" :fs-probe)
-				      (find-symbol "MAKE-FSPT" :fs-probe)
-				      (find-symbol "NO-SUCH-FN" :fs-probe))
-				""").print())
-			.isEqualTo("(FS-PROBE::MY-LOCAL-FN FS-PROBE::FSPT-P FS-PROBE::FSPT-P FS-PROBE::MAKE-FSPT NIL)");
+	void findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage() {
+		// Reading a symbol interns it (CL's reader): a name only READ in the package --
+		// a parameter, a quoted datum, a pkg::name from elsewhere -- is a member from
+		// the form that read it on, internal, and do-symbols walks it; plump's matcher
+		// DSL dispatches on such a find-symbol. A definition IS an interning too: a
+		// defstruct-GENERATED defun is registered only in the function namespace, so
+		// find-symbol probes that namespace as well -- trivia level2's predicatep
+		// resolves a struct's predicate with (find-symbol "POINT-P" (symbol-package
+		// 'point-)).
+		assertThat(evalMulti(
+				"""
+						(defpackage :fs-probe (:use :cl))
+						(in-package :fs-probe)
+						(defvar *before* (multiple-value-list (find-symbol "ONLY-READ")))
+						(defun my-local-fn (x) (list x 'only-read))
+						(defstruct fspt a b)
+						(in-package :cl-user)
+						(defvar *outside* 'fs-probe::read-outside)
+						(in-package :fs-probe)
+						(list (find-symbol "MY-LOCAL-FN")
+						      (find-symbol "FSPT-P")
+						      (find-symbol "FSPT-P" :fs-probe)
+						      (find-symbol "MAKE-FSPT" :fs-probe)
+						      (find-symbol "NO-SUCH-FN" :fs-probe)
+						      *before*
+						      (multiple-value-list (find-symbol "ONLY-READ"))
+						      (multiple-value-list (find-symbol "X" :fs-probe))
+						      (find-symbol "READ-OUTSIDE" :fs-probe)
+						      (let ((n 0))
+						        (do-symbols (s :fs-probe) (when (member (symbol-name s) '("ONLY-READ" "X") :test #'string=) (incf n)))
+						        n))
+						""")
+			.print())
+			.isEqualTo("(FS-PROBE::MY-LOCAL-FN FS-PROBE::FSPT-P FS-PROBE::FSPT-P FS-PROBE::MAKE-FSPT NIL (NIL NIL)"
+					+ " (FS-PROBE::ONLY-READ :INTERNAL) (FS-PROBE::X :INTERNAL) FS-PROBE::READ-OUTSIDE 2)");
 	}
 
 	@Test

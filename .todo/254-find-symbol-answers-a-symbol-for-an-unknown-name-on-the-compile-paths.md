@@ -84,3 +84,17 @@ decision, on the finding that "none of which any current library or roadmap item
 needs". **This is the counter-example**: it is a symbol-IDENTITY question (does
 this package own this name?), not a spelling question, and a real library depends
 on the answer. Decide A1 with this item in hand rather than separately.
+
+## Update 2026-10-30 (`.todo/h34`)
+
+The reader of a live image now records what it reads (`.kb/packages.md`, "The member
+table"): the interpreter's and the compile paths' MACRO-TIME registries know every name
+the program read, ran `intern` on or `shadow`ed, per package. That is most of the "does
+this package own this name" table this item needs -- the missing parts are the names a
+definition derives (`defstruct`'s accessors; the interpreter covers them with
+`definedInImage`) and, for sxql, the names `define-op` interns at macro time (recorded:
+they go through the runtime `intern`). The backends' own resolvers deliberately record
+nothing they read (the baked tables would grow by every name read, and a `defmacro` body
+never reaches them), so the table has to be carried from the macro-time evaluator to the
+backend, not rebuilt there. Weigh it against `.todo/h55` (building `PKG::NAME` for an
+unexported name), which leaves the internal read members agreeing with the build.

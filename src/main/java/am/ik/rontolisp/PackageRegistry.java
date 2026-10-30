@@ -892,25 +892,27 @@ public final class PackageRegistry {
 	private final Map<String, Set<String>> unhomed = new HashMap<>();
 
 	/**
-	 * The member names the runtime {@code intern} (and {@code shadow}) minted in each
-	 * package, keyed by canonical package name -- a subset of the package's owned set.
-	 * The resolver's case-fold retries (an upcased source spelling reaching a lower-kebab
-	 * wit-import member) consult only the DECLARED members, so a runtime-minted
-	 * {@code abc} never catches a later {@code Abc} or {@code ABC}: the case-sensitive
-	 * Scheme symbols all live in one package. Travels with a {@link #rename}, goes with a
-	 * {@link #remove}.
+	 * The member names the runtime {@code intern} (and {@code shadow}) or a recording
+	 * reader minted in each package, keyed by canonical package name -- a subset of the
+	 * package's owned set. The resolver's case-fold retries (an upcased source spelling
+	 * reaching a lower-kebab wit-import member) consult only the DECLARED members, so a
+	 * minted {@code abc} never catches a later {@code Abc} or {@code ABC}: the
+	 * case-sensitive Scheme symbols all live in one package. Travels with a
+	 * {@link #rename}, goes with a {@link #remove}.
 	 */
 	private final Map<String, Set<String>> recorded = new HashMap<>();
 
 	/**
 	 * The canonical names of the packages whose member table is the WHOLE of them: made
-	 * by a {@code defpackage} or {@code make-package} and never read into since. A symbol
-	 * merely READ under a package is not recorded (the resolver mints its spelling
-	 * without writing the table), so once any source minted a name there -- an
-	 * {@code in-package} region, a {@code pkg::name} reference -- a name absent from the
-	 * table may still be one CL would have interned, and only a sealed package may answer
-	 * "no such symbol" (the {@code defpackage} {@code :import-from} check). Travels with
-	 * a {@link #rename}, goes with a {@link #remove}.
+	 * by a {@code defpackage} or {@code make-package} and never read into since. A
+	 * backend's resolution mints a read symbol's spelling without writing the table, and
+	 * even a recording reader leaves out the names a definition derives (a
+	 * {@code defstruct}'s accessors) and those of forms pruned before it reads them, so
+	 * once any source minted a name there -- an {@code in-package} region, a
+	 * {@code pkg::name} reference -- a name absent from the table may still be one CL
+	 * would have interned, and only a sealed package may answer "no such symbol" (the
+	 * {@code defpackage} {@code :import-from} check). Travels with a {@link #rename},
+	 * goes with a {@link #remove}.
 	 */
 	private final Set<String> sealed = new HashSet<>();
 
@@ -1765,8 +1767,8 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Records that source minted a name in the package without recording it: its member
-	 * table no longer answers for every symbol CL would find there.
+	 * Records that source minted a name in the package: its member table no longer
+	 * answers for every symbol CL would find there (see {@link #sealed}).
 	 * @param canonicalName the canonical package name
 	 */
 	public void unseal(String canonicalName) {
@@ -1785,8 +1787,8 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Records that the runtime {@code intern} (or {@code shadow}) minted the member
-	 * {@code name} in the package (see {@link #recorded}).
+	 * Records that the runtime {@code intern} (or {@code shadow}, or a recording reader)
+	 * minted the member {@code name} in the package (see {@link #recorded}).
 	 * @param canonicalName the canonical package name
 	 * @param name the member name
 	 */
@@ -1807,8 +1809,9 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Whether the member was minted by the runtime {@code intern} (or {@code shadow})
-	 * rather than declared -- the names the case-fold retries must not reach.
+	 * Whether the member was minted by the runtime {@code intern} (or {@code shadow}, or
+	 * a recording reader) rather than declared -- the names the case-fold retries must
+	 * not reach.
 	 * @param canonicalName the canonical package name
 	 * @param name the member name
 	 * @return {@code true} for a runtime-minted member

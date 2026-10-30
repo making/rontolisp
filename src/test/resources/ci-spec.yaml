@@ -4566,6 +4566,28 @@ cases:
       ((CI-MT1::BAR :INTERNAL :CI-MT2) (CI-MT2::BAZ :INTERNAL :CI-MT2))
       T
       T
+  # Reading a symbol interns it: a macro's find-symbol sees a name source only READ
+  # in the package -- plump's matcher DSL dispatches on (find-symbol (string (car
+  # form)) "PLUMP-LEXER") against case keys read there -- from the forms read before
+  # it, not the later ones. Expansion-time, so the same on all four backends (SBCL's
+  # output).
+  - name: macro-time-find-symbol-sees-a-symbol-only-read
+    source: |
+      (defpackage :ci-fsr (:use :cl))
+      (in-package :ci-fsr)
+      (defmacro dispatch (form)
+        (case (find-symbol (string (car form)) "CI-FSR") (in ''matched) (t ''nope)))
+      (defmacro known-p (name) (if (find-symbol name "CI-FSR") t nil))
+      (in-package :cl-user)
+      (print (list (ci-fsr::dispatch (in 1 2)) (ci-fsr::dispatch (out 1 2))))
+      (print (ci-fsr::known-p "ZAP"))
+      (print 'ci-fsr::zap)
+      (print (ci-fsr::known-p "ZAP"))
+    expected: |
+      (CI-FSR::MATCHED CI-FSR::NOPE)
+      NIL
+      CI-FSR::ZAP
+      T
   # remprop, the plist REMOVER: one prelude defun over the same %symbol-plists store
   # get / (setf get) / symbol-plist share.
   - name: symbol-plist-remprop
@@ -18864,7 +18886,7 @@ cases:
       ;; INTERPRETER semantics: pattern expansion always runs there, and the
       ;; compiled 2-arg lowering keeps its documented unknown-name-yields-a-
       ;; symbol deviation (.kb/symbol-runtime-api.md). Pinned by
-      ;; LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage.)
+      ;; LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage.)
     expected: |
       (1 2 3 4 5)
       (2 3 . TVS-ATOM)

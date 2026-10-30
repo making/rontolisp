@@ -106,7 +106,10 @@ public final class LispEvaluator {
 
 	private final Environment globalEnv;
 
-	private final PackageResolver packageResolver = new PackageResolver();
+	// The image's reader: a symbol source reads is a member of its package from then on
+	// (find-symbol, the enumerations), on the interpreter and in the compile paths'
+	// macro-time evaluator alike.
+	private final PackageResolver packageResolver = new PackageResolver().recordingReadSymbols();
 
 	/**
 	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
@@ -6704,14 +6707,27 @@ public final class LispEvaluator {
 	 * Calls a printer written as a one-argument lambda on a value the program computed.
 	 * The value is handed to the closure as an ARGUMENT, never quoted into a form: a
 	 * top-level form is walked by the package resolver first, and that walk never ends on
-	 * a cyclic value.
+	 * a cyclic value. The printer is the implementation's own helper, read in
+	 * {@code cl-user} and interning nothing ({@link #evalHelper}).
 	 * @param printer the source of a {@code (lambda (x) ...)} answering the text
 	 * @param value the value to print
 	 * @return what the printer answered
 	 */
 	LispVal printThrough(String printer, LispVal value) {
-		LispVal closure = eval(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
+		LispVal closure = evalHelper(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
 		return applyGlobal(closure, List.of(value));
+	}
+
+	/**
+	 * Evaluates a top-level form of the implementation's own -- a helper evaluated on the
+	 * program's behalf, never the program's source -- resolved in {@code cl-user}
+	 * whatever package is current, and interning nothing: its names are not symbols the
+	 * program read ({@code PackageResolver.resolveHelper}).
+	 * @param form the helper form
+	 * @return its value
+	 */
+	LispVal evalHelper(LispVal form) {
+		return evalResolved(this.packageResolver.resolveHelper(form));
 	}
 
 	/** The elements of a value list (nil -- no values -- included). */
