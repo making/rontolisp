@@ -14441,7 +14441,7 @@ public final class LispEvaluator {
 		if (type == null) {
 			// A COMPUTED result type: the registry rides along so a designator naming a
 			// user deftype resolves before the family dispatch reads its head.
-			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry), env);
+			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry, true), env);
 		}
 		LispVal value = eval(parts.get(1), env);
 		LispVal fast = coerceSequenceFast(value, type);
@@ -14453,7 +14453,8 @@ public final class LispEvaluator {
 		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
 				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
-		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry), env);
+		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry, true),
+				env);
 	}
 
 	// The literal sequence result type a (coerce x 'type) form names, normalized the way
