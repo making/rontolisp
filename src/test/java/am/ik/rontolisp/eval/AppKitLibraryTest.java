@@ -49,13 +49,13 @@ class AppKitLibraryTest {
 	void theLibraryLoadsOnTheFirstAppkitResolution() {
 		// On a Mac the nil receiver answers nil; elsewhere the objc: verb underneath
 		// signals -- either way the appkit: function was resolved and its body ran.
+		// fboundp is a resolution too: it answers what a call would, loading the library.
 		String result = eval("""
-				(defvar *before* (fboundp 'appkit:window))
 				(defvar *first* (handler-case (appkit:visible-p nil) (error (e) (princ-to-string e))))
-				(list *before* *first* (fboundp 'appkit:window) (fboundp 'appkit:button))
+				(list *first* (fboundp 'appkit:window) (fboundp 'appkit:button))
 				""");
-		assertThat(result).satisfiesAnyOf(r -> assertThat(r).isEqualTo("(NIL NIL T T)"),
-				r -> assertThat(r).startsWith("(NIL \"objc:on-main: Objective-C is not available").endsWith(" T T)"));
+		assertThat(result).satisfiesAnyOf(r -> assertThat(r).isEqualTo("(NIL T T)"),
+				r -> assertThat(r).startsWith("(\"objc:on-main: Objective-C is not available").endsWith(" T T)"));
 	}
 
 	@Test

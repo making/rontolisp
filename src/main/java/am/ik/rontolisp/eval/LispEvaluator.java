@@ -12393,6 +12393,39 @@ public final class LispEvaluator {
 		if (SPECIAL_OPERATORS.contains(name)) {
 			throw CellErrorException.undefinedFunction(name);
 		}
+		LispVal loaded = loadFunction(name);
+		if (loaded != null) {
+			return loaded;
+		}
+		// Last resort, past every lazy load: a shared image function spelled from
+		// another package. The reader canonicalizes the symbol to pkg::member, while
+		// the function table keys the image-wide %-helpers cl does not own by their
+		// bare member -- a CL-USER spelling canonifies to bare and resolves, a
+		// foreign one must reach the same entry here, where the qualified lazy loads
+		// have all declined. The user defuns this fallback could shadow live
+		// under their own qualified keys, which the lookup at the top already missed.
+		// fbound does not take this step: a package's own symbol that only falls back
+		// to an image function is no definition of that symbol.
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified != null) {
+			LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
+			if (bare != null) {
+				return bare;
+			}
+		}
+		throw CellErrorException.undefinedFunction(name);
+	}
+
+	/**
+	 * The function a name resolves to once the library that defines it is loaded: every
+	 * lazily loaded definition (the prelude defuns, the uiop and asdf runtimes, the
+	 * qualified libraries, the generated runtimes, the system generics) and the car/cdr
+	 * compositions. {@link #resolveFunction} and {@link #fbound} both ask it, so a name a
+	 * call reaches is a name {@code fboundp} answers t for.
+	 * @param name the function name
+	 * @return the loaded function, or null when no library defines the name
+	 */
+	private @Nullable LispVal loadFunction(String name) {
 		// Everything below LOADS something into the shared global environment, so it runs
 		// under the library lock: a concurrently served request must either see the load
 		// finished or wait for it, never fall through a gate whose flag is already set
@@ -12821,21 +12854,7 @@ public final class LispEvaluator {
 				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
 				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 			}
-			// Last resort, past every lazy load: a shared image function spelled from
-			// another package. The reader canonicalizes the symbol to pkg::member, while
-			// the function table keys the image-wide %-helpers cl does not own by their
-			// bare member -- a CL-USER spelling canonifies to bare and resolves, a
-			// foreign one must reach the same entry here, where the qualified lazy loads
-			// above have all declined. The user defuns this fallback could shadow live
-			// under their own qualified keys, which the lookup at the top already missed.
-			PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
-			if (qualified != null) {
-				LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
-				if (bare != null) {
-					return bare;
-				}
-			}
-			throw CellErrorException.undefinedFunction(name);
+			return null;
 		}
 	}
 
@@ -15685,11 +15704,13 @@ public final class LispEvaluator {
 	 */
 	boolean fbound(String name) {
 		// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until its
-		// first #' resolution evaluates the wrapper (resolveFunction), and is a function
-		// all the same.
+		// first #' resolution evaluates the wrapper (resolveFunction), and a library
+		// function (alphanumericp, equalp, uiop:split-string, ...) none until its first
+		// resolution loads it: each is a function all the same, so the probe loads what a
+		// call would.
 		return SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-				|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
-				|| BuiltinFunctionWrappers.names().contains(name);
+				|| this.globalEnv.lookupFunctionOrNull(name) != null || BuiltinFunctionWrappers.names().contains(name)
+				|| loadFunction(name) != null;
 	}
 
 	/**
