@@ -196,6 +196,40 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Single-step expansion, for {@code macroexpand-1} only, of a CL macro the evaluator
+	 * and the compilers run natively instead of through {@link #expandBuiltinMacro}: the
+	 * same expansion every backend lowers the form to, or the CL one where the native
+	 * form has none ({@code return}, {@code lambda}). A code walker that trusts
+	 * {@code macro-function} emits what this answers, so it must run on every backend.
+	 * Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
+	 * passes, which keep these forms native.
+	 * @param cons the form to expand
+	 * @return the expansion, or {@code null} when the operator has none here
+	 */
+	public static @Nullable LispVal expandNativeMacro(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		return switch (sym.name()) {
+			case LispNames.RETURN ->
+				new LispCons(new LispSymbol(LispNames.RETURN_FROM), new LispCons(LispNil.INSTANCE, cons.cdr()));
+			case LispNames.LAMBDA -> listToCons(List.of(new LispSymbol(LispNames.FUNCTION), cons));
+			case LispNames.PROG -> expandProg(cons, false);
+			case LispNames.PROG_STAR -> expandProg(cons, true);
+			case LispNames.PSETF -> expandPsetf(cons);
+			case LispNames.SHIFTF -> expandShiftf(cons);
+			case LispNames.WITH_OPEN_STREAM -> expandWithOpenStream(cons, true);
+			case LispNames.PRINT_UNREADABLE_OBJECT -> expandPrintUnreadableObject(cons);
+			case LispNames.WITH_PACKAGE_ITERATOR -> expandWithPackageIterator(cons);
+			case LispNames.DO_SYMBOLS -> expandDoSymbols(cons, false);
+			case LispNames.DO_EXTERNAL_SYMBOLS -> expandDoSymbols(cons, true);
+			case LispNames.DO_ALL_SYMBOLS -> expandDoAllSymbols(cons);
+			case LispNames.DEFINE_MODIFY_MACRO -> expandDefineModifyMacro(cons);
+			default -> null;
+		};
+	}
+
+	/**
 	 * Expands (cond (test body...) ...) into nested if/let/progn expressions.
 	 *
 	 * <pre>

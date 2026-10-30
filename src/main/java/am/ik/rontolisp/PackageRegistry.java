@@ -771,21 +771,40 @@ public final class PackageRegistry {
 			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
 
 	/**
-	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special operators
-	 * plus {@code while}. {@code while} is rontolisp's OWN extension, not a CL name at
-	 * all, and it only sits in the {@code cl} package because that is where the built-in
-	 * operators live -- so claiming a macro function for it answers a question about a
-	 * symbol CL does not have. A code walker asking "is this head a macro I should
-	 * expand?" about a library's own {@code while} then gets a yes and refuses to walk
-	 * its own clause: iterate's `(iter ... (while test))` warned "a macro that won't
-	 * expand" and looped forever, because the clause survived into the emitted tagbody
-	 * instead of becoming its exit test.
+	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special
+	 * operators, {@code while}, and the names of {@link #inlineExpandedClFunctions()}.
+	 * {@code while} is rontolisp's OWN extension, not a CL name at all, and it only sits
+	 * in the {@code cl} package because that is where the built-in operators live -- so
+	 * claiming a macro function for it answers a question about a symbol CL does not
+	 * have. A code walker asking "is this head a macro I should expand?" about a
+	 * library's own {@code while} then gets a yes and refuses to walk its own clause:
+	 * iterate's `(iter ... (while test))` warned "a macro that won't expand" and looped
+	 * forever, because the clause survived into the emitted tagbody instead of becoming
+	 * its exit test.
 	 */
-	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE));
+	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE),
+			Set.of(LispNames.DECLARE), PackageRegistry.inlineExpandedClFunctions());
+
+	/**
+	 * The CL FUNCTIONS (and {@code declare}, which CL defines as no operator at all) that
+	 * sit in {@link #CL_MACROS} only because the expander rewrites their calls inline. CL
+	 * gives them no macro function and {@code macroexpand-1} leaves their calls alone
+	 * (SBCL 2.2.9): iterate's walker asks {@code macro-function} about every head and
+	 * warned "a macro that won't expand" for each {@code typep} in an {@code iter} body.
+	 * @return the inline-expanded CL function names
+	 */
+	private static Set<String> inlineExpandedClFunctions() {
+		return Set.of(LispNames.CERROR, LispNames.CHANGE_CLASS, LispNames.COMPLEMENT, LispNames.DOCUMENTATION,
+				LispNames.ERROR, LispNames.FORMAT, LispNames.MAKE_CONDITION, LispNames.MAKE_INSTANCE,
+				LispNames.MAKE_SEQUENCE, LispNames.PROCLAIM, LispNames.SIGNAL, LispNames.SLOT_BOUNDP,
+				LispNames.SLOT_EXISTS_P, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_VALUE, LispNames.TYPEP,
+				LispNames.WARN);
+	}
 
 	/**
 	 * Returns the operators {@code macro-function} must answer nil for -- the ANSI
-	 * special operators plus rontolisp's own {@code while}.
+	 * special operators, rontolisp's own {@code while}, {@code declare}, and the CL
+	 * functions the expander rewrites inline.
 	 * @return the names with no macro function
 	 */
 	public static Set<String> namesWithoutMacroFunction() {

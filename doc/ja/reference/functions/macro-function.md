@@ -2,7 +2,7 @@
 
 `(macro-function symbol &optional environment)`
 
-`symbol` のマクロ展開器を返します。名前が関数、25 個の[特殊オペレータ](special-operator-p.md)のいずれか、または未知の場合は `nil` です。[`defmacro`](../special-forms/defmacro.md) で定義したユーザマクロ、すべての組み込みマクロ、そして rontolisp が独自に特殊形式として実装している Common Lisp のマクロ(`defun`、`handler-case`、`dolist` など)に対して非 nil を返します — 合わせて「`apply` してはいけない名前」のすべてです。
+`symbol` のマクロ展開器を返します。名前が関数、25 個の[特殊オペレータ](special-operator-p.md)のいずれか、または未知の場合は `nil` です。[`defmacro`](../special-forms/defmacro.md) で定義したユーザマクロ、すべての組み込みマクロ、そして rontolisp が独自に特殊形式として実装している Common Lisp のマクロ(`defun`、`handler-case`、`dolist` など)に対して非 nil を返します — 合わせて「`apply` してはいけない名前」のすべてです。rontolisp がインライン展開しているだけの Common Lisp の**関数**(`typep`、`format`、`error`、`make-instance` など)と `declare` には `nil` を返します。
 
 `environment` 引数は受け取って無視します。`macrolet` の本体は実行前に展開され尽くすため、参照できるのはグローバルな答えだけです。
 

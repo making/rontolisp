@@ -8473,6 +8473,17 @@ class LispEvaluatorTest {
 		// library's same-named symbol is a macro to expand must get no (iterate's
 		// (iter ... (while test)) clause).
 		assertThat(eval("(macro-function 'while)").print()).isEqualTo("NIL");
+		// macro-function and macroexpand-1 agree (iterate's walker calls the second when
+		// the first says macro): typep/format are CL FUNCTIONS the expander rewrites
+		// inline, and return/prog are CL macros the evaluator runs natively. SBCL 2.2.9.
+		assertThat(eval("""
+				(list (macro-function 'typep) (macro-function 'format) (macro-function 'declare)
+				      (multiple-value-list (macroexpand-1 '(typep 1 x)))
+				      (multiple-value-list (macroexpand-1 '(return 1)))
+				      (multiple-value-list (macroexpand-1 '(prog (a) (return a))))
+				      (multiple-value-list (macroexpand-1 '(lambda (x) x))))
+				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
+				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T))");
 	}
 
 	@Test

@@ -718,7 +718,26 @@ Verified form for form against SBCL 2.2.9.
 operators plus `while`, consulted by BOTH `runtimeMacroNames()` and
 `LispEvaluator.isMacroName`), because iterate's `walk` asks `(macro-function (car form))` before
 recognizing its own clauses and a yes made it refuse to walk `(iter ... (while test))`.
-**General rule: a name CL does not have must not claim a macro function.**
+**General rule: a name CL does not have must not claim a macro function.** Nor does a CL
+FUNCTION that sits in `CL_MACROS` only because the expander rewrites its calls inline
+(`typep`, `format`, `error`, `signal`, `make-instance`, `slot-value`, ... --
+`PackageRegistry.inlineExpandedClFunctions()`), nor `declare`: both join
+`namesWithoutMacroFunction()`. iterate warned "a macro that won't expand" for every `typep` in
+an `iter` body and skipped the clauses inside it (2026-10-30). SBCL 2.2.9 answers nil for all.
+
+**`macroexpand-1` expands exactly what `macro-function` claims** (`LispEvaluator.macroexpand1`
+gates on `isMacroName`, so the literal fold on the compile paths follows). A CL macro the
+evaluator runs natively expands through `LispMacroExpander.expandNativeMacro`: the expansion
+every backend already lowers it to (`prog`, `psetf`, `shiftf`, `with-open-stream`,
+`do-symbols`, ...) or CL's own (`return` -> `(return-from nil ...)`, `lambda` -> `#'(lambda
+...)`). It is kept out of `expandBuiltinMacro`, which also feeds compile passes that keep these
+forms native. A walker EMITS what it gets, so the expansion must run on every backend. Still
+answered unchanged with `expanded-p` nil (the contradiction left): `handler-case` and the
+definers run as special forms (`defun`, `defmacro`, `defvar`, `defparameter`, `defconstant`,
+`defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
+`define-symbol-macro`, `in-package`). Pins: `IterateE2eTest` (clauses inside `typep`/`return`),
+`LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators`, ci-spec
+`macro-function-and-special-operator-p`.
 
 **One definition per predicate, shared by every backend, and no compile-time fold.** Both are
 `LispPreludeLibrary` entries whose baked name table is GENERATED from `PackageRegistry` (so it

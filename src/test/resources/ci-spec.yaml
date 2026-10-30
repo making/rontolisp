@@ -14321,12 +14321,21 @@ cases:
       ;; macroexpand-1 answers CL's expanded-p as its second value.
       (print (multiple-value-list (macroexpand-1 '(mfp-mac 1))))
       (print (multiple-value-list (macroexpand-1 '(+ 1 2))))
+      ;; macro-function and macroexpand-1 agree (iterate's walker calls the second
+      ;; when the first says macro): typep is a CL FUNCTION the expander rewrites
+      ;; inline, return a CL macro rontolisp runs natively. SBCL 2.2.9.
+      (print (list (mfp-probe '(typep 1 x)) (mfp-probe '(format t "x")) (mfp-probe '(return 1))))
+      (print (multiple-value-list (macroexpand-1 '(typep 1 x))))
+      (print (multiple-value-list (macroexpand-1 '(return 1))))
     expected: |
       (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
       (T NIL NIL)
       (T T T T NIL NIL)
       ((LIST 1) T)
       ((+ 1 2) NIL)
+      (:FUNCTION :FUNCTION :MACRO)
+      ((TYPEP 1 X) NIL)
+      ((RETURN-FROM NIL 1) T)
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))

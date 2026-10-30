@@ -11740,7 +11740,10 @@ public final class LispEvaluator {
 	 * Expands the top-level form once when its operator is a user macro or a built-in
 	 * macro ({@code macroexpand-1}). Subforms are not walked. Returns the form itself
 	 * (same reference) when the operator is not a macro, so callers can detect
-	 * non-expansion by identity.
+	 * non-expansion by identity. It expands exactly the names {@code macro-function}
+	 * claims ({@link #isMacroName}): a code walker trusts the one and calls the other, so
+	 * a CL function the expander happens to rewrite inline ({@code typep}) stays a call,
+	 * and a CL macro the evaluator runs natively ({@code return}) still expands.
 	 * @param form the form to expand
 	 * @return the expansion, or {@code form} unchanged
 	 */
@@ -11749,7 +11752,13 @@ public final class LispEvaluator {
 			if (isUserMacro(sym.name())) {
 				return expandUserMacro(cons);
 			}
+			if (!isMacroName(sym.name())) {
+				return form;
+			}
 			LispVal expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandNativeMacro(cons);
+			}
 			if (expanded != null) {
 				return expanded;
 			}
@@ -11791,9 +11800,9 @@ public final class LispEvaluator {
 	/**
 	 * Whether the name has a macro function: a user {@code defmacro} (a {@code macrolet}
 	 * body's local macro and a {@code (setf macro-function)} alias register in the same
-	 * table) or a built-in operator with no function value that is not one of the 25 ANSI
-	 * special operators -- the CL macros the expander dispatches on, plus the ones
-	 * rontolisp implements as special forms of its own.
+	 * table) or a built-in operator with no function value outside
+	 * {@link PackageRegistry#namesWithoutMacroFunction()} -- the CL macros the expander
+	 * dispatches on, plus the ones rontolisp implements as special forms of its own.
 	 */
 	private boolean isMacroName(String name) {
 		return isUserMacro(name)
