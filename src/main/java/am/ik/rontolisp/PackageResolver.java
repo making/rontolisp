@@ -377,6 +377,11 @@ public final class PackageResolver {
 					return consumed;
 				}
 			}
+			if (LispNames.OWN_SYMBOL.equals(member) && cons.cdr() instanceof LispCons nameCell
+					&& nameCell.car() instanceof LispString name) {
+				claimClExtensionName(name.value());
+				return quotedSymbol(current());
+			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
 				// The save needs no runtime counterpart: the run-time *package* already
 				// holds the package this pass has current, and the restore below
@@ -1913,10 +1918,49 @@ public final class PackageResolver {
 	private LispVal resolveForm(LispVal form) {
 		return switch (form) {
 			case LispSymbol sym -> resolveSymbol(sym);
-			case LispCons cons -> withDefstructInternPackage(cons, resolveCons(cons));
+			case LispCons cons -> {
+				claimDefinedClExtensionName(cons);
+				yield withDefstructInternPackage(cons, resolveCons(cons));
+			}
 			case LispStructLiteral literal -> resolveStructLiteralType(literal);
 			default -> form;
 		};
+	}
+
+	/**
+	 * Makes the current package own a {@code cl} extension name ({@code while},
+	 * {@link PackageRegistry#isClExtensionName}) the form defines unqualified as a global
+	 * macro or function. Where the standard has no such {@code cl} symbol the reader
+	 * interns the package's own (arnesi's and fset's unexported {@code defmacro while}),
+	 * so from the definition on the package's symbol wins over {@code cl}'s, as an
+	 * exported one does; a reference read before the definition stays {@code cl}'s.
+	 * {@code cl-user} keeps {@code cl}'s.
+	 */
+	private void claimDefinedClExtensionName(LispCons cons) {
+		if (!this.probing && cons.car() instanceof LispSymbol op
+				&& (LispNames.DEFMACRO.equals(operatorMember(op)) || LispNames.DEFUN.equals(operatorMember(op)))
+				&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol name) {
+			claimClExtensionName(name.name());
+		}
+	}
+
+	/**
+	 * Makes the current package own the unqualified {@code name} when it is a {@code cl}
+	 * extension name that would read as {@code cl}'s there (see
+	 * {@link #claimDefinedClExtensionName}).
+	 * @param name the name as read
+	 */
+	private void claimClExtensionName(String name) {
+		String pkg = current();
+		// Only where the name would read as cl's: not a shadowed, imported or inherited
+		// symbol of the name, nor one the package owns already.
+		if (!PackageRegistry.isClExtensionName(name) || LispNames.CL_PKG.equals(pkg)
+				|| LispNames.CL_USER_PKG.equals(pkg) || !currentUsesCl()
+				|| !(resolveUnqualified(name) instanceof LispSymbol resolved) || !resolved.name().equals(name)) {
+			return;
+		}
+		this.registry.get(pkg).addSymbol(name);
+		this.registry.rehome(pkg, name);
 	}
 
 	/**

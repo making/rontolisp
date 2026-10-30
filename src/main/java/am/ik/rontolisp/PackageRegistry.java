@@ -890,7 +890,8 @@ public final class PackageRegistry {
 		map.put("ASDF/SYSTEM", List.of("SYSTEM", LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY,
 				LispNames.SYSTEM_RELATIVE_PATHNAME));
 		map.put("ASDF/SYSTEM-REGISTRY", List.of(LispNames.REGISTERED_SYSTEMS));
-		map.put("ASDF/ACTION", List.of(LispNames.PERFORM, LispNames.INPUT_FILES, LispNames.OUTPUT_FILES));
+		map.put("ASDF/ACTION",
+				List.of(LispNames.PERFORM, LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.OPERATION_DONE_P));
 		map.put("ASDF/LISP-ACTION", List.of(LispNames.CL_SOURCE_FILE, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
 				LispNames.LOAD_OP, LispNames.TEST_OP));
 		map.put("ASDF/FIND-COMPONENT", List.of("MISSING-COMPONENT"));
@@ -899,7 +900,7 @@ public final class PackageRegistry {
 		map.put("ASDF/OPERATE", List.of(LispNames.OPERATE, LispNames.LOAD_SYSTEM, LispNames.TEST_SYSTEM));
 		map.put("ASDF/FIND-SYSTEM", List.of());
 		map.put("ASDF/PARSE-DEFSYSTEM", List.of(LispNames.DEFSYSTEM));
-		map.put("ASDF/BUNDLE", List.of());
+		map.put("ASDF/BUNDLE", List.of(LispNames.COMPILE_BUNDLE_OP));
 		map.put("ASDF/CONCATENATE-SOURCE", List.of());
 		map.put("ASDF/PACKAGE-INFERRED-SYSTEM", List.of(LispNames.PACKAGE_INFERRED_SYSTEM));
 		map.put("ASDF/OUTPUT-TRANSLATIONS", List.of());
@@ -1213,10 +1214,12 @@ public final class PackageRegistry {
 						// The operation protocol (asdf.lisp): the operation classes,
 						// the perform generic load-system drives every component load
 						// through, operate, and the generics a library extends
-						// (asdf-flv's perform :around, lass's output-files).
+						// (asdf-flv's perform :around, lass's output-files, arnesi's
+						// operation-done-p and compile-bundle-op).
 						LispNames.OPERATE, LispNames.OPERATION, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
 						LispNames.LOAD_OP, LispNames.TEST_OP, LispNames.PERFORM, LispNames.MAKE_OPERATION,
-						LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.SOURCE_FILE_TYPE))));
+						LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.SOURCE_FILE_TYPE,
+						LispNames.OPERATION_DONE_P, LispNames.COMPILE_BUNDLE_OP))));
 		// Real ASDF's internal packages, each exporting the members it is the home of
 		// (measured against ASDF 3.3.1) as import redirects into asdf, so
 		// asdf/component:component-name IS asdf:component-name. Only the members asdf

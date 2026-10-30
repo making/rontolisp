@@ -69,7 +69,7 @@ public final class AsdfRuntimeLibrary {
 			LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME,
 			qualify(LispNames.ASDF_USER_CACHE), LispNames.ASDF_TEST_SYSTEM, qualify(LispNames.OPERATE),
 			LispNames.ASDF_PERFORM, qualify(LispNames.MAKE_OPERATION), qualify(LispNames.INPUT_FILES),
-			qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE));
+			qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE), qualify(LispNames.OPERATION_DONE_P));
 
 	/** The component metaobject and operation class names {@code asdf.lisp} defines. */
 	private static final Set<String> CLASS_NAMES = Set.of(qualify(LispNames.COMPONENT),
@@ -77,7 +77,7 @@ public final class AsdfRuntimeLibrary {
 			qualify("SYSTEM"), qualify(LispNames.PACKAGE_INFERRED_SYSTEM), qualify(LispNames.SOURCE_FILE),
 			qualify(LispNames.CL_SOURCE_FILE), qualify(LispNames.STATIC_FILE), qualify(LispNames.OPERATION),
 			qualify(LispNames.PREPARE_OP), qualify(LispNames.COMPILE_OP), qualify(LispNames.LOAD_OP),
-			qualify(LispNames.TEST_OP));
+			qualify(LispNames.TEST_OP), qualify(LispNames.COMPILE_BUNDLE_OP));
 
 	/**
 	 * What a {@code defmethod}/{@code typep}/... form has to mention for the interpreter
@@ -92,6 +92,7 @@ public final class AsdfRuntimeLibrary {
 		seeding.add(qualify(LispNames.INPUT_FILES));
 		seeding.add(qualify(LispNames.OUTPUT_FILES));
 		seeding.add(qualify(LispNames.SOURCE_FILE_TYPE));
+		seeding.add(qualify(LispNames.OPERATION_DONE_P));
 		SEEDING_NAMES = Set.copyOf(seeding);
 	}
 

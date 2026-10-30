@@ -5947,6 +5947,15 @@ public final class LispNames {
 	public static final String RUNTIME_PACKAGE_OP_INTERNAL = "%RUNTIME-PACKAGE-OP";
 
 	/**
+	 * Internal marker {@code (%own-symbol "NAME")} the compile path's macro expander
+	 * leaves where it consumed a {@code defmacro} that made the current package own a
+	 * {@code cl} extension name ({@code PackageResolver}'s definition claim): the
+	 * compilers' own resolution pass never sees the definition, so the marker replays the
+	 * claim there. Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String OWN_SYMBOL = "%OWN-SYMBOL";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp
@@ -9159,6 +9168,19 @@ public final class LispNames {
 	 * library may define methods on it (lass).
 	 */
 	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
+
+	/**
+	 * {@code asdf:operation-done-p} -- generic: whether an action needs no performing.
+	 * The default answers {@code t}; it exists so a library may define methods on it
+	 * (arnesi's {@code clean-op}).
+	 */
+	public static final String OPERATION_DONE_P = "OPERATION-DONE-P";
+
+	/**
+	 * The {@code asdf:compile-bundle-op} operation class -- a class only: {@code operate}
+	 * refuses it (there are no fasls to bundle).
+	 */
+	public static final String COMPILE_BUNDLE_OP = "COMPILE-BUNDLE-OP";
 
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
