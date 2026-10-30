@@ -16731,11 +16731,21 @@ cases:
                  (return-from nbrf-outer :from-inner))
                :unreachable))
       (print (block nil (return 7) 9))
+      ;; A keyword is a symbol and names a block of its own, apart from the same name's
+      ;; plain symbol (rutils' (abbr :+ incf) makes one), a return-from crossing a
+      ;; lambda included.
+      (print (list (block :nbrf-k (block nbrf-k (return-from :nbrf-k :lexical)) :unreachable)
+                   (block :nbrf-k
+                     (block nbrf-k
+                       (mapc (lambda (x) (when (= x 2) (return-from :nbrf-k (list :crossed x))))
+                             '(1 2 3)))
+                     :unreachable)))
     expected: |
       400
       (6 :NONE)
       :FROM-INNER
       7
+      (:LEXICAL (:CROSSED 2))
   - name: cross-lambda-return-from
     source: |
       ;; A return-from inside a lambda (a separately compiled method/function) exits the

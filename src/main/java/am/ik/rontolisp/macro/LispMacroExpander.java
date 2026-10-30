@@ -36942,7 +36942,9 @@ public final class LispMacroExpander {
 	 * The block name a {@code block}/{@code %fn-block}/{@code return-from} name
 	 * designator denotes on the compile path: {@code null} for the {@code nil} block
 	 * (which behaves as the plain {@code return} boundary), otherwise the symbol's
-	 * resolved name verbatim -- mirroring the interpreter's name matching.
+	 * resolved name verbatim -- mirroring the interpreter's name matching. A keyword is a
+	 * symbol and names a block of its own: its name keeps the {@code :} marker, so
+	 * {@code :x} and {@code x} are two blocks.
 	 * @param designator the name designator form (a symbol or nil)
 	 * @return the block name, or {@code null} for the nil block
 	 */
@@ -36950,7 +36952,7 @@ public final class LispMacroExpander {
 		if (designator instanceof LispNil) {
 			return null;
 		}
-		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+		if (designator instanceof LispSymbol sym) {
 			return "NIL".equals(sym.name()) ? null : sym.name();
 		}
 		throw new IllegalArgumentException(

@@ -26,7 +26,10 @@ operands for free.
   (`.kb/interpreter-tail-calls.md`). `blockExit` resolves up the LEXICAL chain
   (`Environment.findBlock`, which answers the owner). The nil block is an ordinary name
   (`NIL_BLOCK` = `"NIL"`), so named blocks in between are transparent to a plain `return`
-  for free.
+  for free. A keyword names a block too (CLHS; both `blockName`s and
+  `CrossLambdaExitLowering.isBlockName`, since 2026-10-31 -- rutils' `(abbr :+ incf)` makes
+  `(block :+ ...)`): its name keeps the `:`, so `:x` and `x` are two blocks. ci-spec
+  `named-block-return-from` (a lexical and a cross-lambda exit).
 - **Not dynamic on purpose**: a `handler-bind` handler runs at the SIGNAL point, so a
   nearest-active-frame lookup let the signalling function's own loop catch rove's `signals`
   and return the CONDITION. For a dynamic exit use `catch`/`throw`.

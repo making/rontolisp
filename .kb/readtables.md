@@ -5,7 +5,9 @@ layout (tag `%READTABLE`, OPAQUE: prints `#<READTABLE>`), built and changed by O
 definition (`LispPreludeLibrary`, the `%rt-*` family). Source is read with one on every
 backend: the interpreter's reader with the current `*readtable*`, the compile paths with the
 compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers ignore
-`*readtable*` (`.todo/h74`).
+`*readtable*` (`.todo/h77`). Under the STANDARD one, an undefined dispatch sub-character reads
+as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026-10-31:
+`` "#`(a ,b)" `` answers `|#`|` compiled and `#` on the interpreter, `"#!x"` the symbol `#!X`).
 
 ## The value
 - Slot 0 `CASE` (`:upcase`/`:downcase`/`:preserve`/`:invert`), slot 1 `CHARS`: an eql table
@@ -85,7 +87,7 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
 - Not honored: escape syntax under another character (a constituent there), `read` from a
   file stream or standard input, `with-standard-io-syntax` (does not rebind `*readtable*`),
   the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
-  (`.todo/h74`).
+  (`.todo/h77`).
 
 ## The compile paths' read (`eval/ReadTimeImage`, since h57)
 - The compile path read a whole file before `UserMacroExpander` evaluated anything, so no
@@ -157,18 +159,22 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
   (`.kb/declarations-type-checks.md`). rutils loads since h71 (its `iter` `:unioning`
   reads `` #`(member % var :test ,test) `` in a template, 2026-10-31); cl-redis then stops
   in its own `connection.lisp`: `TRIVIAL-GRAY-STREAMS:STREAM-CLEAR-INPUT` is not external
-  (`.todo/h74`).
+  (`.todo/h77`), and past it the same file names `sb-sys:fd-stream` with no feature guard
+  (cl-redis 20250622 loads on SBCL only).
 - Compile paths (h57, 2026-10-31): named-readtables runs on all four (its `defpackage` sits
   under `(handler-bind () ...)` -- the SBCL binding is `#+sbcl` -- in an `eval-when`, which
   `flattenTopLevel` now splices like `progn`). Through `ql:quickload`, output = the
   interpreter's: cl-interpol (`#?"..."`) and cl-csv (`read-csv`/`write-csv`) on all four,
-  jonathan on the JVM -- verified by hand, no test (the Quicklisp cache).
-  Still stopping, none of it in the reader (`.todo/h74`): jonathan on WASM
-  (`Cannot compile symbol: *`), cl-annot's `@export` (the expansion's
+  jonathan on the JVM, and (re-measured 2026-10-31, `to-json`/`parse`) on WASM -- verified by
+  hand, no test (the Quicklisp cache).
+  Still stopping, none of it in the reader (`.todo/h77`): cl-annot's `@export` (the expansion's
   `(progn (export 'x) (defun x ...))` nests the export the compilers' resolver needs at top
   level: "GREET is not external"), parenscript (`property-bindings`: `Cannot compile symbol
-  reference: PARENSCRIPT:VAR`), rutils (`BLOCK: block name must be a symbol, got :+`: both
-  `blockName`s refuse a keyword, which CLHS allows).
+  reference: PARENSCRIPT:VAR`), rutils -- past `(block :+ ...)` since h74
+  ([do-return-block.md](do-return-block.md)) -- at `merge-hash-tables-with`, which calls
+  `dotable` before `hash-table.lisp` defines it: the call's argument reads a free `v`, which
+  both compilers refuse (`Cannot compile symbol reference`) where SBCL warns; and
+  `rutils:flatten` is not external there (`rutils.lisp` re-exports by a computed `dolist`).
 
 ## Tests
 ci-spec `readtable-objects-and-the-reader-macro-api` (the API, all four backends) and
