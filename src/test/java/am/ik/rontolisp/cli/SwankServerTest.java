@@ -120,6 +120,107 @@ class SwankServerTest {
 			assertThat(client.repl("(drv-file-fn 21)")).first().isEqualTo("(:write-string \"42\n\" :repl-result)");
 			assertThat(client.rex("(swank:load-file " + string(file.toString()) + ")", "CL-USER", "t"))
 				.containsExactly("(:return (:ok \"T\") id)");
+			// M-.: where the editor compiled a definition, else where a load read it
+			Path nav = this.tempDir.resolve("drv-nav.lisp");
+			Files.writeString(nav,
+					"(defvar *drv-var* 1)\n\n(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n"
+							+ "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n"
+							+ "  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n"
+							+ "(defgeneric drv-gen (o))\n\n"
+							+ "(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n"
+							+ "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n");
+			String navFile = string(nav.toString());
+			client.rex("(swank:compile-file-for-emacs " + navFile + " t)", "CL-USER", "t");
+			Path nav2 = this.tempDir.resolve("drv-nav2.lisp");
+			client.rex("(swank:compile-string-for-emacs \"(defun drv-buf-fn ()\n  (drv-callee 7))\n\" \"drv-nav2.lisp\""
+					+ " '((:position 2) (:line 2 1)) " + string(nav2.toString()) + " 'nil)", "CL-USER", "t");
+			Path loaded = this.tempDir.resolve("drv-load.lisp");
+			Files.writeString(loaded, "(defvar *unused*)\n\n  (defun drv-loaded () 1)\n");
+			client.rex("(swank:load-file " + string(loaded.toString()) + ")", "CL-USER", "t");
+			client.repl("(defun drv-repl-fn () (drv-callee 3))");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-callee\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"(DEFUN DRV-CALLEE)\" (:location (:file " + navFile
+						+ ") (:position 70) (:snippet \"(defun drv-callee (a)\n  \\\"Callee doc.\\\"\n  (* a 2))\n\n"
+						+ "(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n"
+						+ "    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x"
+						+ " :initarg :x :accessor drv-point-x) (y :initform 5)))\n\"))))) id)");
+			assertThat(definitions(client, "drv-gen")).containsExactly("(DEFGENERIC DRV-GEN (O)) (:position 220)",
+					"(DEFMETHOD DRV-GEN DRV-POINT) (:position 327)");
+			assertThat(definitions(client, "drv-point")).containsExactly("(DEFCLASS DRV-POINT) (:position 246)");
+			assertThat(definitions(client, "(setf drv-point-x)"))
+				.containsExactly("(DEFMETHOD (SETF DRV-POINT-X) T DRV-POINT) (:position 270)");
+			assertThat(definitions(client, "make-drv-st")).containsExactly("(DEFUN MAKE-DRV-ST) (:position 379)");
+			assertThat(definitions(client, "*drv-var*,")).containsExactly("(DEFVAR *DRV-VAR*) (:position 1)");
+			assertThat(definitions(client, "drv-loaded")).containsExactly("(DEFUN DRV-LOADED) (:position 22)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-buf-fn\")", "CL-USER", "t")).containsExactly(
+					"(:return (:ok ((\"(DEFUN DRV-BUF-FN)\" (:location (:buffer-and-file \"drv-nav2.lisp\" "
+							+ string(nav2.toString()) + ") (:offset 2 0) (:snippet \"(defun drv-buf-fn ()\n"
+							+ "  (drv-callee 7))\"))))) id)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-repl-fn\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"(DEFUN DRV-REPL-FN)\" (:error \"Error: DEFINITION-SOURCE of"
+						+ " function DRV-REPL-FN did not contain meaningful information.\")))) id)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"mapcar\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			// cross references: each use, labelled with the definition it is in
+			assertThat(xref(client, ":calls", "drv-callee")).containsExactly("DRV-CALLER (:position 201)",
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 362)", "DRV-BUF-FN (:offset 2 23)");
+			assertThat(xref(client, ":callers", "drv-callee")).containsExactly("DRV-CALLER (:position 120)",
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 327)", "DRV-BUF-FN (:offset 2 0)");
+			assertThat(xref(client, ":calls-who", "drv-caller")).containsExactly("DRV-CALLEE (:position 70)");
+			assertThat(xref(client, ":references", "*drv-var*")).containsExactly("DRV-CALLER (:position 192)");
+			assertThat(xref(client, ":binds", "*drv-var*")).containsExactly("DRV-CALLER (:position 144)");
+			assertThat(xref(client, ":sets", "*drv-var*")).containsExactly("DRV-CALLER (:position 169)");
+			assertThat(xref(client, ":macroexpands", "drv-mac")).containsExactly("DRV-CALLER (:position 192)");
+			assertThat(xref(client, ":specializes", "drv-point")).containsExactly("(DEFMETHOD DRV-GEN) (:position 327)",
+					"(DEFMETHOD DRV-POINT-X) (:position 270)", "(DEFMETHOD (SETF DRV-POINT-X)) (:position 270)");
+			assertThat(client.rex("(swank:xref :who-knows \"drv-callee\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok :not-implemented) id)");
+			assertThat(client.rex("(swank:xrefs '(:calls :binds) \"drv-buf-fn\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			// the inspector: a value's parts, each inspected in turn, and back
+			assertThat(client.rex("(swank:init-inspector \"(list 1 \\\"two\\\" 'three)\")", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<CONS \\{[0-9A-F]+\\}>\" :id 0 :content \\(\\(\"A proper"
+						+ " list:\" \"\n\" \"0\" \": \" \\(:value \"1\" 1\\) \"\n\" \"1\" \": \" \\(:value \"\\\\\"two"
+						+ "\\\\\"\" 2\\) \"\n\" \"2\" \": \" \\(:value \"THREE\" 3\\) \"\n\"\\) 14 0 500\\)\\)\\) id\\)");
+			assertThat(client.rex("(swank:inspect-nth-part 1)", "CL-USER", "t").getLast())
+				.contains(":content ((\"Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0\" \"\n\"")
+				.contains("\"Integer-length\" \": \" (:value \"@1=1\" 2)");
+			assertThat(client.rex("(swank:inspector-pop)", "CL-USER", "t").getLast())
+				.contains(":id 4 :content ((\"A proper list:\" \"\n\" \"0\" \": \" (:value \"@1=1\" 5)");
+			assertThat(client.rex("(swank:inspector-range 0 2)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"A proper list:\" \"\n\") 1002 0 2)) id)");
+			assertThat(client.rex("(swank:inspector-eval \"(length *)\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"3\") id)");
+			assertThat(client.rex("(swank:describe-inspectee)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"(1 \\\"two\\\" THREE)\n  [list]\n\") id)");
+			// an action changes the value and shows its page again
+			client.rex("(swank:init-inspector \"(let ((h (make-hash-table))) (setf (gethash :a h) 1) h)\")", "CL-USER",
+					"t");
+			assertThat(client.rex("(swank:inspector-call-nth-action 1)", "CL-USER", "t").getLast())
+				.contains("(\"Count\" \": \" (:value \"0\" ")
+				.doesNotContain("[remove entry]");
+			assertThat(
+					client.rex("(swank:init-inspector \"(make-instance 'drv-point :x 1)\")", "CL-USER", "t").getLast())
+				.contains(
+						" \" Group slots by inheritance \" (:action \"[ ]\" 0) \"\n\" \" Sort slots alphabetically  \""
+								+ " (:action \"[X]\" 1) \"\n\" \"\n\" \"All Slots:\" \"\n\" (:action \"[ ]\" 2) \"  \" (:value"
+								+ " \"X\" 2) \"\" \" = \" (:value \"1\" 3) \"\n\" (:action \"[ ]\" 3) \"  \" (:value \"Y\" 4)"
+								+ " \"\" \" = \" (:value \"5\" 5) \"\n\" \"\n\" (:action \"[set value]\" 4) \"  \" (:action"
+								+ " \"[make unbound]\" 5) \"\n\") 33 0 500)");
+			assertThat(client.rex("(swank:init-inspector \"'drv-callee\")", "CL-USER", "t").getLast())
+				.contains("\"It is a function: \" (:value \"#<function DRV-CALLEE>\" 2) \" \" (:action \"[unbind]\" 0)"
+						+ " \"\n\" \"Function documentation\" \": \" \"Callee doc.\" \"\n\" \"It is \" \"internal\"");
+			assertThat(client.rex("(swank:quit-inspector)", "CL-USER", "t")).containsExactly("(:return (:ok nil) id)");
+			// macrostep: one step of a macro form, the macro forms it holds placed
+			assertThat(client.rex("(swank-macrostep:macro-form-p \"(drv-mac 1)\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok :macro)) id)");
+			assertThat(client.rex("(swank-macrostep:macro-form-p \"(+ 1 2)\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok nil)) id)");
+			assertThat(
+					client.rex("(swank-macrostep:macrostep-expand-1 \"(drv-mac (when x y))\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok \"(LIST (WHEN X Y) *DRV-VAR*)\" ((\"WHEN\" :macro 6)))) id)");
+			assertThat(client.rex("(swank-macrostep:macrostep-expand-1 \"(+ 1 2)\" t nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:error \"Not a macro or compiler-macro form\")) id)");
 			// completion, argument lists, descriptions, expansions
 			assertThat(client.rex("(swank:simple-completions \"mapc\" \"COMMON-LISP-USER\")", "CL-USER", "t"))
 				.containsExactly("(:return (:ok ((\"mapc\" \"-f-------\" \"CL:MAPC\") (\"mapcan\" \"-f-------\""
@@ -152,8 +253,8 @@ class SwankServerTest {
 			// no debugger: an error, or a function SWANK does not define here, aborts
 			assertThat(client.repl("(error \"boom ~a\" 1)"))
 				.containsExactly("(:return (:abort \"#<SIMPLE-ERROR \\\"boom 1\\\">\") id)");
-			assertThat(client.rex("(swank:init-inspector \"1\")", "CL-USER", "t")).containsExactly(
-					"(:return (:abort \"#<SIMPLE-ERROR \\\"The function SWANK:INIT-INSPECTOR is undefined.\\\">\") id)");
+			assertThat(client.rex("(swank:profile-report)", "CL-USER", "t")).containsExactly(
+					"(:return (:abort \"#<SIMPLE-ERROR \\\"The function SWANK:PROFILE-REPORT is undefined.\\\">\") id)");
 		}
 	}
 
@@ -197,6 +298,26 @@ class SwankServerTest {
 
 	private static String string(String text) {
 		return SwankWire.print(text);
+	}
+
+	/** Each of a name's definitions as its label and its position, the file left out. */
+	private static List<String> definitions(Client client, String name) throws IOException {
+		return places(client.rex("(swank:find-definitions-for-emacs " + string(name) + ")", "CL-USER", "t"));
+	}
+
+	/** Each use an {@code xref} answers as its label and its position. */
+	private static List<String> xref(Client client, String type, String name) throws IOException {
+		return places(client.rex("(swank:xref " + type + " " + string(name) + ")", "CL-USER", "t"));
+	}
+
+	private static List<String> places(List<String> replies) throws IOException {
+		List<?> reply = (List<?>) SwankWire.parse(replies.getLast());
+		List<String> out = new ArrayList<>();
+		for (Object entry : (List<?>) Objects.requireNonNull(((List<?>) Objects.requireNonNull(reply.get(1))).get(1))) {
+			List<?> pair = (List<?>) Objects.requireNonNull(entry);
+			out.add(pair.getFirst() + " " + SwankWire.print(((List<?>) Objects.requireNonNull(pair.get(1))).get(2)));
+		}
+		return out;
 	}
 
 	/**

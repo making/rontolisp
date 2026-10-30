@@ -16,10 +16,12 @@ Paths are placeholders: `@WORK@` is a work directory, `@CHECKOUT@` this reposito
   expansions, `set-package`, an error and an interrupt, through SLIME's own commands where
   it has them (`slime-repl-return`, `slime-compile-defun`, `slime-compile-and-load-file`,
   `completion-at-point`, `slime-autodoc`, `slime-macroexpand-1`, `slime-interrupt`).
-- `run-sbcl.sh OUTDIR` / `run-ronto.sh OUTDIR` -- start the Lisp, the proxy and the
-  driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update` messages dropped)
-  and `rontolisp-wire.log` are the two recordings; `cli/SwankServerTest` replays the
-  requests and pins rontolisp's answers.
+- `run-sbcl.sh OUTDIR [STEPS]` / `run-ronto.sh OUTDIR [STEPS]` -- start the Lisp, the
+  proxy and the driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update`
+  messages dropped) and `rontolisp-wire.log` are the two recordings of the `basic` steps;
+  `sbcl-nav-wire.log` and `rontolisp-nav-wire.log` of the `nav` steps (`M-.`, xref, the
+  inspector, macrostep; work paths as `@WORK@/out/work`). `cli/SwankServerTest` replays
+  the requests and pins rontolisp's answers.
 - `gen-arglists.lisp OUT` -- writes `src/main/resources/am/ik/rontolisp/eval/cl-arglists.txt`
   (after its four comment lines): `sbcl --non-interactive --load gen-arglists.lisp
   --end-toplevel-options OUT`.
