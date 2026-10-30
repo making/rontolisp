@@ -9576,6 +9576,21 @@ public final class LispNames {
 	 */
 	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
 
+	/**
+	 * The declaration identifier of {@code (declaim (%deftype-instance 'spec
+	 * 'expansion))}: the macro pass's record of what one compound specifier headed by a
+	 * parameterized {@code deftype} expands to, consumed by the compile paths' definition
+	 * walk ({@code ClosRegistry.registerDeftypeInstance}). Matched by member name.
+	 */
+	public static final String DEFTYPE_INSTANCE_DECLARATION = "%DEFTYPE-INSTANCE";
+
+	/**
+	 * The interpreter's run-time expansion of a {@code typep} designator that is a
+	 * compound specifier headed by a parameterized {@code deftype}; any other designator
+	 * comes back unchanged.
+	 */
+	public static final String DEFTYPE_EXPAND_INTERNAL = "%DEFTYPE-EXPAND";
+
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
 
