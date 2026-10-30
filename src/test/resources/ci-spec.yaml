@@ -29078,6 +29078,21 @@ cases:
       (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
       (defun di-f (&key ((rx v) 0)) v)
       (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
+      (defclass di-multi () ((x :initarg :x :initarg :ex :reader di-mx)
+                             (y :initarg :y :initarg :why :initform 0 :reader di-my))
+        (:default-initargs :ex 5))
+      (defclass di-multi2 (di-multi) ((y :initarg :yy)))
+      (print (list (di-mx (make-instance 'di-multi :x 1)) (di-mx (make-instance 'di-multi :ex 2 :x 1))
+                   (di-mx (make-instance 'di-multi)) (di-my (make-instance 'di-multi :why 3 :y 4))
+                   (di-my (make-instance 'di-multi))))
+      (print (list (di-my (make-instance 'di-multi2 :yy 1)) (di-my (make-instance 'di-multi2 :why 2))
+                   (di-my (reinitialize-instance (make-instance 'di-multi) :why 7 :y 8))
+                   (di-my (change-class (make-instance 'di-multi) 'di-multi2 :yy 9 :y 1))
+                   (let ((cls 'di-multi2)) (di-my (change-class (make-instance 'di-multi) cls :why 4 :yy 5)))))
+      (print (mapcar (lambda (s) (%obj-ref s 1)) (%obj-ref (find-class 'di-multi2) 3)))
+      (define-condition di-cond2 (error) ((what :initarg what :initarg :what :reader di-what2)))
+      (print (list (handler-case (error 'di-cond2 :what 8) (di-cond2 (c) (di-what2 c)))
+                   (let ((ty 'di-cond2)) (handler-case (error ty 'what 9 :what 1) (di-cond2 (c) (di-what2 c))))))
     expected: |
       ("localhost" 8080)
       9090
@@ -29088,6 +29103,10 @@ cases:
       4
       7
       (3 0 :REFUSED)
+      (1 2 5 3 0)
+      (1 2 7 9 4)
+      ((:X :EX) (:YY :Y :WHY))
+      (8 9)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
