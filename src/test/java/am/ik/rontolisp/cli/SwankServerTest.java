@@ -27,6 +27,7 @@ import am.ik.rontolisp.cli.SwankWire.Keyword;
 import am.ik.rontolisp.cli.SwankWire.Symbol;
 import am.ik.rontolisp.eval.CommonLispSwank;
 import am.ik.rontolisp.eval.LispEvaluator;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -319,6 +320,100 @@ class SwankServerTest {
 		}
 	}
 
+	/**
+	 * SLY 1.0.43 against Slynk and Lem 2.3.0 against micros, recorded the same way
+	 * (2026-10-30): one server answers both, each request in the dialect of its
+	 * function's package, SLY's REPL a channel with a thread of its own.
+	 */
+	@Test
+	void aSlyAndALemSessionAreAnsweredInTheirOwnDialects() throws Exception {
+		Path file = this.tempDir.resolve("drv-lem.lisp");
+		Files.writeString(file, "(defun drv-lem () 42)\n");
+		try (SwankServer server = start();
+				Client sly = new Client(server.port());
+				Client lem = new Client(server.port())) {
+			assertThat(sly.rex("(slynk:connection-info)", null, "t").getLast())
+				.contains(":modules (\"SLYNK/COMPLETION\")")
+				.contains(":version \"1.0.43\")) id)");
+			assertThat(sly.rex("(slynk:slynk-require '(\"slynk/mrepl\"))", null, "t"))
+				.containsExactly("(:return (:ok ((\"SLYNK/COMPLETION\" \"SLYNK/MREPL\") (\"slynk/mrepl\"))) id)");
+			List<String> created = sly.rex("(slynk-mrepl:create-mrepl 1)", null, "t");
+			assertThat(created).startsWith("(:channel-send 1 (:write-string \"; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n\"))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 0))");
+			assertThat(created.getLast()).startsWith("(:return (:ok (1 ");
+			String thread = created.getLast().replaceAll("^\\(:return \\(:ok \\(1 (\\d+)\\)\\) id\\)$", "$1");
+			// the REPL answers on its channel: output, the values with their history
+			// entry
+			// and what reads back as each, then a prompt with the history's length
+			assertThat(sly.mrepl("(progn (format t \"hello~%\") (values 1 \"two\"))")).containsExactly(
+					"(:channel-send 1 (:write-string \"hello\n\"))",
+					"(:channel-send 1 (:write-values ((\"1 (1 bit, #x1, #o1, #b1)\" 0 \"1\") (\"\\\"two\\\"\" 0 nil))))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 1))");
+			sly.mrepl("(defpackage :drv-sly (:use :cl))");
+			assertThat(sly.mrepl("(in-package :drv-sly)")).containsExactly(
+					"(:channel-send 1 (:write-values ((\":DRV-SLY\" 2 \":drv-sly\"))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 3))");
+			// a read asks the editor's REPL for its next input
+			sly.write("(:emacs-channel-send 1 (:process \"(list (read-line) 7)\"))");
+			assertThat(sly.until("(:channel-send 1 (:set-read-mode :read))")).hasSize(1);
+			assertThat(sly.mrepl("typed\n")).containsExactly("(:channel-send 1 (:set-read-mode :finished-reading))",
+					"(:channel-send 1 (:write-values ((\"(\\\"typed\\\" 7)\" 3 nil))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 4))");
+			assertThat(sly.mrepl("(error \"boom\")")).containsExactly(
+					"(:channel-send 1 (:evaluation-aborted \"#<SIMPLE-ERROR \\\"boom\\\">\"))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 4))");
+			// a package set on the REPL's thread, Slynk's own echo area and completions
+			assertThat(sly.rex("(slynk-mrepl:eval-for-mrepl 1 'slynk-mrepl:guess-and-set-package \"CL-USER\")", null,
+					thread))
+				.containsExactly("(:return (:ok ((\"CL-USER\" \"CL-USER\" 0 4) (t))) id)");
+			assertThat(sly.rex("(slynk:interactive-eval \"(+ 2 3)\")", null, "t"))
+				.containsExactly("(:return (:ok \"5 (3 bits, #x5, #o5, #b101)\") id)");
+			assertThat(sly.rex("(slynk:interactive-eval \"(values)\")", null, "t"))
+				.containsExactly("(:return (:ok \"; No value\") id)");
+			assertThat(sly.rex("(slynk-completion:simple-completions \"mapc\" \"COMMON-LISP-USER\")", null, "t"))
+				.containsExactly("(:return (:ok ((\"mapc\" \"mapcan\" \"mapcar\" \"mapcon\") \"mapc\")) id)");
+			assertThat(sly.rex("(slynk-completion:flex-completions \"mvbind\" \"COMMON-LISP-USER\")", null, "t"))
+				.containsExactly("(:return (:ok (((\"multiple-value-bind\" 0.009072388522326946"
+						+ " ((0 \"M\") (9 \"V\") (15 \"BIND\")) \"macro\")) nil)) id)");
+			// an interrupt names the REPL's thread
+			sly.write("(:emacs-channel-send 1 (:process \"(loop)\"))");
+			Thread.sleep(200);
+			sly.write("(:emacs-interrupt " + thread + ")");
+			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly(
+					"(:channel-send 1 (:evaluation-aborted \"#<SIMPLE-ERROR \\\"Interrupt from Emacs\\\">\"))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 4))");
+
+			assertThat(lem.rex("(micros:connection-info)", "COMMON-LISP-USER", "T").getLast())
+				.contains(":version \"0.0.0\")) id)");
+			assertThat(lem.rex("(micros/repl:create-repl nil :coding-system \"utf-8-unix\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok (\"CL-USER\" \"CL-USER\")) id)");
+			// each value a printed object, output asking for no :write-done
+			assertThat(
+					lem.rex("(micros/repl:listener-eval \"(progn (format t \\\"hello~%\\\") (values 1 \\\"two\\\"))\""
+							+ " :window-width 148)", "CL-USER", ":repl-thread"))
+				.containsExactly("(:write-string \"hello\n\")", "(:write-object \"1\" 1 :repl-result)",
+						"(:write-string \"\n\" :repl-result)", "(:write-object \"\\\"two\\\"\" 2 :repl-result)",
+						"(:write-string \"\n\" :repl-result)", "(:return (:ok nil) id)");
+			assertThat(lem.rex("(micros/pretty-eval:pretty-eval \"(* 6 7)\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok (:value \"=> 42 (6 bits, #x2A, #o52, #b101010)\" :id 3)) id)");
+			assertThat(lem.rex("(micros:interactive-eval \"(values)\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok \"; No value\") id)");
+			// C-c C-l calls micros:load-file in a form of Lem's own
+			assertThat(lem.rex(
+					"(micros:interactive-eval " + string("(MICROS:LOAD-FILE " + string(file.toString()) + ")") + ")",
+					"CL-USER", "T"))
+				.containsExactly("(:return (:ok \"=> \\\"T\\\"\") id)");
+			assertThat(lem.rex("(micros/lsp-api:completions \"drv-le\" \"CL-USER\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok ((\"drv-lem\" ((0 \"drv-le\")) \"function\" \"(drv-lem)\""
+						+ " \"## Function\n```lisp\n(drv-lem)\n```\" \"0000000000\"))) id)");
+			assertThat(lem.rex("(micros/lsp-api:hover-symbol \"mapcar\")", "CL-USER", "T")).containsExactly(
+					"(:return (:ok \"## Function\n```lisp\n(mapcar function list &rest more-lists)\n```\") id)");
+			assertThat(lem.rex("(micros/macrostep:macrostep-expand-1 \"(when a b)\" t '(\"\" \"(when a b)\"))",
+					"CL-USER", "T"))
+				.containsExactly("(:return (:ok (:ok \"(IF A B NIL)\" nil)) id)");
+		}
+	}
+
 	@Test
 	void anInterruptAbortsTheRunningRequestWhileAnotherRunsInItsOwnPackage() throws Exception {
 		try (SwankServer server = start(); Client client = new Client(server.port())) {
@@ -492,15 +587,35 @@ class SwankServerTest {
 		}
 
 		/** Sends an {@code :emacs-rex}, answering its id. */
-		long send(String form, String pkg, String thread) throws IOException {
+		long send(String form, @Nullable String pkg, String thread) throws IOException {
 			long id = ++this.ids;
-			write("(:emacs-rex " + form + " " + string(pkg) + " " + thread + " " + id + ")");
+			write("(:emacs-rex " + form + " " + (pkg == null ? "nil" : string(pkg)) + " " + thread + " " + id + ")");
 			return id;
 		}
 
 		/** Sends a request and answers its messages up to its {@code :return}. */
-		List<String> rex(String form, String pkg, String thread) throws IOException {
+		List<String> rex(String form, @Nullable String pkg, String thread) throws IOException {
 			return replies(send(form, pkg, thread));
+		}
+
+		/**
+		 * An input to SLY's REPL on channel 1, and its messages up to the next prompt.
+		 */
+		List<String> mrepl(String input) throws IOException {
+			write("(:emacs-channel-send 1 (:process " + string(input) + "))");
+			return until("(:channel-send 1 (:prompt");
+		}
+
+		/** The messages up to the first that starts with a text. */
+		List<String> until(String prefix) throws IOException {
+			List<String> messages = new ArrayList<>();
+			while (true) {
+				String message = SwankWire.print(Objects.requireNonNull(SwankWire.read(this.in)));
+				messages.add(message);
+				if (message.startsWith(prefix)) {
+					return messages;
+				}
+			}
 		}
 
 		/** A REPL input, as {@code slime-repl-return} sends it. */

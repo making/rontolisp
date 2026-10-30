@@ -1,0 +1,120 @@
+>> (:emacs-rex (slynk:connection-info) nil t 1)\n
+<< (:return (:ok (:pid 2994271 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SLYNK/COMPLETION") :package (:name "CL-USER" :prompt "CL-USER") :version "1.0.43")) 1)
+>> (:emacs-rex (slynk:slynk-add-load-paths (quote ("@WORK@/dl/sly/contrib/"))) nil t 2)\n
+<< (:return (:ok nil) 2)
+>> (:emacs-rex (slynk:slynk-require (quote ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) nil t 3)\n
+<< (:return (:ok (("SLYNK/COMPLETION" "SLYNK/INDENTATION" "SLYNK/STICKERS" "SLYNK/TRACE-DIALOG" "SLYNK/PACKAGE-FU" "SLYNK/FANCY-INSPECTOR" "SLYNK/MREPL" "SLYNK/ARGLISTS") ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) 3)
+>> (:emacs-rex (slynk-mrepl:create-mrepl 1) nil t 4)\n
+<< (:channel-send 1 (:write-string "; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 0))
+<< (:return (:ok (1 92)) 4)
+>> (:emacs-channel-send 1 (:process "(+ 1 2)"))\n
+<< (:channel-send 1 (:write-values (("3 (2 bits, #x3, #o3, #b11)" 0 "3"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 1))
+>> (:emacs-channel-send 1 (:process "(progn (format t \"hello~%\") (values 1 \"two\"))"))\n
+<< (:channel-send 1 (:write-string "hello\n"))
+<< (:channel-send 1 (:write-values (("1 (1 bit, #x1, #o1, #b1)" 1 "1") ("\"two\"" 1 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 2))
+>> (:emacs-channel-send 1 (:process "(values)"))\n
+<< (:channel-send 1 (:write-values nil))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 2))
+>> (:emacs-channel-send 1 (:process "(princ \"no newline\")"))\n
+<< (:channel-send 1 (:write-string "no newline"))
+<< (:channel-send 1 (:write-values (("\"no newline\"" 2 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 3))
+>> (:emacs-channel-send 1 (:process "(defvar *drv* 10)"))\n
+<< (:channel-send 1 (:write-values (("*DRV*" 3 "'*drv*"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 4))
+>> (:emacs-channel-send 1 (:process "(list *drv* * ** ***)"))\n
+<< (:channel-send 1 (:write-values (("(10 *DRV* \"no newline\" NIL)" 4 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 5))
+>> (:emacs-channel-send 1 (:process "(defpackage :drv-pkg (:use :cl) (:export #:hello))"))\n
+<< (:channel-send 1 (:write-values ((":DRV-PKG" 5 ":drv-pkg"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 6))
+>> (:emacs-channel-send 1 (:process "(in-package :drv-pkg)"))\n
+<< (:channel-send 1 (:write-values ((":DRV-PKG" 6 ":drv-pkg"))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 7))
+>> (:emacs-channel-send 1 (:process "(defun hello () 'hi)"))\n
+<< (:channel-send 1 (:write-values (("HELLO" 7 "'hello"))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 8))
+>> (:emacs-channel-send 1 (:process "(list (package-name *package*) (hello))"))\n
+<< (:channel-send 1 (:write-values (("(\"DRV-PKG\" HI)" 8 nil))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 9))
+>> (:emacs-channel-send 1 (:process "(in-package :cl-user)"))\n
+<< (:channel-send 1 (:write-values ((":CL-USER" 9 ":cl-user"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 10))
+>> (:emacs-channel-send 1 (:process "(drv-pkg:hello)"))\n
+<< (:channel-send 1 (:write-values (("DRV-PKG::HI" 10 "'drv-pkg::hi"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 11))
+>> (:emacs-channel-send 1 (:process "(list (read-line) 7)"))\n
+<< (:channel-send 1 (:set-read-mode :read))
+>> (:emacs-channel-send 1 (:process "typed\n"))\n
+<< (:channel-send 1 (:set-read-mode :finished-reading))
+<< (:channel-send 1 (:write-values (("(\"typed\" 7)" 11 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 12))
+>> (:emacs-rex (slynk:interactive-eval "(+ 2 3)") nil t 5)\n
+<< (:return (:ok "5 (3 bits, #x5, #o5, #b101)") 5)
+>> (:emacs-rex (slynk:interactive-eval "(values 1 2)") nil t 6)\n
+<< (:return (:ok "1, 2") 6)
+>> (:emacs-rex (slynk:interactive-eval "(progn (print 'x) \"str\")") nil t 7)\n
+<< (:channel-send 1 (:write-string "X\n"))
+<< (:return (:ok "\"str\"") 7)
+>> (:emacs-rex (slynk:interactive-eval "(values)") nil t 8)\n
+<< (:return (:ok "; No value") 8)
+>> (:emacs-rex (slynk:interactive-eval "(* 6 7)\n") ":drv-pkg" t 9)\n
+<< (:return (:ok "42 (6 bits, #x2A, #o52, #b101010)") 9)
+>> (:emacs-rex (slynk:eval-and-grab-output "(progn (princ \"x\") (values 42 43))") nil t 10)\n
+<< (:return (:ok ("x" "42, 43")) 10)
+>> (:emacs-rex (slynk:compile-string-for-emacs "(defun drv-add (a b)\n  (+ a b))\n" "drv-compile.lisp" (quote ((:position 1) (:line 1 1))) "@WORK@/sly-oracle/ronto-basic/work/drv-compile.lisp" (quote nil)) nil t 11)\n
+<< (:return (:ok (:compilation-result nil t 0.00727445 nil nil)) 11)
+>> (:emacs-rex (slynk:compile-string-for-emacs "(defun drv-bad ()\n  (drv-undefined-fn 1))\n" "drv-compile.lisp" (quote ((:position 34) (:line 4 1))) "@WORK@/sly-oracle/ronto-basic/work/drv-compile.lisp" (quote nil)) nil t 12)\n
+<< (:return (:ok (:compilation-result ((:message "undefined function: CL-USER::DRV-UNDEFINED-FN" :severity :style-warning :location (:location (:buffer "drv-compile.lisp") (:offset 34 20) nil) :references nil)) t 0.002129179 nil nil)) 12)
+>> (:emacs-channel-send 1 (:process "(drv-add 1 2)"))\n
+<< (:channel-send 1 (:write-values (("3 (2 bits, #x3, #o3, #b11)" 12 "3"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 13))
+>> (:emacs-rex (slynk:compile-file-for-emacs "@WORK@/sly-oracle/ronto-basic/work/drv-file.lisp" t) nil t 13)\n
+<< (:return (:ok (:compilation-result ((:message "undefined function: CL-USER::DRV-OTHER-UNDEFINED" :severity :style-warning :location (:location (:file "@WORK@/sly-oracle/ronto-basic/work/drv-file.lisp") (:position 84) nil) :references nil)) t 0.001691478 nil nil)) 13)
+>> (:emacs-channel-send 1 (:process "(drv-file-fn 21)"))\n
+<< (:channel-send 1 (:write-values (("42 (6 bits, #x2A, #o52, #b101010)" 13 "42"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 14))
+>> (:emacs-rex (slynk:load-file "@WORK@/sly-oracle/ronto-basic/work/drv-file.lisp") nil t 14)\n
+<< (:return (:ok "T") 14)
+>> (:emacs-rex (slynk-completion:simple-completions "mapc" "COMMON-LISP-USER") nil t 15)\n
+<< (:return (:ok (("mapc" "mapcan" "mapcar" "mapcon") "mapc")) 15)
+>> (:emacs-rex (slynk-completion:simple-completions "drv-pkg:he" "COMMON-LISP-USER") nil t 16)\n
+<< (:return (:ok (("drv-pkg:hello") "drv-pkg:hello")) 16)
+>> (:emacs-rex (slynk-completion:flex-completions "mvbind" "COMMON-LISP-USER") nil t 17)\n
+<< (:return (:ok ((("multiple-value-bind" 0.009072388522326946 ((0 "M") (9 "V") (15 "BIND")) "macro")) nil)) 17)
+>> (:emacs-rex (slynk-completion:flex-completions "drv-ad" (quote nil)) nil t 18)\n
+<< (:return (:ok ((("drv-add" 0.4285714328289032 ((0 "DRV-AD")) "fn") ("drv-bad" 0.4285714328289032 ((0 "DRV-") (5 "AD")) "fn") ("uiop/backward-driver:user-configuration-directories" 9.02558327652514e-4 ((12 "D") (15 "R") (17 "V") (25 "-") (34 "A") (40 "D")) "") ("uiop/backward-driver:in-user-configuration-directory" 8.345607202500105e-4 ((12 "D") (15 "R") (17 "V") (23 "-") (37 "A") (43 "D")) "") ("uiop/backward-driver:system-configuration-directories" 8.154508541338146e-4 ((12 "D") (15 "R") (17 "V") (27 "-") (36 "A") (42 "D")) "") ("uiop/backward-driver:in-system-configuration-directory" 7.433151477016509e-4 ((12 "D") (15 "R") (17 "V") (23 "-") (39 "A") (45 "D")) "")) nil)) 18)
+>> (:emacs-rex (slynk-completion:flex-completions "multiple-value-bi" (quote "cl-user")) "cl-user" t 19)\n
+<< (:return (:ok ((("multiple-value-bind" 0.23370873928070068 ((0 "MULTIPLE-VALUE-BI")) "macro")) nil)) 19)
+>> (:emacs-rex (slynk:autodoc (quote ("mapcar" "" slynk::%cursor-marker%)) :print-right-margin 80) nil t 20)\n
+<< (:return (:ok ("(mapcar ===> function <=== list &rest more-lists)" t)) 20)
+>> (:emacs-rex (slynk:operator-arglist "mapcar" "COMMON-LISP-USER") nil t 21)\n
+<< (:return (:ok "(mapcar FUNCTION LIST &REST MORE-LISTS)") 21)
+>> (:emacs-rex (slynk:autodoc (quote ("drv-add" "1" slynk::%cursor-marker%)) :print-right-margin 80) nil t 22)\n
+<< (:return (:ok ("(drv-add ===> a <=== b)" t)) 22)
+>> (:emacs-rex (slynk:describe-symbol "drv-add") nil t 23)\n
+<< (:return (:ok "CL-USER::DRV-ADD\n  [symbol]\n\nDRV-ADD names a function:\n  Lambda-list: (A B)\n") 23)
+>> (:emacs-rex (slynk:documentation-symbol "mapcar") nil t 24)\n
+<< (:return (:ok "Documentation for the symbol MAPCAR:\n\nNot documented.") 24)
+>> (:emacs-rex (slynk:slynk-macroexpand-1 "(when a b)") nil t 25)\n
+<< (:return (:ok "(IF A B NIL)") 25)
+>> (:emacs-rex (slynk:slynk-macroexpand-1 "(when (zerop 0) (print 1))") nil t 26)\n
+<< (:return (:ok "(IF (ZEROP 0) (PRINT 1) NIL)") 26)
+>> (:emacs-channel-send 1 (:process "(error \"boom ~a\" 1)"))\n
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"boom 1\">"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 14))
+>> (:emacs-rex (slynk:interactive-eval "(car 1)") nil t 27)\n
+<< (:return (:abort "#<TYPE-ERROR \"CAR: The value 1 is not of type LIST\">") 27)
+>> (:emacs-channel-send 1 (:process "(+ 40 2)"))\n
+<< (:channel-send 1 (:write-values (("42 (6 bits, #x2A, #o52, #b101010)" 14 "42"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 15))
+>> (:emacs-channel-send 1 (:process "(loop)"))\n
+>> (:emacs-interrupt 92)\n
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"Interrupt from Emacs\">"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 15))
+>> (:emacs-channel-send 1 (:process "(+ 40 3)"))\n
+<< (:channel-send 1 (:write-values (("43 (6 bits, #x2B, #o53, #b101011)" 15 "43"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 16))

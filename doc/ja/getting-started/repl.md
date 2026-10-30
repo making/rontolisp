@@ -23,7 +23,7 @@ CL-USER> (quit)
 各トップレベルフォームは完成するとすぐに評価され、その値がエコーバックされます。
 定義は入力をまたいで保持されます。あるプロンプトで入力した `defun`、`defvar`、`setq`
 は以降のすべてのプロンプトで参照できるため、セッション内で段階的に状態を構築できます。
-同じ REPL は SLIME を通じて Emacs からも使えます: [SWANK (SLIME)](swank.md)。
+同じ REPL は SLIME を通じて Emacs からも使えます: [SWANK (SLIME、SLY、Lem)](swank.md)。
 
 プロンプトには[現在のパッケージ](../reference/packages.md)の名前が出ます。
 Common Lisp の REPL が `CL-USER>` と表示するのと同じものです。行ごとに読み直されるため、

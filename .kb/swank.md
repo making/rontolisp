@@ -1,4 +1,4 @@
-# SWANK: `rontolisp --swank` serves the Common Lisp REPL to SLIME
+# SWANK: `rontolisp --swank` serves the Common Lisp REPL to SLIME, SLY and Lem
 
 **Invariant: one evaluator serves every request, and a request reads and runs in the
 package it names, bound to its own thread (`PackageResolver.bindThreadPackage`) -- two
@@ -15,9 +15,11 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
   lock. SWANK's `:spawn` style: an `:emacs-rex` naming `:repl-thread` (or the REPL thread's
   id) queues on the connection's REPL thread, `t` gets a thread of its own, another id
   answers `(:invalid-rpc id "Thread not found: N")`. Every request thread takes `--stack`.
+- `cli/SwankDialect` -- SWANK, Slynk or micros, told per request by the package prefix of the
+  function the form calls (below, "Dialects"); `SwankServer.MRepl` is SLY's REPL channel.
 - `cli/SwankWire` -- the framing (six hex digits counting the UTF-8 octets, then one
   S-expression) and a reader of Emacs's `prin1` output into plain values (list, string,
-  `Long`, `Keyword`, `Symbol`, `nil` the empty list, `t` `TRUE`), printed back as SWANK
+  `Long`, `Keyword`, `Symbol`, `nil` the empty list, `t` `TRUE`, either in any case), printed back as SWANK
   prints with `*print-case* :downcase`.
 - `eval/CommonLispSwank` -- the Common Lisp half, so `cli` touches no evaluator internals:
   `serve` (the package bound, `*standard-output*`/`*error-output*`/`*trace-output*` and
@@ -31,6 +33,30 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
   default, 0 any free port; refused beside a program, `-o`, `test`, `--nrepl` or a
   non-Common-Lisp `--source-language`; prints `;; Swank started at port: P.`
 - A program starts the same server (below).
+
+## Dialects
+
+SLY's Slynk and Lem's micros are SWANK forks: same framing, same `:emacs-rex`, their functions
+in their own packages. Recorded 2026-10-30 (`.todo/artefacts/h21-slynk-and-lem-micros-protocols/`):
+SLY 1.0.43 against Slynk and Lem 2.3.0 against micros 2ec61c8, both on SBCL 2.2.9, each then
+against rontolisp. The deltas were small enough that one server answers all three on one port:
+`call` takes the dialect from the operator's package (`swank*`, `slynk*`, `micros*`), maps a
+fork's `slynk-require` / `slynk-macroexpand-1` to SWANK's names (`SwankDialect.canonical`),
+answers the few shapes of its own, and falls through to SWANK's table. A connection may switch
+dialect request by request; a request's output and input follow its dialect.
+
+| | SLY (Slynk) | Lem (micros) |
+|---|---|---|
+| `connection-info` | `:version "1.0.43"` (SLY asks "Versions differ" otherwise), modules `SLYNK/...` | `:version "0.0.0"` (unchecked) |
+| contribs | `slynk-add-load-paths` (nil), `slynk-require` answers `(all-modules loaded-now)` | none required |
+| REPL | a channel: `slynk-mrepl:create-mrepl R` answers `(channel thread)` after `(:channel-send R (:write-string "; SLY 1.0.43 (#<MREPL mrepl-C-R>)\n"))` and a prompt; input `(:emacs-channel-send C (:process text))`; answers on `R`: `:write-string`, `(:write-values ((presented history-entry copy)...))` (a number with its notations, `copy` `'sym` / `:kw` / the number / nil), `(:evaluation-aborted "cond")`, `(:prompt pkg prompt 0 history-length)`. The history counts inputs that answered values. A read sends `(:set-read-mode :read)`, takes the next `:process`, then `:finished-reading` | SWANK's `listener-eval` (with `:window-width`); each value `(:write-object "printed" id :repl-result)` then `(:write-string "\n" :repl-result)`, ids per connection; no fresh line before them |
+| output | other requests write to the first REPL's channel, no flow control (none without a REPL) | `(:write-string text)`: no target, no thread, no `:write-done` |
+| input elsewhere | `(:read-from-minibuffer thread tag prompt nil)` / `(:emacs-return thread tag text)` | SWANK's `:read-string` |
+| `eval-for-mrepl` | on the REPL's thread (the request names its id): `guess-and-set-package`, `sync-package-and-default-directory`; answers `(prompt-arguments values)` | |
+| echo area | `echo-for-emacs`: no `=> `, `; No value`, hex up to 64 bits, octal/binary up to 8, ratio with float and percentage | SWANK's, uncut, `; No value` (`Echo`) |
+| completion | `slynk-completion:simple-completions` `(strings common-prefix)`; `flex-completions` `((text score chunks classification)...) nil`, Slynk's score in single floats (`mvbind` 0.009072388522326946, as SBCL), accessible symbols then other packages' externals qualified by each name, `::` every symbol at home | `micros/lsp-api:completions`: SWANK's fuzzy (100) as `(label chunks kind signature markdown sort-key)` |
+| other | | `micros/pretty-eval:pretty-eval` `(:value echo :id n)`, `micros/lsp-api:hover-symbol` Markdown, `micros/macrostep:macrostep-expand-1` SWANK's macrostep; `C-c C-l` sends a form calling `micros:load-file`, defined in the image at `micros:connection-info` |
+| interrupt | `(:emacs-interrupt thread)` of the REPL's thread | `(:emacs-interrupt :repl-thread)` |
 
 ## A program's server
 
@@ -102,8 +128,8 @@ user macro table concurrent for the same reason: a worker defines while the REPL
 | `buffer-first-change`, `init-presentations`, `update-indentation-information`, `fuzzy-completion-selected` | nil |
 | `find-definitions-for-emacs`, `xref`, `xrefs` | below |
 | `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `pprint-inspector-part` | below |
-| `swank-macrostep:macro-form-p`, `macrostep-expand-1` | `(:ok :macro)`/`(:ok nil)`; `(:ok "expansion" (("WHEN" :macro 6)))`, each macro form of the expansion placed by printing it and finding it in the printed whole in walk order; `(:error "Not a macro form")` |
-| anything else in a `swank*` package | aborts: `The function SWANK:X is undefined.` |
+| `swank-macrostep:macro-form-p`, `macrostep-expand-1` (micros's too) | `(:ok :macro)`/`(:ok nil)`; `(:ok "expansion" (("WHEN" :macro 6)))`, each macro form of the expansion placed by printing it and finding it in the printed whole in walk order; `(:error "Not a macro form")` |
+| anything else in a dialect's package | aborts: `The function SWANK:X is undefined.` (the package as sent) |
 | a form of another package | evaluated in the request's package, its value as a reply carries it (a string, number, symbol, list; anything else `prin1`'d) |
 
 An `:emacs-interrupt` stops the newest running request (`LispEvaluator.interrupt`, the
@@ -192,7 +218,8 @@ declaring class, alphabetical sort, `[set value]` reading the minibuffer through
 
 No debugger: an error or an interrupt aborts the request (SLDB, its restarts and frames
 are not sent). No presentation markers, trace, profile, indentation updates or
-`set-default-directory`. `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
+`set-default-directory`; SLY's stickers, trace dialog and history references (`#v`), Lem's
+inspection of a printed value (`M-.`, xref and the inspector measured with SLIME only). `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
 only editor-compiled code, in compile order (SBCL's order is its own), with no entry for a
 REPL-defined caller (SBCL lists one with an `:error` place); `find-definitions` of a
 standard package answers nil. An inspector title is `#<TYPE {identity}>` with rontolisp's
@@ -200,8 +227,10 @@ standard package answers nil. An inspector title is `#<TYPE {identity}>` with ro
 type-specifier lines, floats as doubles (53 digits). Macrostep expansions print on one
 line, so positions differ from SBCL's pretty-printed ones. A package prints as its keyword, a name as rontolisp
 spells it (`CL-USER::F`, `CL:MAPC`), a macro expansion on one line (no pretty printer), no
-SBCL compiler output and no unused-variable note. Thread ids are Java's. SLY (Slynk's
-channels) and Lem's micros are not served. Interpreter only.
+SBCL compiler output and no unused-variable note (nor micros's `; processing (DEFUN ...)`).
+Thread ids are Java's. An aborted SLY REPL input names `Interrupt from Emacs` where Slynk's
+debugger says `Interrupt from client`. `connection-info` carries no `:system-file-patterns`.
+Interpreter only.
 
 ## Tests
 
@@ -210,10 +239,12 @@ recorded -- REPL values, output and input, package switches, the editor's evalua
 both compiles with their notes, load, completions, autodoc, arglist, describe, expansions,
 definitions, xref, the inspector, macrostep, the aborts; an interrupt stopping the REPL
 thread's loop while a worker answers in its own package; an `-e` program starting a
-`:dont-close t` server and a default one, both serving its evaluator, then `stop-server`),
+`:dont-close t` server and a default one, both serving its evaluator, then `stop-server`; a
+SLY and a Lem session on one server, their recorded shapes),
 `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
 By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav` steps --
 `M-.`, xref, inspector, macrostep -- recorded in `sbcl-nav-wire.log` and
-`rontolisp-nav-wire.log`); a program file served after its end and `quit-lisp` ending the
+`rontolisp-nav-wire.log`); h21's SLY driver and Lem in Docker against it (2026-10-30); a
+program file served after its end and `quit-lisp` ending the
 process with 0, and the compiled message on JVM, Preview 1 and the component (2026-10-30).

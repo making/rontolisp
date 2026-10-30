@@ -28,6 +28,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispNames;
@@ -35,6 +36,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
@@ -386,13 +388,87 @@ public final class CommonLispSwank implements SwankLisp {
 	 * @return the last form's values, as {@code prin1} prints them
 	 */
 	public List<String> listenerEval(String code) {
+		return listen(code).stream().map(this::print).toList();
+	}
+
+	/** Evaluates a REPL input and sets the history variables from its last form. */
+	private List<LispVal> listen(String code) {
 		Region region = evalRegion(code);
 		Environment global = this.evaluator.globalEnvironment();
 		LispVal primary = region.values().isEmpty() ? LispNil.INSTANCE : region.values().getFirst();
 		shift(global, "***", "**", "*", primary);
 		shift(global, "///", "//", "/", list(region.values()));
 		shift(global, "+++", "++", "+", region.last());
-		return region.values().stream().map(this::print).toList();
+		return region.values();
+	}
+
+	/**
+	 * A REPL value as Slynk's mREPL presents it ({@code make-results}).
+	 *
+	 * @param presented the value as {@code present-for-emacs} prints it: a number with
+	 * its other notations
+	 * @param copy what reads back as the value, for a symbol ({@code 'name}, downcased)
+	 * or a number, else null
+	 */
+	public record ReplValue(String presented, @Nullable String copy) {
+	}
+
+	/**
+	 * Evaluates a REPL input as Slynk's mREPL ({@code mrepl-eval}): every form in turn,
+	 * the history variables set from the last.
+	 * @param code the input
+	 * @return the last form's values
+	 */
+	public List<ReplValue> mreplEval(String code) {
+		List<ReplValue> out = new ArrayList<>();
+		for (LispVal value : listen(code)) {
+			out.add(new ReplValue(presentForEmacs(value), copyForm(value)));
+		}
+		return out;
+	}
+
+	private @Nullable String copyForm(LispVal value) {
+		return switch (value) {
+			case LispNil nil -> "'nil";
+			case LispTrue t -> "'t";
+			case LispSymbol symbol -> (symbol.isKeyword() ? "" : "'") + print(symbol).toLowerCase(Locale.ROOT);
+			case LispInteger i -> print(i);
+			case LispBigInteger i -> print(i);
+			case LispRatio r -> print(r);
+			case LispDouble d -> print(d);
+			default -> null;
+		};
+	}
+
+	/** Slynk's {@code present-for-emacs} over its {@code *echo-number-alist*}. */
+	private String presentForEmacs(LispVal value) {
+		List<String> extras = new ArrayList<>();
+		BigInteger integer = integer(value);
+		if (integer != null) {
+			int bits = integer.bitLength();
+			extras.add(bits + " bit" + (bits == 1 ? "" : "s"));
+			if (integer.signum() >= 0 && bits <= 64) {
+				extras.add("#x" + integer.toString(16).toUpperCase(Locale.ROOT));
+			}
+			if (integer.signum() >= 0 && bits <= 8) {
+				extras.add("#o" + integer.toString(8));
+				extras.add("#b" + integer.toString(2));
+			}
+		}
+		else if (value instanceof LispRatio || value instanceof LispDouble) {
+			if (value instanceof LispRatio
+					&& helper("(lambda (r) (format nil \"~F\" r))", value) instanceof LispString f) {
+				extras.add(f.value());
+			}
+			// format-as-percentage-maybe: when 0 < |f| < 2, (* f 100) by ~2,'0d
+			LispVal percent = helper("(lambda (f) (when (< 0 (abs f) 2) (* f 100)))", value);
+			if (!(percent instanceof LispNil)) {
+				String digits = print(percent);
+				extras.add((digits.length() < 2 ? "0" + digits : digits) + "%");
+			}
+		}
+		String printed = print(value);
+		return extras.isEmpty() ? printed : printed + " (" + String.join(", ", extras) + ")";
 	}
 
 	private static void shift(Environment global, String third, String second, String first, LispVal value) {
@@ -401,39 +477,54 @@ public final class CommonLispSwank implements SwankLisp {
 		global.define(first, value);
 	}
 
-	/**
-	 * Evaluates the first form of a text as SWANK's {@code interactive-eval}, answering
-	 * its values for the echo area.
-	 * @param code the text
-	 * @param lines the echo area's lines
-	 * @param width its width
-	 * @return the values, as SWANK formats them
-	 */
-	public String interactiveEval(String code, int lines, int width) {
-		return echoArea(evalFirstValues(code), lines, width);
+	/** How an echo area shows a request's values. */
+	public enum Echo {
+
+		/**
+		 * SWANK's {@code format-values-for-echo-area}: {@code => 5 (3 bits, #x5, #o5,
+		 * #b101)}, a ratio with its float, nothing for no value, cut to the echo area.
+		 */
+		SWANK,
+
+		/** micros's: SWANK's uncut, {@code ; No value} for no value. */
+		MICROS,
+
+		/**
+		 * Slynk's {@code echo-for-emacs}: no arrow, {@code ; No value}, a number with its
+		 * other notations ({@code present-for-emacs}), the values on lines of their own
+		 * when one spans lines.
+		 */
+		SLYNK
+
 	}
 
 	/**
-	 * Evaluates every form of a text as SWANK's {@code interactive-eval-region}.
+	 * Evaluates the first form of a text, or every form of a region, as
+	 * {@code interactive-eval} and {@code interactive-eval-region} do, answering its
+	 * values for the echo area.
 	 * @param code the text
-	 * @param lines the echo area's lines
+	 * @param region whether to evaluate every form, answering the last one's values
+	 * @param echo how the values are shown
+	 * @param lines SWANK's echo area's lines
 	 * @param width its width
-	 * @return the last form's values, as SWANK formats them
+	 * @return the values, as the echo area shows them
 	 */
-	public String interactiveEvalRegion(String code, int lines, int width) {
-		return echoArea(evalRegion(code).values(), lines, width);
+	public String interactiveEval(String code, boolean region, Echo echo, int lines, int width) {
+		return echo(region ? evalRegion(code).values() : evalFirstValues(code), echo, lines, width);
 	}
 
 	/**
-	 * Evaluates the first form of a text with its standard output captured, as SWANK's
+	 * Evaluates the first form of a text with its standard output captured, as
 	 * {@code eval-and-grab-output}.
 	 * @param code the text
-	 * @return the output, then the values one per line
+	 * @param echo how the values are shown: Slynk's echo area, else one per line
+	 * @return the output, then the values
 	 */
-	public List<String> evalAndGrabOutput(String code) {
+	public List<String> evalAndGrabOutput(String code, Echo echo) {
 		StringWriter output = new StringWriter();
 		List<LispVal> values = capturing(output, () -> evalFirstValues(code));
-		return List.of(output.toString(), String.join("\n", values.stream().map(this::print).toList()));
+		return List.of(output.toString(), echo == Echo.SLYNK ? echo(values, echo, 0, 0)
+				: String.join("\n", values.stream().map(this::print).toList()));
 	}
 
 	/**
@@ -500,11 +591,19 @@ public final class CommonLispSwank implements SwankLisp {
 	 * then the values, an integer with its bits and radixes, a ratio with its float,
 	 * truncated to the echo area.
 	 */
-	private String echoArea(List<LispVal> values, int maxLines, int width) {
+	private String echo(List<LispVal> values, Echo echo, int maxLines, int width) {
+		if (echo == Echo.SLYNK) {
+			if (values.size() == 1) {
+				return presentForEmacs(values.getFirst());
+			}
+			List<String> printed = values.stream().map(this::print).toList();
+			return values.isEmpty() ? "; No value"
+					: String.join(printed.stream().anyMatch(text -> text.indexOf('\n') >= 0) ? "\n" : ", ", printed);
+		}
 		String output;
 		if (values.isEmpty()) {
-			// SWANK's cond answers "; No value" without writing it
-			output = "";
+			// SWANK's cond answers "; No value" without writing it, micros writes it
+			output = echo == Echo.MICROS ? "; No value" : "";
 		}
 		else if (values.size() == 1 && integer(values.getFirst()) instanceof BigInteger i) {
 			int bits = i.bitLength();
@@ -518,7 +617,7 @@ public final class CommonLispSwank implements SwankLisp {
 		else {
 			output = "=> " + String.join(", ", values.stream().map(this::print).toList());
 		}
-		return truncateForEchoArea(output, maxLines, width);
+		return echo == Echo.SWANK ? truncateForEchoArea(output, maxLines, width) : output;
 	}
 
 	private static @Nullable BigInteger integer(LispVal value) {
@@ -1163,6 +1262,166 @@ public final class CommonLispSwank implements SwankLisp {
 
 	}
 
+	/**
+	 * A flex completion candidate, as Slynk's {@code flex-completions} lists it.
+	 *
+	 * @param text the completed text
+	 * @param score how well it matches
+	 * @param chunks each matched run of the symbol's name: its offset and its text
+	 * @param classification what the symbol names ({@code fn}, {@code macro}, {@code var}
+	 * ...), comma-separated
+	 */
+	public record FlexCompletion(String text, float score, List<Map.Entry<Integer, String>> chunks,
+			String classification) {
+	}
+
+	/**
+	 * One symbol the pattern flex-matches: the name it matched, the indexes, the score.
+	 */
+	private record FlexMatch(String string, String spelling, List<Integer> indexes, float score) {
+	}
+
+	/**
+	 * The symbols whose name holds the pattern's characters in order, as Slynk's
+	 * {@code flex-completions} finds them: those accessible in the package, then the
+	 * external symbols of the packages it does not use qualified by each of their names
+	 * ({@code pkg:name}), best score first, then -- for a pattern with {@code ::} --
+	 * every symbol qualified by its home package.
+	 * @param pattern what the user typed
+	 * @param defaultPackage the buffer's package
+	 * @param limit how many to answer beyond the first
+	 * @return the candidates
+	 */
+	public List<FlexCompletion> flexCompletions(String pattern, @Nullable String defaultPackage, int limit) {
+		String guessed = guessPackage(defaultPackage);
+		String home = packageName(guessed != null ? guessed : currentPackage());
+		String upper = pattern.toUpperCase(Locale.ROOT);
+		int firstColon = upper.indexOf(':');
+		boolean twoColons = firstColon >= 0 && firstColon + 1 < upper.length() && upper.charAt(firstColon + 1) == ':';
+		List<FlexMatch> external = new ArrayList<>();
+		List<FlexMatch> internal = new ArrayList<>();
+		if (firstColon < 0) {
+			for (Map.Entry<String, String> entry : symbolsIn(home, false).entrySet()) {
+				flexCollect(upper, entry.getKey().toUpperCase(Locale.ROOT), entry.getValue(), external);
+			}
+		}
+		if (firstColon != 0 || twoColons) {
+			Map<String, List<String>> uses = this.resolver.runtimePackageUseTable();
+			List<String> homeUses = uses.getOrDefault(home, List.of());
+			for (String pkg : uses.keySet()) {
+				if ("KEYWORD".equals(pkg)
+						|| !twoColons && (pkg.equals(home) || firstColon < 0 && homeUses.contains(pkg))) {
+					continue;
+				}
+				List<String> names = new ArrayList<>(nicknames(pkg));
+				names.add(pkg);
+				names.sort(Comparator.comparingInt(String::length));
+				for (Map.Entry<String, String> entry : symbolsIn(pkg, !twoColons).entrySet()) {
+					String symbolHome = this.resolver.symbolPackageName(entry.getValue());
+					String homeName = symbolHome == null ? null : packageName(symbolHome);
+					// every symbol at its home; an external one not inherited from a used
+					// package
+					if (twoColons ? !pkg.equals(homeName) : firstColon < 0 && homeUses.contains(homeName)) {
+						continue;
+					}
+					for (String name : names) {
+						flexCollect(upper, name + (twoColons ? "::" : ":") + entry.getKey().toUpperCase(Locale.ROOT),
+								entry.getValue(), twoColons ? internal : external);
+					}
+				}
+			}
+		}
+		Comparator<FlexMatch> byScore = Comparator.comparingDouble(FlexMatch::score)
+			.reversed()
+			.thenComparing(FlexMatch::string);
+		external.sort(byScore);
+		internal.sort(byScore);
+		external.addAll(internal);
+		boolean upcase = pattern.chars().allMatch(Character::isUpperCase);
+		List<FlexCompletion> out = new ArrayList<>();
+		for (FlexMatch match : external.subList(0, Math.min(external.size(), limit + 1))) {
+			List<Map.Entry<Integer, String>> chunks = new ArrayList<>();
+			for (int index : match.indexes()) {
+				Map.Entry<Integer, String> last = chunks.isEmpty() ? null : chunks.getLast();
+				if (last != null && last.getKey() + last.getValue().length() == index) {
+					chunks.set(chunks.size() - 1,
+							Map.entry(last.getKey(), last.getValue() + match.string().charAt(index)));
+				}
+				else {
+					chunks.add(Map.entry(index, String.valueOf(match.string().charAt(index))));
+				}
+			}
+			out.add(new FlexCompletion(upcase ? match.string() : match.string().toLowerCase(Locale.ROOT), match.score(),
+					chunks, readablyClassify(classification(match.spelling()))));
+		}
+		return out;
+	}
+
+	/** Slynk's {@code collect-if-matches}: the pattern's characters found in order. */
+	private static void flexCollect(String pattern, String string, String spelling, List<FlexMatch> into) {
+		List<Integer> indexes = new ArrayList<>(pattern.length());
+		int from = 0;
+		for (int i = 0; i < pattern.length(); i++) {
+			int pos = string.indexOf(pattern.charAt(i), from);
+			if (pos < 0) {
+				return;
+			}
+			indexes.add(pos);
+			from = pos + 1;
+		}
+		into.add(new FlexMatch(string, spelling, indexes, flexScore(string, indexes, pattern)));
+	}
+
+	/** Slynk's {@code flex-score}, a qualified name's two halves scored apart. */
+	static float flexScore(String string, List<Integer> indexes, String pattern) {
+		int patternColon = pattern.indexOf(':');
+		if (patternColon > 0) {
+			int colonAt = indexes.get(patternColon);
+			List<Integer> after = new ArrayList<>();
+			for (int index : indexes.subList(patternColon + 1, indexes.size())) {
+				after.add(index - colonAt);
+			}
+			return flexScore1(colonAt, indexes.subList(0, patternColon)) / 2
+					+ flexScore1(string.length() - colonAt, after) / 2;
+		}
+		int stringColon = string.indexOf(':');
+		if (stringColon >= 0 && !indexes.isEmpty() && stringColon < indexes.getFirst()) {
+			// as if the qualifier were half as long: a match on the name counts more
+			int adjust = stringColon / 2;
+			return flexScore1(string.length() - adjust, indexes.stream().map(index -> index - adjust).toList());
+		}
+		return flexScore1(string.length(), indexes);
+	}
+
+	private static float flexScore1(int length, List<Integer> indexes) {
+		float gaps = 0;
+		int previous = -1;
+		for (int i = 0; i <= indexes.size(); i++) {
+			int next = i < indexes.size() ? indexes.get(i) : length;
+			gaps += (float) Math.pow(next - previous - 1, 1.5);
+			previous = next;
+		}
+		return indexes.size() / (length * (1 + gaps));
+	}
+
+	/**
+	 * Slynk's {@code readably-classify} of a SWANK classification string: the generic
+	 * function, package, special operator, macro, class, type, function and variable it
+	 * names, a function left out when it is a generic function or a macro.
+	 */
+	private static String readablyClassify(String flags) {
+		List<String> out = new ArrayList<>();
+		String[][] order = { { "g", "generic-fn" }, { "p", "pak" }, { "s", "special-op" }, { "m", "macro" },
+				{ "c", "cla" }, { "t", "type" }, { "f", "fn" }, { "b", "var" } };
+		boolean dropFunction = flags.indexOf('g') >= 0 || flags.indexOf('m') >= 0;
+		for (String[] each : order) {
+			if (flags.contains(each[0]) && !(dropFunction && "f".equals(each[0]))) {
+				out.add(each[1]);
+			}
+		}
+		return String.join(",", out);
+	}
+
 	// ------------------------------------------------------------------------------------
 	// Argument lists and documentation
 
@@ -1547,6 +1806,112 @@ public final class CommonLispSwank implements SwankLisp {
 			for (String line : Objects.requireNonNull(definition.documentation()).split("\n")) {
 				text.append("    ").append(line).append('\n');
 			}
+		}
+	}
+
+	/**
+	 * What a symbol names, in Markdown, as micros's {@code hover-symbol} answers Lem's
+	 * describe: a {@code ## Variable} section with its value, a {@code ## Function} one
+	 * with its signature in a code block and its documentation string, separated by a
+	 * rule.
+	 * @param name the symbol's name as written
+	 * @return the description, or null when no such symbol is accessible
+	 */
+	public @Nullable String hoverSymbol(String name) {
+		String spelling = findSymbol(name);
+		return spelling == null ? null : describeInMarkdown(spelling);
+	}
+
+	private String describeInMarkdown(String spelling) {
+		List<String> sections = new ArrayList<>();
+		if (this.evaluator.bound(spelling) && !spelling.startsWith(":")) {
+			LispVal value = this.evaluator.globalEnvironment().lookupOrNull(spelling);
+			sections.add("## Variable\nValue: " + (value == null ? "unbound" : print(value)) + "\n");
+		}
+		if (this.evaluator.fbound(spelling)) {
+			StringBuilder text = new StringBuilder("## Function\n```lisp\n").append(signature(spelling))
+				.append("\n```\n");
+			LispEvaluator.Definition definition = this.evaluator.definition(spelling);
+			if (definition != null && definition.documentation() != null) {
+				text.append(definition.documentation()).append('\n');
+			}
+			sections.add(text.toString());
+		}
+		return String.join("----------\n", sections).stripTrailing();
+	}
+
+	/**
+	 * micros's {@code symbol-signature}: the operator and its argument list, downcased.
+	 */
+	private String signature(String spelling) {
+		LispVal arglist = arglist(spelling);
+		String name = LispSymbol.memberName(spelling).toLowerCase(Locale.ROOT);
+		if (arglist == null) {
+			return "(" + name + " . not-available)";
+		}
+		// the argument list's own parenthesis opens the signature
+		return arglist instanceof LispNil ? "(" + name + ")"
+				: "(" + name + " " + arglistText(arglist, false).substring(1);
+	}
+
+	/**
+	 * A completion as micros's {@code micros/lsp-api:completions} lists it for Lem.
+	 *
+	 * @param label the completed text
+	 * @param chunks each matched run: its offset and its text
+	 * @param kind what the symbol names ({@code function}, {@code macro} ...),
+	 * comma-separated
+	 * @param signature the operator and its argument list
+	 * @param documentation its description in Markdown ({@link #hoverSymbol})
+	 */
+	public record LspCompletion(String label, List<Map.Entry<Integer, String>> chunks, String kind,
+			@Nullable String signature, String documentation) {
+	}
+
+	/**
+	 * The fuzzy completions of a text as micros's {@code micros/lsp-api:completions}
+	 * describes them: the first hundred, each with its kind, signature and documentation.
+	 * @param text the input, perhaps package-qualified
+	 * @param defaultPackage the buffer's package
+	 * @return the completions
+	 */
+	public List<LspCompletion> lspCompletions(String text, @Nullable String defaultPackage) {
+		List<LspCompletion> out = new ArrayList<>();
+		// micros's parse-classification-string reads the flags' first eight places so
+		String[] kinds = { "variable", "function", "generic-function", "type", "class", "macro", "special-operator",
+				"package" };
+		for (FuzzyCompletion each : fuzzyCompletions(text, defaultPackage, 100)) {
+			List<String> kind = new ArrayList<>();
+			for (int i = 0; i < kinds.length; i++) {
+				if (each.flags().charAt(i) != '-') {
+					kind.add(kinds[i]);
+				}
+			}
+			String spelling = findSymbol(each.qualified());
+			out.add(new LspCompletion(each.candidate(), each.chunks(), String.join(", ", kind),
+					spelling == null ? null : signature(spelling),
+					spelling == null ? "" : describeInMarkdown(spelling)));
+		}
+		return out;
+	}
+
+	/**
+	 * Defines {@code micros:load-file}, the one function of Lem's server Lem calls in a
+	 * form of its own ({@code C-c C-l}): the file loaded, {@code load}'s value
+	 * {@code prin1}'d.
+	 */
+	public void defineMicrosLoadFile() {
+		Object previous = this.resolver.bindThreadPackage(LispNames.CL_USER_PKG);
+		try {
+			for (LispVal form : read("""
+					(defpackage :micros (:use :cl) (:export #:load-file))
+					(defun micros:load-file (filename) (prin1-to-string (load filename)))
+					""")) {
+				this.evaluator.eval(form);
+			}
+		}
+		finally {
+			this.resolver.unbindThreadPackage(previous);
 		}
 	}
 

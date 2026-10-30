@@ -1,7 +1,9 @@
-# SWANK (SLIME)
+# SWANK (SLIME、SLY、Lem)
 
 `rontolisp --swank` は Common Lisp の [REPL](repl.md) を SWANK で提供します。SWANK は
-Emacs の [SLIME](https://slime.common-lisp.dev) が話すプロトコルです。サーバは localhost
+Emacs の [SLIME](https://slime.common-lisp.dev) が話すプロトコルです。SLIME から分かれた
+[SLY](https://github.com/joaotavora/sly) と [Lem](https://lem-project.github.io) の Lisp
+モードのプロトコルにも答えます（[後述](#sly-and-lem)）。サーバは localhost
 で待ち受け、`--swank=PORT` で別のポートを指定しない限り SWANK と同じ 4005 番を使います
 （`--swank=0` は空いているポートを使います）。起動すると SWANK 自身の `create-server` と
 同じ行を出力します:
@@ -44,7 +46,21 @@ SWANK の `:spawn` 方式と同じく、エディタの要求はそれぞれ専�
 パッケージはキーワードとして表示し（`:CL-USER`）、
 マクロの展開は 1 行で表示します。値や名前は rontolisp の表示に従います（SBCL が
 `COMMON-LISP-USER::F` と書くところは `CL-USER::F` です）。サーバはインタプリタでだけ動きます。
-SLIME から分かれた SLY と Lem の micros は独自のプロトコルを話すので、提供しません。
+
+## SLY と Lem
+
+同じサーバが SLY と Lem にも答えます。各要求には、それを送ったクライアントのプロトコルで
+答えるので、3 つのエディタを同時に接続できます。SLY では `M-x sly-connect RET 127.0.0.1 RET
+4005 RET` で SLY の REPL が開きます。サーバが話すのは SLY 1.0.43 のプロトコルで、別の
+バージョンの SLY は最初に「Versions differ」と確認します。Lem では同じホストとポートを
+`M-x slime-connect` に与えると Lem の REPL が開きます（Lem 2.3.0 で計測）。
+
+上の表のうち REPL、評価、コンパイル、補完、エコー領域、説明、展開の行は、どちらにもそれぞれの
+キーで当てはまります。SLY の REPL は数値をほかの表記と並べて表示し（`3 (2 bits, #x3, #o3,
+#b11)`）、あいまいに補完します（`mvbind` で `multiple-value-bind` が見つかります）。Lem の
+補完は候補ごとに種類、引数リスト、説明を表示し、`C-c Return` はマクロを 1 段展開します。SLIME と
+同じくデバッガはありません。`M-.`、相互参照、インスペクタは SLIME でだけ計測しています。SLY の
+スティッカーとトレースダイアログ、Lem の表示した値の検査には答えません。
 
 ## 実行中のプログラムから
 

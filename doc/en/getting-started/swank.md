@@ -1,7 +1,9 @@
-# SWANK (SLIME)
+# SWANK (SLIME, SLY, Lem)
 
 `rontolisp --swank` serves the Common Lisp [REPL](repl.md) over SWANK, the protocol of
-Emacs's [SLIME](https://slime.common-lisp.dev). It listens on localhost, on SWANK's port
+Emacs's [SLIME](https://slime.common-lisp.dev), and over the protocols of its fork
+[SLY](https://github.com/joaotavora/sly) and of [Lem](https://lem-project.github.io)'s Lisp
+mode ([below](#sly-and-lem)). It listens on localhost, on SWANK's port
 4005 unless `--swank=PORT` names another (`--swank=0` takes a free one), and prints the
 line SWANK's own `create-server` prints:
 
@@ -43,8 +45,23 @@ directory. Cross references cover only code compiled from the editor, and a func
 typed at the REPL has no place to go to. A package prints as its keyword (`:CL-USER`), a
 macro expansion on one line, and a value or a name
 the way rontolisp prints it (`CL-USER::F`, where SBCL writes `COMMON-LISP-USER::F`). The
-server runs on the interpreter only; SLIME's fork SLY and Lem's micros speak protocols of
-their own and are not served.
+server runs on the interpreter only.
+
+## SLY and Lem
+
+The same server answers SLY and Lem, each request in the protocol of the client that sent
+it, so the three editors can be connected at once. In SLY, `M-x sly-connect RET 127.0.0.1
+RET 4005 RET` opens SLY's REPL; the server speaks the protocol of SLY 1.0.43, and a SLY of
+another version asks "Versions differ" first. In Lem, `M-x slime-connect` with the same host
+and port opens Lem's REPL (measured against Lem 2.3.0).
+
+The table's REPL, evaluation, compilation, completion, echo area, description and expansion
+rows hold for both, on their own keys. SLY's REPL shows a number with its other notations
+(`3 (2 bits, #x3, #o3, #b11)`) and completes flexibly (`mvbind` finds
+`multiple-value-bind`); Lem's completion shows each candidate's kind, argument list and
+description, and `C-c Return` expands a macro one step. As with SLIME there is no debugger.
+`M-.`, cross references and the inspector are measured with SLIME only; SLY's stickers and
+trace dialog and Lem's inspection of a printed value are not answered.
 
 ## From a running program
 
